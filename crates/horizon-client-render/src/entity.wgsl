@@ -53,7 +53,7 @@ struct Out {
     @location(9) light_color: vec4<f32>,
     @location(10) @interpolate(flat) weather_rect: vec4<f32>,
     // The `GLINT_TEXTURING` sample for overlay 7 (item foil), or the model UV
-    // `ARMOR_ENTITY_GLINT_TEXTURING` scrolls for overlay 13 (armour).
+    // `ARMOR_ENTITY_GLINT_TEXTURING` scrolls for overlay 36 (armour).
     @location(11) glint_uv: vec2<f32>,
     // 1 drops the quad's back-facing pixels (Vertex::normal w = 1), like a culling render type.
     @location(12) @interpolate(flat) cull: u32,
@@ -254,8 +254,8 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
         // Enchantment glint: item.fsh's GLINT path, sampled from
         // enchanted_glint_item at the `GLINT_TEXTURING` UV.
         color = glint_over(color, textureSample(glint_tex, glint_sampler, in.glint_uv));
-    } else if in.overlay == 13u {
-        // Enchanted armour: enchanted_glint_armor at the scrolling model UV.
+    } else if in.overlay == 36u {
+        // Enchanted armour (mobs::render::ARMOR_GLINT): enchanted_glint_armor at the scrolling model UV.
         color = glint_over(
             color,
             textureSample(glint_armor_tex, glint_sampler, armor_glint_uv(in.glint_uv)),

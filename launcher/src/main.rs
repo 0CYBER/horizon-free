@@ -2382,8 +2382,15 @@ impl Launcher {
         let version = java
             .as_ref()
             .map_or_else(|| backend::game_version(&tag), |j| j.minecraft.clone());
-        let hero = match java {
-            Some(_) => self.hero("", &version, true, cx),
+        let hero = match &java {
+            // Its own game: the Minecraft version and the loader, never Horizon's.
+            Some(j) => {
+                let game = match &j.loader {
+                    Some(l) => format!("{version} · {} {}", l.kind.name(), l.version),
+                    None => version.clone(),
+                };
+                self.hero("", &game, true, cx)
+            }
             None => self.hero(&tag, &version, prepared, cx),
         };
         let running = self.client.is_some() || self.starting_client.is_some();
@@ -2442,7 +2449,8 @@ impl Launcher {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(self.picker(cx))
+                    // Horizon's versions don't apply to a Java instance.
+                    .children(java.is_none().then(|| self.picker(cx)))
                     .child(play),
             );
 
@@ -2940,7 +2948,8 @@ impl Launcher {
                     .text_color(t.ink_soft)
                     .child(line)
             }));
-        if let Some(release) = &self.updates.horizon {
+        // A Java instance (no Horizon tag) isn't offered Horizon's updates.
+        if let Some(release) = self.updates.horizon.as_ref().filter(|_| !tag.is_empty()) {
             let installing = self.installing.as_ref().filter(|(t, _)| *t == release.tag);
             let line = div()
                 .flex()

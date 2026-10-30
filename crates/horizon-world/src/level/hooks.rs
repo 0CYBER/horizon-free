@@ -165,6 +165,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.piston_check_if_extend(pos, state);
                     }
                 }
+                Class::PotentSulfur => self.potent_sulfur_on_place(pos, state),
                 Class::Observer => {
                     if !same
                         && b.table.bool(state, b.props.powered)
@@ -557,7 +558,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let state = self.state(pos);
                 if !b.is_water_fluid(self.fluid_at(pos).kind()) {
                     false
-                } else if self.pickup_block(pos, state) {
+                } else if self.pickup_block(pos, state, false) {
                     true
                 } else {
                     if b.instance_of(state, Class::Liquid) {

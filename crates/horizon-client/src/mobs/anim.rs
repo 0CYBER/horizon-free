@@ -497,7 +497,9 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
             r[5] += (swing * PI).msin() * -0.4;
         }
     }
-    if let Some(aggressive) = h.zombie {
+    // AnimationUtils.animateZombieArms leaves the arms of a spear alone.
+    let using_spear = h.right == ArmPose::Spear || h.left == ArmPose::Spear;
+    if let Some(aggressive) = h.zombie.filter(|_| !using_spear) {
         // AnimationUtils.animateZombieArms
         let raise = !s.baby || !h.holding;
         let drop = if raise {
@@ -710,8 +712,16 @@ pub fn setup(
             let throwing = m.kind.anim == Anim::Drowned
                 && m.ai.aggressive
                 && m.extra.main_hand.as_deref() == Some("minecraft:trident");
+            // HumanoidMobRenderer.getArmPose: the arm holding a spear (at rest too).
+            let spear = m
+                .extra
+                .main_hand
+                .as_deref()
+                .and_then(crate::spear::Kinetic::of);
             let main = if throwing {
                 ArmPose::ThrowTrident
+            } else if spear.is_some() {
+                ArmPose::Spear
             } else {
                 ArmPose::Empty
             };
@@ -721,6 +731,13 @@ pub fn setup(
                 Hum::new(main, ArmPose::Empty)
             };
             h.left_main = m.main_arm_left();
+            let main_side = usize::from(m.main_arm_left());
+            if main == ArmPose::Spear {
+                h.spear[main_side] = spear;
+                if m.extra.using_item > 0 && !m.extra.using_off_hand {
+                    h.spear_ticks[main_side] = m.extra.using_item as f32 + s.partial;
+                }
+            }
             h.zombie = Some(m.ai.aggressive);
             h.holding = m.extra.main_hand.is_some();
             h.crouching = m.extra.crouching;

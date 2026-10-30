@@ -170,7 +170,7 @@ fn teleport(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
                 f64::from(t[2]) + 1.0,
             ),
         );
-        if t[1] <= crate::chunk::MIN_Y
+        if t[1] <= w.world.bottom_y()
             || !w.facts.is_air(w.world.block(t[0], t[1], t[2]))
             || !no_collision(m, w, unit.deflate(Vec3::new(1.0e-6, 1.0e-6, 1.0e-6)))
         {

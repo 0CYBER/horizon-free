@@ -49,7 +49,10 @@ impl WorldRequest {
         // Before any chunk is read: a loaded container with a loot table is rolled as its chunk
         // is decoded (`save::roll_loaded_loot`), and the spawn chunks are read while the world
         // opens. Every world opens here: in-frame, on the server thread, on a dedicated server.
-        horizon_client::structure_blocks::loot_data(&options.resources);
+        horizon_client::structure_blocks::loot_data(
+            &options.resources,
+            &horizon_world::loot::PackOverlay::NONE,
+        );
         let Self {
             save_root,
             folder,
@@ -116,6 +119,7 @@ impl WorldRequest {
             make_streaming(res, pack, options, settings, &save_root, dim, level.seed)?;
         streaming.radius = settings.render_distance;
         let mut world = World::new(res.facts().air, level.seed);
+        world.shape = dim.shape();
         world.fast_lava = dim == Dim::Nether;
         world.game_time = level.time;
         world.day_time = options.time.unwrap_or(level.day_time);
@@ -254,8 +258,14 @@ pub(super) fn preload_world_data(
                         // seed shares: about 140 ms off opening the world.
                         let _ = data.prepare_decoration("minecraft:normal", "minecraft:overworld");
                     }
-                    let _ = horizon_client::structure_blocks::loot_data(&resources);
-                    let _ = super::lan::sync_data(&resources);
+                    // The preload is the game's own data; the world's packs'
+                    // tables are built when it opens (finish_open_world).
+                    let _ = horizon_client::structure_blocks::loot_data(
+                        &resources,
+                        &horizon_world::loot::PackOverlay::NONE,
+                    );
+                    let _ =
+                        super::lan::sync_data(&resources, &horizon_world::loot::PackOverlay::NONE);
                 });
             match spawned {
                 Ok(thread) => *preload = Preload::Started { thread, left: None },
@@ -297,7 +307,10 @@ pub(super) fn preload_server_loot(resources: &std::path::Path) {
         .name("Loot preload".into())
         .spawn(move || {
             horizon_threads::behind_server();
-            let _ = horizon_client::structure_blocks::loot_data(&resources);
+            let _ = horizon_client::structure_blocks::loot_data(
+                &resources,
+                &horizon_world::loot::PackOverlay::NONE,
+            );
         });
     if let Err(e) = spawned {
         log::warn!("Horizon: loot preload: {e}");
@@ -333,10 +346,10 @@ pub(super) fn make_streaming(
     dim: Dim,
     seed: i64,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
-    let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(
-        world_root,
-        dim.id(),
-    )));
+    let save = Arc::new(SaveDir::new(
+        horizon_client::save::dimension_dir(world_root, dim.id()),
+        dim.shape(),
+    ));
     let mut locator = None;
     let flat = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))
@@ -346,6 +359,7 @@ pub(super) fn make_streaming(
                 &s,
                 pack.assets.registry,
                 res.biomes(),
+                dim.shape(),
             )
         });
     let mut streaming = if let Some(inner) = flat {
