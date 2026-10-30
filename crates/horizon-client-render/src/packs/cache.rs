@@ -85,6 +85,8 @@ fn stamp(hash: &mut Sha256, path: &Path, read: bool) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        // The change time stands in for the bytes here.
+        let _ = read;
         hash.update(meta.dev().to_le_bytes());
         hash.update(meta.ino().to_le_bytes());
         hash.update(meta.ctime().to_le_bytes());
