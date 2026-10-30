@@ -59,7 +59,22 @@ impl DiskCache {
         decode(&bytes).map(Arc::new)
     }
 
+    fn contains(&self, x: i32, z: i32) -> bool {
+        let Ok(mut regions) = self.regions.lock() else {
+            return false;
+        };
+        self.region(&mut regions, x, z, false)
+            .is_some_and(|region| region.index.contains_key(&(x, z)))
+    }
+
+    /// Writes a chunk not cached yet. One already cached stays as it is: the
+    /// build key clears stale ones, and a generation batch hands back
+    /// neighbours cached before, which appended again grew the files each
+    /// session.
     pub fn put(&self, x: i32, z: i32, columns: &[Column; 256]) {
+        if self.contains(x, z) {
+            return;
+        }
         let bytes = encode(columns);
         let Ok(mut regions) = self.regions.lock() else {
             return;
@@ -67,6 +82,10 @@ impl DiskCache {
         let Some(region) = self.region(&mut regions, x, z, true) else {
             return;
         };
+        // Another sampler's thread may have written it while this one encoded.
+        if region.index.contains_key(&(x, z)) {
+            return;
+        }
         let mut record = Vec::with_capacity(RECORD as usize + bytes.len());
         record.extend_from_slice(&x.to_le_bytes());
         record.extend_from_slice(&z.to_le_bytes());
@@ -297,18 +316,19 @@ mod tests {
         assert!(cache.get(3, -40).is_none(), "nothing cached yet");
         cache.put(3, -40, &columns(0));
         cache.put(4, -40, &columns(1));
-        // A chunk written again reads back as its latest record.
-        cache.put(3, -40, &columns(2));
-        assert_eq!(*cache.get(3, -40).unwrap(), columns(2));
-        drop(cache);
-
         let path = dir.join("r.0.-2.hlod");
         let size = std::fs::metadata(&path).unwrap().len();
+        // A chunk cached already is not appended again.
+        cache.put(3, -40, &columns(2));
+        assert_eq!(*cache.get(3, -40).unwrap(), columns(0));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), size);
+        drop(cache);
+
         let file = OpenOptions::new().write(true).open(&path).unwrap();
         file.set_len(size + 7).unwrap();
         drop(file);
         let cache = DiskCache::new(dir.clone(), 7);
-        assert_eq!(*cache.get(3, -40).unwrap(), columns(2));
+        assert_eq!(*cache.get(3, -40).unwrap(), columns(0));
         assert_eq!(*cache.get(4, -40).unwrap(), columns(1));
         assert_eq!(
             std::fs::metadata(&path).unwrap().len(),
