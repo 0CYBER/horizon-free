@@ -4277,6 +4277,9 @@ impl Game<'_> {
             if first {
                 self.container_edge_sound(key, true);
             }
+        } else if self.open_mod_menu(key) {
+            // A mod block's container (`native_block_entity_container`).
+            self.container = Some(key);
         } else if self.open_station(pos, &name) {
             // Workstation menus: game/stations.rs.
         } else {

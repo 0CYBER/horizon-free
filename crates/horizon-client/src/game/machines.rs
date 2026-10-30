@@ -1359,6 +1359,7 @@ mod mod_container_tests {
                 faces,
                 inputs: vec![0, 1],
                 outputs: vec![2],
+                menu: None,
             })),
         };
         assert_eq!(view.slots_for_face(Some(Direction::Up)), [0]);
