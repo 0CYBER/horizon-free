@@ -21,6 +21,12 @@ const COMMAND_HISTORY_FILE: &str = "command_history.txt";
 const MAX_PERSISTED_COMMAND_HISTORY: usize = 50;
 /// GuiMessageTag.systemSinglePlayer's indicator colour.
 pub const SYSTEM_INDICATOR: u32 = 0xD0D0D0;
+/// A player message's signature (MessageSignature), which names it to a
+/// server's deletion.
+pub type Signature = horizon_protocol::secure_chat::Signature;
+/// How long a message shows before a deletion replaces it
+/// (`ChatComponent.deleteMessageOrDelay`: `addedTime + 60`).
+const DELETION_DELAY: u64 = 60;
 
 /// `ChatVisiblity`: the Chat option's three values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +171,8 @@ struct Message {
     content: Text,
     indicator: Option<u32>,
     source: ChatSource,
+    /// `GuiMessage.signature`: a signed player message's, for deletion.
+    signature: Option<Box<Signature>>,
 }
 /// A wrapped line (`GuiMessage.Line`).
 #[derive(Clone, Debug)]
@@ -205,6 +213,9 @@ pub struct Chat {
     pub received: u64,
     /// The Chat option's `visibleMessageFilter` (`set_abilities`).
     abilities: ChatAbilities,
+    /// `ChatComponent.messageDeletionQueue`: deletions of messages still
+    /// too new to replace, with the tick from which they may be.
+    deletions: Vec<(Box<Signature>, u64)>,
 }
 impl Chat {
     pub fn lines_per_page(&self, focused: bool) -> usize {
@@ -227,6 +238,38 @@ impl Chat {
     ) {
         self.add_message(&atlas.font, content, indicator, source, ticks, focused);
     }
+    /// `add` of a player message with its signature, which a server's
+    /// deletion names it by (`GuiMessage.signature`).
+    pub fn add_signed(
+        &mut self,
+        atlas: &HudAtlas,
+        content: Text,
+        signature: Option<Signature>,
+        ticks: u64,
+        focused: bool,
+    ) {
+        self.add_signed_message(&atlas.font, content, signature, ticks, focused);
+    }
+    fn add_signed_message(
+        &mut self,
+        font: &crate::font::Font,
+        content: Text,
+        signature: Option<Signature>,
+        ticks: u64,
+        focused: bool,
+    ) {
+        self.push_message(
+            font,
+            Message {
+                added: ticks,
+                content,
+                indicator: None,
+                source: ChatSource::Player,
+                signature: signature.map(Box::new),
+            },
+            focused,
+        );
+    }
     fn add_message(
         &mut self,
         font: &crate::font::Font,
@@ -236,20 +279,28 @@ impl Chat {
         ticks: u64,
         focused: bool,
     ) {
-        if !self.abilities.shows(source) {
+        self.push_message(
+            font,
+            Message {
+                added: ticks,
+                content,
+                indicator,
+                source,
+                signature: None,
+            },
+            focused,
+        );
+    }
+    fn push_message(&mut self, font: &crate::font::Font, message: Message, focused: bool) {
+        if !self.abilities.shows(message.source) {
             return;
         }
         // ChatComponent.logChatMessage: every message shown is in the log.
-        crate::logging::write_only(log::Level::Info, &format!("[CHAT] {}", content.plain()));
+        let plain = message.content.plain();
+        crate::logging::write_only(log::Level::Info, &format!("[CHAT] {plain}"));
         if self.log {
-            println!("[CHAT] {}", content.plain());
+            println!("[CHAT] {plain}");
         }
-        let message = Message {
-            added: ticks,
-            content,
-            indicator,
-            source,
-        };
         self.add_lines(font, &message, focused);
         self.messages.insert(0, message);
         self.messages.truncate(100);
@@ -319,7 +370,65 @@ impl Chat {
     pub fn clear(&mut self) {
         self.messages.clear();
         self.lines.clear();
+        self.deletions.clear();
         self.scroll = 0;
+    }
+    /// `ChatComponent.deleteMessage`: the server deleted a message. One
+    /// shown for 60 ticks becomes the grey "deleted" marker now; a newer
+    /// one waits until then (`messageDeletionQueue`).
+    pub fn delete_message(&mut self, atlas: &HudAtlas, signature: &Signature, ticks: u64) {
+        self.delete_message_with(&atlas.font, signature, ticks);
+    }
+    fn delete_message_with(&mut self, font: &crate::font::Font, signature: &Signature, ticks: u64) {
+        if let Some(delayed) = self.delete_or_delay(font, signature, ticks) {
+            self.deletions.push((Box::new(*signature), delayed));
+        }
+    }
+    /// `ChatComponent.tick` (`processMessageDeletionQueue`): the delayed
+    /// deletions whose message has shown long enough.
+    pub fn tick(&mut self, atlas: &HudAtlas, ticks: u64) {
+        self.process_deletions(&atlas.font, ticks);
+    }
+    fn process_deletions(&mut self, font: &crate::font::Font, ticks: u64) {
+        let mut deletions = std::mem::take(&mut self.deletions);
+        deletions.retain(|(signature, after)| {
+            ticks < *after || self.delete_or_delay(font, signature, ticks).is_some()
+        });
+        self.deletions = deletions;
+    }
+    /// `ChatComponent.deleteMessageOrDelay`: the newest message with this
+    /// signature, replaced by `createDeletedMarker` once 60 ticks have
+    /// passed since it was added; otherwise the tick to retry from.
+    fn delete_or_delay(
+        &mut self,
+        font: &crate::font::Font,
+        signature: &Signature,
+        ticks: u64,
+    ) -> Option<u64> {
+        let message = self
+            .messages
+            .iter_mut()
+            .find(|m| m.signature.as_deref() == Some(signature))?;
+        let deletable = message.added + DELETION_DELAY;
+        if ticks < deletable {
+            return Some(deletable);
+        }
+        *message = Message {
+            added: message.added,
+            content: Self::deleted_marker(),
+            indicator: Some(SYSTEM_INDICATOR),
+            source: ChatSource::Server,
+            signature: None,
+        };
+        // refreshTrimmedMessages.
+        self.rewrap(font);
+        None
+    }
+    /// `ChatComponent.DELETED_CHAT_MESSAGE`: grey, italic.
+    fn deleted_marker() -> Text {
+        Text::translate("chat.deleted_marker", &[])
+            .with_color(text::GRAY)
+            .italic()
     }
     /// `new CommandHistory(gameFolder)`: the commands kept from earlier runs
     /// start the chat's history (`ChatComponent`'s constructor).
@@ -929,7 +1038,9 @@ impl ChatScreen {
         } else if !command.chars().all(char::is_whitespace) {
             let partial = &command[..cursor_b];
             let mut builder = SuggestionsBuilder::new(partial, last_word_index(partial));
-            builder.suggest_matching(c.registries.players.iter().map(String::as_str));
+            // ClientSuggestionProvider.getCustomTabSuggestions: the players
+            // and the server's custom chat completions.
+            builder.suggest_matching(c.registries.custom_tab_suggestions());
             let (range, list) = merge_suggestions(partial, builder.out);
             self.awaiting = None;
             self.pending = Some((range.0, list));

@@ -1,10 +1,30 @@
-//! Hook points for native mods (docs/native-mods.md, "Hook points"): empty
+//! Hook points for native mods (docs/native-mods.md, "Mods on the hook points"): empty
 //! functions the game calls at fixed places, for horizon-mixins bundles to
 //! hook with HEAD. Hooks that answer take an out parameter (`claimed`,
 //! `zoom`…) so several mods can hook the same point. A native mod keeps its
 //! own state in a module of its bundle; the helpers below read and draw what
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
+//!
+//! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
+//! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
+//!
+//! API 9 adds the acting player's plain items (`native_held`,
+//! `native_count_items`, `native_take_items`, `native_give_items`... in
+//! `native_server.rs`).
+//!
+//! API 8 adds server commands and players (`native_register_commands`,
+//! `native_perform_command`, and the helpers in `native_server.rs`).
+//!
+//! API 7 adds block-change observations (`native_block_changed`).
+//!
+//! API 6 adds neighbour-change observations (`native_neighbor_changed`).
+//!
+//! API 5 adds read-only server block queries (`native_server_block`).
+//!
+//! API 4 adds authoritative server tick hooks (`native_server_tick`).
+//!
+//! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
 //! (`native_panel_items`, `native_panel_recipes`, `native_panel_event`),
@@ -19,7 +39,13 @@
 //! that would break such a bundle is not made.
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
-use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use super::native_lifecycle::{NativeLifecycleContext, ServerTickPhase, WorldPhase};
+use super::{
+    Game, GameLevel, LevelDimension, Screen,
+    execution_role::ExecutionRole,
+    native_panel_recipes::RecipePage,
+    native_server::{NativeCommand, NativeServerPlayer},
+};
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -29,13 +55,44 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_core::position::BlockPos;
+use horizon_world::{level::BlockId, registry::BlockStateId};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 2;
+pub(crate) const NATIVE_HOOKS_API: u32 = 10;
+
+impl GameLevel<'_> {
+    /// An authoritative server committed a changed state through `Level.setBlock`.
+    /// The world contains `new`; block side effects and neighbour updates follow.
+    #[inline(always)]
+    pub(super) fn native_block_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (dimension, pos, old, new);
+    }
+
+    /// An authoritative server is about to deliver `neighborChanged`.
+    /// State and block IDs are valid in this level's registries for this call.
+    #[inline(always)]
+    pub(super) fn native_neighbor_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+        moved: bool,
+    ) {
+        let _ = (dimension, pos, state, changed, moved);
+    }
+}
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -269,6 +326,31 @@ impl Game<'_> {
     /// and on servers), and the server's own (`native_window` is false
     /// there: the single player server thread, a dedicated server).
     pub(super) fn native_tick(&mut self) {}
+    /// The world's phases, read-only; `error_text` carries the engine's
+    /// own open-failure text, empty otherwise. Server-side; the deprecated
+    /// in-frame path delivers no lifecycle events. A server loop or final
+    /// save failure fires `WorldCloseFailed` with the error text.
+    pub(super) fn native_world_lifecycle(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: WorldPhase,
+        error_text: &str,
+    ) {
+        let _ = (context, phase, error_text);
+    }
+    /// The authoritative server tick's phases: `ServerTickStart` before any
+    /// level is ticked (NeoForge's `ServerTickEvent.Pre`), `ServerTickEnd`
+    /// after the last (`.Post`). Read blocks with `native_server_block`, by
+    /// dimension: which level `self.world` holds here is not defined. A paused
+    /// pass fires nothing; a frozen world carries `world_running` false except
+    /// during a requested step.
+    pub(super) fn native_server_tick(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: ServerTickPhase,
+    ) {
+        let _ = (context, phase);
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -318,6 +400,48 @@ impl Game<'_> {
     /// act on it when it is yours. API 2.
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
+    }
+    /// The commands native mods add to the server's command tree: push
+    /// yours. Asked once when a world opens to players (a dedicated
+    /// server, a LAN host, single player's server thread); every player's
+    /// chat box then completes them as vanilla's, within their level. A
+    /// name vanilla has is left out. API 8.
+    pub(super) fn native_register_commands(&mut self, commands: &mut Vec<NativeCommand>) {
+        let _ = commands;
+    }
+    /// A player's command on the server (`Commands.performCommand`),
+    /// without its slash, for a command a mod registered and the player's
+    /// level allows: set `ran` when it is yours. The player's state is
+    /// swapped in for the call, so `native_player` and the other helpers
+    /// read that player; `native_feedback` answers them. API 8.
+    pub(super) fn native_perform_command(
+        &mut self,
+        player: &NativeServerPlayer,
+        command: &str,
+        ran: &mut bool,
+    ) {
+        let _ = (player, command, ran);
+    }
+    /// A click in a menu a mod opened (`native_open_menu`), which moved
+    /// nothing: the menu's `slot` (its own first, then the player's
+    /// inventory, `native_menu_inventory_slot`; -999 outside), the `button`
+    /// and the click's `mode` (`ClickType`'s id) of the player `uuid`.
+    /// No player's state is swapped in: the menu helpers take the player's
+    /// UUID. API 10.
+    pub(super) fn native_menu_clicked(
+        &mut self,
+        uuid: u128,
+        window: i32,
+        slot: i32,
+        button: i32,
+        mode: i32,
+    ) {
+        let _ = (uuid, window, slot, button, mode);
+    }
+    /// A menu a mod opened closed: the player closed it, the server or a mod
+    /// opened another, or the player left. API 10.
+    pub(super) fn native_menu_closed(&mut self, uuid: u128, window: i32) {
+        let _ = (uuid, window);
     }
 }
 
@@ -648,6 +772,82 @@ mod tests {
                 assert!(!line.contains(mac), "a macro in the hook points: {line}");
             }
         }
+    }
+
+    #[test]
+    fn lifecycle_source_stays_hookable() {
+        let source = include_str!("native_lifecycle.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+        for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!line.contains("cfg"), "a cfg in lifecycle source: {line}");
+            for mac in ["!(", "![", "! {", "!{"] {
+                assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_matches_hook_points() {
+        use std::collections::BTreeSet;
+
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../native-hooks.json")).unwrap();
+        let hooks = catalog["hooks"].as_array().unwrap();
+        let source = include_str!("native_hooks.rs");
+        let section = source
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        let level_section = source
+            .split("impl GameLevel<'_> {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        let level_hooks: BTreeSet<_> = level_section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let declared: BTreeSet<_> = section
+            .lines()
+            .chain(level_section.lines())
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let mut names = BTreeSet::new();
+        let mut contracts = BTreeSet::new();
+        for hook in hooks {
+            let name = hook["name"].as_str().unwrap();
+            let version = hook["version"].as_u64().unwrap();
+            assert!(
+                version > 0 && contracts.insert((name, version)),
+                "invalid or duplicate hook: {name} v{version}"
+            );
+            names.insert(name);
+            let owner = if level_hooks.contains(name) {
+                "GameLevel"
+            } else {
+                "Game"
+            };
+            assert_eq!(
+                hook["target"].as_str().unwrap(),
+                format!("horizon_client::game::native_hooks::{owner}<'_>::native_{name}")
+            );
+        }
+        assert_eq!(names, declared);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

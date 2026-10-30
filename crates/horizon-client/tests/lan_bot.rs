@@ -202,6 +202,7 @@ impl Server {
             tick_steps: (0, 0),
             collision: None,
             border: &horizon_client::worldborder::WorldBorder::default(),
+            streaming: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -224,7 +225,9 @@ impl Server {
 }
 
 fn server(resources: &Path) -> Server {
-    let sync = Arc::new(SyncData::load(resources).expect("sync data"));
+    let sync = Arc::new(
+        SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+    );
     let lan = Lan::start(sync.clone(), 0, "Test - World".into(), 8).unwrap();
     let biomes: Vec<String> = sync
         .dynamic
@@ -254,6 +257,7 @@ fn server(resources: &Path) -> Server {
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
+            levels: Default::default(),
         },
     );
     Server {
@@ -304,7 +308,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 &[book, u8::from(open), u8::from(filtering)],
             )
             .unwrap();
-            s.hub.guests[0].inbox.push_back(packet);
+            s.hub.guests[0].inbox.push_back((packet, 0));
             s.tick(&[]);
             let settings = &s.hub.guests[0].recipe_book;
             for i in 0..4 {
@@ -326,7 +330,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 );
             }
             let mut saved = horizon_client::save::Level::default();
-            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved);
+            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved, None);
             let mut reopened = horizon_client::save::Level::default();
             reopened.read_player(&saved.player_tag());
             assert_eq!(reopened.recipe_book.open, settings.open);
@@ -364,13 +368,14 @@ fn sprint_commands_survive_keyboard_input_changes() {
     }
     let id = s.hub.guests[0].entity_id;
     s.hub.guests[0].loaded = true;
-    s.hub.guests[0]
-        .inbox
-        .push_back(S::PlayerCommand(play::PlayerCommand {
+    s.hub.guests[0].inbox.push_back((
+        S::PlayerCommand(play::PlayerCommand {
             id,
             action: 1,
             data: 0,
-        }));
+        }),
+        0,
+    ));
     s.tick(&[]);
     assert!(s.hub.guests[0].sprinting);
     // LocalPlayer keeps sprinting after Ctrl is released while W remains
@@ -378,7 +383,7 @@ fn sprint_commands_survive_keyboard_input_changes() {
     for flags in [65, 1, 0, 33] {
         s.hub.guests[0]
             .inbox
-            .push_back(S::PlayerInput(play::PlayerInput { flags }));
+            .push_back((S::PlayerInput(play::PlayerInput { flags }), 0));
         s.tick(&[]);
         let g = &s.hub.guests[0];
         assert!(
@@ -388,18 +393,19 @@ fn sprint_commands_survive_keyboard_input_changes() {
         assert_eq!(g.input, flags);
         assert_eq!(g.sneaking, flags & 32 != 0);
     }
-    s.hub.guests[0]
-        .inbox
-        .push_back(S::PlayerCommand(play::PlayerCommand {
+    s.hub.guests[0].inbox.push_back((
+        S::PlayerCommand(play::PlayerCommand {
             id,
             action: 2,
             data: 0,
-        }));
+        }),
+        0,
+    ));
     s.tick(&[]);
     assert!(!s.hub.guests[0].sprinting);
     s.hub.guests[0]
         .inbox
-        .push_back(S::PlayerInput(play::PlayerInput { flags: 65 }));
+        .push_back((S::PlayerInput(play::PlayerInput { flags: 65 }), 0));
     s.tick(&[]);
     assert!(
         !s.hub.guests[0].sprinting,
@@ -431,26 +437,143 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
     // A creative break as the client sends it in one tick: the dig, the arm swing,
     // then the move into the block it predicted gone.
     let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back(S::PlayerAction(play::PlayerAction {
-        action: 0,
-        pos: below,
-        direction: 1,
-        sequence: 1,
-    }));
-    inbox.push_back(S::Punch(Empty));
-    inbox.push_back(S::MovePlayerPos(play::MovePlayerPos {
-        x: at[0],
-        y: at[1] - 0.0784,
-        z: at[2],
-        flags: 0,
-    }));
+    inbox.push_back((
+        S::PlayerAction(play::PlayerAction {
+            action: 0,
+            pos: below,
+            direction: 1,
+            sequence: 1,
+        }),
+        0,
+    ));
+    inbox.push_back((S::Punch(Empty), 0));
+    inbox.push_back((
+        S::MovePlayerPos(play::MovePlayerPos {
+            x: at[0],
+            y: at[1] - 0.0784,
+            z: at[2],
+            flags: 0,
+        }),
+        0,
+    ));
     s.tick(&[]);
     // The game breaks the block after the hub's pass: the move waits, or it would be
     // checked against the block and sent back.
     let g = &s.hub.guests[0];
     assert_eq!(g.position, at, "the move was handled before the dig");
     assert!(
-        matches!(g.inbox.back(), Some(S::MovePlayerPos(_))),
+        matches!(g.inbox.back(), Some((S::MovePlayerPos(_), _))),
+        "the move left the queue"
+    );
+}
+
+/// The first login packet a client named `name` gets after its hello.
+fn first_login_packet(mut c: Connection, port: u16, name: &str) -> login::Clientbound {
+    c.send(
+        &handshake::Serverbound::Intention(handshake::Intention {
+            protocol: PROTOCOL_VERSION,
+            host: "127.0.0.1".into(),
+            port,
+            intent: handshake::LOGIN,
+        })
+        .encode(),
+    )
+    .unwrap();
+    c.send(
+        &login::Serverbound::Hello(login::ServerHello {
+            name: name.into(),
+            uuid: offline_uuid(name),
+        })
+        .encode(),
+    )
+    .unwrap();
+    let (id, payload) = c.recv().unwrap();
+    login::Clientbound::decode(id, &payload).unwrap()
+}
+
+#[test]
+fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
+    use horizon_client::lan::{NetConfig, OnlineMode};
+    let Some(resources) = resources() else {
+        return;
+    };
+    let sync = Arc::new(
+        SyncData::load(&resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+    );
+    let net = NetConfig {
+        online: Some(Arc::new(OnlineMode::generate(false).unwrap())),
+        announce: false,
+        ..NetConfig::lan(0, "Test - World".into(), 8)
+    };
+    let lan = Lan::start_with(sync, net).unwrap();
+    let guest = Connection::connect("127.0.0.1", lan.port, Duration::from_secs(5)).unwrap();
+    match first_login_packet(guest, lan.port, "Guest") {
+        login::Clientbound::Hello(h) => assert!(h.should_authenticate),
+        other => panic!("expected an encryption request, got {other:?}"),
+    }
+    let owner = Connection::local(lan.connect_local().unwrap());
+    match first_login_packet(owner, 0, "Host") {
+        login::Clientbound::LoginFinished(p) => assert_eq!(p.profile.uuid, offline_uuid("Host")),
+        other => panic!("expected the owner's login, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Pillar", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    s.hub.guests[0].loaded = true;
+    // The join's teleport accepted: the hub takes moves.
+    s.hub.guests[0].awaiting_teleport = None;
+    let at = s.hub.guests[0].position;
+    let below = [
+        at[0].floor() as i32,
+        at[1].floor() as i32 - 1,
+        at[2].floor() as i32,
+    ];
+    // A jump up a pillar as the client sends it in one tick: the click on the block
+    // below from where the player was, the arm swing, then the move up the jump.
+    let inbox = &mut s.hub.guests[0].inbox;
+    inbox.push_back((
+        S::UseItemOn(play::UseItemOn {
+            hand: 0,
+            pos: below,
+            face: 1,
+            cursor: [0.5, 1.0, 0.5],
+            inside: false,
+            world_border: false,
+            sequence: 1,
+        }),
+        0,
+    ));
+    inbox.push_back((S::Punch(Empty), 0));
+    inbox.push_back((
+        S::MovePlayerPos(play::MovePlayerPos {
+            x: at[0],
+            y: at[1] + 0.42,
+            z: at[2],
+            flags: 0,
+        }),
+        0,
+    ));
+    s.tick(&[]);
+    // The game places the block after the hub's pass: BlockItem.canPlace sees the
+    // player where they clicked from, as their client's prediction did.
+    assert_eq!(s.placed.len(), 1, "the use was not handled");
+    let g = &s.hub.guests[0];
+    assert_eq!(g.position, at, "the move was handled before the use");
+    assert!(
+        matches!(g.inbox.back(), Some((S::MovePlayerPos(_), _))),
         "the move left the queue"
     );
 }
@@ -614,6 +737,7 @@ fn guests_see_each_other_and_the_world_entities() {
         precise: false,
         needs_sync: false,
         leash: None,
+        spectator: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
@@ -802,4 +926,73 @@ fn a_spectators_container_click_is_taken_back() {
     );
     assert!(s.hub.guests[0].carried.is_none());
     run(&mut s, move || content(&mut bot));
+}
+
+/// `/fillbiome` on a server: `ChunkMap.resendBiomesForChunks` sends each
+/// player the new biomes of the columns it has been sent, and only those,
+/// in a `ClientboundChunksBiomesPacket` the client reads section by section.
+#[test]
+fn changed_biomes_reach_the_players_that_see_the_column() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let bot = run(&mut s, move || connect(port, "Gardener", true));
+    // The column at the spawn arrives, with the batch that holds it.
+    let mut bot = run(&mut s, move || {
+        let mut bot = bot;
+        let mut seen = false;
+        loop {
+            match bot.recv_play()? {
+                C::PlayerPosition(p) => {
+                    bot.send(S::AcceptTeleportation(play::AcceptTeleportation {
+                        id: p.teleport,
+                        x: p.position[0],
+                        y: p.position[1],
+                        z: p.position[2],
+                        yaw: 0.0,
+                        pitch: 0.0,
+                    }))
+                }
+                C::LevelChunkWithLight(l) if (l.x, l.z) == (0, 0) => seen = true,
+                C::ChunkBatchFinished(_) => {
+                    bot.send(S::ChunkBatchReceived(play::ChunkBatchReceived {
+                        chunks_per_tick: 20.0,
+                    }));
+                    if seen {
+                        return Ok(bot);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    assert!(s.hub.guests[0].sent_chunks.contains(&(0, 0)));
+    assert!(!s.hub.guests[0].sent_chunks.contains(&(4, 4)));
+    for key in [(0, 0), (4, 4)] {
+        let chunk = Arc::make_mut(s.world.chunks.get_mut(&key).unwrap());
+        // The quart cell at x 4..8, y 4..8, z 8..12 of the column.
+        chunk.set_biome_cell(1, 17, 2, 5);
+    }
+    s.hub.resend_biomes(&s.world, &[(0, 0), (4, 4)]);
+    let packet = run(&mut s, move || {
+        loop {
+            if let C::ChunksBiomes(p) = bot.recv_play()? {
+                return Ok(p);
+            }
+        }
+    });
+    assert_eq!(packet.chunks.len(), 1, "only the column the player sees");
+    assert_eq!(packet.chunks[0].pos, [0, 0]);
+    let sections = packet.chunks[0].biomes(24, 7).unwrap();
+    // Section 4 (y 0..16), cell (x 1, y 1, z 2).
+    assert_eq!(sections[4].get(1 << 4 | 2 << 2 | 1), 5);
+    assert_eq!(sections[4].get(0), 0);
+    assert!(
+        sections
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || b.get(25) == 0)
+    );
 }

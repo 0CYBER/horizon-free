@@ -12,7 +12,7 @@
 //! portal) until the player is in that dimension and its exit is loaded.
 use super::{Dim, Game, Screen};
 use horizon_client::Result;
-use horizon_client::nether_portal::PortalState;
+use horizon_client::nether_portal::{ENTITY_DELAY, PortalState};
 use horizon_core::{
     geometry::{Aabb, Axis, Vec3},
     position::BlockPos,
@@ -29,8 +29,6 @@ use std::collections::HashMap;
 
 /// `Player.getDimensionChangingDelay`.
 pub(super) const PLAYER_DELAY: i32 = 10;
-/// `Entity.getDimensionChangingDelay`.
-const ENTITY_DELAY: i32 = 300;
 
 /// Where in its portal a traveller stood, and where its exit is to be found.
 #[derive(Clone, Copy, Debug)]
@@ -89,7 +87,7 @@ pub(super) struct Portals {
     /// Items and mobs, by entity id.
     entities: HashMap<u32, PortalState>,
     /// Positions before this tick's moves, by entity id.
-    before: HashMap<u32, Vec3>,
+    pub(super) before: HashMap<u32, Vec3>,
     arrivals: Vec<Arrival>,
     /// The vehicles server players ride that went through a portal this
     /// tick, in their level, with their entry: they carry their riders
@@ -341,7 +339,7 @@ impl Game<'_> {
                     }) {
                         continue;
                     }
-                    let base = horizon_client::chunk::MIN_Y + 16 * s as i32;
+                    let base = self.world.bottom_y() + 16 * s as i32;
                     for y in base..base + 16 {
                         for lz in 0..16 {
                             for lx in 0..16 {
@@ -429,18 +427,30 @@ impl Game<'_> {
         if !alive || self.riding.is_some() || self.sleeping.is_some() {
             return;
         }
+        // The client's LocalPlayer has the same cooldown (the Respawn
+        // packet's spawn info): standing in the arrival portal, its overlay
+        // fades instead of building up again.
+        let cooling = self.portals.player.cooldown > 0;
         self.portals.player.set_inside(pos, PLAYER_DELAY);
-        self.portals.client_inside = true;
+        if !cooling {
+            self.portals.client_inside = true;
+        }
     }
     /// The same on a server's client: `Entity.canUsePortal` (alive, not a
     /// passenger), then only the client's `setAsInsidePortal`, which drives
-    /// the confusion effect (`client_portal_effect`).
+    /// the confusion effect (`client_portal_effect`). On a server's client
+    /// `portals.player` holds only the LocalPlayer's `portalCooldown`.
     pub(super) fn client_inside_nether_portal(&mut self) {
         let alive = self
             .player
             .as_ref()
             .is_some_and(|p| !p.health.dead_or_dying());
-        if alive && self.riding.is_none() {
+        if !alive || self.riding.is_some() {
+            return;
+        }
+        if self.portals.player.cooldown > 0 {
+            self.portals.player.cooldown = PLAYER_DELAY;
+        } else {
             self.portals.client_inside = true;
         }
     }
@@ -673,6 +683,17 @@ impl Game<'_> {
             );
         }
     }
+    /// `Entity.setAsInsidePortal` on an entity that is still on its portal
+    /// cooldown, whatever the portal: the cooldown restarts and it stays.
+    pub(super) fn restart_portal_cooldown(&mut self, id: u32) -> bool {
+        match self.portals.entities.get_mut(&id) {
+            Some(state) if state.cooldown > 0 => {
+                state.cooldown = ENTITY_DELAY;
+                true
+            }
+            _ => false,
+        }
+    }
     /// `Entity.setPortalCooldown` on an entity that has just spawned in a
     /// portal: it stands in the portal for 300 ticks without going through.
     pub(super) fn set_portal_cooldown(&mut self, id: u32) {
@@ -686,7 +707,7 @@ impl Game<'_> {
     }
     /// `canUsePortal(false)` of a mob: alive, riding nothing, not asleep,
     /// not carrying the player, and not a boss that never travels.
-    fn mob_can_use_portal(&self, m: &horizon_client::mobs::Mob) -> bool {
+    pub(super) fn mob_can_use_portal(&self, m: &horizon_client::mobs::Mob) -> bool {
         use horizon_client::mobs::Species;
         m.alive()
             && m.extra.mount.is_none()
@@ -848,18 +869,18 @@ impl Game<'_> {
         reach: horizon_core::geometry::Aabb,
         sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> bool {
-        use horizon_client::chunk::{MIN_Y, SECTIONS};
+        use horizon_client::section_mask::SectionMask;
         let (min, max) = (reach.min_position(), reach.max_position());
         if !min.is_finite() || !max.is_finite() {
             return true;
         }
         let (min, max) = (BlockPos::containing(min), BlockPos::containing(max));
-        let top = SECTIONS as i32 - 1;
+        let top = self.world.layout().sections() as i32 - 1;
         let (x0, x1) = (min.x >> 4, max.x >> 4);
         let (z0, z1) = (min.z >> 4, max.z >> 4);
         let (y0, y1) = (
-            ((min.y - MIN_Y) >> 4).clamp(0, top),
-            ((max.y - MIN_Y) >> 4).clamp(0, top),
+            ((min.y - self.world.bottom_y()) >> 4).clamp(0, top),
+            ((max.y - self.world.bottom_y()) >> 4).clamp(0, top),
         );
         let count = (i64::from(x1) - i64::from(x0) + 1)
             * (i64::from(y1) - i64::from(y0) + 1)
@@ -867,20 +888,17 @@ impl Game<'_> {
         if count > 64 {
             return true;
         }
-        let mut y_mask = 0u32;
-        for sy in y0..=y1 {
-            y_mask |= 1 << sy;
-        }
+        let y_mask = SectionMask::below(y1 as usize + 1).from(y0 as usize);
         let behaviours = self.res.behaviours();
         let chunks = &self.world.chunks;
         (x0..=x1).any(|cx| {
             (z0..=z1).any(|cz| {
                 chunks.get(&(cx, cz)).is_some_and(|chunk| {
-                    sections.get((cx, cz), chunk, |v| {
+                    let portals = sections.get((cx, cz), chunk, |v| {
                         let state = horizon_world::registry::BlockStateId(v);
                         behaviours.portal_axis(state).is_some() || self.is_end_portal(state)
-                    }) & y_mask
-                        != 0
+                    });
+                    !(portals & y_mask).is_empty()
                 })
             })
         })
