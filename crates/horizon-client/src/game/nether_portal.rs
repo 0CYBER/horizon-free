@@ -869,7 +869,10 @@ impl Game<'_> {
         reach: horizon_core::geometry::Aabb,
         sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> bool {
-        use horizon_client::chunk::{MIN_Y, SECTIONS};
+        use horizon_client::{
+            chunk::{MIN_Y, SECTIONS},
+            section_mask::SectionMask,
+        };
         let (min, max) = (reach.min_position(), reach.max_position());
         if !min.is_finite() || !max.is_finite() {
             return true;
@@ -888,20 +891,17 @@ impl Game<'_> {
         if count > 64 {
             return true;
         }
-        let mut y_mask = 0u32;
-        for sy in y0..=y1 {
-            y_mask |= 1 << sy;
-        }
+        let y_mask = SectionMask::below(y1 as usize + 1).from(y0 as usize);
         let behaviours = self.res.behaviours();
         let chunks = &self.world.chunks;
         (x0..=x1).any(|cx| {
             (z0..=z1).any(|cz| {
                 chunks.get(&(cx, cz)).is_some_and(|chunk| {
-                    sections.get((cx, cz), chunk, |v| {
+                    let portals = sections.get((cx, cz), chunk, |v| {
                         let state = horizon_world::registry::BlockStateId(v);
                         behaviours.portal_axis(state).is_some() || self.is_end_portal(state)
-                    }) & y_mask
-                        != 0
+                    });
+                    !(portals & y_mask).is_empty()
                 })
             })
         })
