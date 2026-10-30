@@ -108,8 +108,8 @@ tells a player why, even inside their own hook; and the players
 `native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
 
 API 22 adds item behaviour, on the server for every player: `native_hurt_enemy` hears a player's hit land on a mob with the
-held stack, `native_inventory_tick` runs each tick for every stack a player carries (armour and off hand included) and may
-change it, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
+held stack, `native_inventory_tick` runs each tick for every stack a player carries (armour and off hand included), and
+`native_carried_stack` reads and changes that stack, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
 that use them need `"hooks": 22`.
 
 ## What the launcher does

@@ -733,21 +733,18 @@ impl Game<'_> {
     pub(super) fn native_hurt_enemy(&mut self, stack: &ItemStack, entity: u32, kind: &str) {
         let _ = (stack, entity, kind);
     }
-    /// A server tick of `stack`, carried by a player: where `Inventory.tick`
-    /// calls `Item.inventoryTick`, for every stack, each tick. `slot` is as
-    /// `Inventory` saves it (0 to 35; the armour 100 feet to 103 head; -106
-    /// the off hand), and `selected` says it is the held slot. Change `stack`
-    /// as you like: a count of 0 empties the slot, and the player's client
-    /// gets the change. The stack is out of its slot during the call. This
-    /// runs often, so check the item first. Server-side, for every living
-    /// player of the world (the helpers read the acting one). API 22.
-    pub(super) fn native_inventory_tick(
-        &mut self,
-        slot: i32,
-        stack: &mut ItemStack,
-        selected: bool,
-    ) {
-        let _ = (slot, stack, selected);
+    /// A server tick of the stack a player carries in `slot`: where
+    /// `Inventory.tick` calls `Item.inventoryTick`, for every stack, each tick,
+    /// `/tick freeze` included (it stops the world, not the player). `slot` is
+    /// as `Inventory` saves it (0 to 35; the armour 100 feet to 103 head; -106
+    /// the off hand), and `selected` says it is the held slot.
+    /// `native_carried_stack` reads and changes the stack, which stays in its
+    /// slot, so the item helpers see it: a count of 0 empties the slot, and the
+    /// player's client gets the change. This runs often, so check the item
+    /// first. Server-side, for every living player of the world (the helpers
+    /// read the acting one). API 22.
+    pub(super) fn native_inventory_tick(&mut self, slot: i32, selected: bool) {
+        let _ = (slot, selected);
     }
     /// A player's equipment slot `slot` (`head`, `chest`, `legs`, `feet`,
     /// `offhand`, and `mainhand` on a swap of the hands) took a different
@@ -816,6 +813,14 @@ impl GameLevel<'_> {
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
+    /// The stack the acting player carries in `slot`, by
+    /// `native_inventory_tick`'s numbers: none for an empty slot or another
+    /// number. Change it as you like: a count of 0 empties the slot at the end
+    /// of `native_inventory_tick`, and the player's client gets the change.
+    /// API 22.
+    pub(super) fn native_carried_stack(&mut self, slot: i32) -> Option<&mut ItemStack> {
+        self.native_carried_slot(slot)?.as_mut()
+    }
     /// Whether the player left mod `mod_id` on in Options > Mods. A mod
     /// turned off does nothing (check this first in each hook) until the
     /// launcher's next build leaves it out.
@@ -1152,26 +1157,34 @@ impl Game<'_> {
             return;
         }
         for i in 0..self.inventory.len() {
-            let stack = self.inventory[i].take();
-            self.inventory[i] = self.native_stack_tick(stack, i as i32, i == self.selected);
+            self.native_slot_tick(i as i32, i == self.selected);
         }
         // Head first here; `Inventory` saves feet as 100 and head as 103.
         for i in 0..self.armor.len() {
-            let stack = self.armor[i].take();
-            self.armor[i] = self.native_stack_tick(stack, 103 - i as i32, false);
+            self.native_slot_tick(103 - i as i32, false);
         }
-        let stack = self.offhand.take();
-        self.offhand = self.native_stack_tick(stack, -106, false);
+        self.native_slot_tick(-106, false);
     }
-    fn native_stack_tick(
-        &mut self,
-        stack: Option<ItemStack>,
-        slot: i32,
-        selected: bool,
-    ) -> Option<ItemStack> {
-        let mut stack = stack?;
-        self.native_inventory_tick(slot, &mut stack, selected);
-        (stack.count > 0).then_some(stack)
+    fn native_slot_tick(&mut self, slot: i32, selected: bool) {
+        if self.native_carried_slot(slot).is_none_or(|s| s.is_none()) {
+            return;
+        }
+        self.native_inventory_tick(slot, selected);
+        if let Some(stack) = self.native_carried_slot(slot)
+            && stack.as_ref().is_some_and(|s| s.count == 0)
+        {
+            *stack = None;
+        }
+    }
+    /// The slot a player's carried stack is in, by `native_inventory_tick`'s
+    /// numbers: none for another number.
+    fn native_carried_slot(&mut self, slot: i32) -> Option<&mut Option<ItemStack>> {
+        match slot {
+            0.. if (slot as usize) < self.inventory.len() => self.inventory.get_mut(slot as usize),
+            100..=103 => self.armor.get_mut(103 - slot as usize),
+            -106 => Some(&mut self.offhand),
+            _ => None,
+        }
     }
     /// `EntityBlock.newBlockEntity` of block `name`: Horizon's own, else a
     /// native mod's.
