@@ -2158,6 +2158,15 @@ impl Dim {
             _ => Self::Overworld,
         }
     }
+    /// The level's shape, from vanilla's dimension types.
+    fn shape(self) -> horizon_client::save::LevelShape {
+        use horizon_client::save::LevelShape;
+        match self {
+            Self::Overworld => LevelShape::OVERWORLD,
+            Self::Nether => LevelShape::NETHER,
+            Self::End => LevelShape::END,
+        }
+    }
     /// `Level.getMinY`: the dimension type's minimum y.
     fn min_y(self) -> i32 {
         match self {
@@ -14433,6 +14442,7 @@ impl<'a> Game<'a> {
             std::env::current_dir()?
                 .join("saves")
                 .join(".horizon-title"),
+            horizon_client::save::LevelShape::OVERWORLD,
         ));
         let prepared = prepared
             .map(Ok)

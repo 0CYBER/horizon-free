@@ -422,6 +422,7 @@ impl Game<'_> {
         self.world = World::new(self.res.facts().air, 0);
         self.save = Arc::new(SaveDir::new(
             std::env::temp_dir().join("horizon-remote-unused"),
+            horizon_client::save::LevelShape::OVERWORLD,
         ));
         self.inventory = vec![None; 36];
         self.armor = [None, None, None, None];

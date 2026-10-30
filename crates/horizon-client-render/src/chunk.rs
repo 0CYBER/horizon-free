@@ -78,17 +78,6 @@ impl LevelShape {
     pub fn has_section(self, y: i32) -> bool {
         (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
     }
-    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
-    /// old `DIM-1` and `DIM1`).
-    pub fn for_dir(root: &std::path::Path) -> Self {
-        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
-            Self::NETHER
-        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
-            Self::END
-        } else {
-            Self::OVERWORLD
-        }
-    }
     /// The sections a chunk of this level holds: the level's, widened to the
     /// vanilla Overworld's `-64..320` so that vanilla's Nether and End keep
     /// the 24 sections they have always had.
