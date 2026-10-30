@@ -5334,7 +5334,7 @@ impl Game<'_> {
                 a.kind,
                 ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
             ) {
-                self.wind_charge_geometry(a, c, packed, out);
+                self.wind_charge_geometry(a, c, packed, alpha as f32, out);
                 continue;
             }
             // ShulkerBulletRenderer: the tumbling bullet model, then a larger
