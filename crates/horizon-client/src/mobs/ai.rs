@@ -668,6 +668,18 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                         "minecraft:cactus" => {
                             m.damage(1.0, Damage::of(DamageKind::Cactus));
                         }
+                        // CampfireBlock.entityInside: a lit campfire hurts a
+                        // living entity by its fire damage (1, soul 2).
+                        name @ ("minecraft:campfire" | "minecraft:soul_campfire")
+                            if w.prop(x, y, z, "lit") == Some("true") =>
+                        {
+                            let damage = if name == "minecraft:campfire" {
+                                1.0
+                            } else {
+                                2.0
+                            };
+                            m.damage(damage, Damage::of(DamageKind::Campfire));
+                        }
                         // WebBlock.entityInside -> makeStuckInBlock, which a
                         // spider ignores for cobwebs and a wither always.
                         "minecraft:cobweb"
