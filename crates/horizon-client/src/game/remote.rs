@@ -7597,7 +7597,8 @@ impl Remote {
             .iter()
             .find(|(_, u)| **u == uuid)
             .map(|(id, _)| *id as u32)
-    }}
+    }
+}
 
 /// The textures to resolve skins from: every list entry's, and for a player
 /// entity whose entry is gone the profile it kept. `kept` first takes, for each
