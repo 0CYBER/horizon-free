@@ -1994,6 +1994,11 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::PandaSneezed { mob } => self.panda_sneezed(mob),
+                MobEvent::FallToPassengers {
+                    mob,
+                    distance,
+                    modifier,
+                } => self.fall_to_passengers(mob, distance, modifier),
                 MobEvent::ShedScute { mob, at, pitch } => {
                     // The mob already checked `shouldDropLoot` (a baby, `mob_drops`).
                     let table = "minecraft:gameplay/armadillo_shed";
