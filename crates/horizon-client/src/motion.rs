@@ -302,6 +302,8 @@ pub struct PlayerMotion {
     pub was_auto_jump: bool,
     /// `input.getMoveVector()` this tick (before `modifyInput`).
     pub move_vector: [f32; 2],
+    /// `LocalPlayer.xxa` / `zza`: the move vector after `modifyInput`.
+    pub applied_input: [f32; 2],
     /// A usable glider (elytra) is worn; the game sets it each tick.
     pub glider: bool,
     /// The view pitch (xRot), for gliding.
@@ -516,6 +518,7 @@ impl PlayerMotion {
             auto_jump_time: 0,
             was_auto_jump: false,
             move_vector: [0.0, 0.0],
+            applied_input: [0.0, 0.0],
             glider: false,
             pitch: 0.0,
             fall_flying: false,
@@ -1133,10 +1136,9 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             None
         };
-        self.simulation_tick_with_fluids(
-            crate::input::modify_input(direction, self.player.item_use_speed, sneak),
-            keys.jump,
-        )
+        let modified = crate::input::modify_input(direction, self.player.item_use_speed, sneak);
+        self.player.applied_input = modified;
+        self.simulation_tick_with_fluids(modified, keys.jump)
     }
     pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
         movement_statistics::check(self, delta)
@@ -2177,8 +2179,14 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         )?;
         Ok(())
     }
-    fn minor_horizontal_collision(&mut self, _: Vec3) -> Result<bool> {
-        Ok(false)
+    /// `LocalPlayer.isHorizontalCollisionMinor`: the move that hit a wall was
+    /// within 8 degrees of the direction the input asked for.
+    fn minor_horizontal_collision(&mut self, movement: Vec3) -> Result<bool> {
+        Ok(horizontal_collision_minor(
+            self.player.yaw,
+            self.player.applied_input,
+            movement,
+        ))
     }
     fn legacy_on_position(&mut self) -> Result<BlockPos> {
         self.support(movement_support::LEGACY_SUPPORT_OFFSET)
@@ -2691,9 +2699,54 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
     }
 }
 
+/// `LocalPlayer.isHorizontalCollisionMinor` for the input `[xxa, zza]`.
+fn horizontal_collision_minor(yaw: f32, input: [f32; 2], movement: Vec3) -> bool {
+    let rad = yaw * (std::f32::consts::PI / 180.0);
+    let sin = f64::from(horizon_core::geometry::trig::sin(f64::from(rad)));
+    let cos = f64::from(horizon_core::geometry::trig::cos(f64::from(rad)));
+    let (xxa, zza) = (f64::from(input[0]), f64::from(input[1]));
+    let global_x = xxa * cos - zza * sin;
+    let global_z = zza * cos + xxa * sin;
+    let a_len = global_x * global_x + global_z * global_z;
+    let m_len = movement.x * movement.x + movement.z * movement.z;
+    if a_len < f64::from(1.0e-5_f32) || m_len < f64::from(1.0e-5_f32) {
+        return false;
+    }
+    let dot = global_x * movement.x + global_z * movement.z;
+    horizon_core::jmath::acos(dot / (a_len * m_len).sqrt()) < f64::from(0.13962634_f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `LocalPlayer.isHorizontalCollisionMinor`: sliding along a wall at a
+    /// small angle to the input is minor; a sideways slide is not.
+    #[test]
+    fn horizontal_collision_minor_by_angle() {
+        // Yaw 0 looks along +z; forward input.
+        let fwd = [0.0, 1.0];
+        assert!(horizontal_collision_minor(
+            0.0,
+            fwd,
+            Vec3::new(0.02, 0.0, 0.2)
+        ));
+        assert!(!horizontal_collision_minor(
+            0.0,
+            fwd,
+            Vec3::new(0.2, 0.0, 0.05)
+        ));
+        assert!(!horizontal_collision_minor(
+            0.0,
+            fwd,
+            Vec3::new(0.0, 0.0, 0.0)
+        ));
+        assert!(!horizontal_collision_minor(
+            0.0,
+            [0.0, 0.0],
+            Vec3::new(0.0, 0.0, 0.2)
+        ));
+    }
 
     #[test]
     fn sword_sweep_requires_charge_ground_and_slow_horizontal_movement() {
