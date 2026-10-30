@@ -1915,28 +1915,43 @@ fn compress_records(
     if helpers <= 1 {
         return records.iter().map(|(_, r)| compress(r)).collect();
     }
+    share_out(records.len(), helpers, |i| compress(records[i].1), || true)
+}
+
+/// `job(i)` for every `i` below `count`, in order, shared between this thread
+/// and up to `helpers - 1` scoped threads, each taking the next index as it
+/// finishes one. A helper the system refuses to start (`start` false, or a
+/// container at its limit of threads: EAGAIN) leaves its share to the
+/// others: this thread does all of it at worst, and never panics for it, as
+/// `thread::scope`'s own `spawn` would, which stopped the region writer.
+fn share_out<R: Send>(
+    count: usize,
+    helpers: usize,
+    job: impl Fn(usize) -> R + Sync,
+    mut start: impl FnMut() -> bool,
+) -> Vec<R> {
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut done: Vec<(usize, std::io::Result<Option<ChunkRecord>>)> =
-        std::thread::scope(|scope| {
-            let threads: Vec<_> = (0..helpers)
-                .map(|_| {
-                    scope.spawn(|| {
-                        let mut out = Vec::new();
-                        loop {
-                            let i = next.fetch_add(1, Ordering::Relaxed);
-                            let Some((_, record)) = records.get(i) else {
-                                return out;
-                            };
-                            out.push((i, compress(record)));
-                        }
-                    })
-                })
-                .collect();
-            threads
-                .into_iter()
-                .flat_map(|t| t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-                .collect()
-        });
+    let work = || {
+        let mut out = Vec::new();
+        loop {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            if i >= count {
+                return out;
+            }
+            out.push((i, job(i)));
+        }
+    };
+    let mut done: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let threads: Vec<_> = (1..helpers)
+            .filter(|_| start())
+            .filter_map(|_| std::thread::Builder::new().spawn_scoped(scope, work).ok())
+            .collect();
+        let mut done = work();
+        for t in threads {
+            done.extend(t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
+        }
+        done
+    });
     done.sort_unstable_by_key(|(i, _)| *i);
     done.into_iter().map(|(_, r)| r).collect()
 }
@@ -5025,6 +5040,24 @@ mod tests {
         assert!(!snapshot[0].block_names.is_empty());
         assert_eq!(source.block_names[0].1, "stale");
         assert_eq!(source.block_entities[0].0, (99, 0, 99));
+    }
+
+    #[test]
+    fn work_shared_out_is_all_done_in_order_when_no_helper_can_start() {
+        use super::share_out;
+        let squares = |i: usize| i * i;
+        let want: Vec<usize> = (0..40).map(squares).collect();
+        // Every helper refused (a container at its thread limit): this thread does it all.
+        assert_eq!(share_out(40, 4, squares, || false), want);
+        // Some refused, some started.
+        let mut asked = 0;
+        let some = || {
+            asked += 1;
+            asked % 2 == 0
+        };
+        assert_eq!(share_out(40, 4, squares, some), want);
+        assert_eq!(share_out(40, 4, squares, || true), want);
+        assert_eq!(share_out(0, 4, squares, || true), Vec::<usize>::new());
     }
 
     #[test]
