@@ -448,8 +448,10 @@ impl Game<'_> {
                 ok()
             }
             "turn" => {
-                self.yaw += arg(1)?.parse::<f32>()?;
-                self.pitch = (self.pitch + arg(2)?.parse::<f32>()?).clamp(-90.0, 90.0);
+                let yaw = arg(1)?.parse::<f32>()?;
+                let pitch = arg(2)?.parse::<f32>()?;
+                // Degrees, as `Entity.turn` degrees.
+                self.turn_player(f64::from(yaw / 0.15), f64::from(pitch / 0.15));
                 ok()
             }
             "tp" => {

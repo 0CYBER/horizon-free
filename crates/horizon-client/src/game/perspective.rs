@@ -11,6 +11,7 @@ use horizon_client::{
 use horizon_client::{
     hud::HudBatch,
     mobs::{Anim, Brain, Mob, MobType},
+    mouse::Rotation,
     pose::Pose,
 };
 use horizon_core::{
@@ -340,7 +341,9 @@ impl Game<'_> {
             let Some(kind) = self.res.player_type().clone() else {
                 return;
             };
-            self.player_model = Some(Mob::new(0, kind, p.position, self.yaw));
+            let mut m = Mob::new(0, kind, p.position, self.yaw);
+            m.head_pitch = self.pitch;
+            self.player_model = Some(m);
         }
         let crouching = p.pose == Pose::Crouching;
         let position = p.position;
@@ -462,6 +465,40 @@ impl Game<'_> {
         m.extra.swing_right_arm = swing_right_arm;
         m.extra.swing_stab = self.swing.current.is_some_and(|c| c.animation.kind == 2);
         m.hurt_time = hurt;
+    }
+    /// `Entity.turn` for the player, by the mouse, a pad, the arrow keys or an
+    /// agent's `turn`.
+    /// The model's old pitch is the player's `xRotO`, which the turn moves
+    /// with `xRot` (`turn_rotation`).
+    pub(super) fn turn_player(&mut self, xo: f64, yo: f64) {
+        let pitch_o = self.player_model.as_ref().map(|m| m.previous_head_pitch);
+        let rotation = turn_rotation(self.yaw, self.pitch, pitch_o, xo, yo);
+        self.yaw = rotation.y_rot;
+        self.pitch = rotation.x_rot;
+        if let Some(m) = self.player_model.as_mut() {
+            m.previous_head_pitch = rotation.x_rot_o;
+            m.head_pitch = rotation.x_rot;
+        }
+        // Entity.turn ends in AbstractBoat.onPassengerTurned: clampRotation
+        // keeps the view within 105 degrees of the boat at every turn, not
+        // only at the tick, so it never swings past and back.
+        if let Some(b) = self
+            .riding
+            .and_then(|id| self.boats.iter().find(|b| b.id == id))
+        {
+            let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
+            self.yaw += delta.clamp(-105.0, 105.0) - delta;
+        }
+    }
+    /// `Entity.setOldRot` after a server sets the player's rotation
+    /// (`handleRotatePlayer`): the model's head snaps to it instead of easing
+    /// in over the next tick.
+    pub(super) fn snap_player_model_pitch(&mut self) {
+        let pitch = self.pitch;
+        if let Some(m) = self.player_model.as_mut() {
+            m.previous_head_pitch = pitch;
+            m.head_pitch = pitch;
+        }
     }
     /// `LevelExtractor`'s skip of the camera entity: the player's own body
     /// is drawn unless the camera is in first person, or while it sleeps.
@@ -896,6 +933,22 @@ fn player_preview_quads(
     quads
 }
 
+/// `Entity.turn` adds the turn to `xRotO` as well as to `xRot`, so the local
+/// player's `getXRot(partialTick)` follows the mouse every frame instead of
+/// easing in over a tick (#3844), while a change the tick made itself (the
+/// pitch a sleeper lies at) still eases in. `pitch_o` is the model's old
+/// pitch; without a model the old pitch is the pitch.
+fn turn_rotation(yaw: f32, pitch: f32, pitch_o: Option<f32>, xo: f64, yo: f64) -> Rotation {
+    let mut rotation = Rotation {
+        x_rot: pitch,
+        y_rot: yaw,
+        x_rot_o: pitch_o.unwrap_or(pitch),
+        y_rot_o: yaw,
+    };
+    rotation.turn(xo, yo);
+    rotation
+}
+
 /// The player's model's old and new positions for a tick: the player's old
 /// (`Entity.xo`, `yo`, `zo`) and new positions, each 0.125 lower while
 /// crouching. The model is the player itself in vanilla, so
@@ -959,6 +1012,44 @@ mod preview_tests {
         // Moving sideways while rising walks only the horizontal part.
         let d = player_walk_distance(from, Vec3::new(0.8, 81.0, 0.9));
         assert!((d - 0.5).abs() < 1e-6, "{d}");
+    }
+    /// #3844: `getXRot(partialTick)` after `Entity.turn`, as the model's
+    /// renderer lerps it, with turns before and after the tick.
+    #[test]
+    fn own_head_pitch_follows_the_mouse_between_ticks() {
+        // (pitch, the model's previous head pitch, its head pitch), as
+        // `turn_player` and `tick_player_model` move them.
+        let turn = |(pitch, previous, _): (f32, f32, f32), degrees: f32| {
+            let r = turn_rotation(0.0, pitch, Some(previous), 0.0, f64::from(degrees / 0.15));
+            (r.x_rot, r.x_rot_o, r.x_rot)
+        };
+        let tick = |(pitch, _, head): (f32, f32, f32)| (pitch, head, pitch);
+        let x_rot =
+            |(_, previous, head): (f32, f32, f32), alpha: f32| previous + (head - previous) * alpha;
+        let at = |state, pitch: f32| {
+            for alpha in [0.0, 0.5, 1.0] {
+                let x = x_rot(state, alpha);
+                assert!((x - pitch).abs() < 1e-3, "partial tick {alpha}: {x}");
+            }
+        };
+        // The arrow keys turn before the frame's ticks: the tick then copies
+        // ends that are already in step.
+        let still = (10.0, 10.0, 10.0);
+        let state = tick(turn(still, 30.0));
+        at(state, 40.0);
+        // The mouse turns after the tick: the head is there at once.
+        let state = turn(state, -30.0);
+        at(state, 10.0);
+        // The tick laid the head down from 30 to 0: the turn moves both
+        // ends, and the tick's change still eases in.
+        let state = turn((0.0, 30.0, 0.0), 10.0);
+        assert!((x_rot(state, 0.5) - 25.0).abs() < 1e-3, "{state:?}");
+        // xRotO is clamped as xRot is.
+        let r = turn_rotation(0.0, 60.0, Some(80.0), 0.0, 200.0);
+        assert_eq!((r.x_rot_o, r.x_rot), (90.0, 90.0));
+        // Without a model the old pitch is the pitch.
+        let r = turn_rotation(0.0, 10.0, None, 0.0, 100.0);
+        assert_eq!(r.x_rot_o, r.x_rot);
     }
     #[test]
     fn preview_keeps_crossing_faces_depth_and_clips_without_dropping_faces() {
