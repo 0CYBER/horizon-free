@@ -951,6 +951,11 @@ impl GameLevel<'_> {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+        if self.native_authoritative {
+            self.native_block_changed(self.dimension, pos, old, new);
+        }
+    }
     fn observe_neighbor_changed(
         &self,
         pos: BlockPos,

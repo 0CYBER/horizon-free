@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 7 adds block-change observations (`native_block_changed`).
+//!
 //! API 6 adds neighbour-change observations (`native_neighbor_changed`).
 //!
 //! API 5 adds read-only server block queries (`native_server_block`).
@@ -49,9 +51,22 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 6;
+pub(crate) const NATIVE_HOOKS_API: u32 = 7;
 
 impl GameLevel<'_> {
+    /// An authoritative server committed a changed state through `Level.setBlock`.
+    /// The world contains `new`; block side effects and neighbour updates follow.
+    #[inline(always)]
+    pub(super) fn native_block_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (dimension, pos, old, new);
+    }
+
     /// An authoritative server is about to deliver `neighborChanged`.
     /// State and block IDs are valid in this level's registries for this call.
     #[inline(always)]
