@@ -1010,6 +1010,14 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             }
             Some(Tag::compound(entries))
         }
+        // StructureBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::StructureBlock(b) => Some(Tag::compound(b.save())),
+        // JigsawBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::JigsawBlock(b) => Some(Tag::compound(b.save())),
+        // TestBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestBlock(b) => Some(Tag::compound(b.save())),
+        // TestInstanceBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestInstanceBlock(b) => Some(Tag::compound(b.save())),
         BlockEntity::Shelf(s) => Some(Tag::compound([
             ("Items", crate::save::encode_items(&s.items)),
             (
@@ -1053,6 +1061,37 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             }
             Some(Tag::compound(entries))
         }
+        // BeaconBlockEntity.getUpdateTag: saveCustomOnly, the effects and the
+        // levels (no name or lock is kept here).
+        BlockEntity::Beacon(b) => {
+            let mut entries = Vec::new();
+            if let Some(effect) = &b.primary {
+                entries.push(("primary_effect", Tag::String(effect.as_str().into())));
+            }
+            if let Some(effect) = &b.secondary {
+                entries.push(("secondary_effect", Tag::String(effect.as_str().into())));
+            }
+            entries.push(("Levels", Tag::Int(b.levels)));
+            Some(Tag::compound(entries))
+        }
+        // TheEndGatewayBlockEntity.getUpdateTag: saveCustomOnly, so the age the
+        // client's beam counts from, the exit and ExactTeleport when set.
+        BlockEntity::EndGateway(g) => {
+            let mut entries = vec![("Age", Tag::Long(g.age))];
+            if let Some(exit) = g.exit_portal {
+                entries.push(("exit_portal", Tag::IntArray(exit.to_vec())));
+            }
+            if g.exact_teleport {
+                entries.push(("ExactTeleport", Tag::Byte(1)));
+            }
+            Some(Tag::compound(entries))
+        }
+        // CreakingHeartBlockEntity.getUpdateTag: saveCustomOnly, the protector.
+        BlockEntity::CreakingHeart(h) => Some(Tag::compound(
+            h.creaking
+                .map(|(_, uuid)| ("creaking", crate::save::uuid_tag(uuid))),
+        )),
+        // No getUpdatePacket: these, chests, hives, command blocks and the rest.
         BlockEntity::Jukebox(_) | BlockEntity::Lectern(_) => None,
         // CampfireBlockEntity.getUpdateTag: the items alone.
         BlockEntity::Campfire(c) => Some(Tag::compound([(
@@ -1613,5 +1652,81 @@ mod tests {
         let per_section = vanilla.chunk.buffer.len() / SECTIONS;
         assert!(tall.chunk.buffer.len() > per_section * 131);
         assert_eq!(tall.light.sky.len(), 132);
+    }
+
+    #[test]
+    fn beacon_gateway_and_heart_update_tags_load_on_the_client() {
+        use crate::containers::{Beacon, CreakingHeart, EndGateway};
+        // What a client loads from the tag (handleBlockEntityData).
+        let load = |id: &str, entity: BlockEntity| {
+            let Some(Tag::Compound(mut tag)) = entity_tag(&entity) else {
+                panic!("no update tag for {id}");
+            };
+            tag.insert("id".into(), Tag::String(id.into()));
+            for k in ["x", "y", "z"] {
+                tag.insert(k.into(), Tag::Int(0));
+            }
+            crate::save::decode_block_entity(&Tag::Compound(tag))
+                .expect("loads")
+                .1
+        };
+        let beacon = Beacon {
+            levels: 4,
+            primary: Some("minecraft:speed".into()),
+            secondary: Some("minecraft:regeneration".into()),
+            ..Default::default()
+        };
+        let BlockEntity::Beacon(b) =
+            load("minecraft:beacon", BlockEntity::Beacon(Box::new(beacon)))
+        else {
+            panic!("not a beacon");
+        };
+        assert_eq!(b.levels, 4);
+        assert_eq!(b.primary.as_deref(), Some("minecraft:speed"));
+        assert_eq!(b.secondary.as_deref(), Some("minecraft:regeneration"));
+        let gateway = EndGateway {
+            age: 150,
+            exit_portal: Some([8, 100, 0]),
+            exact_teleport: false,
+        };
+        let tag = entity_tag(&BlockEntity::EndGateway(gateway.clone())).unwrap();
+        assert_eq!(tag.get("ExactTeleport"), None);
+        let BlockEntity::EndGateway(g) = load(
+            "minecraft:end_gateway",
+            BlockEntity::EndGateway(gateway.clone()),
+        ) else {
+            panic!("not a gateway");
+        };
+        assert_eq!(g, gateway);
+        let exact = EndGateway {
+            exact_teleport: true,
+            ..gateway
+        };
+        let tag = entity_tag(&BlockEntity::EndGateway(exact.clone())).unwrap();
+        assert_eq!(tag.get("ExactTeleport"), Some(&Tag::Byte(1)));
+        let BlockEntity::EndGateway(g) = load(
+            "minecraft:end_gateway",
+            BlockEntity::EndGateway(exact.clone()),
+        ) else {
+            panic!("not a gateway");
+        };
+        assert_eq!(g, exact);
+        let heart = CreakingHeart {
+            creaking: Some((Some(7), [1, 2, 3, 4])),
+            ..Default::default()
+        };
+        let BlockEntity::CreakingHeart(h) = load(
+            "minecraft:creaking_heart",
+            BlockEntity::CreakingHeart(Box::new(heart)),
+        ) else {
+            panic!("not a creaking heart");
+        };
+        assert_eq!(h.creaking, Some((None, [1, 2, 3, 4])));
+        // Without a protector the tag is empty.
+        let lone = entity_tag(&BlockEntity::CreakingHeart(Box::default()));
+        assert_eq!(
+            lone,
+            Some(Tag::Compound(horizon_world::nbt::Compound::new()))
+        );
     }
 }

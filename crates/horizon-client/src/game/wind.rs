@@ -2,6 +2,7 @@
 //! breezes shoot, and the burst they make (`ServerExplosion` with
 //! `TRIGGER_BLOCK`: no damage, only knockback and the blocks that react).
 use super::Game;
+use horizon_client::advancements::EntityView;
 use horizon_client::{
     Result,
     mobs::{Damage, DamageKind, Species, Who},
@@ -216,6 +217,7 @@ impl Game<'_> {
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
+        breeze: bool,
         wind_charge: bool,
         blocklike: bool,
     ) -> Vec<(u32, [f64; 3])> {
@@ -240,7 +242,7 @@ impl Game<'_> {
         // The player, then every other player in the level (LAN guests),
         // each swapped in as the player. In a guest's turn (a mace's wind
         // burst) the player is that guest.
-        let own = self.wind_push_player(center, radius, multiplier, wind_charge);
+        let own = self.wind_push_player(center, radius, multiplier, breeze, wind_charge);
         let mut pushed: Vec<_> = self.lan_acting.zip(own).into_iter().collect();
         if let Some(mut host) = self.lan.take() {
             let guests: Vec<u32> = host
@@ -252,7 +254,7 @@ impl Game<'_> {
                 .collect();
             for conn in guests {
                 let push = self.as_guest(&mut host, conn, |g| {
-                    g.wind_push_player(center, radius, multiplier, wind_charge)
+                    g.wind_push_player(center, radius, multiplier, breeze, wind_charge)
                 });
                 if let Some(Some(push)) = push {
                     pushed.push((conn, push));
@@ -363,6 +365,7 @@ impl Game<'_> {
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
+        breeze: bool,
         wind_charge: bool,
     ) -> Option<[f64; 3]> {
         if self.spectator() {
@@ -413,7 +416,21 @@ impl Game<'_> {
         // fall; any other burst ends the grace of the last impulse.
         let at = p.position;
         p.impulse.set_ignore_fall_damage(wind_charge, Some(at));
-        self.adv.marks.blast = Some(([at.x, at.y, at.z], wind_charge));
+        // The cause is the charge that burst (`ServerExplosion.source`); a mace's
+        // burst has none.
+        let cause = if wind_charge {
+            Some("minecraft:wind_charge")
+        } else if breeze {
+            Some("minecraft:breeze_wind_charge")
+        } else {
+            None
+        }
+        .map(|kind| EntityView {
+            kind: kind.into(),
+            position: center,
+            ..EntityView::default()
+        });
+        self.adv.marks.blast = Some(([at.x, at.y, at.z], cause));
         Some(push)
     }
     /// The burst: knockback, the blocks that react, the gust and the sound.
@@ -444,7 +461,8 @@ impl Game<'_> {
         let mut targets = self.wind_positions(center, radius);
         // ServerExplosion.shouldAffectBlocklikeEntities
         let blocklike = !breeze && !wind_charge && self.ui.rules.bool("mob_griefing");
-        let pushed = self.wind_knockback(center, radius, multiplier, wind_charge, blocklike);
+        let pushed =
+            self.wind_knockback(center, radius, multiplier, breeze, wind_charge, blocklike);
         let block_count = targets.len();
         // Explosion.canTriggerBlocks: a breeze's charge needs mob griefing.
         if !breeze || self.ui.rules.bool("mob_griefing") {
@@ -566,6 +584,7 @@ impl Game<'_> {
         p: &Projectile,
         at: glam::Vec3,
         light: u32,
+        partial: f32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
         static MODEL: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
@@ -583,7 +602,8 @@ impl Game<'_> {
         else {
             return;
         };
-        let age = p.age as f32;
+        // `EntityRenderState.ageInTicks`: the tick count plus the partial tick.
+        let age = p.age as f32 + partial;
         let mut poses = horizon_client::mobs::anim::Poses::new(model);
         poses.yrot("wind_charge", -age * 16.0_f32.to_radians());
         poses.yrot("wind", age * 16.0_f32.to_radians());

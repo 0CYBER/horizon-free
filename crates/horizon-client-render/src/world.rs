@@ -93,6 +93,10 @@ pub struct World {
     /// Every block position written since the log was last drained, kept
     /// only while the world is open to the network (see `lan`).
     pub block_log: Option<Vec<(i32, i32, i32)>>,
+    /// Every write since the mobs last ticked (position, old and new state),
+    /// for `ServerLevel.sendBlockUpdated`'s path recomputing; kept only while
+    /// the mobs of this world tick (`game/creatures.rs`).
+    pub path_writes: Option<Vec<((i32, i32, i32), u32, u32)>>,
     /// The sections whose light changed since the log was last drained, as
     /// a bit per section of each column, kept while `block_log` is
     /// (`ChunkHolder.sectionLightChanged`).
@@ -195,6 +199,7 @@ impl World {
             day_time: 1000,
             weather: Weather::default(),
             block_log: None,
+            path_writes: None,
             light_log: None,
             moving_piston_fallback: Vec::new(),
             moving_pistons: Vec::new(),
@@ -292,6 +297,9 @@ impl World {
             self.revision = self.revision.wrapping_add(1);
             if let Some(log) = &mut self.block_log {
                 log.push((x, y, z));
+            }
+            if let Some(writes) = &mut self.path_writes {
+                writes.push(((x, y, z), previous, state.0));
             }
             self.modified.insert((x >> 4, z >> 4));
             // The mesher reads a 3x3x3 neighbourhood for AO, so a write marks

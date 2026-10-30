@@ -138,7 +138,15 @@ impl Game<'_> {
                     && horizon_client::save::number(v.get("Invisible")).unwrap_or(0) != 0
             })
         });
-        let pos = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
+        let pos: [i32; 3] = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
+        // `ItemFrameItem.mayPlace`: `Level.isInsideBuildHeight(blockPos)`, so a frame is not
+        // placed on the top face of the highest block or under the lowest one.
+        if !(horizon_client::chunk::MIN_Y
+            ..horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT)
+            .contains(&pos[1])
+        {
+            return false;
+        }
         let frame = ItemFrame {
             id: self.next_entity + 1,
             pos,

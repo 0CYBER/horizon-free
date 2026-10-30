@@ -32,13 +32,6 @@ required; refusing input that was accepted; a JSON field that changes type.
 Not breaking: a new function, interface, capability, command, endpoint, tool or `server.toml` key; a new optional
 argument or JSON field (readers must ignore fields they don't know); faster, or fixing behaviour to what the reference already says.
 
-### Mod API levels (WebAssembly mods, removed)
-
-While WebAssembly mods ran, every function the game offered them had an **API level**, the one it arrived at, read
-from the mod's file (`crates/horizon-mods/src/api_level.rs`, levels 0 to 7). Nothing new is added to it. The registry
-index still records each old version's level (`api_level`, [mod-index.md](mod-index.md)), for the modpacks that
-require those mods.
-
 ## Stability levels
 
 Every part of an API has one level, shown in its reference and its surface page.

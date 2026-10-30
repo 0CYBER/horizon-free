@@ -500,6 +500,12 @@ impl Mob {
     pub fn move_relative(&mut self, speed: f32, input: Vec3) {
         let len_sq = input.x * input.x + input.y * input.y + input.z * input.z;
         if len_sq < 1.0e-7 {
+            // `getInputVector` is `Vec3.ZERO`, still added to the motion: a -0.0 becomes 0.0.
+            self.velocity = Vec3::new(
+                self.velocity.x + 0.0,
+                self.velocity.y + 0.0,
+                self.velocity.z + 0.0,
+            );
             return;
         }
         let v = if len_sq > 1.0 {

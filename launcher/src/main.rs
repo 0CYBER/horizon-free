@@ -16,9 +16,11 @@ mod datapacks_page;
 mod dev_options;
 mod export_page;
 mod game_tools;
+mod github_mods_page;
 mod home;
 mod home_tabs;
 mod import_page;
+mod instance_icons;
 mod instance_mods;
 mod instances_page;
 mod internet;
@@ -27,6 +29,7 @@ mod launch_page;
 mod line_edit;
 mod markdown;
 mod mcp;
+mod microsoft;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
@@ -55,8 +58,8 @@ mod worlds_page;
 use gpui::{
     actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
     AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
-    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, PathPromptOptions, SharedString,
-    Stateful, Subscription, Window, WindowBounds, WindowOptions,
+    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, MouseDownEvent, PathPromptOptions,
+    Pixels, Point, SharedString, Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -89,7 +92,7 @@ impl Page {
     /// `settings`) opens on that page, for screenshots; Home otherwise (`getting-ready`: Home
     /// preparing, `home::getting_ready_preview`; `sign-in`: the owner gate's sheet with a
     /// made-up code, `owner_page::sign_in_preview`; `new-instance`: Home with the New instance
-    /// dialog open on Modded; `worlds`, `packs`...: Home on that tab, `HomeTab::from_env`).
+    /// dialog open on Modded; `edit-instance`: the selected one's Edit dialog; `worlds`, `packs`...: Home on that tab, `HomeTab::from_env`).
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,
@@ -178,9 +181,10 @@ struct Launcher {
     releases: Load<Vec<Release>>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
-    /// The version being deleted on a background thread. It is already out of `installed`, so
+    /// The versions being deleted on background threads. Each is already out of `installed`, so
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
-    removing: Option<String>,
+    /// More than one may run at once: a row's Remove stays usable while another version goes.
+    removing: Vec<String>,
     /// What each installed version takes on disk, measured on a thread for the Versions page, and
     /// the installed list it was measured for.
     disk: Vec<(String, u64)>,
@@ -191,10 +195,16 @@ struct Launcher {
     native_step: Option<String>,
     native_error: Option<String>,
     native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
+    /// The mods of a build made for other Horizon versions (`native_mods::MISMATCH`): the build
+    /// waits for "Build anyway".
+    native_mismatch: Option<String>,
     confirm_remove: Option<String>,
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
     account_menu: bool,
+    /// Where the mouse went down to close a menu by pressing outside it, so that the
+    /// same press, ending on the menu's own button, doesn't open it again.
+    menu_closed_at: Option<Point<Pixels>>,
     /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
     skin: Option<skin_page::SkinPanel>,
     /// Why the last picture for Home's background was refused.
@@ -279,6 +289,8 @@ struct Launcher {
     home_tab: home_tabs::HomeTab,
     /// The selected instance's mods, for Home's Mods tab (`instance_mods.rs`).
     instance_mods: instance_mods::InstanceMods,
+    /// Modrinth projects' icon URLs (`instance_mods.rs`).
+    project_icons: instance_mods::ProjectIcons,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -297,6 +309,7 @@ struct Launcher {
     starting_pack: Option<std::path::PathBuf>,
     /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
     mods: mods_page::Mods,
+    github: github_mods_page::Github,
     /// The instances, for the sidebar and Play, and their dialog (`instances_page.rs`).
     instances: instances_page::Instances,
     /// Home's Worlds section, of the selected instance (`worlds_page.rs`).
@@ -419,16 +432,18 @@ impl Launcher {
             releases: Load::Loading,
             installed,
             installing: None,
-            removing: None,
+            removing: Vec::new(),
             disk: Vec::new(),
             disk_for: Vec::new(),
             install_error: None,
             native_step: None,
             native_error: None,
             native_confirm: None,
+            native_mismatch: None,
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
+            menu_closed_at: None,
             skin: None,
             background_error: None,
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
@@ -484,6 +499,7 @@ impl Launcher {
             download_seen: None,
             home_tab: home_tabs::HomeTab::from_env(),
             instance_mods: Default::default(),
+            project_icons: Default::default(),
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
@@ -496,6 +512,7 @@ impl Launcher {
             pack_error: None,
             starting_pack: None,
             mods: mods_page::Mods::new(cx),
+            github: github_mods_page::Github::new(cx),
             instances: instances_page::Instances::default(),
             worlds: worlds_page::Worlds::default(),
             multiplayer: multiplayer_page::Multiplayer::default(),
@@ -543,6 +560,9 @@ impl Launcher {
         if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("new-instance") {
             this.open_instance_dialog(None);
             this.pick_kind(new_instance::NewKind::Modded, cx);
+        }
+        if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("edit-instance") {
+            this.open_instance_dialog(this.selected_instance().cloned());
         }
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();
@@ -606,7 +626,7 @@ impl Launcher {
         let Some(release) = self.updates.horizon.clone() else {
             return;
         };
-        if self.installing.is_some() || self.removing.as_ref() == Some(&release.tag) {
+        if self.installing.is_some() || self.removing.contains(&release.tag) {
             return;
         }
         let select =
@@ -627,12 +647,14 @@ impl Launcher {
 
     /// Builds the selected instance's native mods, once the player accepted the warning. The
     /// build reuses the game files of the version the instance plays, else the newest installed.
-    fn build_native(&mut self) {
+    /// `anyway`: the player agreed to build mods made for other Horizon versions together.
+    fn build_native(&mut self, anyway: bool) {
         if self.native_step.is_some() {
             return;
         }
         self.native_confirm = None;
         self.native_error = None;
+        self.native_mismatch = None;
         let instance = instances::selected();
         let base = instance
             .version
@@ -658,7 +680,7 @@ impl Launcher {
         self.native_step = Some(tr("Starting the build").into());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = native_mods::build(&base, &folder, Some(&instance), |step| {
+            let result = native_mods::build(&base, &folder, Some(&instance), anyway, |step| {
                 let _ = tx.send(Msg::NativeProgress(step.label()));
             });
             let _ = tx.send(Msg::Native(result));
@@ -866,9 +888,7 @@ impl Launcher {
                     }
                 }
                 Msg::Removed(tag, result) => {
-                    if self.removing.as_ref() == Some(&tag) {
-                        self.removing = None;
-                    }
+                    self.removing.retain(|t| *t != tag);
                     self.installed = backend::installed();
                     self.settings.selected =
                         selection_after_removal(&self.installed, Settings::load().selected);
@@ -898,8 +918,13 @@ impl Launcher {
                     self.native_step = None;
                     self.installed = backend::installed();
                     self.reload_instances();
-                    if let Err(e) = result {
-                        self.native_error = Some(e);
+                    match result.map_err(|e| match e.strip_prefix(native_mods::MISMATCH) {
+                        Some(list) => Ok(list.to_owned()),
+                        None => Err(e),
+                    }) {
+                        Err(Ok(list)) => self.native_mismatch = Some(list),
+                        Err(Err(e)) => self.native_error = Some(e),
+                        Ok(_) => {}
                     }
                 }
                 Msg::LauncherProgress(p) => {
@@ -1034,6 +1059,7 @@ impl Launcher {
         }
         changed |= self.servers_tick();
         changed |= self.mods_tick();
+        changed |= self.github_tick();
         if let Some(sign_in) = &self.sign_in {
             let state = sign_in.state();
             let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
@@ -1101,7 +1127,7 @@ impl Launcher {
     }
 
     fn install(&mut self, release: &Release) {
-        if release.asset.is_none() || self.removing.as_ref() == Some(&release.tag) {
+        if release.asset.is_none() || self.removing.contains(&release.tag) {
             return;
         }
         let (release, tx) = (release.clone(), self.tx.clone());
@@ -1123,14 +1149,12 @@ impl Launcher {
     /// the window must keep drawing meanwhile. `Msg::Removed` ends it.
     fn remove(&mut self, tag: &str) {
         self.confirm_remove = None;
-        if self.removing.is_some()
-            || self.installing.as_ref().is_some_and(|(t, _)| t == tag)
-            || !self.installed.iter().any(|t| t == tag)
-        {
+        let installing = self.installing.as_ref().map(|(t, _)| t.as_str());
+        if !removable(&self.installed, installing, &self.removing, tag) {
             return;
         }
         self.install_error = None;
-        self.removing = Some(tag.to_string());
+        self.removing.push(tag.to_string());
         self.installed.retain(|t| t != tag);
         self.settings.selected =
             selection_after_removal(&self.installed, self.settings.selected.take());
@@ -1741,6 +1765,19 @@ fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
     play_press(prepared, None, preparing || running) == PlayPress::Play
 }
 
+/// Whether `tag` can start being deleted now: it is installed, no install is writing it, and it
+/// is not already going. Another version deleting at the same time does not stop it.
+fn removable(
+    installed: &[String],
+    installing: Option<&str>,
+    removing: &[String],
+    tag: &str,
+) -> bool {
+    installing != Some(tag)
+        && installed.iter().any(|t| t == tag)
+        && !removing.iter().any(|t| t == tag)
+}
+
 /// The selected version once one has been removed: the saved choice if it is still installed,
 /// else the newest left.
 fn selection_after_removal(installed: &[String], saved: Option<String>) -> Option<String> {
@@ -1983,7 +2020,10 @@ impl Launcher {
                             .child(how),
                     ),
             )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if this.closed_by_this_press(event) {
+                    return;
+                }
                 this.account_menu = !this.account_menu;
                 if this.account_menu {
                     // Who can play may have changed elsewhere since the window opened.
@@ -2260,6 +2300,12 @@ impl Launcher {
             .child(foot)
     }
 
+    /// Whether `event` is the press that just closed a menu from outside it (on the menu's
+    /// own button): the button then leaves the menu closed instead of opening it again.
+    fn closed_by_this_press(&mut self, event: &ClickEvent) -> bool {
+        closed_by_press(self.menu_closed_at.take(), event)
+    }
+
     fn picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         // "Nightly · ba6344a", a release's tag: the menu lists the full tags.
@@ -2297,8 +2343,10 @@ impl Launcher {
                         .child(shell::text(theme::night::UI, t.ink).child(label)),
                 )
                 .child(blocks::icon("chevron-down", 20., t.muted))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.picker_open = !this.picker_open;
+                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                    if !this.closed_by_this_press(event) {
+                        this.picker_open = !this.picker_open;
+                    }
                     cx.notify();
                 })),
         );
@@ -2314,7 +2362,12 @@ impl Launcher {
                 .border_color(plate::alpha(n.stroke, 2. * n.stroke_alpha))
                 .bg(t.surface)
                 .flex()
-                .flex_col();
+                .flex_col()
+                .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.picker_open = false;
+                    this.menu_closed_at = Some(event.position);
+                    cx.notify();
+                }));
             // Picking a version keeps the selected instance on it; the launcher's own version
             // (newest unless chosen otherwise on Versions) follows updates.
             let follows = self.launcher_version().cloned();
@@ -2507,14 +2560,12 @@ impl Launcher {
                         cx.notify();
                     })),
                 ),
-            Some(false) => div().child(
-                button("prepare-sign-in", "Sign in", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.sign_in_to_play();
-                        cx.notify();
-                    },
-                )),
-            ),
+            Some(false) => div().child(microsoft::sign_in_button("prepare-sign-in", &t).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.sign_in_to_play();
+                    cx.notify();
+                }),
+            )),
             None => div().child(prepare),
         };
         let owner = self.owner == Some(true);
@@ -2589,7 +2640,7 @@ impl Launcher {
                             .into_any_element(),
                     ),
                     Some(
-                        button("gate-sign-in", "Sign in", Kind::Primary, &t)
+                        microsoft::sign_in_button("gate-sign-in", &t)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.sign_in_to_play();
                                 cx.notify();
@@ -3084,6 +3135,7 @@ impl Launcher {
             switch("native-mods", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.settings.native_mods = !this.settings.native_mods;
                 this.native_confirm = None;
+                this.native_mismatch = None;
                 this.settings.save();
                 cx.notify();
             }));
@@ -3102,7 +3154,9 @@ impl Launcher {
                     }),
             };
             detail = detail.children(status);
-            if self.native_step.is_none() && self.native_confirm.is_none() {
+            if let (None, Some(list)) = (&self.native_step, &self.native_mismatch) {
+                detail = detail.child(self.native_mismatch_panel(list, cx));
+            } else if self.native_step.is_none() && self.native_confirm.is_none() {
                 detail = detail.child(div().flex().gap(px(8.)).mt(px(4.)).child(
                     button("native-build", "Build", Kind::Primary, &t).on_click(cx.listener(
                         |this, _: &ClickEvent, _, cx| {
@@ -3162,7 +3216,7 @@ impl Launcher {
                     &t,
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.build_native();
+                    this.build_native(false);
                     cx.notify();
                 })),
             );
@@ -3175,6 +3229,44 @@ impl Launcher {
                 },
             )),
         ))
+    }
+
+    /// Mods made for other Horizon versions: which, and the version the build uses. They often
+    /// still work, so the player may build anyway.
+    fn native_mismatch_panel(&self, list: &str, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .mt(px(8.))
+            .p(px(12.))
+            .bg(t.well)
+            .child(div().text_color(t.danger).child(tr("These mods were made for different Horizon versions").to_string()))
+            .child(list.to_owned())
+            .child(tr("They often still work together. If the build fails, install versions made for the same Nightly.").to_string())
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .mt(px(4.))
+                    .child(
+                        button("native-anyway", "Build anyway", Kind::Primary, &t).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.build_native(true);
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        button("native-mismatch-cancel", "Cancel", Kind::Secondary, &t).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.native_mismatch = None;
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
     }
 
     fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
@@ -3448,7 +3540,7 @@ impl Launcher {
             None
         } else {
             Some(
-                button("sign-in", "Sign in with Microsoft", Kind::Secondary, &t)
+                microsoft::sign_in_button("sign-in", &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.start_sign_in();
                         cx.notify();
@@ -3553,7 +3645,7 @@ impl Launcher {
             self.installing.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.confirm_remove.as_ref() == Some(tag)
-                || self.removing.as_ref() == Some(tag)
+                || self.removing.contains(tag)
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,
@@ -3593,7 +3685,7 @@ impl Launcher {
                                 .child(format!("{:.0}%", p * 100.)),
                         )
                         .into_any_element()
-                } else if self.removing.as_ref() == Some(&tag) {
+                } else if self.removing.contains(&tag) {
                     div()
                         .flex()
                         .items_center()
@@ -3914,6 +4006,7 @@ impl Render for Launcher {
         self.servers.note_focus(window);
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
+        self.github.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
         self.proxy_focused = self.proxy_focus.is_focused(window);
         let size = window.viewport_size();
@@ -4274,8 +4367,37 @@ fn main() {
         });
 }
 
+/// Whether the click `event` began with the mouse-down that closed a menu at `closed_at`.
+/// A keyboard click never did.
+fn closed_by_press(closed_at: Option<Point<Pixels>>, event: &ClickEvent) -> bool {
+    matches!(event, ClickEvent::Mouse(click) if closed_at == Some(click.down.position))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_menu_button_stays_closed_after_the_press_that_closed_its_menu() {
+        use super::closed_by_press;
+        use gpui::{point, px, ClickEvent, KeyboardClickEvent, MouseClickEvent, MouseDownEvent};
+        let click = |x: f32| {
+            ClickEvent::Mouse(MouseClickEvent {
+                down: MouseDownEvent {
+                    position: point(px(x), px(20.)),
+                    ..MouseDownEvent::default()
+                },
+                ..MouseClickEvent::default()
+            })
+        };
+        let closed_at = Some(point(px(10.), px(20.)));
+        // The press on the button that closed the open menu: it stays closed.
+        assert!(closed_by_press(closed_at, &click(10.)));
+        // A later press, or one with no menu closed, toggles as before.
+        assert!(!closed_by_press(closed_at, &click(11.)));
+        assert!(!closed_by_press(None, &click(10.)));
+        let keyboard = ClickEvent::Keyboard(KeyboardClickEvent::default());
+        assert!(!closed_by_press(closed_at, &keyboard));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn cmd_q_quits_and_cmd_w_closes_the_window() {
@@ -4287,6 +4409,21 @@ mod tests {
         assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
         let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
         assert!(hit.iter().any(|b| b.action().partial_eq(&CloseWindow)));
+    }
+
+    #[test]
+    fn a_second_version_can_be_removed_while_another_deletes() {
+        let installed = ["v0.2.97".to_string(), "v0.2.76".to_string()];
+        let removing = ["v0.2.97".to_string()];
+        assert!(super::removable(&installed, None, &removing, "v0.2.76"));
+        assert!(!super::removable(&installed, None, &removing, "v0.2.97"));
+        assert!(!super::removable(
+            &installed,
+            Some("v0.2.76"),
+            &[],
+            "v0.2.76"
+        ));
+        assert!(!super::removable(&installed, None, &[], "v0.2.85"));
     }
 
     #[test]

@@ -1,14 +1,43 @@
 //! The looping sound instances of mobs: a bee's buzz
 //! (`ClientPacketListener.postAddEntitySoundInstance`) and a guardian's
-//! attack hum (entity event 21). The sound engine ticks them with what
-//! `start_mob_sounds` reads off the mobs.
+//! attack hum (entity event 21), and the happy ghast's riding sound. The
+//! sound engine ticks them with what `start_mob_sounds` and
+//! `start_riding_sound` read off the mobs.
 use super::Game;
 use horizon_client::{
     mobs::{Species, bee, guardian},
-    sound_engine::{MobSound, SoundEngine, SoundInstance, Sounds},
+    sound_engine::{MobSound, RiddenSound, SoundEngine, SoundInstance, Sounds},
 };
 
 impl Game<'_> {
+    /// `LocalPlayer.startRiding` on a happy ghast: its riding sound (a
+    /// minecart's are `start_cart_sounds`'). Then what the instance reads
+    /// about the mob the player rides.
+    pub(super) fn start_riding_sound(&mut self) -> Option<RiddenSound> {
+        let ridden = self
+            .riding
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id && !m.removed))
+            .map(|m| {
+                let ghast = m.species() == Species::HappyGhast;
+                let sound = RiddenSound {
+                    id: m.id,
+                    // Vec3.length.
+                    speed: m.velocity.length(),
+                    silent: m.silent,
+                };
+                (ghast, sound)
+            });
+        let ghast = ridden.filter(|r| r.0).map(|r| r.1);
+        if let Some(sound) = ghast
+            && self.riding_ghast_sound != Some(sound.id)
+            && !sound.silent
+        {
+            let instance = SoundInstance::riding_happy_ghast(&sound, SoundEngine::unseeded());
+            self.audio.play_instance(instance, false);
+        }
+        self.riding_ghast_sound = ghast.map(|g| g.id);
+        ridden.map(|r| r.1)
+    }
     /// Start the buzz of each bee that has none (or whose anger changed, which
     /// swaps the flying loop for the aggressive one and back), forget the mobs
     /// that are gone, and read what the instances follow.

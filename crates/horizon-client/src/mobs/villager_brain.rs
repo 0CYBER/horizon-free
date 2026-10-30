@@ -3505,6 +3505,7 @@ fn harvest_tick(
                 pos: p,
                 name: crop,
                 effect: false,
+                flags: horizon_world::level::flags::UPDATE_ALL,
             });
             cx.events.push(MobEvent::Sound(
                 "item.crop.plant",
