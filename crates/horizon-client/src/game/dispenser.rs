@@ -908,6 +908,10 @@ impl Game<'_> {
         let Some(id) = self.spawn_mob_at(&kind, front, facing != Direction::Up) else {
             return Ok((Some(stack), CLICK));
         };
+        // EntityType.create: `finalizeSpawn` first, the egg's components after.
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            horizon_client::entity_nbt::apply_item_components(m, &stack);
+        }
         self.mob_ambient(id)?;
         // SpawnEggItemBehavior: the entity was placed by the dispenser.
         self.post_block_game_event("minecraft:entity_place", [pos.0, pos.1, pos.2], None, None);
@@ -1211,7 +1215,7 @@ impl Game<'_> {
             // persistent) calls out, then ENTITY_PLACE.
             if let Some(id) = self.spawn_mob_at(kind, target, true) {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    horizon_client::entity_nbt::load_bucket_data(m, &stack);
+                    horizon_client::entity_nbt::apply_item_components(m, &stack);
                 }
                 self.mob_placed(id)?;
             }

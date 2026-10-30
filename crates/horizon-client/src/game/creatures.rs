@@ -4696,8 +4696,13 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob_spawned(&kind, at).is_none() {
+        let Some(id) = self.spawn_mob_spawned(&kind, at) else {
             return Ok(false);
+        };
+        // SpawnEggItem.spawnMob: `EntityType.create` finalizes the mob, then
+        // `PostSpawnProcessor` puts the egg's components on it.
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            horizon_client::entity_nbt::apply_item_components(m, stack);
         }
         self.swing_arm();
         if !self.creative

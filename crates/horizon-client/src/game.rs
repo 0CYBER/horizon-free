@@ -10626,7 +10626,7 @@ impl Game<'_> {
             if let Some(kind) = mob {
                 if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                        horizon_client::entity_nbt::load_bucket_data(m, stack);
+                        horizon_client::entity_nbt::apply_item_components(m, stack);
                     }
                     self.mob_placed(id)?;
                 }
