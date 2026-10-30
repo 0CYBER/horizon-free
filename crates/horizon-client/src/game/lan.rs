@@ -1567,7 +1567,7 @@ impl Game<'_> {
                 .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
                 Holder::Player => player_entity,
-                Holder::Mob(id) => Some(id as i32),
+                Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
                 Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
             });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());

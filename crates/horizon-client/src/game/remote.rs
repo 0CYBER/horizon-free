@@ -2502,6 +2502,9 @@ impl Game<'_> {
                         Some(&block) => Some(Holder::Knot(block)),
                         // Not a known knot yet: kept by id until the knot
                         // arrives (game/remote_objects.rs).
+                        None if self.boats.iter().any(|b| b.id == d as u32) => {
+                            Some(Holder::Boat(d as u32))
+                        }
                         None => Some(Holder::Mob(d as u32)),
                     },
                 };

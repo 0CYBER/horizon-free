@@ -678,7 +678,8 @@ impl Game<'_> {
                             self.target_by_uuid(horizon_client::lan::playerdata::ints_uuid(uuid))
                         }
                         horizon_client::mobs::leash::Holder::Mob(i) => Some(Target::Mob(i)),
-                        horizon_client::mobs::leash::Holder::Knot(_) => None,
+                        horizon_client::mobs::leash::Holder::Boat(_)
+                        | horizon_client::mobs::leash::Holder::Knot(_) => None,
                     })
                     .into_iter()
                     .collect(),

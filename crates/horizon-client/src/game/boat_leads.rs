@@ -3,10 +3,14 @@
 //! the lead snapping past twelve blocks), saving who holds it, and dropping
 //! the lead when the boat breaks. The rope is drawn by `leads.rs`
 //! (`LeashFeatureRenderer`, four ropes from a boat to a happy ghast).
+//! A boat is also a holder (`Holder::Boat`): `Entity.interact`'s sneak click
+//! ties the player's mobs and boats to it.
 //!
-//! Gap: a boat cannot hold a lead of its own (`Entity.interact` ties the
-//! player's mobs to whatever is sneak-clicked); only a player, a fence knot
-//! or a mob holds one here.
+//! The elastic pull of a ridden boat: `Leashable.tickLeash` runs on the
+//! server only, and the server's boat that its rider's client drives takes
+//! that client's position back (`handleMoveVehicle`), so vanilla never moves
+//! it by the rope either. Here the pull lands on the server's copy and the
+//! rider's client overwrites it the same way (`tick_boats`).
 use super::{Game, boats::Boat};
 use horizon_client::mobs::leash::{self, Holder, HolderState, Pending};
 use horizon_core::geometry::Vec3;
@@ -31,6 +35,20 @@ fn center(b: &Boat) -> Vec3 {
         b.position.x,
         b.position.y + f64::from(HEIGHT) / 2.0,
         b.position.z,
+    )
+}
+/// A boat as a lead's holder (`HolderState`), with its id.
+pub(super) fn boat_state(b: &Boat) -> (u32, HolderState) {
+    (
+        b.id,
+        HolderState {
+            position: b.position,
+            center: center(b),
+            width: f64::from(WIDTH),
+            height: f64::from(HEIGHT),
+            yaw: b.yaw,
+            velocity: b.velocity,
+        },
     )
 }
 fn distance(a: Vec3, b: Vec3) -> f64 {
@@ -125,6 +143,11 @@ impl Game<'_> {
                     leash::quad_holder_offsets(m).is_some(),
                 )
             }
+            Holder::Boat(id) => match self.boats.iter().find(|o| o.id == id) {
+                // supportQuadLeashAsHolder is the ghasts' alone.
+                Some(o) => Held::At(boat_state(o).1, false),
+                None => Held::Gone,
+            },
             Holder::Knot(pos) => {
                 let name = self
                     .res
@@ -257,7 +280,9 @@ impl Game<'_> {
                 if guest || (self.level.player_uuid == Some(u) && self.player.is_some()) {
                     Some((Holder::Player, Some(u)))
                 } else {
-                    self.mob_by_uuid(u).map(|id| (Holder::Mob(id), None))
+                    self.mob_by_uuid(u)
+                        .map(|id| (Holder::Mob(id), None))
+                        .or_else(|| self.boat_by_uuid(u).map(|id| (Holder::Boat(id), None)))
                 }
             }
         };
@@ -282,6 +307,10 @@ impl Game<'_> {
                 let uuid = self.mob_uuid(id);
                 leash::to_nbt(Holder::Mob(id), Some(uuid))
             }
+            (Some(Holder::Boat(id)), _) => {
+                let uuid = self.uuid_for(id);
+                leash::to_nbt(Holder::Boat(id), Some(uuid))
+            }
             (Some(h), _) => leash::to_nbt(h, player),
             (None, Some(Pending::Knot(p))) => leash::to_nbt(Holder::Knot(p), None),
             (None, Some(Pending::Uuid(u))) => leash::to_nbt(Holder::Player, Some(u)),
@@ -297,6 +326,15 @@ impl Game<'_> {
         let me = self.acting_player_uuid();
         let b = &self.boats[i];
         b.leash == Some(Holder::Player) && self.boat_leash_player(b) == Some(me)
+    }
+
+    /// The boat with this UUID (`ServerLevel.getEntity`).
+    pub(super) fn boat_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        self.persist
+            .uuids
+            .iter()
+            .find(|(id, u)| **u == uuid && self.boats.iter().any(|b| b.id == **id))
+            .map(|(id, _)| *id)
     }
 
     /// The boats on the acting player's lead within 32 blocks of a point
@@ -333,6 +371,10 @@ impl Game<'_> {
     pub(super) fn tie_player_boats(&mut self, at: glam::DVec3, to: Holder) -> bool {
         let mut any = false;
         for i in self.player_led_boats(at) {
+            // Leashable.setLeashedTo: `this != holder`.
+            if to == Holder::Boat(self.boats[i].id) {
+                continue;
+            }
             if self.boat_can_attach(i, at) {
                 self.boats[i].leash = Some(to);
                 self.boats[i].leash_player = None;
@@ -373,13 +415,41 @@ impl Game<'_> {
         let item = self.held().map(|s| s.item.to_string());
         let c = center(&self.boats[i]);
         let at = [c.x, c.y, c.z];
-        // Entity.shearOffAllLeashConnections.
-        if item.as_deref() == Some("minecraft:shears") && self.boats[i].leash.is_some() {
-            self.drop_boat_leashes(&[i]);
-            self.audio
-                .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
-            self.damage_held_tool();
+        let id = self.boats[i].id;
+        // The sneak branch: the player's mobs and boats on leads are re-tied
+        // to this boat.
+        let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+        if sneaking
+            && self.tie_player_leads(glam::DVec3::new(c.x, c.y, c.z), Holder::Boat(id), None)
+        {
+            self.lead_game_event("minecraft:entity_action", at);
+            self.lead_sound("tied", at);
             return true;
+        }
+        // Entity.shearOffAllLeashConnections: its own lead and every one
+        // hanging on it.
+        if item.as_deref() == Some("minecraft:shears") {
+            let held_mobs: Vec<u32> = self
+                .mobs
+                .iter()
+                .filter(|m| m.extra.leash == Some(Holder::Boat(id)))
+                .map(|m| m.id)
+                .collect();
+            let mut held_boats = self.boats_on(Holder::Boat(id));
+            if self.boats[i].leash.is_some() {
+                held_boats.push(i);
+            }
+            if !held_mobs.is_empty() || !held_boats.is_empty() {
+                for m in held_mobs {
+                    self.break_leash(m, true, false);
+                }
+                self.drop_boat_leashes(&held_boats);
+                self.lead_game_event("minecraft:shear", at);
+                self.audio
+                    .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
+                self.damage_held_tool();
+                return true;
+            }
         }
         if self.boat_led_by_player(i) {
             // hasInfiniteMaterials: removeLeash, else dropLeash.
@@ -387,6 +457,7 @@ impl Game<'_> {
             let mut b = self.boats[i].clone();
             self.release_boat_leash(&mut b, drop);
             self.boats[i] = b;
+            self.lead_game_event("minecraft:entity_interact", at);
             self.lead_sound("untied", at);
             return true;
         }
@@ -433,7 +504,7 @@ impl Game<'_> {
                     None => None,
                 }
             }
-            Holder::Mob(id) => Some(id as i32),
+            Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
             Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
         }
     }
@@ -449,6 +520,21 @@ mod tests {
         let c = center(&b);
         assert_eq!((c.x, c.z), (1.0, 2.0));
         assert!((c.y - 64.28125).abs() < 1e-9);
+    }
+    #[test]
+    fn a_boat_holds_a_lead_from_its_centre() {
+        let mut b = Boat::new(7, "oak".into(), Vec3::new(1.0, 64.0, 2.0), 90.0);
+        b.velocity = Vec3::new(0.1, 0.0, 0.0);
+        let (id, s) = boat_state(&b);
+        assert_eq!(id, 7);
+        assert!((s.center.y - 64.28125).abs() < 1e-9);
+        assert!((s.width - 1.375).abs() < 1e-9 && (s.height - 0.5625).abs() < 1e-9);
+        assert_eq!((s.yaw, s.velocity.x), (90.0, 0.1));
+    }
+    #[test]
+    fn a_boat_holder_is_an_entity_not_a_player() {
+        assert_eq!(Holder::Boat(7).who(), None);
+        assert_ne!(Holder::Boat(7), Holder::Mob(7));
     }
     #[test]
     fn distances_are_euclidean() {

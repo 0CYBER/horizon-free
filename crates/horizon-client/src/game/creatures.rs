@@ -551,6 +551,7 @@ impl Game<'_> {
             nearest_player: player.as_ref().filter(|p| !p.spectator).map(|p| p.position),
             player,
             others,
+            leash_boats: &self.leash_boats,
             others_grid: None,
             others_index: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
@@ -711,6 +712,11 @@ impl Game<'_> {
                 horizon_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
             // All but the snapshot is the same for every mob of the tick, so
             // build it once: the player view and the teams scan every UUID.
+            self.leash_boats = self
+                .boats
+                .iter()
+                .map(super::boat_leads::boat_state)
+                .collect();
             let base = self.mob_world_base(&[]);
             // Each mob keeps its snapshot slot all tick; the first slot of an
             // id answers, as a scan would.
@@ -5901,6 +5907,7 @@ mod pearl_tests {
             player: None,
             nearest_player: None,
             others: &[],
+            leash_boats: &[],
             others_grid: None,
             others_index: None,
             daylight: true,
