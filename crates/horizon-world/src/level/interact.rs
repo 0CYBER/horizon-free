@@ -680,6 +680,36 @@ impl Behaviours {
         );
         true
     }
+    /// `AbstractCandleBlock.isLit` (a lit block of `#candles` or `#candle_cakes`) then
+    /// `AbstractCandleBlock.extinguish(null, ...)`:
+    /// a lit candle or candle cake at `pos` goes out (`setBlock` with flags 11), with
+    /// the extinguish sound and the block-change game event, which has no source
+    /// entity. The smoke is drawn by a client's own `addParticle`, never by the
+    /// server. False when the block is not a lit candle.
+    pub fn extinguish_candle<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
+        let state = level.block_state(pos);
+        let data = self.data(state);
+        // `#candles` is every `CandleBlock`, `#candle_cakes` every `CandleCakeBlock`.
+        if !(data.is(Class::Candle) || data.is(Class::CandleCake))
+            || !self.table.bool(state, self.props.lit)
+        {
+            return false;
+        }
+        let mut sim = self.sim(level, ticks);
+        sim.set_block(
+            pos,
+            self.table.set_bool(state, self.props.lit, false),
+            super::flags::UPDATE_ALL_IMMEDIATE,
+        );
+        sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+        sim.game_event(pos, "minecraft:block_change");
+        true
+    }
     /// `BlockState.useItemOn` with `item` in the main hand, then, when the
     /// block asks to try with an empty hand (the default), `useWithoutItem`.
     /// `SweetBerryBushBlock.useItemOn` passes bone meal on a bush that can
