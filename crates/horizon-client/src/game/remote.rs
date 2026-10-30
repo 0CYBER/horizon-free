@@ -7344,7 +7344,12 @@ impl Remote {
             .iter()
             .find(|(_, u)| **u == uuid)
             .map(|(id, _)| *id as u32)
-    }}
+    }
+    /// The kind and last sent position of a tracked server entity.
+    pub(super) fn tracked(&self, id: i32) -> Option<(&str, [f64; 3])> {
+        self.entities.get(&id).map(|t| (&*t.kind, t.position))
+    }
+}
 
 /// The textures to resolve skins from: every list entry's, and for a player
 /// entity whose entry is gone the profile it kept. `kept` first takes, for each

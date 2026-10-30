@@ -99,6 +99,9 @@ impl RemoteTextDisplay {
         self.target = at;
         self.steps = 0;
     }
+    pub(super) fn position(&self) -> glam::DVec3 {
+        self.position
+    }
     fn progress(&self, partial: f32) -> f32 {
         if self.duration <= 0 {
             1.0
