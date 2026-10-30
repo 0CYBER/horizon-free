@@ -890,6 +890,10 @@ pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color
     if species == Species::Sheep {
         child.extra.color = color;
     }
+    // `SulfurCube.getBreedOffspring`: `setSize(1, true)`.
+    if species == Species::SulfurCube {
+        sulfur_size(child, 1);
+    }
 }
 /// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
 pub fn set_baby(m: &mut Mob, baby: bool) {
