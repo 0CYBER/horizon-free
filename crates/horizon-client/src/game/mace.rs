@@ -203,6 +203,7 @@ impl Game<'_> {
             .items()
             .get(&stack.item)
             .and_then(|i| i.weapon_damage.map(|d| (d, i.max_damage)));
+        self.native_hurt_enemy_event(&stack, index);
         let smash = self.smash_attack();
         if smash {
             self.mace_hurt_enemy(index);

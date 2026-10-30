@@ -169,6 +169,21 @@
       "name": "place_block",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
+    },
+    {
+      "name": "hurt_enemy",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"
+    },
+    {
+      "name": "inventory_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_tick"
+    },
+    {
+      "name": "on_equip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_on_equip"
     }
   ]
 }

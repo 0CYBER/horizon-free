@@ -6304,6 +6304,7 @@ impl Game<'_> {
             horizon_client::spans::time("tick_lecterns", || self.tick_lecterns());
             horizon_client::spans::time("tick_maps", || self.tick_maps());
             self.tick_lodestone_compasses();
+            self.native_inventory_ticks();
             horizon_client::spans::time("tick_bolts", || self.tick_bolts());
             horizon_client::spans::time("tick_fishing", || self.tick_fishing());
             horizon_client::spans::time("tick_tridents", || self.tick_tridents());

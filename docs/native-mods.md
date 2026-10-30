@@ -99,6 +99,11 @@ API 20 adds buttons, tooltips and item icons on mod screens: `native_screen_clic
 (a button press on the server, on the mod block entity) and the helpers `native_item`, `native_screen_title`, `native_data`, `native_block`,
 `native_block_property`, `native_insert_item` and `native_cursor`. Bundles that use them need `"hooks": 20`.
 
+API 21 adds item behaviour, on the server for every player: `native_hurt_enemy` hears a player's hit land on a mob with the
+held stack, `native_inventory_tick` runs each tick for every stack a player carries (armour and off hand included) and may
+change it, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
+that use them need `"hooks": 21`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
