@@ -16,6 +16,7 @@ mod datapacks_page;
 mod dev_options;
 mod export_page;
 mod game_tools;
+mod github_mods_page;
 mod home;
 mod home_tabs;
 mod import_page;
@@ -301,6 +302,7 @@ struct Launcher {
     starting_pack: Option<std::path::PathBuf>,
     /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
     mods: mods_page::Mods,
+    github: github_mods_page::Github,
     /// The instances, for the sidebar and Play, and their dialog (`instances_page.rs`).
     instances: instances_page::Instances,
     /// Home's Worlds section, of the selected instance (`worlds_page.rs`).
@@ -501,6 +503,7 @@ impl Launcher {
             pack_error: None,
             starting_pack: None,
             mods: mods_page::Mods::new(cx),
+            github: github_mods_page::Github::new(cx),
             instances: instances_page::Instances::default(),
             worlds: worlds_page::Worlds::default(),
             multiplayer: multiplayer_page::Multiplayer::default(),
@@ -1044,6 +1047,7 @@ impl Launcher {
         }
         changed |= self.servers_tick();
         changed |= self.mods_tick();
+        changed |= self.github_tick();
         if let Some(sign_in) = &self.sign_in {
             let state = sign_in.state();
             let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
@@ -3976,6 +3980,7 @@ impl Render for Launcher {
         self.servers.note_focus(window);
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
+        self.github.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
         self.proxy_focused = self.proxy_focus.is_focused(window);
         let size = window.viewport_size();
