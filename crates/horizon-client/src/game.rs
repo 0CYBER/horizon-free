@@ -4520,7 +4520,8 @@ impl Game<'_> {
             }
             // CeilingHangingSignBlock.useItemOn: a hanging sign aimed at the
             // underside passes, so the next sign chains below instead of
-            // opening the editor (signs here carry no click commands).
+            // opening the editor, unless the side has click commands to run
+            // (`shouldTryToChainAnotherHangingSign`).
             let chains_sign = hit.face == [0, -1, 0]
                 && held
                     .as_ref()
@@ -4538,7 +4539,8 @@ impl Game<'_> {
                         .block_entities
                         .get(&(hit.pos[0], hit.pos[1], hit.pos[2])),
                     Some(BlockEntity::Sign(_))
-                );
+                )
+                && !self.sign_can_execute_click_commands((hit.pos[0], hit.pos[1], hit.pos[2]));
             // TRY_WITH_EMPTY_HAND: only the main hand's turn uses the block
             // itself (useWithoutItem).
             if !anchor_passed && !chains_sign && self.hand == Hand::Main {
