@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API next adds server particle emission (`native_send_particles`).
+//!
 //! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
 //! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
 //!
@@ -53,6 +55,7 @@ use horizon_client::{
     hud::{HudBatch, rgba},
     keybinds,
     mod_list::{self, Installed, NativePage},
+    particles::{ParticleOptions, ParticleType},
     text::Text,
 };
 use horizon_core::position::BlockPos;
@@ -443,6 +446,58 @@ impl Game<'_> {
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
+/// Server-level helpers for native mods.
+#[allow(dead_code)]
+impl GameLevel<'_> {
+    /// Queue particles in this authoritative level. A zero count sends one
+    /// directional particle. The return value means accepted, not delivered.
+    /// Block particle types require their block state; item, trail and
+    /// vibration particles are not supported by the current network dispatch.
+    pub(super) fn native_send_particles(
+        &mut self,
+        options: &ParticleOptions,
+        state: Option<BlockStateId>,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: i32,
+    ) -> bool {
+        use ParticleType as T;
+        let supported = match options.ty {
+            T::Block | T::BlockMarker | T::FallingDust | T::DustPillar | T::BlockCrumble => {
+                state.is_some_and(|id| self.registry.state(id).is_some())
+            }
+            T::Item | T::Trail | T::Vibration => false,
+            T::Geyser | T::GeyserPlume | T::GeyserBase | T::GeyserPoof => options
+                .geyser
+                .is_some_and(|(_, impulse)| impulse.is_finite()),
+            _ => true,
+        };
+        if !self.native_authoritative
+            || !supported
+            || !at.into_iter().all(f64::is_finite)
+            || !spread
+                .into_iter()
+                .all(|v| v.is_finite() && v.abs() <= f32::MAX as f64)
+            || !speed.is_finite()
+            || speed.abs() > f32::MAX as f64
+            || !options.color.into_iter().all(f32::is_finite)
+            || !options.to_color.into_iter().all(f32::is_finite)
+            || !options.scale.is_finite()
+        {
+            return false;
+        }
+        let dimension = match self.dimension {
+            LevelDimension::Overworld => "minecraft:overworld",
+            LevelDimension::Nether => "minecraft:the_nether",
+            LevelDimension::End => "minecraft:the_end",
+        };
+        self.native_particles
+            .push((dimension, options.clone(), state, at, spread, speed, count));
+        true
+    }
+}
+
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
