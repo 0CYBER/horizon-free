@@ -192,9 +192,8 @@ impl Assets {
     pub fn reload(&self, root: &Path) -> Result<RenderAssets> {
         RenderAssets::load(root, self)
     }
-    /// [`Assets::reload`] for a server, which draws nothing: the item models
-    /// and the sprites' layers, without the block models or the textures'
-    /// pixels.
+    /// [`Assets::reload`] for a server, which draws nothing: the sprites'
+    /// layers, without the block or item models or the textures' pixels.
     pub fn reload_for_server(&self, root: &Path) -> Result<RenderAssets> {
         RenderAssets::load_with(root, self, false)
     }
@@ -209,8 +208,13 @@ impl RenderAssets {
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
-        let parsed = crate::model_library::ParsedModels::load(root);
-        // A server draws no block: its models (about 24 MB baked) stay empty.
+        // A server draws no block and no item: its block models (about 24 MB
+        // baked) and item model library (7 MB) stay empty.
+        let parsed = if draws {
+            crate::model_library::ParsedModels::load(root)
+        } else {
+            crate::model_library::ParsedModels::default()
+        };
         let models = if draws {
             crate::models::prepare_with_models(root, registry, &mut sprites, &parsed)?
         } else {
