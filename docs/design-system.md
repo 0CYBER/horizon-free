@@ -261,6 +261,13 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   bar, what is happening with the time left, and the steps (game files, Java, sounds, prepare,
   play), the current one lit, those done ticked: steps, never the log
   (`HORIZON_LAUNCHER_PAGE=getting-ready` shows it for screenshots, nothing runs).
+- **Instance icons** (`launcher/src/instance_icons.rs`): the sidebar's rows, Home's hero (beside
+  the name) and the instance dialog show the same icon. Its own picture first (`icon.png` in its
+  game folder: one the player chose with Choose image…, scaled to 128 pixels, or its modpack's
+  icon from where it was installed), else the block or colour chosen in the dialog, else its
+  mark: the loader's logo (Fabric, Quilt, Forge, NeoForge), the grass block for plain Minecraft,
+  Horizon's for Horizon. The letter tile is the last resort. Pixel-art logos are scaled by whole
+  pixels; each is decoded once per size.
 - **The instance's tabs** (`launcher/src/home_tabs.rs`): under Home's hero, one tab at a time
   instead of one long page: Overview (what Play needs: the instance, the game or its resources,
   the account), Worlds, Multiplayer, Packs, then Screenshots and Console once they have something.

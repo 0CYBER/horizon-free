@@ -237,5 +237,6 @@
   "No mod matches.": "Aucun mod ne correspond.",
   "{source} · needed by another mod": "{source} · requis par un autre mod",
   "Local file · {file}": "Fichier local · {file}",
-  "Update {version}": "Mettre à jour : {version}"
+  "Update {version}": "Mettre à jour : {version}",
+  "Choose image…": "Choisir une image…"
 }

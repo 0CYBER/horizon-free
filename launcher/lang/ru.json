@@ -237,5 +237,6 @@
   "No mod matches.": "Нет подходящих модов.",
   "{source} · needed by another mod": "{source} · нужен другому моду",
   "Local file · {file}": "Локальный файл · {file}",
-  "Update {version}": "Обновить до {version}"
+  "Update {version}": "Обновить до {version}",
+  "Choose image…": "Выбрать изображение…"
 }
