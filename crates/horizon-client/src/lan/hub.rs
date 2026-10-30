@@ -2189,7 +2189,14 @@ impl Hub {
                     }
                     g.max_unacknowledged = 10;
                 }
-                S::ClientTickEnd(_) => self.guests[i].position_this_tick = false,
+                S::ClientTickEnd(_) => {
+                    // handleClientTickEnd: no move this tick, no known movement.
+                    let g = &mut self.guests[i];
+                    if !g.position_this_tick {
+                        g.known_movement = [0.0; 3];
+                    }
+                    g.position_this_tick = false;
+                }
                 // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
                 S::RecipeBookChangeSettings(p) => {
                     if let Some(book) = crate::recipe_book::BookType::ALL.get(p.book_type as usize)
@@ -2381,6 +2388,7 @@ impl Hub {
             g.moves_from_ground = g.on_ground;
         }
         g.moves.push((moved, flags & 1 != 0));
+        g.known_movement = moved;
         g.yaw = yaw;
         g.pitch = pitch.clamp(-90.0, 90.0);
         g.head_yaw = g.yaw;

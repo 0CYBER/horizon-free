@@ -1199,6 +1199,20 @@ impl Game<'_> {
         });
         self.ui.screenshot_message = Some(path);
     }
+    /// `Minecraft.handleGlobalKeyPress`'s screenshot branch: the
+    /// `key.screenshot` mapping (F2 by default) takes the picture before a
+    /// screen or a text box sees the key, and the debug modifier suppresses it.
+    pub(super) fn screenshot_shortcut(&mut self, key: KeyCode, repeat: bool) -> bool {
+        if repeat || self.debug_keys.modifier_down {
+            return false;
+        }
+        if horizon_client::keybinds::key_name(key) != Some(self.settings.keys.get("key.screenshot"))
+        {
+            return false;
+        }
+        self.take_screenshot();
+        true
+    }
     /// After a frame: report a finished F2 screenshot in chat.
     pub(super) fn finish_screenshot(&mut self, result: &std::result::Result<[u32; 2], String>) {
         let Some(path) = self.ui.screenshot_message.take() else {

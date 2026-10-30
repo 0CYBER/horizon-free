@@ -105,7 +105,8 @@ impl Pending {
             .is_some_and(|(item, _)| **item == *stack.item)
             && let Some((_, name)) = self.names.remove(&pos)
         {
-            stack.data_mut().custom_name = Some(name);
+            stack.data_mut().custom_name =
+                Some(horizon_world::nbt::Tag::String(name.as_str().into()));
         }
         if self
             .copied

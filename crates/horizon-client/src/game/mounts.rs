@@ -293,6 +293,7 @@ impl Game<'_> {
         self.audio.play(sound, Some(at), 1.0, pitch);
         // Animal.setInLove: entity event 18.
         if loved {
+            self.love_cause.insert(id, self.lan_acting);
             self.mob_event_particles(id, 18);
         }
         self.consume_held();
