@@ -138,7 +138,11 @@ impl SyncData {
             features: Vec::new(),
             commands: None,
             recipes: Vec::new(),
-            advancements: super::advancements::ServerAdvancements::load(Path::new("")),
+            advancements: super::advancements::ServerAdvancements::load(
+                Path::new(""),
+                &horizon_world::loot::PackOverlay::NONE,
+            ),
+            content_identity: None,
         }
     }
     pub fn load(
