@@ -134,6 +134,7 @@ mod growth_tests;
 #[cfg(test)]
 mod tests;
 
+pub use bonemeal::TemplateSettings;
 pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;

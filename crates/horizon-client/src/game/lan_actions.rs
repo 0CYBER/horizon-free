@@ -272,6 +272,32 @@ impl Game<'_> {
         Some(result)
     }
 
+    /// `as_guest`, with the system messages the guest's action earns (the
+    /// `player::sendSystemMessage` of a packet handler) sent to that guest.
+    pub(super) fn as_guest_messaged<R>(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let (result, lines) = self.as_guest(host, conn, |game| {
+            let outer = game.chat_capture.replace(Vec::new());
+            let result = f(game);
+            let lines = std::mem::replace(&mut game.chat_capture, outer).unwrap_or_default();
+            (result, lines)
+        })?;
+        for line in lines {
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        Some(result)
+    }
+
     /// The first half of `as_guest`: the guest's state in place of the
     /// game's, which the returned swap keeps until `leave_guest`. Between the
     /// two the host may go back into `self.lan`, so that what the guest does
@@ -1546,6 +1572,11 @@ impl Game<'_> {
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
             S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
+            S::SetStructureBlock(p) => self.lan_set_structure_block(host, conn, p),
+            S::TestInstanceBlockAction(p) => self.lan_test_instance_action(host, conn, p),
+            S::SetTestBlock(p) => self.lan_set_test_block(host, conn, p),
+            S::SetJigsawBlock(p) => self.lan_set_jigsaw_block(host, conn, p),
+            S::JigsawGenerate(p) => self.lan_jigsaw_generate(host, conn, p),
             S::EditBook(p) => self.lan_edit_book(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);

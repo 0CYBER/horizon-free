@@ -1010,6 +1010,14 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             }
             Some(Tag::compound(entries))
         }
+        // StructureBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::StructureBlock(b) => Some(Tag::compound(b.save())),
+        // JigsawBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::JigsawBlock(b) => Some(Tag::compound(b.save())),
+        // TestBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestBlock(b) => Some(Tag::compound(b.save())),
+        // TestInstanceBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestInstanceBlock(b) => Some(Tag::compound(b.save())),
         BlockEntity::Shelf(s) => Some(Tag::compound([
             ("Items", crate::save::encode_items(&s.items)),
             (

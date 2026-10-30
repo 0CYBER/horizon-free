@@ -157,7 +157,6 @@
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "Diese Version des Launchers hat keine Microsoft-Anmeldung (HORIZON_MSA_CLIENT_ID). Das Spiel kann daher nicht gestartet werden.",
   "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Melde dich mit einem Microsoft-Konto an, das Minecraft: Java Edition besitzt, um zu spielen",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Horizon benötigt wie andere Launcher ein Microsoft-Konto, das Minecraft: Java Edition besitzt. Damit kannst du auch mit deinem Namen und Skin auf Online-Servern spielen.",
-  "Sign in": "Anmelden",
   "Sign in with Microsoft": "Mit Microsoft anmelden",
   "Not now": "Nicht jetzt",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "Horizon benötigt wie andere Launcher ein Microsoft-Konto, das Minecraft: Java Edition besitzt.",
@@ -237,5 +236,6 @@
   "No mod matches.": "Kein Mod passt.",
   "{source} · needed by another mod": "{source} · von einem anderen Mod benötigt",
   "Local file · {file}": "Lokale Datei · {file}",
-  "Update {version}": "Update {version}"
+  "Update {version}": "Update {version}",
+  "Choose image…": "Bild wählen…"
 }

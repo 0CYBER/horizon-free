@@ -81,14 +81,17 @@ impl Toast {
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
     pub(super) fall: Option<[f64; 3]>,
-    /// `currentExplosionImpactPos`, and whether a wind charge made the blast.
-    pub(super) blast: Option<([f64; 3], bool)>,
+    /// `currentExplosionImpactPos` and `currentExplosionCause` (the entity
+    /// that made the blast, if any).
+    pub(super) blast: Option<([f64; 3], Option<EntityView>)>,
     /// `enteredLavaOnVehiclePosition`.
     pub(super) lava_ride: Option<[f64; 3]>,
     /// `enteredNetherPosition`.
     pub(super) nether: Option<[f64; 3]>,
     /// The (effect, amplifier) pairs `EffectsChangedTrigger` last saw.
     pub(super) effects: Vec<(&'static str, i32)>,
+    /// `PlayerEffects::changes` as the last tick saw it.
+    pub(super) effect_changes: u32,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -894,13 +897,13 @@ impl Game<'_> {
         match (falling, self.adv.marks.fall) {
             (true, None) => {
                 self.adv.marks.fall = Some(at);
-                // The blast a wind charge made is spent by the fall, and counts
-                // only if the player was above where it hit.
-                if let Some((impact, wind_charge)) = self.adv.marks.blast.take()
-                    && wind_charge
+                // `trackStartFallingPosition`: the last blast is spent by the
+                // fall (whatever made it), and counts only if the player was
+                // above where it hit.
+                if let Some((impact, cause)) = self.adv.marks.blast.take()
                     && impact[1] <= at[1]
                 {
-                    self.trigger_fall_after_explosion(impact);
+                    self.trigger_fall_after_explosion(impact, cause);
                 }
             }
             // `resetFallDistance`: a fall ends by landing, climbing or water.
@@ -925,17 +928,31 @@ impl Game<'_> {
             self.adv.marks.nether = None;
             self.trigger_distance("minecraft:nether_travel", start);
         }
-        let effects: Vec<(&'static str, i32)> = self
-            .potions
+        let effects = self.effects_seen();
+        // `onEffectAdded`, `onEffectUpdated` (an `update` that changed the
+        // duration, amplifier or flags too) and `onEffectsRemoved`.
+        let changes = self.potions.effects.changes;
+        if effects != self.adv.marks.effects || changes != self.adv.marks.effect_changes {
+            self.adv.marks.effects = effects;
+            self.adv.marks.effect_changes = changes;
+            self.trigger_effects_changed(None);
+        }
+    }
+    /// The (effect, amplifier) pairs `marks.effects` compares.
+    fn effects_seen(&self) -> Vec<(&'static str, i32)> {
+        self.potions
             .effects
             .list
             .iter()
             .map(|e| (e.id, e.amplifier))
-            .collect();
-        if effects != self.adv.marks.effects {
-            self.adv.marks.effects = effects;
-            self.trigger_effects_changed(None);
-        }
+            .collect()
+    }
+    /// `EffectsChangedTrigger` for a change the caller knows the source of;
+    /// the end-of-tick check then does not fire it a second time.
+    pub(super) fn trigger_effects_changed_by(&mut self, source: Option<EntityView>) {
+        self.adv.marks.effects = self.effects_seen();
+        self.adv.marks.effect_changes = self.potions.effects.changes;
+        self.trigger_effects_changed(source);
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
     /// at `start`, and the `distance` from `start` to the player.
@@ -953,15 +970,12 @@ impl Game<'_> {
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
         });
     }
-    /// `FallAfterExplosionTrigger` for a wind charge's blast that hit the
-    /// player at `impact`, measured to where the player is now.
-    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3]) {
+    /// `FallAfterExplosionTrigger.trigger`: a blast that hit the player at
+    /// `impact` (made by `cause`, or by nothing), measured to where the
+    /// player is now. `matches` tests `cause` only when the instance has one,
+    /// and a missing cause fails it.
+    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3], cause: Option<EntityView>) {
         let me = self.player_entity();
-        let cause = EntityView {
-            kind: "minecraft:wind_charge".into(),
-            position: impact,
-            ..EntityView::default()
-        };
         self.trigger("minecraft:fall_after_explosion", move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
@@ -969,21 +983,24 @@ impl Game<'_> {
                 tool: None,
                 block_pos: None,
             };
-            let cctx = adv::Entities {
-                this: Some(&cause),
-                origin: me.position,
-                tool: None,
-                block_pos: None,
-            };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::location(&c["start_position"], impact, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], impact, me.position))
-                && adv::conditions(&c["cause"], &cctx, w)
+                && (c["cause"].is_null()
+                    || cause.as_ref().is_some_and(|cause| {
+                        let cctx = adv::Entities {
+                            this: Some(cause),
+                            origin: me.position,
+                            tool: None,
+                            block_pos: None,
+                        };
+                        adv::conditions(&c["cause"], &cctx, w)
+                    }))
         });
     }
     /// `EffectsChangedTrigger`: the player's `effects`, and for an effect that
     /// `source` gave, that entity (`source`).
-    pub(super) fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
+    fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
         let me = self.player_entity();
         self.trigger("minecraft:effects_changed", move |c, w| {
             let pctx = adv::Entities {

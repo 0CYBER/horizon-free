@@ -58,6 +58,9 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The exploding mob as predicates see it (`ServerExplosion.source`,
+    /// `ServerPlayer.currentExplosionCause`), for a mob already out of the list.
+    pub(super) explosion_cause: Option<horizon_client::advancements::EntityView>,
     /// The exploding mob named itself (`MobEvent::ExplosionSource`), so the
     /// blast leaves it out (`getEntities(source, box)`). A source guessed
     /// from the mobs near the centre is still hurt: it may be a bystander.
