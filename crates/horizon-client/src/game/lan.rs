@@ -2185,6 +2185,7 @@ impl Game<'_> {
             m.extra.fall_flying = body.gliding;
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
+            m.extra.previous_velocity = m.velocity;
             m.velocity = g
                 .motion
                 .as_ref()
