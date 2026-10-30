@@ -152,7 +152,7 @@ impl CyclingSlot {
         for _ in 0..ticks {
             if !self.icons.is_empty() {
                 self.tick += 1;
-                if self.tick % Self::CHANGE_TICKS == 0 {
+                if self.tick.is_multiple_of(Self::CHANGE_TICKS) {
                     self.index = (self.index + 1) % self.icons.len();
                 }
             }
