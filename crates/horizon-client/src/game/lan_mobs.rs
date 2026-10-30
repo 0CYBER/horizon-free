@@ -5,7 +5,7 @@
 //! (hits, pushes, fire, its projectiles) runs with that guest swapped in.
 use super::{Game, lan::LanHost};
 use horizon_client::{
-    mobs::{Mob, MobEvent, PlayerView, Who},
+    mobs::{Mob, MobEvent, PlayerView, Species, Who},
     projectiles::{Hit, Projectile},
 };
 use horizon_core::geometry::{Aabb, Vec3};
@@ -26,8 +26,38 @@ pub(super) fn player_for(
     guests: &GuestViews,
     bound: Option<u32>,
 ) -> Option<u32> {
+    // A tame cat reads its owner wherever they are while they sleep, or just
+    // woke up (`CatRelaxOnOwnerGoal` uses `getOwner`, not the nearest player).
+    if m.species() == Species::Cat
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        let asleep = |v: &PlayerView| v.uuid == owner && (v.sleeping || v.sleep_timer > 0);
+        if host.is_some_and(asleep) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| asleep(v)) {
+            return Some(*conn);
+        }
+    }
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    // A tame wolf, cat or parrot sees its owner (`TamableAnimal.getOwner`), while they
+    // are in play, whoever is nearer. Not while it targets or was just hurt by
+    // a player: then `Who::Player` is that attacker, whoever it is, and the
+    // owner goals ignore it until the wolf lets go.
+    if !targeting
+        && matches!(m.species(), Species::Wolf | Species::Cat | Species::Parrot)
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        if host.is_some_and(|v| v.alive && v.uuid == owner) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| v.alive && v.uuid == owner) {
+            return Some(*conn);
+        }
+    }
     choose(m.position, targeting, host, guests, bound)
 }
 
@@ -65,10 +95,22 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
     matches!(
         e,
         MobEvent::AttackPlayer(..)
+            | MobEvent::AttackPlayerWithEffect { .. }
             | MobEvent::DamagePlayer { .. }
+            | MobEvent::SonicBoom {
+                target: Who::Player,
+                ..
+            }
             | MobEvent::Push {
                 target: Who::Player,
                 ..
+            }
+            | MobEvent::Knockback {
+                target: Who::Player,
+                ..
+            }
+            | MobEvent::StabDismount {
+                target: Who::Player,
             }
             | MobEvent::Ignite {
                 target: Who::Player,
@@ -78,6 +120,9 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
                 target: Who::Player,
                 ..
             }
+            | MobEvent::EffectPlayer { .. }
+            | MobEvent::AxolotlSupportPlayer { .. }
+            | MobEvent::ParrotToShoulder { .. }
     )
 }
 
@@ -115,6 +160,35 @@ impl Game<'_> {
         views
     }
 
+    /// Runs `f` as each guest in play here, for what strikes every player in
+    /// an area (`Level.getEntities`), not only the window's own.
+    pub(super) fn each_guest_hit(&mut self, f: impl FnMut(&mut Self)) {
+        self.each_guest_hit_except(None, f);
+    }
+
+    /// [`Self::each_guest_hit`] leaving out the guest `except` (the one a
+    /// firework rocket is attached to, which it hurts on its own).
+    pub(super) fn each_guest_hit_except(
+        &mut self,
+        except: Option<u32>,
+        mut f: impl FnMut(&mut Self),
+    ) {
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        let conns: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && Some(g.conn) != except)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.guest_hit_by(&mut host, conn, &mut f);
+        }
+        self.lan = Some(host);
+    }
+
     /// Mob events aimed at a guest, run as that guest (`guest_hit_by`).
     pub(super) fn lan_guest_mob_events(&mut self, events: Vec<(u32, MobEvent)>) {
         if events.is_empty() {
@@ -144,10 +218,23 @@ impl Game<'_> {
             .iter()
             .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .map(|g| {
-                let [x, y, z] = g.position;
-                let height = if g.sneaking { 1.5 } else { 1.8 };
-                ([x - 0.3, y, z - 0.3], [x + 0.3, y + height, z + 0.3])
+                let b = g.bounds();
+                let (lo, hi) = (b.min_position(), b.max_position());
+                ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
             })
+            .collect()
+    }
+    /// The same guests' feet and whether they stand on the ground, for the
+    /// blocks that also ask that (`BigDripleafBlock.canEntityTilt`).
+    pub(super) fn lan_guest_feet(&self) -> Vec<([f64; 3], bool)> {
+        let Some(host) = self.lan.as_ref() else {
+            return Vec::new();
+        };
+        host.hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+            .map(|g| (g.position, g.on_ground))
             .collect()
     }
 
@@ -192,7 +279,9 @@ impl Game<'_> {
 
 impl Game<'_> {
     /// Hurt a guest: `f` runs as them, and the knockback it gave reaches
-    /// their client (`hurtMarked`: ClientboundSetEntityMotionPacket).
+    /// their client. A hurt marks the velocity (Entity.markHurt), which goes
+    /// out once the guest's server copy has travelled (`guest_server_tick`);
+    /// a push with no hurt goes out at once.
     pub(super) fn guest_hit_by<R>(
         &mut self,
         host: &mut LanHost,
@@ -202,16 +291,47 @@ impl Game<'_> {
         let (result, pushed) = self.as_guest(host, conn, |g| {
             let before = g.player.as_ref().map(|p| p.velocity);
             let result = f(g);
-            let after = g.player.as_ref().map(|p| p.velocity);
-            (result, after.filter(|v| Some(*v) != before))
+            let pushed = g
+                .player
+                .as_ref()
+                .filter(|p| !p.health.sync_velocity && Some(p.velocity) != before)
+                .map(|p| p.velocity);
+            (result, pushed)
         })?;
-        if let (Some(v), Some(g)) = (pushed, host.hub.guest(conn)) {
+        self.send_guest_motion(host, conn, pushed);
+        Some(result)
+    }
+
+    /// A player's melee hit on a guest (Player.causeExtraKnockback on a
+    /// ServerPlayer): a hurt that marked the velocity sends it at once, and
+    /// the server's copy goes back to the velocity it had before the hit.
+    pub(super) fn guest_struck_by<R>(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let (result, sent) = self.as_guest(host, conn, |g| {
+            let before = g.player.as_ref().map(|p| p.velocity);
+            let result = f(g);
+            let sent = g.player.as_mut().zip(before).and_then(|(p, before)| {
+                std::mem::take(&mut p.health.sync_velocity)
+                    .then(|| std::mem::replace(&mut p.velocity, before))
+            });
+            (result, sent)
+        })?;
+        self.send_guest_motion(host, conn, sent);
+        Some(result)
+    }
+
+    /// ClientboundSetEntityMotionPacket to a guest about themselves.
+    pub(super) fn send_guest_motion(&self, host: &LanHost, conn: u32, velocity: Option<Vec3>) {
+        if let (Some(v), Some(g)) = (velocity, host.hub.guest(conn)) {
             g.send(&C::SetEntityMotion(play::SetEntityMotion {
                 id: g.entity_id,
                 velocity: [v.x, v.y, v.z],
             }));
         }
-        Some(result)
     }
 }
 
@@ -225,6 +345,8 @@ pub(super) struct Present {
     pub creative: bool,
     pub spectator: bool,
     pub alive: bool,
+    /// Trial Omen, else Bad Omen, among the guest's effects.
+    pub omen: Option<horizon_client::mobs::trial_spawner::Omen>,
 }
 
 impl Game<'_> {
@@ -238,14 +360,21 @@ impl Game<'_> {
             .filter(|g| g.loaded)
             .map(|g| {
                 let [x, y, z] = g.position;
+                // The acting guest's effects are on the game while their turn runs.
+                let effects = if self.lan_acting == Some(g.conn) {
+                    &self.potions.effects
+                } else {
+                    &g.effects
+                };
                 Present {
                     uuid: horizon_client::lan::playerdata::uuid_ints(g.uuid),
                     position: g.position,
                     eye: [x, y + g.eye_height(), z],
-                    height: if g.sneaking { 1.5 } else { 1.8 },
+                    height: g.dimensions().height,
                     creative: g.creative(),
                     spectator: g.spectator(),
                     alive: !g.dead,
+                    omen: omen_of(effects),
                 }
             })
             .collect()
@@ -259,14 +388,21 @@ impl Game<'_> {
     }
 }
 
-/// A guest's bounding box (0.6 wide, 1.8 tall, 1.5 crouching).
+/// `TrialSpawner.findPlayerWithOminousEffect`: Trial Omen first, then Bad Omen.
+pub(super) fn omen_of(
+    effects: &horizon_client::effects::PlayerEffects,
+) -> Option<horizon_client::mobs::trial_spawner::Omen> {
+    use horizon_client::mobs::trial_spawner::Omen;
+    if effects.get("trial_omen").is_some() {
+        Some(Omen::Trial)
+    } else {
+        effects.get("bad_omen").map(|_| Omen::Bad)
+    }
+}
+
+/// A guest's bounding box, by its pose (`Avatar.POSES`).
 pub(super) fn guest_bounds(g: &horizon_client::lan::guest::Guest) -> Aabb {
-    let [x, y, z] = g.position;
-    let height = if g.sneaking { 1.5 } else { 1.8 };
-    Aabb::new(
-        Vec3::new(x - 0.3, y, z - 0.3),
-        Vec3::new(x + 0.3, y + height, z + 0.3),
-    )
+    g.bounds()
 }
 
 #[cfg(test)]
@@ -281,21 +417,30 @@ mod tests {
             alive: true,
             creative,
             sneaking: false,
+            swimming: false,
             look: [0.0; 3],
             main_hand: None,
             off_hand: None,
             head: None,
             armor_cover: 0.0,
+            invisible: false,
             spectator: false,
             gold_armor: false,
             hurt_by: None,
             last_hurt: None,
             velocity: Vec3::ZERO,
             yaw: 0.0,
+            sprinting: false,
+            riding: false,
             hero: false,
+            effects: Vec::new(),
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            sleeping: false,
+            sleep_timer: 0,
+            passenger: false,
+            vehicle: None,
         }
     }
 

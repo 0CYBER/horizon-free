@@ -46,6 +46,80 @@ packet!(KnownPack { namespace: String => Str, id: String => Str, version: String
 packet!(SelectKnownPacks { packs: Vec<KnownPack> => List<KnownPack> });
 packet!(CodeOfConduct { text: String => Str });
 
+/// ServerLinks.UntrustedEntry's `type` (Either<KnownLinkType, Component>): a
+/// known link's id, or a custom label component.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ServerLinkKind {
+    /// ServerLinks.KnownLinkType by id (ByIdMap: unknown ids read as 0).
+    Known(i32),
+    /// A custom label (TRUSTED_CONTEXT_FREE_STREAM_CODEC: a component in NBT).
+    Custom(Tag),
+}
+/// ServerLinks.UntrustedEntry: the label and the unchecked link string (the
+/// client keeps only `http`/`https` URIs, Util.parseAndValidateUntrustedUri).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerLink {
+    pub kind: ServerLinkKind,
+    pub link: String,
+}
+impl Codec<ServerLink> for ServerLink {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let kind = if Bool::read(r)? {
+            ServerLinkKind::Known(VarInt::read(r)?)
+        } else {
+            ServerLinkKind::Custom(Nbt::read(r)?)
+        };
+        Ok(Self {
+            kind,
+            link: Str::read(r)?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match &v.kind {
+            ServerLinkKind::Known(id) => {
+                Bool::write(&true, w);
+                VarInt::write(id, w);
+            }
+            ServerLinkKind::Custom(tag) => {
+                Bool::write(&false, w);
+                Nbt::write(tag, w);
+            }
+        }
+        Str::write(&v.link, w);
+    }
+}
+packet!(
+    /// ClientboundServerLinksPacket (a common packet: configuration and play).
+    /// Links the pause menu's "Server Links..." screen lists.
+    ServerLinks { links: Vec<ServerLink> => List<ServerLink> }
+);
+packet!(
+    /// ClientboundShowDialogPacket.CONTEXT_FREE_STREAM_CODEC: the dialog
+    /// itself (`Dialog.DIRECT_CODEC` as NBT).
+    ShowDialog { dialog: Tag => Nbt }
+);
+packet!(
+    /// ServerboundCustomClickActionPacket: a `custom` click event's id and
+    /// payload (a dialog's answer).
+    CustomClickAction { id: String => Ident, payload: Option<Tag> => ClickPayload }
+);
+/// ServerboundCustomClickActionPacket.UNTRUSTED_TAG_CODEC: an optional tag
+/// (`End` when there is none) behind its length, 65536 bytes at most.
+pub struct ClickPayload;
+impl Codec<Option<Tag>> for ClickPayload {
+    fn read(r: &mut Reader) -> Result<Option<Tag>> {
+        let n = r.count(65536)?;
+        let tag = Reader::new(r.bytes(n)?).nbt()?;
+        Ok((tag != Tag::End).then_some(tag))
+    }
+    fn write(v: &Option<Tag>, w: &mut Writer) {
+        let mut tag = Writer::new();
+        tag.nbt(v.as_ref().unwrap_or(&Tag::End));
+        w.varint(tag.data.len() as i32);
+        w.bytes(&tag.data);
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::configuration::clientbound {
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
@@ -63,6 +137,8 @@ packet_enum!(Clientbound, crate::ids::configuration::clientbound {
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     SelectKnownPacks(SelectKnownPacks) = SELECT_KNOWN_PACKS,
     ClearDialog(Empty) = CLEAR_DIALOG,
+    ServerLinks(ServerLinks) = SERVER_LINKS,
+    ShowDialog(ShowDialog) = SHOW_DIALOG,
     CodeOfConduct(CodeOfConduct) = CODE_OF_CONDUCT,
 });
 
@@ -142,6 +218,7 @@ packet_enum!(Serverbound, crate::ids::configuration::serverbound {
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectKnownPacks(SelectKnownPacks) = SELECT_KNOWN_PACKS,
     AcceptCodeOfConduct(Empty) = ACCEPT_CODE_OF_CONDUCT,
+    CustomClickAction(CustomClickAction) = CUSTOM_CLICK_ACTION,
 });
 
 #[cfg(test)]
@@ -208,6 +285,22 @@ mod tests {
             Clientbound::CodeOfConduct(CodeOfConduct {
                 text: "Be nice".into(),
             }),
+            Clientbound::ServerLinks(ServerLinks {
+                links: vec![
+                    ServerLink {
+                        kind: ServerLinkKind::Known(0),
+                        link: "https://bugs.example.net".into(),
+                    },
+                    ServerLink {
+                        kind: ServerLinkKind::Custom(crate::text::literal("Custom link")),
+                        link: "https://example.net".into(),
+                    },
+                ],
+            }),
+            Clientbound::ShowDialog(ShowDialog {
+                dialog: Tag::compound([("type", Tag::String("minecraft:notice".into()))]),
+            }),
+            Clientbound::ClearDialog(Empty),
         ] {
             round_trip(p, Clientbound::encode, Clientbound::decode);
         }
@@ -219,8 +312,43 @@ mod tests {
             Serverbound::ResourcePack(ResourcePackResponse { id: 5, action: 1 }),
             Serverbound::SelectKnownPacks(SelectKnownPacks { packs: vec![] }),
             Serverbound::AcceptCodeOfConduct(Empty),
+            Serverbound::CustomClickAction(CustomClickAction {
+                id: "authme:prejoin-register/submit".into(),
+                payload: Some(Tag::compound([("password", Tag::String("hunter2".into()))])),
+            }),
+            Serverbound::CustomClickAction(CustomClickAction {
+                id: "minecraft:x".into(),
+                payload: None,
+            }),
         ] {
             round_trip(p, Serverbound::encode, Serverbound::decode);
         }
+    }
+
+    #[test]
+    fn client_information_carries_the_main_hand() {
+        // Skin Customization's Main Hand: HumanoidArm LEFT is 0, RIGHT is 1.
+        for main_hand in [0, 1] {
+            round_trip(
+                Serverbound::ClientInformation(ClientInformation {
+                    main_hand,
+                    ..ClientInformation::new(12)
+                }),
+                Serverbound::encode,
+                Serverbound::decode,
+            );
+        }
+    }
+
+    /// The bytes vanilla writes: the length, then the tag (a lone `End` byte
+    /// for none).
+    #[test]
+    fn click_payload_is_length_prefixed() {
+        let mut w = Writer::new();
+        ClickPayload::write(&None, &mut w);
+        assert_eq!(w.data, [1, 0]);
+        let mut w = Writer::new();
+        ClickPayload::write(&Some(Tag::Byte(1)), &mut w);
+        assert_eq!(w.data, [2, 1, 1]);
     }
 }

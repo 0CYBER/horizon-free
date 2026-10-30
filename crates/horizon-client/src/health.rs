@@ -25,19 +25,7 @@ use std::{fs, io, path::Path};
 pub(crate) type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
 pub(crate) type State = HurtState<DamageTypeId>;
 
-#[derive(Clone, Copy, Debug)]
-pub struct HealthRules {
-    pub difficulty: Difficulty,
-    pub natural_regeneration: bool,
-}
-impl Default for HealthRules {
-    fn default() -> Self {
-        Self {
-            difficulty: Difficulty::Normal,
-            natural_regeneration: true,
-        }
-    }
-}
+pub use crate::world::HealthRules;
 pub struct HealthResources {
     pub damage: Catalog,
     pub ids: PlayerFloatIds,
@@ -111,6 +99,12 @@ pub enum HealthEvent {
         amount: f32,
     },
     Phase(&'static str),
+    /// `Player.hurtArmor`: a hit that doesn't bypass armor wears the worn
+    /// pieces (`LivingEntity.getDamageAfterArmorAbsorb`); the game applies it.
+    ArmorHurt {
+        source: DamageTypeId,
+        amount: f32,
+    },
     /// `ServerLevel.broadcastDamageEvent`: the client's
     /// `LivingEntity.handleDamageEvent` plays the source's hurt sound.
     DamageBroadcast {
@@ -139,6 +133,7 @@ impl HealthEvent {
                 format!("record-damage {:08x}", amount.to_bits())
             }
             Self::Phase(name) => name.into(),
+            Self::ArmorHurt { amount, .. } => format!("hurt-armor {:08x}", amount.to_bits()),
             Self::DamageBroadcast { .. } => "broadcast-damage".into(),
             Self::Criterion { .. } => "hurt-criterion".into(),
         }
@@ -163,6 +158,12 @@ pub struct PlayerHealth {
     pub hurt: State,
     /// Client hurt animation; fully blocked hits only refresh the server's hurt state.
     pub hurt_animation_time: i32,
+    /// `Player.hurtDir` on a client: the yaw `ClientboundHurtAnimationPacket`
+    /// gave, which `GameRenderer.bobHurt` tilts the camera around.
+    pub hurt_dir: f32,
+    /// `ServerPlayer.hurtDir` of a hit the player's client hasn't been told
+    /// of yet (`indicateDamage`).
+    pub indicated_dir: Option<f32>,
     pub dead: bool,
     pub sync_velocity: bool,
     pub game_time: i64,
@@ -213,6 +214,8 @@ impl PlayerHealth {
                 last_stamp: 0,
             },
             hurt_animation_time: 0,
+            hurt_dir: 0.0,
+            indicated_dir: None,
             dead: false,
             sync_velocity: false,
             game_time: 0,
@@ -253,6 +256,40 @@ impl PlayerHealth {
             self.hurt_animation_time -= 1;
         }
     }
+    /// `LivingEntity.animateHurt` / `handleDamageEvent` on a client: the hurt
+    /// tilt and red flash restart.
+    pub fn animate_hurt(&mut self) {
+        self.hurt.hurt_duration = 10;
+        self.hurt.hurt_time = 10;
+        self.hurt_animation_time = 10;
+    }
+    /// `LivingEntity.animateHurt(yaw)` on a player: the tilt restarts around
+    /// `yaw` (`Player.animateHurt` keeps it as `hurtDir`).
+    pub fn animate_hurt_dir(&mut self, yaw: f32) {
+        self.animate_hurt();
+        self.hurt_dir = yaw;
+    }
+    /// `ServerPlayer.indicateDamage`: the hit's direction relative to where
+    /// the player looks, kept for the packet to its client.
+    pub fn indicate_damage(&mut self, xd: f64, zd: f64, yaw: f32) {
+        use horizon_core::geometry::trig::{RAD_TO_DEG, atan2};
+        self.indicated_dir = Some((atan2(zd, xd) * f64::from(RAD_TO_DEG) - f64::from(yaw)) as f32);
+    }
+    /// `LocalPlayer.hurtTo` with `flashOnSetHealth`: a drop below the current
+    /// health starts the hurt animation; `damageCooldownTime` (20 on a drop,
+    /// 10 on a gain) is what lets `Hud.extractPlayerHealth` blink the hearts.
+    pub fn flash_health_change(&mut self, health: f32) {
+        let damage = self.health() - health;
+        if damage <= 0.0 {
+            if damage < 0.0 {
+                self.hurt.cooldown = 10;
+            }
+        } else {
+            self.hurt.last_hurt = damage;
+            self.hurt.cooldown = 20;
+            self.animate_hurt();
+        }
+    }
 }
 impl PlayerMotion {
     pub fn hurt(
@@ -274,6 +311,23 @@ impl PlayerMotion {
         amount: f32,
         blocking: Option<Blocking>,
     ) -> Result<BlockOutcome> {
+        self.hurt_caused_by(resources, rules, source, amount, blocking, false)
+    }
+    /// `hurt_blocking` from a source whose causing entity is a living
+    /// non-player (`living_cause`), which the `when_caused_by_living_non_player`
+    /// damage types scale with the difficulty.
+    pub fn hurt_caused_by(
+        &mut self,
+        resources: &HealthResources,
+        rules: HealthRules,
+        source: DamageTypeId,
+        amount: f32,
+        blocking: Option<Blocking>,
+        living_cause: bool,
+    ) -> Result<BlockOutcome> {
+        if self.client_side {
+            return Ok(BlockOutcome::default());
+        }
         let source = resources
             .damage
             .source::<()>(source, None, None, None)
@@ -290,6 +344,7 @@ impl PlayerMotion {
             invulnerable,
             rules,
             source,
+            living_cause,
             events: &mut self.events,
             dead: &mut h.dead,
             sync_velocity: &mut h.sync_velocity,
@@ -298,6 +353,7 @@ impl PlayerMotion {
             blocking,
             blocked: 0.0,
             block_sound: false,
+            knocked: false,
             totem: totem_ready,
             totem_fired: false,
         };
@@ -313,6 +369,7 @@ impl PlayerMotion {
             hurt,
             blocked: environment.blocked,
             sound: environment.block_sound,
+            knockback: environment.knocked,
         };
         if environment.totem_fired {
             h.totem_used = true;
@@ -320,6 +377,13 @@ impl PlayerMotion {
         }
         if outcome.hurt {
             h.hurt_animation_time = h.hurt.hurt_time;
+        }
+        // `dealDefaultKnockback` ends in `indicateDamage` unless blocked: a
+        // hit with no direction of its own (`xd` and `zd` zero) is sent as
+        // the opposite of the player's yaw. A hit that has a direction
+        // replaces this (`mob_hits_player`).
+        if outcome.knockback && outcome.blocked <= 0.0 {
+            h.indicate_damage(0.0, 0.0, self.yaw);
         }
         let after = h.health() + h.absorption();
         if self.hurt_log.len() >= HURT_LOG {
@@ -363,6 +427,8 @@ pub(crate) struct Environment<'a> {
     pub(crate) invulnerable: bool,
     pub(crate) rules: HealthRules,
     pub(crate) source: DamageSource<'a, ()>,
+    /// The causing entity is a living non-player (a mob, or its projectile's owner).
+    pub(crate) living_cause: bool,
     pub(crate) events: &'a mut Vec<MotionEvent>,
     pub(crate) dead: &'a mut bool,
     pub(crate) sync_velocity: &'a mut bool,
@@ -373,6 +439,8 @@ pub(crate) struct Environment<'a> {
     pub(crate) blocking: Option<Blocking>,
     pub(crate) blocked: f32,
     pub(crate) block_sound: bool,
+    /// `dealDefaultKnockback` ran: a fresh hit, not fully blocked.
+    pub(crate) knocked: bool,
     /// LivingEntity.checkTotemDeathProtection: a totem is held / was used.
     pub(crate) totem: bool,
     pub(crate) totem_fired: bool,
@@ -435,6 +503,9 @@ pub struct BlockOutcome {
     pub blocked: f32,
     /// `BlocksAttacks.onBlocked` ran (the block sound plays).
     pub sound: bool,
+    /// The hit knocks the player back (`dealDefaultKnockback`): not one in
+    /// the hurt cooldown, nor one the shield took whole.
+    pub knockback: bool,
 }
 struct MatchedSets;
 impl horizon_world::blocking_rules::TypeMatchWorld for MatchedSets {
@@ -485,9 +556,14 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
     fn bypasses(&mut self, kind: Bypass) -> io::Result<bool> {
         Ok(self.source.bypasses(kind))
     }
-    fn hurt_armor(&mut self, _: &mut Attributes, _: f32) -> io::Result<()> {
+    fn hurt_armor(&mut self, _: &mut Attributes, damage: f32) -> io::Result<()> {
+        // The worn armor lives in the game, which wears it from this event.
+        self.event(HealthEvent::ArmorHurt {
+            source: self.source.type_id(),
+            amount: damage,
+        });
         Ok(())
-    } // empty equipment
+    }
     fn has_resistance(&mut self) -> io::Result<bool> {
         Ok(self.status.resistance.is_some())
     }
@@ -572,8 +648,13 @@ impl ImmunityWorld for Environment<'_> {
     fn enchantment_immunity(&mut self) -> io::Result<bool> {
         Ok(false)
     }
-    fn damage_rule(&mut self, _: DamageRule) -> io::Result<bool> {
-        Ok(true)
+    fn damage_rule(&mut self, rule: DamageRule) -> io::Result<bool> {
+        Ok(match rule {
+            DamageRule::Drowning => self.rules.drowning_damage,
+            DamageRule::Fall => self.rules.fall_damage,
+            DamageRule::Fire => self.rules.fire_damage,
+            DamageRule::Freeze => self.rules.freeze_damage,
+        })
     }
     fn changing_dimension(&mut self) -> io::Result<bool> {
         Ok(false)
@@ -667,9 +748,11 @@ impl HurtWorld for Environment<'_> {
         *self.sync_velocity = true;
         Ok(())
     }
+    /// The caller applies it: these sources carry no entity or position.
     fn knockback(&mut self, _: &mut State, _: f32, _: bool) -> io::Result<()> {
+        self.knocked = true;
         Ok(())
-    } // no entity or position on these sources
+    }
     fn death_protection(&mut self, _: &mut State) -> io::Result<bool> {
         if !self.totem
             || self
@@ -739,8 +822,13 @@ impl PlayerHurtWorld for Environment<'_> {
         Ok(())
     }
     fn scales_with_difficulty(&mut self, _: &mut State) -> io::Result<bool> {
-        Ok(self.source.definition().scaling == Scaling::Always)
-    } // no causing entity
+        // DamageSource.scalesWithDifficulty.
+        Ok(match self.source.definition().scaling {
+            Scaling::Never => false,
+            Scaling::Always => true,
+            Scaling::LivingNonPlayer => self.living_cause,
+        })
+    }
     fn difficulty(&mut self, _: &mut State) -> io::Result<Difficulty> {
         Ok(self.rules.difficulty)
     }
@@ -761,6 +849,62 @@ impl ServerPlayerHurtWorld for Environment<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hit_in_the_hurt_cooldown_knocks_nobody_back() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .unwrap();
+        let (health, rules) = (&resources.health, super::HealthRules::default());
+        let id = health.damage.id("minecraft:mob_attack").unwrap();
+        let mut hit = |amount| {
+            player
+                .hurt_blocking(health, rules, id, amount, None)
+                .unwrap()
+        };
+        let first = hit(1.0);
+        assert!(first.hurt && first.knockback);
+        // A stronger hit inside the cooldown hurts by the difference only
+        // (LivingEntity.hurtServer), with no dealDefaultKnockback.
+        let second = hit(2.0);
+        assert!(second.hurt && !second.knockback);
+        // A weaker one doesn't hurt at all.
+        let third = hit(1.5);
+        assert!(!third.hurt && !third.knockback);
+    }
+
+    /// #2141: an arrow that takes the last of the player's health must kill
+    /// them: `LivingEntity.hurt` leaves the health at zero and `Player.die`
+    /// follows.
+    #[test]
+    fn an_arrow_kills_a_player_at_one_health() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .unwrap();
+        player.set_health(1.0, false).unwrap();
+        let (health, rules) = (&resources.health, super::HealthRules::default());
+        let id = health.damage.id("minecraft:arrow").unwrap();
+        let hurt = player.hurt(health, rules, id, 5.0).unwrap();
+        assert!(hurt, "the arrow must hurt");
+        assert_eq!(player.health.health(), 0.0, "the health must be spent");
+        assert!(player.health.dead_or_dying(), "the player must be dead");
+    }
+
     #[test]
     fn hurt_sounds_follow_damage_effects() {
         // DamageEffects: HURT, THORNS, DROWNING, BURNING, POKING, FREEZING.

@@ -31,6 +31,33 @@ pub(super) struct RespawnConfig {
     pub forced: bool,
 }
 
+/// A respawn point as a player's save keeps it (`respawn`): dimension,
+/// block, yaw and whether it is forced.
+pub(super) type SavedRespawn = (String, [i32; 3], f32, bool);
+
+impl RespawnConfig {
+    /// `RespawnData.of`: the yaw wrapped to [-180, 180).
+    pub(super) fn wrapped(dim: Dim, pos: [i32; 3], yaw: f32, forced: bool) -> Self {
+        Self {
+            dim,
+            pos,
+            yaw: wrap_degrees(f64::from(yaw)) as f32,
+            forced,
+        }
+    }
+    pub(super) fn from_saved((dim, pos, yaw, forced): &SavedRespawn) -> Self {
+        Self {
+            dim: Dim::from_id(dim),
+            pos: *pos,
+            yaw: *yaw,
+            forced: *forced,
+        }
+    }
+    pub(super) fn saved(&self) -> SavedRespawn {
+        (self.dim.id().to_owned(), self.pos, self.yaw, self.forced)
+    }
+}
+
 /// `RespawnAnchorBlock.RESPAWN_HORIZONTAL_OFFSETS`, then the same a block
 /// below, a block above, and straight above.
 const HORIZONTAL: [[i32; 3]; 8] = [
@@ -62,7 +89,7 @@ pub(super) enum AnchorUse {
 }
 
 impl Game<'_> {
-    fn is_anchor(&self, state: BlockStateId) -> bool {
+    pub(super) fn is_anchor(&self, state: BlockStateId) -> bool {
         &*self.res.facts().get(state).name == "minecraft:respawn_anchor"
     }
     fn anchor_charges(&self, state: BlockStateId) -> i32 {
@@ -104,6 +131,15 @@ impl Game<'_> {
         self.audio
             .play("minecraft:block.respawn_anchor.charge", Some(at), 1.0, 1.0);
         Ok(())
+    }
+    /// `RespawnAnchorBlock.useItemOn`'s test: `held` is glowstone
+    /// (`isRespawnFuel`) and the block at `pos` is an anchor that takes another
+    /// charge (`canBeCharged`).
+    pub(super) fn anchor_takes(&self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        held.is_some_and(|s| &*s.item == "minecraft:glowstone")
+            && self.is_anchor(state)
+            && self.anchor_charges(state) < 4
     }
     /// `RespawnAnchorBlock.useItemOn` with `held` in the hand that acts.
     pub(super) fn use_respawn_anchor(
@@ -215,6 +251,21 @@ impl Game<'_> {
         ];
         self.block_explosion(center, in_water.then_some(pos))
     }
+    /// `StrawBedBlock.destroyBed`: the break sound, then the bed is air.
+    pub(super) fn destroy_straw_bed(&mut self, head: [i32; 3]) -> Result<()> {
+        let center = [
+            f64::from(head[0]) + 0.5,
+            f64::from(head[1]) + 0.5,
+            f64::from(head[2]) + 0.5,
+        ];
+        self.audio.play(
+            "minecraft:block.straw_bed.break_leave",
+            Some(center),
+            1.0,
+            1.0,
+        );
+        self.level_set(head, self.world.air)
+    }
     /// `BedRule.destroyOnUse` of the dimension's `bed_rule` and
     /// `straw_bed_rule`: true in the Nether and the End.
     pub(super) fn beds_destroy_on_use(&self) -> bool {
@@ -232,14 +283,7 @@ impl Game<'_> {
             f64::from(head[2]) + 0.5,
         ];
         if &*name == "minecraft:straw_bed" {
-            // StrawBedBlock.destroyBed.
-            self.audio.play(
-                "minecraft:block.straw_bed.break_leave",
-                Some(center),
-                1.0,
-                1.0,
-            );
-            return self.level_set(head, self.world.air);
+            return self.destroy_straw_bed(head);
         }
         // removeBlock(head), then the foot behind it if it is still this bed.
         let facing = self
@@ -276,11 +320,7 @@ impl Game<'_> {
         center: [f64; 3],
         water_at: Option<[i32; 3]>,
     ) -> Result<()> {
-        let interaction = if self.ui.rules.bool("block_explosion_drop_decay") {
-            super::explosion::BlockInteraction::DestroyWithDecay
-        } else {
-            super::explosion::BlockInteraction::Destroy
-        };
+        let interaction = self.destroy_type("block_explosion_drop_decay");
         self.server_explode_as(
             center,
             5.0,
@@ -309,6 +349,12 @@ impl Game<'_> {
         if self.block_in_tag("minecraft:climbable", name) || open_trapdoor {
             return VoxelShape::empty();
         }
+        self.block_collision_shape(p)
+    }
+    /// `BlockState.getCollisionShape(level, pos)`: the shape under the empty
+    /// collision context.
+    pub(super) fn block_collision_shape(&self, p: [i32; 3]) -> VoxelShape {
+        let state = self.world.block(p[0], p[1], p[2]);
         let binding = self.collision;
         let mut scene = SceneCollisions {
             world: &self.world,
@@ -323,6 +369,22 @@ impl Game<'_> {
                 &CollisionContext::empty(false),
             )
             .unwrap_or_else(|_| VoxelShape::empty())
+    }
+    /// `DismountHelper.canDismountTo(level, entity, box)`: no block collides
+    /// with the box and it is inside the world border.
+    pub(super) fn can_dismount_to(&self, bounds: Aabb) -> bool {
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        if !no_collision_empty(&mut scene, bounds) {
+            return false;
+        }
+        // WorldBorder.isWithinBounds(box).
+        let (lo, hi) = (bounds.min(Axis::X), bounds.max(Axis::X) - 1.0e-5);
+        let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
+        self.border.contains(lo, lz) && self.border.contains(hi, hz)
     }
     pub(super) fn block_in_tag(&self, tag: &str, block: &str) -> bool {
         self.res
@@ -387,12 +449,7 @@ impl Game<'_> {
                 position.z + half,
             ),
         );
-        let mut scene = SceneCollisions {
-            world: &self.world,
-            binding: self.collision,
-            subject: None,
-        };
-        if !no_collision_empty(&mut scene, bounds) {
+        if !self.can_dismount_to(bounds) {
             return None;
         }
         let name = |q: [i32; 3]| {
@@ -410,10 +467,17 @@ impl Game<'_> {
         {
             return None;
         }
-        // WorldBorder.isWithinBounds(box).
-        let (lo, hi) = (bounds.min(Axis::X), bounds.max(Axis::X) - 1.0e-5);
-        let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
-        (self.border.contains(lo, lz) && self.border.contains(hi, hz)).then_some(position)
+        Some(position)
+    }
+    /// `Block.isPossibleToRespawnInThis`: neither solid nor liquid; banners,
+    /// signs and pressure plates override it to always.
+    fn possible_to_respawn_in(&self, state: BlockStateId) -> bool {
+        let f = self.res.facts().get(state);
+        let name = &*f.name;
+        name.ends_with("_banner")
+            || name.ends_with("_sign")
+            || name.ends_with("_pressure_plate")
+            || !(f.legacy_solid || matches!(name, "minecraft:water" | "minecraft:lava"))
     }
     /// `RespawnAnchorBlock.findStandUpPosition`: a safe spot around the
     /// anchor, else any spot.
@@ -428,8 +492,87 @@ impl Game<'_> {
         }
         None
     }
-    /// `ServerPlayer.findRespawnAndUseSpawnBlock` for an anchor config in the
-    /// loaded dimension: the position and yaw, using a charge.
+    /// `AbstractBedBlock.findStandUpPosition` for a bed whose head is at
+    /// `pos`, facing `forward`, set from `yaw`: beside the bed on the side
+    /// the player faced away from, around it, then on it; a safe spot
+    /// first, else any spot (a bunk bed: around it, a block lower, then on
+    /// it).
+    pub(super) fn bed_stand_up(&self, pos: [i32; 3], forward: [i32; 3], yaw: f32) -> Option<Vec3> {
+        // Direction.getClockWise.
+        let right = [-forward[2], 0, forward[0]];
+        // Direction.isFacingAngle.
+        let radians = yaw * 0.017_453_292;
+        let (dx, dz) = (
+            -horizon_core::geometry::trig::sin(f64::from(radians)),
+            horizon_core::geometry::trig::cos(f64::from(radians)),
+        );
+        let facing = right[0] as f32 * dx + right[2] as f32 * dz > 0.0;
+        let side = if facing {
+            [-right[0], 0, -right[2]]
+        } else {
+            right
+        };
+        let (f, s) = ([forward[0], forward[2]], [side[0], side[2]]);
+        // bedSurroundStandUpOffsets and bedAboveStandUpOffsets.
+        let surround = [
+            [s[0], s[1]],
+            [s[0] - f[0], s[1] - f[1]],
+            [s[0] - f[0] * 2, s[1] - f[1] * 2],
+            [-f[0] * 2, -f[1] * 2],
+            [-s[0] - f[0] * 2, -s[1] - f[1] * 2],
+            [-s[0] - f[0], -s[1] - f[1]],
+            [-s[0], -s[1]],
+            [-s[0] + f[0], -s[1] + f[1]],
+            [f[0], f[1]],
+            [s[0] + f[0], s[1] + f[1]],
+        ];
+        let above = [[0, 0], [-f[0], -f[1]]];
+        let at = |base: [i32; 3], offsets: &[[i32; 2]], check: bool| {
+            offsets.iter().find_map(|o| {
+                self.safe_dismount_location([base[0] + o[0], base[1], base[2] + o[1]], check)
+            })
+        };
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        // isBunkBed: a bed below.
+        if self.is_bed(self.world.block(below[0], below[1], below[2])) {
+            return at(pos, &surround, true)
+                .or_else(|| at(below, &surround, true))
+                .or_else(|| at(pos, &above, true))
+                .or_else(|| at(pos, &surround, false))
+                .or_else(|| at(below, &surround, false))
+                .or_else(|| at(pos, &above, false));
+        }
+        let all: Vec<[i32; 2]> = surround.into_iter().chain(above).collect();
+        at(pos, &all, true).or_else(|| at(pos, &all, false))
+    }
+    pub(super) fn is_bed(&self, state: BlockStateId) -> bool {
+        self.res.facts().get(state).name.ends_with("_bed")
+    }
+    /// The bed's `facing`, as a step.
+    fn bed_forward(&self, state: BlockStateId) -> [i32; 3] {
+        let facing = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("facing").cloned());
+        match facing.as_deref() {
+            Some("south") => [0, 0, 1],
+            Some("west") => [-1, 0, 0],
+            Some("east") => [1, 0, 0],
+            _ => [0, 0, -1],
+        }
+    }
+    /// `BedRule.canSetSpawn` of the bed's rule attribute (`bed_rule`,
+    /// `straw_bed_rule`): only the Overworld's beds set the spawn, straw
+    /// beds never.
+    pub(super) fn bed_sets_spawn(&self, state: BlockStateId) -> bool {
+        self.dim == Dim::Overworld && &*self.res.facts().get(state).name != "minecraft:straw_bed"
+    }
+    /// `ServerPlayer.findRespawnAndUseSpawnBlock` for a config in the loaded
+    /// dimension: the position and yaw, using an anchor's charge; a bed's
+    /// stand-up spot. A forced point (`spawnpoint`) that is no anchor or bed
+    /// holds if a player fits in it; anything else is gone.
     pub(super) fn find_respawn_and_use(
         &mut self,
         c: RespawnConfig,
@@ -440,7 +583,19 @@ impl Game<'_> {
             && (c.forced || self.anchor_charges(state) > 0)
             && self.anchor_works())
         {
-            return Ok(None);
+            // A bed where its bed rule lets it set the spawn.
+            if self.is_bed(state) && self.bed_sets_spawn(state) {
+                let facing = self.bed_forward(state);
+                let stand = self.bed_stand_up(c.pos, facing, c.yaw);
+                return Ok(stand.map(|p| (p, look_at_yaw(p, c.pos))));
+            }
+            let [x, y, z] = c.pos;
+            let free = c.forced
+                && !self.is_anchor(state)
+                && self.possible_to_respawn_in(state)
+                && self.possible_to_respawn_in(self.world.block(x, y + 1, z));
+            let at = Vec3::new(f64::from(x) + 0.5, f64::from(y) + 0.1, f64::from(z) + 0.5);
+            return Ok(free.then_some((at, c.yaw)));
         }
         let stand = self.anchor_stand_up(c.pos);
         if !c.forced

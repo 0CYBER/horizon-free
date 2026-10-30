@@ -276,8 +276,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if value > 0.175_781_25 {
             return;
         }
-        if !(self.speleothem_with(state, Direction::Down)
-            && !b.is_block(self.above_state(pos), b.block(state)))
+        if !self.speleothem_with(state, Direction::Down)
+            || b.is_block(self.above_state(pos), b.block(state))
         {
             return;
         }

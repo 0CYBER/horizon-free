@@ -7,9 +7,8 @@ pipeline, not a list of hand ports. It takes a pack as players download it and p
 Horizon mods. The pipeline is AI agents in dependency order, each port checked against the
 original mod running in a dev-only Java instance.
 
-This page is the design. It builds on [mods.md](mods.md) (the mod API, WASM in wasmtime) and
-[research/java-mod-compat.md](research/java-mod-compat.md) (why Java jars and Mixins cannot
-run in Horizon, so we port instead). The ATM10 inventory behind the numbers below is
+This page is the design. It builds on [mods.md](mods.md) (content mods, native mods, and
+why Java jars cannot run in Horizon, so we port instead). The ATM10 inventory behind the numbers below is
 [modpacks/atm10-mods.csv](modpacks/atm10-mods.csv).
 
 ## In one picture
@@ -26,8 +25,8 @@ run in Horizon, so we port instead). The ATM10 inventory behind the numbers belo
    │
    ├─ carry-over (mechanical, no agent): assets/ + data/ upgraded to 26.3 formats,
    │    block and item registrations from the oracle's facts export  →  <mod>.hmod
-   ├─ port (one agent per mod, tiers logic and up): Rust → WASM against the Horizon
-   │    mod API, iterating until its harness passes                  →  <mod>.hmod
+   ├─ port (one agent per mod, tiers logic and up): a Rust native mod (a horizon-mixins
+   │    bundle), iterating until its harness passes                  →  <mod>.hnmod
    ├─ harness per mod: the Java mod in a dev-only NeoForge/Fabric oracle vs the port
    ▼
  coverage report: ported · partial · not yet · not needed, per mod and per class
@@ -57,10 +56,10 @@ was downloaded.
 | Class | What it is | Port? | ATM10 |
 |---|---|---|---:|
 | **content** | adds or changes gameplay: blocks, items, machines, mobs, worldgen, magic | yes: carry-over or agent | **287** |
-| **library** | APIs and code shared by other mods (Architectury, Curios, GeckoLib, Kotlin for Forge, Balm...) | no: maps to the Horizon API or the SDK | **80** |
+| **library** | APIs and code shared by other mods (Architectury, Curios, GeckoLib, Kotlin for Forge, Balm...) | no: maps to Horizon's own code or a native mod | **80** |
 | **integration** | glue between two other mods (JEI plugins, AE2 ↔ Mekanism, Create add-on wiring) | after both sides are ported | **44** |
 | **client-ui** | client-only screens, HUDs, tooltips, maps, recipe viewers | yes: client API, or built in | **32** |
-| **other** | pack tooling and engine features: KubeJS, Almost Unified, Iris/shaders, CTM, crash/version tools | no: folded into the pipeline or the engine | **25** |
+| **other** | pack tooling and engine features: KubeJS, Almost Unified, shader mods, CTM, crash/version tools | no: folded into the pipeline or the engine | **25** |
 | **performance** | Sodium, FerriteCore, ModernFix, ImmediatelyFast, spark, AI and recipe speed-ups | no: Horizon is the replacement | **16** |
 | **server-only** | admin and server features: ranks, essentials, backups, claims, spawn control | yes: server API | **11** |
 | | | | **495** |
@@ -141,24 +140,28 @@ derivative work. These rules are part of the pipeline, not advice to users:
    has given written permission, recorded in the index entry. The tooling refuses to package
    anything else. No-derivatives and non-commercial licences (14 in ATM10) are never published.
    For them, even a local port gets a warning that the licence may not allow it.
-4. **Mod code never enters this repository.** Mod jars, decompiled sources, Java oracle builds
+4. **Mod code never enters this repository, and nobody reads it.** Mod jars, Java oracle builds
    with mod code, and ports of mods we have no permission to publish all live outside the
    repo: in the user's pipeline work directory, or for our own development in
-   `~/code/horizon-parity/modports/` (dev-only, never pushed). Ports are written from
-   observed behaviour and the harness, with decompiled code as a local reference only. The
-   repository holds the pipeline, the API, metadata (ids, names, versions, licences, counts)
+   `~/code/horizon-parity/modports/` (dev-only, never pushed). A mod's code is never
+   decompiled, read, quoted or paraphrased, by people or agents. Ports are written only from
+   the mod's observed behaviour (the oracle and the harness), its own data files and its
+   public documentation. The repository holds the pipeline, the API, metadata (ids, names, versions, licences, counts)
    and test fixtures we write ourselves.
 5. **Contacting authors or publishing any port is Ludovic's call.** Agents ask first.
 
 This is engineering policy, not legal advice. Before anything is published, Ludovic decides,
 with advice if needed.
 
-## The mod API: what packs need, against API 0.1
+## What packs need, and what runs today
 
-API 0.1 is client-side only: `log`, `game` (player and clock), `chat`, `hud`, plus tick,
-frame, chat and command hooks. Server mods do not run yet. What a content pack needs:
+Content mods (`.hmod`, API 0.2) carry data: blocks, items, and everything in the 26.3 data-pack and resource-pack
+formats ([mods.md](mods.md#content-mods-api-02)). Behaviour that needs code is not a content-mod feature: it is
+written as a native mod ([native-mods.md](native-mods.md)), one per ported mod. The "Planned in" column keeps the
+order of the original plan; for the rows planned for 0.3 and later, a native mod hooks the game's code instead of
+using the "Shape" column. What a content pack needs:
 
-| Feature | API 0.1 | Needed by (ATM10 content+integration, by tier) | Planned in | Shape |
+| Feature | Content mod today | Needed by (ATM10 content+integration, by tier) | Planned in | Shape |
 |---|---|---|---|---|
 | Block registry: ids, states, properties, shapes, sounds, light | — | data and up (all 331) | **0.2** | declared in `data/<mod>/horizon/block/*.json`, each from a vanilla *template* block (below) |
 | Item registry, block items | — | data and up | **0.2** | `data/<mod>/horizon/item/*.json`, from a vanilla template item |
@@ -172,22 +175,20 @@ frame, chat and command hooks. Server mods do not run yet. What a content pack n
 | Capabilities: energy (FE), item, fluid handlers on blocks and items | — | machines and up | **0.4** | `capabilities` interface; FE as the common unit, others as mod-defined resources |
 | Data attachments on entities, chunks, levels | — | machines and up | **0.4** | `storage` per entity/chunk/level |
 | Accessory slots (what Curios does) | — | Curios users (6 require it, more use it optionally) | **0.4** | built-in slots API |
-| Mod networking between its client and server halves | — | machines and up | **0.4** | `net` interface (already planned in mods.md) |
+| Mod networking between its client and server halves | — | machines and up | **0.4** | `net` interface |
 | Custom recipe types: machine recipes with their own JSON | — | machines and up | **0.4** | recipe-type registry: the mod declares its JSON schema and a display layout for the recipe viewer |
 | Entities: types, attributes, AI goals and brains, spawning | — | deep (87) | 0.5 | `entity` interface, AI in the mod with vanilla goals reusable |
 | Custom renderers and animated models (block-entity, entity, item; GeckoLib's format) | — | deep | 0.5 | data models (Bedrock geometry + animations), plus a budgeted draw-list interface for the rest |
 | Dimensions: dimension types, levels, chunk generators | — | about 10 (Twilight Forest, Aether, Ad Astra, Undergarden, ...) | 0.5 | JSON part with worldgen; custom generators as mod code |
-| New hooks into vanilla behaviour (what Mixins do) | — | deep | as asked | each becomes a named hook, added for everyone ([java-mod-compat.md](research/java-mod-compat.md#3-a-porting-guide-outline)) |
-| Client interfaces: `keys`, `target`, `inventory-read`, `ui`, `render`, `world-read` | planned | client tier (38) | 0.2–0.4 | as in [mods.md](mods.md#planned-interfaces) |
+| New hooks into vanilla behaviour (what Mixins do) | — | deep | as asked | each becomes a named hook, added for everyone |
+| Client interfaces: `keys`, `target`, `inventory-read`, `ui`, `render`, `world-read` | — | client tier (38) | native mods | hook points in the game, as the official native mods use ([extras.md](extras.md)) |
 
-Two rules from mods.md stay: **the sandbox** (no files, sockets or processes; memory cap; fuel
-per call; a crashing mod stops alone) and **free when unused** (no mods means vanilla code
-paths and the vanilla resource root, so the parity harnesses test the same game).
+One rule stays: **free when unused** (no mods means vanilla code paths and the vanilla resource root, so the parity
+harnesses test the same game).
 
 ### Registries 0.2: data-driven blocks and items
 
-A `.hmod` may now carry `assets/` and `data/` beside (or instead of) `mod.wasm`. A content-only
-mod needs no code:
+A content mod (`.hmod`) carries `assets/` and `data/` and no code:
 
 ```
 ruby.hmod
@@ -216,11 +217,34 @@ properties and shapes the new block takes, and overrides what differs:
 }
 ```
 
+A block may define `shapes` to replace both its selection outline and collision
+shape. It selects a list of boxes by one template state property:
+
+```json
+"shapes": { "property": "axis", "values": {
+  "x": [[0, 0.25, 0.25, 1, 0.75, 0.75]],
+  "y": [[0.25, 0, 0.25, 0.75, 1, 0.75]],
+  "z": [[0.25, 0.25, 0, 0.75, 0.75, 1]]
+} }
+```
+
+Each box is `[min_x, min_y, min_z, max_x, max_y, max_z]` in block units.
+Each value of the template property needs an entry. Up to 16 boxes form a union;
+an empty list is an empty shape. Invalid bounds or values reject the content root.
+Without `shapes`, both shapes remain the template's. Other properties such as
+occlusion, light, and support still come from the template.
+
+A declaration may also set `"default_state": {"facing": "north"}`. The map
+changes only those state properties on the template's default; omitted properties keep
+their template values. Names and values must identify exactly one template state, or
+the content root is rejected. Leave the map out to keep the template default.
+
 Most decoration and resource blocks are vanilla classes with other numbers: Macaw's doors are
 `DoorBlock`s, XTones are full cubes, ore sets are `DropExperienceBlock`s. So templates cover the
 data tier without code. Templates also give mod blocks every behaviour Horizon already
 implements and the harnesses already check. Items work the same way (`"template":
-"minecraft:diamond"`, overriding `max_stack_size`, `rarity` and so on).
+"minecraft:diamond"`, overriding `max_stack_size`, `rarity` and any data component in
+`components`).
 
 How the game loads them, without touching vanilla's path:
 
@@ -240,6 +264,10 @@ How the game loads them, without touching vanilla's path:
   when its Java original ships them so (`namespaces = ["kaisyn", "towns_and_towers"]` for Towns
   and Towers, mod id `t_and_t`; docs/mods.md). No namespace has two owners: a mod whose id or
   listed namespace another mod that is on already owns is left out, with both named in the log.
+  `horizon-port-pack` avoids that inside a pack: a namespace two carried mods both claim (YUNG's
+  structure mods all ship files under `yungsapi`, the namespace of YUNG's API, whose own jar isn't
+  carried) is left to none of them, and its files stay outside. The launcher applies the game's
+  rule before it starts a pack (`pipeline::loadable`) and lists what it left off.
 - The overlay is built on the first start with a set of mods and kept for later starts. A stamp
   (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
   size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
@@ -302,12 +330,28 @@ cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage
 cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
 
+`check <jar> <out>` takes one mod jar on its own, as the launcher's mod browser installs it
+([mod-browser.md](mod-browser.md)): it carries the jar into `<out>/carry/` and reads its class
+files (constant pool, superclass, declared methods; no decompiling) for what the carry can't
+take, then writes the verdict to `<out>/check.json`. **Works**: content only, and the code just
+registers it. **Partly**: the content ports, and the code features listed don't (block entities,
+menus, entities, blocks and items with behaviour of their own, recipe types, Mixins, game events).
+**Doesn't run**: nothing to port, or a jar made for 1.20 or older. Each mod class is followed up to
+the first game class it extends; a block subclass that only overrides how it looks or is placed
+(`getStateForPlacement`, `rotate`...) is registration. Game classes are read by Mojang's names
+(26.1 and later, and NeoForge since 1.20.5); older Fabric jars name them in intermediary, so a
+class extending one counts as code that can't be read. On ten 26.3 jars (2026-10-22): Macaw's
+Fences, Windows and Furniture, Ecologics, Compressed Blocks, More Decorative Blocks and Moog's
+Nether Structures are Partly; Sodium and GeckoLib don't run (Mixins, renderers, nothing to port);
+Fabric API doesn't run (its id has a dash, which content mods can't use). A check takes 0.2 s to
+3 s, and 24 s for Compressed Blocks (18 MB, 9,360 recipes, writing the carry dominates).
+
 `fetch` gets each jar the player's way, never from us: copied from a folder they have (matched
 by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
 the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
 pack, the same file on Modrinth's public CDN, found by its SHA-1. A jar is kept only when its
-hash matches. A file only CurseForge has is listed as needing a CurseForge API key (Ludovic's
-decision; open question below), with the player's installed instance as the way round it.
+hash matches. A file only CurseForge has is listed as "CurseForge downloads coming soon" (its API
+needs a paid key; Ludovic, 2026-10-22), with the player's installed instance as the way round it.
 `<work>/fetch.json` says what happened to each file. On All the Mods 10 8.3's CurseForge zip
 (2026-10-17): of the 54 data-tier content mods, 42 come from Modrinth's CDN (84 MB) and 12 need
 the key or the instance; `port` then carries the 42 over (0 ported, 42 partial: the harness is a
@@ -344,7 +388,11 @@ resistance, light, tool need, friction, map colour and sounds as overrides. `--r
 <prepared>` limits templates to blocks Horizon's tables have. `carry-report.json` lists, per
 block, what the template does not reproduce (other shapes, sounds no vanilla block has, a class
 of its own), and the blocks left out: those whose vanilla class has no vanilla block with the
-same states (Macaw's garage doors, multi-part gates). Recipes get the convention tags they use
+same states (Macaw's garage doors, multi-part gates). An item of a vanilla tool or armour class
+(`SwordItem`, `PickaxeItem`, `ArmorItem`, ...) gets the iron item of that class and slot as its
+template, and the oracle's durability, attribute modifiers, tool rules, enchantability and repair
+items as a component patch over it, minus what the template already has (`--resources` gives the
+template's components); other items keep `minecraft:stick`. Recipes get the convention tags they use
 (`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
 oracle, templates are guessed from the blockstate's properties: the template whose properties
 include them with the fewest left over (models often ignore `powered` or `waterlogged`), the
@@ -444,6 +492,18 @@ Two cases the oracle fills in:
     also spreads its structures 1.65 times as far apart as its files say, which carry now
     applies. MVS went from 829 starts to 90 in a 128×128-chunk square (seed 1234): 294 from the
     spacing, the rest from the start checks.
+  - **Mo' Structures** (LGPL-3.0; 38 files). Its `mostructures:generic` is vanilla's jigsaw
+    that starts only where the terrain under the 5×5 chunks around it varies by no more than
+    its `heightRange`: carry writes `minecraft:jigsaw` with `horizon:start_checks`
+    (`terrain_radius` 2, `terrain_range`). Its placement `mostructures:type` takes spacing and
+    separation from the mod's config, not its files; carry writes the config's defaults
+    (keyed by `config_key`) and the sets it avoids within 3 chunks as `horizon:exclusion_zone`
+    with `"their_zones": false`: like the mod, the game tests those sets by their spread and
+    frequency alone, not by their own exclusion zones. Its two block-ageing processors
+    (`jungle_rot_processor`, `simple_cobblestone`, 3 uses) are still dropped, as is its
+    mixin that keeps lakes out of its structures. Over chunks -64..63 that adds 13 starts at
+    seed 1234 (pirate ships, churches, a tavern, the castle in the sky...) and 16 at seed 2,
+    and every other start stays as it was.
   - **Processors written in Java** are taken out of their lists (#822). The game, like
     vanilla, refuses a list holding a type it does not know, and with it every pool naming the
     list. The structures now generate undecorated (no pillars under them, spawners as the
@@ -472,17 +532,22 @@ Two cases the oracle fills in:
     mod. Better Dungeons' small dungeons keep one chest and each other one with a fifth's
     chance, two at most (the game's `horizon:count_cap`, counted per placement as the mod's
     DungeonContext is): 12 chests in five small dungeons at seed 1234 become 6.
-    Lithostitched's `block_swap` (137 lists, all in ChoiceTheorem's Overhauled Village) is the
-    game's `horizon:block_swap`: the same map, with Block.withPropertiesOf's properties kept;
-    a target block the game does not have (most of them are Nature's Spirit's and Croptopia's)
-    leaves the block as it is, as the mod does. Lithostitched's `reference` (CTOV builds most
-    of its lists from others) has the referenced lists' processors written in its place; its
-    `apply_random`, `condition` and `set_block` are the game's `horizon:apply_random`,
-    `horizon:condition` and `horizon:set_block`, with Lithostitched's random (the world seed
-    plus the name's hash, at the block, piece or structure). In a CTOV plains village at seed
-    1234 the farms now grow carrots, potatoes and beetroot besides wheat, and 1,655
-    cobblestone blocks become paths, grass, mossy cobblestone and planks. No Lithostitched processor is
-    dropped now (130 before), only CTOV's compat hooks for other mods inside them (142 copies).
+    Lithostitched's processors (all in ChoiceTheorem's Overhauled Village in ATM10) are the
+    game's own types, read as the mod writes them. `block_swap` keeps the properties the new
+    block can have: a farm's ripe wheat becomes ripe carrots, but beetroot, whose age stops at
+    3, keeps its default; a target block the game does not have (most are Nature's Spirit's and
+    Croptopia's) leaves the block as it is. `reference` runs the lists it names, `condition`
+    tests the template's block or the world's, `apply_random` and `set_block` draw per block or
+    per piece as the data says. Lithostitched's own random is not known yet, so the shares of a
+    random choice are the Java pack's but the blocks chosen differ. Lists named by tag and state
+    providers other than simple and weighted ones are dropped and counted (ATM10 has none).
+    CTOV's compat hooks for other mods (its `modular_compat`, 30 of them in 17 lists) become a
+    `reference` when the mod they name is ported along, and are taken out (a no-op, as in the
+    mod) when it is not. In ATM10 they all name Nature's Spirit, which the pack does not have.
+    In Java, Lithostitched also lays out every jigsaw structure its own way (villages,
+    outposts, trial chambers; CTOV's villages are `lithostitched:jigsaw`, carried as vanilla's
+    jigsaw). Horizon keeps vanilla's layouts, so with Lithostitched in a pack, structure layouts
+    differ from the Java pack's for the same seed (their positions do not).
     The processors that build outside their template are carried too: Repurposed's and
     Moog's pillar processors become the game's `horizon:pillar` (a column from a placeholder
     block down to the ground, with the processor list they run on each of its blocks written
@@ -517,6 +582,11 @@ Two cases the oracle fills in:
     the world is air, keep it" rules: around the ocean mineshaft at chunk (-18, -54), seed
     1234, 650 blocks of air and cave air become prismarine and 614 more template water blocks
     stay water (1,303 blocks change in its 81 chunks).
+    Its mineshafts' sky view processor (71 lists) is `horizon:mineshaft_sky_view`: a block
+    of the template at or above the world's `OCEAN_FLOOR_WG` height in its column is not
+    placed, so a mineshaft cut by a valley or a ravine is not built in the open, except
+    plain rails over a block that can occlude, which stay (waterlogged where the world holds
+    water). Repurposed's dropped processors go from 253 to 182.
     Still taken out: Formations' biome replacements, blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
@@ -622,12 +692,10 @@ Two cases the oracle fills in:
   - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already (T&T's
     namespaces are carried since the namespaces rule above).
   - Still lost, written in Java:
-    - Formations' pieced structure (1, its one jigsaw-like type);
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
       (YUNG's banners and decorations, Better Strongholds' legs, Lithostitched's block swaps);
-    - MO Structures (38; its library is only on CurseForge).
   - **Formations** (Overworld and Nether: 50 structures, 128 pool elements) places one
     template per start at a height found in the noise columns under its corners and centre: on
     the surface, on water or lava, or in a cave (on its floor, under its ceiling, buried in
@@ -638,6 +706,13 @@ Two cases the oracle fills in:
     39 Overworld and 672 Nether starts at seed 1234 (51 and 643 at seed 2), and leaves every
     other start as it was. Its processors (biome replacements, aged blocks, bed colours,
     plants) are still dropped, so its structures keep their templates' blocks.
+    Its one PiecedStructure, the fountain, starts the same way and then lays out the element's
+    jigsaw children with vanilla's jigsaw: carry writes it as `horizon:formations` with
+    `horizon:pieced` (`max_depth`, `max_distance_from_center`), and the game's assembler takes
+    the placed start piece (`jigsaw::add_children`), the children kept within that distance of
+    the start's centre, one block above the height found. It shares Formations' "uncommon"
+    structure set, so where the set now picks it, it takes the place of a statue or a house:
+    1 fountain at seed 1234 and 3 at seed 2 in chunks -64..63, one with a child piece.
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
   overworld starts with 22,026 pieces. CTOV has 7, Better Dungeons 72 and Better Ocean
@@ -665,16 +740,16 @@ For tiers logic, machines and deep, in dependency order, as many agents at once 
 budget allows:
 
 - **Input:** the inventory record, the carried-over data, the oracle's exports and traces, the
-  harness, the Horizon mod API docs, the ports of its dependencies, and the mod's decompiled
-  code as a local reference (dev-only, in the work directory).
-- **Output:** a Rust crate in `mods/<id>/port/` built with `cargo horizon-mod build`, and its
-  `.hmod`.
+  harness, [native-mods.md](native-mods.md), the ports of its dependencies, and the mod's public
+  documentation. Never its code: the agent doesn't decompile, read or quote it.
+- **Output:** a native mod, a horizon-mixins bundle started from
+  [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template), and its `.hnmod`.
 - **Loop:** write → build → run the harness → read the differences → fix, until the harness
-  passes or the agent reports what blocks it. Usually that is an API gap, which becomes an
-  issue against the mod API ("needs a scheduled-tick hook"), the way version ports turn
-  differences into work items.
-- **Rules:** the agent writes the port from observed behaviour and the harness, not by
-  transliterating decompiled Java; ports follow the mod's licence ([Licences](#licences)).
+  passes or the agent reports what blocks it. Usually that is a place in the game's code the
+  mixins can't reach yet, which becomes an issue ("needs a scheduled-tick hook point"), the way version ports
+  turn differences into work items.
+- **Rules:** the agent writes the port from observed behaviour, the harness and the mod's
+  own data files only; ports follow the mod's licence ([Licences](#licences)).
   Players without an AI agent get the carry-over tiers. A port the licence lets us publish can
   be downloaded instead of regenerated.
 
@@ -711,7 +786,9 @@ python3 tools/mod_port_harness.py --work <work>      # or --jars/--deps to expor
   namespaces and every vanilla block: the class chain, states, per-state hardness, light, tool
   need, map colour, sounds, outline and collision shapes; drops for hand, diamond tools, shears
   and silk touch; placement on a floor and a wall; BlockSetType and WoodType. Then items (class,
-  stack size, rarity, food), recipes (type, result, count, resolved ingredients) and tags. One run
+  stack size, rarity, food; every default data component in 1.21.1's form, the effective attribute
+  modifiers, enchantability and repair items; armour's slot, defense, toughness, knockback resistance,
+  equip sound and texture layers), recipes (type, result, count, resolved ingredients) and tags. One run
   with the seven mods below takes about 30 s.
 - `crates/horizon-client/examples/mod_port_probe.rs` builds the content root from the carried
   mods and dumps what Horizon's loaders make of the same blocks, drops, recipes and tags.
@@ -954,15 +1031,86 @@ In scope (each is a PR or a small stack):
 Out of scope for that date, and next in order: the rest of worldgen carry-over (mods'
 structures, sets, pools and features generate now, see step 4; mod biomes, noise and density
 functions, and the structure types written in Java such as YUNG's and Formations', do not yet),
-behaviour callbacks and server events (0.3), block entities, menus, capabilities and net
-(0.4), the first agent-ported logic-tier mod as the pilot of step 5, then machines. Porting all
+behaviour callbacks and server events, block entities, menus, capabilities and net, as
+native mods, the first agent-ported logic-tier mod as the pilot of step 5, then machines. Porting all
 of ATM10 is a campaign. Each step publishes its coverage number; we make no claim beyond what
 the report shows.
+
+### Where ATM10's data mods stand (2026-10-22)
+
+Measured with #1175, #1176, #1177 and #1191 on main, over the 42 data-tier mods carried from
+ATM10 (the launcher's `--dev-mod` carries), seeds 1234 and 2.
+
+- **Structures.** The carries define 687 structures in 25 mods. 419 of them start somewhere in
+  chunks -128..127 of the Overworld, the Nether or the End at one of the two seeds, and 264 in
+  chunks -64..63 (249 on 2026-10-19). Most of the rest are biome-bound and rare: no desert lies
+  in either square, and ChoiceTheorem's Overhauled Village (25 of 78) and Towns and Towers (15
+  of 60) have a variant per biome. 27 never start because their type is written in Java:
+  Better Mineshafts 13, Repurposed Structures' mansions 8, monuments 4 and End mineshaft 1, and
+  one Better Dungeons type.
+- **Processors.** 1,560 carried and 605 dropped (1,347 and 818 on 2026-10-19). The dropped ones
+  by mod: Formations 227 (Overworld 182, Nether 45), Repurposed Structures 182, Better Dungeons
+  69, Better Jungle Temples 50, Better Strongholds 41, Better Desert Temples 14, Villages and
+  Pillages 10, Better Fortresses 5, Better Witch Huts 3, Mo' Structures 3, Moog's Nether
+  Structures 1.
+- **Content.** 190,550 block states and 12,931 items load. 5 block models are missing (4 of
+  Macaw's Doors' cherry waffle door, Regions Unexplored's blue crystalite): those blocks draw
+  the missing model.
+- **Load time** (Mac mini M4 Pro, offscreen, render distance 12). The first start builds the
+  content root: about 25 to 35 s, and again after every game update, since the root's stamp
+  includes the executable. Later starts: 6.6 to 8.2 s to "resources loaded", against 1.3 to
+  2.5 s for vanilla.
+- **Play.** No crash at either seed: spawn, Mo' Structures' pirate ship, castle in the sky,
+  barn house and villager tower, CTOV villages, Formations' fountains (one with its chamber),
+  the Nether.
+
+What is missing, ranked by how much a player notices:
+
+1. **Code mods.** 333 of ATM10's 496 mods (machines, magic, mobs, tools, storage): the pack's
+   gameplay. They need a native port per mod.
+2. **The 12 mods only on CurseForge**, which the carry has not fetched.
+3. **Plainer structures.** The 605 dropped processors are what makes structures look aged,
+   overgrown or fitted to their biome in Java: Formations' biome swaps and block ageing (its
+   tables are All Rights Reserved code), Repurposed Structures' random and noise replacements
+   and floating-block removal, and YUNG's decorations (Better Dungeons, Jungle Temples,
+   Strongholds).
+4. **Structures that never generate:** the 27 Java types above. Repurposed Structures' mansions
+   and monuments are about 3,000 lines of LGPL layout code; whether to port them into this MIT
+   repository is a licence question.
+5. **The first start after installing or updating:** 25 to 35 s. Later starts are about four
+   times vanilla's.
+6. **Smaller gaps:** Mo' Structures' mixin that keeps lakes out of its structures and its two
+   block-ageing processors, and the 5 missing block models.
+
+### Three packs through the mod browser, measured
+
+2026-10-22, Mac mini M4 Pro (offscreen, a debug launcher, release-profile `horizon-port-pack` and game), while
+other sessions kept the CPU at 85 to 93 %, so times are upper bounds. The two Modrinth packs were imported with
+`horizon-launcher mods install <slug>` (the browser's Import), ATM10 from its CurseForge zip with `modpack import`
+(CurseForge support is coming soon), then each ported with `--resources` for 26.3 and opened as a survival
+world with every ported mod on (horizon-ctl `launch --dev-mod ...`, from a scratch script).
+
+| Pack | Files | Import | Port | Ported mods | Coverage | Declared | World load (resources) | Crashes |
+|---|---|---|---|---|---|---|---|---|
+| Vanilla Perfected 26.3 (Fabric, small) | 108 | 30.4 s | 1.0 s | 2 | 2 partial, 79 not yet, 27 not needed | 0 blocks (a trail effect, a torch-flower texture) | 5.2 s (2.1 s) | none |
+| Slimes Adventure 1.13.4 (Fabric 1.21.1, medium) | 105 | 18.8 s | 22.8 s | 20 | 20 partial, 46 not yet, 39 not needed | 8,208 blocks, 41 items, 1,376 recipes | 23.0 s (15.0 s) | none |
+| All the Mods 10 8.3 (NeoForge 1.21.1, CurseForge zip) | 496 | 3.1 s | 29.4 s | 42 | 42 partial, 333 not yet, 121 not needed | 10,000 blocks, 1,273 items, 4,178 recipes | 38.3 s (28.7 s) | none |
+
+The same world with no mods loads in 5.4 s (resources 1.1 s). Import is the pack download and Modrinth's answers by
+file hash; Vanilla Perfected's 30 s is mostly its 108 lookups and its download. Port is the jars (downloaded for the
+two Modrinth packs; ATM10's 42 copied from a folder, 12 more are on CurseForge only: CurseForge downloads coming soon) and the carry,
+which writes tens of thousands of small files. World load grows with the blocks the pack declares: ATM10 adds
+about 155,000 block states, and loading their models and textures is most of its 28.7 s.
+
+Every world loaded and stayed up, with no panic and no error in the log. Before the namespace fix above, Slimes
+Adventure lost three of YUNG's mods at start ("both use the namespace yungsapi"); after it all 20 load. As a share of
+the mods that need porting (not counting performance mods and libraries), 2 of 81 ported partly, 20 of 66 and 42 of
+375. Every ported mod is Partial: their Java code (block entities, entities, Mixins) doesn't come along.
 
 ## Open questions for Ludovic
 
 - Contacting authors of permissively licensed mods to publish ports (none contacted).
 - Whether players should run code-port agents themselves (their own Claude Code or Codex
   login, as Zenith does) or only download published ports.
-- A CurseForge API key for the launcher (CurseForge grants them to launchers on request). Until
-  then, CurseForge packs import from an installed instance.
+- CurseForge: dropped for now (its API needs a paid key; Ludovic, 2026-10-22), shown as coming
+  soon. CurseForge packs import from their zip or an installed instance.

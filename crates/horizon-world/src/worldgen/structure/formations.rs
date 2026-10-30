@@ -3,9 +3,14 @@
 //! one pool element at a random spot of the chunk, at a height its
 //! placement finds in the noise columns under the element's corners and
 //! centre ([`StartContext::noise_column`]).
+//!
+//! Its PiecedStructure (the fountain) starts the same way, then lays out
+//! the element's jigsaw children with vanilla's jigsaw
+//! ([`super::jigsaw::add_children`]): `horizon:pieced` on the structure
+//! holds its `max_depth` and `max_distance_from_center`.
 use super::{
     BoundingBox, Rotation, StructureResources,
-    jigsaw::{PoolElement, PoolPiece, Pools},
+    jigsaw::{JigsawConfig, PoolElement, PoolPiece, Pools, add_children},
     start::{NoiseBlock, NoiseColumn, StartContext},
 };
 use crate::{
@@ -51,6 +56,8 @@ impl Placement {
 pub struct Def {
     pub pool: String,
     pub placement: Placement,
+    /// PiecedStructure's jigsaw: (max depth, max distance from the centre).
+    pub pieced: Option<(i32, i32)>,
 }
 impl Def {
     pub fn decode(v: &Value) -> Result<Self, DecodeError> {
@@ -61,11 +68,21 @@ impl Def {
                 .ok_or(DecodeError::Field("formations template"))?
                 .to_owned(),
             placement: Placement::decode(v["placement"].as_str().unwrap_or_default())?,
+            pieced: match v.get("horizon:pieced") {
+                None => None,
+                Some(p) => {
+                    let int = |k: &'static str| {
+                        p[k].as_i64().map(|n| n as i32).ok_or(DecodeError::Field(k))
+                    };
+                    Some((int("max_depth")?, int("max_distance_from_center")?))
+                }
+            },
         })
     }
 }
 
-/// SimpleStructure.findGenerationPoint: the start's position and piece.
+/// SimpleStructure.findGenerationPoint, or PiecedStructure's: the start's
+/// position and pieces.
 pub fn generate(
     def: &Def,
     context: &mut impl StartContext,
@@ -74,7 +91,7 @@ pub fn generate(
     bindings: &FeatureBlockBindings<'_>,
     random: &mut impl RandomSource,
     chunk: ChunkPos,
-) -> Option<([i32; 3], PoolPiece)> {
+) -> Option<([i32; 3], Vec<PoolPiece>)> {
     let element = pools
         .get(&def.pool, resources, bindings)?
         .random_template(random);
@@ -88,7 +105,7 @@ pub fn generate(
     let height = find_height(def.placement, context, b, random)?;
     let ground = element.ground_level_delta();
     let y = height - ground + 1;
-    if y < context.min_y() {
+    if def.pieced.is_none() && y < context.min_y() {
         return None;
     }
     let piece = PoolPiece {
@@ -101,7 +118,46 @@ pub fn generate(
         // LiquidSettings.APPLY_WATERLOGGING.
         waterlogging: true,
     };
-    Some(([x, y, z], piece))
+    let Some((max_depth, distance)) = def.pieced else {
+        return Some(([x, y, z], vec![piece]));
+    };
+    // PiecedStructure.addPieces: the start sits at the element's centre, one
+    // above the height found, and its children may fill the box of
+    // `distance` around it (not clamped to the world's height) less its own.
+    let (cx, cy, cz) = (
+        (b.max[0] + b.min[0]) / 2,
+        height + 1,
+        (b.max[2] + b.min[2]) / 2,
+    );
+    let mut pieces = vec![piece];
+    if max_depth > 0 {
+        let config = JigsawConfig {
+            start_pool: &def.pool,
+            start_jigsaw: None,
+            max_depth,
+            use_expansion_hack: false,
+            project_to: None,
+            max_distance: [distance, distance],
+            aliases: &Default::default(),
+            padding: [0, 0],
+            waterlogging: true,
+        };
+        let container = BoundingBox::new(
+            [cx - distance, cy - distance, cz - distance],
+            [cx + distance, cy + distance, cz + distance],
+        );
+        add_children(
+            &config,
+            context,
+            pools,
+            resources,
+            bindings,
+            random,
+            &mut pieces,
+            container,
+        );
+    }
+    Some(([cx, cy, cz], pieces))
 }
 
 /// The four corners (min x min z, min x max z, max x max z, max x min z)
@@ -335,6 +391,15 @@ mod tests {
         );
         assert!(Placement::decode("floating").is_err());
         let def = Def::decode(&serde_json::json!({"template": "a:b", "placement": "surface"}));
-        assert_eq!(def.unwrap().placement, Placement::Surface);
+        let def = def.unwrap();
+        assert_eq!((def.placement, def.pieced), (Placement::Surface, None));
+        let pieced = Def::decode(
+            &serde_json::json!({"template": "a:b", "placement": "surface",
+            "horizon:pieced": {"max_depth": 2, "max_distance_from_center": 116}}),
+        );
+        assert_eq!(pieced.unwrap().pieced, Some((2, 116)));
+        let broken = serde_json::json!({"template": "a:b", "placement": "surface",
+            "horizon:pieced": {"max_depth": 2}});
+        assert!(Def::decode(&broken).is_err());
     }
 }

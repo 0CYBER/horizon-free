@@ -9,7 +9,7 @@ sources) and selects them over the prepared vanilla resources. The Java oracle
 and MultiPackResourceManager and asks what each reload listener reads: which
 pack a file comes from, translations (ClientLanguage), sound events
 (SoundManager.prepare), font providers (FontManager) and atlas sources
-(SpriteSourceList). examples/pack_resources_fixture builds Horizon's resource
+(SpriteSourceList). examples/probe/pack_resources_fixture builds Horizon's resource
 root for the same selection (packs::build_overlay) and reads it with Horizon's
 loaders. Every answer must agree.
 """
@@ -127,9 +127,9 @@ def main():
         harness.differential(f"resource-pack-parity-{index}", "VanillaPackResourcesOracle",
                                     "pack_resources_fixture", make,
                                     "Pack discovery, overlays, filters and the resource stacks vanilla merges.",
-                                    sources=[lab.ROOT / "crates/horizon-client/src/packs.rs",
-                                             lab.ROOT / "crates/horizon-client/src/sound_events.rs",
-                                             lab.ROOT / "crates/horizon-client/src/lang.rs"])
+                                    sources=[lab.ROOT / "crates/horizon-client-render/src/packs.rs",
+                                             lab.ROOT / "crates/horizon-client-render/src/sound_events.rs",
+                                             lab.ROOT / "crates/horizon-client-core/src/lang.rs"])
         total += len(QUERIES)
     print(f"{total} resource pack queries match the pinned client over {len(SELECTIONS)} selections")
 

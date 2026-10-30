@@ -13,10 +13,14 @@
 //! And from Repurposed Structures':
 //! - `horizon:waterlog_in_world_water`: a block that can be waterlogged is
 //!   where the world holds water and is dry where it does not (its
-//!   WaterlogWhenReplacingWaterProcessor).
+//!   WaterlogWhenReplacingWaterProcessor);
+//! - `horizon:mineshaft_sky_view`: its mineshafts are not built above the
+//!   ocean floor, but keep their rails on solid ground (its
+//!   MineshaftSkyViewProcessor).
 use super::{PlaceSettings, ProcessResult, pillars::outside_chunk};
 use crate::{
     fluid::{FluidKind, FluidState},
+    heightmap::HeightmapType,
     registry::{BlockRegistry, BlockStateId},
     worldgen::{DecodeError, placement::PlacementContext, structure::BlockInfo},
 };
@@ -152,11 +156,7 @@ impl WaterlogInWorldWater {
         if !state.properties.contains_key("waterlogged") || outside_chunk(settings, info.pos) {
             return Ok(Some(info));
         }
-        let here = world.block_state(info.pos)?;
-        let water = registry
-            .state(here)
-            .and_then(|s| FluidState::from_block(s).ok())
-            .is_some_and(|f| f.kind().same_family(FluidKind::Water));
+        let water = world_water(world, registry, info.pos)?;
         // The mod's height check (min to max build height) holds for every
         // block of the chunk.
         if water && world.inside_build_height(info.pos)? {
@@ -169,6 +169,56 @@ impl WaterlogInWorldWater {
             state: registry.id(&set).unwrap_or(info.state),
             ..info
         }))
+    }
+}
+
+/// Whether the world's block at `pos` holds water (still or flowing, or a
+/// waterlogged block): `getFluidState().is(FluidTags.WATER)`.
+fn world_water<W: PlacementContext>(
+    world: &mut W,
+    registry: &BlockRegistry,
+    pos: [i32; 3],
+) -> Result<bool, crate::worldgen::placement::PlacementQueryError> {
+    let here = world.block_state(pos)?;
+    Ok(registry
+        .state(here)
+        .and_then(|s| FluidState::from_block(s).ok())
+        .is_some_and(|f| f.kind().same_family(FluidKind::Water)))
+}
+
+/// `horizon:mineshaft_sky_view`: MineshaftSkyViewProcessor. A plain rail
+/// whose world block below can occlude is placed, waterlogged where the
+/// world holds water; any other block at or above the world's
+/// `OCEAN_FLOOR_WG` height in its column is not placed, so a mineshaft cut
+/// by a valley or a ravine is not built in the open.
+pub struct MineshaftSkyView;
+impl MineshaftSkyView {
+    pub(super) fn process<W: PlacementContext>(
+        world: &mut W,
+        registry: &BlockRegistry,
+        info: BlockInfo,
+    ) -> ProcessResult {
+        let [x, y, z] = info.pos;
+        let rail = registry
+            .state(info.state)
+            .filter(|s| s.name == "minecraft:rail");
+        if let Some(rail) = rail {
+            let below = world.block_state([x, y - 1, z])?;
+            if world.can_occlude(below)? {
+                let mut set = rail.clone();
+                let water = world_water(world, registry, info.pos)?;
+                set.properties
+                    .insert("waterlogged".into(), water.to_string());
+                return Ok(Some(BlockInfo {
+                    state: registry.id(&set).unwrap_or(info.state),
+                    ..info
+                }));
+            }
+        }
+        if y >= world.height(HeightmapType::OceanFloorWg, x, z)? {
+            return Ok(None);
+        }
+        Ok(Some(info))
     }
 }
 
@@ -198,8 +248,19 @@ mod tests {
         fn min_y(&mut self) -> Result<i32, PlacementQueryError> {
             Ok(-64)
         }
-        fn height(&mut self, _: HeightmapType, _: i32, _: i32) -> Result<i32, PlacementQueryError> {
-            Err(PlacementQueryError::Unavailable)
+        /// The ocean floor is at 64 everywhere.
+        fn height(
+            &mut self,
+            kind: HeightmapType,
+            _: i32,
+            _: i32,
+        ) -> Result<i32, PlacementQueryError> {
+            assert_eq!(kind, HeightmapType::OceanFloorWg);
+            Ok(64)
+        }
+        /// Only stone can occlude.
+        fn can_occlude(&mut self, state: BlockStateId) -> Result<bool, PlacementQueryError> {
+            Ok(state == BlockStateId(6))
         }
         fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
             Ok(63)
@@ -226,12 +287,13 @@ mod tests {
         }
     }
 
-    // 0 air, 1 cave air, 2 water, 3/4 slab dry/wet, 5 purpur slab, 6 stone.
+    // 0 air, 1 cave air, 2 water, 3/4 slab dry/wet, 5 purpur slab, 6 stone,
+    // 7/8 rail dry/wet.
     fn registry() -> BlockRegistry {
         let row = |name: &str, props: Value| json!([name, false, false, "", {"id": name, "properties": props}]);
         let facts = json!({"defaults": {"minecraft:air": 0, "minecraft:cave_air": 1,
                 "minecraft:water": 2, "minecraft:prismarine_slab": 3, "minecraft:purpur_slab": 5,
-                "minecraft:stone": 6},
+                "minecraft:stone": 6, "minecraft:rail": 7},
             "states": [
                 ["minecraft:air", false, false, "", "minecraft:air"],
                 ["minecraft:cave_air", false, false, "", "minecraft:cave_air"],
@@ -239,7 +301,9 @@ mod tests {
                 row("minecraft:prismarine_slab", json!({"waterlogged": "false"})),
                 row("minecraft:prismarine_slab", json!({"waterlogged": "true"})),
                 ["minecraft:purpur_slab", false, false, "", "minecraft:purpur_slab"],
-                ["minecraft:stone", false, false, "", "minecraft:stone"]]});
+                ["minecraft:stone", false, false, "", "minecraft:stone"],
+                row("minecraft:rail", json!({"shape": "north_south", "waterlogged": "false"})),
+                row("minecraft:rail", json!({"shape": "north_south", "waterlogged": "true"}))]});
         BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap()
     }
 
@@ -355,5 +419,30 @@ mod tests {
         // Blocks that cannot be waterlogged, and other chunks, are left.
         assert_eq!(run(&mut sea, info(6, [3, 40, 3])), BlockStateId(6));
         assert_eq!(run(&mut sea, info(4, [16, 40, 3])), BlockStateId(4));
+    }
+
+    #[test]
+    fn mineshafts_stop_at_the_ocean_floor_but_keep_grounded_rails() {
+        let registry = registry();
+        let mut sea = Sea {
+            world: BlockStateId(6),
+            marked: vec![],
+            ticks: vec![],
+        };
+        let run = |sea: &mut Sea, i: BlockInfo| {
+            MineshaftSkyView::process(sea, &registry, i)
+                .unwrap()
+                .map(|i| i.state)
+        };
+        // Over stone a rail stays, above the floor too, dry as the world is.
+        assert_eq!(run(&mut sea, info(8, [3, 80, 3])), Some(BlockStateId(7)));
+        // Anything else stops at the floor (64).
+        assert_eq!(run(&mut sea, info(6, [3, 63, 3])), Some(BlockStateId(6)));
+        assert_eq!(run(&mut sea, info(6, [3, 64, 3])), None);
+        assert_eq!(run(&mut sea, info(0, [3, 90, 3])), None);
+        // Over water a rail is like any block.
+        sea.world = BlockStateId(2);
+        assert_eq!(run(&mut sea, info(7, [3, 70, 3])), None);
+        assert_eq!(run(&mut sea, info(8, [3, 40, 3])), Some(BlockStateId(8)));
     }
 }

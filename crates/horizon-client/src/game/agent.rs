@@ -7,8 +7,11 @@ use super::{Game, Screen};
 use horizon_client::{
     Result,
     block_entity_anim::Ticker,
-    chunk::{MIN_Y, SECTIONS},
     items::ItemStack,
+    mobs::{
+        Species,
+        render::{PROFESSIONS, VILLAGER_TYPES},
+    },
     widgets,
 };
 use horizon_core::geometry::Vec3;
@@ -296,6 +299,8 @@ struct Glide {
 pub(super) struct Agent {
     task: Option<Task>,
     glide: Option<Glide>,
+    /// Control-fixture barrier: hold simulation and packet handling, not transport threads.
+    pub hold_server: bool,
 }
 
 pub(super) enum Handled {
@@ -334,6 +339,12 @@ impl Game<'_> {
             Some(Ticker::Lid) => v["lid"] = json!(self.chest_lid(pos, 1.0)),
             Some(Ticker::Shulker { .. }) => v["lid"] = json!(self.block_anim(pos, 1.0).shulker.0),
             _ => {}
+        }
+        // The lines of a sign, as this client has them.
+        if let Some(horizon_client::containers::BlockEntity::Sign(sign)) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        {
+            v["sign"] = json!({ "front": sign.front.lines, "back": sign.back.lines });
         }
         v
     }
@@ -380,6 +391,9 @@ impl Game<'_> {
         Ok(())
     }
     pub(super) fn screen_label(&self) -> &'static str {
+        if self.dialog_open() {
+            return "dialog";
+        }
         if self.title.is_some() {
             return "title";
         }
@@ -403,7 +417,12 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::Friends => "friends",
+            Screen::ServerLinks => "server-links",
+            Screen::ConfirmLink => "confirm-link",
+            Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
+            Screen::Win => "win",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -455,16 +474,28 @@ impl Game<'_> {
                 "velocity": [p.velocity.x, p.velocity.y, p.velocity.z],
                 "on_ground": p.ground.on_ground,
                 "flying": p.flying,
+                "fall_flying": p.fall_flying,
                 "sneaking": self.keys.contains(&KeyCode::ShiftLeft),
-                "sprinting": self.keys.contains(&KeyCode::ControlLeft),
+                "sprinting": p.sprinting,
+                "fov_modifier": self.view.fov_modifier,
                 "health": p.health.health(),
+                "absorption": p.health.absorption(),
+                // The hurt animation's ticks left (the camera's hurt tilt).
+                "hurt_time": p.health.hurt_animation_time,
+                // LivingEntity.deathTime while dead (the camera's death roll).
+                "death_time": self.death_time(),
+                "air": p.air,
+                // LocalPlayer.portalEffectIntensity: the Nether portal overlay.
+                "portal_effect": self.screen_fx.portal,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
+                "shield_cooldown": self.shield_cooldown,
                 "xp": { "level": self.experience.level, "progress": self.experience.progress, "total": self.experience.total },
                 "effects": self.potions.effects.list.iter().map(|e| json!({ "id": e.id, "duration_ticks": e.duration, "amplifier": e.amplifier })).collect::<Vec<_>>(),
             })
         });
         json!({
+            "dialog": self.dialog_status(),
             "screen": self.screen_label(),
             "menu": self.title.as_ref().map(|_| self.title_value()),
             "world": (self.title.is_none()).then(|| match &self.integrated {
@@ -477,6 +508,8 @@ impl Game<'_> {
             "sleeping": self.sleeping,
             // The item in use: its slot and for how many ticks.
             "using": self.using.map(|(slot, ticks)| json!({ "slot": slot, "ticks": ticks })),
+            // The block being dug: how far along, after how many ticks.
+            "mining": self.mining.as_ref().map(|m| json!({ "pos": m.pos, "progress": m.progress, "ticks": m.ticks })),
             // The arm swings started (LivingEntity.swing).
             "swings": self.swings_started,
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },
@@ -503,7 +536,9 @@ impl Game<'_> {
             title
                 .recent_worlds()
                 .iter()
-                .map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.creative }))
+                .map(
+                    |w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 }),
+                )
                 .collect::<Vec<_>>()
         };
         match &title.mode {
@@ -513,7 +548,7 @@ impl Game<'_> {
                 selected,
             } => json!({
                 "mode": "select-world",
-                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.creative })).collect::<Vec<_>>(),
+                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1, "corrupted": w.corrupted })).collect::<Vec<_>>(),
                 "selected": selected,
             }),
             Mode::Create {
@@ -531,9 +566,25 @@ impl Game<'_> {
                 "hardcore": options.hardcore,
                 "difficulty": horizon_client::title::DIFFICULTIES[options.difficulty()],
                 "allow_commands": options.commands(*creative),
-                "superflat": options.flat,
+                "world_type": options.world_type.id(),
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
+            }),
+            Mode::CreateFlat {
+                name,
+                seed,
+                options,
+                flat,
+                ..
+            } => json!({
+                "mode": "customize-flat",
+                "fields": { "name": name, "seed": seed },
+                "superflat": options.world_type == horizon_client::save::WorldPreset::Flat,
+                "biome": flat.settings().biome,
+                "layers": flat.settings().layers.iter().map(|layer| json!({
+                    "block": layer.block,
+                    "height": layer.height,
+                })).collect::<Vec<_>>(),
             }),
             Mode::Edit {
                 world,
@@ -548,6 +599,20 @@ impl Game<'_> {
             Mode::Delete { world } => {
                 json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
             }
+            Mode::BackupBeforeUpgrade { world, .. } => {
+                json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
+            }
+            Mode::Recover { world, issues } => {
+                let issue = |i: &Option<horizon_client::save::DatIssue>| match i {
+                    None => json!(null),
+                    Some(horizon_client::save::DatIssue::Missing) => json!("missing file"),
+                    Some(horizon_client::save::DatIssue::Unreadable(why)) => json!(why),
+                };
+                json!({ "mode": "recover-world", "folder": world.folder, "level_dat": issue(&issues[0]), "level_dat_old": issue(&issues[1]) })
+            }
+            Mode::Recovered { world, success } => {
+                json!({ "mode": "recovery-done", "folder": world.folder, "success": success })
+            }
             Mode::Error { message, .. } => {
                 json!({ "mode": "world-operation-error", "message": message })
             }
@@ -557,6 +622,9 @@ impl Game<'_> {
                 json!({ "mode": "multiplayer", "disconnected": reason })
             }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
+            Mode::MultiplayerWarning { check } => {
+                json!({ "mode": "multiplayer-warning", "check": check })
+            }
         }
     }
 
@@ -578,10 +646,20 @@ impl Game<'_> {
             }
         };
         for m in self.mobs.iter().filter(|m| m.alive()) {
+            let mut v = json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time });
+            // VillagerData as this game knows it: on a client, what the
+            // server's synched data says.
+            if matches!(m.species(), Species::Villager | Species::ZombieVillager) {
+                v["villager"] = json!({
+                    "type": VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()],
+                    "profession": PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()],
+                    "level": m.extra.variant3,
+                });
+            }
             push(
                 [m.position.x, m.position.y, m.position.z],
                 m.kind.id.as_ref(),
-                json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time }),
+                v,
             );
         }
         for item in &self.dropped {
@@ -631,6 +709,7 @@ impl Game<'_> {
         });
         if let Some(chat) = &self.ui.chat_screen {
             v["chat_input"] = json!(chat.input.value);
+            v["chat_suggestions"] = json!(chat.suggestions_visible());
         }
         if self.title.is_some() {
             v["menu"] = self.title_value();
@@ -650,13 +729,28 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            // The title a server gave the menu, span by span as it is drawn.
+            if let Some(title) = self.remote_menu_title() {
+                let spans = title.spans.iter().map(|s| {
+                    json!({
+                        "text": s.text,
+                        "color": s.style.color.map(|c| format!("#{c:06X}")),
+                        "bold": s.style.is_bold(),
+                        "italic": s.style.is_italic(),
+                    })
+                });
+                v["title"] = json!(spans.collect::<Vec<_>>());
+            }
             // The recipe book's buttons (GUI pixels): the book button, then
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
             if !book.is_empty() {
+                let (open, filtering) = self.recipe_book_flags().unwrap_or_default();
                 v["recipe_book"] = json!({
                     "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
                     "known": self.recipe_book_known(),
+                    "open": open,
+                    "filtering": filtering,
                 });
             }
             v["slot_ids"] = json!(
@@ -671,6 +765,8 @@ impl Game<'_> {
         json!({
             "chat": self.remote_chat(n).unwrap_or_else(|| self.ui.chat.recent_lines(n)),
             "order": "newest first",
+            // The chat lines as drawn: colours, click and hover events.
+            "styled": self.ui.chat.recent_components(n),
             "title": (titles.time > 0).then(|| titles.title.as_ref().map(|t| t.plain())).flatten(),
             "subtitle": (titles.time > 0).then(|| titles.subtitle.as_ref().map(|t| t.plain())).flatten(),
             "actionbar": (titles.overlay_time > 0).then(|| titles.overlay.as_ref().map(|t| t.plain())).flatten(),
@@ -1002,7 +1098,9 @@ impl Game<'_> {
                                 .world
                                 .chunks
                                 .get(&(x >> 4, z >> 4))
-                                .filter(|_| (MIN_Y..MIN_Y + SECTIONS as i32 * 16).contains(&y))
+                                .filter(|_| {
+                                    (self.world.bottom_y()..self.world.top_y()).contains(&y)
+                                })
                                 .map(|c| c.light(x & 15, y, z & 15));
                             let digit = |v: u8| char::from_digit(u32::from(v), 16).unwrap_or('.');
                             sky.push(packed.map_or('.', |v| digit(v >> 4)));
@@ -1372,7 +1470,15 @@ impl Game<'_> {
                 self.playing()?;
                 let all = a.pos.first() == Some(&"all");
                 let before = self.held().map(|s| self.stack_value(s));
-                self.drop_held(all);
+                if self.remote.is_some() {
+                    // As Q does on a server (and on the single-player server
+                    // thread): the server throws the stack, the client predicts it.
+                    if !self.spectator() {
+                        self.remote_drop(all);
+                    }
+                } else {
+                    self.drop_held(all);
+                }
                 ok(
                     json!({ "ok": true, "dropped_from": before, "held": self.held().map(|s| self.stack_value(s)) }),
                 )
@@ -1566,8 +1672,12 @@ impl Game<'_> {
                 if self.screen != Screen::Dead {
                     return Err("respawn needs the death screen".into());
                 }
-                let label =
-                    horizon_client::text::Text::translate("deathScreen.respawn", &[]).plain();
+                let key = if self.level.hardcore {
+                    "deathScreen.spectate"
+                } else {
+                    "deathScreen.respawn"
+                };
+                let label = horizon_client::text::Text::translate(key, &[]).plain();
                 let w = widgets::find(&widgets::last(), &label)?;
                 if !w.enabled {
                     // DeathScreen enables its buttons after 20 ticks.
@@ -1840,11 +1950,21 @@ impl Game<'_> {
                 if self.ticks < *report_tick && !timed_out {
                     return None;
                 }
-                let after = pos.map(|p| self.block_json(p));
                 let changed = match (*pos, *before) {
                     (Some(p), Some(b)) => self.world.block(p[0], p[1], p[2]) != b,
                     _ => false,
                 };
+                // A client of a server (single player's server thread, a LAN
+                // guest) sees the block once the server's answer comes.
+                if *place
+                    && !changed
+                    && self.remote.is_some()
+                    && self.ticks < *report_tick + 20
+                    && !timed_out
+                {
+                    return None;
+                }
+                let after = pos.map(|p| self.block_json(p));
                 let used = delta(inventory, &self.inventory_counts());
                 let mut v = json!({
                     "ok": !*place || changed,

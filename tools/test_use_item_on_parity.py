@@ -2,8 +2,9 @@
 """Compare a player's right click on a block with vanilla's, for items that are
 both food and blocks (sweet and glow berries, carrots, potatoes), for sweet
 berry bushes, for spawn eggs used on a monster spawner, for shears carving
-pumpkins, for blocks placed where mobs and armor stands stand, for respawn
-anchors and for beds in the Nether and the End.
+pumpkins, for copper golem statues turned to their next pose, for blocks
+placed where mobs and armor stands stand, for respawn anchors and for beds in
+the Nether and the End.
 
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
@@ -23,7 +24,9 @@ explode elsewhere (`RespawnAnchorBlock`, through the stand-in level's real
 `ServerExplosion`, with water at the anchor). Respawn cases call
 `ServerPlayer.findRespawnAndUseSpawnBlock` on an anchor among blocks
 (`RespawnAnchorBlock.findStandUpPosition` through `DismountHelper`): the
-position, the yaw that faces the anchor and the charge it uses. Beds and straw
+position, the yaw that faces the anchor and the charge it uses; others on a
+bed's head set from some yaw (`AbstractBedBlock.findStandUpPosition`: intact,
+bunk, only the foot left or gone, crowded around and on top). Beds and straw
 beds clicked (head or foot, whole or broken) in the Nether and the End blow up
 or fall apart (`AbstractBedBlock.useWithoutItem` under the dimension's
 `bed_rule`: `BedBlock.destroyOnUse`, `StrawBedBlock.destroyBed`). Horizon runs
@@ -88,6 +91,52 @@ def respawn_case(rng, states, case):
 
 BED_COLORS = ['red', 'white', 'black', 'cyan', 'lime']
 FACINGS = {'north': (0, -1), 'south': (0, 1), 'west': (-1, 0), 'east': (1, 0)}
+
+
+def bed_respawn_case(rng, states, case):
+    """Respawning at a bed's head set from some yaw: intact, a bunk bed, only the foot left or
+    gone, with blocks around and on it, in the Overworld (and a few in the Nether or the End)."""
+    name = 'straw_bed' if rng.random() < 0.15 else rng.choice(BED_COLORS) + '_bed'
+    facing = rng.choice(list(FACINGS))
+    fx, fz = FACINGS[facing]
+    bed = {}
+    kept = rng.random()
+    if kept < 0.75:
+        bed[(0, 0, 0)] = states.get(name, facing=facing, part='head', occupied='false')
+    elif kept < 0.85:
+        bed[(0, 0, 0)] = states.get(rng.choice(['stone', 'white_carpet', 'oak_slab']))
+    if kept < 0.9 or rng.random() < 0.5:
+        bed[(-fx, 0, -fz)] = states.get(name, facing=facing, part='foot', occupied='false')
+    if rng.random() < 0.2:
+        # A bunk bed: another bed below.
+        bed[(0, -1, 0)] = states.get(name, facing=facing, part='head', occupied='false')
+        bed[(-fx, -1, -fz)] = states.get(name, facing=facing, part='foot', occupied='false')
+    crowd = rng.choice([0.0, 0.1, 0.3, 0.6, 0.95])
+    cells = [[*k, v] for k, v in bed.items()]
+    if (0, 0, 0) not in bed:
+        cells.insert(0, [0, 0, 0, states.get('air')])
+    for dy in (-2, -1, 0, 1, 2):
+        for dx in range(-3, 4):
+            for dz in range(-3, 4):
+                if (dx, dy, dz) in bed or (dx, dy, dz) == (0, 0, 0):
+                    continue
+                if dy == -1 and (dx, 0, dz) in bed:
+                    name2 = 'stone'
+                elif dy < 0:
+                    name2 = rng.choice(['stone'] * 8 + STAND)
+                elif rng.random() < crowd:
+                    name2 = rng.choice(['stone'] * 4 + STAND)
+                else:
+                    continue
+                if name2 == 'air':
+                    continue
+                state = states.any(rng, name2) if name2 in ('oak_trapdoor', 'oak_slab', 'snow', 'campfire', 'water', 'ladder') else states.get(name2)
+                cells.append([dx, dy, dz, state])
+    if rng.random() < 0.1:
+        case['dim'] = rng.choice(['nether', 'end'])
+    yaw = rng.choice([0.0, 90.0, -90.0, 180.0, round(rng.uniform(-720, 720), rng.choice([0, 2]))])
+    case['respawn_at'] = {'forced': rng.random() < 0.15, 'consume': rng.random() < 0.8, 'yaw': yaw}
+    case['cells'] = cells
 
 
 def bed_case(rng, states, case):
@@ -180,6 +229,32 @@ def pumpkin_case(rng, states, case):
     case['cells'] = cells
 
 
+STATUES = [f'{wax}{age}copper_golem_statue' for wax in ('', 'waxed_')
+           for age in ('', 'exposed_', 'weathered_', 'oxidized_')]
+
+
+def statue_case(rng, states, case):
+    """A copper golem statue right-clicked (`CopperGolemStatueBlock.useItemOn`, the weathering
+    one's): anything but an axe, an empty hand too, turns it to its next pose; honeycomb waxes a
+    statue that still weathers instead (`HoneycombItem.useOn`), and an axe scrapes or unwaxes it."""
+    statue = rng.choice(STATUES)
+    case['cells'] = [[0, 0, 0, states.any(rng, statue)]]
+    items = ['-', '-', 'stick', 'honeycomb', 'honeycomb', 'stone', 'copper_ingot', 'diamond_pickaxe',
+             'copper_golem_statue']
+    if statue != 'copper_golem_statue':
+        # An axe scrapes or unwaxes the others; on the unaffected one it brings the golem back
+        # (`CopperGolemStatueBlockEntity.removeStatue`), which Horizon does not do yet.
+        items.append('iron_axe')
+    item = rng.choice(items)
+    use = {'item': '-' if item == '-' else d_plain(item, rng.choice([1, 16])), 'creative': rng.random() < 0.2,
+           'sneaking': rng.random() < 0.15, 'food': 20,
+           'face': rng.choice(['up', 'up', 'north', 'south', 'west', 'east'])}
+    if rng.random() < 0.2:
+        # The item in the off hand, nothing in the main hand.
+        use.update(offhand=use['item'], item='-')
+    case['use_item'] = use
+
+
 # Entities a block may be placed into (`Entity.blocksBuilding`), and blocks to place.
 BLOCKERS = ['skeleton', 'zombie', 'pig', 'chicken', 'cow', 'armor_stand', 'slime', 'bat']
 PLACED = ['obsidian', 'stone', 'oak_slab', 'oak_fence', 'white_carpet', 'torch', 'glass', 'oak_trapdoor', 'snow']
@@ -224,6 +299,12 @@ def cases(facts, count, seed):
             case['mode'] = 'dispense'
             yield case
             continue
+        if rng.random() < 0.1:
+            bed_respawn_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
         if rng.random() < 0.15:
             anchor_case(rng, states, case)
             case['items'] = []
@@ -232,6 +313,12 @@ def cases(facts, count, seed):
             continue
         if rng.random() < 0.1:
             blocked_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
+        if rng.random() < 0.08:
+            statue_case(rng, states, case)
             case['items'] = []
             case['mode'] = 'dispense'
             yield case
@@ -318,10 +405,10 @@ def main():
            '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaDispenserOracle.java')])
     d.run(['java', '-Xmx3G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaDispenserOracle',
            str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    d.run(['cargo', 'build', '-q', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    d.run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
           env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
-    d.run([str(lab.cargo_target() / 'release/horizon-client'), '--resources', str(resources)], cwd=work,
-          env={**os.environ, 'HORIZON_DISPENSE_FIXTURE': f'{work / "cases.jsonl"},{work / "rust.txt"}', 'HORIZON_NO_AUDIO': '1'})
+    d.run([str(lab.cargo_target() / 'fast/horizon-client'), '--resources', str(resources)], cwd=work,
+          env=lab.game_env(HORIZON_DISPENSE_FIXTURE=f'{work / "cases.jsonl"},{work / "rust.txt"}'))
     ignore = tuple(prefix + ' ' for prefix in args.ignore.split(',') if prefix) + ('D ',)
     native = h.split_cases((work / 'native.txt').read_text(), ignore)
     rust = h.split_cases((work / 'rust.txt').read_text(), ignore)

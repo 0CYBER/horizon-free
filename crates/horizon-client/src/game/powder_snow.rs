@@ -53,7 +53,11 @@ impl Game<'_> {
         if let Some(player) = self.player.as_mut() {
             player.fire_ticks = 0;
         }
-        // Entity.playEntityOnFireExtinguishedSound
+        self.extinguish_sound(at);
+        Ok(())
+    }
+    /// Entity.playEntityOnFireExtinguishedSound
+    pub(super) fn extinguish_sound(&mut self, at: [f64; 3]) {
         let r = self.particles.random();
         let pitch = 1.6 + (r.next_float() - r.next_float()) * 0.4;
         self.audio.play(
@@ -62,7 +66,29 @@ impl Game<'_> {
             0.7,
             pitch,
         );
-        Ok(())
+    }
+    /// `Entity.applyEffectsFromBlocks`: a burning player in the rain
+    /// (`isInRain`) has the fire put out (`clearFire`), with the extinguish
+    /// sound that everyone near hears.
+    pub(super) fn rain_extinguish_player(&mut self) {
+        let Some(player) = self.player.as_ref() else {
+            return;
+        };
+        let (at, top) = (player.position, player.bounds().max_position().y);
+        if player.fire_ticks <= 0 || !self.in_rain(at, top) {
+            return;
+        }
+        if let Some(player) = self.player.as_mut() {
+            player.fire_ticks = 0;
+        }
+        self.extinguish_sound([at.x, at.y, at.z]);
+    }
+    /// The in-window player's rain extinguish (a server's player has its
+    /// fire put out by the server).
+    pub(super) fn rain_extinguish_in_frame(&mut self) {
+        if self.remote.is_none() {
+            self.rain_extinguish_player();
+        }
     }
     /// Whether the block at `pos` is powder snow.
     pub(super) fn is_powder_snow(&self, pos: [i32; 3]) -> bool {
@@ -79,7 +105,8 @@ impl Game<'_> {
     /// and the filled_bucket trigger.
     pub(super) fn pick_up_powder_snow(&mut self, pos: [i32; 3]) -> Result<()> {
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, at));
+        let creative = self.creative;
+        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, at, creative));
         self.process_level_events()?;
         let Some(filled) = picked else {
             return Ok(());
@@ -106,7 +133,7 @@ impl Game<'_> {
         Ok(())
     }
     /// `ItemUtils.createFilledResult(held, player, filled)` for the held stack.
-    fn filled_result(&mut self, filled: ItemStack) {
+    pub(super) fn filled_result(&mut self, filled: ItemStack) {
         if self.creative {
             // Kept, and the filled one added unless the inventory has it.
             let has = self

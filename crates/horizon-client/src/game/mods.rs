@@ -1,50 +1,19 @@
-//! Horizon mods in the game (`docs/mods.md`): loading the ones turned on,
-//! their tick, frame, chat and command hooks, their HUD panels and what
-//! they print. With no mod on, `horizon_mods::Mods` holds no engine and
-//! every hook here returns after one check.
-use super::{Game, Screen};
+//! Mods in the game (`docs/mods.md`): content mods' blocks, items, data and
+//! assets (`content_root`), and the Mods page's rows. Code mods are native
+//! (`native_hooks.rs`); WebAssembly code mods don't run any more.
+use super::Game;
 use horizon_client::{
-    command::{Dispatcher, vanilla},
-    extras::Corner,
-    extras_hud::{self, Corners},
-    hud::HudBatch,
     mod_list::{self, Installed},
-    text::{self, Text},
+    text::Text,
 };
-use horizon_mods::{Clock, Mods, Output, Player, Snapshot, Status};
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::path::PathBuf;
 
 #[derive(Default)]
 pub(super) struct ModsState {
-    pub(super) mods: Mods,
-    /// `--dev-mod PATH`: always on, reloaded when rebuilt.
+    /// `--dev-mod PATH`: always on.
     pub(super) dev: Vec<PathBuf>,
-    /// When dev mods were last checked for a rebuild.
-    checked: Option<Instant>,
-    /// The chat's command tree while a running mod owns commands.
-    tree: Option<Dispatcher>,
-}
-impl ModsState {
-    /// The chat's command tree: vanilla's, plus the running mods' commands.
-    pub(super) fn dispatcher(&self) -> &Dispatcher {
-        self.tree
-            .as_ref()
-            .unwrap_or_else(|| vanilla::game_dispatcher())
-    }
-}
-/// How often dev mods are checked for a rebuild.
-const RELOAD_CHECK: Duration = Duration::from_secs(1);
-
-/// A vanilla command name: mods may not take it.
-fn vanilla_command(name: &str) -> bool {
-    let d = vanilla::game_dispatcher();
-    d.nodes[0]
-        .children
-        .iter()
-        .any(|&c| d.nodes[c].name() == name)
+    /// The WebAssembly mods found that no longer run, for the one-time notice.
+    stopped: Vec<String>,
 }
 
 /// `root` with the content mods that are on layered over it
@@ -112,211 +81,74 @@ pub(super) fn content_root(
     }
 }
 
+/// A WebAssembly code mod's row on the Mods page.
+const STOPPED: &str = "Doesn't run any more: needs a native port";
+/// The player was told once about the WebAssembly mods that stopped (`horizon-mods/<this>`).
+const NOTICE_SEEN: &str = ".native-notice";
+
 impl Game<'_> {
-    /// Reads `horizon-mods/` and the dev mods, and starts the ones turned on.
+    /// Lists the installed mods on the Mods page. Content mods load with the resources
+    /// (`content_root`); native ones are built into the game (`native_hooks.rs`). WebAssembly code
+    /// mods don't run any more: their rows say so, and the player hears it once in the chat
+    /// (`tell_native_now`).
     pub(super) fn start_mods(&mut self) {
         let dir = Self::options_path().with_file_name(mod_list::DIR);
-        let dev = &self.mods.dev;
         let mut paths = horizon_mods::find(&dir);
-        paths.retain(|p| !dev.contains(p));
-        paths.extend(dev.iter().cloned());
-        // A dev mod is on whatever the list says.
-        let dev_ids: Vec<String> = dev
+        paths.retain(|p| !self.mods.dev.contains(p));
+        paths.extend(self.mods.dev.iter().cloned());
+        self.settings.mods.installed = paths
             .iter()
-            .filter_map(|p| horizon_mods::Package::read(p).ok())
-            .map(|p| p.manifest.id)
-            .collect();
-        let enabled = &self.settings.mods.enabled;
-        let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
-        let mods = Mods::load(&paths, on, vanilla_command);
-        self.mods.mods = mods;
-        self.list_mods();
-        self.sync_mod_commands();
-        self.show_mod_output();
-    }
-    /// The Mods page's rows, from what loaded.
-    fn list_mods(&mut self) {
-        let dev = &self.mods.dev;
-        self.settings.mods.installed = self
-            .mods
-            .mods
-            .entries()
-            .iter()
-            .map(|e| {
-                let file = e.path.file_name().unwrap_or_default().to_string_lossy();
-                let problem = match &e.status {
-                    Status::Failed(reason) => Some(format!("Stopped: {reason}")),
-                    _ => None,
+            .map(|path| {
+                let file = path.file_name().unwrap_or_default().to_string_lossy();
+                let package = match horizon_mods::Package::read(path) {
+                    Ok(package) => package,
+                    Err(e) => {
+                        return Installed {
+                            id: String::new(),
+                            title: file.into_owned(),
+                            description: String::new(),
+                            problem: Some(format!("Can't be read: {e}")),
+                            dev: false,
+                            native: None,
+                        };
+                    }
                 };
-                let Some(m) = &e.manifest else {
-                    return Installed {
-                        id: String::new(),
-                        title: file.into_owned(),
-                        description: String::new(),
-                        problem,
-                        dev: false,
-                    };
-                };
-                // What it may do first: the row cuts long descriptions.
-                let may: Vec<&str> = m.capabilities.iter().map(|c| c.describe()).collect();
-                let may = if may.is_empty() {
-                    "Asks for nothing.".to_owned()
-                } else {
-                    format!("May {}.", may.join(", "))
-                };
+                let m = &package.manifest;
+                let problem = package.wasm.is_some().then(|| STOPPED.to_owned());
                 Installed {
                     id: m.id.clone(),
                     title: format!("{} {}", m.name, m.version),
-                    description: format!("{may} {}", m.description).trim().to_owned(),
+                    description: m.description.clone(),
                     problem,
-                    dev: dev.contains(&e.path),
+                    dev: self.mods.dev.contains(path),
+                    native: None,
                 }
             })
             .collect();
-    }
-    /// The chat's tree after the running mods changed.
-    fn sync_mod_commands(&mut self) {
-        let mut names = self.mods.mods.commands().peekable();
-        self.mods.tree = names
-            .peek()
-            .is_some()
-            .then(|| vanilla::game_dispatcher().with_mod_commands(names));
-    }
-    /// After the options changed: restart the mods if the list of the ones
-    /// turned on did.
-    pub(super) fn sync_mods(&mut self) {
-        let running: Vec<&str> = self
-            .mods
-            .mods
-            .entries()
+        // A mod with a native version built in says so instead, and isn't news.
+        self.list_native_mods();
+        let installed = &self.settings.mods.installed;
+        self.mods.stopped = installed
             .iter()
-            .filter(|e| e.status != Status::Off)
-            .filter_map(|e| Some(e.manifest.as_ref()?.id.as_str()))
+            .filter(|row| row.problem.as_deref() == Some(STOPPED))
+            .map(|row| row.title.clone())
             .collect();
-        let wanted: Vec<&str> = self
-            .settings
-            .mods
-            .installed
-            .iter()
-            .enumerate()
-            .filter(|&(i, _)| self.settings.mods.is_on(i))
-            .map(|(_, m)| m.id.as_str())
-            .collect();
-        if running != wanted {
-            self.start_mods();
-        }
     }
-    /// What mods read this tick.
-    fn mod_snapshot(&self) -> Snapshot {
-        let player = self.player.as_ref().map(|p| Player {
-            x: p.position.x,
-            y: p.position.y,
-            z: p.position.z,
-            yaw: self.yaw,
-            pitch: self.pitch,
-            health: p.health.health(),
-            food: p.health.food.food.max(0) as u32,
-            dimension: self.dim.id().to_owned(),
-        });
-        let clock = player.is_some().then(|| Clock {
-            game_time: self.world.game_time.max(0) as u64,
-            day_time: self.world.day_time.max(0) as u64,
-        });
-        Snapshot { player, clock }
-    }
-    /// A game tick.
-    pub(super) fn tick_mods(&mut self) {
-        if !self.mods.mods.is_running() {
+    /// Once, in the first world after the update: which WebAssembly mods stopped.
+    pub(super) fn tell_native_now(&mut self) {
+        if self.mods.stopped.is_empty() || self.player.is_none() {
             return;
         }
-        let snapshot = self.mod_snapshot();
-        self.mods.mods.set_snapshot(snapshot);
-        self.mods.mods.tick(self.ticks);
-        self.show_mod_output();
-    }
-    /// Once per frame: the frame hook, and dev mods' rebuilds.
-    pub(super) fn mods_frame(&mut self, elapsed: Duration) {
-        if !self.mods.dev.is_empty()
-            && self
-                .mods
-                .checked
-                .is_none_or(|t| t.elapsed() >= RELOAD_CHECK)
-        {
-            self.mods.checked = Some(Instant::now());
-            if self.mods.mods.reload_changed(vanilla_command) {
-                self.list_mods();
-                self.sync_mod_commands();
-                self.system_message(Text::literal("Mods reloaded").with_color(text::GRAY));
-            }
-        }
-        if !self.mods.mods.is_running() {
+        let names = std::mem::take(&mut self.mods.stopped).join(", ");
+        let seen = Self::options_path()
+            .with_file_name(mod_list::DIR)
+            .join(NOTICE_SEEN);
+        if seen.exists() {
             return;
         }
-        self.mods.mods.frame(elapsed.as_secs_f32());
-        self.show_mod_output();
-    }
-    /// `/command` typed in chat: true when a mod owns it.
-    pub(super) fn mod_command(&mut self, command: &str) -> bool {
-        if !self.mods.mods.is_running() {
-            return false;
-        }
-        // The command may follow a teleport in the same tick.
-        let snapshot = self.mod_snapshot();
-        self.mods.mods.set_snapshot(snapshot);
-        if !self.mods.mods.command(command) {
-            return false;
-        }
-        self.show_mod_output();
-        true
-    }
-    /// A chat line the player received.
-    pub(super) fn mods_chat(&mut self, line: &str) {
-        self.mods.mods.chat(line);
-        self.show_mod_output();
-    }
-    /// Chat lines, command feedback and stopped mods, into the chat.
-    fn show_mod_output(&mut self) {
-        for output in self.mods.mods.drain() {
-            let line = match output {
-                Output::Chat { name, text } => {
-                    let mut line = Text::literal(format!("[{name}] ")).with_color(text::GRAY);
-                    line.push(Text::literal(text));
-                    line
-                }
-                Output::Feedback { text, error: false } => Text::literal(text),
-                Output::Feedback { text, error: true } => Text::literal(text).with_color(text::RED),
-                Output::Stopped { name, reason } => {
-                    self.list_mods();
-                    self.sync_mod_commands();
-                    Text::literal(format!("Mod {name} stopped: {reason}")).with_color(text::RED)
-                }
-            };
-            // Not through system_message: a mod must not hear its own lines.
-            let focused = self.screen == Screen::Chat;
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
-        }
-    }
-    /// The mods' HUD panels, stacked with the extras in their corners.
-    pub(super) fn draw_mod_panels(&self, batch: &mut HudBatch, corners: &mut Corners) {
-        for panel in self.mods.mods.panels() {
-            let corner = match panel.corner {
-                horizon_mods::Corner::TopLeft => Corner::TopLeft,
-                horizon_mods::Corner::TopRight => Corner::TopRight,
-                horizon_mods::Corner::BottomLeft => Corner::BottomLeft,
-                horizon_mods::Corner::BottomRight => Corner::BottomRight,
-            };
-            // F3 takes the top left, as it does from the extras.
-            if self.debug && corner == Corner::TopLeft {
-                continue;
-            }
-            let lines: Vec<(&str, u32)> = panel
-                .lines
-                .iter()
-                .map(|l| (l.text.as_str(), l.color))
-                .collect();
-            extras_hud::draw_lines(batch, &self.gui.atlas, corners, corner, &lines);
-        }
+        self.system_message(Text::literal(format!(
+            "Horizon mods are native now: {names} stopped running until they have a native version. The launcher's Mods page has the native ones."
+        )));
+        let _ = std::fs::write(&seen, "");
     }
 }

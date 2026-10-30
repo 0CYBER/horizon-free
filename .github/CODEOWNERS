@@ -6,7 +6,6 @@
 /.github/                                @ludovic111
 /tools/ci/                               @ludovic111
 /tools/release_train.py                  @ludovic111
-/tools/release_channels.py               @ludovic111
 /crates/horizon-release-sign/            @ludovic111
 /crates/horizon-server/src/update.rs     @ludovic111
 /crates/horizon-server/Cargo.toml        @ludovic111

@@ -2,7 +2,7 @@
 //! seconds, reporting packet counts and any decode failures. A differential
 //! check of the codecs against a real vanilla server:
 //!
-//!     cargo run -p horizon-protocol --example probe -- 127.0.0.1:25565 [seconds] [registries.json]
+//!     cargo run -p horizon-protocol --example protocol_probe -- 127.0.0.1:25565 [seconds] [registries.json]
 use horizon_protocol::{
     PROTOCOL_VERSION, State,
     connection::Connection,
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while start.elapsed() < Duration::from_secs(seconds) {
         let (id, payload) = match c.recv() {
             Ok(p) => p,
-            Err(e) if e.0.contains("timed out") || e.0.contains("temporarily unavailable") => {
+            Err(e) if e.is_timed_out() => {
                 continue;
             }
             Err(e) => return Err(e.into()),

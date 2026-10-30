@@ -39,7 +39,7 @@ impl PerlinNoise {
         )
     }
 
-    fn gradients(&self, cell: [i32; 3]) -> [[i32; 3]; 8] {
+    fn gradients(&self, cell: [i32; 3]) -> [[f32; 3]; 8] {
         self.gradients_at(
             self.table.permute(cell[0]),
             self.table.permute(cell[0].wrapping_add(1)),
@@ -52,7 +52,7 @@ impl PerlinNoise {
     /// resolved. `add_volume` reuses one X column across every Y, so hoisting
     /// the two X permutes out of that loop avoids repeating them per Y.
     #[inline]
-    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[i32; 3]; 8] {
+    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[f32; 3]; 8] {
         let lower = self.table.permute(p.wrapping_add(cell_y));
         let upper = self.table.permute(p.wrapping_add(cell_y).wrapping_add(1));
         let lower_x = self.table.permute(q.wrapping_add(cell_y));
@@ -66,7 +66,7 @@ impl PerlinNoise {
         })
     }
 
-    fn corner_values(gradients: [[i32; 3]; 8], point: [f32; 3]) -> [f32; 8] {
+    fn corner_values(gradients: [[f32; 3]; 8], point: [f32; 3]) -> [f32; 8] {
         std::array::from_fn(|i| {
             dot(
                 gradients[i],
@@ -99,7 +99,7 @@ impl PerlinNoise {
         let values = Self::corner_values(gradients, point);
         let fade = point.map(smoothstep);
         let gradient =
-            std::array::from_fn::<_, 3, _>(|axis| lerp3(fade, gradients.map(|g| g[axis] as f32)));
+            std::array::from_fn::<_, 3, _>(|axis| lerp3(fade, gradients.map(|g| g[axis])));
         let changes = [
             lerp2(
                 fade[1],
@@ -148,10 +148,11 @@ impl PerlinNoise {
         y_scale: f64,
         amplitude: f32,
     ) -> Result<(), DensityError> {
-        self.add_volume(buffer, volume, xz_scale, y_scale, amplitude, None)
+        self.add_volume::<true>(buffer, volume, xz_scale, y_scale, amplitude, None)
     }
 
-    fn add_volume(
+    /// `BATCH` = false evaluates one Y at a time: the reference the batched loop is tested against.
+    fn add_volume<const BATCH: bool>(
         &self,
         buffer: &mut [f32],
         volume: DensityVolume,
@@ -164,6 +165,31 @@ impl PerlinNoise {
             return Err(DensityError::BufferTooShort);
         }
         let [size_x, size_y, size_z] = volume.sizes();
+        // Every X/Z column walks the same Y coordinates, so their cells, offsets
+        // and fades are computed once per volume instead of once per column.
+        let mut stack = [YSample::default(); STACK_Y];
+        let mut heap = Vec::new();
+        let ys = if size_y <= STACK_Y {
+            &mut stack[..size_y]
+        } else {
+            heap.resize(size_y, YSample::default());
+            &mut heap[..]
+        };
+        for (y, sample) in ys.iter_mut().enumerate() {
+            let input_y = f64::from(volume.coordinate(1, y)) * y_scale;
+            let shifted_y = wrap(input_y) + self.table.offsets[1];
+            let cell = floor_i32(shifted_y);
+            let dy = shifted_y - f64::from(cell);
+            *sample = YSample {
+                cell,
+                fade: smoothstep(dy as f32),
+                offset: match fudge_y_scale {
+                    Some(scale) => (dy - compute_fudge_y(input_y, dy, scale)) as f32,
+                    None => dy as f32,
+                },
+            };
+        }
+        let ys = &*ys;
         let mut index = 0;
         for z in 0..size_z {
             let shifted_z =
@@ -182,35 +208,61 @@ impl PerlinNoise {
                 let mut previous_y = i32::MIN;
                 let mut xz_dots = [0.0_f32; 8];
                 let mut y_gradients = [0.0_f32; 8];
-                for y in 0..size_y {
-                    let input_y = f64::from(volume.coordinate(1, y)) * y_scale;
-                    let shifted_y = wrap(input_y) + self.table.offsets[1];
-                    let cell_y = floor_i32(shifted_y);
-                    let dy = shifted_y - f64::from(cell_y);
-                    let fade_y = smoothstep(dy as f32);
-                    if previous_y != cell_y {
-                        let gradients = self.gradients_at(p, q, cell_y, cell_z);
+                let column = &mut buffer[index..index + size_y];
+                let mut y = 0;
+                while y < size_y {
+                    let sample = &ys[y];
+                    if previous_y != sample.cell {
+                        let gradients = self.gradients_at(p, q, sample.cell, cell_z);
                         for i in 0..8 {
-                            xz_dots[i] = gradients[i][0] as f32 * (dx - (i & 1) as f32)
-                                + gradients[i][2] as f32 * (dz - ((i >> 2) & 1) as f32);
-                            y_gradients[i] = gradients[i][1] as f32;
+                            xz_dots[i] = gradients[i][0] * (dx - (i & 1) as f32)
+                                + gradients[i][2] * (dz - ((i >> 2) & 1) as f32);
+                            y_gradients[i] = gradients[i][1];
                         }
-                        previous_y = cell_y;
+                        previous_y = sample.cell;
                     }
-                    let dy = match fudge_y_scale {
-                        Some(scale) => (dy - compute_fudge_y(input_y, dy, scale)) as f32,
-                        None => dy as f32,
-                    };
+                    // Four Ys in one cell share the corners: side by side, LLVM computes them
+                    // as vectors. Cell boundaries and the column's tail go one at a time.
+                    if BATCH
+                        && y + 4 <= size_y
+                        && ys[y + 1..y + 4].iter().all(|s| s.cell == sample.cell)
+                    {
+                        add_four(
+                            &mut column[y..y + 4],
+                            &ys[y..y + 4],
+                            xz_dots,
+                            y_gradients,
+                            fade_x,
+                            fade_z,
+                            amplitude,
+                        );
+                        y += 4;
+                        continue;
+                    }
+                    let out = &mut column[y];
+                    let dy = sample.offset;
                     let values = std::array::from_fn(|i| {
                         xz_dots[i] + y_gradients[i] * (dy - ((i >> 1) & 1) as f32)
                     });
-                    buffer[index] += amplitude * lerp3([fade_x, fade_y, fade_z], values);
-                    index += 1;
+                    *out += amplitude * lerp3([fade_x, sample.fade, fade_z], values);
+                    y += 1;
                 }
+                index += size_y;
             }
         }
         Ok(())
     }
+}
+
+/// Y columns up to this height keep their per-Y samples on the stack.
+const STACK_Y: usize = 64;
+
+#[derive(Clone, Copy, Default)]
+struct YSample {
+    cell: i32,
+    fade: f32,
+    /// The Y offset inside the cell used for the corner values, after any fudge.
+    offset: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -265,7 +317,7 @@ impl SmearedPerlinNoise {
         y_scale: f64,
         amplitude: f32,
     ) -> Result<(), DensityError> {
-        self.base.add_volume(
+        self.base.add_volume::<true>(
             buffer,
             volume,
             xz_scale,
@@ -283,4 +335,98 @@ fn compute_fudge_y(input_y: f64, relative_y: f64, scale: f64) -> f64 {
         relative_y
     };
     f64::from(floor_i32(limited_y / scale + f64::from(1e-7_f32))) * scale
+}
+
+/// Adds four Y samples of one cell, laid out lane by lane so LLVM vectorizes them (no intrinsics,
+/// no target feature). Each lane does the one-at-a-time loop's operations in the same order.
+#[inline]
+fn add_four(
+    out: &mut [f32],
+    ys: &[YSample],
+    dots: [f32; 8],
+    gradients: [f32; 8],
+    fade_x: f32,
+    fade_z: f32,
+    amplitude: f32,
+) {
+    let dy: [f32; 4] = std::array::from_fn(|lane| ys[lane].offset);
+    let fy: [f32; 4] = std::array::from_fn(|lane| ys[lane].fade);
+    let values: [[f32; 4]; 8] = std::array::from_fn(|i| {
+        std::array::from_fn(|lane| dots[i] + gradients[i] * (dy[lane] - ((i >> 1) & 1) as f32))
+    });
+    for lane in 0..4 {
+        out[lane] += amplitude * lerp3([fade_x, fy[lane], fade_z], values.map(|v| v[lane]));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::random::LegacyRandom;
+
+    #[test]
+    fn batched_volume_is_bit_identical() {
+        let scales = [
+            0.0,
+            -0.0,
+            0.001,
+            -0.001,
+            0.125,
+            -0.5,
+            1.0,
+            4.0,
+            1e100,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let amplitudes = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            f32::from_bits(1),
+        ];
+        for seed in [0, -1, 1234, i64::MIN] {
+            let noise = PerlinNoise::new(&mut LegacyRandom::new(seed));
+            for height in [1, 2, 3, 4, 5, 7, 8, 9, 31, 64, 65, 97] {
+                for (case, &scale) in scales.iter().enumerate() {
+                    let minimum = [
+                        [-17, -64, 49],
+                        [i32::MAX, i32::MIN, -16777216],
+                        [16777216, 33554431, -33554432],
+                    ][case % 3];
+                    let volume = DensityVolume::new(
+                        [2, height, 2],
+                        minimum,
+                        [4, if case % 3 == 0 { i32::MAX } else { 1 }, 16],
+                    )
+                    .unwrap();
+                    for fudge in [None, Some(0.125), Some(-0.25), Some(0.0), Some(f64::NAN)] {
+                        let initial = [0.0, -0.0, 1.5, f32::from_bits(1)];
+                        let mut a: Vec<_> =
+                            (0..volume.size() + 3).map(|i| initial[i % 4]).collect();
+                        let mut b = a.clone();
+                        let amplitude = amplitudes[case % amplitudes.len()];
+                        noise
+                            .add_volume::<false>(&mut a, volume, scale, scale, amplitude, fudge)
+                            .unwrap();
+                        noise
+                            .add_volume::<true>(&mut b, volume, scale, scale, amplitude, fudge)
+                            .unwrap();
+                        for (i, (a, b)) in a.iter().zip(&b).enumerate() {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "seed={seed} height={height} scale={scale} fudge={fudge:?} index={i}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

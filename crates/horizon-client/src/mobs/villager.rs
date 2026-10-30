@@ -46,7 +46,7 @@ pub fn register(m: &mut Mob) {
     // Villager's constructor: its brain does everything, it has no goals.
     m.ai.nav.can_open_doors = true;
     m.ai.nav.can_float = true;
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
 }
 
 /// `LivingEntity.addParticlesAroundSelf`: five particles about the body.
@@ -93,14 +93,21 @@ pub fn activity_at(baby: bool, day_time: i64) -> Activity {
 pub fn sleeping(m: &Mob) -> bool {
     matches!(m.species(), Species::Villager | Species::WanderingTrader) && m.extra.ints[1] != 0
 }
-/// `LivingEntity.startSleeping`: lie in the bed (`setPosToBed`).
-pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) -> bool {
+/// `LivingEntity.startSleeping`: lie in the bed (`setPosToBed`), whose
+/// head becomes `occupied`.
+pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     if w.prop(p[0], p[1], p[2], "occupied") == Some("true") {
         return false;
     }
     m.extra.ints[1] = bed_facing_code(w.prop(p[0], p[1], p[2], "facing"));
     m.nav_stop();
-    ext_mut(m).last_slept = Some(w.game_time);
+    let e = ext_mut(m);
+    e.last_slept = Some(w.game_time);
+    e.sleeping_pos = Some(p);
+    events.push(MobEvent::BedOccupied {
+        pos: p,
+        occupied: true,
+    });
     m.velocity = horizon_core::geometry::Vec3::ZERO;
     m.position = horizon_core::geometry::Vec3::new(
         f64::from(p[0]) + 0.5,
@@ -109,11 +116,24 @@ pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) -> bool {
     );
     true
 }
-/// `LivingEntity.stopSleeping` with `BedBlock.findStandUpPosition`: beside
-/// the bed where there is room, else on top of it.
-pub fn stop_sleeping(m: &mut Mob, w: &MobWorld) {
+/// `LivingEntity.stopSleeping` with `BedBlock.findStandUpPosition`: the bed
+/// is no longer `occupied`, and the sleeper stands beside it where there is
+/// room, else on top of it.
+pub fn stop_sleeping(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.extra.ints[1] = 0;
-    let Some(p) = m.extra.bed else { return };
+    let bed = m
+        .extra
+        .villager
+        .as_deref_mut()
+        .and_then(|e| e.sleeping_pos.take());
+    let Some(p) = bed else { return };
+    if !w.block_name(p[0], p[1], p[2]).ends_with("_bed") {
+        return;
+    }
+    events.push(MobEvent::BedOccupied {
+        pos: p,
+        occupied: false,
+    });
     for (dx, dz) in [
         (1, 0),
         (-1, 0),
@@ -135,7 +155,12 @@ pub fn stop_sleeping(m: &mut Mob, w: &MobWorld) {
             return;
         }
     }
-    m.position.y = f64::from(p[1]) + 0.5625;
+    // The bed's top (getSleepHeight) and 0.125 above it.
+    m.position.y = f64::from(p[1]) + 0.5625 + 0.125;
+}
+/// `LivingEntity.getSleepingPos`: the bed head a sleeper lies in.
+pub fn sleeping_pos(m: &Mob) -> Option<[i32; 3]> {
+    ext(m).and_then(|e| e.sleeping_pos).filter(|_| sleeping(m))
 }
 /// `LivingEntityRenderer.sleepDirectionToRotation` and the bed's direction
 /// (the body is shifted back from the pillow by the standing eye height).
@@ -159,8 +184,9 @@ pub fn sleep_pose(m: &Mob) -> Option<(f32, [f32; 2])> {
 }
 /// `Villager.tick`: the unhappy counter and the gossip decay; a sleeper
 /// hurt or without its bed wakes up (`LivingEntity.hurtServer`,
-/// `LivingEntity.checkBedExists`). The brain does the rest.
-pub fn ai_step(m: &mut Mob, w: &MobWorld) {
+/// `LivingEntity.checkBedExists`), and lies the way its bed faces
+/// (`getBedOrientation`). The brain does the rest.
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.ints[0] > 0 {
         m.extra.ints[0] -= 1;
     }
@@ -168,12 +194,12 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
         ext_mut(m).maybe_decay(w.game_time);
     }
     if sleeping(m) {
-        let bed_gone = m
-            .extra
-            .bed
-            .is_none_or(|p| !w.block_name(p[0], p[1], p[2]).ends_with("_bed"));
-        if m.hurt_time > 0 || bed_gone {
-            stop_sleeping(m, w);
+        let bed = sleeping_pos(m).filter(|p| w.block_name(p[0], p[1], p[2]).ends_with("_bed"));
+        if let Some(p) = bed {
+            m.extra.ints[1] = bed_facing_code(w.prop(p[0], p[1], p[2], "facing"));
+        }
+        if m.hurt_time > 0 || bed.is_none() {
+            stop_sleeping(m, w, events);
             super::villager_brain::woken(m, w.game_time);
         }
     }
@@ -246,6 +272,9 @@ pub struct Ext {
     pub inventory: Vec<ItemStack>,
     /// `LAST_SLEPT` memory.
     pub last_slept: Option<i64>,
+    /// `LivingEntity.getSleepingPos`: the bed head it lies in, saved as
+    /// `sleeping_pos`.
+    pub sleeping_pos: Option<[i32; 3]>,
     /// `GOLEM_DETECTED_RECENTLY` expires at this game time.
     pub golem_until: i64,
     /// The `last_hurt_by_time` of the player's hit already counted.
@@ -284,12 +313,14 @@ pub fn xp(m: &Mob) -> i32 {
     m.extra.trade.as_ref().map_or(0, |t| t.xp)
 }
 /// `Villager.setVillagerData(withProfession)`: a new profession forgets the
-/// offers.
+/// offers (`offers = null`), so the next `getOffers` rolls the new
+/// profession's trades.
 pub fn set_profession(m: &mut Mob, profession: u8) {
     if m.extra.variant2 != profession {
         m.extra.variant2 = profession;
         if let Some(t) = m.extra.trade.as_mut() {
             t.offers.clear();
+            t.unset = true;
         }
     }
 }
@@ -316,7 +347,11 @@ pub fn work_sound(profession: u8) -> Option<&'static str> {
 pub fn crop(w: &MobWorld, p: [i32; 3]) -> bool {
     matches!(
         w.block_name(p[0], p[1], p[2]),
-        "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" | "minecraft:beetroots"
+        "minecraft:wheat"
+            | "minecraft:carrots"
+            | "minecraft:potatoes"
+            | "minecraft:beetroots"
+            | "minecraft:torchflower_crop"
     )
 }
 /// `CropBlock.isMaxAge` for the block at `p`.
@@ -324,6 +359,8 @@ pub fn ripe_crop(w: &MobWorld, p: [i32; 3]) -> bool {
     let max = match w.block_name(p[0], p[1], p[2]) {
         "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" => "7",
         "minecraft:beetroots" => "3",
+        // TorchflowerCropBlock.getMaxAge is 2, past its age property (0-1):
+        // the crop is never at max age (age 2 is the torchflower itself).
         _ => return false,
     };
     w.prop(p[0], p[1], p[2], "age") == Some(max)
@@ -351,18 +388,14 @@ pub fn food_points(item: &str) -> i32 {
         _ => 0,
     }
 }
-/// The farmer's `requestedItems`.
+/// The farmer's `requestedItems` (`VillagerProfession.FARMER`). Food is picked
+/// up and traded separately, through its villager food value.
 pub fn farmer_items() -> &'static [&'static str] {
     &[
-        "minecraft:bread",
-        "minecraft:potato",
-        "minecraft:carrot",
         "minecraft:wheat",
         "minecraft:wheat_seeds",
-        "minecraft:beetroot",
         "minecraft:beetroot_seeds",
-        "minecraft:torchflower_seeds",
-        "minecraft:pitcher_pod",
+        "minecraft:bone_meal",
     ]
 }
 /// A villager's `requestedItems` by profession.
@@ -445,6 +478,24 @@ impl Ext {
             stack.count -= n;
         }
         (stack.count > 0).then_some(stack)
+    }
+    /// `SimpleContainer.removeItemType`: take up to `count` of the item from
+    /// the first stacks that hold it.
+    pub fn remove_item(&mut self, item: &str, mut count: u32) {
+        let mut slot = 0;
+        while slot < self.inventory.len() && count > 0 {
+            let s = &mut self.inventory[slot];
+            if &*s.item == item {
+                let n = s.count.min(count);
+                s.count -= n;
+                count -= n;
+                if s.count == 0 {
+                    self.inventory.remove(slot);
+                    continue;
+                }
+            }
+            slot += 1;
+        }
     }
     pub fn count_item(&self, item: &str) -> u32 {
         self.inventory
@@ -614,29 +665,132 @@ pub fn meet(
         gossiped: ready,
     }
 }
-/// `PoiManager.take(HOME, ..., 48)`: the nearest bed head not `claimed`
-/// (`free_head`: a bed head that is not occupied).
-pub fn take_vacant_bed(
-    claimed: &[[i32; 3]],
-    from: [i32; 3],
-    mut free_head: impl FnMut(i32, i32, i32) -> bool,
+/// `Villager.spawnGolemIfNeeded` up to the spawn: villager `i` wants a golem
+/// and so do at least `needed` of the villagers whose boxes meet its own grown
+/// by 10 blocks. Returns all of those villagers: once the golem stands, they
+/// remember it ([`super::villager_brain::golem_detected`]).
+pub fn golem_summoners(mobs: &[Mob], i: usize, now: i64, needed: usize) -> Option<Vec<usize>> {
+    if !ext(&mobs[i]).is_some_and(|e| e.wants_golem(now)) {
+        return None;
+    }
+    let area = mobs[i]
+        .bounds()
+        .inflate(horizon_core::geometry::Vec3::new(10.0, 10.0, 10.0));
+    let near: Vec<usize> = mobs
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.species() == Species::Villager && !m.removed && m.bounds().intersects(area)
+        })
+        .map(|(j, _)| j)
+        .collect();
+    let wanting = near
+        .iter()
+        .filter(|&&j| ext(&mobs[j]).is_some_and(|e| e.wants_golem(now)))
+        .take(5)
+        .count();
+    (wanting >= needed).then_some(near)
+}
+/// `SpawnUtil.Strategy.LEGACY_IRON_GOLEM`'s refused floors.
+fn golem_floor_ok(name: &str) -> bool {
+    !matches!(
+        name,
+        "minecraft:cobweb"
+            | "minecraft:cactus"
+            | "minecraft:glass_pane"
+            | "minecraft:conduit"
+            | "minecraft:ice"
+            | "minecraft:tnt"
+            | "minecraft:glowstone"
+            | "minecraft:beacon"
+            | "minecraft:sea_lantern"
+            | "minecraft:frosted_ice"
+            | "minecraft:tinted_glass"
+            | "minecraft:glass"
+    ) && !name.ends_with("_stained_glass_pane")
+        && !name.ends_with("_stained_glass")
+        && !name.ends_with("leaves")
+}
+/// One attempt of `SpawnUtil.trySpawnMob(IRON_GOLEM, ..., 8 across, 6 up and
+/// down, LEGACY_IRON_GOLEM)`: a column drawn near `start`, searched down from
+/// 6 above for a solid floor (or powder snow) under air or a liquid block.
+/// Returns the block the golem would stand in.
+fn golem_attempt<L: super::spawn_rules::SpawnLevel>(
+    l: &L,
+    start: [i32; 3],
+    random: &mut impl RandomSource,
 ) -> Option<[i32; 3]> {
-    let mut best: Option<(i32, [i32; 3])> = None;
-    for y in from[1] - 8..=from[1] + 8 {
-        for z in from[2] - 48..=from[2] + 48 {
-            for x in from[0] - 48..=from[0] + 48 {
-                let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);
-                if d <= 48 * 48
-                    && best.is_none_or(|(b, _)| d < b)
-                    && free_head(x, y, z)
-                    && !claimed.contains(&[x, y, z])
-                {
-                    best = Some((d, [x, y, z]));
-                }
-            }
+    let dx = random.next_int_bound(17).unwrap_or(8) - 8;
+    let dz = random.next_int_bound(17).unwrap_or(8) - 8;
+    let (x, z) = (start[0] + dx, start[2] + dz);
+    let name = |y: i32| -> &str { &l.facts().get(l.state(x, y, z)).name };
+    let mut y = start[1] + 6;
+    let mut above = l.state(x, y, z);
+    for _ in 0..=12 {
+        y -= 1;
+        let here = l.state(x, y, z);
+        let above_name = &*l.facts().get(above).name;
+        // BlockState.liquid(): a water or lava block (not a waterlogged one).
+        let open = l.facts().is_air(above)
+            || above_name == "minecraft:water"
+            || above_name == "minecraft:lava";
+        let solid = l.mob_data().state(here).flags & super::data::SOLID != 0
+            || name(y) == "minecraft:powder_snow";
+        if golem_floor_ok(name(y)) && open && solid {
+            return Some([x, y + 1, z]);
+        }
+        above = here;
+    }
+    None
+}
+/// `IronGolem.checkSpawnObstruction`: a floor with a full top face, its feet
+/// free whatever fluid is there, and the two blocks above free.
+fn golem_fits<L: super::spawn_rules::SpawnLevel>(l: &L, [x, y, z]: [i32; 3]) -> bool {
+    use super::spawn_rules::is_valid_empty_spawn;
+    // entityCanStandOn: Block.isFaceFull(collision shape, UP).
+    let floor = l.mob_data().state(l.state(x, y - 1, z));
+    let stands = floor.flags & super::data::STURDY_TOP != 0 && floor.top >= 1.0;
+    // isValidEmptySpawnBlock with Fluids.EMPTY: open water is free too.
+    let feet = is_valid_empty_spawn(Species::IronGolem, l, x, y, z)
+        || &*l.facts().get(l.state(x, y, z)).name == "minecraft:water";
+    stands
+        && feet
+        && is_valid_empty_spawn(Species::IronGolem, l, x, y + 1, z)
+        && is_valid_empty_spawn(Species::IronGolem, l, x, y + 2, z)
+}
+/// `SpawnUtil.trySpawnMob(IRON_GOLEM, MOB_SUMMONED, level, start, 10, 8, 6,
+/// LEGACY_IRON_GOLEM, false)`: up to ten columns tried. In each spot found
+/// `create` makes the golem (`EntityType.create`: the yaw drawn here, then its
+/// `finalizeSpawn` draws, see [`finalize_summoned_golem`]); it is kept only
+/// when `IronGolem.checkSpawnObstruction` passes, and discarded otherwise.
+pub fn summon_golem<L: super::spawn_rules::SpawnLevel, R: RandomSource, T>(
+    l: &L,
+    start: [i32; 3],
+    random: &mut R,
+    mut create: impl FnMut(&mut R, horizon_core::geometry::Vec3, f32) -> T,
+) -> Option<T> {
+    for _ in 0..10 {
+        let Some([x, y, z]) = golem_attempt(l, start, random) else {
+            continue;
+        };
+        // Mth.wrapDegrees(nextFloat() * 360).
+        let mut yaw = random.next_float() * 360.0;
+        if yaw >= 180.0 {
+            yaw -= 360.0;
+        }
+        let at =
+            horizon_core::geometry::Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+        let golem = create(random, at, yaw);
+        if golem_fits(l, [x, y, z]) {
+            return Some(golem);
         }
     }
-    best.map(|(_, p)| p)
+    None
+}
+/// `Mob.finalizeSpawn` for a summoned iron golem, from the level's random:
+/// the follow range spawn bonus and left-handedness.
+pub fn finalize_summoned_golem(m: &mut Mob, random: &mut impl RandomSource) {
+    super::finalize::mob_spawn(m, random);
 }
 /// `Villager.canBreed`: enough food, awake and an adult.
 pub fn can_breed(m: &Mob) -> bool {
@@ -646,10 +800,13 @@ pub fn can_breed(m: &Mob) -> bool {
         && ext(m).map_or(0, |e| e.food_level + e.food_in_inventory()) >= 12
 }
 
-/// The saved fields (`FoodLevel`, `Gossips`, `LastGossipDecay`, `Inventory`
-/// and the sleep and golem memories).
+/// The saved fields (`FoodLevel`, `Gossips`, `LastGossipDecay`, `Inventory`,
+/// `LivingEntity`'s `sleeping_pos` and the sleep and golem memories).
 pub fn write_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
     use horizon_world::nbt::Tag;
+    if let Some(p) = sleeping_pos(m) {
+        map.insert("sleeping_pos".into(), Tag::IntArray(p.to_vec()));
+    }
     let Some(e) = ext(m) else { return };
     map.insert(
         "FoodLevel".into(),
@@ -695,6 +852,14 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
         .unwrap_or_default();
     e.last_gossip_decay = int(tag.get("LastGossipDecay")).unwrap_or(0);
     e.last_slept = last_slept;
+    // LivingEntity.readAdditionalSaveData: asleep in the bed again (the
+    // pose; `ai_step` turns it the way the bed faces, or wakes it when the
+    // bed is gone, as `baseTick`'s first tick does).
+    e.sleeping_pos = match tag.get("sleeping_pos") {
+        Some(Tag::IntArray(a)) if a.len() == 3 => Some([a[0], a[1], a[2]]),
+        _ => None,
+    };
+    let asleep = e.sleeping_pos.is_some();
     if let Some(Tag::List(items)) = tag.get("Inventory") {
         e.inventory = items
             .iter()
@@ -702,11 +867,156 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
             .take(INVENTORY_SLOTS)
             .collect();
     }
+    if asleep {
+        m.extra.ints[1] = bed_facing_code(None);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn villager() -> Mob {
+        use crate::mobs::{Anim, Brain, Flags, MobType, Part, Species};
+        use std::{collections::HashMap, sync::Arc};
+        let kind = Arc::new(MobType {
+            id: "minecraft:villager".into(),
+            species: Species::Villager,
+            width: 0.6,
+            height: 1.95,
+            eye_height: 1.62,
+            category: "misc".into(),
+            max_health: 20.0,
+            speed: 0.5,
+            flying_speed: 0.02,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 48.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Flags::default(),
+            model: Arc::new(Part::parse("root", &serde_json::json!({}))),
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Villager,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        });
+        Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0)
+    }
+    /// A sleeper's box is 0.2 high, but `LivingEntityRenderer` moves it
+    /// toward the foot of the bed by its standing eye height, so its head
+    /// lies on the pillow.
+    #[test]
+    fn a_sleeper_lies_by_its_standing_eye_height() {
+        let mut m = villager();
+        m.extra.ints[1] = bed_facing_code(Some("east"));
+        assert!(sleeping(&m));
+        assert_eq!(m.eye_height(), f64::from(0.2_f32));
+        assert_eq!(m.awake_dims().2, f64::from(1.62_f32));
+    }
+    /// `LivingEntity.add/readAdditionalSaveData`: a sleeper is saved with
+    /// its bed (`sleeping_pos`) and loads asleep in it.
+    #[test]
+    fn a_sleeper_is_saved_asleep_in_its_bed() {
+        let mut m = villager();
+        m.extra.ints[1] = bed_facing_code(Some("north"));
+        ext_mut(&mut m).sleeping_pos = Some([3, 64, -7]);
+        let mut map = horizon_world::nbt::Compound::new();
+        write_nbt(&m, &mut map);
+        let mut loaded = villager();
+        read_nbt(&mut loaded, &horizon_world::nbt::Tag::Compound(map));
+        assert!(sleeping(&loaded));
+        assert_eq!(sleeping_pos(&loaded), Some([3, 64, -7]));
+        let mut awake = villager();
+        let mut map = horizon_world::nbt::Compound::new();
+        write_nbt(&awake, &mut map);
+        assert!(!map.contains_key(&"sleeping_pos".into()));
+        read_nbt(&mut awake, &horizon_world::nbt::Tag::Compound(map));
+        assert!(!sleeping(&awake));
+    }
+    #[test]
+    fn a_new_profession_rolls_new_offers() {
+        let mut m = villager();
+        set_profession(&mut m, 1);
+        // Offers made for the first profession.
+        m.extra.trade.get_or_insert_default().unset = false;
+        // The same profession keeps them.
+        set_profession(&mut m, 1);
+        assert!(!m.extra.trade.as_ref().unwrap().unset);
+        // A new one forgets them (offers = null), so the next getOffers
+        // (ensure_offers) rolls the new profession's trades.
+        set_profession(&mut m, 2);
+        let t = m.extra.trade.as_ref().unwrap();
+        assert!(t.offers.is_empty());
+        assert!(t.unset);
+        assert_eq!(m.extra.variant2, 2);
+    }
+    /// The reported sequence: a villager works at a bench, the bench is
+    /// destroyed (its job site is gone, so `ResetProfession` makes it
+    /// unemployed) and it takes another bench's job. The new profession's
+    /// trades are offered again.
+    ///
+    /// `Villager.setVillagerData` drops the offers (`offers = null`) when the
+    /// profession changes, so `AbstractVillager.getOffers` rolls the new
+    /// profession's trade set the next time the offers are asked for. A
+    /// villager that keeps its old offers marked as made never trades again:
+    /// it shakes its head instead of opening the trading menu.
+    #[test]
+    fn a_villager_that_loses_its_job_site_offers_its_new_profession_trades() {
+        let mut m = villager();
+        // The composter's job: the villager is a farmer.
+        set_profession(&mut m, 5);
+        assert_eq!(m.extra.variant2, 5);
+        // Its trades were made, so the offers are there.
+        let trade = m.extra.trade.get_or_insert_default();
+        trade.unset = false;
+        trade.offers = vec![crate::merchant::MerchantOffer {
+            base_cost_a: crate::merchant::ItemCost {
+                stack: ItemStack::new("minecraft:wheat", 20),
+            },
+            cost_b: None,
+            result: ItemStack::new("minecraft:emerald", 1),
+            uses: 0,
+            max_uses: 16,
+            reward_exp: true,
+            special_price_diff: 0,
+            demand: 0,
+            price_multiplier: 0.0,
+            xp: 1,
+        }];
+        // The work bench is destroyed: the job site is gone, so the villager
+        // is unemployed and its offers are dropped (`offers = null`).
+        set_profession(&mut m, NONE);
+        let t = m.extra.trade.as_ref().unwrap();
+        assert!(t.offers.is_empty());
+        assert!(t.unset);
+        // It takes the smithing table's job. The new profession's trades are
+        // rolled by the next `getOffers` (ensure_offers).
+        set_profession(&mut m, 13);
+        let t = m.extra.trade.as_ref().unwrap();
+        assert!(t.offers.is_empty());
+        assert!(t.unset);
+        assert_eq!(m.extra.variant2, 13);
+    }
 
     fn stack(item: &str, count: u32) -> ItemStack {
         ItemStack::new(item, count)

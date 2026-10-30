@@ -9,6 +9,7 @@ use crate::{
     items::{ItemStack, Items},
     particles::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape},
 };
+use horizon_world::loot::PackOverlay;
 use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{
@@ -27,7 +28,7 @@ impl Ingredient {
     pub fn of(items: Vec<String>) -> Self {
         Self(items.iter().cloned().collect(), items)
     }
-    fn parse(v: &Value, items: &Items) -> Option<Self> {
+    pub(crate) fn parse(v: &Value, items: &Items) -> Option<Self> {
         let mut list: Vec<String> = Vec::new();
         let mut add = |s: &str| {
             let more: Vec<String> = match s.strip_prefix('#') {
@@ -43,14 +44,6 @@ impl Ingredient {
         match v {
             Value::String(s) => add(s),
             Value::Array(a) => a.iter().filter_map(Value::as_str).for_each(&mut add),
-            Value::Object(o) => {
-                if let Some(s) = o.get("item").and_then(Value::as_str) {
-                    add(s);
-                }
-                if let Some(t) = o.get("tag").and_then(Value::as_str) {
-                    add(&format!("#{t}"));
-                }
-            }
             _ => return None,
         }
         (!list.is_empty()).then(|| Self::of(list))
@@ -101,6 +94,18 @@ pub struct Template {
     pub damage: u32,
     pub extra: Option<Box<StackData>>,
 }
+/// `ItemStackTemplate.CODEC` count: absent means 1, present must be an
+/// integer in `1..=99` (`ExtraCodecs.intRange(1, 99)`), else the recipe is
+/// not loaded.
+pub(crate) fn template_count(v: &Value) -> Option<u32> {
+    match v.get("count") {
+        None => Some(1),
+        Some(c) => c
+            .as_u64()
+            .filter(|n| (1..=99).contains(n))
+            .map(|n| n as u32),
+    }
+}
 impl Template {
     fn parse(v: &Value) -> Option<Self> {
         let (damage, extra) = match v.get("components") {
@@ -109,7 +114,7 @@ impl Template {
         };
         Some(Self {
             item: v["id"].as_str().map(Arc::from),
-            count: v["count"].as_u64().unwrap_or(1) as u32,
+            count: template_count(v)?,
             damage,
             extra,
         })
@@ -1102,7 +1107,11 @@ pub struct Recipes {
     facts: HashMap<Arc<str>, Facts>,
     /// The `#minecraft:curse` enchantments.
     curses: HashSet<String>,
+    /// The first cooking recipe of each kind taking each item, built at the
+    /// first lookup (furnaces look theirs up every tick).
+    cook_index: std::sync::OnceLock<CookIndex>,
 }
+type CookIndex = HashMap<String, crate::fast_hash::FxHashMap<String, usize>>;
 /// `MinMaxBounds.Ints` as (min, max) with the given defaults.
 fn bounds(v: Option<&Value>, default: (i64, i64), open: (i64, i64)) -> (i64, i64) {
     match v {
@@ -1172,7 +1181,7 @@ fn matches_all(ingredients: &[Ingredient], stacks: &[&ItemStack]) -> bool {
     })
 }
 impl Recipes {
-    pub fn load(root: &Path, items: &Items) -> Result<Self> {
+    pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Result<Self> {
         let mut crafting = Vec::new();
         let mut cooking = Vec::new();
         let mut meta = HashMap::new();
@@ -1185,27 +1194,47 @@ impl Recipes {
             files.sort();
             Ok(files)
         };
+        let stem = |p: &Path| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_owned()
+        };
         // Vanilla's recipes by bare name, then content mods' as `<ns>:<name>`.
-        let mut files: Vec<(String, PathBuf)> = json_files(&root.join("data/minecraft/recipe"))?
-            .into_iter()
-            .map(|p| (String::new(), p))
-            .collect();
+        let mut sources: Vec<(String, Vec<u8>)> = Vec::new();
+        for p in json_files(&root.join("data/minecraft/recipe"))? {
+            sources.push((stem(&p), fs::read(&p)?));
+        }
         for namespace in crate::mod_content::namespaces(root) {
             let dir = root.join(format!("data/{namespace}/recipe"));
             if dir.is_dir() {
-                files.extend(
-                    json_files(&dir)?
-                        .into_iter()
-                        .map(|p| (format!("{namespace}:"), p)),
-                );
+                for p in json_files(&dir)? {
+                    sources.push((format!("{namespace}:{}", stem(&p)), fs::read(&p)?));
+                }
             }
         }
-        for (prefix, path) in files {
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let name = format!("{prefix}{stem}");
+        // The world's packs' recipes over the game's own: the top pack's
+        // file for each id replaces it (`SimpleJsonResourceReloadListener`
+        // sees one resource per id, the resource stack's top).
+        for (id, files) in overlay.kind("recipe") {
+            let Some((ns, path)) = id.split_once(':') else {
+                continue;
+            };
+            let name = if ns == "minecraft" {
+                path.to_owned()
+            } else {
+                id.to_owned()
+            };
+            let bytes = PackOverlay::top(files).to_vec();
+            match sources.iter_mut().find(|(n, _)| *n == name) {
+                Some(slot) => slot.1 = bytes,
+                None => sources.push((name, bytes)),
+            }
+        }
+        for (name, bytes) in sources {
             // Vanilla's RecipeManager logs a file that does not parse and
             // goes on ("Couldn't parse data file").
-            let v: Value = match serde_json::from_slice(&fs::read(&path)?) {
+            let v: Value = match serde_json::from_slice(&bytes) {
                 Ok(v) => v,
                 Err(e) => {
                     log::warn!("Horizon: recipe {name} not loaded: {e}");
@@ -1412,7 +1441,7 @@ impl Recipes {
                 )
             })
             .collect();
-        let curses = crate::items::load_tags(root, "enchantment")?
+        let curses = crate::items::load_tags(root, "enchantment", overlay)?
             .remove("minecraft:curse")
             .unwrap_or_default();
         Ok(Self {
@@ -1421,6 +1450,7 @@ impl Recipes {
             meta,
             facts,
             curses,
+            cook_index: Default::default(),
         })
     }
     /// Match a `size`x`size` grid (row-major) against the crafting recipes.
@@ -1605,7 +1635,33 @@ impl Recipes {
         }
         out
     }
+    /// The `experience` of the cooking recipe with this file name, and 0 for one this data
+    /// pack does not have (a save from another pack can name it).
+    /// `id` with or without the `minecraft:` namespace (a furnace keeps the full id).
+    pub fn cooking_experience(&self, id: &str) -> f32 {
+        let id = id.strip_prefix("minecraft:").unwrap_or(id);
+        self.cooking
+            .iter()
+            .find(|c| c.id == id)
+            .map_or(0.0, |c| c.experience)
+    }
     pub fn cook(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
+        let index = self.cook_index.get_or_init(|| {
+            let mut index = CookIndex::new();
+            for (i, c) in self.cooking.iter().enumerate() {
+                let of_kind = index.entry(c.kind.clone()).or_default();
+                for item in &c.ingredient.0 {
+                    of_kind.entry(item.clone()).or_insert(i);
+                }
+            }
+            index
+        });
+        let i = *index.get(kind)?.get(&*input.item)?;
+        self.cooking.get(i)
+    }
+    /// `cook` by scanning every recipe, as it was before the index.
+    #[cfg(test)]
+    fn cook_scan(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
         self.cooking
             .iter()
             .find(|c| c.kind == kind && c.ingredient.test(input))
@@ -1617,6 +1673,27 @@ mod tests {
     use super::*;
     use crate::banner::BannerLayer;
 
+    #[test]
+    fn result_count_is_bounded_like_vanilla() {
+        let parse = |s: &str| Template::parse(&serde_json::from_str(s).unwrap());
+        assert_eq!(parse(r#"{"id":"minecraft:stone"}"#).unwrap().count, 1);
+        let top = parse(r#"{"id":"minecraft:stone","count":99}"#);
+        assert_eq!(top.unwrap().count, 99);
+        for bad in [
+            "0",
+            "100",
+            "2147483648",
+            "4294967295",
+            "4294967296",
+            "-1",
+            "1.5",
+            "\"2\"",
+        ] {
+            let json = format!(r#"{{"id":"minecraft:stone","count":{bad}}}"#);
+            assert!(parse(&json).is_none(), "count {bad} must be rejected");
+        }
+    }
+
     fn ingredient(items: &[&str]) -> Ingredient {
         Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
     }
@@ -1625,6 +1702,80 @@ mod tests {
         s.data_mut().banner_patterns = vec![BannerLayer::new("minecraft:cross", "red")];
         s
     }
+    /// About vanilla's count of cooking recipes: four kinds, ingredients of
+    /// one to twelve items, overlapping (several recipes take some items).
+    fn cooking_book() -> Recipes {
+        let kinds = ["smelting", "blasting", "smoking", "campfire_cooking"];
+        let cooking = (0..320usize)
+            .map(|i| Cooking {
+                id: format!("r{i}"),
+                category: "misc".into(),
+                group: String::new(),
+                kind: kinds[i % 4].into(),
+                ingredient: ingredient(
+                    &(0..1 + i % 12)
+                        .map(|k| format!("minecraft:item_{}", (i * 7 + k * 13) % 400))
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                ),
+                result: ItemStack::new("minecraft:stone", 1),
+                experience: 0.1,
+                time: 200,
+            })
+            .collect();
+        Recipes {
+            crafting: Vec::new(),
+            cooking,
+            meta: HashMap::new(),
+            facts: HashMap::new(),
+            curses: HashSet::new(),
+            cook_index: Default::default(),
+        }
+    }
+    #[test]
+    fn cook_finds_the_first_recipe_the_scan_finds() {
+        let recipes = cooking_book();
+        for kind in [
+            "smelting",
+            "blasting",
+            "smoking",
+            "campfire_cooking",
+            "other",
+        ] {
+            for n in 0..420 {
+                let stack = ItemStack::new(&format!("minecraft:item_{n}"), 1);
+                let a = recipes.cook(kind, &stack).map(|c| &c.id);
+                let b = recipes.cook_scan(kind, &stack).map(|c| &c.id);
+                assert_eq!(a, b, "{kind} item_{n}");
+            }
+        }
+    }
+    /// A furnace's recipe lookup, once per lit furnace per tick.
+    #[test]
+    #[ignore]
+    fn cook_cost() {
+        let recipes = cooking_book();
+        let stacks: Vec<ItemStack> = (0..1000)
+            .map(|n| ItemStack::new(&format!("minecraft:item_{}", n % 400), 1))
+            .collect();
+        let t = std::time::Instant::now();
+        let a = stacks
+            .iter()
+            .filter(|s| recipes.cook_scan("smelting", s).cloned().is_some())
+            .count();
+        let before = t.elapsed().as_secs_f64() * 1e3;
+        recipes.cook("smelting", &stacks[0]);
+        let t = std::time::Instant::now();
+        let b = stacks
+            .iter()
+            .filter(|s| recipes.cook("smelting", s).is_some())
+            .count();
+        let after = t.elapsed().as_secs_f64() * 1e3;
+        assert_eq!(a, b);
+        println!("1000 furnace lookups (scan and clone -> index): {before:.3} ms -> {after:.3} ms");
+    }
     fn run(special: &Special, cells: &[ItemStack]) -> Option<ItemStack> {
         let recipes = Recipes {
             crafting: Vec::new(),
@@ -1632,6 +1783,7 @@ mod tests {
             meta: HashMap::new(),
             facts: HashMap::new(),
             curses: HashSet::new(),
+            cook_index: Default::default(),
         };
         let ctx = Context {
             recipes: &recipes,

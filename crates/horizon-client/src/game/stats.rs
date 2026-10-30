@@ -256,9 +256,8 @@ impl Game<'_> {
             .fluid
             == horizon_client::blocks::Fluid::Water;
         let on_ground = p.ground.on_ground;
-        let (sprinting, flying, gliding, swimming) = (
+        let (sprinting, gliding, swimming) = (
             p.sprinting,
-            p.flying,
             p.fall_flying,
             p.pose == horizon_client::pose::Pose::Swimming,
         );
@@ -272,15 +271,27 @@ impl Game<'_> {
         });
         let s = &mut self.stats;
         match riding {
-            Some(Ok(horizon_client::mobs::Species::Pig)) => s.custom("pig_one_cm", total),
-            Some(Ok(horizon_client::mobs::Species::Strider)) => s.custom("strider_one_cm", total),
-            Some(Ok(sp)) if horizon_client::mobs::equine::is_equine(sp) => {
-                s.custom("horse_one_cm", horizontal)
+            Some(Ok(sp)) => {
+                use horizon_client::mobs::Species;
+                // `checkRidingStatistics`: only these mounts count, the horse
+                // family by the full 3D distance; any other mount nothing.
+                match sp {
+                    Species::Pig => s.custom("pig_one_cm", total),
+                    Species::Strider => s.custom("strider_one_cm", total),
+                    Species::HappyGhast => s.custom("happy_ghast_one_cm", total),
+                    Species::Nautilus | Species::ZombieNautilus => {
+                        s.custom("nautilus_one_cm", total)
+                    }
+                    sp if horizon_client::mobs::equine::is_equine(sp) => {
+                        s.custom("horse_one_cm", total)
+                    }
+                    _ => {}
+                }
             }
-            Some(_) => {
+            Some(Err(())) => {
                 if self.boats.iter().any(|b| Some(b.id) == self.riding) {
                     s.custom("boat_one_cm", total)
-                } else {
+                } else if self.carts.iter().any(|c| Some(c.id) == self.riding) {
                     s.custom("minecart_one_cm", total)
                 }
             }
@@ -300,15 +311,25 @@ impl Game<'_> {
                 }
             }
             None if gliding => s.custom("aviate_one_cm", total),
-            None if flying => s.custom("fly_one_cm", horizontal),
-            None if d.y < 0.0 => s.custom("fall_one_cm", (-d.y * 100.0).round() as i32),
+            // Airborne and not gliding: more than 25 cm sideways per move
+            // (creative flight, or a long jump), not only flying.
+            None if horizontal > 25 => s.custom("fly_one_cm", horizontal),
             None => {}
         }
     }
     /// `PhantomSpawner.tick`: tired players under an open night sky draw
-    /// phantoms.
+    /// phantoms. A custom spawner ticks only while `spawn_mobs` is on
+    /// (`ServerChunkCache.tickChunks`), and this one only spawns enemies
+    /// (`ServerLevel.isSpawningMonsters`: `spawn_monsters` too). Every
+    /// player of the level counts: the game's own and the hosted ones (a
+    /// server thread's players are all hosted).
     pub(super) fn spawn_phantoms(&mut self) {
-        if !self.ui.rules.bool("spawn_phantoms") || self.dim != Dim::Overworld {
+        let rules = &self.ui.rules;
+        if !rules.bool("spawn_mobs")
+            || !rules.bool("spawn_monsters")
+            || !rules.bool("spawn_phantoms")
+            || self.dim != Dim::Overworld
+        {
             return;
         }
         self.stats.phantom_tick -= 1;
@@ -317,34 +338,61 @@ impl Game<'_> {
         }
         let r = &mut self.world.random;
         self.stats.phantom_tick += (60 + r.next_int_bound(60).unwrap_or(0)) * 20;
-        if self.sky_darken() < 5 || self.spectator() {
+        if self.sky_darken() < 5 {
             return;
         }
-        let Some(p) = self.player.as_ref() else {
-            return;
-        };
+        let rest = |s: &Stats| s.get("custom", "minecraft:time_since_rest");
+        // `level.players()`: (block position, time since rest) of each player
+        // who isn't a spectator.
+        let mut players = Vec::new();
+        if let Some(p) = self.player.as_ref()
+            && !self.spectator()
+        {
+            players.push((p.position, rest(&self.stats)));
+        }
+        if let Some(host) = self.lan.as_ref() {
+            let level = self.dim.id();
+            for g in host.hub.guests.iter().filter(|g| {
+                g.placed
+                    && g.dimension == level
+                    && g.game_mode != horizon_client::lan::guest::SPECTATOR
+            }) {
+                let since = host.play.get(&g.conn).map_or(0, |p| rest(&p.stats));
+                players.push((
+                    Vec3::new(g.position[0], g.position[1], g.position[2]),
+                    since,
+                ));
+            }
+        }
+        for (position, since) in players {
+            self.spawn_phantoms_near(position, since);
+        }
+    }
+    /// One player's turn of `PhantomSpawner.tick`.
+    fn spawn_phantoms_near(&mut self, position: Vec3, since_rest: i32) {
         let pos = [
-            p.position.x.floor() as i32,
-            p.position.y.floor() as i32,
-            p.position.z.floor() as i32,
+            position.x.floor() as i32,
+            position.y.floor() as i32,
+            position.z.floor() as i32,
         ];
         if pos[1] < 63 || !self.can_see_sky(pos) {
             return;
         }
-        // DifficultyInstance.isHarderThan(random * 3) at normal difficulty.
+        // `getCurrentDifficultyAt(playerPos).isHarderThan(random * 3)`.
+        let difficulty = self.local_difficulty([position.x, position.y, position.z]);
         let r = &mut self.world.random;
-        if r.next_float() * 3.0 >= 2.0 {
+        if difficulty.effective <= r.next_float() * 3.0 {
             return;
         }
-        let rest = self.stats.get("custom", "minecraft:time_since_rest").max(1);
-        if r.next_int_bound(rest).unwrap_or(0) < 72000 {
+        if r.next_int_bound(since_rest.max(1)).unwrap_or(0) < 72000 {
             return;
         }
-        let at = [
-            pos[0] - 10 + r.next_int_bound(21).unwrap_or(10),
-            pos[1] + 20 + r.next_int_bound(15).unwrap_or(0),
-            pos[2] - 10 + r.next_int_bound(21).unwrap_or(10),
-        ];
+        // `playerPos.above(20 + nextInt(15)).east(-10 + nextInt(21)).south(...)`:
+        // the height is drawn first.
+        let up = 20 + r.next_int_bound(15).unwrap_or(0);
+        let east = -10 + r.next_int_bound(21).unwrap_or(10);
+        let south = -10 + r.next_int_bound(21).unwrap_or(10);
+        let at = [pos[0] + east, pos[1] + up, pos[2] + south];
         if !self
             .res
             .facts()

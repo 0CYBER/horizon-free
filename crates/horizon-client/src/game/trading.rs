@@ -27,6 +27,8 @@ pub(super) struct MerchantState {
     pub(super) session: Box<merchant::Session>,
     /// The offer list's scroll offset.
     pub(super) scroll: usize,
+    /// The scroller is held by the mouse (`isDragging`).
+    pub(super) dragging: bool,
     /// The offer button that keeps focus after a click (drawn highlighted).
     pub(super) focused: Option<usize>,
     /// The trading mob (its offers and experience are written back on
@@ -137,7 +139,9 @@ impl Game<'_> {
                 horizon_world::nbt::Tag::Int(horizon_world::DATA_VERSION),
             ),
         ]);
-        let _ = horizon_client::save::write_dat(&self.random_sequences_path(), tag);
+        if let Err(e) = horizon_client::save::write_dat(&self.random_sequences_path(), tag) {
+            log::warn!("the villager random sequences were not written: {e}");
+        }
     }
     /// `AbstractVillager.addOffersFromTradeSet` with the world's random
     /// sequence of the set, at the merchant's position.
@@ -147,7 +151,7 @@ impl Game<'_> {
         variant: &str,
         origin: [f64; 3],
     ) -> Vec<MerchantOffer> {
-        let Some(sequence) = self.res.stations().trades.sequence(set) else {
+        let Some(sequence) = self.stations().trades.sequence(set) else {
             return Vec::new();
         };
         let mut random = self.rand_sequences.lend(&sequence, self.level.seed);
@@ -160,8 +164,8 @@ impl Game<'_> {
             next_id: std::cell::Cell::new(next_map),
         };
         let ctx = TradeContext {
-            items: self.res.items(),
-            enchantments: &self.res.stations().enchantments,
+            items: self.items(),
+            enchantments: &self.stations().enchantments,
             variant,
             origin,
             maps: Some(&maps),
@@ -205,7 +209,7 @@ impl Game<'_> {
                 let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
                 let level = i32::from(m.extra.variant3.max(1));
                 let set = merchant::Trades::set_for(profession, level);
-                if self.res.stations().trades.sets.contains_key(&set) {
+                if self.stations().trades.sets.contains_key(&set) {
                     self.offers_from_set(&set, &variant, origin)
                 } else {
                     Vec::new()
@@ -245,7 +249,7 @@ impl Game<'_> {
             self.handle_mob_events(events)?;
             return Ok(true);
         }
-        self.stats.custom("talk_to_villager", 1);
+        self.stats.custom("talked_to_villager", 1);
         self.ensure_offers(index);
         let m = &self.mobs[index];
         let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
@@ -284,7 +288,7 @@ impl Game<'_> {
             session.reputation = self.villager_reputation(id);
             session.hero = self.hero_amplifier();
             for seq in merchant::Session::sequences_needed(
-                &self.res.stations().trades,
+                &self.stations().trades,
                 &session.profession,
                 level,
             ) {
@@ -301,6 +305,7 @@ impl Game<'_> {
         self.open_merchant_state(MerchantState {
             session: Box::new(session),
             scroll: 0,
+            dragging: false,
             focused: None,
             mob: Some(id),
             name,
@@ -355,6 +360,7 @@ impl Game<'_> {
         self.open_merchant_state(MerchantState {
             session: Box::new(session),
             scroll: 0,
+            dragging: false,
             focused: None,
             mob: None,
             name: None,
@@ -369,6 +375,7 @@ impl Game<'_> {
         self.open_merchant_state(MerchantState {
             session: Box::new(session),
             scroll: 0,
+            dragging: false,
             focused: None,
             mob: None,
             name,
@@ -398,18 +405,21 @@ impl Game<'_> {
             .as_ref()
             .and_then(|s| s.merchant.as_ref())
             .and_then(|m| m.mob);
-        let session = self.merchant_apply(session, mob);
+        let (session, traded) = self.merchant_apply(session, mob);
+        self.merchant_traded(mob, &traded);
         if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
             m.session = session;
         }
     }
-    /// What a menu click's session did, applied to the world and its mob.
+    /// What a menu click's session did, applied to the world and its mob;
+    /// with the result of each trade made, for `merchant_traded`.
     pub(super) fn merchant_apply(
         &mut self,
         session: Box<merchant::Session>,
         mob: Option<u32>,
-    ) -> Box<merchant::Session> {
+    ) -> (Box<merchant::Session>, Vec<ItemStack>) {
         let mut session = session;
+        let mut traded = Vec::new();
         let events = std::mem::take(&mut session.events);
         let (villager, origin) = (session.villager, session.origin);
         if let Some(m) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
@@ -438,15 +448,65 @@ impl Game<'_> {
                     };
                     self.audio.play(sound, Some(origin), 1.0, pitch);
                 }
-                merchant::Event::Traded(_) => self.stats.custom("traded_with_villager", 1),
-                merchant::Event::TradeSound => {}
+                merchant::Event::Traded(index) => {
+                    traded.extend(session.offers.get(index).map(|o| o.result.clone()));
+                }
+                merchant::Event::TradeSound => {
+                    let sound = if villager {
+                        "minecraft:entity.villager.yes"
+                    } else {
+                        "minecraft:entity.wandering_trader.yes"
+                    };
+                    self.audio.play(sound, Some(origin), 1.0, 1.0);
+                }
             }
         }
-        session
+        (session, traded)
+    }
+    /// `MerchantResultSlot.checkTakeAchievements` and `AbstractVillager.notifyTrade`
+    /// for each trade made: the statistic and the `villager_trade` trigger.
+    pub(super) fn merchant_traded(&mut self, mob: Option<u32>, results: &[ItemStack]) {
+        for result in results {
+            self.stats.custom("traded_with_villager", 1);
+            let villager = mob
+                .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+                .map(|m| self.mob_entity(m));
+            if let Some(villager) = villager {
+                self.trigger_trade(&villager, result);
+            }
+        }
     }
     /// `Villager.customServerAiStep`: the TRADE reputation event of the last
     /// trade, a tick later; the prices follow the new reputation.
     pub(super) fn merchant_tick(&mut self) {
+        // `AbstractVillager.stillValid`: the trade screen closes once the trader
+        // is gone or dead, or the player is more than 4 blocks past their reach.
+        if self.remote.is_none()
+            && self.screen == super::Screen::Inventory
+            && let Some(id) = self
+                .station
+                .as_ref()
+                .and_then(|s| s.merchant.as_ref())
+                .and_then(|m| m.mob)
+            && let Some(eye) = self.eye_position()
+        {
+            let valid = self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
+                let (lo, hi) = (m.bounds().min_position(), m.bounds().max_position());
+                let d = [
+                    eye[0] - eye[0].clamp(lo.x, hi.x),
+                    eye[1] - eye[1].clamp(lo.y, hi.y),
+                    eye[2] - eye[2].clamp(lo.z, hi.z),
+                ];
+                let range = if self.creative { 5.0 } else { 3.0 } + 4.0;
+                m.alive() && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
+            });
+            if !valid {
+                self.close_container();
+                self.screen = super::Screen::Playing;
+                self.capture(true);
+                return;
+            }
+        }
         let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) else {
             return;
         };
@@ -482,11 +542,16 @@ impl Game<'_> {
             Some(true)
         });
     }
-    /// Clicks on the offer list; true when one was hit.
+    /// Clicks on the offer list; true when one was hit. A press on the
+    /// scroller holds it (`MerchantScreen.mouseClicked`).
     pub(super) fn merchant_click(&mut self, local: (f32, f32)) -> bool {
-        let Some(m) = self.station.as_ref().and_then(|s| s.merchant.as_ref()) else {
+        let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) else {
             return false;
         };
+        m.dragging = on_scroller(local, m.session.offers.len());
+        if m.dragging {
+            return true;
+        }
         for i in 0..7 {
             let (x, y) = (5.0 + SHIFT, 18.0 + 20.0 * i as f32);
             if local.0 >= x
@@ -516,6 +581,23 @@ impl Game<'_> {
             .filter(|i| i + m.scroll < m.session.offers.len())
             .map(|i| [5.0 + SHIFT, 18.0 + 20.0 * i as f32, 88.0, 20.0])
             .collect()
+    }
+    /// `MerchantScreen.mouseDragged`: the held scroller follows the cursor.
+    pub(super) fn merchant_drag(&mut self) {
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
+        let (_, oy) = self.inventory_origin(&HudBatch::new(size));
+        let y = self.cursor.1 - oy;
+        if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut())
+            && m.dragging
+        {
+            m.scroll = drag_scroll(y, m.session.offers.len());
+        }
     }
     pub(super) fn merchant_scroll(&mut self, d: f32) {
         let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) else {
@@ -547,7 +629,7 @@ impl Game<'_> {
             m.focused,
         );
         let offers = m.session.offers.clone();
-        let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.res.items())).collect();
+        let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.items())).collect();
         let atlas = &self.gui.atlas;
         batch.fill(
             atlas,
@@ -563,7 +645,7 @@ impl Game<'_> {
             r.v1 = r.v0 + 166.0 * dv;
             batch.rect_uv(ox + SHIFT, oy, 276.0, 166.0, r, u32::MAX);
         }
-        let e = &self.res.stations().enchantments;
+        let e = &self.stations().enchantments;
         let tr = |k: &str, f: &str| e.translate(k).unwrap_or(f).to_owned();
         let name = custom.unwrap_or_else(|| {
             if progress {
@@ -765,7 +847,7 @@ impl Game<'_> {
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             let stack = self.slot_mut(i).clone();
-            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
+            self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -803,9 +885,53 @@ impl Game<'_> {
                 text.split('\n').map(|l| (l.to_owned(), u32::MAX)).collect();
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         } else if let Some(stack) = tooltip {
-            let lines = self.stack_tooltip(&stack);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         }
         true
+    }
+}
+
+/// Whether a press at `local` (GUI origin relative) lands on the offer list's
+/// scroller, which only takes it when there are more than 7 offers.
+fn on_scroller(local: (f32, f32), offers: usize) -> bool {
+    let x = SHIFT + 94.0;
+    offers > 7
+        && local.0 > x
+        && local.0 < x + 6.0
+        && local.1 > 18.0
+        && local.1 <= 18.0 + 139.0 + 1.0
+}
+/// The first shown offer for the scroller dragged to `y` (GUI origin
+/// relative): the 139-px track starts at 18 and the scroller is 27 px tall.
+fn drag_scroll(y: f32, offers: usize) -> usize {
+    let max = offers.saturating_sub(7) as i32;
+    let offs = (y - 18.0 - 13.5) / (139.0 - 27.0);
+    ((offs * max as f32 + 0.5) as i32).clamp(0, max) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroller_takes_presses_only_with_more_than_seven_offers() {
+        let x = SHIFT + 97.0;
+        assert!(on_scroller((x, 20.0), 8));
+        assert!(!on_scroller((x, 20.0), 7));
+        // The track's edges: x is exclusive both ways, y includes 158.
+        assert!(!on_scroller((SHIFT + 94.0, 20.0), 8));
+        assert!(!on_scroller((SHIFT + 100.0, 20.0), 8));
+        assert!(!on_scroller((x, 18.0), 8));
+        assert!(on_scroller((x, 158.0), 8));
+        assert!(!on_scroller((x, 158.5), 8));
+    }
+    #[test]
+    fn dragged_scroller_picks_the_nearest_offer() {
+        // 10 offers: the list scrolls 3 steps over the track's 112 px.
+        assert_eq!(drag_scroll(0.0, 10), 0);
+        assert_eq!(drag_scroll(31.5, 10), 0);
+        assert_eq!(drag_scroll(31.5 + 112.0 / 2.0, 10), 2);
+        assert_eq!(drag_scroll(31.5 + 112.0, 10), 3);
+        assert_eq!(drag_scroll(500.0, 10), 3);
     }
 }

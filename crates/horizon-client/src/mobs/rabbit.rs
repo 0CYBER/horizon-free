@@ -1,5 +1,12 @@
 //! Rabbit hopping controls and the clocks consumed by `RabbitModel`.
-use super::{Mob, MobEvent, MobWorld, control::Operation};
+use super::{
+    Mob, MobEvent, MobWorld, Species,
+    control::Operation,
+    goals::{
+        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, LookAtPlayer, Panic,
+        Stroll, Tempt, goal_clone,
+    },
+};
 use horizon_core::{
     geometry::{Vec3, trig},
     random::RandomSource,
@@ -14,10 +21,68 @@ const IDLE_TIMEOUT: usize = 3;
 const CLIENT_JUMP_TICKS: usize = 4;
 const CLIENT_JUMP_DURATION: usize = 5;
 
+/// The killer bunny's variant id (`Rabbit.Variant.EVIL`).
+const EVIL: u8 = 99;
+
+/// Rabbit.registerGoals. Not ported yet: RaidGardenGoal (5).
 pub fn register(m: &mut Mob) {
+    let food = m.kind.food.clone();
+    let monsters = super::species::ALL
+        .iter()
+        .map(|d| d.species)
+        .filter(|s| super::ai::is_monster(*s))
+        .collect::<Vec<Species>>();
+    let g = &mut m.ai.goals;
+    g.add(1, Float);
+    g.add(1, ClimbOnTopOfPowderSnow);
+    g.add(1, Panic::new(2.2));
+    g.add(2, Breed::new(0.8));
+    g.add(3, Tempt::new(1.0, food, false));
+    g.add(4, RabbitAvoid::new(Avoid::Player, 8.0));
+    g.add(
+        4,
+        RabbitAvoid::new(Avoid::Species(vec![Species::Wolf]), 10.0),
+    );
+    g.add(4, RabbitAvoid::new(Avoid::Species(monsters), 4.0));
+    g.add(6, Stroll::avoiding_water(0.6));
+    g.add(11, LookAtPlayer::new(10.0));
     m.ai.mov.kind = super::control::MoveKind::Custom;
     m.ai.nav.can_float = true;
     m.extra.ints[IDLE_TIMEOUT] = m.random.next_int_bound(40).unwrap_or(0) + 180;
+}
+
+/// `Rabbit.RabbitAvoidEntityGoal(rabbit, class, maxDist, 2.2, 2.2)`: the
+/// killer bunny flees nothing.
+#[derive(Clone, Debug)]
+struct RabbitAvoid(AvoidEntity);
+impl RabbitAvoid {
+    fn new(what: Avoid, max_dist: f32) -> Self {
+        Self(AvoidEntity::new(what, max_dist, 2.2, 2.2))
+    }
+}
+impl Goal for RabbitAvoid {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "RabbitAvoidEntityGoal"
+    }
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.variant != EVIL && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx)
+    }
 }
 
 /// Rabbit.baseTick: the idle timeout branch precedes the hop clock branch.
@@ -308,6 +373,37 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn registers_vanillas_goals_with_the_three_avoidances() {
+        // Rabbit.registerGoals: players 8, wolves 10, monsters 4 (#2780).
+        let mut m = rabbit();
+        register(&mut m);
+        for name in [
+            "Float",
+            "Panic",
+            "Breed",
+            "Tempt",
+            "RabbitAvoidEntityGoal",
+            "Stroll",
+            "LookAtPlayer",
+        ] {
+            assert!(m.ai.goals.has(name), "{name}");
+        }
+        assert!(!m.ai.goals.has("RandomLookAround"));
+    }
+
+    #[test]
+    fn love_ticks_survive_a_save() {
+        // Animal.addAdditionalSaveData / readAdditionalSaveData: "InLove" (#1396).
+        let mut m = rabbit();
+        m.extra.in_love = 570;
+        let tag = crate::entity_nbt::mob_to_nbt(&m, [0, 0, 0, 1], None);
+        assert_eq!(tag.get("InLove"), Some(&horizon_world::nbt::Tag::Int(570)));
+        let types = HashMap::from([(m.kind.id.clone(), m.kind.clone())]);
+        let back = crate::entity_nbt::mob_from_nbt(&tag, &types, 2).unwrap();
+        assert_eq!(back.extra.in_love, 570);
     }
 
     #[test]

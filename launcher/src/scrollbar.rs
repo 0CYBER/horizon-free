@@ -6,6 +6,9 @@ use gpui::{
 };
 use std::{cell::Cell, rc::Rc};
 
+/// Space reserved beside scroll content for the track and its padding.
+pub const GUTTER: f32 = 16.;
+
 #[derive(Clone, Default)]
 pub(crate) struct Scrollbar {
     pub handle: ScrollHandle,
@@ -49,7 +52,7 @@ impl Scrollbar {
     /// Wrap the scroll container, reserving a narrow gutter so the bar never covers controls.
     pub fn wrap(&self, content: Stateful<Div>, theme: &Theme) -> Div {
         let state = self.clone();
-        let track_color = theme.rule;
+        let track_color = theme.well;
         let thumb_color = theme.muted;
         div()
             .relative()
@@ -60,7 +63,7 @@ impl Scrollbar {
             .child(
                 content
                     .track_scroll(&self.handle)
-                    .mr(px(16.))
+                    .mr(px(GUTTER))
                     // Nested scroll areas must not also move the page behind them.
                     .on_scroll_wheel(|_, _, cx| cx.stop_propagation()),
             )
@@ -83,17 +86,14 @@ impl Scrollbar {
                             return;
                         };
                         let hitbox = hitbox.unwrap();
-                        window.paint_quad(fill(bounds, track_color).corner_radii(px(3.)));
-                        window.paint_quad(
-                            fill(
-                                Bounds::new(
-                                    point(bounds.left() + px(3.), bounds.top() + px(g.top)),
-                                    size(bounds.size.width - px(6.), px(g.thumb)),
-                                ),
-                                thumb_color,
-                            )
-                            .corner_radii(px(3.)),
-                        );
+                        window.paint_quad(fill(bounds, track_color));
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(bounds.left() + px(3.), bounds.top() + px(g.top)),
+                                size(bounds.size.width - px(6.), px(g.thumb)),
+                            ),
+                            thumb_color,
+                        ));
                         window.on_mouse_event({
                             let state = state.clone();
                             move |ev: &MouseDownEvent, phase, window, cx| {

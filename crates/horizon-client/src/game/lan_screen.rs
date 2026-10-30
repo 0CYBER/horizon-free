@@ -5,14 +5,10 @@
 //! forcing the game mode. Its difficulty lock asks first (PopupScreen), and
 //! Restrictions opens RestrictionsScreen.
 //! Parity reference: https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/WorldOptionsScreen
-use super::{
-    Game, Screen,
-    game_rules_screen::{Exit, RulesScreen},
-    integrated::ServerOptions,
-    lan::LanSettings,
-};
+use super::{Game, Screen, integrated::ServerOptions, lan::LanSettings};
 use horizon_client::{
     font::Font,
+    game_rules_screen::{Exit, RulesScreen},
     hud::{HudBatch, rgba},
     text::{Text, named_color},
     ui::{self, EditBox},
@@ -388,7 +384,10 @@ impl Restrictions {
             1 => Some("chat_restriction.chat_disabled_by_options"),
             _ => None,
         };
-        let (chat, commands) = (chat_visibility == 0, chat_visibility < 2);
+        let abilities = horizon_client::chat::ChatAbilities::new(
+            horizon_client::chat::ChatVisibility::from_option(chat_visibility),
+        );
+        let (chat, commands) = (abilities.send_messages, abilities.send_commands);
         // The body's widgets: text blocks (lines, top) and the action's top.
         let mut blocks = Vec::new();
         let mut action = None;
@@ -802,6 +801,27 @@ impl Game<'_> {
         }
     }
 
+    /// The pointer moved while a list's scrollbar is held: the game rules'
+    /// list follows it (AbstractSelectionList.mouseDragged).
+    pub(super) fn world_options_drag(&mut self) {
+        let h = self.gui_size().1;
+        if let Some(o) = self.world_options.as_mut()
+            && o.view == View::GameRules
+            && let Some(rules) = o.rules.as_mut()
+        {
+            rules.drag(self.cursor.1, h);
+        }
+    }
+
+    /// The button came up: a held scrollbar lets go (onRelease).
+    pub(super) fn world_options_release(&mut self) {
+        if let Some(o) = self.world_options.as_mut()
+            && let Some(rules) = o.rules.as_mut()
+        {
+            rules.release();
+        }
+    }
+
     pub(super) fn world_options_click(&mut self) {
         let Some(mut o) = self.world_options.take() else {
             return;
@@ -939,6 +959,7 @@ impl Game<'_> {
         };
         let ctrl = self.keys.contains(&winit::keyboard::KeyCode::ControlLeft);
         let shortcut = self.edit_shortcut(event);
+        let types_text = self.types_text();
         let Some(o) = self.world_options.as_mut() else {
             return;
         };
@@ -950,7 +971,7 @@ impl Game<'_> {
                 None => {
                     let mut handled = false;
                     rules.edit(|b| handled = b.key(key, ctrl, false));
-                    if !handled && !ctrl {
+                    if !handled && types_text {
                         self.world_options_text(event.text.as_deref());
                     }
                 }
@@ -964,7 +985,7 @@ impl Game<'_> {
             o.port.shortcut(shortcut, &mut self.clipboard);
             return;
         }
-        if !o.port.key(key, ctrl, false) && !ctrl {
+        if !o.port.key(key, ctrl, false) && types_text {
             self.world_options_text(event.text.as_deref());
         }
     }

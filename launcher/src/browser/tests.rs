@@ -18,6 +18,7 @@ fn version(id: &str, games: &[&str], loaders: &[&str]) -> Version {
             name: format!("{id}.zip"),
             size: 3,
             sha512: Some("ab".into()),
+            sha256: None,
             sha1: None,
             primary: true,
         }],
@@ -46,12 +47,6 @@ fn support_by_kind() {
         old.reason().unwrap().starts_with("Made for 1.21.10:"),
         "{old:?}"
     );
-    assert!(support(Kind::ShaderPack, &[], &v(&["iris"])).installable());
-    assert!(support(Kind::ShaderPack, &[], &v(&["optifine"])).installable());
-    let canvas = support(Kind::ShaderPack, &[], &v(&["canvas"]));
-    assert!(!canvas.installable());
-    assert!(canvas.reason().unwrap().contains("canvas"));
-    assert!(!support(Kind::ShaderPack, &[], &[]).installable());
     assert!(support(Kind::Modpack, &v(&["1.21.1"]), &v(&["neoforge"])).installable());
 }
 
@@ -70,14 +65,6 @@ fn picks_the_newest_version_that_runs() {
     assert!(pick(Kind::ResourcePack, &old, false).is_none());
     assert_eq!(pick(Kind::ResourcePack, &old, true).unwrap().id, "old");
 
-    let shaders = [
-        version("canvas", &[GAME], &["canvas"]),
-        version("iris", &["1.21.1"], &["iris"]),
-    ];
-    assert_eq!(pick(Kind::ShaderPack, &shaders, false).unwrap().id, "iris");
-    let only_canvas = [version("canvas", &[GAME], &["canvas"])];
-    assert!(pick(Kind::ShaderPack, &only_canvas, true).is_none());
-
     let mut blocked = version("blocked", &[GAME], &["minecraft"]);
     blocked.blocked = Some("no".into());
     let mut empty = version("empty", &[GAME], &["minecraft"]);
@@ -86,11 +73,56 @@ fn picks_the_newest_version_that_runs() {
 }
 
 #[test]
+fn data_packs_are_their_own_kind() {
+    // Most data packs on Modrinth also ship a mod build; only the data pack files are picked.
+    let versions = [
+        version("fabric", &[GAME], &["fabric", "neoforge"]),
+        version("pack", &[GAME], &["datapack"]),
+        version("old", &["1.21.4"], &["datapack"]),
+    ];
+    assert_eq!(pick(Kind::DataPack, &versions, false).unwrap().id, "pack");
+    assert!(pick(Kind::DataPack, &versions[2..], false).is_none());
+    assert_eq!(
+        pick(Kind::DataPack, &versions[2..], true).unwrap().id,
+        "old"
+    );
+    assert!(pick(Kind::DataPack, &versions[..1], true).is_none());
+
+    let now = support(Kind::DataPack, &v(&[GAME]), &v(&["datapack"]));
+    assert_eq!(now.reason(), Some(DATAPACK_SUPPORT));
+    let old = support(Kind::DataPack, &v(&["1.21.4"]), &v(&["datapack"]));
+    assert!(
+        old.reason().unwrap().starts_with("Made for 1.21.4"),
+        "{old:?}"
+    );
+    assert!(old.installable());
+
+    assert_eq!(
+        modrinth::facets(&Query::new("", Kind::DataPack)),
+        r#"[["project_type:datapack"],["versions:26.3"]]"#
+    );
+    // A data pack's hit says `mod`: the search for data packs marks it.
+    let hit = serde_json::json!({
+        "project_id": "bVrj3hwG", "project_type": "mod", "slug": "terralith",
+        "title": "Terralith", "categories": ["datapack", "fabric", "worldgen"],
+        "versions": [GAME],
+    });
+    let p = modrinth::parse_hit(&hit).unwrap();
+    assert_eq!(p.kind, Kind::Mod);
+    let p = p.as_datapack();
+    assert_eq!(
+        (p.kind, p.page.as_str()),
+        (Kind::DataPack, "https://modrinth.com/datapack/terralith")
+    );
+    assert_eq!(Kind::DataPack.folder(), None);
+}
+
+#[test]
 fn file_names_must_be_plain() {
     for good in [
         "Faithful 32x.zip",
         "FreshAnimations_v1.11.1_26.1+.zip",
-        "BSL_v10.zip",
+        "Faithful_v10.zip",
     ] {
         assert_eq!(safe_name(good), Some(good));
     }
@@ -122,12 +154,7 @@ fn modrinth_search_asks_for_what_runs() {
         url.contains("&index=relevance&") && url.ends_with("&query=faithful"),
         "{url}"
     );
-    let shaders = Query::new("", Kind::ShaderPack);
-    assert_eq!(
-        modrinth::facets(&shaders),
-        r#"[["project_type:shader"],["categories:iris","categories:optifine"]]"#
-    );
-    assert!(modrinth::search_url(&shaders).contains("&index=downloads&"));
+    assert!(modrinth::search_url(&Query::new("", Kind::ResourcePack)).contains("&index=downloads&"));
     let everything = Query {
         everything: true,
         ..Query::new("", Kind::ResourcePack)
@@ -140,6 +167,42 @@ fn modrinth_search_asks_for_what_runs() {
         modrinth::facets(&Query::new("", Kind::Modpack)),
         r#"[["project_type:modpack"]]"#
     );
+    assert_eq!(
+        modrinth::facets(&Query::new("", Kind::Mod)),
+        r#"[["project_type:mod"],["versions:26.3"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"]]"#
+    );
+}
+
+#[test]
+fn java_mods_are_checked_for_1_21_and_later() {
+    assert_eq!(
+        support(Kind::Mod, &v(&["1.20.1"]), &v(&["forge"])),
+        Support::No("Made for 1.20.1: Horizon ports mods made for 1.21 and later.".into())
+    );
+    assert!(!support(Kind::Mod, &v(&[GAME]), &v(&["rift"])).installable());
+    assert!(matches!(
+        support(Kind::Mod, &v(&["1.21.1"]), &v(&["neoforge"])),
+        Support::Partial(_)
+    ));
+    for (version, ok) in [
+        ("1.21", true),
+        ("1.21.11", true),
+        ("26.3", true),
+        ("1.20.6", false),
+        ("26.1-snapshot-2", false),
+        ("", false),
+    ] {
+        assert_eq!(portable_version(version), ok, "{version}");
+    }
+    let versions = [
+        version("snapshot", &["26.4-snapshot-1"], &["fabric"]),
+        version("plugin", &[GAME], &["bukkit"]),
+        version("now", &[GAME], &["neoforge"]),
+        version("older", &["1.21.1"], &["neoforge"]),
+    ];
+    assert_eq!(pick(Kind::Mod, &versions, false).unwrap().id, "now");
+    assert_eq!(pick(Kind::Mod, &versions[3..], false), None);
+    assert_eq!(pick(Kind::Mod, &versions[3..], true).unwrap().id, "older");
 }
 
 #[test]
@@ -157,23 +220,29 @@ fn modrinth_answers() {
     assert_eq!(p.page, "https://modrinth.com/resourcepack/fresh-animations");
     assert_eq!(p.support(), Support::Works);
     assert_eq!(p.downloads, 51404735);
-    // A Java mod is never a result.
-    let jar = json!({"project_id": "AANobbMI", "project_type": "mod", "slug": "sodium"});
-    assert!(modrinth::parse_hit(&jar).is_none());
+    // A Java mod is a result, checked before it is offered.
+    let jar = json!({"project_id": "AANobbMI", "project_type": "mod", "slug": "sodium",
+        "versions": ["26.3"], "categories": ["fabric", "optimization"]});
+    let sodium = modrinth::parse_hit(&jar).unwrap();
+    assert_eq!(sodium.kind, Kind::Mod);
+    assert_eq!(sodium.page, "https://modrinth.com/mod/sodium");
+    assert!(matches!(sodium.support(), Support::Partial(_)));
+    // Data packs, plugins and shader packs are not.
+    for project_type in ["plugin", "shader"] {
+        let hit = json!({"project_id": "x", "project_type": project_type, "slug": "p"});
+        assert!(modrinth::parse_hit(&hit).is_none(), "{project_type}");
+    }
 
     let project = json!({
-        "id": "HVnmMxH1", "project_type": "shader", "slug": "complementary-reimagined",
-        "title": "Complementary Shaders - Reimagined", "description": "d",
-        "license": {"id": "LicenseRef-Complementary", "name": ""},
-        "game_versions": ["1.21.1"], "loaders": ["iris", "optifine"]
+        "id": "HVnmMxH1", "project_type": "resourcepack", "slug": "fresh-animations",
+        "title": "Fresh Animations", "description": "d",
+        "license": {"id": "LicenseRef-Custom", "name": ""},
+        "game_versions": ["26.3"], "loaders": ["minecraft"]
     });
     let p = modrinth::parse_project(&project).unwrap();
-    assert_eq!(p.kind, Kind::ShaderPack);
-    assert_eq!(p.license, "LicenseRef-Complementary");
-    assert_eq!(
-        p.page,
-        "https://modrinth.com/shader/complementary-reimagined"
-    );
+    assert_eq!(p.kind, Kind::ResourcePack);
+    assert_eq!(p.license, "LicenseRef-Custom");
+    assert_eq!(p.page, "https://modrinth.com/resourcepack/fresh-animations");
     assert!(p.support().installable());
 
     let version = json!({
@@ -216,45 +285,48 @@ fn curseforge_stays_off_without_a_key() {
 
 #[test]
 fn curseforge_answers() {
-    let q = Query::new("bsl", Kind::ShaderPack);
+    let q = Query::new("faithful", Kind::ResourcePack);
     let url = curseforge::search_url(&q);
-    assert!(url.contains("gameId=432&classId=6552&"), "{url}");
+    assert!(url.contains("gameId=432&classId=12&"), "{url}");
     assert!(
-        !url.contains("gameVersion=") && url.ends_with("&searchFilter=bsl"),
+        url.contains("&gameVersion=26.3") && url.ends_with("&searchFilter=faithful"),
         "{url}"
-    );
-    assert!(
-        curseforge::search_url(&Query::new("", Kind::ResourcePack)).contains("&gameVersion=26.3")
     );
 
     let m = json!({
-        "id": 228756, "classId": 6552, "slug": "bsl-shaders", "name": "BSL Shaders",
-        "summary": "s", "authors": [{"name": "CaptTatsu"}], "downloadCount": 1.5e7,
-        "links": {"websiteUrl": "https://www.curseforge.com/minecraft/shaders/bsl-shaders"},
+        "id": 238222, "classId": 6, "slug": "jei", "name": "Just Enough Items",
+        "summary": "s", "authors": [{"name": "mezz"}], "downloadCount": 1.5e7,
+        "links": {"websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/jei"},
         "logo": {"thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/x.png"},
-        "latestFilesIndexes": [{"gameVersion": "1.21.1"}],
-        "latestFiles": [{"gameVersions": ["1.21.1", "Iris", "OptiFine"]}]
+        "latestFilesIndexes": [{"gameVersion": "1.21.1"}, {"gameVersion": "NeoForge"}]
     });
     let p = curseforge::parse_mod(&m).unwrap();
     assert_eq!(
         (p.source, p.id.as_str(), p.kind),
-        (SourceId::CurseForge, "228756", Kind::ShaderPack)
+        (SourceId::CurseForge, "238222", Kind::Mod)
     );
-    assert_eq!(p.loaders, ["iris", "optifine"]);
-    assert_eq!(p.author, "CaptTatsu");
+    assert_eq!(p.game_versions, ["1.21.1"]);
+    assert_eq!(p.loaders, ["neoforge"]);
+    assert_eq!(p.author, "mezz");
     assert!(p.support().installable());
-    assert!(curseforge::parse_mod(&json!({"id": 1, "classId": 6})).is_none());
+    // Shader packs (class 6552) are not offered.
+    assert!(curseforge::parse_mod(&json!({"id": 1, "classId": 6552})).is_none());
+    assert_eq!(
+        curseforge::parse_mod(&json!({"id": 1, "classId": 6})).map(|p| p.kind),
+        Some(Kind::Mod)
+    );
+    assert!(curseforge::parse_mod(&json!({"id": 1, "classId": 17})).is_none());
 
     let file = json!({
-        "id": 5000, "displayName": "BSL v10", "fileName": "BSL_v10.zip", "fileLength": 300,
-        "fileDate": "2026-01-01T00:00:00Z", "downloadUrl": "https://edge.forgecdn.net/files/5/0/BSL_v10.zip",
-        "gameVersions": ["1.21.1", "Iris"],
+        "id": 5000, "displayName": "JEI 19", "fileName": "jei-19.jar", "fileLength": 300,
+        "fileDate": "2026-01-01T00:00:00Z", "downloadUrl": "https://edge.forgecdn.net/files/5/0/jei-19.jar",
+        "gameVersions": ["1.21.1", "NeoForge"],
         "hashes": [{"value": "D41D8CD9", "algo": 2}, {"value": "DA39A3EE", "algo": 1}],
         "dependencies": [{"modId": 7, "relationType": 3}, {"modId": 8, "relationType": 2}]
     });
     let ver = curseforge::parse_file(&file).unwrap();
     assert_eq!(ver.required, ["7"]);
-    assert_eq!(ver.loaders, ["iris"]);
+    assert_eq!(ver.loaders, ["neoforge"]);
     assert_eq!(ver.file().unwrap().checksum(), Some(("SHA-1", "da39a3ee")));
     assert!(ver.blocked.is_none());
     let mut closed = file.clone();
@@ -279,6 +351,7 @@ fn file_for(body: &[u8], sha512: bool) -> FileRef {
         name: "pack.zip".into(),
         size: body.len() as u64,
         sha512: sha512.then(|| hex(&sha2::Sha512::digest(body))),
+        sha256: None,
         sha1: (!sha512).then(|| hex(&sha1::Sha1::digest(body))),
         primary: true,
     }
@@ -313,6 +386,22 @@ fn downloads_refused_before_any_byte() {
     let mut file = file_for(body, true);
     file.url = "https://example.com/pack.zip".into();
     assert!(download::refuse(&file).unwrap().contains("file servers"));
+    // A mod's own repository's release asset, which the registry's index lists with its SHA-256.
+    let mut file = file_for(body, true);
+    file.url = "https://github.com/acme/zoom/releases/download/v1.0.0/zoom-1.0.0.hnmod".into();
+    assert_eq!(download::refuse(&file), None);
+    for bad in [
+        "http://github.com/acme/zoom/releases/download/v1/z.hnmod",
+        "https://github.com/acme/zoom/archive/main.zip",
+        "https://github.com/acme/zoom/releases/download/v1/../z.hnmod",
+        "https://github.com/acme/zoom/releases/download/v1/z.hnmod?x=1",
+        "https://github.com.evil.example/a/b/releases/download/v1/z.hnmod",
+        "https://github.com/acme/zoom/releases/download/v1/a/z.hnmod",
+    ] {
+        let mut file = file_for(body, true);
+        file.url = bad.into();
+        assert!(download::refuse(&file).is_some(), "{bad}");
+    }
     let mut file = file_for(body, true);
     file.url = "http://cdn.modrinth.com/data/a/pack.zip".into();
     assert!(download::refuse(&file).is_some());
@@ -352,4 +441,11 @@ fn live_modrinth_search_pick_and_download() {
     assert!(path.is_file());
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(source.project(&p.id).unwrap().slug, p.slug);
+}
+
+#[test]
+fn curseforge_is_coming_soon_and_never_searched() {
+    let ids: Vec<SourceId> = sources().iter().map(|s| s.id()).collect();
+    assert_eq!(ids, [SourceId::Modrinth, SourceId::Horizon]);
+    assert!(source(SourceId::CurseForge).is_none());
 }

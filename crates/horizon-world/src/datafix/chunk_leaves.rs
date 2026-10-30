@@ -6,6 +6,7 @@
 //! emulated here (`IntOpenHashSet` and the key order of an `Int2ObjectOpenHashMap`).
 use std::collections::{HashMap, HashSet};
 
+use super::chunk_flatten::side_mask;
 use super::dynamic::{as_int, as_long_stream, as_str, ceillog2, set};
 use crate::nbt::Tag;
 
@@ -353,32 +354,6 @@ impl Section {
 
 fn get_index(x: i32, y: i32, z: i32) -> i32 {
     y << 8 | z << 4 | x
-}
-
-fn side_mask(west: bool, east: bool, north: bool, south: bool) -> i32 {
-    let mut s = 0;
-    if north {
-        if east {
-            s |= 2;
-        } else if west {
-            s |= 128;
-        } else {
-            s |= 1;
-        }
-    } else if south {
-        if west {
-            s |= 32;
-        } else if east {
-            s |= 8;
-        } else {
-            s |= 16;
-        }
-    } else if east {
-        s |= 4;
-    } else if west {
-        s |= 64;
-    }
-    s
 }
 
 /// `LeavesFix` over a chunk (`{Level: ...}`).

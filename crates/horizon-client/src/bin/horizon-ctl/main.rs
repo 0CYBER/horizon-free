@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 const GAME_ERROR: u8 = 1;
 const USAGE: u8 = 2;
 const UNREACHABLE: u8 = 3;
+/// No AI is on (`horizon_core::no_ai`): agent control is off.
+const DENIED: u8 = 4;
 
 /// A failure, with the exit status it maps to.
 #[derive(Debug)]
@@ -32,6 +34,13 @@ impl Failure {
         Self {
             reply: json!({ "error": message.into(), "kind": "usage" }),
             status: USAGE,
+        }
+    }
+    /// No AI is on in the game's home.
+    fn denied() -> Self {
+        Self {
+            reply: json!({ "error": horizon_core::no_ai::REFUSAL, "kind": "denied" }),
+            status: DENIED,
         }
     }
     fn unreachable(message: impl Into<String>) -> Self {
@@ -98,6 +107,8 @@ impl Client {
 pub struct Session {
     pub socket: PathBuf,
     pub timeout: Option<Duration>,
+    /// The game's home, where No AI is read (`horizon_core::no_ai`).
+    pub home: PathBuf,
     client: Option<Client>,
 }
 
@@ -106,8 +117,13 @@ impl Session {
         Self {
             socket,
             timeout,
+            home: horizon_client::logging::game_home(),
             client: None,
         }
+    }
+    /// A failure while No AI is on: every command refuses (help aside).
+    pub fn allowed(&self) -> Result<(), Failure> {
+        horizon_core::no_ai::check(&self.home).map_err(|_| Failure::denied())
     }
     fn client(&mut self) -> Result<&mut Client, Failure> {
         if self.client.is_none() {
@@ -137,6 +153,7 @@ impl Session {
         let Some(name) = words.first().map(String::as_str) else {
             return Err(Failure::usage("no command; try horizon-ctl help"));
         };
+        self.allowed()?;
         if words.iter().skip(1).any(|w| w == "--help" || w == "-h") {
             return Err(Failure::usage(
                 "use horizon-ctl COMMAND --help outside scripts",
@@ -174,6 +191,18 @@ impl Session {
                 ready["launch"] = reply;
                 Ok(ready)
             }
+            "interact-entity" => {
+                let id = match words {
+                    [_, id] if id.parse::<i64>().is_ok() => id,
+                    _ => return Err(Failure::usage(format!("usage: {}", usage(name)))),
+                };
+                self.game(&format!("look-at entity {id}"))?;
+                self.game("mouse right click")?;
+                self.game("wait 2")?;
+                let mut screen = self.game("screen")?;
+                screen["ok"] = json!(true);
+                Ok(screen)
+            }
             "hold" => {
                 let (key, seconds) = match words {
                     [_, key, _] => (key.clone(), number(2, "SECONDS")?),
@@ -183,7 +212,7 @@ impl Session {
                 thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
                 self.game(&format!("key {key} up"))
             }
-            "logs" => logs(&horizon_client::logging::game_home(), &words[1..]),
+            "logs" => logs(&self.home, &words[1..]),
             "wait-ready" => {
                 let limit = if words.len() > 1 {
                     number(1, "SECONDS")?
@@ -417,6 +446,10 @@ fn main() -> ExitCode {
             print!("{}", commands::overview());
             0
         }
+        Some("help") if args.get(1).is_some_and(|a| a == "--markdown") => {
+            print!("{}", commands::markdown());
+            0
+        }
         Some("help") if args.get(1).is_none_or(|a| a != "--game") => match args.get(1) {
             None => {
                 print!("{}", commands::overview());
@@ -450,6 +483,10 @@ fn main() -> ExitCode {
                     USAGE
                 }
             }
+        }
+        Some("mcp") if session.allowed().is_err() => {
+            eprintln!("horizon-ctl mcp: {}", horizon_core::no_ai::REFUSAL);
+            DENIED
         }
         Some("mcp") => match mcp::serve(&mut session) {
             Ok(()) => 0,
@@ -573,12 +610,38 @@ mod tests {
 
     #[test]
     fn unreachable_games_fail_with_status_3() {
-        let mut s = Session::new(std::env::temp_dir().join("horizon-ctl-nobody.sock"), None);
+        let home =
+            std::env::temp_dir().join(format!("horizon-ctl-unreachable-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut s = Session::new(home.join("nobody.sock"), None);
+        s.home = home.clone();
         let f = s.run(&["state".to_owned()]).unwrap_err();
         assert_eq!(f.status, UNREACHABLE);
         assert_eq!(f.reply["kind"], "connection");
         let f = s.run(&["sleep".to_owned(), "x".to_owned()]).unwrap_err();
         assert_eq!(f.status, USAGE);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn no_ai_refuses_every_command() {
+        let home = std::env::temp_dir().join(format!("horizon-ctl-no-ai-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let mut s = Session::new(std::env::temp_dir().join("horizon-ctl-nobody.sock"), None);
+        s.home = home.clone();
+        assert_eq!(
+            s.run(&["state".to_owned()]).unwrap_err().status,
+            UNREACHABLE
+        );
+        horizon_core::no_ai::set(&home, true).unwrap();
+        for words in [vec!["state"], vec!["logs"], vec!["launch", "--world", "A"]] {
+            let words: Vec<String> = words.into_iter().map(str::to_owned).collect();
+            let f = s.run(&words).unwrap_err();
+            assert_eq!(f.status, DENIED, "{words:?}");
+            assert_eq!(f.reply["kind"], "denied");
+            assert_eq!(f.reply["error"], horizon_core::no_ai::REFUSAL);
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

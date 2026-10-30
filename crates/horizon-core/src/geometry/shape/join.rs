@@ -13,8 +13,6 @@ impl ShapeOp {
     pub const XOR: Self = Self(6);
     pub const ONLY_FIRST: Self = Self(4);
     pub const ONLY_SECOND: Self = Self(2);
-    pub const FIRST: Self = Self(12);
-    pub const SECOND: Self = Self(10);
     pub const fn from_truth_table(bits: u8) -> Self {
         Self(bits & 15)
     }

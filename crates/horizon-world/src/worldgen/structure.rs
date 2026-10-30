@@ -21,7 +21,6 @@ pub mod start_checks;
 pub mod stronghold;
 pub mod template;
 pub mod temple;
-pub mod yung;
 
 use crate::{
     nbt::{self, Limits},
@@ -80,12 +79,31 @@ impl Rotation {
     pub fn get_rotated(self, other: Self) -> Self {
         Self::ALL[(self as usize + other as usize) % 4]
     }
+    /// `Rotation.name()`, as structure pieces save it.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Clockwise90 => "CLOCKWISE_90",
+            Self::Clockwise180 => "CLOCKWISE_180",
+            Self::Counterclockwise90 => "COUNTERCLOCKWISE_90",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mirror {
     None,
     LeftRight,
     FrontBack,
+}
+impl Mirror {
+    /// `Mirror.name()`, as structure pieces save it.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::LeftRight => "LEFT_RIGHT",
+            Self::FrontBack => "FRONT_BACK",
+        }
+    }
 }
 
 /// Inclusive integer box (vanilla BoundingBox).
@@ -347,14 +365,16 @@ impl StructureResources {
                 .read_to_end(&mut raw)
                 .ok()?;
             let tag = nbt::read_named(&raw, Limits::templates()).ok()?.0.tag;
-            Some(Arc::new(StructureTemplate::from_nbt(
+            Some(StructureTemplate::from_nbt(
                 &tag,
                 self.registry,
                 &self.transforms,
-            )))
+            ))
         });
         // StructureTemplateManager.getOrCreate: missing templates are empty.
-        let loaded = loaded.or_else(|| Some(Arc::new(StructureTemplate::empty())));
+        let mut loaded = loaded.unwrap_or_else(StructureTemplate::empty);
+        loaded.location = id.as_str().into();
+        let loaded = Some(Arc::new(loaded));
         self.templates.write().unwrap().insert(id, loaded.clone());
         loaded
     }

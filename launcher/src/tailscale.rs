@@ -126,13 +126,8 @@ pub fn status_of(cli: Option<PathBuf>) -> State {
     let Some(cli) = cli else {
         return State::Missing;
     };
-    let mut command = Command::new(&cli);
+    let mut command = crate::process::command(&cli);
     command.args(["status", "--json"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     let out = match command.output() {
         Ok(out) => out,
         Err(e) => return State::Off(e.to_string()),
@@ -265,11 +260,14 @@ impl Api {
         body: Option<&Value>,
         if_match: Option<&str>,
     ) -> Result<(Value, Option<String>), String> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(20))
-            .build();
+        let url = format!("{}/api/v2{path}", self.base);
+        let agent = crate::proxy::agent(
+            ureq::AgentBuilder::new().timeout(Duration::from_secs(20)),
+            &url,
+        )
+        .build();
         let mut request = agent
-            .request(method, &format!("{}/api/v2{path}", self.base))
+            .request(method, &url)
             .set("Authorization", &format!("Bearer {}", self.token))
             .set("Accept", "application/json");
         if let Some(etag) = if_match {

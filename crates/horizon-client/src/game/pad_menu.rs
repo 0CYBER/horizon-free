@@ -113,7 +113,7 @@ impl Game<'_> {
     }
 
     /// Where focus can land: buttons drawn last frame, every registered
-    /// target (sliders, fields, rows, Horizon-style widgets), and the slots
+    /// target (sliders, fields, rows, keyboard keys), and the slots
     /// and tabs of inventories (GUI pixels), on screen.
     fn pad_targets(&self) -> Vec<Target> {
         let mut targets = self.pad_all_targets();
@@ -137,7 +137,7 @@ impl Game<'_> {
             })
             .collect();
         for t in widgets::last_targets() {
-            // A Horizon button is both a labelled button and a target.
+            // A button can be both a labelled button and a target.
             if let Some(same) = targets.iter_mut().find(|o| o.rect == t.rect) {
                 same.kind = t.kind;
             } else {
@@ -822,6 +822,10 @@ impl Game<'_> {
             return;
         }
         self.pad.menu.os_hidden = !show;
+        // Controller menus leave the native pointer to its owning player.
+        if !self.keyboard_mouse {
+            return;
+        }
         if let Some(window) = &self.window {
             window.set_cursor_visible(show && !self.captured);
         }
@@ -921,8 +925,10 @@ impl Game<'_> {
         } else if self.book.is_some() {
             self.book_input(key, text);
         } else if self.screen == Screen::Creative && self.creative_screen.tab().search {
-            if key != Some(KeyCode::Enter) {
-                self.creative_search_edit(text, backspace);
+            if backspace {
+                self.creative_search_backspace(false);
+            } else if key != Some(KeyCode::Enter) {
+                self.creative_search_edit(text);
             }
         } else if self.recipe_search_focused() {
             if key != Some(KeyCode::Enter) {
@@ -1026,45 +1032,13 @@ impl Game<'_> {
         }
     }
 
-    /// The focus highlight. Classic screens look as vanilla's keyboard focus
-    /// does: buttons, sliders and slots already draw their highlighted
-    /// sprite under the (hidden) pointer, and list rows and fields get
-    /// vanilla's white one-pixel outline (`AbstractSelectionList`'s focused
-    /// selection, `EditBox`'s highlighted border). Horizon-style screens get
-    /// the design system's focus colour: a two-dp accent ring.
+    /// The focus highlight, as vanilla's keyboard focus looks: buttons,
+    /// sliders and slots already draw their highlighted sprite under the
+    /// (hidden) pointer, and list rows and fields get vanilla's white
+    /// one-pixel outline (`AbstractSelectionList`'s focused selection,
+    /// `EditBox`'s highlighted border).
     fn draw_pad_focus(&self, batch: &mut HudBatch, focus: Target) {
         let [x, y, w, h] = focus.rect;
-        // The options' sub-pages keep the classic layout under either style.
-        let horizon = horizon_client::ui_theme::horizon()
-            && if self.screen == Screen::Options {
-                self.ui.options.page() == Page::Main
-            } else {
-                self.title.is_some() || self.screen == Screen::Paused
-            };
-        if horizon {
-            use horizon_client::ui_theme::{self as theme, Ui, color};
-            let mut ui = Ui::new(&self.gui.atlas, batch, self.cursor);
-            let k = ui.batch.scale / ui.density;
-            let (x, y, w, h) = (x * k, y * k, w * k, h * k);
-            let radius = match focus.kind {
-                Kind::Button | Kind::Tab(_) | Kind::Slider { .. } => (h + 6.0) / 2.0,
-                Kind::Field => theme::RADIUS + 3.0,
-                _ => theme::RADIUS_PLATE + 3.0,
-            };
-            for inset in [0.0, 1.0] {
-                let o = 3.0 - inset;
-                ui.border(
-                    x - o,
-                    y - o,
-                    w + 2.0 * o,
-                    h + 2.0 * o,
-                    radius - inset,
-                    color::ACCENT,
-                );
-            }
-            ui.finish();
-            return;
-        }
         if matches!(focus.kind, Kind::Row | Kind::Field) {
             let atlas = &self.gui.atlas;
             let white = rgba(255, 255, 255, 255);

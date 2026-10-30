@@ -7,8 +7,7 @@ should beat vanilla, Paper and Fabric + Lithium on TPS/MSPT, RAM, CPU, chunk gen
 Gameplay stays vanilla: there are no Paper-style rule changes unless the owner turns one on.
 
 This page covers what the server does today (measured), the design of `horizon-server`, and what ships for the
-first working version (2026-10-23). It replaced the Java/Fabric starter (`docs/server-quickstart.txt`,
-`tools/server.py`, retired on 2026-10-19). The owner's guide is docs/hosting.md, also at
+first working version (2026-10-23). The owner's guide is docs/hosting.md, also at
 https://playhorizon.dev/server.
 
 ## 1. Today
@@ -90,7 +89,7 @@ not tick cost, so it is in scope here (see section 9).
 |---|---|
 | `online-mode=true` | **Works** (ServerLoginPacketListenerImpl): a 1024-bit RSA key pair at start ("Generating keypair"), the encryption request, the shared secret and challenge, AES/CFB8, and the session service's `hasJoined` check (with the address when `prevent-proxy-connections` is on), with vanilla's log lines and messages. `test_online_mode_parity.py` runs the same logins against vanilla's server and Horizon's with a mock session service. |
 | Secure chat | **Works** (`SignedMessageChain`, `LastSeenMessagesValidator`, `MessageSignatureCache`): the chat session update and its profile key, checked against the services' `playerCertificateKeys`; signed chat, `say`, `me` and `msg`, relayed with their signatures and last-seen lists; `enforce-secure-profile` (with `online-mode`) refuses unsigned chat; and vanilla's log lines (`[Not Secure]`, the decoder's warnings, the kicks). Offline servers and players without a chat session chat unsigned, as on vanilla. `test_secure_chat_parity.py` runs the same signed and unsigned players against vanilla's server and Horizon's, with test keys and a mock services server. |
-| Nether and End | **Players can't change dimension.** The engine keeps one dimension loaded (`Game::enter_dimension` moves only the local single-player player), and the hub serves one `dimension` to everyone. |
+| Nether and End | **Works**: the server holds a level per dimension, and each player is in its own (portals, `execute in … tp`, respawn). `test_server_dimension_players_parity.py` checks it against vanilla. How it works, its cost and what's left: [server-levels.md](server-levels.md). |
 | Refused logins | Logged as vanilla does: `Disconnecting <name> (/address): <reason>`, then `<name> (/address) lost connection: <reason>`, and the session errors (`Username '<name>' tried to join with an invalid session`, `Couldn't verify username because servers are unavailable`). |
 | Gameplay for remote players | Checked against vanilla's server with a vanilla-codec client (#484, `tools/test_dedicated_server_parity.py`): a right click with an item on a block uses it once, a dead player's commands run, players on a team without friendly fire don't hurt each other, and a player's projectiles are theirs (their ender pearl takes them). The recipe book, status effects and block sync while digging (#500) work. Left: a player's projectiles don't hit other players (no bow PvP between guests), and a mob a guest kills counts in the host's statistics and advancements, not the guest's (`mob_died` runs as the host). |
 | Defaults that surprise owners | `white-list=true` is vanilla 26.3's default, so a fresh server refuses everyone until they are added. That matches vanilla, so the first-run flow (section 3) asks about the whitelist up front. |
@@ -192,7 +191,7 @@ comes out of the headless-engine work.
 **One-command install** (`packaging/server/`):
 
 - Linux and macOS:
-  `curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh`
+  `curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh`
   The script picks the release archive for the OS and architecture (on Linux x86_64 the server archive,
   on macOS arm64 the game's), downloads it from GitHub Releases, and checks it against the SHA-256 GitHub
   publishes for each asset. It never asks for sudo. Options: `--version vX.Y.Z`, `--dir` (default
@@ -204,7 +203,7 @@ comes out of the headless-engine work.
   any that are missing, `init` warns, and `run` stops at once with what to install, rather than restarting
   a game that can't load.
 - Windows:
-  `irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex`
+  `irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex`
   The script does the same into `%LOCALAPPDATA%\Horizon` (`-Version`, `-Dir`), with junctions instead of
   links (no admin rights), and adds `bin` to the user's PATH.
 - **Layout.** Each release goes to `<dir>/releases/<tag>` and `<dir>/current` points at the one in use, so an
@@ -410,10 +409,12 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   newer release a minute after it starts and then every 6 hours, and only says so, in its log, in `status`
   and in the panel (`HORIZON_NO_UPDATE_CHECK=1` turns the check off). `update --check` asks GitHub once.
   `update`:
-  1. downloads the newest stable release's archive for this computer (on Linux the server build; `--version`
-     picks another, a beta included) and checks it against the release's SHA256SUMS, whose Ed25519 signature
-     must check with a key built into `horizon-server` (docs/release-flow.md, "Signed checksums"): an unsigned
-     or tampered release is refused;
+  1. downloads the current Nightly's archive for this computer (the only build Horizon ships since 2026-10-28;
+     GitHub's latest release while there is none; on Linux the server build; `--version` picks another: a
+     `vX.Y.Z` release, or a `nightly-<date>` of the last 7 days) and checks it against its SHA256SUMS, whose Ed25519
+     signature must check with a key built into `horizon-server` (docs/release-flow.md, "Signed checksums"),
+     signed for the Nightly channel: an unsigned or tampered build is refused. A Nightly installs as
+     `nightly-<date>-<commit>`, newer than every `vX.Y.Z`; another build of the same day is an update too;
   2. unpacks it into `<dir>/releases/<tag>`, beside the others, with its game files linked to
      `<dir>/game-files` as the installers do;
   3. stops the game, backs up the world (`backups/<time>-before-<tag>.zip`), records the release in use in
@@ -467,7 +468,7 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Horizon (`horizon-server`);
   - vanilla 26.3 (the owner's `server.jar`);
   - Paper (a jar the owner downloads; Paper's defaults are kept, and noted as non-vanilla);
-  - optionally Fabric + Lithium (the old starter's setup, via the pinned `packs/mods.lock.json`).
+  - optionally Fabric + Lithium (via the pinned `tools/benchmark-deps/mods.lock.json`).
 
   Java servers run on Java 25 with `-Xms` = `-Xmx` (the same heap for all, 4 GB by default), and the heap is
   reported.

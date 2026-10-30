@@ -13,38 +13,13 @@ pub const HELP: &[&str] = &[
     "signedit X Y Z [front|back]    open the sign editor for the sign at X Y Z",
     "section-draws [flat|indirect]  how terrain sections are drawn (A/B checks); replies the mode",
     "section-cull [on|off]          occlusion culling of solid sections (A/B checks); replies the mode",
+    "section-sides [on|off]         leave out solid quads facing away from the eye (A/B checks); replies the mode",
 ];
 
 impl Game<'_> {
     /// Parse `name[k=v,...]` into a registry state (defaults for missing properties).
     fn parse_state(&self, text: &str) -> Result<BlockStateId> {
-        let (name, props) = match text.split_once('[') {
-            Some((n, rest)) => (n, rest.trim_end_matches(']')),
-            None => (text, ""),
-        };
-        let name = if name.contains(':') {
-            name.to_owned()
-        } else {
-            format!("minecraft:{name}")
-        };
-        let registry = &self.pack.assets.registry;
-        let default = registry
-            .default_state(&name)
-            .ok_or_else(|| format!("unknown block {name}"))?;
-        let mut state = registry
-            .state(default)
-            .ok_or("missing default state")?
-            .clone();
-        for pair in props.split(',').filter(|p| !p.is_empty()) {
-            let (k, v) = pair
-                .split_once('=')
-                .ok_or_else(|| format!("bad property {pair}"))?;
-            if !state.properties.contains_key(k) {
-                return Err(format!("{name} has no property {k}").into());
-            }
-            state.properties.insert(k.to_owned(), v.to_owned());
-        }
-        Ok(registry.resolve(&state)?)
+        parse_state(self.pack.assets.registry, text)
     }
     pub(super) fn render_command(&mut self, words: &[&str]) -> Result<Option<Value>> {
         let int = |i: usize| -> Result<i32> {
@@ -135,4 +110,37 @@ impl Game<'_> {
             other => Err(format!("unknown render command {other}").into()),
         }
     }
+}
+
+/// Parse `name[k=v,...]` into a registry state (defaults for missing properties).
+pub(super) fn parse_state(
+    registry: &horizon_world::registry::BlockRegistry,
+    text: &str,
+) -> Result<BlockStateId> {
+    let (name, props) = match text.split_once('[') {
+        Some((n, rest)) => (n, rest.trim_end_matches(']')),
+        None => (text, ""),
+    };
+    let name = if name.contains(':') {
+        name.to_owned()
+    } else {
+        format!("minecraft:{name}")
+    };
+    let default = registry
+        .default_state(&name)
+        .ok_or_else(|| format!("unknown block {name}"))?;
+    let mut state = registry
+        .state(default)
+        .ok_or("missing default state")?
+        .clone();
+    for pair in props.split(',').filter(|p| !p.is_empty()) {
+        let (k, v) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("bad property {pair}"))?;
+        if !state.properties.contains_key(k) {
+            return Err(format!("{name} has no property {k}").into());
+        }
+        state.properties.insert(k.to_owned(), v.to_owned());
+    }
+    Ok(registry.resolve(&state)?)
 }

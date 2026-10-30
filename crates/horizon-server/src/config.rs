@@ -19,22 +19,22 @@ pub const TEMPLATE: &str = r##"# Horizon server settings (docs/server.md). The s
 # every start: edit this file, not that one.
 
 [server]
-motd = "A Minecraft Server"
-port = 25565
+motd = "A Minecraft Server"  # the line under the server's name in the server list
+port = 25565                 # the port players connect to
 bind = ""                    # listen on every address, or only on this one (server-ip)
-max_players = 20
+max_players = 20             # how many players can be online at once
 online_mode = true           # check players' Minecraft accounts (false: anyone joins under any name)
 whitelist = true             # only whitelisted players and operators can join
 enforce_whitelist = false    # kick online players taken off the whitelist
-view_distance = 10
-simulation_distance = 10
+view_distance = 10           # chunks sent around each player
+simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
 
 [world]
 name = "world"               # the world folder
 seed = ""                    # empty: a random seed on the first start
 game_mode = "survival"       # survival, creative, adventure or spectator
 difficulty = "easy"          # peaceful, easy, normal or hard
-hardcore = false
+hardcore = false             # one life: a player who dies becomes a spectator
 
 # Any other server.properties key, spelled as vanilla spells it, for example:
 # spawn-protection = 16
@@ -43,7 +43,7 @@ hardcore = false
 [engine]
 path = ""                    # the game program; empty: the one installed beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
-restart_on_crash = true
+restart_on_crash = true      # start the game again when it crashes
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
@@ -55,10 +55,21 @@ keep = 1                     # other releases kept by updates, besides the one i
 [panel]
 bind = "127.0.0.1:8130"      # the web panel: this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false         # true lets bind be any address; never put the panel on the open internet
+
+# Horizon's anticheat (docs/anticheat.md) is off: the server checks only what vanilla's checks. To turn it on:
+# [anticheat]
+# enabled = true
+# alerts = true              # tell online operators (alert_level = 2) in their chat; the console always is
+# log = "logs/anticheat.log" # every flag, one line each
+# [anticheat.timer]          # a sped-up game: more client ticks than the server's clock allows
+# setback = 2                # the violation level from which the player is sent back; 0: never
+# alert = 5
+# kick = 20
+# decay = 0.02               # violation level lost each second
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-const TYPED: [(&str, &str, &str); 14] = [
+pub(crate) const TYPED: [(&str, &str, &str); 14] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -92,6 +103,13 @@ pub struct Config {
     pub updates: Updates,
     #[serde(default)]
     pub panel: Panel,
+    /// The game reads this section itself (docs/anticheat.md); written only when it isn't the default (off).
+    #[serde(default, skip_serializing_if = "anticheat_off")]
+    pub anticheat: horizon_anticheat::Config,
+}
+
+fn anticheat_off(c: &horizon_anticheat::Config) -> bool {
+    *c == horizon_anticheat::Config::default()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -296,6 +314,7 @@ impl Config {
         }
         crate::backup::interval(&self.backups.every)?;
         self.panel.address()?;
+        self.anticheat.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -403,7 +422,14 @@ pub fn render(config: &Config) -> String {
     ] {
         set(&mut doc, section, field, &table[section][field]);
     }
-    doc.to_string()
+    let mut text = doc.to_string();
+    if let Some(anticheat) = table.get("anticheat") {
+        let mut only = toml::Table::new();
+        only.insert("anticheat".into(), anticheat.clone());
+        text.push('\n');
+        text.push_str(&toml::to_string(&only).expect("the anticheat's settings are a table"));
+    }
+    text
 }
 
 /// After the game stopped: copies into `server.toml` the keys it wrote that the game changed in
@@ -538,6 +564,25 @@ mod tests {
     fn template_is_the_default() {
         assert_eq!(Config::parse(TEMPLATE).unwrap(), Config::default());
         assert_eq!(render(&Config::default()), TEMPLATE);
+    }
+
+    #[test]
+    fn anticheat_is_off_unless_its_section_turns_it_on() {
+        assert!(!Config::default().anticheat.enabled);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[anticheat]"));
+        let text =
+            format!("{TEMPLATE}\n[anticheat]\nenabled = true\n[anticheat.timer]\nkick = 0\n");
+        let c = Config::parse(&text).unwrap();
+        assert!(c.anticheat.enabled);
+        assert_eq!(c.anticheat.timer.kick, 0.0);
+        // The game reads the same section from the same file.
+        assert_eq!(
+            horizon_anticheat::Config::from_server_toml(&text).unwrap(),
+            c.anticheat
+        );
+        assert_eq!(Config::parse(&render(&c)).unwrap(), c);
+        assert!(Config::parse("[anticheat]\nenable = true\n").is_err());
+        assert!(Config::parse("[anticheat.timer]\nalert = -1\n").is_err());
     }
 
     #[test]

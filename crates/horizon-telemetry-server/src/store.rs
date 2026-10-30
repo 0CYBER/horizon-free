@@ -1,7 +1,8 @@
 //! The database: one SQLite file, kept small.
 //!
 //! - `systems`: each distinct machine description once. Rows point at it, so a CPU and GPU
-//!   name isn't stored again with every session.
+//!   name isn't stored again with every session. `extra` holds the later hardware fields
+//!   (cores, clocks, GPU maker and kind, VRAM, drive, screen, power, form) as JSON.
 //! - `perf`: one row per play session, in columns. A frame or tick summary is an 80-byte blob
 //!   ([`pack`]), not JSON.
 //! - `reports`: crash and bug reports and benchmark uploads, their `data` zstd-compressed.
@@ -17,6 +18,7 @@ use horizon_telemetry::Kind;
 use horizon_telemetry::batch::Batch;
 use horizon_telemetry::payload::{BUCKET_EDGES_MS, Payload, Summary, System};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 const BUCKETS: usize = BUCKET_EDGES_MS.len() + 1;
 
@@ -27,8 +29,8 @@ CREATE TABLE IF NOT EXISTS systems (
     id INTEGER PRIMARY KEY,
     os TEXT NOT NULL, os_version TEXT NOT NULL, arch TEXT NOT NULL, cpu TEXT NOT NULL,
     threads INTEGER NOT NULL, ram_gb INTEGER NOT NULL,
-    gpu TEXT NOT NULL, driver TEXT NOT NULL, backend TEXT NOT NULL,
-    UNIQUE (os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend)
+    gpu TEXT NOT NULL, driver TEXT NOT NULL, backend TEXT NOT NULL, extra TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend, extra)
 );
 CREATE TABLE IF NOT EXISTS perf (
     install BLOB NOT NULL, day INTEGER NOT NULL, version TEXT NOT NULL, system INTEGER NOT NULL,
@@ -121,13 +123,16 @@ pub fn gpu_vendor(gpu: &str) -> &'static str {
 }
 
 pub struct Store {
-    db: Connection,
+    pub(crate) db: Connection,
 }
 
 impl Store {
     pub fn open(path: &str) -> rusqlite::Result<Self> {
-        let db = Connection::open(path)?;
+        let mut db = Connection::open(path)?;
         db.execute_batch(SCHEMA)?;
+        db.execute_batch(crate::hub::SCHEMA)?;
+        db.execute_batch(crate::intake::SCHEMA)?;
+        migrate(&mut db)?;
         Ok(Self { db })
     }
 
@@ -357,25 +362,108 @@ impl Store {
             })?
             .collect::<Result<_, _>>()?
         };
-        let benchmarks: Vec<serde_json::Value> = {
-            let mut q = self.db.prepare(
-                "SELECT day, version, body FROM reports WHERE kind = ?1 AND day BETWEEN ?2 AND ?3
-                 ORDER BY rowid DESC LIMIT 50",
-            )?;
-            q.query_map(params![kind_code(Kind::Benchmark), from, to], |r| {
-                let body: Vec<u8> = r.get(2)?;
-                Ok(serde_json::json!({
-                    "day": r.get::<_, u32>(0)?, "version": r.get::<_, String>(1)?, "report": inflate(&body),
-                }))
-            })?
-            .collect::<Result<_, _>>()?
-        };
+        let breakdowns = self.breakdowns(from, to)?;
         Ok(serde_json::json!({
             "from_day": from, "to_day": to, "min_install_days": k,
             "bucket_edges_ms": BUCKET_EDGES_MS.map(|e| (f64::from(e) * 10.0).round() / 10.0),
             "totals": { "sessions": sessions, "hours": (hours * 10.0).round() / 10.0 },
-            "groups": out, "crashes_by_version": crashes, "benchmarks": benchmarks,
+            "groups": out, "crashes_by_version": crashes, "breakdowns": breakdowns,
         }))
+    }
+
+    /// Play sessions in `from..=to` per hardware class (`classes`): for each RAM, VRAM, drive,
+    /// OS and GPU kind class with at least `MIN_INSTALLS` different installs, its installs,
+    /// sessions, hours and mean p50 and p99 frame times. From the raw rows, so only within the
+    /// retention period.
+    fn breakdowns(&self, from: u32, to: u32) -> rusqlite::Result<serde_json::Value> {
+        #[derive(Default)]
+        struct Cell {
+            installs: HashSet<Vec<u8>>,
+            sessions: u64,
+            seconds: u64,
+            p50_sum: f64,
+            p99_sum: f64,
+        }
+        let mut cells: [HashMap<&'static str, Cell>; 5] = Default::default();
+        let mut q = self.db.prepare(
+            "SELECT perf.install, perf.seconds, perf.frames, systems.os, systems.ram_gb, systems.extra
+             FROM perf JOIN systems ON systems.id = perf.system WHERE perf.day BETWEEN ?1 AND ?2",
+        )?;
+        let mut rows = q.query([from, to])?;
+        while let Some(r) = rows.next()? {
+            let Some(frames) = unpack(&r.get::<_, Vec<u8>>(2)?) else {
+                continue;
+            };
+            let extra: Extra = serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default();
+            let system = System {
+                os: r.get(3)?,
+                ram_gb: r.get(4)?,
+                gpu_kind: extra.gpu_kind,
+                vram_mb: extra.vram_mb,
+                storage: extra.storage,
+                ..System::default()
+            };
+            let install: Vec<u8> = r.get(0)?;
+            let seconds: u64 = r.get(1)?;
+            for (dim, class) in crate::classes::of_system(&system).into_iter().enumerate() {
+                let Some(class) = class else { continue };
+                let c = cells[dim].entry(class).or_default();
+                c.installs.insert(install.clone());
+                c.sessions += 1;
+                c.seconds += seconds;
+                c.p50_sum += f64::from(frames.p50_ms);
+                c.p99_sum += f64::from(frames.p99_ms);
+            }
+        }
+        let mut out = serde_json::Map::new();
+        for (dim, by_class) in crate::classes::DIMENSIONS.iter().zip(cells) {
+            let mut list: Vec<(&str, Cell)> = by_class
+                .into_iter()
+                .filter(|(_, c)| c.installs.len() >= crate::summary::MIN_INSTALLS)
+                .collect();
+            list.sort_by(|a, b| {
+                b.1.installs
+                    .len()
+                    .cmp(&a.1.installs.len())
+                    .then(a.0.cmp(b.0))
+            });
+            if list.is_empty() {
+                continue;
+            }
+            let avg = |sum: f64, n: u64| (sum / n as f64 * 10.0).round() / 10.0;
+            out.insert(
+                dim.to_string(),
+                list.into_iter()
+                    .map(|(class, c)| {
+                        serde_json::json!({
+                            "class": class, "installs": c.installs.len(), "sessions": c.sessions,
+                            "hours": (c.seconds as f64 / 360.0).round() / 10.0,
+                            "p50_ms": avg(c.p50_sum, c.sessions), "p99_ms": avg(c.p99_sum, c.sessions),
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        Ok(serde_json::Value::Object(out))
+    }
+
+    /// Every benchmark upload received since `from_day`, with its install (to count installs, never shown)
+    /// and release, for `summary`.
+    pub fn benchmark_uploads(
+        &self,
+        from_day: u32,
+    ) -> rusqlite::Result<Vec<crate::summary::Upload>> {
+        let mut q = self
+            .db
+            .prepare("SELECT install, version, body FROM reports WHERE kind = ?1 AND day >= ?2")?;
+        q.query_map(params![kind_code(Kind::Benchmark), from_day], |r| {
+            Ok(crate::summary::Upload {
+                install: r.get(0)?,
+                version: r.get(1)?,
+                report: inflate(&r.get::<_, Vec<u8>>(2)?),
+            })
+        })?
+        .collect()
     }
 
     /// The day an install's newest row came in, if any (tests, and checking a deletion).
@@ -392,15 +480,74 @@ impl Store {
     }
 }
 
+/// The hardware fields after the first nine, as `systems.extra` keeps them.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Extra {
+    pub cores: u16,
+    pub cpu_base_mhz: u32,
+    pub cpu_boost_mhz: u32,
+    pub gpu_vendor: String,
+    pub gpu_kind: String,
+    pub vram_mb: u32,
+    pub storage: String,
+    pub display: Option<horizon_telemetry::payload::Display>,
+    pub power: String,
+    pub form: String,
+}
+
+impl Extra {
+    fn of(s: &System) -> Self {
+        Self {
+            cores: s.cores,
+            cpu_base_mhz: s.cpu_base_mhz,
+            cpu_boost_mhz: s.cpu_boost_mhz,
+            gpu_vendor: s.gpu_vendor.clone(),
+            gpu_kind: s.gpu_kind.clone(),
+            vram_mb: s.vram_mb,
+            storage: s.storage.clone(),
+            display: s.display.clone(),
+            power: s.power.clone(),
+            form: s.form.clone(),
+        }
+    }
+}
+
+/// Databases from before `systems.extra`: the table rebuilt with it (ids kept), once.
+fn migrate(db: &mut Connection) -> rusqlite::Result<()> {
+    let has_extra = db
+        .prepare("SELECT 1 FROM pragma_table_info('systems') WHERE name = 'extra'")?
+        .exists([])?;
+    if has_extra {
+        return Ok(());
+    }
+    let tx = db.transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE systems_new (
+            id INTEGER PRIMARY KEY,
+            os TEXT NOT NULL, os_version TEXT NOT NULL, arch TEXT NOT NULL, cpu TEXT NOT NULL,
+            threads INTEGER NOT NULL, ram_gb INTEGER NOT NULL,
+            gpu TEXT NOT NULL, driver TEXT NOT NULL, backend TEXT NOT NULL, extra TEXT NOT NULL DEFAULT '{}',
+            UNIQUE (os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend, extra)
+        );
+        INSERT INTO systems_new (id, os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend)
+            SELECT id, os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend FROM systems;
+        DROP TABLE systems;
+        ALTER TABLE systems_new RENAME TO systems;",
+    )?;
+    tx.commit()
+}
+
 fn system_id(tx: &rusqlite::Transaction, s: &System) -> rusqlite::Result<i64> {
+    let extra = serde_json::to_string(&Extra::of(s)).unwrap_or_else(|_| "{}".into());
     tx.execute(
-        "INSERT OR IGNORE INTO systems (os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![s.os, s.os_version, s.arch, s.cpu, s.threads, s.ram_gb, s.gpu, s.driver, s.backend],
+        "INSERT OR IGNORE INTO systems (os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend, extra)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![s.os, s.os_version, s.arch, s.cpu, s.threads, s.ram_gb, s.gpu, s.driver, s.backend, extra],
     )?;
     tx.query_row(
         "SELECT id FROM systems WHERE os = ?1 AND os_version = ?2 AND arch = ?3 AND cpu = ?4
-         AND threads = ?5 AND ram_gb = ?6 AND gpu = ?7 AND driver = ?8 AND backend = ?9",
+         AND threads = ?5 AND ram_gb = ?6 AND gpu = ?7 AND driver = ?8 AND backend = ?9 AND extra = ?10",
         params![
             s.os,
             s.os_version,
@@ -410,7 +557,8 @@ fn system_id(tx: &rusqlite::Transaction, s: &System) -> rusqlite::Result<i64> {
             s.ram_gb,
             s.gpu,
             s.driver,
-            s.backend
+            s.backend,
+            extra
         ],
         |r| r.get(0),
     )
@@ -425,4 +573,66 @@ pub fn inflate(body: &[u8]) -> serde_json::Value {
         .and_then(|d| d.take(1 << 20).read_to_end(&mut json).ok())
         .and_then(|_| serde_json::from_slice(&json).ok())
         .unwrap_or(serde_json::Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A database from before `systems.extra` opens, keeps its machines' ids and takes new ones.
+    #[test]
+    fn systems_from_before_extra_are_kept() {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-telemetry-migrate-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE systems (
+                    id INTEGER PRIMARY KEY,
+                    os TEXT NOT NULL, os_version TEXT NOT NULL, arch TEXT NOT NULL, cpu TEXT NOT NULL,
+                    threads INTEGER NOT NULL, ram_gb INTEGER NOT NULL,
+                    gpu TEXT NOT NULL, driver TEXT NOT NULL, backend TEXT NOT NULL,
+                    UNIQUE (os, os_version, arch, cpu, threads, ram_gb, gpu, driver, backend)
+                );
+                INSERT INTO systems VALUES (7, 'linux', 'Fedora 43', 'x86_64', 'Ryzen', 32, 32, 'RTX 4070', '570', 'Vulkan');",
+            )
+            .unwrap();
+        }
+        let path_str = path.to_str().unwrap();
+        let mut store = Store::open(path_str).unwrap();
+        let old: (String, String) = store
+            .db
+            .query_row("SELECT gpu, extra FROM systems WHERE id = 7", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(old, ("RTX 4070".to_owned(), "{}".to_owned()));
+        let s = System {
+            os: "linux".into(),
+            gpu: "RTX 4070".into(),
+            vram_mb: 12288,
+            gpu_kind: "discrete".into(),
+            storage: "nvme".into(),
+            ..System::default()
+        };
+        let tx = store.db.transaction().unwrap();
+        let id = system_id(&tx, &s).unwrap();
+        assert_eq!(system_id(&tx, &s).unwrap(), id, "the same machine once");
+        let extra: String = tx
+            .query_row("SELECT extra FROM systems WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        tx.commit().unwrap();
+        let back: Extra = serde_json::from_str(&extra).unwrap();
+        assert_eq!((back.vram_mb, back.storage.as_str()), (12288, "nvme"));
+        drop(store);
+        Store::open(path_str).unwrap(); // a second open doesn't rebuild again
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_str}{suffix}"));
+        }
+    }
 }

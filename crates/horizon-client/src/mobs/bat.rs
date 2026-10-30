@@ -66,7 +66,7 @@ pub fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         return;
     }
     if let Some(&t) = m.extra.positions.first()
-        && (!w.facts.is_air(w.world.block(t[0], t[1], t[2])) || t[1] <= crate::chunk::MIN_Y)
+        && (!w.facts.is_air(w.world.block(t[0], t[1], t[2])) || t[1] <= w.world.bottom_y())
     {
         m.extra.positions.clear();
     }
@@ -132,6 +132,10 @@ pub fn tick(m: &mut Mob) {
     } else {
         m.velocity.y *= 0.6;
     }
+    setup_animation_states(m);
+}
+/// `Bat.setupAnimationStates`: client visuals, without changing server motion.
+pub fn setup_animation_states(m: &mut Mob) {
     let age = m.age as f32;
     if resting(m) {
         m.anim.states[0].stop();

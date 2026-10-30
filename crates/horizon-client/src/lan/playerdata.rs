@@ -1,6 +1,6 @@
 //! Guests' saved state: `players/data/<uuid>.dat` in the vanilla player
 //! compound, through the same code that saves the host.
-use super::guest::Guest;
+use super::guest::{Guest, SavedBody};
 use crate::{
     items::ItemStack,
     save::{Level, read_dat, write_dat},
@@ -26,6 +26,11 @@ pub fn uuid_ints(uuid: u128) -> [i32; 4] {
         (uuid >> 32) as i32,
         uuid as i32,
     ]
+}
+/// `UUIDUtil.uuidFromIntArray`.
+pub fn ints_uuid(ints: [i32; 4]) -> u128 {
+    ints.iter()
+        .fold(0, |acc, &i| acc << 32 | u128::from(i as u32))
 }
 
 /// Whether a saved file exists for this player.
@@ -61,17 +66,39 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.head_yaw = guest.yaw;
     guest.on_ground = level.on_ground;
     guest.health = level.health;
+    guest.saved_absorption = Some(level.absorption);
     guest.food = level.food;
     guest.saturation = level.saturation;
     guest.xp_level = level.xp_level;
     guest.xp_progress = level.xp_progress;
     guest.xp_total = level.xp_total;
+    guest.xp_seed = level.xp_seed;
     guest.effects = crate::effects::PlayerEffects::from_saved(&level.active_effects);
     guest.game_mode = level.mode();
     guest.flying = level.flying;
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
-    guest.spawn = level.spawn.map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
+    // A point that is the world spawn is none of the player's own: it
+    // respawns wherever the world spawn is then (`setworldspawn`).
+    guest.spawn = level
+        .spawn
+        .filter(|s| Some(s.map(|v| v.floor() as i32)) != level.world_spawn)
+        .map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
+    guest.respawn_elsewhere = level.respawn_elsewhere.clone();
     guest.saved = level.player_extra.clone();
+    guest.seen_credits = level.seen_credits;
+    guest.last_death = level.last_death.clone();
+    let extra = level.player_extra.as_ref();
+    let short = |key: &str, default: i64| {
+        extra
+            .and_then(|t| crate::save::number(t.get(key)))
+            .unwrap_or(default) as i32
+    };
+    guest.loaded_body = Some(SavedBody {
+        fire_ticks: short("Fire", -20),
+        air: short("Air", 300),
+        fall_distance: level.fall_distance,
+    });
+    guest.saved_vehicle = level.root_vehicle;
     guest.recipe_book = level.recipe_book.clone();
     guest.dimension = match level.dimension.as_str() {
         d @ ("minecraft:the_nether" | "minecraft:the_end") => d.to_owned(),
@@ -103,12 +130,12 @@ pub fn apply(guest: &mut Guest, level: &Level) {
 }
 
 /// Save a guest (PlayerDataStorage.save).
-pub fn save(guest: &Guest, world: &Path) {
+pub fn save(guest: &Guest, world: &Path, vehicle: Option<[i32; 4]>) {
     let mut level = Level {
         player_uuid: Some(uuid_ints(guest.uuid)),
         ..Level::default()
     };
-    store(guest, &mut level);
+    store(guest, &mut level, vehicle);
     let file = path(world, guest.uuid);
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -117,24 +144,64 @@ pub fn save(guest: &Guest, world: &Path) {
 }
 
 /// Put a guest's state in `level`'s player fields.
-pub fn store(guest: &Guest, level: &mut Level) {
+pub fn store(guest: &Guest, level: &mut Level, vehicle: Option<[i32; 4]>) {
     level.position = Some(guest.position);
     level.dimension = guest.dimension.clone();
     level.rotation = [guest.yaw, guest.pitch];
     level.health = guest.health;
+    level.absorption = guest
+        .motion
+        .as_ref()
+        .map_or(guest.saved_absorption.unwrap_or(0.0), |m| {
+            m.health.absorption()
+        });
     level.food = guest.food;
     level.saturation = guest.saturation;
     level.xp_level = guest.xp_level;
     level.xp_progress = guest.xp_progress;
     level.xp_total = guest.xp_total;
+    level.xp_seed = guest.xp_seed;
     level.active_effects = guest.effects.saved();
     level.game_mode = guest.game_mode;
     level.creative = guest.game_mode == 1;
     level.flying = guest.flying;
     level.selected_slot = guest.selected as i32;
     level.spawn = guest.spawn.map(|s| [s[0] - 0.5, s[1], s[2] - 0.5]);
+    level.respawn_elsewhere = guest.respawn_elsewhere.clone();
     level.on_ground = guest.on_ground;
+    level.seen_credits = guest.seen_credits;
+    level.last_death = guest.last_death.clone();
     level.player_extra = guest.saved.clone();
+    // The vehicle the player rides (`ServerPlayer.saveParentVehicle`).
+    level.root_vehicle = vehicle.or(guest.saved_vehicle);
+    // The live body's fire, air and fall distance (Entity.saveWithoutId),
+    // or what the file had while the player has no body yet.
+    let body = guest
+        .motion
+        .as_deref()
+        .map(SavedBody::of)
+        .or(guest.loaded_body);
+    if let Some(body) = body {
+        level.fall_distance = body.fall_distance;
+        let extra = level
+            .player_extra
+            .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
+        if let horizon_world::nbt::Tag::Compound(map) = extra {
+            let short = |v: i32| horizon_world::nbt::Tag::Short(v.clamp(-32768, 32767) as i16);
+            map.insert("Fire".into(), short(body.fire_ticks));
+            map.insert("Air".into(), short(body.air));
+        }
+    }
+    // LivingEntity.addAdditionalSaveData: the live body's AttributeMap.pack,
+    // or the list the file had while the player has no body yet.
+    if let Some(m) = guest.motion.as_deref() {
+        let extra = level
+            .player_extra
+            .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
+        if let horizon_world::nbt::Tag::Compound(map) = extra {
+            map.insert("attributes".into(), m.saved_attributes());
+        }
+    }
     level.recipe_book = guest.recipe_book.clone();
     level.ender_items = guest.ender_items.clone();
     level.inventory.clear();
@@ -157,4 +224,114 @@ pub fn store(guest: &Guest, level: &mut Level) {
     put(101, &guest.armor[2]);
     put(100, &guest.armor[3]);
     put(150, &guest.offhand);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lan::{Joined, PlayerSender};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::{Arc, atomic::AtomicI32, mpsc};
+
+    fn guest() -> Guest {
+        let (tx, _rx) = mpsc::channel();
+        Guest::new(
+            Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Alex".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(8),
+                brand: "test".into(),
+                sender: PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+            },
+            2,
+            [0.0, 64.0, 0.0],
+            8,
+        )
+    }
+
+    #[test]
+    fn a_saved_burn_and_fall_come_back() {
+        // A player saved burning in mid-fall (#1323, #1327): Entity.saveWithoutId's
+        // Fire, Air and fall_distance, read back for the next body.
+        let mut g = guest();
+        g.loaded_body = Some(SavedBody {
+            fire_ticks: 96,
+            air: 250,
+            fall_distance: 9.5,
+        });
+        let mut level = Level::default();
+        store(&g, &mut level, None);
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.loaded_body, g.loaded_body);
+    }
+
+    /// The resources the prepared game data holds, for a body to breathe with.
+    fn resources() -> Option<(crate::assets::Assets, crate::motion::MotionResources)> {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            return None;
+        }
+        let assets = crate::assets::Assets::load(&root).ok()?;
+        let resources = crate::motion::MotionResources::load(&root, &assets).ok()?;
+        Some((assets, resources))
+    }
+
+    #[test]
+    fn a_saved_air_comes_back() {
+        // A player saved underwater (#1321): the file keeps the remaining air
+        // (Entity.saveWithoutId's Air), and the body that comes back breathes
+        // on it instead of starting with a full supply.
+        let Some((_assets, resources)) = resources() else {
+            eprintln!("skipped the air round trip: prepared resources unavailable");
+            return;
+        };
+        let mut g = guest();
+        let mut motion =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .expect("a body");
+        motion.air = 99;
+        g.motion = Some(Box::new(motion));
+        let mut level = Level::default();
+        store(&g, &mut level, None);
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.loaded_body.expect("a body").air, 99);
+    }
+
+    #[test]
+    fn a_saved_root_vehicle_comes_back() {
+        // A player saved riding a horse (#1474): the file names the vehicle
+        // (ServerPlayer.saveParentVehicle's RootVehicle), and the next login
+        // finds it and rides it again.
+        let vehicle = [1, 2, 3, 4];
+        let g = guest();
+        let mut level = Level::default();
+        store(&g, &mut level, Some(vehicle));
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.saved_vehicle, Some(vehicle));
+    }
 }

@@ -2,7 +2,7 @@
 //! handle it: chat sessions validated against the services' keys, signed
 //! messages checked link by link, the acknowledged window, and messages
 //! relayed with each connection's numbering and signature cache.
-use super::{HostEvent, Hub, display_name};
+use super::{HostEvent, Hub};
 use horizon_protocol::{
     packets::play::{self, Clientbound as C},
     secure_chat::{self, Body, Chain, ChatSession, DecodeError, ProfileKey, Signature, Unpacked},
@@ -214,11 +214,15 @@ impl Hub {
         }
         let bound = play::ChatTypeBound {
             chat_type: self.chat_type,
-            name: display_name(uuid, &name),
+            name: self.player_display_name(uuid, &name),
             target: None,
         };
         let line = format!("<{name}> {}", message.content);
         self.broadcast_chat(&message, &bound, line, events);
+        events.push(HostEvent::PlayerChat {
+            sender: uuid,
+            text: message.content,
+        });
     }
 
     /// handleChatSessionUpdate: a new profile key, validated against the
@@ -427,7 +431,7 @@ impl Hub {
         let (uuid, name) = (self.guests[i].uuid, self.guests[i].name.clone());
         let bound = play::ChatTypeBound {
             chat_type: self.chat_type_id(chat_type),
-            name: display_name(uuid, &name),
+            name: self.player_display_name(uuid, &name),
             target: None,
         };
         let line = match chat_type {
@@ -467,15 +471,15 @@ impl Hub {
             self.chat_type_id("msg_command_incoming"),
         );
         for &t in targets {
-            let target = display_name(self.guests[t].uuid, &self.guests[t].name);
+            let target = self.player_display_name(self.guests[t].uuid, &self.guests[t].name);
             let out = play::ChatTypeBound {
                 chat_type: outgoing,
-                name: display_name(uuid, &name),
+                name: self.player_display_name(uuid, &name),
                 target: Some(target),
             };
             let inc = play::ChatTypeBound {
                 chat_type: incoming,
-                name: display_name(uuid, &name),
+                name: self.player_display_name(uuid, &name),
                 target: None,
             };
             match &message {

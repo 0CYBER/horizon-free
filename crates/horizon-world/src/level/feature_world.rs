@@ -122,6 +122,9 @@ impl<L: LevelAccess + ?Sized> PlacementContext for LevelFeatureWorld<'_, '_, L> 
     ) -> Result<bool, PlacementQueryError> {
         Ok(self.sim.b.has_flag(state, state_flags::COLLISION_EMPTY))
     }
+    fn can_occlude(&mut self, state: BlockStateId) -> Result<bool, PlacementQueryError> {
+        Ok(self.sim.b.has_flag(state, state_flags::CAN_OCCLUDE))
+    }
     /// BeehiveDecorator's bees go into the nest's block entity (the tree
     /// checked the nest is there).
     fn store_beehive_occupants(

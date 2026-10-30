@@ -193,6 +193,11 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         }
         Who::Player => false,
     };
+    // `target.hasEffect`: a target that already has the effect gets the next one.
+    let has = |effect: &str| match who {
+        Who::Player => cx.w.player.as_ref().is_some_and(|p| p.has_effect(effect)),
+        Who::Mob(id) => cx.w.seen(id).is_some_and(|s| s.has_effect(effect)),
+    };
     let (effect, ticks, amplifier) = if heals {
         m.ai.target = None;
         if health <= 4.0 {
@@ -200,11 +205,11 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         } else {
             ("minecraft:regeneration", 900, 0)
         }
-    } else if dist >= 8.0 {
+    } else if dist >= 8.0 && !has("slowness") {
         ("minecraft:slowness", 1800, 0)
-    } else if health >= 8.0 {
+    } else if health >= 8.0 && !has("poison") {
         ("minecraft:poison", 900, 0)
-    } else if dist <= 3.0 && m.random.next_float() < 0.25 {
+    } else if dist <= 3.0 && !has("weakness") && m.random.next_float() < 0.25 {
         ("minecraft:weakness", 1800, 0)
     } else {
         ("minecraft:instant_damage", 1, 0)
@@ -236,6 +241,15 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         pitch,
     ));
 }
+/// The movement speed of a witch with `SPEED_MODIFIER_DRINKING` (-0.25,
+/// `ADD_VALUE`) while it drinks: it stands still for the 32 ticks.
+pub fn speed(m: &Mob, base: f64) -> f64 {
+    if m.species() == Species::Witch && m.extra.flag {
+        (base - 0.25).max(0.0)
+    } else {
+        base
+    }
+}
 /// Witch.aiStep before `super.aiStep()`: the healing cooldown, then drink
 /// water breathing, fire resistance, healing or swiftness.
 pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
@@ -254,7 +268,7 @@ fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         m.extra.using_item -= 1;
         if m.extra.using_item < 0 {
             m.extra.using_item = 0;
-            if let Some(potion) = m.extra.main_hand.take() {
+            if let Some(potion) = m.extra.take_main_hand() {
                 match potion.as_ref() {
                     "minecraft:water_breathing" => {
                         m.add_effect("minecraft:water_breathing", 3600, 0)
@@ -293,7 +307,7 @@ fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         None
     };
     if let Some(p) = potion {
-        m.extra.main_hand = Some(p.into());
+        m.extra.set_main_hand(Some(p.into()));
         // PotionItem use duration 32 ticks.
         m.extra.using_item = 32;
         m.extra.flag = true;
@@ -305,6 +319,19 @@ fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
             pitch,
         ));
     }
+}
+/// `WitchRenderer.extractRenderState`'s `isHoldingPotion`: the main hand holds
+/// a potion, either a drunk one (kept by the potion's name, `drink`) or a
+/// plain potion item.
+pub fn holds_potion(item: &str) -> bool {
+    matches!(
+        item,
+        "minecraft:potion"
+            | "minecraft:water_breathing"
+            | "minecraft:fire_resistance"
+            | "minecraft:healing"
+            | "minecraft:swiftness"
+    )
 }
 /// WitchModel.setupAnim (VillagerModel base with a wobbling nose).
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {

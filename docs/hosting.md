@@ -3,7 +3,7 @@
 `horizon-server` hosts a Minecraft Java Edition 26.3 server with Horizon's own game as the engine: one native
 program, no Java, one settings file, a command line, and a web panel. Vanilla 26.3 clients and Horizon clients
 can join it. This page covers what works on `main` today and says plainly what doesn't yet. The design and the
-plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md).
+plan are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/docs/server.md).
 
 ## Before you start
 
@@ -19,7 +19,7 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
   takes the account's UUID when someone owns that name, as vanilla does, and that player is then refused.
 - **Horizon's own client can't sign in to a Microsoft account yet.** That needs an Azure app registration and
   Mojang's approval, which the project doesn't have
-  ([docs/microsoft-account.md](https://github.com/ludovic111/horizon/blob/main/docs/microsoft-account.md)).
+  ([docs/microsoft-account.md](https://github.com/horizon-rust/horizon/blob/main/docs/microsoft-account.md)).
   Until then Horizon players can join offline servers only (`online_mode = false`). An offline server never
   checks accounts: anyone who reaches it can join under any name. Keep it on your LAN or a tailnet
   (Tailscale, ZeroTier), or share it only with friends you trust.
@@ -41,20 +41,20 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
 
 ## 1. Install
 
-Linux (x86-64) and macOS (Apple Silicon; Intel from the next release):
+Linux (x86-64) and macOS (Apple Silicon; Intel from the next Nightly):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh
 ```
 
 Windows (x64), in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex
+irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex
 ```
 
-The script downloads the latest Horizon release for your computer from GitHub, checks it against the SHA-256
-GitHub publishes, and never asks for sudo or administrator rights. It installs:
+The script downloads the current Horizon Nightly for your computer from GitHub (the only build Horizon ships;
+`--version` picks another), checks it against the SHA-256 GitHub publishes, and never asks for sudo or administrator rights. It installs:
 
 - the release in `~/.local/share/horizon/releases/<version>` (Windows: `%LOCALAPPDATA%\Horizon`), with
   `current` pointing at the one in use;
@@ -71,7 +71,7 @@ from there too.
 ## 2. Prepare the game files
 
 Horizon reads Minecraft's data from your own copy of the game. You need Minecraft Java Edition 26.3, played
-once from the official launcher on this computer, Java 25 (a JDK), and the 26.3 `server.jar`: it's the
+once from the official launcher on this computer, a Java 25 runtime, and the 26.3 `server.jar`: it's the
 `downloads.server.url` in your launcher's `versions/26.3/26.3.json`. Then:
 
 ```sh
@@ -165,6 +165,8 @@ hardcore = false
 # Any other server.properties key, spelled as vanilla spells it:
 [properties]
 # spawn-protection = 16
+# resource-pack = "https://example.com/pack.zip"   # offered to players as they join; with
+# resource-pack-sha1, require-resource-pack and resource-pack-prompt, as on vanilla
 
 [engine]
 path = ""                    # the game program; empty: the one beside horizon-server
@@ -198,6 +200,7 @@ horizon-server start | stop | restart    in the background (its output goes to l
 horizon-server status [--json]           up or not, TPS, MSPT, players, chunks, RAM, CPU
 horizon-server cmd COMMAND...            one console command, and what it answers
 horizon-server logs [-f] [-n N]          the log; -f follows it
+horizon-server report [SECONDS]          record a performance report (below)
 horizon-server op|deop NAME
 horizon-server whitelist on|off|list
 horizon-server whitelist add|remove NAME
@@ -216,6 +219,21 @@ horizon-server rollback                  back to the release before
 While the server runs, `op`, `whitelist` and `cmd` go to the game's console, so they act exactly as vanilla's
 console commands do. While it's stopped, they edit vanilla's files directly. Any console command works through
 `cmd`: `horizon-server cmd ban Griefer`, `horizon-server cmd say Restarting in 5 minutes`.
+To generate the world around spawn ahead of the players, Horizon has its own `pregen` command, off until
+`server.toml` has `horizon-pregen = true` under `[properties]`: `horizon-server cmd pregen start 2500`
+([pregeneration](pregeneration.md)).
+To let only the Horizon client join, set `horizon-clients-only = true` under `[properties]` (off by default).
+Other clients are turned away while they connect with "This server is for the Horizon client:
+playhorizon.dev", and the console says which client it was. The check reads the brand a client names itself
+by (`minecraft:brand`), which any client can fake: it keeps out players who didn't install Horizon, not
+cheaters. The server's own checks (reach, movement) are what protect it.
+
+`horizon-server report` records the running server for 60 seconds (`report 300` for five minutes, up to 600),
+then prints a short summary and saves it in `reports/`: `perf-<time>.txt` and `perf-<time>.json`. They say where
+the ticks' time went, phase by phase (mobs, block ticks, block entities, the network and the chunks it
+sends, saving...), the slowest ticks, how many entities of each type, chunks, players, memory, CPU, and the
+settings that matter (view and simulation distance, max players). They hold no names, UUIDs or addresses, so you
+can attach them to an issue as they are. On the console it is `horizon-report [SECONDS]`.
 
 `config set` changes `server.toml` without opening it: `horizon-server config set world.difficulty=hard
 server.max_players=10`. Each key is a section and a name from the file (`properties.spawn-protection=0` for any
@@ -231,7 +249,7 @@ minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, a
 after it starts and every 6 hours after, and says so in its log, in `status` and in the panel; it never
 updates by itself. `horizon-server update --check` asks once. `horizon-server update`:
 
-1. downloads the newest release and checks it against the SHA-256 GitHub publishes for it;
+1. downloads the current Nightly and checks it against its signed SHA-256;
 2. stops the game, backs up the world (`backups/<time>-before-<release>.zip`) and switches to the new
    release;
 3. starts the game on it and waits up to 5 minutes (`--timeout SECONDS`) for it to come up.
@@ -240,7 +258,9 @@ If the new game crashes or doesn't come up in time, the server goes back to the 
 and puts the world back as it was just before the switch (the world the new game left is kept in
 `backups/`). `horizon-server rollback` goes back to the release before by hand, keeping the world as it is
 (it backs it up first). `--version vX.Y.Z` installs a given release, and `--archive FILE --version NAME` an
-archive you have, such as your own build. A stopped server is switched and starts on the new release next
+archive you have, such as your own build. A server still on a release from before the last dated one doesn't know
+that 0.2 comes after the dated releases and says it is up to date: run `horizon-server update --version v0.2.0`
+once ([versioning](versioning.md)). A stopped server is switched and starts on the new release next
 time. Set `HORIZON_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
 
 Coming: `console` (attach to a server running in the background), `ban` and `pardon` as their own
@@ -304,7 +324,7 @@ No image is published: build one from the repository. The image holds none of Mi
 folder you prepared (step 2) read-only.
 
 ```sh
-git clone https://github.com/ludovic111/horizon && cd horizon
+git clone https://github.com/horizon-rust/horizon && cd horizon
 docker build -f packaging/server/Dockerfile -t horizon-server .
 
 docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
@@ -329,10 +349,10 @@ docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
 ## 10. How fast is it
 
 The latest bot benchmark compares Horizon with vanilla 26.3, Paper and Fabric + Lithium:
-[benchmarks/server-four-way-2026-10-19](https://github.com/ludovic111/horizon/blob/main/benchmarks/server-four-way-2026-10-19/README.md).
+[benchmarks/server-four-way-2026-10-19](https://github.com/horizon-rust/horizon/blob/main/benchmarks/server-four-way-2026-10-19/README.md).
 It ran release v2026.10.19 on a 4-thread laptop CPU (i7-7500U), with 1 to 50 players walking, exploring and
 standing around spawn, the bots on another machine. All four servers did the same work. Earlier
-measurements are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md). In
+measurements are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/docs/server.md). In
 short:
 
 - **Memory:** 0.7 GB with one player and 1.1 GB with 50, against 3.4 to 4.5 GB for the Java servers
@@ -359,4 +379,4 @@ For more than 50 active players, give it more cores.
   open in your firewall. On a tailnet, use the server's tailnet address.
 - **It keeps restarting**: `horizon-server status` shows the last crash and `horizon-server logs -n 200` the log
   before it. Crash reports are in `crash-reports/`.
-- Report problems at <https://github.com/ludovic111/horizon/issues>, with the end of the log.
+- Report problems at <https://github.com/horizon-rust/horizon/issues>, with the end of the log.

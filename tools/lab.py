@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Pinned Java Edition import/decompilation. Game files come from the user's own
 copy (their official launcher install and the server jar they downloaded); all
-generated files stay in .local/."""
+generated files stay in .local/. Also the small helpers the harnesses share
+(free ports, offline UUIDs, VarInts, float bits)."""
 
 import argparse
+import atexit
 from collections import Counter
 import hashlib
 import json
@@ -12,11 +14,13 @@ import platform
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
 import tempfile
 import urllib.request
+import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +55,41 @@ def cargo_target():
     return ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
 
 
+_SCRATCH_DIRS = []
+
+
+def _scratch_dir(prefix):
+    path = tempfile.mkdtemp(prefix=prefix)
+    _SCRATCH_DIRS.append(path)
+    return path
+
+
+@atexit.register
+def _remove_scratch_dirs():
+    for path in _SCRATCH_DIRS:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def game_env(base=None, **extra):
+    """The environment for every run of the game, the launcher or horizon-ctl from a tool or a harness: no audio,
+    no Discord presence, and fresh scratch folders for the game's home (logs, saves, options), the launcher's home and the XDG folders,
+    so a run never writes into a real player's folders (the game falls back to them when HORIZON_HOME is unset).
+    A folder the caller already has in `base` (default os.environ) or passes in `extra` is kept. The scratch folders
+    are removed when this process exits."""
+    env = dict(os.environ if base is None else base)
+    env.update({key: str(value) for key, value in extra.items()})
+    env["HORIZON_NO_AUDIO"] = "1"
+    env["HORIZON_LAUNCHER_NO_SELF_UPDATE"] = "1"
+    # Never a real Discord's Rich Presence; tools/discord_presence_e2e.py points the game at a fake one.
+    if not env.get("HORIZON_DISCORD_IPC_DIR"):
+        env["HORIZON_NO_DISCORD"] = "1"
+    for key, prefix in (("HORIZON_HOME", "horizon-home-"), ("HORIZON_LAUNCHER_HOME", "horizon-launcher-home-"),
+                        ("XDG_DATA_HOME", "horizon-xdg-data-"), ("XDG_CONFIG_HOME", "horizon-xdg-config-")):
+        if not env.get(key):
+            env[key] = _scratch_dir(prefix)
+    return env
+
+
 def write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -59,6 +98,66 @@ def write_json(path, data):
 def digest(path, algorithm):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, algorithm).hexdigest()
+
+
+def free_port():
+    """A free local TCP port, for a server a harness starts."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def offline_uuid(name):
+    """UUIDUtil.createOfflinePlayerUUID: the UUID an offline-mode server gives a player name."""
+    digest = bytearray(hashlib.md5(("OfflinePlayer:" + name).encode()).digest())
+    digest[6] = (digest[6] & 0x0F) | 0x30
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    return uuid.UUID(bytes=bytes(digest))
+
+
+def varint(value):
+    """FriendlyByteBuf.writeVarInt: the int's 32 bits, 7 at a time."""
+    out = b""
+    value &= 0xFFFFFFFF
+    while True:
+        b = value & 0x7F
+        value >>= 7
+        out += bytes([b | (0x80 if value else 0)])
+        if not value:
+            return out
+
+
+def parse_varint(data, pos):
+    """The VarInt at data[pos]: (the position after it, its unsigned value)."""
+    value = shift = 0
+    while True:
+        b = data[pos]
+        pos += 1
+        value |= (b & 0x7F) << shift
+        shift += 7
+        if not b & 0x80:
+            return pos, value
+
+
+def fbits(value):
+    """A float's IEEE 754 bits in hex, as the Java oracles print them."""
+    return struct.pack(">f", value).hex()
+
+
+def dbits(value):
+    """A double's IEEE 754 bits in hex, as the Java oracles print them."""
+    return struct.pack(">d", value).hex()
+
+
+def settled(lines):
+    """One player's lines of one step, in order, with the waypoint packets reduced to the last for each waypoint:
+    what the locator bar shows once the step is over. Arriving in a level, vanilla sends the same waypoint more
+    than once on the way there; the packet by packet order is test_locator_bar_parity's."""
+    def waypoint(line):
+        parts = line.split(" ")
+        return parts[3] if len(parts) > 3 and parts[2] in ("track", "untrack", "update") else None
+    last = {waypoint(l): i for i, l in enumerate(lines) if waypoint(l)}
+    return [l for i, l in enumerate(lines) if not waypoint(l) or last[waypoint(l)] == i]
 
 
 def download(url, destination, checksum, algorithm="sha1"):

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Compare the resource pack screen's drawing with the vanilla client's.
 
-Each case is a pack repository (titles and descriptions as text components,
+Each case is a title (the resource pack screen's, or the data pack screen's
+Create World opens), a pack repository (titles and descriptions as text components,
 with legacy formatting codes, colours and styles; pack sources; compatible,
 too old, too new or unknown packs; required, fixed and positioned packs;
 icons), an initial selection, a GUI size, in a world or not, and what the
@@ -14,7 +15,7 @@ records every GuiGraphicsExtractor call of the screen shown at the end
 (widgets, list backgrounds, scissor, separators, scroll bars, entries with
 their incompatibility tint, hover overlay and arrows, the selection
 outline, the search box, the buttons and their tooltip);
-examples/pack_screen_fixture runs horizon_client::pack_screen, which the
+examples/probe/pack_screen_fixture runs horizon_client::pack_screen, which the
 game's pack screen is, through the same actions. The call lists must agree.
 
   test_pack_screen_parity.py [--count N] [--detail N]
@@ -119,7 +120,9 @@ def cases(count):
                             (rng.randint(cx - 154, cx + 154), height - 26 + rng.randint(0, 19)),
                             (rng.randint(cx - 160, cx + 160), rng.randint(height // 2 - 30, height // 2 + 60))])
         out.append({'width': width, 'height': height, 'inWorld': rng.random() < 0.3, 'packs': packs, 'selected': selected,
-                    'actions': actions, 'mouse': list(mouse), 'blink': rng.choice([0, 100, 400, 650])})
+                    'actions': actions, 'mouse': list(mouse), 'blink': rng.choice([0, 100, 400, 650]),
+                    # Create World's Data Packs screen is the same screen under its own title.
+                    'title': 'dataPack.title' if n % 4 == 3 else 'resourcePack.title'})
     return out
 
 
@@ -147,7 +150,7 @@ def main():
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-cp', dependencies, '-d', classes,
          *(PARITY / f'{n}.java' for n in ('ParityData', 'ParityFont', 'VanillaPackScreenOracle'))], 'compile-java')
     run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaPackScreenOracle',
-         inputs, build / 'vanilla.jsonl'], 'vanilla')
+         inputs, build / 'vanilla.jsonl', lab.RESOURCES / 'assets'], 'vanilla')
     lib.cargo_example('horizon-client', 'pack_screen_fixture', lib.RESOURCES, inputs, build / 'rust.jsonl')
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text().splitlines()]
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
@@ -161,7 +164,7 @@ def main():
     for e in sorted(set(errors))[:5]:
         print('ORACLE ERROR', e[:1500])
     for c, v, r in bad[:args.detail]:
-        brief = {k: c[k] for k in ('width', 'height', 'inWorld', 'selected', 'actions', 'mouse', 'blink')}
+        brief = {k: c[k] for k in ('title', 'width', 'height', 'inWorld', 'selected', 'actions', 'mouse', 'blink')}
         print('MISMATCH', json.dumps(brief)[:1500])
         if v.get('screen') != r.get('screen'):
             print(f'   screen: vanilla {v.get("screen")} | horizon {r.get("screen")}')

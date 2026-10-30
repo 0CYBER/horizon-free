@@ -1,7 +1,7 @@
 # Section meshing parity
 
 `tools/test_section_mesh_parity.py` compares the vertices Horizon's section
-mesher (`crates/horizon-client/src/mesher.rs`, with `mesher/lighting.rs` and
+mesher (`crates/horizon-client-render/src/mesher.rs`, with `mesher/lighting.rs` and
 `mesher/fluid.rs`) emits with the vertices the pinned client's own renderers
 emit for the same scenes.
 
@@ -20,7 +20,7 @@ emit for the same scenes.
   `FluidRenderer.tesselate`, then `RenderShape.MODEL` blocks through
   `ModelBlockRenderer.tesselateBlock` with smooth lighting on, culling on,
   cutout leaves, `BlockColors.createDefault()` and `state.getSeed(pos)`.
-- **Horizon side**: `crates/horizon-client/examples/section_mesh_fixture.rs`
+- **Horizon side**: `crates/horizon-client/examples/probe/section_mesh_fixture.rs`
   loads the prepared resources (`Assets`, `BlockFacts`, `Biomes`,
   `load_visibility`, `MeshTables`), builds the same blocks and light in real
   client `Chunk`s (a 3x3 chunk region), sets every biome's colours to the

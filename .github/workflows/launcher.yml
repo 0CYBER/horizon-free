@@ -50,6 +50,10 @@ concurrency:
   group: launcher-${{ github.ref == 'refs/heads/main' && 'release' || github.ref }}
   cancel-in-progress: false
 
+env:
+  # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
+  HORIZON_TELEMETRY_URL: "off"
+
 jobs:
   decide:
     runs-on: ubuntu-latest
@@ -198,22 +202,21 @@ jobs:
           retry() { for i in 1 2 3 4; do "$@" && return 0; sleep $((i * 15)); done; return 1; }
           retry "$launcher" versions
           "$launcher" links --json
-          "$launcher" menu-style classic
-          grep -qx 'menuStyle:classic' "$HORIZON_HOME/horizon.txt"
-          "$launcher" menu-style horizon
-          # A new platform's launcher can come out before any stable game release has its build (Intel Macs, #1161):
-          # then there is nothing to install yet.
-          stable_build='import json, sys; sys.exit(not any(r["available_here"] and r["channel"] == "stable" for r in json.load(sys.stdin)))'
-          if ! retry "$launcher" --json versions | ${{ runner.os == 'Windows' && 'python' || 'python3' }} -c "$stable_build"; then
-            echo "::warning::No stable game release has a build for ${{ matrix.name }} yet: install not tested"
+          # A new platform's launcher can come out before any game build has its asset (Intel Macs, #1161): then
+          # there is nothing to install yet.
+          any_build='import json, sys; sys.exit(not any(r["available_here"] for r in json.load(sys.stdin)))'
+          if ! retry "$launcher" --json versions | ${{ runner.os == 'Windows' && 'python' || 'python3' }} -c "$any_build"; then
+            echo "::warning::No game build has an asset for ${{ matrix.name }} yet: install not tested"
             rm -rf "$HORIZON_LAUNCHER_HOME"
             exit 0
           fi
           retry "$launcher" install latest
           "$launcher" versions --installed
-          clients=("$HORIZON_LAUNCHER_HOME"/versions/v*/horizon-client*)
+          # `install latest` is the Nightly since #3342 (versions/nightly-<date>-<commit>), a vX.Y.Z before.
+          clients=("$HORIZON_LAUNCHER_HOME"/versions/*/horizon-client*)
           client="${clients[0]}"
           echo "installed client: $client"
+          [[ -f "$client" ]] || { echo "::error::no game installed under versions/"; exit 1; }
           # The game's Linux build is the game's to keep portable (release.yml checks it): a
           # release linked to a Nix store is a warning here, not a broken launcher.
           soft() { if [[ "$RUNNER_OS" == "Linux" ]]; then "$@" || echo "::warning::$* failed"; else "$@"; fi; }

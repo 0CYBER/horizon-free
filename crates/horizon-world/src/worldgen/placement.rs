@@ -445,7 +445,7 @@ impl PlacementModifier {
                             if !include_edges && (u8::from(bx) + u8::from(by) + u8::from(bz)) >= 2 {
                                 continue;
                             }
-                            if !include_interior && !(bx || by || bz) {
+                            if !(*include_interior || bx || by || bz) {
                                 continue;
                             }
                             emit(

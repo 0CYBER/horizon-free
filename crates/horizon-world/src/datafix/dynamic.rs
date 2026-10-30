@@ -157,12 +157,6 @@ pub fn map(tag: &Tag) -> Option<&Compound> {
         _ => None,
     }
 }
-pub fn map_mut(tag: &mut Tag) -> Option<&mut Compound> {
-    match tag {
-        Tag::Compound(c) => Some(c),
-        _ => None,
-    }
-}
 /// `Dynamic.set`: only maps change.
 pub fn set(tag: &mut Tag, field: &str, value: Tag) {
     if let Tag::End = tag {
@@ -193,12 +187,6 @@ pub fn update(tag: &mut Tag, field: &str, f: impl FnOnce(Tag) -> Tag) {
         set(tag, field, f(v));
     }
 }
-/// `Dynamic.update` in place.
-pub fn update_mut(tag: &mut Tag, field: &str, f: impl FnOnce(&mut Tag)) {
-    if let Some(v) = tag.get_mut(field) {
-        f(v);
-    }
-}
 /// `Dynamic.renameAndFixField`: the fixed value under the new name, removed when
 /// the fix gives nothing.
 pub fn rename_and_fix(tag: &mut Tag, from: &str, to: &str, f: impl FnOnce(Tag) -> Option<Tag>) {
@@ -222,15 +210,6 @@ pub fn is_empty_map(tag: &Tag) -> bool {
 /// `Dynamic.orElseEmptyMap` of an optional field.
 pub fn or_empty_map(tag: Option<&Tag>) -> Tag {
     tag.cloned().unwrap_or_else(empty_map)
-}
-/// Apply `f` to every element of a list field (`Dynamic.createList(asStream().map(f))`).
-pub fn map_list(tag: &mut Tag, field: &str, mut f: impl FnMut(Tag) -> Tag) {
-    if let Some(v) = tag.get(field)
-        && is_list(Some(v))
-    {
-        let list = stream(Some(v)).into_iter().map(&mut f).collect();
-        set(tag, field, Tag::List(list));
-    }
 }
 /// `NamespacedSchema.ensureNamespaced`.
 pub fn namespaced(id: &str) -> String {

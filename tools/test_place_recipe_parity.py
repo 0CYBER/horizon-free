@@ -9,7 +9,7 @@ renamed copies the book must not use, junk, and sometimes a nearly full
 inventory; the grid is empty, holds the same recipe already (placing again
 adds one set, or a full stack with shift) or something else. The Java oracle
 (VanillaPlaceRecipeOracle) runs RecipeBookMenu.handlePlacement as the server's
-packet handler does; examples/place_recipe_fixture runs
+packet handler does; examples/probe/place_recipe_fixture runs
 horizon_client::menu's place_recipe. Every menu slot, the whole inventory,
 the drops and whether the client gets a ghost recipe are compared.
 

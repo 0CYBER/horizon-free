@@ -85,7 +85,10 @@ impl Game<'_> {
         let players = self.vault_players();
         let mut random = std::mem::replace(&mut self.world.random, LegacyRandom::new(0));
         let mut sequences = std::mem::take(&mut self.rand_sequences);
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         let seed = self.level.seed;
         let mut events = Vec::new();
         let out = {
@@ -169,6 +172,8 @@ impl Game<'_> {
                 self.consume_held();
             }
         }
+        // ServerPlayerGameMode.useItemOn: the action was consumed.
+        self.trigger_block("minecraft:item_used_on_block", pos, &stack);
         Ok(true)
     }
     fn vault_events(&mut self, key: Pos, events: Vec<VaultEvent>) -> Result<()> {

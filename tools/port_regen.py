@@ -124,8 +124,23 @@ def prepare_local(root, version, found, store):
         run([python(), "tools/lab.py", "prepare", "--minecraft-dir", tree, "--server-jar", found["server"]], root)
 
 
+_PYTHON = None
+
+
 def python():
-    return shutil.which("python3") or "python3"
+    """The interpreter to run the other tools with. Git for Windows puts a
+    `python3` on PATH that is only the Store stub: it prints "Python" and exits
+    49, so probe the names and keep the first one that runs Python 3."""
+    global _PYTHON
+    if _PYTHON is None:
+        _PYTHON = "python3"
+        for name in ("python3", "python", "py"):
+            found = shutil.which(name)
+            probe = [found, "-c", "import sys; sys.exit(sys.version_info < (3,))"] if found else None
+            if probe and subprocess.run(probe, capture_output=True).returncode == 0:
+                _PYTHON = found
+                break
+    return _PYTHON
 
 
 class Failed(RuntimeError):
@@ -229,10 +244,10 @@ def gen_vanilla_order(root, version, store, build):
          "dev.horizonlab.parity.VanillaCommandParseOracle", "tree", build], build)
     env = dict(os.environ, CARGO_TARGET_DIR=str(root / ".local" / "port-target"))
     jobs = os.environ.get("FLEET_LOAD_JOBS")
-    run(["cargo", "build", "-p", "horizon-client", "--example", "command_parse_fixture",
+    run(["cargo", "build", "-p", "horizon-client", "--example", "client_probe",
          *(["-j", jobs] if jobs else [])], root, env=env)
-    fixture = root / ".local/port-target/debug/examples/command_parse_fixture"
-    run([fixture, "tree", build / "rust_tree.json"], root)
+    fixture = root / ".local/port-target/debug/examples/client_probe"
+    run([fixture, "command_parse_fixture", "tree", build / "rust_tree.json"], root)
     return [python(), "tools/generate_command_order.py", build / "tree.json", build / "rust_tree.json"]
 
 
@@ -251,7 +266,7 @@ GENERATORS = [
     ("lan_command_order", ["crates/horizon-client/src/lan/command_order.rs"],
      lambda root, version, store, build: [python(), "tools/generate_lan_command_order.py"]),
     ("command_suggestions", ["crates/horizon-client/src/lan/command_suggestions.rs"], gen_suggestions),
-    ("vanilla_command_order", ["crates/horizon-client/src/command/vanilla_order.rs"], gen_vanilla_order),
+    ("vanilla_command_order", ["crates/horizon-command/src/vanilla_order.rs"], gen_vanilla_order),
 ]
 
 

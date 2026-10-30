@@ -1,0 +1,4 @@
+{
+  "template": "minecraft:amethyst_block",
+  "properties": { "hardness": 2.0, "light": 7 }
+}

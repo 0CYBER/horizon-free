@@ -68,6 +68,22 @@ def generate(resources, count, seed):
     return cases
 
 
+def obstruction_cases(resources):
+    """Placement failures must not predict a hand swing.
+
+    Exercise BlockItem.canPlace's entity-obstruction gate with the same
+    otherwise valid placements, including partial shapes and two-block items.
+    """
+    facts = json.loads((resources / 'facts.json').read_text())
+    states = {s[0]: i for i, s in reversed(list(enumerate(facts['states'])))}
+    stone = states['minecraft:stone']
+    for item in ['minecraft:stone', 'minecraft:oak_slab', 'minecraft:oak_stairs',
+                 'minecraft:oak_door', 'minecraft:torch']:
+        for obstructed in [False, True]:
+            yield dict(seed=0, item=item, pos=[0, 0, 0], face=1, hit=[0.5, 1.0, 0.5],
+                       yaw=0, pitch=45, sneak=False, cells=[[0, 0, 0, stone]], obstructed=obstructed)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--count', type=int, default=20000)
@@ -77,7 +93,7 @@ def main():
     resources = lab.LOCAL / 'horizon-client' / lock['minecraft']['version']
     work = lab.LOCAL / 'level-place-parity'
     work.mkdir(parents=True, exist_ok=True)
-    cases = generate(resources, args.count, args.seed)
+    cases = list(obstruction_cases(resources)) + generate(resources, args.count, args.seed)
     (work / 'cases.jsonl').write_text(''.join(json.dumps(case) + '\n' for case in cases))
     classes = work / 'classes'
     classes.mkdir(exist_ok=True)
@@ -89,8 +105,8 @@ def main():
     subprocess.run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies,
                     'dev.horizonlab.parity.VanillaBlockPlacementOracle', str(resources), str(work / 'cases.jsonl'),
                     str(work / 'native.txt')], check=True)
-    subprocess.run(['cargo', 'run', '-q', '-j2', '--release', '-p', 'horizon-world', '--example', 'level_place_fixture', '--',
-                    str(resources), str(work / 'cases.jsonl'), str(work / 'rust.txt')], check=True, cwd=lab.ROOT)
+    subprocess.run(['cargo', 'run', '-q', '-j2', '--release', '-p', 'horizon-world', '--example', 'world_probe', '--',
+                    'level_place_fixture', str(resources), str(work / 'cases.jsonl'), str(work / 'rust.txt')], check=True, cwd=lab.ROOT)
     native = (work / 'native.txt').read_text().splitlines()
     rust = (work / 'rust.txt').read_text().splitlines()
     differences = {}

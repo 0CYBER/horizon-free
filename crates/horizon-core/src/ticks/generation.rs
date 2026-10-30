@@ -91,9 +91,6 @@ impl<C: WorldGenTickContainers> WorldGenTickAccess<C> {
     pub fn containers_mut(&mut self) -> &mut C {
         &mut self.containers
     }
-    pub fn into_containers(self) -> C {
-        self.containers
-    }
     pub fn schedule(&mut self, tick: ScheduledTick) -> Result<bool, C::Error> {
         Ok(self.containers.container_at(tick.pos)?.schedule(tick))
     }

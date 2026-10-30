@@ -1,6 +1,7 @@
 //! Horses, donkeys, mules and the undead horses (`AbstractHorse`): random
 //! stats, coat colours and markings, eating, rearing, taming by riding,
 //! the ridden movement and jump, offspring stats and `AbstractEquineModel`.
+use super::finalize::{Attr, set_base};
 use super::{
     Mob, MobEvent, MobWorld, Species,
     anim::{Poses, State},
@@ -28,6 +29,8 @@ pub const MARKINGS: [&str; 5] = ["", "white", "whitefield", "whitedots", "blackd
 pub const EAT: usize = 0;
 pub const STAND: usize = 1;
 pub const MOUTH: usize = 2;
+/// `AbstractHorse.tailCounter`: client-side, it only drives the model.
+pub const TAIL: usize = 3;
 
 /// What a rider asks of its mount this tick.
 #[derive(Clone, Copy, Debug, Default)]
@@ -44,6 +47,9 @@ pub struct Rider {
     pub sprint: bool,
     /// Holding the jump key (a happy ghast rises).
     pub jumping: bool,
+    /// A server's player whose own client moves the mount
+    /// (`Entity.isClientAuthoritative`): here it only turns (`tickRidden`).
+    pub client: bool,
 }
 
 pub fn is_equine(s: Species) -> bool {
@@ -68,12 +74,49 @@ pub fn max_temper(s: Species) -> i32 {
         100
     }
 }
-/// `canPerformRearing`: not donkeys or mules.
+/// `canPerformRearing`: every `AbstractHorse` but llamas (and camels).
 fn can_rear(s: Species) -> bool {
     matches!(
         s,
-        Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
+        Species::Horse
+            | Species::Donkey
+            | Species::Mule
+            | Species::SkeletonHorse
+            | Species::ZombieHorse
     )
+}
+/// `AbstractHorse.getPassengerAttachmentPoint`: what it adds to its seat
+/// before the yaw turns it. A horse up on its hind legs slides its rider back
+/// and up by the stand animation of the last tick (`standAnimO`), at
+/// `getAgeScale`. Camels and llamas never rear.
+pub fn rear_offset(m: &Mob) -> [f64; 3] {
+    if !can_rear(m.species()) {
+        return [0.0; 3];
+    }
+    let stand = f64::from(m.anim.vo[STAND]);
+    let scale = f64::from(if m.is_baby() { 0.5_f32 } else { 1.0 });
+    [0.0, 0.15 * stand * scale, -0.7 * stand * scale]
+}
+/// `AbstractHorse.isImmobile`: no goals while it eats or rears. A mount its
+/// rider steers still takes their input (`travelRidden`).
+pub fn immobile(m: &Mob) -> bool {
+    can_rear(m.species()) && (m.extra.flag || m.extra.counter > 0) && !controlled(m)
+}
+/// `AbstractHorse.onElasticLeashPull`: a lead pulled taut ends the horse's
+/// grazing, and `Camel.onElasticLeashPull` stands a sitting camel up.
+pub fn on_elastic_leash_pull(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if grazes(m.species()) {
+        m.extra.flag = false;
+    }
+    if super::camel::is_camel(m.species()) {
+        super::camel::on_elastic_leash_pull(m, w, events);
+    }
+}
+/// `AbstractHorse.onPlayerJump`: a released jump bar lets the horse slide on
+/// the rider's keys (`allowStandSliding`) and makes it rear.
+pub fn on_player_jump(m: &mut Mob) {
+    m.extra.stand_sliding = true;
+    stand_if_possible(m);
 }
 pub fn register(m: &mut Mob) {
     if super::camel::is_camel(m.species()) {
@@ -112,28 +155,49 @@ pub fn register(m: &mut Mob) {
         g.add(3, Tempt::new(1.25, tempt, false));
     }
 }
-/// `generateMaxHealth`, `generateSpeed`, `generateJumpStrength` and the coat.
+/// `randomizeAttributes` of each class: horses roll health, speed and jump,
+/// donkeys and mules only health (their jump stays 0.5), skeleton horses only
+/// the jump, zombie horses a smaller jump and their own speed. The health and
+/// speed are attribute bases (`setBaseValue`), so the server syncs them to
+/// the clients that draw the mount's hearts.
 pub fn finalize(m: &mut Mob) {
+    let species = m.species();
     let r = &mut m.random;
-    let health =
-        15.0 + r.next_int_bound(8).unwrap_or(0) as f32 + r.next_int_bound(9).unwrap_or(0) as f32;
-    let speed =
-        (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3) * 0.25;
-    let jump = 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
-    match m.species() {
+    let health = matches!(species, Species::Horse | Species::Donkey | Species::Mule).then(|| {
+        15.0 + r.next_int_bound(8).unwrap_or(0) as f32 + r.next_int_bound(9).unwrap_or(0) as f32
+    });
+    let mut speed = None;
+    match species {
         Species::Horse => {
-            m.attrs.max_health = health;
-            m.attrs.speed = speed;
-            m.extra.vector[0] = jump;
-            m.extra.variant = m.random.next_int_bound(7).unwrap_or(0) as u8;
-            m.extra.variant2 = m.random.next_int_bound(5).unwrap_or(0) as u8;
+            speed = Some(
+                (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3)
+                    * 0.25,
+            );
+            m.extra.vector[0] =
+                0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
+            m.extra.variant = r.next_int_bound(7).unwrap_or(0) as u8;
+            m.extra.variant2 = r.next_int_bound(5).unwrap_or(0) as u8;
         }
-        Species::Donkey | Species::Mule => {
-            // AbstractChestedHorse.randomizeAttributes: fixed speed, generated health.
-            m.attrs.max_health = health;
-            m.extra.vector[0] = jump;
+        Species::Donkey | Species::Mule => m.extra.vector[0] = 0.5,
+        Species::ZombieHorse => {
+            // ZombieHorse.generateZombieHorseJumpStrength and ...Speed.
+            let d = 0.066_666_666_666_666_67;
+            m.extra.vector[0] =
+                0.5 + r.next_double() * d + r.next_double() * d + r.next_double() * d;
+            speed = Some(
+                (9.0 + r.next_double() + r.next_double() + r.next_double()) / f64::from(42.16f32),
+            );
         }
-        _ => m.extra.vector[0] = jump,
+        _ => {
+            m.extra.vector[0] =
+                0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2
+        }
+    }
+    if let Some(health) = health {
+        set_base(m, Attr::MaxHealth, f64::from(health));
+    }
+    if let Some(speed) = speed {
+        set_base(m, Attr::MovementSpeed, speed);
     }
     m.health = m.attrs.max_health;
 }
@@ -154,16 +218,18 @@ pub fn offspring(a: f64, b: f64, min: f64, max: f64, r: &mut impl RandomSource) 
 }
 /// `AbstractHorse.setOffspringAttributes` from two parents.
 pub fn inherit(child: &mut Mob, a: &Mob, b: &Mob, r: &mut impl RandomSource) {
-    child.attrs.max_health = offspring(
+    let health = offspring(
         f64::from(a.attrs.max_health),
         f64::from(b.attrs.max_health),
         15.0,
         30.0,
         r,
-    ) as f32;
+    );
+    set_base(child, Attr::MaxHealth, f64::from(health as f32));
     child.health = child.attrs.max_health;
     child.extra.vector[0] = offspring(a.extra.vector[0], b.extra.vector[0], 0.4, 1.0, r);
-    child.attrs.speed = offspring(a.attrs.speed, b.attrs.speed, 0.1125, 0.3375, r);
+    let speed = offspring(a.attrs.speed, b.attrs.speed, 0.1125, 0.3375, r);
+    set_base(child, Attr::MovementSpeed, speed);
 }
 /// The rider controls the mount: saddled, with a player on it.
 pub fn controlled(m: &Mob) -> bool {
@@ -175,8 +241,22 @@ pub fn controlled(m: &Mob) -> bool {
         Species::Pig | Species::Strider => m.extra.saddled && r.steer,
         Species::HappyGhast => super::happy_ghast::controlled(m),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::controlled(m),
-        _ => m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame,
+        // AbstractHorse.getControllingPassenger: saddled with a player on it. A
+        // tamed skeleton horse (SkeletonTrapGoal only tames it) needs the saddle too.
+        _ => m.extra.saddled,
     }
+}
+/// `AbstractHorse`s (camels too, not llamas, which no player steers): the
+/// player controlling one moves it on its own client
+/// (`Entity.isLocalInstanceAuthoritative`, `LivingEntity.travelRidden`) and
+/// sends the moves (`ServerboundMoveVehiclePacket`).
+pub fn moved_by_rider(s: Species) -> bool {
+    is_equine(s) && !super::llama::is_llama(s)
+}
+/// A server's mount that its rider's client moves: `travelRidden` without
+/// `canSimulateMovement` turns it (`tickRidden`) and stops it there.
+pub fn moved_by_client(m: &Mob) -> bool {
+    moved_by_rider(m.species()) && m.rider.is_some_and(|r| r.client) && controlled(m)
 }
 /// `ItemBasedSteering.boost`: 140 to 980 ticks of extra speed.
 pub fn boost(m: &mut Mob) -> bool {
@@ -269,22 +349,89 @@ impl Goal for RunAroundLikeCrazy {
         make_mad(m, cx.events);
     }
 }
-/// `AbstractHorse.makeMad`: rear with the angry sound.
-pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    if m.extra.counter > 0 {
-        return;
-    }
+/// `AbstractHorse.standIfPossible`: `setStanding(20)` (which also stops the
+/// eating) when `canPerformRearing`.
+pub fn stand_if_possible(m: &mut Mob) {
     if can_rear(m.species()) {
         m.extra.counter = 20;
         m.extra.flag = false;
     }
+}
+/// `AbstractHorse.hurtServer`, after the hurt went through: one hit in three
+/// rears the horse. Llamas and camels make the draw too, but never rear.
+pub fn after_hurt_server(m: &mut Mob) {
+    if m.random.next_int_bound(3).unwrap_or(1) == 0 {
+        stand_if_possible(m);
+    }
+}
+/// `AbstractHorse.makeMad`: rear with the angry sound (`makeSound`).
+pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.extra.counter > 0 {
+        return;
+    }
+    stand_if_possible(m);
+    // getAngrySound: null (silent) for the skeleton horse.
     let sound = match m.species() {
+        Species::SkeletonHorse => return,
         Species::Donkey => "entity.donkey.angry",
         Species::Mule => "entity.mule.angry",
+        Species::ZombieHorse => "entity.zombie_horse.angry",
         Species::Llama | Species::TraderLlama => "entity.llama.angry",
+        _ if m.is_baby() => "entity.baby_horse.angry",
         _ => "entity.horse.angry",
     };
-    events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+    m.voice(sound, events);
+}
+/// What `Horse`, `AbstractChestedHorse` (donkeys, mules, llamas) and
+/// `ZombieHorse.mobInteract` do with a held item before
+/// `AbstractHorse.mobInteract`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldItem {
+    /// `isFood`: `fedFood`, whether it eats or not.
+    Feed,
+    /// Untamed: `makeMad` instead of taking the rider.
+    Refused,
+}
+/// That branch for a click with `item` (empty for none): no rider, not
+/// opening a tamed adult's inventory (`sneaking`), not a baby while the
+/// player holds a golden dandelion (`dandelion`; zombie horses skip that
+/// check). An untamed mount is made mad here.
+pub fn held_item(
+    m: &mut Mob,
+    item: &str,
+    sneaking: bool,
+    dandelion: bool,
+    events: &mut Vec<MobEvent>,
+) -> Option<HeldItem> {
+    let species = m.species();
+    let checks_dandelion = match species {
+        Species::Horse | Species::Donkey | Species::Mule => true,
+        Species::Llama | Species::TraderLlama => true,
+        Species::ZombieHorse => false,
+        _ => return None,
+    };
+    let open_inventory = !m.is_baby() && m.extra.tame && sneaking;
+    if m.rider.is_some()
+        || open_inventory
+        || (checks_dandelion && m.is_baby() && dandelion)
+        || item.is_empty()
+    {
+        return None;
+    }
+    // ZombieHorse.isFood: the zombie_horse_food tag.
+    let food = if species == Species::ZombieHorse {
+        item == "minecraft:red_mushroom"
+    } else {
+        m.kind.food.iter().any(|f| f == item)
+    };
+    if food {
+        return Some(HeldItem::Feed);
+    }
+    if m.extra.tame {
+        return None;
+    }
+    make_mad(m, events);
+    Some(HeldItem::Refused)
 }
 /// `RandomStandGoal`.
 #[derive(Clone, Debug)]
@@ -300,7 +447,7 @@ impl Goal for RandomStand {
         self.next += 1;
         if self.next > 0 && m.random.next_int_bound(1000).unwrap_or(1000) < self.next {
             self.next = -m.kind.ambient_interval;
-            return m.random.next_int_bound(10).unwrap_or(1) == 0;
+            return !immobile(m) && m.random.next_int_bound(10).unwrap_or(1) == 0;
         }
         false
     }
@@ -308,12 +455,114 @@ impl Goal for RandomStand {
         false
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        m.extra.counter = 20;
-        m.extra.flag = false;
-        if m.species() == Species::Horse {
-            cx.events
-                .push(MobEvent::Sound("entity.horse.angry", m.center(), 1.0, 1.0));
+        stand_if_possible(m);
+        // playStandSound: getAmbientStandSound is the ambient sound, plain
+        // playSound(sound) at volume and pitch 1.
+        let sound = super::ai::voice_sounds(m)[0];
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+    }
+}
+/// Horses that step with `AbstractHorse.playStepSound` (llamas and camels
+/// have their own).
+pub fn hoof_steps(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Horse
+            | Species::Donkey
+            | Species::Mule
+            | Species::SkeletonHorse
+            | Species::ZombieHorse
+    )
+}
+/// `AbstractHorse.playStepSound` (and `Horse.playGallopSound`) on the block
+/// `pos`: silent on liquids; a ridden horse walks on wood for five steps,
+/// then gallops every third; unridden, wood or the plain step by age.
+/// Donkeys and mules never gallop (`canGallop`).
+pub fn play_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    pos: [i32; 3],
+    state: horizon_world::registry::BlockStateId,
+    events: &mut Vec<MobEvent>,
+) {
+    if matches!(
+        &*w.facts.get(state).name,
+        "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
+    ) {
+        return;
+    }
+    let above = w.world.block(pos[0], pos[1] + 1, pos[2]);
+    let sound_type = if &*w.facts.get(above).name == "minecraft:snow" {
+        &w.facts.get(above).sounds
+    } else {
+        &w.facts.get(state).sounds
+    };
+    let (volume, pitch) = (sound_type.volume, sound_type.pitch);
+    let at = [m.position.x, m.position.y, m.position.z];
+    let baby = m.is_baby();
+    let can_gallop = !matches!(m.species(), Species::Donkey | Species::Mule);
+    if m.rider.is_some() && can_gallop {
+        m.ai.steps.gallop += 1;
+        let count = m.ai.steps.gallop;
+        if count > 5 && count % 3 == 0 {
+            events.push(MobEvent::Sound(
+                "entity.horse.gallop",
+                at,
+                volume * 0.15,
+                pitch,
+            ));
+            // Horse.playGallopSound: now and then it breathes too.
+            if m.species() == Species::Horse && m.random.next_int_bound(10).unwrap_or(1) == 0 {
+                let breathe = if baby {
+                    "entity.baby_horse.breathe"
+                } else {
+                    "entity.horse.breathe"
+                };
+                events.push(MobEvent::Sound(breathe, at, volume * 0.6, pitch));
+            }
+        } else if count <= 5 {
+            events.push(MobEvent::Sound(
+                "entity.horse.step_wood",
+                at,
+                volume * 0.15,
+                pitch,
+            ));
         }
+    } else if is_wood_sound_type(sound_type) {
+        events.push(MobEvent::Sound(
+            "entity.horse.step_wood",
+            at,
+            volume * 0.15,
+            pitch,
+        ));
+    } else {
+        let step = if baby {
+            "entity.baby_horse.step"
+        } else {
+            "entity.horse.step"
+        };
+        events.push(MobEvent::Sound(step, at, volume * 0.15, pitch));
+    }
+}
+/// `AbstractHorse.isWoodSoundType`: WOOD, NETHER_WOOD, STEM, CHERRY_WOOD and
+/// BAMBOO_WOOD (not HARD_CROP, which only shares WOOD's step).
+fn is_wood_sound_type(sounds: &horizon_items::blocks::Sounds) -> bool {
+    let step = sounds
+        .step
+        .strip_prefix("minecraft:")
+        .unwrap_or(&sounds.step);
+    let place = sounds
+        .place
+        .strip_prefix("minecraft:")
+        .unwrap_or(&sounds.place);
+    match step {
+        "block.wood.step" => place == "block.wood.place",
+        "block.nether_wood.step"
+        | "block.stem.step"
+        | "block.cherry_wood.step"
+        | "block.bamboo_wood.step" => true,
+        _ => false,
     }
 }
 /// The mount takes its rider's input (`getRiddenInput`, `tickRidden`).
@@ -321,6 +570,10 @@ pub fn ridden_step(m: &mut Mob) {
     let Some(r) = m.rider else {
         return;
     };
+    // AbstractHorse.tickRidden: not pressing forward ends the gallop.
+    if hoof_steps(m.species()) && r.forward <= 0.0 {
+        m.ai.steps.gallop = 0;
+    }
     // AbstractNautilus.tickRidden turns half way toward the rider.
     if super::nautilus::is_nautilus(m.species()) {
         return super::nautilus::ridden(m);
@@ -328,25 +581,36 @@ pub fn ridden_step(m: &mut Mob) {
     if m.species() == Species::HappyGhast {
         return super::happy_ghast::ridden(m);
     }
-    m.yaw = r.yaw;
-    m.head_pitch = r.pitch * 0.5;
-    m.body_yaw = r.yaw;
-    m.head_yaw = r.yaw;
+    // AbstractHorse.tickRidden: setRot(getRiddenRotation), then the body and
+    // head turn with it. A camel that refuses to move keeps its rotation
+    // (Camel.getRiddenRotation).
+    if !(super::camel::is_camel(m.species()) && super::camel::refuse_to_move(m)) {
+        m.yaw = r.yaw;
+        m.head_pitch = r.pitch * 0.5;
+    }
+    m.body_yaw = m.yaw;
+    m.head_yaw = m.yaw;
     m.ai.nav.stop();
 
     if matches!(m.species(), Species::Pig | Species::Strider) {
         // Pig/Strider: always forward along the rider's look, at a fraction
         // of the movement speed, boosted by the stick.
         m.head_pitch = r.pitch * 0.5;
-        m.ai.xxa = 0.0;
-        m.ai.zza = 1.0;
+        // Strider.getRiddenSpeed: slower while it shivers out of the warmth.
         let factor = if m.species() == Species::Pig {
             0.225
+        } else if super::strider::suffocating(m) {
+            0.35
         } else {
             0.55
         };
         let boost = boost_factor(m);
-        m.set_speed((m.attrs.speed * factor) as f32 * boost);
+        // travelRidden: setSpeed(getRiddenSpeed), then travel(getRiddenInput);
+        // the input is set after the speed (Mob.setSpeed also sets zza).
+        // getAttributeValue(MOVEMENT_SPEED): with the cold strider's modifier.
+        m.set_speed((m.movement_speed() * factor) as f32 * boost);
+        m.ai.xxa = 0.0;
+        m.ai.zza = 1.0;
         return;
     }
     if super::camel::is_camel(m.species()) {
@@ -366,14 +630,14 @@ pub fn ridden_step(m: &mut Mob) {
         } else {
             r.forward
         };
-        m.ai.xxa = r.strafe * 0.5;
-        m.ai.zza = forward;
         let bonus = if r.sprint && m.extra.anim_ticks == 0 {
             0.1
         } else {
             0.0
         };
-        m.set_speed(m.attrs.speed as f32 + bonus);
+        m.set_speed(m.movement_speed() as f32 + bonus);
+        m.ai.xxa = r.strafe * 0.5;
+        m.ai.zza = forward;
         if r.jump > 0.0 {
             let mut ev = Vec::new();
             super::camel::dash(m, r.jump, &mut ev);
@@ -383,8 +647,10 @@ pub fn ridden_step(m: &mut Mob) {
         }
         return;
     }
+    // AbstractHorse.getRiddenInput: no input on the ground while rearing,
+    // unless a jump let it slide.
     let standing = m.extra.counter > 0;
-    if m.on_ground && r.jump == 0.0 && standing {
+    if m.on_ground && r.jump == 0.0 && standing && !m.extra.stand_sliding {
         m.ai.xxa = 0.0;
         m.ai.zza = 0.0;
         return;
@@ -394,10 +660,10 @@ pub fn ridden_step(m: &mut Mob) {
     } else {
         r.forward
     };
+    let speed = m.movement_speed() as f32;
+    m.set_speed(speed);
     m.ai.xxa = r.strafe * 0.5;
     m.ai.zza = forward;
-    let speed = m.attrs.speed as f32;
-    m.set_speed(speed);
     if m.on_ground && r.jump > 0.0 {
         // executeRidersJump
         let impulse = m.extra.vector[0] as f32 * r.jump;
@@ -409,6 +675,20 @@ pub fn ridden_step(m: &mut Mob) {
         }
         if let Some(rider) = m.rider.as_mut() {
             rider.jump = 0.0;
+        }
+    }
+}
+/// `AbstractHorse.aiStep`'s `moveTail` (one in 200 ticks) and the counter's
+/// step in `tick` (it runs to 8, then stops). A client runs it on its own
+/// random, as vanilla's client-side `aiStep` does.
+pub fn tail_tick(m: &mut Mob) {
+    if m.random.next_int_bound(200).unwrap_or(1) == 0 {
+        m.anim.v[TAIL] = 1.0;
+    }
+    if m.anim.v[TAIL] > 0.0 {
+        m.anim.v[TAIL] += 1.0;
+        if m.anim.v[TAIL] > 8.0 {
+            m.anim.v[TAIL] = 0.0;
         }
     }
 }
@@ -446,9 +726,20 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.extra.flag = false;
         }
     }
+    stand_tick(m);
+    animate(m);
+}
+/// `AbstractHorse.tick`: the stand counter runs down to `clearStanding`. It is
+/// in `tick`, not `aiStep`, so a horse with no AI stops rearing too.
+pub fn stand_tick(m: &mut Mob) {
     if m.extra.counter > 0 {
         m.extra.counter -= 1;
     }
+}
+/// `AbstractHorse.tick`'s eat, stand and mouth animations, which follow the
+/// eating and standing flags (`flag` and `counter > 0`), and the end of
+/// `allowStandSliding` once it stands no more.
+pub fn animate(m: &mut Mob) {
     let (eating, standing) = (m.extra.flag, m.extra.counter > 0);
     let v = &mut m.anim.v;
     if standing {
@@ -456,6 +747,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.anim.vo[EAT] = 0.0;
         v[STAND] = (v[STAND] + (1.0 - v[STAND]) * 0.4 + 0.05).min(1.0);
     } else {
+        m.extra.stand_sliding = false;
         if eating {
             v[EAT] = (v[EAT] + (1.0 - v[EAT]) * 0.4 + 0.05).min(1.0);
         } else {
@@ -465,6 +757,22 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         v[STAND] = (s + (0.8 * s * s * s - s) * 0.6 - 0.05).max(0.0);
     }
     v[MOUTH] = (v[MOUTH] - v[MOUTH] * 0.7 - 0.05).max(0.0);
+}
+/// `AbstractHorse.tick` on a client that is not the server: the animations
+/// follow the flags of the synched data (`set_flags`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    animate(m);
+}
+/// `AbstractHorse.DATA_ID_FLAGS` on a client: eating 16 and standing 32.
+pub fn set_flags(m: &mut Mob, flags: u8) {
+    m.extra.flag = flags & 16 != 0;
+    m.extra.counter = i32::from(flags & 32 != 0);
+}
+/// Whether `ai_step` above runs this species' grazing and rearing, so that
+/// the server's flags 16 and 32 mean eating and standing.
+pub fn grazes(s: Species) -> bool {
+    is_equine(s) && !super::camel::is_camel(s) && !super::llama::is_llama(s)
 }
 /// Body texture and the markings overlay.
 pub fn texture(m: &Mob) -> String {
@@ -597,7 +905,15 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         t[1] += speed * age;
         t[2] += speed * 2.0 * age;
     }
-    p.yrot("tail", 0.0);
+    // animateTail: the tail swings while the counter runs.
+    p.yrot(
+        "tail",
+        if m.anim.v[TAIL] > 0.0 {
+            (s.age * 0.7).mcos()
+        } else {
+            0.0
+        },
+    );
     if baby && donkey {
         // BabyDonkeyModel overrides the state's pitch with -30 degrees and
         // sets the head parts again.
@@ -608,5 +924,88 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             "head_parts",
             standing * (PI / 12.0 + head_x) + eating * (PI / 2.0 + s.age.msin() * 0.05) + base,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::Damage;
+    use crate::mobs::finalize::base_value;
+    use crate::mobs::sensor_scan_tests::kind;
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    fn horse(species: Species) -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.species = species;
+        k.max_health = 53.0;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// The rolled health is the attribute's base, which the server syncs: a
+    /// rider's client draws the horse's hearts from it, not the type's 53.
+    #[test]
+    fn rolled_health_and_speed_are_attribute_bases() {
+        for species in [Species::Horse, Species::Donkey, Species::Mule] {
+            let mut m = horse(species);
+            finalize(&mut m);
+            assert!((15.0..=30.0).contains(&m.attrs.max_health));
+            assert_eq!(
+                base_value(&m, Attr::MaxHealth),
+                f64::from(m.attrs.max_health)
+            );
+            assert_eq!(m.health, m.attrs.max_health);
+        }
+        let mut m = horse(Species::Horse);
+        finalize(&mut m);
+        assert_eq!(base_value(&m, Attr::MovementSpeed), m.attrs.speed);
+    }
+
+    fn equine(id: u32, species: Species, name: &str) -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = name.into();
+        k.species = species;
+        k.max_health = 30.0;
+        Mob::new(id, kind, Vec3::new(f64::from(id), 64.0, 0.0), 0.0)
+    }
+    /// Hits `n` fresh mobs of a species once each; how many reared.
+    fn rears(species: Species, name: &str, n: u32) -> u32 {
+        (1..=n)
+            .filter(|&id| {
+                let mut m = equine(id, species, name);
+                assert!(m.damage(1.0, Damage::player([0.0, 64.0, 0.0])));
+                m.extra.counter == 20
+            })
+            .count() as u32
+    }
+
+    #[test]
+    fn a_hurt_horse_rears_one_hit_in_three() {
+        // AbstractHorse.hurtServer: nextInt(3) == 0 -> standIfPossible (#3432).
+        let n = rears(Species::Horse, "minecraft:horse", 300);
+        assert!((60..=140).contains(&n), "{n} of 300 hits reared");
+    }
+
+    #[test]
+    fn the_rear_ends_after_twenty_ticks() {
+        // AbstractHorse.tick: standCounter runs down, then clearStanding.
+        let mut m = equine(1, Species::Horse, "minecraft:horse");
+        stand_if_possible(&mut m);
+        for _ in 0..19 {
+            stand_tick(&mut m);
+        }
+        assert!(m.extra.counter > 0);
+        stand_tick(&mut m);
+        assert_eq!(m.extra.counter, 0);
+    }
+
+    #[test]
+    fn llamas_and_camels_never_rear_when_hurt() {
+        // Llama and Camel: canPerformRearing is false.
+        assert_eq!(rears(Species::Llama, "minecraft:llama", 60), 0);
+        assert_eq!(rears(Species::Camel, "minecraft:camel", 60), 0);
     }
 }

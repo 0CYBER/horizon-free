@@ -24,7 +24,7 @@ Games:
                 mod (mods/horizon/src/bench), built here; nothing of the game
                 is redistributed
   vanilla-mods  the same + Sodium, Lithium, FerriteCore and ImmediatelyFast
-                (pinned in packs/mods.lock.json)
+                (pinned in tools/benchmark-deps/mods.lock.json)
   neoforge      Minecraft 1.21.1 on NeoForge (dev-only, tools/neoforge_oracle.py
                 installs it under .local/neoforge-oracle) + a driver mod
                 (mods/horizon/src/neoforge-bench) + the jars of --mod-jars and
@@ -50,6 +50,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -186,6 +187,46 @@ def summary(values):
     return {"n": n, "mean": rnd(mean), "stdev": sd, "min": rnd(min(values)), "max": rnd(max(values)), "ci95": ci}
 
 
+def rss_bytes(pid):
+    """A process's resident memory: `ps` on macOS and Linux, the working set (what Task Manager shows) on Windows,
+    which has no `ps`. None once the process is gone."""
+    if sys.platform == "win32":
+        return windows_working_set(pid)
+    out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True)
+    return int(out.stdout.split()[0]) * 1024 if out.stdout.strip() else None
+
+
+def windows_working_set(pid):
+    import ctypes
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):  # PROCESS_MEMORY_COUNTERS
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (name, ctypes.c_size_t) for name in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+    kernel32, psapi = ctypes.WinDLL("kernel32", use_last_error=True), ctypes.WinDLL("psapi")
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        counters = Counters(cb=ctypes.sizeof(Counters))
+        if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return counters.WorkingSetSize
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def load_average():
+    """The one-minute load average; None on Windows, which has none (horizon_bench::hardware::load_average)."""
+    return os.getloadavg()[0] if hasattr(os, "getloadavg") else None
+
+
 def phys_footprint(pid):
     """macOS: the bytes the kernel charges the process (`footprint`), without
     the freed pages the allocator marked reusable, which `ps` still counts as
@@ -198,9 +239,9 @@ def phys_footprint(pid):
 
 
 class Sampler(threading.Thread):
-    """Samples a process's resident memory every quarter second (ps, so the
-    same reading for every game and OS) and, on macOS, its physical footprint
-    every two seconds."""
+    """Samples a process's resident memory every quarter second (rss_bytes, so
+    the same reading for every game on an OS) and, on macOS, its physical
+    footprint every two seconds."""
 
     def __init__(self, pid):
         super().__init__(daemon=True)
@@ -209,9 +250,8 @@ class Sampler(threading.Thread):
     def run(self):
         tick = 0
         while not self.stop.is_set():
-            out = subprocess.run(["ps", "-o", "rss=", "-p", str(self.pid)], capture_output=True, text=True)
-            if out.stdout.strip():
-                self.samples.append((time.time(), int(out.stdout.split()[0]) * 1024))
+            if (rss := rss_bytes(self.pid)) is not None:
+                self.samples.append((time.time(), rss))
             if tick % 8 == 0 and (fp := phys_footprint(self.pid)) is not None:
                 self.footprints.append((time.time(), fp))
             tick += 1
@@ -243,7 +283,10 @@ def nvidia_memory_mb(pid):
     for line in out.stdout.splitlines():
         p, _, mem = line.partition(",")
         if p.strip() == str(pid):
-            return float(mem)
+            try:
+                return float(mem)
+            except ValueError:  # "[N/A]": Windows drivers (WDDM) don't give per-process memory
+                return None
     return None
 
 
@@ -254,6 +297,23 @@ def write_options(game_dir, distance, version=None):
     text = "".join(f"{k}:{v.format(distance=distance, data_version=data_version)}\n" for k, v in options.items())
     (game_dir / "options.txt").write_text(text)
     return text
+
+
+# Window sizes of the standard set (every game gets --width/--height): 720p,
+# the size results were first published at, and 1080p, the commonest screen.
+SIZES = [(1280, 720), (1920, 1080)]
+
+
+def parse_sizes(text):
+    """"1280x720,1920x1080" as [(1280, 720), (1920, 1080)]."""
+    return [tuple(int(v) for v in size.lower().split("x")) for size in text.split(",") if size]
+
+
+def size_label(label, width, height):
+    """Reports at 1280x720 keep the plain label; other sizes add theirs: horizon-m4-1080p, or -2560x1080."""
+    if (width, height) == SIZES[0]:
+        return label
+    return f"{label}-{height}p" if width * 9 == height * 16 else f"{label}-{width}x{height}"
 
 
 def scene_list(args):
@@ -267,21 +327,46 @@ def yaw(start, end):
 
 # Horizon -------------------------------------------------------------------
 
+def control_path():
+    """Where the game opens its control endpoint (crates/horizon-client/src/control.rs): a Unix socket, or,
+    where Python has none (Windows), a JSON file in which the game names a localhost TCP port and a token."""
+    if hasattr(socket, "AF_UNIX"):
+        return Path("/tmp") / f"horizon-bench-{os.getpid()}.sock"
+    return Path(tempfile.gettempdir()) / f"horizon-bench-{os.getpid()}.json"
+
+
+def read_line(s):
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = s.recv(1 << 20)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
 class Control:
     def __init__(self, path):
         self.path = path
 
-    def __call__(self, line, timeout=600):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+    def connect(self, timeout):
+        if self.path.suffix != ".json":
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(timeout)
             s.connect(str(self.path))
+            return s
+        endpoint = json.loads(self.path.read_text(encoding="utf-8"))
+        s = socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=timeout)
+        s.sendall(f"auth {endpoint['token']}\n".encode())
+        if b'"ok"' not in read_line(s):
+            s.close()
+            raise OSError(f"the game refused the token of {self.path}")
+        return s
+
+    def __call__(self, line, timeout=600):
+        with self.connect(timeout) as s:
             s.sendall((line + "\n").encode())
-            data = b""
-            while not data.endswith(b"\n"):
-                chunk = s.recv(1 << 20)
-                if not chunk:
-                    break
-                data += chunk
+            data = read_line(s)
         reply = json.loads(data)
         if isinstance(reply, dict) and "error" in reply:
             raise RuntimeError(f"{line}: {reply['error']}")
@@ -307,7 +392,12 @@ def poll(control, check, limit, interval=0.05):
 QUIET_MESHES_PER_S = 100
 
 
-def wait_loaded(control, near, limit):
+def view_chunks(distance):
+    """80% of the view circle (pi x RD^2): Horizon keeps 637 columns at RD 12 and 3725 at RD 32."""
+    return int(0.8 * math.pi * distance ** 2)
+
+
+def wait_loaded(control, near, limit, min_chunks=0):
     """Waits until the player is spawned (near(position)), nothing is queued, the
     resident and generated chunk counts have not changed for a second, as the
     vanilla driver does, and the last sections are drawn; returns when the last
@@ -320,6 +410,10 @@ def wait_loaded(control, near, limit):
     already taken, and sections waiting for their neighbours' light.)"""
     deadline = time.time() + limit
     last, changed, previous, meshing = None, time.time(), None, time.time()
+    # Right after a teleport (and at spawn) Horizon reports nothing queued and steady counts for over a second
+    # before it starts loading: the counts must change once, or stay full for 5 s, and the resident chunks reach
+    # min_chunks, before "steady" means loaded.
+    first, moved, began = None, False, time.time()
     while time.time() < deadline:
         try:
             s = control("status", timeout=10)
@@ -331,6 +425,12 @@ def wait_loaded(control, near, limit):
             last, changed, previous, meshing = None, now, None, now
         else:
             counts = (s["chunks"], s["generated_chunks"])
+            first = first or counts
+            moved = moved or counts != first or (s["chunks"] >= min_chunks > 0 and now - began > 5)
+            if min_chunks and (not moved or s["chunks"] < min_chunks):
+                last, changed, previous, meshing = None, now, None, now
+                time.sleep(0.05)
+                continue
             if counts != last:
                 last, changed = counts, now
             stages = s.get("streaming")
@@ -355,16 +455,20 @@ def run_horizon(args, distance):
     game_dir = WORK / "horizon"
     shutil.rmtree(game_dir, ignore_errors=True)
     options = write_options(game_dir, distance)
-    sock = Path("/tmp") / f"horizon-bench-{os.getpid()}.sock"
+    sock = control_path()
     sock.unlink(missing_ok=True)
-    client = Path(args.build).resolve() / "horizon-client"
+    client = Path(args.build).resolve() / ("horizon-client.exe" if sys.platform == "win32" else "horizon-client")
     command = [str(client), "--resources", str(Path(args.resources).resolve()),
                "--control-socket", str(sock), "--no-pause", "--weather", "clear", "--time", "6000"]
+    if (args.width, args.height) != SIZES[0]:
+        # 1280x720 is Horizon's own window; builds before --width open only that one.
+        command += ["--width", str(args.width), "--height", str(args.height)]
     if args.offscreen:
         command.append("--offscreen")
     for carry in dev_mods(args):
         command += ["--dev-mod", str(carry)]
-    env = dict(os.environ, HORIZON_NO_AUDIO="1")
+    # Benchmark runs stay out of the live count and send nothing (docs/telemetry.md).
+    env = lab.game_env(HORIZON_TELEMETRY_URL="off")
     if args.warm:
         # A first start to the title screen builds what later starts reuse (the content-mod
         # root, the block behaviour snapshot). It is not measured: players see it once.
@@ -392,7 +496,7 @@ def run_horizon(args, distance):
         result["renderer"] = title["renderer"]
         result["startup"] = {"title_s": at - started}
         control(f"open {WORLD} {SEED} creative")
-        result["startup"]["world_s"] = wait_loaded(control, lambda p: True, args.timeout) - started
+        result["startup"]["world_s"] = wait_loaded(control, lambda p: True, args.timeout, view_chunks(distance)) - started
         for name, start, end, pitch in scene_list(args):
             control("time 6000")
             meshed = control("status")["meshed_sections"]
@@ -402,7 +506,7 @@ def run_horizon(args, distance):
             control("fly {0} {1} {2} {0} {1} {2} 0.1 {3}".format(*start, pitch))
             control(f"look {yaw(start, end):.3f} {pitch}")
             near = lambda p: sum((a - b) ** 2 for a, b in zip(p, start)) < 4.0
-            scene = {"load_s": wait_loaded(control, near, args.timeout) - tp}
+            scene = {"load_s": wait_loaded(control, near, args.timeout, view_chunks(distance)) - tp}
             # Section meshes built while loading and while flying (Horizon only).
             loaded_meshes = control("status")["meshed_sections"]
             scene["meshes_load"] = loaded_meshes - meshed
@@ -427,7 +531,16 @@ def run_horizon(args, distance):
         sampler.stop.set()
         sock.unlink(missing_ok=True)
     result["memory"] = sampler.summary(windows)
+    args.release = release_version(WORK / f"horizon-rd{distance}.log")
     return result
+
+
+def release_version(log):
+    """A release's or nightly's version, from the first line it logs ("Horizon v0.2.97"); None for a dev build
+    ("Horizon 0.1.0", or "Horizon v0.2.97 (client 0.1.0)" in a release's folder)."""
+    first = log.read_text(errors="replace").partition("\n")[0].strip() if log.exists() else ""
+    m = re.fullmatch(r"Horizon ((?:v\d|nightly-)\S*)", first)
+    return m and m.group(1)
 
 
 def dev_mods(args):
@@ -453,6 +566,13 @@ def vanilla_classpath(manifest):
     return jars
 
 
+def manifest_jvm_flags(manifest):
+    """The -XX flags the version manifest gives every OS, which the official launcher passes. 26.3's
+    -XX:StackShadowPages=32 matters: without it, about half of the starts on Windows crash (EXCEPTION_ACCESS_VIOLATION
+    under shaderc.dll, no hs_err file) while the client compiles its shaders, before the title screen."""
+    return [a for a in manifest.get("arguments", {}).get("jvm", []) if isinstance(a, str) and a.startswith("-XX:")]
+
+
 def extract_natives(jars, target):
     target.mkdir(parents=True, exist_ok=True)
     for jar in jars:
@@ -474,7 +594,8 @@ def build_bench_mod(jars):
     shutil.rmtree(classes, ignore_errors=True)
     classes.mkdir(parents=True)
     sources = sorted(map(str, (source / "java").rglob("*.java")))
-    subprocess.run(["javac", "--release", "25", "-proc:none", "-encoding", "UTF-8", "-d", str(classes),
+    javac = Path(os.environ["JAVA_HOME"]) / "bin/javac" if os.environ.get("JAVA_HOME") else "javac"
+    subprocess.run([str(javac), "--release", "25", "-proc:none", "-encoding", "UTF-8", "-d", str(classes),
                     "-classpath", os.pathsep.join(map(str, jars)), *sources], check=True)
     output = build / "horizon-bench.jar"
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -488,9 +609,9 @@ def build_bench_mod(jars):
 
 def perf_mod_jars():
     """Sodium, Lithium, FerriteCore and ImmediatelyFast for 26.3 (downloaded from
-    Modrinth, checked against packs/mods.lock.json, never committed), plus
+    Modrinth, checked against tools/benchmark-deps/mods.lock.json, never committed), plus
     Fabric API when one of them needs it."""
-    lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    lock = json.loads((ROOT / "tools/benchmark-deps/mods.lock.json").read_text())
     jars, needs_api = [], False
     for name in PERF_MODS:
         project = lock["projects"][name]
@@ -536,7 +657,7 @@ def run_vanilla(args, distance):
     (assets / "indexes").mkdir(parents=True, exist_ok=True)
     java = Path(os.environ["JAVA_HOME"]) / "bin/java" if os.environ.get("JAVA_HOME") else "java"
     command = [str(java), f"-Xmx{args.heap}", *LAUNCHER_JVM,
-               *runtime.conditional_client_jvm_options(manifest),
+               *runtime.conditional_client_jvm_options(manifest), *manifest_jvm_flags(manifest),
                "--enable-native-access=ALL-UNNAMED",
                f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
                f"-Dhorizon.bench.script={script}", f"-Dhorizon.bench.out={events}",
@@ -676,6 +797,8 @@ def hardware():
         q = lambda *cmd: subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
         info.update(os_version=q("sw_vers", "-productVersion"), cpu=q("sysctl", "-n", "machdep.cpu.brand_string"),
                     ram_mb=int(q("sysctl", "-n", "hw.memsize") or 0) >> 20)
+    elif sys.platform == "win32":
+        info.update(os_version=windows_version(), cpu=windows_cpu(), ram_mb=windows_ram_bytes() >> 20)
     else:
         release = dict(l.split("=", 1) for l in Path("/etc/os-release").read_text().splitlines() if "=" in l)
         info["os_version"] = f"{release.get('PRETTY_NAME', '').strip(chr(34))} (kernel {platform.release()})"
@@ -685,6 +808,35 @@ def hardware():
                 break
         info["ram_mb"] = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") >> 20
     return info
+
+
+def windows_version():
+    """"Microsoft Windows [Version 10.0.26200.8037]", as horizon_bench reports it (`ver`)."""
+    out = subprocess.run(["cmd", "/C", "ver"], capture_output=True, text=True).stdout.strip()
+    return out or f"Windows {platform.version()}"
+
+
+def windows_cpu():
+    """The brand string ("AMD Ryzen 7 9800X3D 8-Core Processor"), else PROCESSOR_IDENTIFIER."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+            return str(winreg.QueryValueEx(key, "ProcessorNameString")[0]).strip()
+    except OSError:
+        return platform.processor()
+
+
+def windows_ram_bytes():
+    import ctypes
+
+    class Status(ctypes.Structure):  # MEMORYSTATUSEX
+        _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32)] + [
+            (name, ctypes.c_uint64) for name in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile",
+                                                 "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
+                                                 "ullAvailExtendedVirtual")]
+
+    status = Status(dwLength=ctypes.sizeof(Status))
+    return status.ullTotalPhys if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else 0
 
 
 def report(args, distance, runs, app):
@@ -699,8 +851,9 @@ def report(args, distance, runs, app):
     size = renderer.get("size")
     conditions = {"scenario": "perf_bench:" + ",".join(first["scenes"]), "seed": str(SEED),
                   "render_distance": distance, "simulation_distance": 12, "vsync": False,
-                  "offscreen": bool(args.offscreen), "repeats": len(runs), "warmup_s": args.settle,
-                  "load_avg_1m": rnd(first["load_before"][0])}
+                  "offscreen": bool(args.offscreen), "repeats": len(runs), "warmup_s": args.settle}
+    if first["load_before"] is not None:
+        conditions["load_avg_1m"] = rnd(first["load_before"])
     if size:
         conditions["window"] = list(size)
     metrics, entries = {}, []
@@ -767,7 +920,7 @@ def table(labels):
                          f"{statistics.mean(loads) / 1000 if loads else 0:.1f}, "
                          f"{mb('memory.rss_steady_mb')} / {mb('memory.rss_peak_mb')}, "
                          f"{mb('memory.footprint_steady_mb')} / {mb('memory.footprint_peak_mb')}, "
-                         f"{r['conditions'].get('load_avg_1m')}")
+                         f"{r['conditions'].get('load_avg_1m', '–')}")
         print(f"| {d} | " + " | ".join(cells) + " |")
 
 
@@ -780,8 +933,8 @@ def main():
     p.add_argument("--seconds", type=float, default=12.0, help="flight duration per scene")
     p.add_argument("--settle", type=float, default=2.0, help="seconds held at the start before each flight")
     p.add_argument("--timeout", type=float, default=300.0, help="seconds allowed for each load")
-    p.add_argument("--width", type=int, default=1280, help="vanilla window width (Horizon's is 1280x720)")
-    p.add_argument("--height", type=int, default=720)
+    p.add_argument("--sizes", default=",".join(f"{w}x{h}" for w, h in SIZES),
+                   help="window sizes, each a set of reports (default 1280x720 and 1920x1080)")
     p.add_argument("--heap", default="2G", help="vanilla -Xmx (the official launcher's default is 2G)")
     p.add_argument("--offscreen", action="store_true",
                    help="Horizon renders into a texture and does not wait for the window (locked macOS sessions)")
@@ -801,17 +954,20 @@ def main():
     args.label = args.label or f"{args.game}-{platform.node().split('.')[0]}"
     WORK.mkdir(parents=True, exist_ok=True)
     run = {"horizon": run_horizon, "neoforge": run_neoforge}.get(args.game, run_vanilla)
-    for d in [int(x) for x in args.distances.split(",")]:
-        runs = []
-        for _ in range(args.repeats):
-            load_before = os.getloadavg()
-            result = run(args, d)
-            result["load_before"], result["load_after"] = load_before, os.getloadavg()
-            runs.append(result)
-        out = ROOT / "benchmarks/perf" / f"{args.label}-rd{d}.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report(args, d, runs, app(args)), indent=1) + "\n")
-        print(out)
+    label = args.label
+    for args.width, args.height in parse_sizes(args.sizes):
+        args.label = size_label(label, args.width, args.height)
+        for d in [int(x) for x in args.distances.split(",")]:
+            runs = []
+            for _ in range(args.repeats):
+                load_before = load_average()
+                result = run(args, d)
+                result["load_before"], result["load_after"] = load_before, load_average()
+                runs.append(result)
+            out = ROOT / "benchmarks/perf" / f"{args.label}-rd{d}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report(args, d, runs, app(args)), indent=1) + "\n")
+            print(out)
 
 
 def app(args):
@@ -821,13 +977,16 @@ def app(args):
         manifest = (ROOT / "crates/horizon-client/Cargo.toml").read_text()
         version = next(l.split('"')[1] for l in manifest.splitlines() if l.startswith("version"))
         mods = [{"name": p.parent.name, "version": "carried"} for p in dev_mods(args)]
+        if getattr(args, "release", None):
+            # A release binary (--build of an installed version) is not this checkout: report its own version.
+            version, commit = args.release, None
         return {"name": "horizon-client", "version": version, "commit": commit, **({"mods": mods} if mods else {})}
     if args.game == "neoforge":
         import neoforge_oracle
         jars = [j.name for f in filter(None, (args.mod_jars, args.deps)) for j in sorted(Path(f).glob("*.jar"))]
         return {"name": "minecraft", "version": "1.21.1",
                 "mods": [{"name": "neoforge", "version": neoforge_oracle.NEOFORGE}] + [{"name": j} for j in jars]}
-    lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    lock = json.loads((ROOT / "tools/benchmark-deps/mods.lock.json").read_text())
     mods = [{"name": "fabric-loader", "version": lock["fabric_loader"]}]
     if args.game == "vanilla-mods":
         mods += [{"name": n, "version": lock["projects"][n]["version"]} for n in PERF_MODS]

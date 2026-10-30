@@ -49,6 +49,10 @@ impl Game<'_> {
     fn scoreboard_path(&self) -> std::path::PathBuf {
         self.world_root.join("data/minecraft/scoreboard.dat")
     }
+    fn border_path(&self) -> std::path::PathBuf {
+        save::dimension_dir(&self.world_root, "minecraft:overworld")
+            .join("data/minecraft/world_border.dat")
+    }
     /// `ScoreboardSaveData` read from `data/minecraft/scoreboard.dat`.
     pub(super) fn load_scoreboard(&mut self) {
         if self.score.loaded || self.remote.is_some() {
@@ -62,7 +66,12 @@ impl Game<'_> {
         }
         self.score.storage =
             horizon_client::command_storage::CommandStorage::load(&self.world_root);
-        if let Some(root) = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"))
+        // ServerLevel.getWorldBorder: each dimension's data/minecraft/world_border.dat. Horizon
+        // keeps one border, so the overworld's file stands for it; the root file is what
+        // older Horizon builds wrote.
+        let border_path = self.border_path();
+        if let Some(root) = save::read_dat(&border_path)
+            .or_else(|| save::read_dat(&self.world_root.join("data/minecraft/world_border.dat")))
             && let Some(data) = root.get("data")
         {
             self.border = horizon_client::worldborder::WorldBorder::unpack(data);
@@ -76,27 +85,31 @@ impl Game<'_> {
         }
         self.score.storage.save(&self.world_root);
         self.score.stopwatches.save(&self.world_root);
-        if self.border != horizon_client::worldborder::WorldBorder::default() {
-            let _ = save::write_dat(
-                &self.world_root.join("data/minecraft/world_border.dat"),
+        if self.border != horizon_client::worldborder::WorldBorder::default()
+            && let Err(e) = save::write_dat(
+                &self.border_path(),
                 Tag::compound([
                     ("data", self.border.pack()),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                 ]),
-            );
+            )
+        {
+            log::warn!("the world border was not written: {e}");
         }
         let path = self.scoreboard_path();
         let board = &self.score.board;
         if board == &Scoreboard::default() && !path.exists() {
             return;
         }
-        let _ = save::write_dat(
+        if let Err(e) = save::write_dat(
             &path,
             Tag::compound([
                 ("data", board.pack()),
                 ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
             ]),
-        );
+        ) {
+            log::warn!("the scoreboard was not written: {e}");
+        }
     }
     /// The names commands complete: objectives, teams and tracked holders.
     pub(super) fn sync_score_registries(&mut self) {
@@ -132,8 +145,18 @@ impl Game<'_> {
         match t {
             Target::Player => Some(self.acting_player_name().to_owned()),
             Target::Guest(conn) => self.command_guest(conn).map(|g| g.name.clone()),
-            Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
-            _ => None,
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
+            | Target::Other(id) => Some(uuid_text(self.uuid_for(id))),
+            // Orbs and projectiles have no UUID here.
+            Target::Orb(_) | Target::Projectile(_) => None,
         }
     }
     fn holder_for(&mut self, t: Target) -> Option<Holder> {
@@ -180,7 +203,11 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Guest(_) | Target::Orb(_) | Target::Arrow(_) => None,
+            Target::Guest(_)
+            | Target::Orb(_)
+            | Target::Projectile(_)
+            | Target::Crystal(_)
+            | Target::Dragon(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l
@@ -324,6 +351,23 @@ impl Game<'_> {
             }
         }
     }
+    /// `ServerScoreboard`'s packets: each placed player's client is sent
+    /// what changed on the board since it was last sent it (all of it on
+    /// joining), lan/scoreboard.rs.
+    pub(super) fn lan_sync_scoreboard(&mut self, host: &mut super::lan::LanHost) {
+        if host.hub.guests.iter().all(|g| !g.placed) {
+            return;
+        }
+        self.load_scoreboard();
+        host.hub.teams.clone_from(&self.score.board.teams);
+        let view = horizon_client::lan::scoreboard::View::of(&self.score.board);
+        for g in host.hub.guests.iter_mut().filter(|g| g.placed) {
+            if g.scoreboard != view {
+                g.send_all(&g.scoreboard.changes(&view));
+                g.scoreboard = view.clone();
+            }
+        }
+    }
     /// `ServerPlayer.doTick` score updates and the statistic criteria.
     pub(super) fn tick_scoreboard(&mut self) {
         self.load_scoreboard();
@@ -422,28 +466,36 @@ impl Game<'_> {
 
     // ---- teams in gameplay -----------------------------------------------------
 
-    /// `Entity.getTeam` of a mob (a mob joins a team by its UUID).
+    /// `Entity.getScoreboardName`: another player's profile name
+    /// (`Player.getScoreboardName`), any other entity's UUID.
+    fn scoreboard_name(&self, id: u32, uuid: [i32; 4]) -> String {
+        self.remote_player_name(id)
+            .map_or_else(|| uuid_text(uuid), str::to_owned)
+    }
+    /// `Entity.getTeam` of a mob or another player.
     pub(super) fn mob_team(&self, id: u32) -> Option<&sb::Team> {
         let uuid = self.persist.uuids.get(&id)?;
-        self.score.board.players_team(&uuid_text(*uuid))
+        self.score
+            .board
+            .players_team(&self.scoreboard_name(id, *uuid))
     }
     pub(super) fn player_team(&self) -> Option<&sb::Team> {
         self.score.board.players_team(self.acting_player_name())
     }
     /// The teams of the player and of the mobs on one (empty without teams).
-    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams {
+    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams<'_> {
         let board = &self.score.board;
         if board.teams.is_empty() {
             return Default::default();
         }
         horizon_client::mobs::Teams {
-            player: self.player_team().cloned(),
+            player: self.player_team(),
             mobs: self
                 .persist
                 .uuids
                 .iter()
                 .filter_map(|(id, uuid)| {
-                    Some((*id, board.players_team(&uuid_text(*uuid))?.clone()))
+                    Some((*id, board.players_team(&self.scoreboard_name(*id, *uuid))?))
                 })
                 .collect(),
         }
@@ -456,7 +508,7 @@ impl Game<'_> {
         self.persist
             .uuids
             .iter()
-            .filter(|(_, uuid)| team.players.contains(&uuid_text(**uuid)))
+            .filter(|(id, uuid)| team.players.contains(&self.scoreboard_name(**id, **uuid)))
             .map(|(id, _)| *id)
             .collect()
     }
@@ -565,19 +617,42 @@ impl Game<'_> {
 
     // ---- the sidebar -----------------------------------------------------------
 
-    /// `Hud.extractScoreboardSidebar` / `displayScoreboardSidebar`.
-    pub(super) fn draw_scoreboard(&self, batch: &mut HudBatch) {
+    /// The objective in the player's team's sidebar slot, else the sidebar's.
+    fn sidebar_objective(&self) -> Option<&sb::Objective> {
         let board = &self.score.board;
         if board.display.is_empty() {
-            return;
+            return None;
         }
+        // A server's client is in its team by its profile name.
+        let name = self
+            .remote
+            .as_ref()
+            .map_or(PLAYER_NAME, |r| r.profile_name.as_str());
         let team_slot = board
-            .players_team(PLAYER_NAME)
+            .players_team(name)
             .and_then(|t| t.color.as_ref())
             .map(|c| format!("sidebar.team.{c}"))
             .and_then(|slot| board.display_objective(&slot));
-        let Some(objective) = team_slot.or_else(|| board.display_objective(sb::SLOT_SIDEBAR))
-        else {
+        team_slot.or_else(|| board.display_objective(sb::SLOT_SIDEBAR))
+    }
+    /// The sidebar the HUD shows: its objective and its lines, for `status`.
+    pub(super) fn sidebar_status(&self) -> serde_json::Value {
+        let board = &self.score.board;
+        let Some(objective) = self.sidebar_objective() else {
+            return serde_json::Value::Null;
+        };
+        let scores: serde_json::Map<String, serde_json::Value> = board
+            .scores
+            .iter()
+            .filter_map(|(holder, s)| Some((holder.clone(), s.get(&objective.name)?.value.into())))
+            .collect();
+        serde_json::json!({ "objective": objective.name, "title": objective.display_text().plain(), "scores": scores })
+    }
+
+    /// `Hud.extractScoreboardSidebar` / `displayScoreboardSidebar`.
+    pub(super) fn draw_scoreboard(&self, batch: &mut HudBatch) {
+        let board = &self.score.board;
+        let Some(objective) = self.sidebar_objective() else {
             return;
         };
         let draws = hud_overlays::sidebar(
@@ -599,9 +674,19 @@ impl Game<'_> {
     /// objective.
     pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
         use horizon_client::tab_list::{self, TabInputs};
+        // Player heads and the player list both draw from the same skin
+        // slots: a new frame, with what the last one drew.
+        let (ready, drawn) = {
+            let mut downloads = self.skin_downloads.borrow_mut();
+            (downloads.take_ready(), downloads.take_drawn())
+        };
+        self.skin_slots.next_frame(drawn);
+        for (location, rgba) in ready {
+            self.store_skin(location, rgba);
+        }
         let key = self.screen == super::Screen::Playing
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
-        let (players, online_mode, upside_down) = match self.remote_tab_players() {
+        let (mut players, online_mode, upside_down) = match self.remote_tab_players() {
             Some(remote) => remote,
             None => {
                 // The integrated server: the local player, online mode, no ping.
@@ -622,18 +707,28 @@ impl Game<'_> {
                 (players, true, upside_down)
             }
         };
-        let board = &self.score.board;
-        let objective = board.display_objective(sb::SLOT_LIST);
+        let has_objective = self.score.board.display_objective(sb::SLOT_LIST).is_some();
         let shown = tab_list::visible(
             key,
-            self.remote.is_none(),
+            self.has_singleplayer_server(),
             players.len(),
-            objective.is_some(),
+            has_objective,
         );
         self.tab_list.set_visible(shown);
         if !shown {
             return;
         }
+        // The faces of the players the list shows.
+        let faces: std::collections::HashSet<u128> =
+            tab_list::sorted_players(&players, &self.score.board)
+                .iter()
+                .map(|p| p.uuid)
+                .collect();
+        for p in players.iter_mut().filter(|p| faces.contains(&p.uuid)) {
+            p.skin = self.face_skin(p.uuid, &p.skin);
+        }
+        let board = &self.score.board;
+        let objective = board.display_objective(sb::SLOT_LIST);
         let up = |id: u128| upside_down.contains(&id);
         let inputs = TabInputs {
             players: &players,

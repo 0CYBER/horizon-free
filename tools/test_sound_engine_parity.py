@@ -18,14 +18,10 @@ import math
 import random
 
 try:
-    from . import audio_harness as h
+    from . import audio_harness as h, lab
 except ImportError:
     import audio_harness as h
-
-
-def dbits(v):
-    import struct
-    return struct.pack('>d', v).hex()
+    import lab
 
 
 class Script:
@@ -37,11 +33,11 @@ class Script:
         self.lines.append(' '.join(map(str, parts)))
 
     def play(self, name, event, source=4, volume=1.0, pitch=1.0, at=(0.0, 0.0, 0.0), looping=0, delay=0, linear=True, relative=0, seed=0, kind='simple'):
-        self.add('play', name, kind, event, source, h.bits(volume), h.bits(pitch), *map(dbits, at), looping, delay,
+        self.add('play', name, kind, event, source, h.bits(volume), h.bits(pitch), *map(lab.dbits, at), looping, delay,
                  'linear' if linear else 'none', relative, seed)
 
     def cart(self, name, at, delta, removed=0):
-        self.add('cart', name, *map(dbits, at), *map(dbits, delta), removed)
+        self.add('cart', name, *map(lab.dbits, at), *map(lab.dbits, delta), removed)
 
     def tick(self, n=1, paused=0):
         for _ in range(n):

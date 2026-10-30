@@ -22,13 +22,13 @@ use horizon_core::{
     },
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
 struct RegionBlockQueries {
     fluids: super::fluid_predicate::FluidPredicateBindings,
-    tags: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
+    tags: Arc<BTreeMap<String, Arc<BTreeSet<BlockStateId>>>>,
 }
 
 #[derive(Debug)]
@@ -58,7 +58,10 @@ impl From<RegionError> for PlacementQueryError {
     }
 }
 pub struct TerrainRegion<'r, B: TerrainBlockStates> {
-    chunks: BTreeMap<(i32, i32), TerrainChunk<'r, B>>,
+    /// Ordered by X then Z.
+    chunks: Vec<TerrainChunk<'r, B>>,
+    /// Each chunk's index in `chunks`: every block access looks one up.
+    index: ChunkIndex,
     min_y: i32,
     height: i32,
     generation: WorldGenerationContext,
@@ -67,6 +70,78 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     next_tick_order: i64,
     block_queries: Option<RegionBlockQueries>,
     world_seed: Option<i64>,
+}
+/// Where each chunk of a region sits in its list: a grid over the chunks'
+/// bounding box while it is small (the usual square of neighbours), else a
+/// map (chunks spread far apart).
+enum ChunkIndex {
+    Grid {
+        origin: (i32, i32),
+        columns: i64,
+        rows: i64,
+        /// Row by row from `origin`; `u32::MAX` where no chunk is.
+        cells: Vec<u32>,
+    },
+    Sparse(HashMap<(i32, i32), u32>),
+}
+impl ChunkIndex {
+    /// The largest grid, in chunk columns.
+    const GRID_CELLS: i64 = 1 << 20;
+    /// `None` when two chunks share a position.
+    fn new(positions: &[(i32, i32)]) -> Option<Self> {
+        let x0 = positions.iter().map(|p| p.0).min()?;
+        let z0 = positions.iter().map(|p| p.1).min()?;
+        let columns = i64::from(positions.iter().map(|p| p.0).max()?) - i64::from(x0) + 1;
+        let rows = i64::from(positions.iter().map(|p| p.1).max()?) - i64::from(z0) + 1;
+        if columns * rows > Self::GRID_CELLS {
+            let mut map = HashMap::with_capacity(positions.len());
+            for (i, &p) in positions.iter().enumerate() {
+                if map.insert(p, i as u32).is_some() {
+                    return None;
+                }
+            }
+            return Some(Self::Sparse(map));
+        }
+        let mut cells = vec![u32::MAX; (columns * rows) as usize];
+        for (i, &(x, z)) in positions.iter().enumerate() {
+            let cell = (i64::from(z) - i64::from(z0)) * columns + (i64::from(x) - i64::from(x0));
+            let cell = &mut cells[cell as usize];
+            if *cell != u32::MAX {
+                return None;
+            }
+            *cell = i as u32;
+        }
+        Some(Self::Grid {
+            origin: (x0, z0),
+            columns,
+            rows,
+            cells,
+        })
+    }
+    #[inline]
+    fn get(&self, x: i32, z: i32) -> Option<usize> {
+        match self {
+            Self::Grid {
+                origin,
+                columns,
+                rows,
+                cells,
+            } => {
+                let (dx, dz) = (
+                    i64::from(x) - i64::from(origin.0),
+                    i64::from(z) - i64::from(origin.1),
+                );
+                if !(0..*columns).contains(&dx) || !(0..*rows).contains(&dz) {
+                    return None;
+                }
+                match cells[(dz * columns + dx) as usize] {
+                    u32::MAX => None,
+                    i => Some(i as usize),
+                }
+            }
+            Self::Sparse(map) => map.get(&(x, z)).map(|&i| i as usize),
+        }
+    }
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -83,15 +158,16 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         }) {
             return Err(RegionError::InvalidChunks);
         }
-        let mut stored = BTreeMap::new();
-        for chunk in chunks {
-            let p = chunk.position();
-            if stored.insert((p.x, p.z), chunk).is_some() {
-                return Err(RegionError::InvalidChunks);
-            }
-        }
+        let mut chunks = chunks;
+        chunks.sort_by_key(|c| (c.position().x, c.position().z));
+        let positions: Vec<(i32, i32)> = chunks
+            .iter()
+            .map(|c| (c.position().x, c.position().z))
+            .collect();
+        let index = ChunkIndex::new(&positions).ok_or(RegionError::InvalidChunks)?;
         Ok(Self {
-            chunks: stored,
+            chunks,
+            index,
             sea_level: generator.sea_level,
             game_time: 0,
             next_tick_order: 0,
@@ -114,10 +190,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         mut self,
         bindings: &super::block_feature::FeatureBlockBindings<'r>,
     ) -> Result<Self, RegionError> {
-        if !std::ptr::eq(
-            self.chunks.first_key_value().unwrap().1.registry(),
-            bindings.registry(),
-        ) {
+        if !std::ptr::eq(self.chunks[0].registry(), bindings.registry()) {
             return Err(RegionError::InvalidBindings);
         }
         self.block_queries = Some(RegionBlockQueries {
@@ -140,9 +213,6 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn tick_clock(&self) -> (i64, i64) {
         (self.game_time, self.next_tick_order)
     }
-    pub fn set_game_time(&mut self, game_time: i64) {
-        self.game_time = game_time;
-    }
     /// Raw tick identities are default block-state IDs for block ticks and
     /// `FluidKind` discriminants for fluid ticks, in separate namespaces.
     pub fn schedule_tick(
@@ -151,15 +221,6 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         tick: ScheduledTick,
     ) -> Result<bool, RegionError> {
         WorldGenTickAccess::new(RegionTickContainers { region: self, kind }).schedule(tick)
-    }
-    pub fn has_scheduled_tick(
-        &mut self,
-        kind: TickKind,
-        position: BlockPos,
-        tick_type: TickTypeId,
-    ) -> Result<bool, RegionError> {
-        WorldGenTickAccess::new(RegionTickContainers { region: self, kind })
-            .has_scheduled(position, tick_type)
     }
     fn request_tick(
         &mut self,
@@ -179,30 +240,45 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         self.schedule_tick(kind, tick)?;
         Ok(())
     }
-    /// Override world sea level without changing generator placement anchors.
-    pub fn with_world_sea_level(mut self, sea_level: i32) -> Self {
-        self.sea_level = sea_level;
-        self
-    }
     /// Release the resident chunks, ordered by X then Z; match them by position.
     pub fn into_chunks(self) -> Vec<TerrainChunk<'r, B>> {
-        self.chunks.into_values().collect()
+        self.chunks
     }
     pub fn chunks(&self) -> impl Iterator<Item = &TerrainChunk<'r, B>> {
-        self.chunks.values()
+        self.chunks.iter()
     }
+    #[inline]
+    fn index(&self, x: i32, z: i32) -> Option<usize> {
+        self.index.get(x, z)
+    }
+    #[inline]
     pub fn chunk(&self, x: i32, z: i32) -> Result<&TerrainChunk<'r, B>, RegionError> {
-        self.chunks
-            .get(&(x, z))
-            .ok_or(RegionError::MissingChunk([x, z]))
+        match self.index(x, z) {
+            Some(i) => Ok(&self.chunks[i]),
+            None => Err(RegionError::MissingChunk([x, z])),
+        }
     }
     pub fn chunk_mut(&mut self, x: i32, z: i32) -> Result<&mut TerrainChunk<'r, B>, RegionError> {
-        self.chunks
-            .get_mut(&(x, z))
-            .ok_or(RegionError::MissingChunk([x, z]))
+        match self.index(x, z) {
+            Some(i) => Ok(&mut self.chunks[i]),
+            None => Err(RegionError::MissingChunk([x, z])),
+        }
     }
+    #[inline]
     pub fn block(&self, [x, y, z]: [i32; 3]) -> Result<BlockStateId, RegionError> {
         Ok(self.chunk(x >> 4, z >> 4)?.block(x, y, z))
+    }
+    /// `FeatureWorld::scan_column` within one chunk's column.
+    pub fn scan_column(
+        &self,
+        [x, y, z]: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, RegionError> {
+        Ok(self
+            .chunk(x >> 4, z >> 4)?
+            .scan_column([x, y, z], step, limit, keep))
     }
     /// Level-style biome lookup checks the selected chunk's generation status
     /// before reading its palette. Raw biome storage remains independently
@@ -302,12 +378,7 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
         block: BlockStateId,
         delay: i32,
     ) -> Result<(), PlacementQueryError> {
-        let registry = self
-            .chunks
-            .first_key_value()
-            .expect("nonempty region")
-            .1
-            .registry();
+        let registry = self.chunks[0].registry();
         let state = registry
             .state(block)
             .ok_or(RegionError::InvalidTickState(block))?;
@@ -464,7 +535,7 @@ impl<'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'_, 'r, B, F> {
                 })
             }
         };
-        Ok(!height.is_some_and(|height| !height.contains(position[1])))
+        Ok(height.is_none_or(|height| height.contains(position[1])))
     }
 }
 impl<'r, B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, 'r, B, F>
@@ -594,6 +665,15 @@ where
     type Error = RegionError;
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, Self::Error> {
         self.region.block(position)
+    }
+    fn scan_column(
+        &mut self,
+        position: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, Self::Error> {
+        self.region.scan_column(position, step, limit, keep)
     }
     fn set_block(
         &mut self,

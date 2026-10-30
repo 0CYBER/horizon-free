@@ -1,12 +1,17 @@
 //! The DualSense's output report, built by hand (docs/controllers.md "DualSense output"): the
 //! compatible-vibration motors, the adaptive triggers, the lightbar and the player LEDs. Gilrs
 //! keeps reading the pad; this crate only writes to it, over hidapi ([`device`]).
+//! On iOS the crate builds without hidapi, which has no backend there: [`Link`] never opens.
 //!
 //! The byte layout is the one documented by the Linux kernel's `hid-playstation.c` and SDL's
 //! `SDL_hidapi_ps5.c`: a 47-byte block shared by both transports, sent as report 0x02 over USB
 //! and as report 0x31 over Bluetooth, where a sequence tag leads it and a CRC-32 (seeded with
 //! the byte 0xA2) closes it.
 pub mod device;
+#[cfg(not(target_os = "ios"))]
+pub mod haptics;
+#[cfg(target_os = "ios")]
+#[path = "haptics_stub.rs"]
 pub mod haptics;
 pub mod trigger;
 

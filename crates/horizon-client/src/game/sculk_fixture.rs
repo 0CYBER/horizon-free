@@ -156,6 +156,10 @@ const CLIENT_SOUNDS: &[&str] = &[
 impl Game<'_> {
     /// Run every scenario of `spec` ("SCENARIOS,OUTPUT") and write the results.
     pub(super) fn sculk_fixture(&mut self, spec: &str) -> Result<()> {
+        assert!(
+            !self.options.execution_role.is_client(),
+            "fixture requires a server Game"
+        );
         let (input, output) = spec
             .split_once(',')
             .ok_or("HORIZON_SCULK_FIXTURE=SCENARIOS,OUTPUT")?;
@@ -433,6 +437,7 @@ impl Game<'_> {
         });
         self.level_events.clear();
         self.sculk.known = self.world.chunks.keys().copied().collect();
+        self.sculk.known_revision = Some(self.world.chunks.membership_revision());
         self.sculk_sync_index();
         let mut names: HashMap<u32, String> = HashMap::new();
         let mut sources: Vec<u32> = Vec::new();

@@ -2,6 +2,7 @@ import datetime as dt
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from tools import release_train as train
 
@@ -11,7 +12,7 @@ NOW = dt.datetime(2026, 10, 15, 12, 0, tzinfo=dt.timezone.utc)
 def pr(number, title="Fix a thing", labels=(), paths=("crates/horizon-client/src/game.rs",), issues=(), author="ludovic111",
        merged=dt.timedelta(hours=9)):
     return {"number": number, "title": title, "labels": list(labels), "paths": list(paths), "issues": list(issues),
-            "author": author, "url": f"https://github.com/ludovic111/horizon/pull/{number}", "merged_at": NOW - merged}
+            "author": author, "url": f"https://github.com/horizon-rust/horizon/pull/{number}", "merged_at": NOW - merged}
 
 
 class ReleaseTrainTests(unittest.TestCase):
@@ -104,33 +105,86 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(train.decision("game", [], NOW)[0])
 
     def test_the_first_release_of_0_2_says_what_changed(self):
-        title, body = train.notes("game", "v0.2.0", [pr(1)], [], beta=True, previous="v2026.10.21")
+        title, body = train.notes("game", "v0.2.0", [pr(1)], [], previous="v2026.10.21")
         self.assertTrue(title.startswith("Horizon 0.2.0: "), title)
+        body = body.removeprefix(train.PLAYERS + "\n\n")
         self.assertTrue(body.startswith("Horizon is numbered from now on: this is Horizon 0.2.0, the release after 2026.10.21."))
         self.assertIn("`horizon-server update --version v0.2.0`", body)
         title, body = train.notes("launcher", "launcher@0.2.0", [], [], previous="launcher-v0.17.0")
         self.assertEqual(title, "Horizon launcher 0.2.0")
         self.assertIn("the release after launcher 0.17.0", body)
         self.assertIn("Rebuilt from the latest main.", body)
-        self.assertTrue(train.notes("game", "v0.3.0", [pr(1)], [], previous="v0.2.14")[1].startswith("The first release of Horizon 0.3."))
+        body = train.notes("game", "v0.3.0", [pr(1)], [], previous="v0.2.14")[1]
+        self.assertTrue(body.startswith(train.PLAYERS + "\n\nThe first release of Horizon 0.3."))
         for version, previous in [("v0.2.1", "v0.2.0"), ("v0.3.0-rc.1", "v0.2.9"), ("v2026.10.23", "v2026.10.21")]:
             body = train.notes("game", version, [pr(1)], [], previous=previous)[1]
-            self.assertTrue(body.startswith("### Fixed"), (version, body))
+            self.assertTrue(body.startswith(train.PLAYERS + "\n\n### Fixed"), (version, body))
 
     def test_decision(self):
         minute = dt.timedelta(minutes=1)
         decide = lambda prs, **kw: train.decision("game", prs, NOW, **kw)[0]
-        self.assertTrue(decide([pr(1, merged=16 * minute)]), "settled for the debounce")
-        self.assertFalse(decide([pr(1, merged=5 * minute)]), "merged moments ago")
-        self.assertFalse(decide([pr(1, merged=40 * minute), pr(2, merged=5 * minute)]), "a burst still merging")
-        self.assertTrue(decide([pr(1, merged=61 * minute), pr(2, merged=2 * minute)]), "merges that never pause still ship")
+        hour = 60 * minute
+        five = lambda newest: [pr(n, merged=newest + n * minute) for n in range(5)]
+        self.assertTrue(decide(five(6 * minute)), "a batch, settled for the debounce")
+        self.assertFalse(decide(five(2 * minute)), "a batch still merging")
+        self.assertFalse(decide(five(6 * minute)[:4]), "not yet a batch")
+        self.assertFalse(decide([pr(1, merged=5 * hour)]), "a lone fix waits for others")
+        self.assertTrue(decide([pr(1, merged=6 * hour)]), "until the oldest has waited 6 hours")
+        self.assertTrue(decide([pr(1, merged=7 * hour), pr(2, merged=minute)]), "merges that never pause still ship")
+        self.assertFalse(decide([pr(n, merged=6 * minute) for n in range(4)] + [pr(9, labels=["skip-release"])]),
+                         "work players don't see doesn't fill a batch")
         self.assertTrue(decide([pr(1, labels=["release-now"], merged=minute)]))
         self.assertFalse(decide([pr(1, paths=[])]), "nothing players run")
         self.assertFalse(decide([pr(1, labels=["skip-release"])]))
         self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])]))
-        self.assertFalse(decide([pr(1, merged=5 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
         self.assertFalse(decide([pr(1)], paused=True))
         self.assertTrue(decide([], paused=True, force=True))
+
+    def test_an_open_release_blocker_holds_every_release_even_forced(self):
+        release, why = train.decision("game", [pr(1, labels=["release-now"])], NOW, blockers=[7, 9])
+        self.assertFalse(release)
+        self.assertEqual(why, "held by release-blocker #7, release-blocker #9")
+        self.assertFalse(train.decision("game", [], NOW, force=True, blockers=[7])[0])
+        self.assertFalse(train.decision("game", [], NOW, new_line="0.3", blockers=[7])[0])
+        self.assertTrue(train.decision("game", [pr(1)], NOW, blockers=[])[0])
+
+    def test_game_releases_ship_only_what_parity_main_passed(self):
+        def runs(parity, checks):
+            def gh_json(*arguments):
+                table = parity if "parity-main" in arguments else checks
+                if "--commit" in arguments:
+                    sha = arguments[arguments.index("--commit") + 1]
+                    return [{"status": s, "conclusion": c} for h, s, c in table if h == sha]
+                return [{"headSha": h, "status": s, "conclusion": c} for h, s, c in table]
+            return mock.patch.object(train, "gh_json", gh_json)
+        checks = [("c", "in_progress", ""), ("b", "completed", "success"), ("a", "completed", "success")]
+        with runs([("c", "queued", ""), ("b", "completed", "cancelled"), ("a", "completed", "success")], checks):
+            self.assertEqual(train.green_main_head(), "b", "checks alone: the newest green checks")
+            self.assertEqual(train.green_main_head(parity=True), "a", "a superseded parity-main run counts for nothing")
+            self.assertTrue(train.passed_on("parity-main", "a"))
+            self.assertFalse(train.passed_on("parity-main", "b"))
+        with runs([("b", "completed", "failure"), ("a", "completed", "success")], checks):
+            self.assertIsNone(train.green_main_head(parity=True), "a failed batch holds releases until fixed")
+        with runs([("c", "completed", "success")], checks):
+            self.assertIsNone(train.green_main_head(parity=True), "its checks must pass too")
+
+    def test_a_release_is_published_only_after_its_smoke_test_and_with_no_blocker(self):
+        drew = {"error": None, "frames": 12710, "chunks": 81, "meshed_sections": 550, "player": [160.5, 71.0, 156.5]}
+        self.assertIsNone(train.gate(drew, []))
+        self.assertEqual(train.gate(drew, [4]), "release-blocker #4 is open")
+        self.assertEqual(train.gate(None, []), "no smoke-test.json: the release smoke test did not run")
+        self.assertEqual(train.gate(None, [4]),
+                         "no smoke-test.json: the release smoke test did not run; release-blocker #4 is open")
+        self.assertEqual(train.smoke_problem({**drew, "error": "device lost"}), "the smoke run failed: device lost")
+        for broken in ({**drew, "frames": 1499}, {**drew, "chunks": 0}, {**drew, "meshed_sections": 0},
+                       {**drew, "player": None}, {}):
+            self.assertEqual(train.smoke_problem(broken), "the smoke run did not draw a world", broken)
+
+    def test_notes_never_call_a_release_alpha_or_beta(self):
+        _, body = train.notes("game", "v0.2.12", [pr(1)], [])
+        self.assertNotIn("alpha", body.lower())
+        self.assertNotIn("beta", body.lower())
+        self.assertNotIn("Stable", body)
 
     def test_notes(self):
         prs = [pr(5, "Nether portals: vanilla timing and linking (fixes #94)", issues=[94]),
@@ -144,7 +198,8 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertIn("### Known issues\n- Sound cuts out after an hour.", body)
         self.assertNotIn("#7", body)
         self.assertNotIn("#8", body)
-        self.assertIn("Thanks to @cosmic.", body)
+        self.assertIn("### Contributors\nThanks to @cosmic.", body)
+        self.assertTrue(body.endswith("---\n" + train.DISCLAIMER + "\n"), body)
         self.assertLess(body.index("### New"), body.index("### Fixed"))
         title, _ = train.notes("game", "v2026.10.15.2", [pr(9, "Horizon's mark", labels=["feature"]),
                                                          pr(10, "Game menus", labels=["feature"])], [])
@@ -170,13 +225,78 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertEqual(title, "Horizon launcher 0.2.0")
         self.assertIn("### Fixed\n- Launcher: say the self-update succeeded (#3)", body)
         self.assertNotIn("Known issues", body)
+        self.assertNotIn(train.PLAYERS, body)
+        self.assertIn("Your launcher updates itself.", body)
+
+    def test_a_game_release_opens_with_the_way_to_the_launcher(self):
+        # GitHub's latest is a game release: whoever lands on it is sent to the launcher first (#1647).
+        _, body = train.notes("game", "v0.2.50", [pr(1)], ["- Sound cuts out after an hour."])
+        self.assertTrue(body.startswith('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher'))
+        self.assertIn('href="https://github.com/horizon-rust/horizon/releases?q=launcher&amp;expanded=true"', body)
+        self.assertNotIn("\n", train.PLAYERS, "one line: one HTML block, which ends at the blank line after it")
+        self.assertEqual(body.count("playhorizon.dev"), 1, "said once, at the top")
+        _, body = train.notes("game", "v0.2.51", [], [])
+        self.assertTrue(body.startswith(train.PLAYERS + "\n\nRebuilt from the latest main."))
 
     def test_known_issues_are_the_bullets_of_the_file(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp, "known-issues.md")
-            path.write_text("# Known issues\n\nSome text.\n\n- One.\n- Two, with **bold**.\n  continued\n")
-            self.assertEqual(train.known_issues(path), ["- One.", "- Two, with **bold**."])
+            path.write_text("# Known issues\n\nSome text.\n\n- One.\n- Two, with **bold**.  \n"
+                            "  continued with `code`\n\tand a [link](https://example.com).  \n- Three.\n")
+            self.assertEqual(train.known_issues(path),
+                             ["- One.", "- Two, with **bold**. continued with `code` and a [link](https://example.com).",
+                              "- Three."])
             self.assertEqual(train.known_issues(Path(temp, "missing.md")), [])
+
+    def test_known_issues_do_not_include_unrelated_text(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp, "known-issues.md")
+            for separator in ["\n", "  \n", "# Heading\n", "Some text.\n"]:
+                with self.subTest(separator=separator):
+                    path.write_text("  Intro.\n- One.\n  continued.\n" + separator + "  Not an issue.\n- Two.\n")
+                    self.assertEqual(train.known_issues(path), ["- One. continued.", "- Two."])
+            path.write_text("# Known issues\n\nNo issues.\n")
+            self.assertEqual(train.known_issues(path), [])
+            path.write_text("")
+            self.assertEqual(train.known_issues(path), [])
+
+    def test_notes_keep_the_wrapped_shaderpacks_issue(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp, "known-issues.md")
+            path.write_text("- Shader packs have been removed for now. Packs in your\n"
+                            "  `shaderpacks` folder are left where they are.\n")
+            _, body = train.notes("game", "v0.2.70", [pr(1)], train.known_issues(path))
+            self.assertIn("### Known issues\n- Shader packs have been removed for now. Packs in your "
+                          "`shaderpacks` folder are left where they are.\n", body)
+
+
+
+
+class NightlyTrainTests(unittest.TestCase):
+    """Since 2026-10-28 the train decides when a Nightly goes out (release.yml starts nightly-build.yml)."""
+
+    PRS = [{"number": 1, "labels": [], "paths": ["crates/x.rs"]}]
+
+    def test_one_build_at_a_time_and_twelve_a_day(self):
+        self.assertEqual(train.nightly_decision(True, "5 pull requests", self.PRS, None, 3)[:2], (True, "5 pull requests"))
+        release, reason, _ = train.nightly_decision(True, "5", self.PRS, 4242, 3)
+        self.assertFalse(release)
+        self.assertIn("run 4242", reason)
+        release, reason, urgent = train.nightly_decision(True, "5", self.PRS, None, 12)
+        self.assertFalse(release)
+        self.assertFalse(urgent)
+        self.assertIn("12 Nightlies today", reason)
+        self.assertEqual(train.nightly_decision(False, "waiting", self.PRS, None, 0)[:2], (False, "waiting"))
+
+    def test_release_now_and_force_pass_the_cap_but_not_a_running_build(self):
+        urgent = [{"number": 2, "labels": ["release-now"], "paths": ["crates/x.rs"]}]
+        self.assertEqual(train.nightly_decision(True, "release-now: #2", urgent, None, 12), (True, "release-now: #2", True))
+        self.assertTrue(train.nightly_decision(True, "forced", self.PRS, None, 30, force=True)[0])
+        self.assertFalse(train.nightly_decision(True, "forced", self.PRS, 7, 0, force=True)[0])
+
+    def test_the_cap_is_the_nightly_sets(self):
+        from tools.ci import nightly_set
+        self.assertEqual(train.NIGHTLY_CAP, nightly_set.MAX_BUILDS_PER_DAY)
 
 
 if __name__ == "__main__":

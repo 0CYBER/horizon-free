@@ -195,11 +195,32 @@ above remains a record of its narrower tested source snapshot.
 
 `tools/test_chunk_generation_parity.py` generates chunks in actual vanilla classes (`VanillaChunkGenerationOracle`: structure starts and
 references, biomes, noise, surface, carvers, then biome decoration and structure pieces through real `WorldGenRegion`s) and with
-`crates/horizon-world/examples/chunk_dump.rs`, and compares every block state, quart biome and block entity (canonical NBT) of each target
+`crates/horizon-world/examples/probe/chunk_dump.rs`, and compares every block state, quart biome and block entity (canonical NBT) of each target
 chunk, and the scheduled block and fluid ticks each proto chunk carries into the live world. Cases are terrain sites for several seeds
 across the overworld, Nether and End, plus rectangles around every structure kind found by scanning the seed. `--phase structures`
 isolates terrain plus structure pieces, `--phase terrain` stops before features. `HORIZON_ORDER` (a file of `x z` lines) makes both sides
 decorate in that order instead of row-major.
+
+### Data packs
+
+A world's enabled data packs (`<world>/datapacks`, in `datapacks.json`'s order) change its generation as vanilla's registries do:
+`worldgen::overrides` maps each pack file to the bundle it joins (noises, density functions, noise settings, material rules and
+conditions, carvers, configured and placed features, structures, structure sets, template pools, processor lists, biomes, level stems), a
+higher pack's file for an id replacing a lower one's, and its block, fluid and biome tag files to the tag bundles in pack order.
+`GeneratorData::load_with` reads the bundles with them; the client caches the result per set of pack entries
+(`vanillagen::shared_data_with`). What Horizon leaves out is logged: a pack's new biomes (the game has no id, colours or sounds for them;
+their tag entries and climate points go with them) and folders the generator does not read. A pack's dimension types set each level's
+height ([world-height.md](world-height.md)); noise settings taller than the level generate only inside it, as `clampToHeightAccessor`. Sapling growth and bone
+meal still place vanilla's features.
+
+`tools/test_datapack_worldgen_parity.py` runs the whole-chunk harness with `HORIZON_DATAPACKS=tools/fixtures/datapacks` on both sides
+(the oracle selects every pack of the folder after vanilla through vanilla's own pack repository): its pack overrides a noise, a density
+function, the overworld noise settings (sea level 70, no aquifers, a new final density with a new noise added), a placed feature and a
+biome tag. Every site must match vanilla with the pack and differ from Horizon without it.
+
+Packs must be written for 26.3: its worldgen formats differ from 26.2's (density functions take `left`/`right`, `gradient` replaces
+`y_clamped_gradient`, noises take `base_octave`/`octave_count`, block states are strings, surface rules became the `material_rule` and
+`material_condition` registries, configured features lost `config`). Vanilla 26.3 refuses a 26.2 worldgen pack as Horizon does.
 
 ### Decoration order
 

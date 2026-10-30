@@ -22,13 +22,19 @@ pub struct CurseForge {
 fn class(kind: Kind) -> u64 {
     match kind {
         Kind::ResourcePack => 12,
-        Kind::ShaderPack => 6552,
         Kind::Modpack => 4471,
+        Kind::Mod => 6,
+        Kind::Shader => 6552,
+        Kind::DataPack => 6945,
     }
 }
 
+/// The kind of a CurseForge class; its shader packs (the shaders/ format) are not offered.
 fn kind_of(class_id: u64) -> Option<Kind> {
-    Kind::ALL.into_iter().find(|k| class(*k) == class_id)
+    Kind::ALL
+        .into_iter()
+        .filter(|k| *k != Kind::Shader)
+        .find(|k| class(*k) == class_id)
 }
 
 /// The key: the environment's, else the one built in. Empty counts as none.
@@ -50,7 +56,7 @@ impl CurseForge {
     }
 
     fn get(&self, url: &str) -> Result<Value, String> {
-        let response = super::download::agent()
+        let response = super::download::agent(url)
             .get(url)
             .set("x-api-key", &self.key)
             .set("Accept", "application/json")
@@ -68,12 +74,15 @@ impl CurseForge {
 
 pub(super) fn search_url(query: &Query) -> String {
     let mut url = format!(
-        "{API}/mods/search?gameId={MINECRAFT}&classId={}&sortField=2&sortOrder=desc&index={}&pageSize={}",
+        "{API}/mods/search?gameId={MINECRAFT}&classId={}&sortField={}&sortOrder=desc&index={}&pageSize={}",
         class(query.kind),
+        query.filters.sort(&query.text).curseforge(),
         query.offset,
         query.limit.clamp(1, 50),
     );
-    if !query.everything && query.kind == Kind::ResourcePack {
+    if let Some(v) = &query.filters.game_version {
+        url.push_str(&format!("&gameVersion={}", encode(v)));
+    } else if !query.everything && matches!(query.kind, Kind::ResourcePack | Kind::Mod) {
         url.push_str(&format!("&gameVersion={GAME}"));
     }
     if !query.text.is_empty() {
@@ -83,7 +92,7 @@ pub(super) fn search_url(query: &Query) -> String {
     url
 }
 
-/// CurseForge mixes Minecraft versions and loader names (`Iris`, `OptiFine`, `NeoForge`) in one
+/// CurseForge mixes Minecraft versions and loader names (`Fabric`, `NeoForge`) in one
 /// list: digits first is a version, the rest are loaders, in lowercase as Modrinth names them.
 fn split_versions(list: &Value) -> (Vec<String>, Vec<String>) {
     let mut versions = Vec::new();
@@ -118,19 +127,7 @@ pub(super) fn parse_mod(m: &Value) -> Option<Project> {
             .map(|v| Value::String(v.to_owned()))
             .collect(),
     );
-    let (game_versions, mut loaders) = split_versions(&latest);
-    // A shader pack's files name its loader; the index often doesn't.
-    if kind == Kind::ShaderPack && loaders.is_empty() {
-        let (_, own) = split_versions(&Value::Array(
-            m["latestFiles"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .flat_map(|f| f["gameVersions"].as_array().cloned().unwrap_or_default())
-                .collect(),
-        ));
-        loaders = own;
-    }
+    let (game_versions, loaders) = split_versions(&latest);
     Some(Project {
         source: SourceId::CurseForge,
         id: m["id"].as_u64()?.to_string(),
@@ -173,6 +170,7 @@ pub(super) fn parse_file(f: &Value) -> Option<Version> {
                 name: name.clone(),
                 size: f["fileLength"].as_u64().unwrap_or(0),
                 sha512: None,
+                sha256: None,
                 sha1,
                 primary: true,
             }]
@@ -204,6 +202,9 @@ impl Source for CurseForge {
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
+        if query.kind == Kind::Shader {
+            return Err(super::SHADERS_ON_HORIZON.into());
+        }
         let found = self.get(&search_url(query))?;
         Ok(found["data"]
             .as_array()

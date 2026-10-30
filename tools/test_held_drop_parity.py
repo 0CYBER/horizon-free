@@ -2,10 +2,12 @@
 """Compare selected-slot drops with Minecraft.handleKeybinds in all four game modes.
 
 The oracle invokes the unmodified native key handler, consuming real drop-key
-clicks. Its controlled dropItem callback removes from the real player Inventory;
-other keys are idle and execution stops at the following item-use boundary.
+clicks, and MultiPlayerGameMode.dropItem's real prediction and swing dispatch.
+Other keys are idle and execution stops at the following item-use boundary.
 Checks Q/Ctrl+Q, slots 0/8, empty/single/partial/full stacks and repeated drops.
-Packet delivery, item entities, swing animation and statistics are outside scope.
+Checks swing attempts and drop packet counts, including packets without swings
+for empty slots. Packet delivery, animation ticks, item entities and statistics
+are outside scope.
 """
 import os
 import subprocess
@@ -33,9 +35,9 @@ def main():
                     'dev.horizonlab.parity.VanillaHeldDropOracle', str(build / 'vanilla.txt')], check=True)
     with (build / 'rust.txt').open('w') as out:
         subprocess.run(['cargo', 'run', '--quiet', '-p', 'horizon-client', '--example',
-                        'held_drop_fixture'], cwd=lab.ROOT, stdout=out, check=True)
+                        'client_probe', '--', 'held_drop_fixture'], cwd=lab.ROOT, stdout=out, check=True)
     matched = base.compare(build / 'vanilla.txt', build / 'rust.txt')
-    print(f'Held drop parity passed: {matched} selected-stack/drop-count snapshots match vanilla')
+    print(f'Held drop parity passed: {matched} inventory/drop/swing/packet snapshots match vanilla')
 
 
 if __name__ == '__main__':

@@ -79,7 +79,10 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
             assert!(Instant::now() < deadline, "streaming never settled");
             let before = (world.chunks.len(), meshed.len());
             let (uploads, _) = streaming.update(&mut world);
-            meshed.extend(uploads.into_iter().map(|(key, _)| key));
+            meshed.extend(uploads.iter().map(|(key, _)| *key));
+            // As the game does once they are uploaded: a worker frees them,
+            // and nothing comes back (`pending` empties).
+            streaming.free(uploads);
             thread::sleep(Duration::from_millis(5));
             let idle = streaming.pending() == 0 && before == (world.chunks.len(), meshed.len());
             quiet = if idle { quiet + 1 } else { 0 };
@@ -215,14 +218,15 @@ fn relit_columns_keep_every_mesh_current() {
             blend_radius: 2,
             smooth_lighting: true,
             cutout_leaves: true,
-            cull_leaves: false,
             assets: &context.assets,
             render: &context.render,
             tables: &context.tables,
             biomes: &context.biomes,
             visibility: context.tables.visibility.clone(),
         };
-        let fresh = mesher.mesh(&borrow(&region), sy);
+        // The workers sort solid quads by side, as uploads expect.
+        let mut fresh = mesher.mesh(&borrow(&region), sy);
+        fresh.sort_solid();
         let bytes = |m: &SectionMesh| {
             [
                 bytemuck::cast_slice::<_, u8>(&m.solid).to_vec(),

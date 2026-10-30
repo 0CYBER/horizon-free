@@ -33,9 +33,6 @@ impl BelowZeroRetrogen {
             .get(index / 64)
             .is_some_and(|word| word & (1_u64 << (index % 64)) != 0)
     }
-    pub fn missing_bedrock_words(&self) -> &[u64] {
-        &self.missing_bedrock
-    }
     pub fn from_nbt(tag: &Tag) -> io::Result<Self> {
         if !matches!(tag, Tag::Compound(_)) {
             return Err(invalid("retrogen is not a compound"));

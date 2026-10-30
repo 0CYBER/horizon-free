@@ -14,7 +14,10 @@ impl SupportType {
         shape: &VoxelShape,
         direction: Direction,
     ) -> Result<bool, ShapeError> {
-        let face = shape.face_shape(direction)?;
+        self.supported_by(&shape.face_shape(direction)?)
+    }
+    /// [`Self::is_supporting`] given the shape's face in that direction.
+    fn supported_by(self, face: &VoxelShape) -> Result<bool, ShapeError> {
         let (required, operation) = match self {
             Self::Full => (VoxelShape::block(), ShapeOp::XOR),
             Self::Center => {
@@ -92,13 +95,17 @@ impl<'r> CachedBlockSupportRegistry<'r> {
                 *flags
             } else {
                 let mut flags = [0; 3];
-                for (i, support) in [SupportType::Full, SupportType::Center, SupportType::Rigid]
-                    .into_iter()
-                    .enumerate()
-                {
-                    for direction in Direction::ALL {
+                for direction in Direction::ALL {
+                    // Not kept on the shape: only these flags are.
+                    let face = shape
+                        .face_shape_transient(direction)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    for (i, support) in [SupportType::Full, SupportType::Center, SupportType::Rigid]
+                        .into_iter()
+                        .enumerate()
+                    {
                         if support
-                            .is_supporting(shape, direction)
+                            .supported_by(&face)
                             .map_err(|e| invalid(e.to_string()))?
                         {
                             flags[i] |= 1 << direction as u8;
@@ -185,25 +192,6 @@ impl<'r> BlockSupportRegistry<'r> {
     }
     pub fn registry(&self) -> &'r BlockRegistry {
         self.cached.registry()
-    }
-    pub fn support_shape<W: DynamicSupportWorld>(
-        &self,
-        world: &mut W,
-        state: BlockStateId,
-        position: [i32; 3],
-    ) -> Result<VoxelShape, SupportQueryError<W::Error>> {
-        if let Some(shape) = self
-            .cached
-            .cached_shape(state)
-            .map_err(SupportQueryError::Data)?
-        {
-            return Ok(shape.clone());
-        }
-        self.dynamic
-            .get(&state)
-            .ok_or(SupportQueryError::Unsupported(state))?
-            .shape(world, position)
-            .map_err(SupportQueryError::Dynamic)
     }
     pub fn is_face_sturdy<W: DynamicSupportWorld>(
         &self,

@@ -17,11 +17,15 @@ load failures.
 import argparse
 import os
 import re
-import socket
 import subprocess
 import sys
 import threading
 import time
+
+try:
+    from . import lab
+except ImportError:
+    import lab
 
 SUSPICIOUS = re.compile(
     r'(ERROR|login failed|Exception|Couldn\'t load|Failed to|Skipping|Invalid|Unknown|corrupt|'
@@ -29,12 +33,6 @@ SUSPICIOUS = re.compile(
 # Benign lines the server prints on every start.
 BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate usernames|hackers|'
                     r'Failed to load properties|Failed to load eula)')
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 def main():
@@ -48,7 +46,7 @@ def main():
     p.add_argument('--wait-after', type=float, default=1.0)
     p.add_argument('--timeout', type=float, default=240)
     args = p.parse_args()
-    port = args.port or free_port()
+    port = args.port or lab.free_port()
     os.makedirs(args.dir, exist_ok=True)
     with open(os.path.join(args.dir, 'eula.txt'), 'w') as f:
         f.write('eula=true\n')

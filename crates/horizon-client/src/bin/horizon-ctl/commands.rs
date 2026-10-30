@@ -32,16 +32,18 @@ pub enum Group {
     Move,
     Act,
     Screens,
+    Multiplayer,
     World,
     Scripting,
 }
 impl Group {
-    pub const ALL: [Group; 7] = [
+    pub const ALL: [Group; 8] = [
         Group::Session,
         Group::Observe,
         Group::Move,
         Group::Act,
         Group::Screens,
+        Group::Multiplayer,
         Group::World,
         Group::Scripting,
     ];
@@ -52,6 +54,7 @@ impl Group {
             Group::Move => "Move and look",
             Group::Act => "Act on the world",
             Group::Screens => "Screens, menus and chat",
+            Group::Multiplayer => "Multiplayer, LAN and friends",
             Group::World => "World and cheats",
             Group::Scripting => "Scripting and benchmarks",
         }
@@ -117,6 +120,51 @@ const OVER: Param = flag(
     "turn with mouse motion spread over this many seconds (eased), as a player would",
 );
 const FACE: Ty = Ty::Enum(&["down", "up", "north", "south", "west", "east"]);
+const BOX: [Param; 6] = [
+    p("x1", Ty::Int, "corner X"),
+    p("y1", Ty::Int, "corner Y"),
+    p("z1", Ty::Int, "corner Z"),
+    p("x2", Ty::Int, "opposite X"),
+    p("y2", Ty::Int, "opposite Y"),
+    p("z2", Ty::Int, "opposite Z"),
+];
+const PAGES: Ty = Ty::Enum(&[
+    "main",
+    "video",
+    "sound",
+    "controls",
+    "keybinds",
+    "controller",
+    "controller-binds",
+    "mouse",
+    "chat",
+    "accessibility",
+    "language",
+    "font",
+    "packs",
+    "mods",
+    "shader-packs",
+    "graphics",
+    "graphics-advanced",
+    "graphics-hdr",
+    "extras",
+    "horizon",
+    "agent",
+]);
+
+/// `--confirm`, required by destructive commands: the player agreed.
+const CONFIRM: Param = Param {
+    name: "confirm",
+    ty: Ty::Bool,
+    required: true,
+    flag: true,
+    help: "true once the player agreed: it cannot be undone",
+};
+
+/// MCP tools that delete or overwrite the player's things (`destructiveHint`).
+pub const DESTRUCTIVE: &[&str] = &["world-delete", "fill", "setblock"];
+/// MCP tools that reach other players or the network (`openWorldHint`): only when the player asks.
+pub const OPEN_WORLD: &[&str] = &["connect", "lan", "friends", "chat", "command"];
 
 macro_rules! cmd {
     ($name:expr, $group:ident, $usage:expr, $summary:expr, $details:expr, [$($ex:expr),* $(,)?], $params:expr, mcp: $mcp:expr, local: $local:expr $(, wire: $wire:expr)?) => {
@@ -164,7 +212,19 @@ pub const COMMANDS: &[Cmd] = &[
         &[flag("lines", Ty::Int, "how many lines of latest.log (default 100)"), flag("crash", Ty::Bool, "the newest crash report instead")],
         mcp: true, local: true),
     cmd!("status", Session, "status", "game, renderer and streaming state (the scripting socket's original summary)",
-        "", ["horizon-ctl status"], &[], mcp: false, local: false),
+        "Also what F3 shows: the overlay flags, the renderer, chunk streaming and memory.", ["horizon-ctl status"], &[], mcp: true, local: false),
+    cmd!("worlds", Session, "worlds", "the saved worlds, newest first: folder, name, mode, last played, version",
+        "folder is what open, world-rename, world-backup and world-delete take.", ["horizon-ctl worlds"], &[], mcp: true, local: false),
+    cmd!("world-rename", Session, "world-rename FOLDER NAME", "rename a world, as Edit World does (its folder stays)",
+        "Needs the title screen (no world open).", ["horizon-ctl world-rename Test \"My Base\""],
+        &[p("folder", Ty::Str, "world folder from worlds"), p("name", Ty::Rest, "the new name")], mcp: true, local: false),
+    cmd!("world-backup", Session, "world-backup FOLDER", "zip a world into backups/, as Edit World's Make Backup does",
+        "Needs the title screen. Replies once the zip is written, with its size.", ["horizon-ctl world-backup Test"],
+        &[p("folder", Ty::Str, "world folder from worlds")], mcp: true, local: false),
+    cmd!("world-delete", Session, "world-delete FOLDER --confirm", "delete a world for good, as Select World's Delete does",
+        "Needs the title screen and --confirm: ask the player first, it cannot be undone (world-backup keeps a copy).",
+        ["horizon-ctl world-delete Test --confirm"],
+        &[p("folder", Ty::Str, "world folder from worlds"), CONFIRM], mcp: true, local: false),
     cmd!("open", Session, "open WORLD [SEED] [creative]", "open or create a world from the title screen",
         "Opens saves/WORLD, creating it with SEED (and creative mode) when it doesn't exist.",
         ["horizon-ctl open Test 12345", "horizon-ctl open Build 0 creative"],
@@ -190,10 +250,10 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("light", Observe, "light X1 Y1 Z1 X2 Y2 Z2", "the stored sky and block light of a box",
         "At most 32768 blocks per request. One hex digit per block in `sky` and `block`, x fastest, then z, then y; `.` where no chunk is loaded.",
         ["horizon-ctl light 0 64 0 15 70 15"],
-        &[p("x1", Ty::Int, "corner X"), p("y1", Ty::Int, "corner Y"), p("z1", Ty::Int, "corner Z"), p("x2", Ty::Int, "opposite X"), p("y2", Ty::Int, "opposite Y"), p("z2", Ty::Int, "opposite Z")], mcp: true, local: false),
+        &BOX, mcp: true, local: false),
     cmd!("blocks", Observe, "blocks X1 Y1 Z1 X2 Y2 Z2", "the non-air blocks of a box, with counts per block",
         "At most 32768 blocks per request.", ["horizon-ctl blocks 0 60 0 15 70 15"],
-        &[p("x1", Ty::Int, "corner X"), p("y1", Ty::Int, "corner Y"), p("z1", Ty::Int, "corner Z"), p("x2", Ty::Int, "opposite X"), p("y2", Ty::Int, "opposite Y"), p("z2", Ty::Int, "opposite Z")], mcp: true, local: false),
+        &BOX, mcp: true, local: false),
     cmd!("find-block", Observe, "find-block BLOCK [RADIUS]", "the nearest loaded blocks of a kind",
         "Searches a cube of RADIUS (default 32, at most 64) around the player; returns the count and the 16 nearest.",
         ["horizon-ctl find-block oak_log", "horizon-ctl find-block diamond_ore 48"],
@@ -264,12 +324,15 @@ pub const COMMANDS: &[Cmd] = &[
         "down holds the key until key ... up, release or stop; wait does not release it. move, goto, jump, break and the other actions release the movement keys when they end.",
         ["horizon-ctl key space tap"], &[p("key", Ty::Str, "key name"), p("action", Ty::Enum(&["down", "up", "tap", "repeat"]), "what to do")], mcp: true, local: false),
     cmd!("mouse", Act, "mouse left|right|middle down|up|click", "press or release a mouse button in the world", "",
-        ["horizon-ctl mouse right click"], &[p("button", Ty::Enum(&["left", "right", "middle"]), "button"), p("action", Ty::Enum(&["down", "up", "click"]), "what to do")], mcp: false, local: false),
+        ["horizon-ctl mouse right click"], &[p("button", Ty::Enum(&["left", "right", "middle"]), "button"), p("action", Ty::Enum(&["down", "up", "click"]), "what to do")], mcp: true, local: false),
+    cmd!("interact-entity", Act, "interact-entity ID", "right-click an entity: trade with a villager, mount a horse, ride a boat, shear a sheep",
+        "Faces the entity (from entities), right-clicks it with the held item, waits two ticks and replies with the screen.",
+        ["horizon-ctl interact-entity 42"], &[p("id", Ty::Int, "entity id from entities")], mcp: true, local: true),
     cmd!("pad", Act, "pad BUTTON down|up|tap | pad stick left|right X Y | pad trigger left|right V | pad release | pad status", "a virtual controller: buttons, sticks and triggers as a real pad would send them",
         "Buttons by position: south east west north lb rb lt rt select start ls rs up down left right (south is Xbox A / PlayStation cross). Sticks run -1..1 with up positive and stay tilted until centred; triggers 0..1. Merged with any real controller; status lists the connected ones and what is held.",
         ["horizon-ctl pad south tap", "horizon-ctl pad stick left 0 1", "horizon-ctl pad trigger right 1", "horizon-ctl pad status"],
-        &[p("what", Ty::Str, "a button name, stick, trigger, release or status"), opt("a", Ty::Str, "down|up|tap, or left|right"), opt("b", Ty::Num, "stick X or trigger value"), opt("c", Ty::Num, "stick Y")], mcp: false, local: false),
-    cmd!("release", Act, "release", "release every key and mouse button", "", ["horizon-ctl release"], &[], mcp: false, local: false),
+        &[p("what", Ty::Str, "a button name, stick, trigger, release or status"), opt("a", Ty::Str, "down|up|tap, or left|right"), opt("b", Ty::Num, "stick X or trigger value"), opt("c", Ty::Num, "stick Y")], mcp: true, local: false),
+    cmd!("release", Act, "release", "release every key and mouse button", "", ["horizon-ctl release"], &[], mcp: true, local: false),
     cmd!("stop", Act, "stop", "cancel the running action (goto, break...) and release every key", "", ["horizon-ctl stop"], &[], mcp: true, local: false),
     // Screens
     cmd!("open-inventory", Screens, "open-inventory", "open the inventory screen (crafting grid 100-103, result 200)", "",
@@ -317,7 +380,31 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("respawn", Screens, "respawn", "respawn from the death screen", "", ["horizon-ctl respawn"], &[], mcp: true, local: false),
     cmd!("pause", Screens, "pause", "open the pause menu", "", ["horizon-ctl pause"], &[], mcp: true, local: false),
     cmd!("resume", Screens, "resume", "leave the pause menu", "", ["horizon-ctl resume"], &[], mcp: true, local: false),
+    cmd!("options", Screens, "options [PAGE]", "open the options screen, or one of its pages (Horizon's too)",
+        "Then ui lists its widgets and click, set and type change them, as with the mouse. options-set changes an options.txt value without the screen.",
+        ["horizon-ctl options video", "horizon-ctl options horizon"], &[opt("page", PAGES, "the page (default: the main options)")], mcp: true, local: false),
+    cmd!("book", Screens, "book [next|back|take|done]", "the open book or lectern: its page text, or press one of its buttons",
+        "", ["horizon-ctl book", "horizon-ctl book next"], &[opt("action", Ty::Enum(&["next", "back", "take", "done"]), "a button to press")], mcp: true, local: false),
+    cmd!("signedit", Screens, "signedit X Y Z [front|back]", "open the sign editor of the sign at X Y Z (then type and close)",
+        "", ["horizon-ctl signedit 3 64 1"], &[BLOCK_XYZ[0], BLOCK_XYZ[1], BLOCK_XYZ[2], opt("side", Ty::Enum(&["front", "back"]), "which side")], mcp: true, local: false),
+    cmd!("mount-menu", Screens, "mount-menu", "open the inventory of the horse, donkey, mule or llama being ridden",
+        "As the inventory key does while riding; also opens the nearest one's.", ["horizon-ctl mount-menu"], &[], mcp: true, local: false),
     cmd!("chat-log", Screens, "chat-log [N]", "the newest N chat messages", "", ["horizon-ctl chat-log 5"], &[], mcp: false, local: false),
+    // Multiplayer
+    cmd!("connect", Multiplayer, "connect ADDRESS [NAME]", "join a multiplayer server, or a friend's world by its invite code, from the title screen",
+        "ADDRESS is HOST[:PORT], or friend:CODE for an invite code. Only when the player asks: it reaches the network.",
+        ["horizon-ctl connect play.example.net", "horizon-ctl connect localhost:25565", "horizon-ctl connect friend:0B33K-Q405Q-..."],
+        &[p("address", Ty::Str, "HOST[:PORT] or friend:CODE"), opt("name", Ty::Str, "player name when offline")], mcp: true, local: false),
+    cmd!("disconnect", Multiplayer, "disconnect", "leave the server, back to the server list", "", ["horizon-ctl disconnect"], &[], mcp: true, local: false),
+    cmd!("servers", Multiplayer, "servers", "the Multiplayer screen's server list: name and address",
+        "Add, edit and remove them on the Multiplayer screen (click-button Multiplayer, then ui).", ["horizon-ctl servers"], &[], mcp: true, local: false),
+    cmd!("lan", Multiplayer, "lan open [PORT] [commands] [force] | lan close | lan status", "open the world to LAN (Open to LAN), stop, or see the guests",
+        "PORT 0 or none picks one; commands lets guests use cheats; force forces the game mode. Only when the player asks.",
+        ["horizon-ctl lan open", "horizon-ctl lan status", "horizon-ctl lan close"],
+        &[p("action", Ty::Enum(&["open", "close", "status"]), "what to do"), opt("port", Ty::Int, "port for open"), opt("commands", Ty::Bool, "allow cheats"), opt("force", Ty::Bool, "force the game mode")], mcp: true, local: false),
+    cmd!("friends", Multiplayer, "friends host|stop|status", "Play with Friends: share the open world behind an invite code, stop, or see who joined",
+        "status gives the code: share it only when the player asks. Friends join with connect friend:CODE.",
+        ["horizon-ctl friends host", "horizon-ctl friends status"], &[p("action", Ty::Enum(&["host", "stop", "status"]), "what to do")], mcp: true, local: false),
     // World
     cmd!("give", World, "give ITEM [COUNT]", "add items to the inventory", "", ["horizon-ctl give oak_log 16"],
         &[p("item", Ty::Str, "item id"), opt("count", Ty::Int, "how many (default 1)")], mcp: true, local: false),
@@ -325,9 +412,21 @@ pub const COMMANDS: &[Cmd] = &[
         &[p("ticks", Ty::Int, "day time")], mcp: true, local: false),
     cmd!("setblock", World, "setblock X Y Z BLOCK[props]", "set a block (with neighbour updates)", "", ["horizon-ctl setblock 0 64 0 stone"],
         &[BLOCK_XYZ[0], BLOCK_XYZ[1], BLOCK_XYZ[2], p("block", Ty::Str, "block state such as oak_stairs[facing=east]")], mcp: true, local: false),
-    cmd!("summon", World, "summon KIND [X Y Z] [baby]", "spawn a mob", "", ["horizon-ctl summon cow"], &[p("kind", Ty::Str, "mob type")], mcp: true, local: false),
-    cmd!("effect", World, "effect ID SECONDS [AMPLIFIER] | effect clear", "give a status effect", "", ["horizon-ctl effect speed 30 1"], &[], mcp: false, local: false),
-    cmd!("render-distance", World, "render-distance N", "chunks, 2..64", "", ["horizon-ctl render-distance 8"], &[p("chunks", Ty::Int, "render distance")], mcp: false, local: false),
+    cmd!("summon", World, "summon KIND [X Y Z] [baby]", "spawn a mob (in front of the player without a position)", "Replies with its id.", ["horizon-ctl summon cow", "horizon-ctl summon pig 10 64 3 baby"],
+        &[p("kind", Ty::Str, "mob type"), opt("x", Ty::Num, "X"), opt("y", Ty::Num, "Y"), opt("z", Ty::Num, "Z"), opt("baby", Ty::Bool, "a baby")], mcp: true, local: false),
+    cmd!("effect", World, "effect ID SECONDS [AMPLIFIER] | effect clear", "give a status effect, or clear them all", "", ["horizon-ctl effect speed 30 1", "horizon-ctl effect clear"],
+        &[p("id", Ty::Str, "effect id such as speed, or clear"), opt("seconds", Ty::Num, "duration"), opt("amplifier", Ty::Int, "level - 1 (default 0)")], mcp: true, local: false),
+    cmd!("effects", World, "effects", "the player's active status effects", "", ["horizon-ctl effects"], &[], mcp: true, local: false),
+    cmd!("xp", World, "xp LEVELS", "add experience levels (negative removes)", "", ["horizon-ctl xp 30"], &[p("levels", Ty::Int, "levels to add")], mcp: true, local: false),
+    cmd!("enchant", World, "enchant ID LEVEL", "enchant the held item (a book stores it)", "", ["horizon-ctl enchant sharpness 5"],
+        &[p("id", Ty::Str, "enchantment id"), p("level", Ty::Int, "level")], mcp: true, local: false),
+    cmd!("potion", World, "potion ITEM POTION", "give a potion item", "", ["horizon-ctl potion splash_potion healing"],
+        &[p("item", Ty::Enum(&["potion", "splash_potion", "lingering_potion", "tipped_arrow"]), "which item"), p("potion", Ty::Str, "potion id")], mcp: true, local: false),
+    cmd!("fill", World, "fill X1 Y1 Z1 X2 Y2 Z2 BLOCK", "set a box of loaded blocks", "", ["horizon-ctl fill 0 64 0 4 64 4 glass"],
+        &[BOX[0], BOX[1], BOX[2], BOX[3], BOX[4], BOX[5], p("block", Ty::Str, "block state")], mcp: true, local: false),
+    cmd!("container", World, "container X Y Z [ITEM COUNT]", "list a container's items, or add items to it", "", ["horizon-ctl container 3 64 1", "horizon-ctl container 3 64 1 diamond 3"],
+        &[BLOCK_XYZ[0], BLOCK_XYZ[1], BLOCK_XYZ[2], opt("item", Ty::Str, "item to add"), opt("count", Ty::Int, "how many")], mcp: true, local: false),
+    cmd!("render-distance", World, "render-distance N", "chunks, 2..128", "", ["horizon-ctl render-distance 8"], &[p("chunks", Ty::Int, "render distance")], mcp: false, local: false),
     cmd!("wait", World, "wait TICKS", "wait until TICKS game ticks have passed (20 per second)",
         "Keys and mouse buttons held with key ... down or mouse ... down stay held while it waits. Release them with key ... up, release or stop.",
         ["horizon-ctl wait 40", "horizon-ctl key w down && horizon-ctl wait 40 && horizon-ctl key w up"],
@@ -340,8 +439,8 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("mcp", Scripting, "mcp", "serve the Model Context Protocol on stdin/stdout, one tool per command",
         "Add it to an MCP client as a stdio server: command horizon-ctl, args [\"mcp\"] (with --socket PATH first if needed). The screenshot tool returns the image.",
         ["horizon-ctl mcp"], &[], mcp: false, local: true),
-    cmd!("bench", Scripting, "bench SECONDS", "reset frame stats, wait, reply with the summary", "", ["horizon-ctl bench 10"], &[], mcp: false, local: false),
-    cmd!("stats", Scripting, "stats [reset]", "frame-time summary since the last reset", "", ["horizon-ctl stats"], &[], mcp: false, local: false),
+    cmd!("bench", Scripting, "bench SECONDS", "reset frame stats, wait, reply with the summary", "", ["horizon-ctl bench 10"], &[p("seconds", Ty::Num, "how long to measure")], mcp: true, local: false),
+    cmd!("stats", Scripting, "stats [reset]", "frame-time summary since the last reset", "", ["horizon-ctl stats"], &[opt("reset", Ty::Bool, "start counting again")], mcp: true, local: false),
     cmd!("fly", Scripting, "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]", "fly the camera along a line, then reply with the frame summary",
         "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). With raw, the reply also lists every frame time in milliseconds (frame_ms).",
         ["horizon-ctl fly 0 100 0 500 100 0 20"], &[], mcp: false, local: false),
@@ -366,8 +465,9 @@ pub fn overview() -> String {
     }
     out.push_str(
         "\nEvery reply is one JSON line. Errors are {\"error\": \"...\"}; the exit status is 0 on\n\
-         success, 1 when the game replied with an error, 2 for a usage error and 3 when the\n\
-         game cannot be reached or started. Actions (goto, break, place...) block until done.\n\
+         success, 1 when the game replied with an error, 2 for a usage error, 3 when the\n\
+         game cannot be reached or started and 4 while No AI is on (the launcher's settings).\n\
+         Actions (goto, break, place...) block until done.\n\
          horizon-ctl help --game lists the running game's own commands, test hooks included.\n\
          The socket is $HORIZON_CONTROL, else $XDG_RUNTIME_DIR/horizon-control.sock (on Windows\n\
          %TEMP%\\horizon-control.json, a localhost TCP port with a token; any path ending in .json\n\
@@ -397,6 +497,73 @@ pub fn detail(c: &Cmd) -> String {
         out.push_str("\nExamples:\n");
         for e in c.examples {
             out.push_str(&format!("  {e}\n"));
+        }
+    }
+    out
+}
+
+/// The generated reference, docs/horizon-ctl-commands.md (`horizon-ctl help --markdown`).
+pub fn markdown() -> String {
+    let cell = |s: &str| s.replace('|', "\\|");
+    let mut out = String::from(
+        "<!-- Generated by `horizon-ctl help --markdown` from the command table in \
+         crates/horizon-client/src/bin/horizon-ctl/commands.rs: edit the table, then regenerate. -->\n\
+         # horizon-ctl commands\n\n\
+         Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launcher's \
+         `horizon-launcher mcp` offers the same tools as `game_<tool>`, all but `launch`) and its \
+         arguments. Positional arguments come first, in order; `--flags` after them. \
+         `horizon-ctl help --game` lists the game's own commands, test hooks included. \
+         Design rules and the full inventory: [agent-control.md](agent-control.md).\n",
+    );
+    for group in Group::ALL {
+        out.push_str(&format!(
+            "\n## {}\n\n| Command | MCP tool | What it does | Arguments |\n| --- | --- | --- | --- |\n",
+            group.title()
+        ));
+        for c in COMMANDS.iter().filter(|c| c.group == group) {
+            let tool = if c.mcp {
+                let mut t = format!("`{}`", tool_name(c));
+                if DESTRUCTIVE.contains(&c.name) {
+                    t.push_str(" (destructive)");
+                } else if OPEN_WORLD.contains(&c.name) {
+                    t.push_str(" (network)");
+                }
+                t
+            } else {
+                "CLI only".to_owned()
+            };
+            let args: Vec<String> = c
+                .params
+                .iter()
+                .map(|p| {
+                    let ty = match p.ty {
+                        Ty::Int => "integer".to_owned(),
+                        Ty::Num => "number".to_owned(),
+                        Ty::Str => "string".to_owned(),
+                        Ty::Rest => "text".to_owned(),
+                        Ty::Bool => "boolean".to_owned(),
+                        Ty::Enum(v) => v.join(", "),
+                    };
+                    let name = if p.flag {
+                        format!("--{}", p.name)
+                    } else {
+                        p.name.to_owned()
+                    };
+                    let need = if p.required { ", required" } else { "" };
+                    format!("`{name}` ({ty}{need}): {}", cell(p.help))
+                })
+                .collect();
+            out.push_str(&format!(
+                "| `{}` | {} | {} | {} |\n",
+                cell(c.usage),
+                tool,
+                cell(&capitalize(c.summary)),
+                if args.is_empty() {
+                    "none".to_owned()
+                } else {
+                    args.join("<br>")
+                }
+            ));
         }
     }
     out
@@ -638,6 +805,43 @@ mod tests {
         assert_eq!(s["required"], json!(["x", "y", "z"]));
         assert_eq!(s["properties"]["timeout"]["type"], "number");
         assert_eq!(tool_name(find("look-at-entity").unwrap()), "look_at_entity");
+    }
+
+    #[test]
+    fn the_generated_reference_is_up_to_date() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/horizon-ctl-commands.md"
+        );
+        let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            on_disk == markdown(),
+            "docs/horizon-ctl-commands.md is out of date: run `horizon-ctl help --markdown > docs/horizon-ctl-commands.md`"
+        );
+        for c in COMMANDS {
+            assert!(
+                on_disk.contains(&format!("`{}", c.usage.replace('|', "\\|"))),
+                "{} undocumented",
+                c.name
+            );
+        }
+    }
+
+    #[test]
+    fn destructive_and_network_tools_exist() {
+        for name in DESTRUCTIVE.iter().chain(OPEN_WORLD) {
+            assert!(find(name).is_some_and(|c| c.mcp), "{name}");
+        }
+        let delete = find("world-delete").unwrap();
+        assert_eq!(
+            line_for(delete, &json!({ "folder": "A", "confirm": true })).unwrap(),
+            ["world-delete", "A", "--confirm"]
+        );
+        let lan = find("lan").unwrap();
+        assert_eq!(
+            line_for(lan, &json!({ "action": "open", "commands": true })).unwrap(),
+            ["lan", "open", "commands"]
+        );
     }
 
     #[test]

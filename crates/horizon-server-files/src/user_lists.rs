@@ -416,11 +416,6 @@ pub type WhiteList = UserList<WhiteEntry>;
 pub type BanList = UserList<BanEntry<NameAndId>>;
 pub type IpBanList = UserList<BanEntry<String>>;
 
-/// IpBanList.getIpFromAddress.
-pub fn ip_of(address: &std::net::SocketAddr) -> String {
-    address.ip().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -245,13 +245,19 @@ pub struct Report {
 impl Report {
     /// An empty report for this machine, created now.
     pub fn new(kind: Kind, app: App) -> Report {
+        Self::with_hardware(kind, app, Hardware::detect())
+    }
+
+    /// Starts a report using supplied hardware, without running system probes.
+    /// Interactive apps can collect the remaining machine details after their first frame.
+    pub fn with_hardware(kind: Kind, app: App, hardware: Hardware) -> Report {
         Report {
             format: FORMAT.to_owned(),
             version: VERSION,
             kind,
             created: utc_now(),
             app,
-            hardware: Hardware::detect(),
+            hardware,
             conditions: Conditions::default(),
             metrics: BTreeMap::new(),
             frames: Vec::new(),

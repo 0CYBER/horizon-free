@@ -1,239 +1,297 @@
 # Agent control: driving the launcher and the game
 
-AI agents and scripts control Horizon through four surfaces:
+A player's own AI agent (Claude Code, Codex, Cursor, any MCP client) or a script can do
+everything a player does with the mouse and keyboard, in the launcher and in the game. This page
+covers developers: the surfaces, the full inventory, and the rules every new command follows.
+Players read [Control Horizon with your AI agent](https://playhorizon.dev/docs/agents)
+(playhorizon.dev/docs/agents).
+
+The command lists are generated, so they can't drift:
+
+- [launcher-commands.md](launcher-commands.md): every `horizon-launcher` command, its arguments
+  and its MCP tool. It comes from the CLI's clap definition (`cli_tools::markdown`), and the
+  launcher test `the_launcher_reference_is_up_to_date` fails when it is stale or a tool is missing.
+- [horizon-ctl-commands.md](horizon-ctl-commands.md): every `horizon-ctl` command, its MCP tool
+  and its arguments. It comes from the command table (`horizon-ctl help --markdown`), and the
+  test `the_generated_reference_is_up_to_date` fails when it is stale.
+
+## Surfaces
 
 | Surface | Where | Transport |
 | --- | --- | --- |
-| Game control socket | `horizon-client --control` (`crates/horizon-client/src/control.rs`, commands in `src/game/control.rs`, `agent.rs` and friends) | text line in, one JSON line out; Unix socket, or localhost TCP + token where there is none |
-| `horizon-ctl` | `crates/horizon-client/src/bin/horizon-ctl/` | CLI over the socket: one table of commands (`commands.rs`) gives help, argument checks and the MCP tools |
-| `horizon-ctl mcp` | same | MCP over stdio, a tool per `horizon-ctl` command |
-| Launcher CLI and MCP | `launcher/src/cli.rs`, `launcher/src/mcp.rs` | `horizon-launcher <cmd> [--json]`; `horizon-launcher mcp` (stdio) |
+| Game control socket | `horizon-client --control` / `--control-socket PATH`, or Agent Control on in Horizon Settings > AI Agent (`crates/horizon-client/src/control.rs`; commands in `src/game/control.rs`, `agent.rs`, `ui_control.rs`, `saves_control.rs` and friends) | text line in, one JSON line out; Unix socket, or localhost TCP and a token where there is none |
+| `horizon-ctl` | `crates/horizon-client/src/bin/horizon-ctl/` | CLI over the socket; one table of commands (`commands.rs`) gives the help, the argument checks, the MCP tools and the reference |
+| `horizon-ctl mcp` | same | MCP over stdio, one tool per command of the table |
+| Launcher CLI | `launcher/src/cli.rs` | `horizon-launcher <command> [--json]` |
+| Launcher MCP | `launcher/src/mcp.rs`, `cli_tools.rs`, `game_tools.rs` | `horizon-launcher mcp` (stdio): every CLI command as a tool, the session tools, and the game's tools as `game_*` |
+| Connecting | `launcher/src/agents.rs`, `agents_page.rs`; `src/game/agent_settings.rs` | `horizon-launcher agent-config`; Settings > AI in the launcher; Horizon Settings > AI Agent in the game |
+| No AI | `crates/horizon-core/src/no_ai.rs` | `noAi:true` in `<game home>/horizon-extras.txt`, read by every surface |
 
-This page is the inventory of what each surface can do and the design every new command
-follows. Quick start for players and scripts: [native-client.md](native-client.md#agent-control-horizon-ctl-and-mcp).
+## One MCP server for everything
 
-## What exists today
+An agent adds one server, `horizon-launcher mcp`. It holds:
 
-Legend: **yes** complete, **part** partial (see note), **no** missing, **—** not applicable.
-"Socket" is the game's own command; `horizon-ctl` and its MCP offer the subset in its table
-(`horizon-ctl help --game` lists everything the game takes, test hooks included).
+- **The launcher's CLI, generated.** `cli_tools.rs` walks the clap definition. Each command is a
+  tool named after its words (`mods search` is `mods_search`). Its arguments are the command's,
+  in snake_case, with clap's help, choices and defaults. A call runs that command with `--json`
+  as a child process and returns what it printed. A new CLI command is a new tool with no extra
+  code.
+- **Session tools**, which keep something running between calls:
+  - `play` (the game, under control: `world`, `creative`, `join`, `offscreen`, `arg`);
+  - `server`, `server_command`, `server_log`, `server_stop`;
+  - `account_sign_in`, `account_list`.
+- **The game's tools.** It runs the selected version's `horizon-ctl mcp` (shipped beside the
+  game) as a child. It lists that server's tools as `game_<name>`, all but `launch`, and passes
+  calls and results through, images included. `play` starts the game with a control socket in
+  the launcher's data folder. While no game answers, `game_*` calls say to call `play`.
+
+Why one server rather than two: the game's tools stay defined once, in horizon-ctl's table. The
+agent's client needs one entry and one approval. The version that plays is always the one the
+launcher selected, so the game's tools always match the game. `horizon-ctl mcp` stays available
+on its own, for a game started by hand or by a script.
+
+## Inventory, before and after
+
+Before is `main` at 2026-10-23, before #1342, #1343, #1344, #1345 and #1353. After is with
+them. CLI is `horizon-launcher` for the launcher and `horizon-ctl` for the game. MCP is
+`horizon-launcher mcp` (the game's tools as `game_*`) and `horizon-ctl mcp`. **part** means only
+through a generic command (`ui` and `click` by widget, or a raw socket line that horizon-ctl
+passes on without checking it).
 
 ### Launcher
 
-| Capability | Window | CLI | MCP | Notes |
-| --- | --- | --- | --- | --- |
-| Releases, installed versions, select | yes | yes | yes | `versions`, `list_versions`; selecting happens on install only (no `select` command) |
-| Install / remove a version | yes | yes | yes | |
-| Prepare resources | yes | yes | yes | |
-| Start the client | yes | yes (attached) | yes | MCP starts it detached and cannot reach it afterwards |
-| Dedicated server: start, console, log, stop | yes | yes | yes | |
-| Accounts (no secrets) | yes | yes | yes | names and UUIDs only; sign-in is a device code the player enters |
-| Launcher settings (game folder, auto-install, opening animation, desktop entry) | yes | part | no | CLI has `desktop-entry`; the rest only in the window |
-| Game menu style | yes | yes | yes | |
-| Logs, crash report | yes | yes | yes | |
-| Updates (Horizon and launcher) | yes | yes | yes | MCP only checks |
-| Patch notes, links | yes | yes | yes | |
-| Benchmark | — | yes | no | |
-| Telemetry consent | PR #250 | PR #250 | PR #250 | opt-in, in review |
-| Friends: join by invite code | yes | yes (`play --join`) | no | |
-| Profiles, packs, mods | no | no | no | the launcher has none yet |
-| The running game's controls | — | no | no | an agent needs a second MCP server (`horizon-ctl mcp`) |
+| Capability | Window | CLI before | MCP before | CLI after | MCP after | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Releases and installed versions | Play, version picker | yes | yes | yes | yes | `versions [--installed]` |
+| Install, remove a version | Play | yes | yes | yes | yes | `remove` needs `confirm` in MCP |
+| Pick the version that plays | Play | no | no | yes | yes | `settings selected-version TAG` |
+| Prepare resources | Play | yes | yes | yes | yes | |
+| Start the game | Play | yes | yes | yes | yes | `play --world --creative --join --arg`; MCP `play` adds `offscreen` |
+| Join a friend by invite code | Play | yes | no | yes | yes | `play --join CODE` |
+| Dedicated server here: start, console, log, stop | Servers | yes | yes | yes | yes | `server`; MCP `server`, `server_command`, `server_log`, `server_stop` |
+| Hosted servers: list, create, set up, run a command, forget | Servers | yes | no | yes | yes | `servers ...`; `servers_forget` needs `confirm` |
+| Accounts: list, sign in, sign out, select, offline | Settings | yes | part | yes | yes | names and UUIDs only; sign-in is a device code; `account_offline` was missing |
+| Game folder, server folder, install new versions, opening animation | Settings | no | no | yes | yes | `settings [KEY VALUE]` |
+| Extra game arguments | Settings | yes | no | yes | yes | `game-args` |
+| Applications menu entry (Linux) | Settings | yes | no | yes | yes | `desktop-entry` |
+| Updates: check and install | Settings | yes | part | yes | yes | MCP could only check |
+| Patch notes, links | Patch notes, footer | yes | yes | yes | yes | |
+| Game log, crash reports | Settings | yes | yes | yes | yes | `logs [--crash]` |
+| Data collection: status, allow, deny, show, delete, send, bug, benchmark upload | Settings > Data | yes | part | yes | yes | sending was missing in MCP; `data_delete` needs `confirm` |
+| Mod browser: search, check, install, update, remove, list (mods, resource packs, modpacks) | Mods | yes | no | yes | yes | `mods ...`; `mods_remove` needs `confirm` |
+| Modpacks: import, port, play, remove, list | Modpacks | yes | no | yes | yes | `modpack ...`; `modpack_remove` needs `confirm` |
+| Launcher benchmark | (none) | yes | no | yes | yes | |
+| The game it started | (the game) | (horizon-ctl) | yes | (horizon-ctl) | yes | `game_*` |
+| Connect an AI agent | Settings > AI | no | (none) | yes | (none) | `agent-config [--client] [--test]`; the agent is already connected, so there is no tool |
+| No AI | Settings > AI | no | (none) | yes | (none) | `no-ai [on\|off]`; the player's switch, never an agent's |
 
 ### Game
 
-| Capability | Socket | horizon-ctl / MCP | Notes |
-| --- | --- | --- | --- |
-| Session: launch, wait until ready, open/create a world, save, quit, logs | yes | yes | `launch`, `wait-ready`, `open`, `save`, `quit`, `logs` |
-| Player and world state | yes | yes | `state`, `status` (renderer, streaming, memory) |
-| Crosshair target | yes | yes | `looking-at` |
-| Blocks: one, a box, nearest of a kind | yes | yes | `block`, `blocks`, `find-block` |
-| Entities near the player | yes | yes | `entities [RADIUS] [TYPE]`; no single-entity detail |
-| Inventory, armor, offhand, carried stack | yes | yes | `inventory` |
-| Containers and stations: read, click slots | yes | yes | `screen`/`menu`, `click-slot ID`, `container X Y Z` |
-| Crafting (grid, result, recipe book) | part | part | grid by `click-slot`; the recipe book only by `click-at` |
-| Movement, look, path-finding | yes | yes | `move`, `goto`, `look`, `look-at`, `turn --over`, `mouse-move` |
-| Act on the world | yes | yes | `break`, `place`, `interact`, `use-item`, `attack`, `select`, `drop` |
-| Raw input: keys, mouse buttons | yes | yes | `key`, `mouse`, `release`; `key w down` stays held through `wait` until `key w up`, `release` or `stop` |
-| Controllers | yes | yes | `pad` button/stick/trigger/status (a virtual pad) |
-| Chat and commands | yes | yes | `chat`, `command`, `type`, `messages`, `chat-log` |
-| Screens: which is open | yes | yes | `screen` gives a label (`title`, `options`, `inventory`...) but not the options page or sub-screen |
-| Screens: widgets | part | part | `screen` lists **labelled buttons** only (label, bounds, enabled); sliders, fields, list rows, tabs and switches are invisible |
-| Screens: act on a widget | part | part | `click-button LABEL` (buttons only), `click-at X Y`; no slider set, no field focus, no row select by id |
-| Options | part | no | `options PAGE` opens a page and `render-distance N` sets one value; no read, no set of the other ~120 options |
-| Packs (resource packs) | no | no | only through the Packs screen by pixel |
-| F3 debug data | part | part | `status` has the overlay flags and the renderer; not the F3 lines |
-| Screenshots | yes | yes | PNG of the next frame (works `--offscreen`) |
-| Recording video | no | no | |
-| Benchmarks and frame stats | yes | yes | `bench`, `stats`, `fly`, `--benchmark` |
-| Multiplayer: connect, disconnect, respawn | yes | part | `connect`/`disconnect` are socket-only |
-| LAN and friends hosting | yes | no | `lan open/close/status`, `friends host/stop/status` socket-only |
-| Cheats and test hooks | yes | part | `give`, `time`, `setblock`, `summon`, `effect`; `xp`, `enchant`, `potion`, `trade`, `fill`, `particle`, `sculk` socket-only |
-| Waits | part | part | `wait TICKS`, `wait-ready`; no "until screen X", "until chunks loaded", "until chat says Y" |
-| Events | no | no | everything is polled |
-| Errors with reasons | part | part | `{"error": "text"}`; horizon-ctl adds `kind` (`usage`, `connection`) to its own errors only |
+| Capability | Screen | CLI before | MCP before | CLI after | MCP after | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Start, wait until ready, save, quit, log | (all) | yes | yes | yes | yes | `launch`, `wait-ready`, `save`, `quit`, `logs` |
+| Every widget of every screen, by id; click, set, type | (all) | yes | yes | yes | yes | `ui`, `click ID`, `set ID VALUE`, `type`; `click-at`, `drag-at`, `scroll-at` by pixel |
+| Title menu, pause menu | Title, Pause | yes | yes | yes | yes | `ui`/`click`, `pause`, `resume` |
+| Worlds: list | Select World | part | part | yes | yes | `worlds` |
+| Worlds: create, open | Create New World | yes | yes | yes | yes | `open WORLD [SEED] [creative]` |
+| Worlds: rename, back up | Edit World | part | part | yes | yes | `world-rename`, `world-backup` |
+| Worlds: delete | Select World | part | part | yes | yes | `world-delete FOLDER --confirm`; it was possible through `click` without any confirm |
+| Servers list | Multiplayer | part | part | yes | yes | `servers` (names and addresses; reads servers.dat) |
+| Join a server or an invite code, leave | Multiplayer | part | no | yes | yes | `connect`, `disconnect` |
+| Open to LAN | Pause > Open to LAN | part | no | yes | yes | `lan open\|close\|status` |
+| Play with Friends: host, stop, status | Pause | part | no | yes | yes | `friends host\|stop\|status` |
+| Vanilla options, every page | Options | yes | part | yes | yes | `options-get`, `options-set` (all of options.txt, typed); `options PAGE` was socket-only |
+| Horizon Settings: Graphics, Controller, Extras, Mods, AI Agent | Horizon Settings | part | part | yes | yes | `options horizon\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
+| Agent control on or off, status, connection details | Horizon Settings > AI Agent | no | no | yes | yes | new page (#1353) |
+| Key binds | Controls > Key Binds | yes | yes | yes | yes | `options-set key_key.jump key.keyboard.j` |
+| Resource packs | Options > Resource Packs | part | part | yes | yes | `options packs`, then `ui` rows and `click`; `options-set resourcePacks` |
+| Chat and commands | Chat | yes | yes | yes | yes | `chat`, `command`, `messages`, `chat-log` |
+| Inventory, containers, stations | Inventory, Chest... | yes | part | yes | yes | `inventory`, `screen`, `click-slot`; `container X Y Z` was socket-only |
+| Crafting, recipe book | Crafting | part | part | yes | yes | the grid by `click-slot`; the recipe book by `ui`/`click` |
+| Trading, riding, shearing (right-click an entity) | Merchant, Horse | part | no | yes | yes | `interact-entity ID`; `mouse` was CLI-only |
+| Horse, llama inventory | Horse | no | no | yes | yes | `mount-menu` |
+| Books, lecterns, signs | Book, Sign | part | part | yes | yes | `book [next\|back\|take\|done]`, `signedit X Y Z` |
+| Move, look, find a path | (playing) | yes | yes | yes | yes | `move`, `goto`, `look`, `look-at`, `turn`, `jump` |
+| Mine, place, use, attack, hotbar, drop | (playing) | yes | yes | yes | yes | `break`, `place`, `interact`, `use-item`, `attack`, `select`, `drop` |
+| Raw keys and mouse buttons | (all) | yes | part | yes | yes | `key`; `mouse`, `release` were CLI-only |
+| Controllers | (all) | yes | no | yes | yes | `pad` |
+| Respawn | Death | yes | yes | yes | yes | `respawn` |
+| Screenshots | (all) | yes | yes | yes | yes | PNG of the next frame, `--offscreen` too |
+| F3 data | F3 | yes | part | yes | yes | `key f3`; `status` (renderer, chunks, memory) was CLI-only |
+| Waits and events | (all) | yes | yes | yes | yes | `wait`, `wait-for`, `events` |
+| Effects, experience, enchantments, potions, fill | (cheats) | part | no | yes | yes | `effect`, `effects`, `xp`, `enchant`, `potion`, `fill` |
+| Benchmarks and frame stats | (all) | yes | part | yes | yes | `bench`, `stats` were CLI-only; `fly` |
 
-### After the PRs in [Status](#status)
+## No AI
 
-| Capability | Before | After |
-| --- | --- | --- |
-| Screens: widgets | labelled buttons only | every widget of every screen (`ui`): id, kind, label, bounds, slider value, tab selected, slots with stacks; both menu styles |
-| Screens: act on a widget | `click-button LABEL`, `click-at X Y` | `click ID [right\|middle] [shift]`, `set ID VALUE` (sliders), `click` focuses fields |
-| Options | open a page; `render-distance` only | `options-get` all 193 `options.txt` options typed with ranges/choices; `options-set` validates, applies, saves |
-| Waits | `wait TICKS`, `wait-ready` | `wait-for screen\|widget\|loaded\|chat\|event` with timeout errors |
-| Events | none (poll) | `events [--since SEQ]`: screen, chat, death, respawn, item, dimension, world |
-| Launch headless | `--offscreen` by hand | `launch --offscreen` in horizon-ctl and its MCP; `launch_client {offscreen}` |
-| The running game from the launcher's MCP | no (a second server) | every game tool as `game_*` through `horizon-launcher mcp` |
+One switch hides and turns off every AI feature: `noAi:true` in `<game home>/horizon-extras.txt`.
+The game home is `HORIZON_HOME`, else the data dir's `horizon`. The game reads its extras from
+its working directory, which is that folder. `horizon_core::no_ai` reads and writes the switch:
 
-## Design
+- `is_on(home)` and `check(home)` read it;
+- `set(home, on)` keeps the file's other lines, and writes no file to turn off a switch that was
+  never on;
+- `REFUSAL` is the one line every surface prints.
 
-### One vocabulary, four surfaces
+The switch is in three places: Settings > AI in the launcher, Horizon Settings in the game
+(`Item::NoAi`), and `horizon-launcher no-ai on|off`. When it is on:
+
+| Surface | What happens |
+| --- | --- |
+| Game | opens no control socket, even with `--control` (it logs the refusal); Horizon Settings hides AI Agent...; turning it on in a running game closes the socket at once |
+| `horizon-ctl` | every command refuses: exit status 4, `{"error": REFUSAL, "kind": "denied"}` |
+| `horizon-ctl mcp` | refuses to start (exit 4, REFUSAL on stderr); a session already running refuses each call |
+| `horizon-launcher mcp` | refuses to start; a running session answers each `tools/call` with error -32000 and REFUSAL |
+| Launcher CLI | `mcp` and `agent-config` are hidden from the help and refuse |
+| Launcher window | Settings > AI shows only the No AI switch, without Connect an AI agent |
+| Companion (#1068) | uses the same switch (see horizon-parity companion-notes.md) |
+
+Every other launcher command stays usable: versions, install, remove, prepare, play, server,
+notes, links, account, settings, game-args, logs, update, desktop-entry, data,
+modpack, mods, servers, no-ai and benchmark. None of them drives the game for an agent. The
+launcher itself, packagers, the docs and players' scripts need them, and `no-ai` has to stay to
+turn the switch off.
+
+## Connecting
+
+- **Launcher, Settings > AI > Connect an AI agent:**
+  - a client picker (Claude Code, Codex, Cursor, any MCP client) with its config and a Copy button;
+  - for clients with a CLI, the add command, shown and run only on **Add to ...**:
+    `claude mcp add --scope user horizon -- <exe> mcp`, `codex mcp add horizon -- <exe> mcp`;
+  - **Test the connection** (`agents::self_test`) starts `<exe> mcp`, lists its tools and says
+    how many answered.
+  - `horizon-launcher agent-config [--client ID] [--json] [--test]` prints the same thing.
+- **Game, Horizon Settings > AI Agent:**
+  - **Agent Control** (`agentControl` in horizon-extras.txt, off by default) opens the default
+    endpoint (`$HORIZON_CONTROL`, else `horizon-control.sock` in the runtime directory) in a game
+    the player started. Turning it off closes the endpoint and stops its listener.
+  - The page shows whether a client is connected (`Server::clients`), when the last command came,
+    and the socket's name.
+  - **Copy Connection Details** copies the socket path, a `horizon-ctl --socket ... state` line
+    and an `mcpServers` config for this game's `horizon-ctl mcp`.
+- **The default:** a game an agent starts (`play` in MCP, `horizon-ctl launch`, `--control`) is
+  under control. A game the player starts from the window is not, until they turn Agent Control
+  on. An open socket lets any program of that user drive the game, so it opens only when an agent
+  asked for the game, or when the player chose it.
+
+## Design rules for a new command
+
+### One vocabulary
 
 - **A command has one name**, kebab-case, the same on the socket, in `horizon-ctl` and in the
-  launcher CLI. Its MCP tool is the name with `_` for `-` (`click-slot` → `click_slot`).
-  The launcher's MCP offers the game's tools under a `game_` prefix (`game_click_slot`) so they
-  never collide with its own (`logs` exists on both sides).
-- **Arguments** are positional words then `--flags`; the `horizon-ctl` table (`Param`) is the
-  source of truth and generates the MCP `inputSchema`. A new game command is not done until it
-  is in that table.
+  launcher CLI. Its MCP tool is the name with `_` for `-` (`click-slot` is `click_slot`). In the
+  launcher, a subcommand's words are joined (`mods search` is `mods_search`). The launcher's MCP
+  offers every game tool as `game_<name>`, so none collides with its own (`logs` is on both
+  sides). A launcher tool whose name starts with `game_` (`game_args`) is matched first.
+- **Arguments:** positional words, then `--flags`.
+  - The game: the `horizon-ctl` table (`Param`) is the source of truth. It generates the MCP
+    `inputSchema` and the reference. A game command is not done until it is in that table.
+  - The launcher: the clap definition is the source of truth. Give every argument a help line;
+    it becomes the tool's description.
 - **Replies are one JSON object.** A query returns its data; an action returns
   `{"ok": true, ...}` plus what changed (`clicked`, `screen`, `drops`...).
-- **Errors** are `{"error": "<sentence an agent can act on>", "kind": "<reason>"}`. Kinds:
-  `usage` (bad or missing argument), `unknown` (no such command, widget, option, entity),
-  `state` (the game is not in a state that allows it: no world, wrong screen, disabled
-  widget), `busy` (another action or benchmark runs), `timeout`, `connection` (game not
-  reachable), `denied` (needs consent, below). The message names what to do next
-  ("no world open; use: open WORLD").
-- **Shapes are shared**: a position is `[x, y, z]`; a block is
-  `{"pos", "block", "state", "loaded"}`; an item stack is `{"item", "count", "damage"?,
-  "components"?}`; a slot is a stack plus `"slot": ID` (the slot ids of
-  `click-slot`); bounds are `[x, y, w, h]` in GUI pixels, the coordinates of `click-at`.
+- **Errors** are `{"error": "<sentence an agent can act on>", "kind": "<reason>"}`. The kinds:
+  - `usage`: a bad or missing argument;
+  - `unknown`: no such command, widget, option or entity;
+  - `state`: the game is not in a state that allows it (no world, wrong screen, disabled widget);
+  - `busy`: another action or a benchmark is running;
+  - `timeout`;
+  - `connection`: the game can't be reached;
+  - `denied`: No AI is on (exit status 4).
 
-### Structured UI: the widget tree
+  The message names what to do next ("no world open; use: open WORLD").
+- **Shapes are shared:**
+  - a position is `[x, y, z]`;
+  - a block is `{"pos", "block", "state", "loaded"}`;
+  - an item stack is `{"item", "count", "damage"?, "components"?}`;
+  - a slot is a stack plus `"slot": ID` (the slot ids of `click-slot`);
+  - bounds are `[x, y, w, h]` in GUI pixels, the coordinates of `click-at`.
 
-`ui` returns every interactive element the last frame drew, on every screen (title menus,
-pause, options pages, inventories and stations, chat, death, Horizon-style menus):
+### Safety
+
+- **Local only.** The socket is a Unix socket in the user's runtime directory, or a TCP port on
+  127.0.0.1 behind a 128-bit token in a file only the user can read. It is never `0.0.0.0` and
+  never a network listener. Both MCP servers use stdio.
+- **Confirm what can't be undone.** A command that deletes the player's things requires
+  `confirm` and carries the MCP `destructiveHint`. In the game these are `world-delete`, `fill`
+  and `setblock` (the table's `DESTRUCTIVE`); in the launcher, `remove`, `modpack remove`,
+  `mods remove`, `servers forget`, `account sign-out` and `data delete` (`cli_tools::DESTRUCTIVE`).
+  Without `confirm: true` the call is refused and the message says to ask the player. In the game
+  CLI the flag is `--confirm`. The launcher CLI asks nothing: a person typing `remove` meant it.
+- **Ask before reaching out.** A command that sends data or reaches other people carries
+  `openWorldHint`, and its description says "only when the player asks". In the game these are
+  `connect`, `lan`, `friends`, `chat` and `command`; in the launcher, `data allow`, `data send`,
+  `data bug`, `data benchmark` and `servers create`. `play`'s `join` argument says the same.
+  Telemetry stays opt-in, and only `data allow` turns it on.
+- **No secrets.** No surface returns tokens, session files, keychain entries or invite secrets
+  the player didn't ask to share:
+  - accounts are names and UUIDs;
+  - sign-in is a device code the player enters;
+  - `--session-file` is read once and deleted;
+  - `servers` reads names and addresses only.
+- **Vanilla behaviour untouched.** Control code reads state and synthesizes the input events a
+  player produces; registering widgets for the tree draws nothing. A change to game files runs
+  `tools/parity.py --changed origin/main`.
+
+### The widget tree
+
+`ui` returns every interactive element the last frame drew, on every screen:
 
 ```json
 {"screen": "options", "gui_size": [427, 240], "frame": 3061,
  "widgets": [
    {"id": "fov", "kind": "slider", "label": "FOV: 70", "bounds": [40, 50, 150, 20], "enabled": true, "value": 0.5},
-   {"id": "video-settings", "kind": "button", "label": "Video Settings...", "bounds": [...], "enabled": true},
-   {"id": "row-2", "kind": "row", "bounds": [...], "enabled": true},
    {"id": "done", "kind": "button", "label": "Done", "bounds": [...], "enabled": true}]}
 ```
 
-- **Ids are stable and readable**: the label up to its `:` as a slug (`FOV: 70` → `fov`,
-  `Video Settings...` → `video-settings`); a repeated slug gets `-2`, `-3` in draw order;
-  unlabelled elements are `<kind>-<n>` in draw order. The id of a slider does not change
-  when its value (and so its label) does. World, server and language rows carry their
-  names; Horizon-style switches, sliders and segments carry their settings row's caption
-  (`vsync`, `menu-style-horizon`); inventory, creative and menu slots are `slot-<ID>` with
-  their stack (an item tab's display slots are `slot-900` up).
-- **Kinds**: `button`, `slider` (`value` 0..1 as drawn), `field` (text box), `row` (list
-  entry: world, server, pack, language), `tab` (`selected`), `slot`.
-- **Actions by id**: `click ID [right|middle]` (move the pointer there and click, exactly as a
-  player would; `middle` is the pick block button, which clones a stack in creative), `set ID VALUE` (a slider to a 0..1 position, a click on its track, as vanilla
-  `AbstractSliderButton.onClick` reads the pointer). `type TEXT` keeps typing into the focused
-  field; `click` on a field focuses it. After a click or a set, the next `ui`, `click` or
-  `set` waits for a redrawn frame, so it never reads the screen the click left.
-- **No new code paths in screens**: the tree is built from what the draw functions already
-  register for the controller's focus navigation (`widgets.rs`), so every screen that a
-  controller can drive is in it, and clicks go through the same window events as the mouse.
+- **Ids are stable and readable.** An id is the label up to its `:`, as a slug (`FOV: 70` is
+  `fov`, `AI Agent...` is `ai-agent`). A repeated slug gets `-2`, `-3`; unlabelled elements are
+  `<kind>-<n>`. A slider's id doesn't change with its value. Slots are `slot-<ID>` with their
+  stack.
+- **Kinds:** `button`, `slider` (`value` 0..1), `field`, `row` (a world, server, pack or
+  language), `tab` (`selected`), `slot`.
+- **Actions:**
+  - `click ID [right|middle] [shift]` clicks where the mouse would.
+  - `set ID VALUE` moves a slider.
+  - `type` types into the focused field.
 
-### Options
+  After a click, the next `ui`, `click` or `set` waits for a redrawn frame.
+- **No new code paths in screens.** The tree is built from what the draw functions already
+  register for controller navigation (`widgets.rs`).
 
-- `options-get [KEY...]`: every option of `options.txt` by its vanilla key, with its value
-  and what it accepts: `{"key": "fov", "value": 70, "type": "int", "min": 30, "max": 110}`,
-  enums with `choices`, key bindings as `key.keyboard.w`. Next: Horizon's own files
-  (`horizon-graphics.txt`, `horizon-controller.txt`, extras) under their own keys.
-- `options-set KEY VALUE`: validated like vanilla's `OptionInstance.set` (out of range is an
-  error here, not a silent reset), applied at once as the options screen would apply it, and
-  saved. Reply: the new value.
-- `options [PAGE]` keeps opening a page for screenshots and for `ui`.
+### Waits and events
 
-### Inventory, containers, world, entities
+- `wait-for screen NAME|widget ID|loaded|chat TEXT|event KIND [--timeout S] [--since SEQ]`
+  replies when the condition holds, or with `kind: timeout`.
+- `events [--since SEQ]` returns what happened since SEQ: screens, chat, deaths, respawns, items,
+  dimensions and worlds (the newest 256). Take `last` before an action, and wait with `--since`,
+  so the action's event can't slip in before the wait.
 
-The existing commands stay and keep their shapes: `inventory`, `screen`, `click-slot`,
-`block`, `blocks`, `find-block`, `entities`, `looking-at`. Planned additions: `entity ID`
-(full detail: equipment, effects, passengers, AI state), `entities` filters by position and
-radius around any point (`--at X Y Z`), and `blocks --of BLOCK` to keep a box query small.
+## Tests
 
-### Waits
+- **Unit tests:**
+  - horizon-ctl: the table, the schemas, the reference, the No AI refusal, the destructive and
+    network annotations;
+  - the launcher: generated tools, `confirm`, the reference, the agent configs;
+  - `horizon_core::no_ai`;
+  - `options_ui`: the AI Agent page, and that No AI hides it.
+- **`tools/agent_control_e2e.py`** drives a real game, offscreen on macOS and on a virtual screen
+  on Linux, through the CLI and MCP:
+  - `survival`, `ui`, `options`, `events`, `consume`, `pick`, `suggestions`;
+  - `manage`: worlds, servers, effects, books, LAN, the options pages and `confirm`;
+  - `no-ai`: every surface refuses;
+  - `setting`: Agent Control on opens the endpoint, the AI Agent page, Copy, and off closes it.
+- **`tools/launcher_mcp_e2e.py`** drives `horizon-launcher mcp`: the generated tools, `play` and
+  the `game_*` tools, `confirm`, `agent-config` and `--test`, and No AI.
 
-`wait-for CONDITION [--timeout S] [--since SEQ]` replies when the condition holds, or with
-an error of kind `timeout` saying what screen it ended on (`wait TICKS` waits for ticks):
+## Later
 
-- `screen NAME` (the label `state` shows), `widget ID` (a widget is on screen),
-- `loaded` (a world is open, the player exists and no chunk is pending),
-- `chat TEXT` (a new chat line containing TEXT), `event KIND` (an event of that kind);
-  both count from `--since SEQ`, else from now: take `last` from `events` before an action
-  so its event can't slip in before the wait starts.
+These are tracked in FEATURES.md (LATER):
 
-### Events
-
-`events [--since SEQ]` returns what happened since SEQ, oldest first, and `last`, the SEQ to
-pass next time (the game keeps the newest 256):
-
-```json
-{"event": "world", "seq": 1, "tick": 0, "state": "opened", "name": "Survival"}
-{"event": "screen", "seq": 2, "tick": 0, "from": "title", "to": "playing"}
-{"event": "item", "seq": 3, "tick": 110, "item": "minecraft:oak_log", "delta": 3}
-{"event": "chat", "seq": 4, "tick": 140, "text": "[Player] hello"}
-{"event": "death", "seq": 7, "tick": 300}
-{"event": "respawn", "seq": 9, "tick": 330}
-{"event": "dimension", "seq": 12, "tick": 900, "from": "minecraft:overworld", "to": "minecraft:the_nether"}
-```
-
-Events are found by comparing state once per event loop turn on the game thread, and only
-under `--control` (no hooks inside game logic), so they cannot change what the game does.
-Next: `subscribe [KIND...]`, the same events as a stream on one connection, for clients that
-keep one open (MCP tools reply once, so `events` is what MCP offers).
-
-### The launcher's MCP proxies the game
-
-An agent configures one MCP server, `horizon-launcher mcp`. It runs the selected version's
-`horizon-ctl mcp` (shipped beside the game) as a child and lists every one of its tools as
-`game_<name>` (all but `launch`), passing calls and results (images included) through, so
-the game's tools are defined once, in horizon-ctl's table. `launch_client` starts the game
-with a control socket in the launcher's data folder (`world`, `creative`, `offscreen`
-optional) and returns once it answers. While no game listens, `game_*` calls fail with
-`kind: "state"` and say to call `launch_client`. A game the player starts from the window
-is not under control.
-
-### Safety
-
-- **Local only.** The socket is a Unix socket in the user's runtime directory, or a TCP port
-  on 127.0.0.1 behind a 128-bit token in a file only the user can read. Never `0.0.0.0`,
-  never a network listener; the launcher's MCP is stdio.
-- **No secrets.** No surface returns tokens, session files or keychain entries: accounts are
-  names and UUIDs, `--session-file` is read once and deleted, and `options-get` leaves out
-  nothing secret because `options.txt` holds none (server addresses are in `servers.dat`,
-  which no command reads).
-- **Consent for anything that sends data.** Commands that reach the network (`connect`,
-  `chat`/`command` on a server, `lan open`, `friends host`, `install_version`,
-  `check_updates`, telemetry) carry the MCP `openWorldHint` annotation and their description
-  says "only when the player asks". Telemetry stays opt-in (PR #250); no agent command turns
-  it on. Destructive ones (`remove_version`, `sign_out`, `fill`, `setblock`) carry
-  `destructiveHint`.
-- **Vanilla behaviour untouched.** Control code reads state and synthesizes the same input
-  events a player produces; registering widgets for the tree draws nothing. Every PR that
-  touches game files runs `tools/parity.py --changed origin/main`.
-
-## Status
-
-| Step | PR |
-| --- | --- |
-| This document | #321 |
-| `ui`, `click ID`, `set ID VALUE`: the widget tree of every screen | #349 |
-| `options-get` / `options-set` | #350 |
-| `wait-for`, `events` | #351 |
-| The launcher's MCP proxies the game (`game_*`), `launch_client` under control | #342 |
-| Next: `subscribe` (a stream), error `kind` on every game error, MCP annotations (`openWorldHint`, `destructiveHint`) | |
-| Next: `entity ID`, `entities --at`, packs (`packs list|enable|disable`), F3 lines, Horizon's own option files, launcher settings over CLI/MCP | |
-
-Each PR adds its tests: unit tests next to the code, and scenarios in
-`tools/agent_control_e2e.py` (`survival`, `ui`, `options`, `events`; CLI and MCP) and
-`tools/launcher_mcp_e2e.py`, which drive the real game offscreen on macOS or on a virtual
-screen on Linux. `tools/lan_e2e.py` runs two games at once, a host that opens its world to LAN
-and a guest that joins it, and checks from both sides what a guest sees and can do (player
-list, own model, armour, name tags, chest lids, crafting, fall damage).
+- Horizon's own option files by key (`horizon-graphics.txt`, controller, extras) next to
+  `options-get` and `options-set`.
+- Adding and removing saved servers by command.
+- `subscribe`: events as a stream on one connection.
+- Launcher window screenshots in this page's PRs.
+- No AI changed in the launcher while a game is open: the game rewrites its extras when it saves.
+- A confirmation question in the launcher CLI for destructive commands.

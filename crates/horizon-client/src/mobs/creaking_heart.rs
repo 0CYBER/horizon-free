@@ -152,10 +152,6 @@ pub fn protector(heart: &mut CreakingHeart, host: &impl HeartHost) -> Option<u32
     }
     None
 }
-/// `isProtector`.
-pub fn is_protector(heart: &mut CreakingHeart, host: &impl HeartHost, id: u32) -> bool {
-    protector(heart, host) == Some(id)
-}
 fn distance_to_creaking(heart: &mut CreakingHeart, pos: [i32; 3], host: &impl HeartHost) -> f64 {
     protector(heart, host)
         .and_then(|id| host.mob(id))
@@ -468,6 +464,7 @@ pub fn finalize_spawn(m: &mut Mob, lr: &mut LegacyRandom) {
     let bonus = lr.triangle(0.0, 0.114_850_000_000_000_01);
     // ADD_MULTIPLIED_BASE on the base value.
     m.attrs.follow_range += m.kind.follow_range * bonus;
+    m.update_max_visited_nodes();
     let _left_handed = lr.next_float() < 0.05;
 }
 fn wrap_degrees(angle: f32) -> f32 {
@@ -492,6 +489,13 @@ fn liquid_in(w: &MobWorld, b: Aabb) -> bool {
         }
     }
     false
+}
+
+/// Whether this tick of the heart reaches its update (`updateCreakingState`
+/// and the protector checks), the only part of [`server_tick`] that reads the
+/// level's other mobs: about once a second, so a host may build them only then.
+pub fn tick_updates(heart: &CreakingHeart) -> bool {
+    heart.ticker < 0
 }
 
 /// `CreakingHeartBlockEntity.serverTick` (hearts that are not uprooted).

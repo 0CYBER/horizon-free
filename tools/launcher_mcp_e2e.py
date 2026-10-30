@@ -3,9 +3,12 @@
 
 A scratch launcher home gets one "installed" version made of this checkout's builds
 (horizon-client and horizon-ctl) and the prepared resources in .local/horizon-client. An MCP
-client then talks to `horizon-launcher mcp` alone: the game tools are listed, a call before the
-game runs says to launch it, launch_client starts it under control, and game_wait_ready,
-game_state, game_ui and game_screenshot play it until game_quit.
+client then talks to `horizon-launcher mcp` alone: every CLI command is listed as a tool of the same
+name (versions, settings, mods_search...), a destructive one needs confirm, the game tools are
+listed, a call before the game runs says to start it, play starts it under control, and
+game_wait_ready, game_state, game_ui and game_screenshot play it until game_quit. Then No AI is turned on with
+`horizon-launcher no-ai on`: `horizon-launcher mcp` refuses to start, and a session already running
+refuses its next call.
 
     python3 tools/launcher_mcp_e2e.py --bin-dir target/fast --launcher launcher/target/debug/horizon-launcher
 
@@ -68,14 +71,27 @@ def scenario(m, out):
                                 'clientInfo': {'name': 'launcher_mcp_e2e', 'version': '1'}})
     assert init['serverInfo']['name'] == 'horizon-launcher', init
     tools = {t['name'] for t in m.rpc('tools/list', {})['tools']}
-    for name in ['launch_client', 'game_state', 'game_ui', 'game_click', 'game_screenshot']:
+    for name in ['play', 'server', 'versions', 'settings', 'mods_search', 'modpack_list', 'servers_list',
+                 'data_status', 'account_list', 'game_args', 'game_state', 'game_ui', 'game_click',
+                 'game_screenshot']:
         assert name in tools, f'{name} missing from {sorted(tools)}'
-    assert 'game_launch' not in tools, 'launch_client covers horizon-ctl launch'
+    for name in ['game_launch', 'mcp', 'no_ai', 'agent_config']:
+        assert name not in tools, f'{name} is a tool'
+
+    # Generated from the CLI: the same command, its JSON output.
+    result, texts, _ = m.call('versions', installed=True)
+    assert json.loads(texts[-1])['installed'] == [TAG], texts
+    result, texts, _ = m.call('settings', key='opening-animation', value='off')
+    assert json.loads(texts[-1])['opening_animation'] is False, texts
+    result, texts, _ = m.call('game_args')
+    assert 'game_args' in json.loads(texts[-1]), texts
+    result, texts, _ = m.call('remove', tag=TAG)
+    assert result['isError'] and 'confirm' in texts[-1], texts
 
     result, texts, _ = m.call('game_state')
-    assert result['isError'] and 'launch_client' in texts[-1], texts
+    assert result['isError'] and 'with play' in texts[-1], texts
 
-    result, texts, _ = m.call('launch_client', world='Agent', creative=True,
+    result, texts, _ = m.call('play', world='Agent', creative=True,
                               offscreen=sys.platform == 'darwin')
     assert not result['isError'], texts
     result, texts, _ = m.call('game_wait_ready', seconds=300)
@@ -94,6 +110,42 @@ def scenario(m, out):
     (out / 'launcher-mcp.png').write_bytes(base64.b64decode(images[0]['data']))
     m.call('game_quit')
     return {'tools': len(tools)}
+
+
+REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
+
+
+def no_ai_scenario(launcher, env, home):
+    run = lambda *a: subprocess.run([str(launcher), *a], env=env, input='', capture_output=True, text=True,
+                                    timeout=60)
+    assert json.loads(run('no-ai', '--json').stdout) == {'no_ai': False}
+    config = json.loads(run('agent-config', '--json').stdout)
+    assert config['server']['args'] == ['mcp'] and len(config['clients']) == 4, config
+    assert 'agent-config' in run('--help').stdout
+    test = json.loads(run('agent-config', '--test', '--json').stdout)
+    assert test['answered'] and test['tools'] > 100, test
+    m = Mcp(launcher, env)
+    m.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
+                         'clientInfo': {'name': 'launcher_mcp_e2e', 'version': '1'}})
+    r = run('no-ai', 'on')
+    assert r.returncode == 0, r
+    assert 'noAi:true' in (home / 'horizon-extras.txt').read_text()
+    try:
+        m.call('links')
+        raise AssertionError('links ran under No AI')
+    except Failed as e:
+        assert REFUSAL in str(e), e
+    m.close()
+    for command in ('mcp', 'agent-config'):
+        r = run(command)
+        print(f'[launcher-mcp] {command} under No AI -> exit {r.returncode}: {r.stderr.strip()}')
+        assert r.returncode == 1 and r.stderr.strip() == f'error: {REFUSAL}', r
+    assert 'agent-config' not in run('--help').stdout and ' mcp ' not in run('--help').stdout
+    # What the launcher needs keeps working.
+    assert run('versions', '--installed', '--json').returncode == 0
+    assert run('no-ai', 'off').returncode == 0
+    assert json.loads(run('no-ai', '--json').stdout) == {'no_ai': False}
+    return {'no_ai': 'refused'}
 
 
 def main():
@@ -115,11 +167,11 @@ def main():
         os.symlink(bins / name, version / name)
     os.symlink(resources, version / '.local/horizon-client' / lab.VERSION)
     (version / '.installed').write_text('')
-    env = dict(os.environ, HORIZON_LAUNCHER_HOME=str(work / 'launcher'), HORIZON_HOME=str(work / 'home'),
-               HORIZON_NO_AUDIO='1')
+    env = lab.game_env(HORIZON_LAUNCHER_HOME=work / 'launcher', HORIZON_HOME=work / 'home', HORIZON_TELEMETRY_URL='off')
     m = Mcp(Path(args.launcher).resolve(), env)
     try:
         summary = scenario(m, out)
+        summary.update(no_ai_scenario(Path(args.launcher).resolve(), env, work / 'home'))
         print(f'[launcher-mcp] PASS: {summary}')
         ok = True
     except (Failed, AssertionError, KeyError, json.JSONDecodeError) as e:

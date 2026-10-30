@@ -1,0 +1,6 @@
+# Generated files that tests compare byte for byte with what they generate: LF on every OS, also
+# where Git for Windows' core.autocrlf would check them out with CRLF.
+docs/launcher-commands.md text eol=lf
+docs/horizon-ctl-commands.md text eol=lf
+crates/horizon-theme/tokens.css text eol=lf
+docs/api/*-reference.md text eol=lf

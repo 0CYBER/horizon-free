@@ -22,6 +22,9 @@ async fn main() {
             if let Err(e) = upkeep.maintain() {
                 eprintln!("horizon-telemetry-server: upkeep failed: {e}");
             }
+            // The hub's reports GitHub refused before: their issues, off the async workers.
+            let filing = upkeep.clone();
+            let _ = tokio::task::spawn_blocking(move || filing.file_pending()).await;
         }
     });
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))

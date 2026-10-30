@@ -4,7 +4,7 @@
 The Java oracle bakes each vanilla model layer, builds the model's own render
 state class with the generated walk/age/head/attack inputs (plus per-species
 state fields), runs the real `setupAnim` and writes every part's pose.
-`examples/entity_anim_fixture` replays the same inputs through Horizon's
+`examples/probe/entity_anim_fixture` replays the same inputs through Horizon's
 `mobs::anim::setup` and the loaded model tree; the two must agree on every part
 pose and on the baked polygon count and vertex sums.
 
@@ -164,6 +164,15 @@ def cases(layer, model=None):
     cases_out = [{**c, **DEFAULTS.get(name, {})} for c in cases_out]
     yield from cases_out
     yield from species_cases(layer, cases_out)
+    # Exercise render-state extraction with a live walk clock, including the
+    # first mounted frame. Existing setupAnim cases bypass anim::state.
+    if name == 'skeleton':
+        for passenger in [False, True]:
+            for alive in [False, True]:
+                for partial in [0.0, 0.5, 1.0]:
+                    yield {**cases_out[2], 'isPassenger': passenger,
+                           '@walkTicks': [0.5, 1.0, 0.75],
+                           '@alive': alive, '@partial': partial}
     part = model and scaled_part(model)
     if part:
         for index, scale in enumerate(PART_SCALES):
@@ -276,6 +285,14 @@ def species_cases(layer, base_cases):
     for extra in SPECIES.get(name, []):
         for index in (2, 3, 6):
             yield {**base_cases[index], **extra}
+    if name == 'bat':
+        # Entity clocks, rather than injected render clocks: flight, rest, transitions and
+        # unrelated flag bits. Exercise the in-frame tick and server-client visual update.
+        for flags in ([0] * 4, [1] * 4, [0, 0, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1], [2, 3, 2, 2]):
+            for in_frame in (False, True):
+                for partial in (0.0, 0.5):
+                    yield {**base_cases[0], 'ageInTicks': len(flags) + partial,
+                           '@batTicks': flags, '@batInFrame': in_frame}
 
 
 def compare_vertices(v, r, args, stats):
@@ -364,8 +381,8 @@ def main():
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', dependencies, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaEntityAnimOracle',
          inputs, build / 'vanilla.jsonl', jars['client']], 'vanilla')
-    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'entity_anim_fixture', '--',
-         resources, build / 'vanilla.jsonl', build / 'rust.jsonl'], 'rust')
+    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'client_probe', '--',
+         'entity_anim_fixture', resources, build / 'vanilla.jsonl', build / 'rust.jsonl'], 'rust')
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text().splitlines()]
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust), (len(vanilla), len(rust))
@@ -379,6 +396,10 @@ def main():
             skipped.add(layer); continue
         checked += 1
         bad = []
+        if 'walk' in v:
+            for a, b in zip(v['walk'], r['walk']):
+                if abs(a - b) > args.tolerance * (1.0 + abs(a)):
+                    bad.append(('@walk', f'{v["walk"]} != {r["walk"]}'))
         for path, expected in v['parts'].items():
             got = r['parts'].get(path)
             if got is None:

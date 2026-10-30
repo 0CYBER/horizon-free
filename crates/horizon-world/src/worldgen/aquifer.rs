@@ -50,11 +50,6 @@ impl GlobalFluidPicker {
             disabled: false,
         }
     }
-    /// Matches the vanilla developer flag. Regular gameplay keeps this false.
-    pub const fn with_disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
 }
 impl FluidPicker for GlobalFluidPicker {
     fn compute(&self, [_, y, _]: [i32; 3]) -> FluidStatus {

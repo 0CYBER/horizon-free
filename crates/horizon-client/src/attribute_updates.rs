@@ -22,6 +22,11 @@ impl PlayerMotion {
     pub fn refresh_attributes(&mut self) -> Result<()> {
         live_updates::refresh(self)
     }
+    /// `Player.internalSetAbsorptionAmount`: the amount as given, unclamped
+    /// (the saved `AbsorptionAmount`, or what a client's server sent).
+    pub fn internal_set_absorption(&mut self, value: f32) -> Result<()> {
+        self.store_absorption(value)
+    }
 }
 impl HealthWorld for PlayerMotion {
     type Error = Box<dyn std::error::Error>;

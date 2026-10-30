@@ -1,0 +1,59 @@
+# Schema 1 of horizon-shaders.toml with every key. Readers of later schemas
+# keep reading this file (docs/api/stability.md, "Data formats").
+schema = 1
+id = "sample_pack"
+name = "Sample Pack"
+version = "1.0.0"
+api = "0.1"
+description = "Every key of schema 1."
+authors = ["Horizon"]
+license = "MIT"
+shared = ["common.wgsl"]
+
+[sky]
+file = "sky.wgsl"
+
+[material]
+file = "material.wgsl"
+name = "Terrain"
+
+[[post]]
+file = "post/grade.wgsl"
+name = "Colour grade"
+
+[[post]]
+file = "post/vignette.wgsl"
+
+[[options]]
+id = "saturation"
+name = "Saturation"
+description = "How colourful the picture is."
+type = "float"
+default = 1.1
+min = 0.0
+max = 2.0
+step = 0.05
+
+[[options]]
+id = "vignette"
+name = "Vignette"
+type = "bool"
+default = true
+
+[[options]]
+id = "samples"
+name = "Samples"
+type = "int"
+default = 4
+min = 1
+max = 16
+
+[[options]]
+id = "tonemap"
+name = "Tone mapping"
+type = "choice"
+values = ["None", "Soft", "Filmic"]
+default = "Soft"
+
+[budget]
+gpu_ms = 1.5

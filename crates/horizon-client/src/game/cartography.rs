@@ -1,70 +1,80 @@
-//! The cartography table (`CartographyTableMenu`, `CartographyTableScreen`):
-//! zooming a map out with paper, cloning it with an empty map, locking it
-//! with a glass pane, the post-processing on take (`MapItem.scaleMap`,
-//! `lockMap`) and the preview with its error and lock sprites.
+//! The cartography table (`CartographyTableMenu` on the menu engine,
+//! `CartographyTableScreen`): zooming a map out with paper, cloning it with
+//! an empty map, locking it with a glass pane. The engine reads the level's
+//! maps through `LevelMaps`; the scaled and locked copies a take makes
+//! (`MapItem.scaleMap`, `lockMap`) are registered after the click. The
+//! screen draws the preview with its error and lock sprites.
 use super::{
     Game,
     maps::{MapData, map_id},
-    stations::Station,
 };
-use horizon_client::{hud::HudBatch, items::ItemStack};
+use horizon_client::{hud::HudBatch, items::ItemStack, menu::Maps};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
+
+/// The level's maps as a menu sees them (`ContainerLevelAccess`): the
+/// states of the maps the click can reach, and the copies it makes.
+pub(super) struct LevelMaps {
+    states: RefCell<HashMap<i32, (bool, u8)>>,
+    next_id: Cell<i32>,
+    /// (new id, source id, scaled) for each copy made.
+    made: RefCell<Vec<(i32, i32, bool)>>,
+}
+
+impl Maps for LevelMaps {
+    fn state(&self, id: i32) -> Option<(bool, u8)> {
+        self.states.borrow().get(&id).copied()
+    }
+
+    fn derive(&self, id: i32, scale: bool) -> Option<i32> {
+        let (_, s) = self.state(id)?;
+        let new = self.next_id.get();
+        self.next_id.set(new + 1);
+        let made = if scale {
+            (false, (s + 1).min(4))
+        } else {
+            (true, s)
+        };
+        self.states.borrow_mut().insert(new, made);
+        self.made.borrow_mut().push((new, id, scale));
+        Some(new)
+    }
+}
 
 impl Game<'_> {
-    /// `setupResultSlot`.
-    pub(super) fn cartography_result(&self, s: &Station) -> Option<ItemStack> {
-        let (map, extra) = (s.inputs[0].as_ref()?, s.inputs[1].as_ref()?);
-        let data = self.maps.data.get(&map_id(map)?)?;
-        match &*extra.item {
-            "minecraft:paper" if !data.locked && data.scale < 4 => Some(ItemStack {
-                count: 1,
-                ..map.clone()
-            }),
-            "minecraft:glass_pane" if !data.locked => Some(ItemStack {
-                count: 1,
-                ..map.clone()
-            }),
-            "minecraft:map" => Some(ItemStack {
-                count: 2,
-                ..map.clone()
-            }),
-            _ => None,
+    /// The maps of `stacks` (loaded as needed) for a menu over this level.
+    pub(super) fn level_maps<'s>(
+        &mut self,
+        stacks: impl IntoIterator<Item = &'s ItemStack>,
+    ) -> LevelMaps {
+        let ids: Vec<i32> = stacks.into_iter().filter_map(map_id).collect();
+        let mut states = HashMap::new();
+        for id in ids {
+            if let Some(m) = self.map(id) {
+                states.insert(id, (m.locked, m.scale));
+            }
+        }
+        LevelMaps {
+            states: RefCell::new(states),
+            next_id: Cell::new(self.peek_map_id()),
+            made: RefCell::new(Vec::new()),
         }
     }
-    /// `onCraftedPostProcess` for the taken result: a scaled or locked copy
-    /// under a new map id. Also spends the inputs' extra item kind check.
-    pub(super) fn cartography_post(&mut self, mut result: ItemStack) -> ItemStack {
-        let extra = self
-            .station
-            .as_ref()
-            .and_then(|s| s.inputs[1].as_ref())
-            .map(|e| e.item.clone());
-        let Some(id) = map_id(&result) else {
-            return result;
-        };
-        let new = match extra.as_deref() {
-            Some("minecraft:paper") => self.map(id).map(|m| m.scaled()),
-            Some("minecraft:glass_pane") => self.map(id).map(|m| m.locked_copy()),
-            _ => None,
-        };
-        if let Some(data) = new {
-            let new_id = self.new_map_id(data);
-            result.data_mut().map_id = Some(new_id);
+
+    /// The scaled and locked copies a menu made (`level.setMapData`).
+    pub(super) fn register_made_maps(&mut self, maps: LevelMaps) {
+        for (id, source, scale) in maps.made.into_inner() {
+            let Some(data) = self
+                .map(source)
+                .map(|m| if scale { m.scaled() } else { m.locked_copy() })
+            else {
+                continue;
+            };
+            let new = self.new_map_id(data);
+            debug_assert_eq!(new, id, "map ids follow peek_map_id");
         }
-        result
-    }
-    /// The take sound (once per tick).
-    pub(super) fn cartography_taken(&mut self, pos: [i32; 3]) {
-        let at = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]) + 0.5,
-        ];
-        self.audio.play(
-            "minecraft:ui.cartography_table.take_result",
-            Some(at),
-            1.0,
-            1.0,
-        );
     }
     /// `CartographyTableScreen.extractBackground` after the background.
     pub(super) fn draw_cartography(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
@@ -106,12 +116,13 @@ impl Game<'_> {
             );
         };
         let preview = |batch: &mut HudBatch, game: &mut Self, x: f32, y: f32, scale: f32| {
-            if let Some(rect) = id
+            if let Some((id, rect)) = id
                 .filter(|_| state.is_some())
-                .and_then(|id| game.map_texture(id))
+                .and_then(|id| game.map_texture(id).map(|rect| (id, rect)))
             {
                 let size = 128.0 * scale;
                 batch.rect_uv(ox + x, oy + y, size, size, rect, u32::MAX);
+                game.draw_map_decorations(batch, id, ox + x, oy + y, scale);
             }
         };
         if scaling && !locked {
@@ -132,6 +143,40 @@ impl Game<'_> {
         }
     }
 }
+impl Game<'_> {
+    /// `MapRenderer.render` in a screen (`GuiGraphicsExtractor.map`): map
+    /// `id`'s decorations, all of them (not in an item frame), over its
+    /// image at `(x, y)` drawn `scale` GUI pixels per map pixel.
+    fn draw_map_decorations(&self, batch: &mut HudBatch, id: i32, x: f32, y: f32, scale: f32) {
+        let Some(map) = self.maps.data.get(&id) else {
+            return;
+        };
+        for d in &map.decorations {
+            let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
+                continue;
+            };
+            batch.quad(
+                decoration_corners(d, x, y, scale),
+                [[s.u0, s.v0], [s.u1, s.v0], [s.u1, s.v1], [s.u0, s.v1]],
+                u32::MAX,
+            );
+        }
+    }
+}
+
+/// Decoration `d`'s corners on screen, for a map drawn at `(x, y)` with
+/// `scale` GUI pixels per map pixel: (-1, 1), (1, 1), (1, -1), (-1, -1)
+/// under `MapRenderer.render`'s pose.
+fn decoration_corners(d: &super::maps::Decoration, x: f32, y: f32, scale: f32) -> [[f32; 2]; 4] {
+    let m = glam::Mat4::from_translation(glam::Vec3::new(x, y, 0.0))
+        * glam::Mat4::from_scale(glam::Vec3::new(scale, scale, 1.0))
+        * super::maps::decoration_pose(d, 0.0);
+    [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)].map(|(cx, cy)| {
+        let p = m.transform_point3(glam::Vec3::new(cx, cy, 0.0));
+        [p.x, p.y]
+    })
+}
+
 impl MapData {
     /// `MapItemSavedData.scaled`: a fresh map one scale up around the same centre.
     pub(super) fn scaled(&self) -> MapData {
@@ -145,7 +190,7 @@ impl MapData {
         m.unlimited = self.unlimited;
         m
     }
-    /// `MapItemSavedData.locked`: the same pixels, locked.
+    /// `MapItemSavedData.locked`: the same pixels and banner markers, locked.
     pub(super) fn locked_copy(&self) -> MapData {
         let mut m = MapData::fresh(
             f64::from(self.center[0]),
@@ -155,9 +200,57 @@ impl MapData {
         );
         m.center = self.center;
         m.colors = self.colors.clone();
+        m.banners = self.banners.clone();
         m.tracking = self.tracking;
         m.unlimited = self.unlimited;
         m.locked = true;
         m
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::maps::Decoration;
+
+    fn close(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
+        for (a, b) in a.iter().zip(&b) {
+            assert!(
+                (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4,
+                "{a:?} {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn map_markers_sit_on_the_preview_like_on_a_held_map() {
+        let player = |x, y, rot| Decoration {
+            sprite: "map/decorations/player",
+            x,
+            y,
+            rot,
+            holder: None,
+        };
+        // The centre, facing north: 8 map pixels wide, nudged by (-0.5, 0.5).
+        close(
+            decoration_corners(&player(0, 0, 0), 0.0, 0.0, 1.0),
+            [[59.5, 68.5], [67.5, 68.5], [67.5, 60.5], [59.5, 60.5]],
+        );
+        // A quarter turn (rotation 4 of 16) turns the quad about its marker.
+        close(
+            decoration_corners(&player(0, 0, 4), 0.0, 0.0, 1.0),
+            [[59.5, 59.5], [59.5, 67.5], [67.5, 67.5], [67.5, 59.5]],
+        );
+        // The preview's offset and scale apply after: the top-left corner
+        // marker on the 0.45 preview at (71, 17).
+        close(
+            decoration_corners(&player(-128, -128, 0), 71.0, 17.0, 0.45),
+            [
+                [71.0 - 4.5 * 0.45, 17.0 + 4.5 * 0.45],
+                [71.0 + 3.5 * 0.45, 17.0 + 4.5 * 0.45],
+                [71.0 + 3.5 * 0.45, 17.0 - 3.5 * 0.45],
+                [71.0 - 4.5 * 0.45, 17.0 - 3.5 * 0.45],
+            ],
+        );
     }
 }

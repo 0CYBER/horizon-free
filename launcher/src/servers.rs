@@ -12,6 +12,7 @@ use crate::backend;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -48,9 +49,19 @@ pub fn list() -> Vec<Entry> {
 }
 
 fn save_list(entries: &[Entry]) -> Result<(), String> {
+    let path = list_file();
     fs::create_dir_all(backend::data_dir()).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
-    fs::write(list_file(), text).map_err(|e| e.to_string())
+    // A torn write would drop every server from the sidebar: write beside
+    // the list, flush it, and rename it into place. Without the flush a
+    // power cut can leave a file of the right length full of zeros.
+    let partial = path.with_extension("json.tmp");
+    let mut file = fs::File::create(&partial).map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    drop(file);
+    fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
 /// Adds a server folder to the list (once).
@@ -66,6 +77,53 @@ pub fn forget(dir: &Path) -> Result<(), String> {
     let mut all = list();
     all.retain(|e| e.dir != dir);
     save_list(&all)
+}
+
+/// Removes a registered, stopped server, retaining its files in the system trash.
+pub fn delete(dir: &Path) -> Result<(), String> {
+    if !list().iter().any(|entry| entry.dir == dir) {
+        return Err("This server is no longer in the launcher’s list.".into());
+    }
+    if service_installed(dir) {
+        return Err("Turn off running in the background before deleting this server.".into());
+    }
+    trash_stopped_server(dir, crate::desktop_seams::to_trash)?;
+    forget(dir).map_err(|e| {
+        format!("The server was moved to the trash, but its list could not be saved: {e}")
+    })
+}
+
+fn trash_stopped_server(
+    dir: &Path,
+    trash: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    if dir
+        .symlink_metadata()
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_symlink()
+        || !dir.join("server.toml").is_file()
+    {
+        return Err("This is not a server folder.".into());
+    }
+    let state = dir.join(".horizon");
+    fs::create_dir_all(&state).map_err(|e| e.to_string())?;
+    // The supervisor holds this same lock throughout starting, running and stopping.
+    // Hold it through the move so a stale UI/API status cannot delete a live server.
+    let lock = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state.join("lock"))
+        .map_err(|e| e.to_string())?;
+    lock.try_lock()
+        .map_err(|_| "Stop the server before deleting it.".to_string())?;
+    // Windows can't move a folder while a file in it is open, the lock included: let it go
+    // first. Still safe: a supervisor starting in between opens the lock again, and then the
+    // move fails instead of taking a live server.
+    #[cfg(windows)]
+    drop(lock);
+    trash(dir).map_err(|e| format!("Could not move the server to the trash: {e}"))
 }
 
 /// A folder name for a server name: lower case letters, digits and dashes.
@@ -197,13 +255,14 @@ pub fn set_up_in(root: &Path, version: &Path, tag: &str, game_version: &str) -> 
     Ok(())
 }
 
-/// A release folder without the launcher's own files (its prepared copy and install marker).
+/// A release folder without the launcher's own files (its prepared copy, install marker and the
+/// game's macOS app bundle).
 fn copy_release(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let name = entry.file_name();
-        if name == ".local" || name == ".installed" {
+        if name == ".local" || name == ".installed" || name == "Horizon.app" {
             continue;
         }
         let target = to.join(&name);
@@ -244,17 +303,7 @@ fn point(link: &Path, target: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         let _ = fs::remove_dir(link);
-        let status = Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
-            .stdout(Stdio::null())
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(std::io::Error::other("mklink /J failed"))
-        }
+        crate::sources::junction(target, link)
     }
 }
 
@@ -265,10 +314,8 @@ pub fn command(dir: &Path, args: &[&str]) -> Result<Command, String> {
     let program = program().ok_or(
         "The server programs aren't set up yet: create a server, or press Prepare on its page.",
     )?;
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::process::command(program);
     cmd.arg("--dir").arg(dir).args(args);
-    #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
     Ok(cmd)
 }
 
@@ -751,7 +798,7 @@ pub fn lan_address() -> Option<std::net::IpAddr> {
 pub fn service_installed(dir: &Path) -> bool {
     if cfg!(windows) {
         let name = format!("horizon-server-{}", service_suffix(dir));
-        return Command::new("schtasks")
+        return crate::process::command("schtasks")
             .args(["/Query", "/TN", &name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -814,6 +861,8 @@ impl Api {
     }
 
     pub fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
+        // No proxy here on purpose: the server is on this computer, and this is asked every
+        // second (`proxy` never sends a loopback address through one either).
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(10))
             .build();

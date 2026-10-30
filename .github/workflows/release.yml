@@ -1,22 +1,19 @@
 name: release
-# Automatic game releases (docs/release-flow.md). After every green `checks` run on main, every 10 minutes (so a
-# release waiting for merges to settle goes out without another merge) and by hand, tools/release_train.py decides:
-# a release when pull requests merged since the last one changed what players run and the newest merged 15 minutes
-# ago (the oldest an hour ago, if merges never pause), or at once for a pull request labelled release-now.
-# RELEASES_PAUSED=1 (repository variable) stops them.
-# Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
-# Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub): Apple Silicon, and
-# Intel cross-built there for x86_64-apple-darwin and checked under Rosetta 2 (#1161), then
-# publishes vX.Y.Z on the release line in .github/release-line.txt (docs/versioning.md; without it, the dated
-# vYYYY.MM.DD[.N] from before 0.2) with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
-# stable after 6 hours. macOS: with the repository variable MACOS_SIGN_IDENTITY set, the programs are signed with
-# Developer ID and the hardened runtime and the zip is notarized, from the runner's signing keychain
-# (packaging/macos/README.md); unset (forks), ad hoc.
-#   gh workflow run release --ref <branch>                       # dry run: builds and notes, publishes nothing
-#   gh workflow run release -f dry_run=false -f force=true       # on main: release now, whatever the rules say
+# Automatic game releases (docs/release-flow.md). Horizon ships only the Nightly since 2026-10-28 (Ludovic): this
+# workflow is the batch train that decides when a new Nightly goes out, and `nightly build` (nightly-build.yml) builds,
+# signs and publishes it. After every green `checks` run on main, every 10 minutes (so a batch waiting for merges to
+# settle goes out without another merge) and by hand, tools/release_train.py decides, for a commit whose checks and
+# parity-main (the vanilla harnesses on main) both passed: a Nightly when 5 pull requests merged since the published
+# Nightly changed what players run and the newest merged 5 minutes ago, or when the oldest has waited 6 hours, or at
+# once for a pull request labelled release-now. RELEASES_PAUSED=1 (repository variable) stops it; so does an open issue
+# labelled release-blocker, forced runs too (nightly-build.yml checks again before publishing). One Nightly build at a
+# time, at most 12 a day (release-now and force=true pass the cap). No `vX.Y.Z` game release is made any more.
+#   gh workflow run release --ref <branch>                       # dry run: decides, starts nothing
+#   gh workflow run release -f dry_run=false -f force=true       # on main: a Nightly now, whatever the rules say
 on:
   workflow_run:
-    workflows: [checks]
+    # A game release ships a commit both passed on (parity-main runs on batches: the newest commit it passed on).
+    workflows: [checks, parity-main]
     types: [completed]
     branches: [main]
   schedule:
@@ -24,17 +21,24 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Build everything and write the notes, but publish nothing
+        description: Decide only; start no Nightly build
         type: boolean
         default: true
       force:
-        description: Release even without player-facing changes, before merges settle or while paused
+        description: A Nightly even without player-facing changes, before merges settle, while paused or past the day's cap
         type: boolean
         default: false
 permissions:
   contents: read
+  # The open release-blocker issues (decide).
+  issues: read
+  # The checks, parity-main and nightly build runs (decide).
+  actions: read
 concurrency:
-  group: game-release
+  # One release at a time. A hand-started dry run publishes nothing, so it can't race a real release: it gets a
+  # group of its own. In the shared group, a release queued behind it replaced it as the pending run and GitHub
+  # cancelled it (#2779's dry run, 2026-10-27), which happens all day while releases go out in batches.
+  group: game-release${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '-dry-run' || '' }}
   cancel-in-progress: false
 jobs:
   decide:
@@ -45,8 +49,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       release: ${{ steps.decide.outputs.release }}
-      tag: ${{ steps.decide.outputs.tag }}
       head: ${{ steps.decide.outputs.head }}
+      urgent: ${{ steps.decide.outputs.urgent }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
@@ -59,310 +63,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
-          # The commit whose checks just passed; a dry run builds the branch it was started on; otherwise
-          # main's newest commit with green checks.
+          # The commit whose checks or parity-main just passed; a dry run builds the branch it was started on;
+          # otherwise main's newest commit with green checks and parity-main.
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || (steps.mode.outputs.dry_run == 'true' && github.sha) || '' }}
           FORCE: ${{ inputs.force && 'yes' || '' }}
         run: |
           python3 tools/release_train.py decide --kind game ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
           echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
-          # A dry run builds whatever the decision, to test the builds.
-          if [[ "${{ steps.mode.outputs.dry_run }}" == true ]]; then echo "release=true" >> "$GITHUB_OUTPUT"; fi
 
-  build:
+  nightly:
+    # The Nightly is the release: nightly-build.yml builds the decided commit plus the reviewers' picks, signs it for
+    # the Nightly channel and publishes it once its smoke test passed and no release-blocker is open.
     needs: decide
-    if: needs.decide.outputs.release == 'true'
-    name: build ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux
-            os: ubuntu-22.04
-            dir: horizon-linux-x86_64
-            asset: horizon-linux-x86_64.tar.gz
-            # The server build too: packaging/server/install.sh installs it on Linux.
-            server_dir: horizon-server-linux-x86_64
-            server_asset: horizon-server-linux-x86_64.tar.gz
-          - name: windows
-            os: windows-latest
-            dir: horizon-windows-x64
-            asset: horizon-windows-x64.zip
-            exe: .exe
-            # The C runtime linked in, so the game runs without the Visual C++ redistributable.
-            rustflags: -C target-feature=+crt-static
-          - name: macos
-            mac: true
-            dir: horizon-macos-arm64
-            asset: horizon-macos-arm64.zip
-          # Intel Macs: built on the same runner for another target; its checks and smoke test run the x86_64
-          # programs under Rosetta 2.
-          - name: macos-x64
-            mac: true
-            target: x86_64-apple-darwin
-            dir: horizon-macos-x64
-            asset: horizon-macos-x64.zip
-    runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
-    # Notarizing the zip can take a few minutes.
-    timeout-minutes: ${{ matrix.mac && 60 || 40 }}
-    env:
-      RUSTFLAGS: ${{ matrix.rustflags }}
-      # Where cargo puts the programs: target/release, or target/<target>/release for another target.
-      BIN: ${{ matrix.target && format('target/{0}/release', matrix.target) || 'target/release' }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.decide.outputs.head }}
-          persist-credentials: false
-          # Always from a clean checkout, the Mac mini's runner too: its work folder is shared with pull requests'
-          # parity jobs, and nothing they leave (target/, an untracked .cargo/config.toml, a build script's output)
-          # may end up in a release. target/ is rebuilt from scratch; .local/ is relinked by vanilla-data.sh, which
-          # keeps its preparations outside the checkout.
-          clean: true
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment == 'github-hosted'
-        with:
-          shared-key: release-${{ matrix.name }}
-      - name: ALSA and udev headers
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-      - name: Build the client, horizon-ctl, horizon-prepare and horizon-server
-        run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare -p horizon-server --bin horizon-server
-      - name: Every program the release folder takes was built
-        run: |
-          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
-            test -f "$BIN/$binary${{ matrix.exe }}" || { echo "::error::$BIN/$binary${{ matrix.exe }} is missing"; exit 1; }
-          done
-      - name: The signing keychain, unlocked
-        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
-        env:
-          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
-        run: packaging/macos/keychain.sh unlock
-      - name: Signed with Developer ID and the hardened runtime
-        # Before the checks below, so they run the programs as players will.
-        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
-        env:
-          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
-        run: |
-          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
-            codesign --force --options runtime --timestamp --keychain "$MACOS_SIGN_KEYCHAIN" \
-              --identifier "dev.horizon.${binary#horizon-}" --sign "$MACOS_SIGN_IDENTITY" "$BIN/$binary"
-            codesign --verify --strict --verbose=2 "$BIN/$binary"
-          done
-      - name: Only system libraries
-        # Windows: no non-system DLL (a "DLL not found" dialog on some players' machines). Linux: the standard
-        # loader and libraries every desktop distribution has. macOS: only the system's own libraries.
-        run: |
-          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
-            file="$BIN/$binary${{ matrix.exe }}"
-            if [[ "$RUNNER_OS" == macOS ]]; then
-              others=$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)
-              [[ -z "$others" ]] || { echo "::error::$binary links $others"; exit 1; }
-            else
-              ${{ runner.os == 'Windows' && 'python' || 'python3' }} tools/check_imports.py "$file"
-            fi
-          done
-      - name: Every program starts
-        run: |
-          set -euo pipefail
-          bin=$BIN
-          "$bin/horizon-client${{ matrix.exe }}" --help | grep -q -- '--resources'
-          "$bin/horizon-ctl${{ matrix.exe }}" --help > /dev/null
-          "$bin/horizon-prepare${{ matrix.exe }}" --version
-          "$bin/horizon-prepare${{ matrix.exe }}" --help | grep -q -- '--minecraft-dir'
-          "$bin/horizon-server${{ matrix.exe }}" --version
-      - name: Tools from the runner
-        if: runner.environment == 'self-hosted'
-        run: bash tools/ci/runner-env.sh
-      - name: Resources prepared from the runner's own Minecraft
-        if: runner.environment == 'self-hosted'
-        run: bash tools/ci/vanilla-data.sh
-      - name: The game runs (offscreen, a new world, 1500 frames)
-        if: runner.environment == 'self-hosted'
-        run: |
-          set -euo pipefail
-          # From a scratch folder: the game keeps its saves and options in the folder it starts in.
-          home="$RUNNER_TEMP/horizon-smoke"
-          rm -rf "$home" && mkdir -p "$home"
-          version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' research-lock.json | head -1)
-          client="$PWD/$BIN/horizon-client"
-          resources="$PWD/.local/horizon-client/$version"
-          (cd "$home" && HORIZON_HOME="$home" HORIZON_NO_AUDIO=1 "$client" --resources "$resources" --offscreen \
-            --world smoke --seed 1 --render-distance 4 --world-frames 1500 --timeout-seconds 180 \
-            --smoke-report "$home/smoke.json" > "$home/client.log" 2>&1) || { tail -40 "$home/client.log"; exit 1; }
-          python3 - "$home/smoke.json" <<'EOF'
-          import json, sys
-          report = json.load(open(sys.argv[1]))
-          print(json.dumps(report))
-          if report.get("error") is not None or report.get("frames", 0) < 1500 or not report.get("chunks") \
-                  or not report.get("meshed_sections") or not report.get("player"):
-              sys.exit("the smoke run did not draw a world")
-          EOF
-          # Published with the release: a beta becomes stable only with it (tools/release_channels.py).
-          cp "$home/smoke.json" "$RUNNER_TEMP/smoke-test.json"
-      # One smoke-test.json per release, the Apple Silicon build's; the Intel build must pass its own run too.
-      - uses: actions/upload-artifact@v4
-        if: runner.environment == 'self-hosted' && !matrix.target
-        with:
-          name: smoke-test.json
-          path: ${{ runner.temp }}/smoke-test.json
-          if-no-files-found: error
-          retention-days: 3
-      - name: Package
-        run: |
-          set -euo pipefail
-          cargo run --locked -p xtask -- package "$BIN/horizon-client${{ matrix.exe }}" "dist/${{ matrix.dir }}"
-          cd dist
-          rm -f "${{ matrix.asset }}"
-          case "${{ matrix.asset }}" in
-            *.tar.gz) tar czf "${{ matrix.asset }}" "${{ matrix.dir }}" ;;
-            *) if [[ "$RUNNER_OS" == Windows ]]; then 7z a -tzip "${{ matrix.asset }}" "${{ matrix.dir }}" > /dev/null
-               else
-                 # Without resource forks and extended attributes: plain ditto adds an
-                 # AppleDouble `._` file beside every file that has any.
-                 ditto -c -k --norsrc --noextattr --noqtn --keepParent "${{ matrix.dir }}" "${{ matrix.asset }}"
-                 if unzip -Z1 "${{ matrix.asset }}" | grep -E '(^|/)(\._|__MACOSX/)'; then
-                   echo "::error::macOS metadata files in ${{ matrix.asset }}"; exit 1
-                 fi
-               fi ;;
-          esac
-          ls -l "${{ matrix.asset }}"
-      - name: Notarized
-        # A zip of programs can't be stapled: Gatekeeper asks Apple the first time each one runs.
-        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
-        run: |
-          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
-            codesign --verify --strict "dist/${{ matrix.dir }}/$binary"
-          done
-          packaging/macos/notarize.sh "dist/${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
-          if-no-files-found: error
-          retention-days: 3
-      - name: The server build (the game without sound or controllers, as horizon-engine)
-        if: matrix.server_asset
-        run: |
-          set -euo pipefail
-          # After the client is packaged: target/release/horizon-client is rebuilt without the audio and
-          # controllers features, so it needs neither libasound nor libudev (minimal server images lack them).
-          cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
-          cargo run --locked -p xtask -- package-server target/release/horizon-client "dist/${{ matrix.server_dir }}"
-          folder="dist/${{ matrix.server_dir }}"
-          python3 tools/check_imports.py --server "$folder/horizon-engine" "$folder/horizon-server" "$folder/horizon-prepare"
-          "$folder/horizon-engine" --help | grep -q -- '--resources'
-          "$folder/horizon-server" --version
-          cd dist
-          rm -f "${{ matrix.server_asset }}"
-          tar czf "${{ matrix.server_asset }}" "${{ matrix.server_dir }}"
-          ls -l "${{ matrix.server_asset }}"
-      - uses: actions/upload-artifact@v4
-        if: matrix.server_asset
-        with:
-          name: ${{ matrix.server_asset }}
-          path: dist/${{ matrix.server_asset }}
-          if-no-files-found: error
-          retention-days: 3
-      - name: The signing keychain, locked again
-        if: always() && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
-        run: packaging/macos/keychain.sh lock
-
-  sign:
-    needs: [decide, build]
+    if: needs.decide.outputs.release == 'true' && needs.decide.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # The only job that holds the release signing key, a secret of the `release` environment, which only main's real
-    # releases enter (dry runs sign with a throwaway key). It runs no code from the repository but
-    # tools/ci/sign_release.sh, which calls only the runner's sha256sum and OpenSSL (docs/release-flow.md).
-    environment: ${{ needs.decide.outputs.dry_run != 'true' && 'release' || '' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: tools/ci/sign_release.sh
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: horizon-*
-          merge-multiple: true
-      - name: Sign the checksums (SHA256SUMS, SHA256SUMS.sig)
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
-          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
-          TAG: ${{ needs.decide.outputs.tag }}
-        run: |
-          bash tools/ci/sign_release.sh "$TAG" dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
-            dist/horizon-macos-arm64.zip dist/horizon-macos-x64.zip dist/horizon-server-linux-x86_64.tar.gz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: signature
-          path: dist/SHA256SUMS*
-          if-no-files-found: error
-          retention-days: 3
-      - uses: actions/upload-artifact@v4
-        if: needs.decide.outputs.dry_run == 'true'
-        with:
-          name: ephemeral.pub
-          path: dist/ephemeral.pub
-          retention-days: 3
-
-  publish:
-    needs: [decide, build, sign]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
-      contents: write
+      actions: write  # starts `nightly build`
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Notes
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.decide.outputs.head }}
+          URGENT: ${{ needs.decide.outputs.urgent }}
         run: |
-          python3 tools/release_train.py notes --kind game --tag "${{ needs.decide.outputs.tag }}" \
-            --head "${{ needs.decide.outputs.head }}" --out notes > /dev/null
-          { echo "## $(cat notes/title.txt)"; echo; cat notes/body.md; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: The signature, checked as launchers check it
-        env:
-          TAG: ${{ needs.decide.outputs.tag }}
-          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
-        run: |
-          key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
-          cargo run --locked --quiet -p horizon-release-sign -- verify --tag "$TAG" --publishing "${key[@]}" dist
-      - name: Publish ${{ needs.decide.outputs.tag }}
-        if: needs.decide.outputs.dry_run != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.decide.outputs.tag }}
-        run: |
-          signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
-          smoke=(); [[ -f dist/smoke-test.json ]] && smoke=(dist/smoke-test.json)
-          # A beta (pre-release): promote.yml makes it stable and latest after 6 hours (docs/release-flow.md).
-          gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
-            --notes-file notes/body.md --prerelease --latest=false dist/horizon-linux-x86_64.tar.gz \
-            dist/horizon-windows-x64.zip dist/horizon-macos-arm64.zip dist/horizon-macos-x64.zip \
-            dist/horizon-server-linux-x86_64.tar.gz dist/SHA256SUMS "${signature[@]}" "${smoke[@]}"
-      - name: Dry run, the release that would be published
-        if: needs.decide.outputs.dry_run == 'true'
-        run: |
-          echo "Would publish ${{ needs.decide.outputs.tag }} at ${{ needs.decide.outputs.head }}: $(cat notes/title.txt)"
-          ls -l dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-notes
-          path: notes/
-          retention-days: 3
+          gh workflow run nightly-build.yml --repo "$GITHUB_REPOSITORY" --ref main -f base="$HEAD_SHA" -f urgent="$URGENT"
+          echo "### Started \`nightly build\` on ${HEAD_SHA:0:9}" >> "$GITHUB_STEP_SUMMARY"

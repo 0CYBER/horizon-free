@@ -129,6 +129,51 @@ fn rejects_incompatible_regions_and_routes_negative_chunk_coordinates() {
     ));
     assert_eq!(region.block([0, 7, 0]).unwrap(), BlockStateId(0));
 }
+/// The column scan matches reading block by block: from inside and outside
+/// the build range, both ways, across all-air and mixed sections.
+#[test]
+fn column_scan_matches_block_by_block_reads() {
+    let registry = registry();
+    let chunk = TerrainChunk::new(ChunkPos::new(-1, 0), -32, 64, &registry, Properties).unwrap();
+    let mut region =
+        TerrainRegion::new(vec![chunk], WorldGenerationContext::new(-32, 64, 8)).unwrap();
+    for (y, state) in [
+        (-30, 2),
+        (-17, 3),
+        (-16, 2),
+        (5, 4),
+        (6, 0),
+        (20, 2),
+        (31, 3),
+    ] {
+        region
+            .set_block_worldgen([-13, y, 5], BlockStateId(state))
+            .unwrap();
+    }
+    let keeps: [fn(BlockStateId) -> bool; 3] = [|s| s.0 < 2, |s| s.0 == 0, |s| s.0 != 2];
+    for keep in keeps {
+        for start in -40..40 {
+            for step in [1, -1] {
+                for limit in [0, 1, 3, 15, 16, 17, 40, 90] {
+                    let mut y = start;
+                    for _ in 0..limit {
+                        if !keep(region.block([-13, y, 5]).unwrap()) {
+                            break;
+                        }
+                        y += step;
+                    }
+                    assert_eq!(
+                        region
+                            .scan_column([-13, start, 5], step, limit, keep)
+                            .unwrap(),
+                        y,
+                        "start {start} step {step} limit {limit}"
+                    );
+                }
+            }
+        }
+    }
+}
 #[test]
 fn write_callback_controls_mutation_and_receives_all_flags() {
     let registry = registry();
@@ -383,5 +428,48 @@ fn retained_upgrade_status_allows_old_biome_reads() {
                 stage.status() >= ChunkStatus::Biomes
             );
         }
+    }
+}
+#[test]
+fn spread_out_regions_route_like_dense_ones() {
+    // Chunks too far apart for a grid over their bounding box (fixtures put
+    // one at the far edge of the world beside the origin's neighbours).
+    let registry = registry();
+    let context = WorldGenerationContext::new(0, 16, 8);
+    let chunk =
+        |x, z| TerrainChunk::new(ChunkPos::new(x, z), 0, 16, &registry, Properties).unwrap();
+    for far in [4_194_304, -4_194_304] {
+        let mut region = TerrainRegion::new(
+            vec![chunk(0, 0), chunk(far, 0), chunk(1, -1), chunk(-1, 1)],
+            context,
+        )
+        .unwrap();
+        let x = far * 16 + 3;
+        region
+            .set_block_worldgen([x, 7, 5], BlockStateId(2))
+            .unwrap();
+        assert_eq!(region.block([x, 7, 5]).unwrap(), BlockStateId(2));
+        assert_eq!(region.block([3, 7, 5]).unwrap(), BlockStateId(0));
+        assert_eq!(region.block([16, 7, -1]).unwrap(), BlockStateId(0));
+        assert!(matches!(
+            region.block([x + 16, 7, 5]),
+            Err(RegionError::MissingChunk([_, 0]))
+        ));
+        assert!(matches!(
+            region.block([0, 7, 16]),
+            Err(RegionError::MissingChunk([0, 1]))
+        ));
+        let order: Vec<_> = region
+            .into_chunks()
+            .iter()
+            .map(|c| (c.position().x, c.position().z))
+            .collect();
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(order, sorted, "into_chunks is ordered by X then Z");
+        // A position twice is refused either way.
+        assert!(
+            TerrainRegion::new(vec![chunk(0, 0), chunk(far, 0), chunk(far, 0)], context).is_err()
+        );
     }
 }

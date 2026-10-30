@@ -9,7 +9,7 @@ use horizon_world::{
 };
 use std::{
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The `custom_data` key holding an exploration map's search until the game
@@ -63,6 +63,18 @@ pub fn loot_item_with_components(s: &horizon_world::loot::LootStack) -> ItemStac
     if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
         item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
     }
+    // set_stew_effect's `suspicious_stew_effects`.
+    for (effect, duration) in &s.stew_effects {
+        item.data_mut()
+            .stew_effects
+            .push((Arc::from(effect.as_str()), *duration));
+    }
+    for (id, text) in &s.names {
+        item.data_mut().set_loot_name(id, text);
+    }
+    for (id, value) in &s.components {
+        item.data_mut().set_loot_component(id, value);
+    }
     item
 }
 
@@ -108,17 +120,122 @@ pub fn has_pending_map(item: &ItemStack) -> bool {
     })
 }
 
-/// Loot data of the resource root, loaded once per process.
-pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
-    static LOOT: OnceLock<Option<Arc<LootData>>> = OnceLock::new();
-    LOOT.get_or_init(|| match LootData::load(root) {
+/// The loot data and the [`loot_key`] it was loaded for; None until
+/// `loot_data` runs. `Some((_, None))` when the tables failed to load.
+type LoadedLoot = (u64, Option<Arc<LootData>>);
+static LOOT: Mutex<Option<LoadedLoot>> = Mutex::new(None);
+
+/// The resource root and the packs' files the loot data was loaded from.
+fn loot_key(root: &Path, overlay: &horizon_world::loot::PackOverlay) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    root.hash(&mut hasher);
+    overlay.files.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn load_loot(root: &Path, overlay: &horizon_world::loot::PackOverlay) -> LoadedLoot {
+    let data = match LootData::load(root, overlay) {
         Ok(data) => Some(Arc::new(data)),
         Err(e) => {
             log::warn!("Horizon: loot tables unavailable, structure containers stay empty: {e}");
             None
         }
-    })
-    .clone()
+    };
+    (loot_key(root, overlay), data)
+}
+
+/// Loot data of the resource root with the world's packs over it, loaded
+/// once per process (a world open with other packs, or `/reload`, loads it
+/// again).
+pub fn loot_data(root: &Path, overlay: &horizon_world::loot::PackOverlay) -> Option<Arc<LootData>> {
+    let mut loot = LOOT.lock().unwrap_or_else(|e| e.into_inner());
+    loot.get_or_insert_with(|| load_loot(root, overlay))
+        .1
+        .clone()
+}
+
+/// [`loot_data`] for a world being opened: the copy already loaded when it
+/// came from the same root and packs (world generation loads it first, with
+/// no packs; a second copy held 8 MB for the whole run), else a fresh one.
+pub fn world_loot_data(
+    root: &Path,
+    overlay: &horizon_world::loot::PackOverlay,
+) -> Option<Arc<LootData>> {
+    reuse_or_load(
+        &mut LOOT.lock().unwrap_or_else(|e| e.into_inner()),
+        root,
+        overlay,
+    )
+}
+
+fn reuse_or_load(
+    loot: &mut Option<LoadedLoot>,
+    root: &Path,
+    overlay: &horizon_world::loot::PackOverlay,
+) -> Option<Arc<LootData>> {
+    let key = loot_key(root, overlay);
+    if loot.as_ref().is_none_or(|(loaded, _)| *loaded != key) {
+        *loot = Some(load_loot(root, overlay));
+    }
+    loot.as_ref().and_then(|(_, data)| data.clone())
+}
+
+/// The loot data `loot_data` loaded, if it ran.
+pub fn loaded_loot_data() -> Option<Arc<LootData>> {
+    LOOT.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|(_, data)| data.clone())
+}
+
+/// Let go of the loot data: for a preload no world used
+/// (game/world_loading.rs). The next `loot_data` loads it again.
+pub fn forget_loot_data() {
+    *LOOT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// `RandomizableContainer.unpackLootTable` of a container at `pos`: `table`
+/// rolled into `slots`. A missing or zero seed is the level's random in
+/// vanilla; Horizon derives one from the position. Without loot data the
+/// container stays empty and still saves its table.
+pub fn roll_container(
+    slots: &mut [Option<ItemStack>],
+    loot: Option<&LootData>,
+    table: String,
+    saved_seed: Option<i64>,
+    pos: (i32, i32, i32),
+    biome: &str,
+) -> crate::save::RolledLoot {
+    let seed = saved_seed.filter(|s| *s != 0).unwrap_or_else(|| {
+        horizon_core::random::position_seed(horizon_core::position::BlockPos::new(
+            pos.0, pos.1, pos.2,
+        ))
+    });
+    if let Some(loot) = loot {
+        // LootTable.fill spreads the items over the container's own size.
+        let rolled = loot.fill(&table, seed, slots.len(), Some(biome));
+        for (slot, stack) in slots.iter_mut().zip(rolled) {
+            // With what the rolls put on them: enchantments
+            // (enchant_with_levels in End city chests), potions and an
+            // ominous bottle's level.
+            *slot = stack.map(|s| loot_item_with_components(&s));
+        }
+    }
+    crate::save::RolledLoot {
+        pos,
+        table,
+        seed: saved_seed,
+        items: crate::save::encode_items(slots),
+    }
+}
+
+/// A saved `LootTableSeed`, if any.
+pub fn loot_seed(nbt: &Tag) -> Option<i64> {
+    match nbt.get("LootTableSeed") {
+        Some(Tag::Long(seed)) => Some(*seed),
+        _ => None,
+    }
 }
 
 fn text(nbt: &Compound, key: &str) -> Option<String> {
@@ -128,101 +245,167 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
     }
 }
 
-/// Client block entities for the generated block entities of a chunk.
+/// The client block entity for one of a chunk's generated block entities,
+/// before a container's loot is unpacked: `StructureTemplate.placeInWorld`
+/// hands the template's block entity NBT to `loadWithComponents`, which is
+/// what a chunk load does with a saved one.
+fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
+    let fallback = BlockEntity::for_block(block)?;
+    let mut tag = nbt.clone();
+    // RandomizableContainer.tryLoadLootTable: with a table the items are not read.
+    if text(&tag, "LootTable").is_some() {
+        tag.remove(&JavaString::from("Items"));
+    }
+    // Programmatic block entities (and a template that saved none) carry no id.
+    if !tag.contains_key(&JavaString::from("id")) {
+        tag.insert("id".into(), Tag::String(fallback.id().into()));
+    }
+    for axis in ["x", "y", "z"] {
+        tag.insert(axis.into(), Tag::Int(0));
+    }
+    // A saved kind the client cannot decode keeps the block's own entity.
+    Some(
+        crate::save::decode_block_entity(&Tag::Compound(tag))
+            .map_or(fallback, |(_, entity)| entity),
+    )
+}
+
+/// Client block entities for the generated block entities of a chunk, and the
+/// loot rolled into its containers.
 pub fn block_entities(
     chunk: &ProtoChunk,
     loot: Option<&LootData>,
-) -> Vec<((i32, i32, i32), BlockEntity)> {
+) -> (
+    Vec<((i32, i32, i32), BlockEntity)>,
+    Vec<crate::save::RolledLoot>,
+) {
     let mut out = Vec::new();
+    let mut rolled = Vec::new();
     for (pos, nbt) in &chunk.block_entities {
         let [x, y, z] = *pos;
         let block = chunk.block_name(x, y, z);
-        let Some(mut entity) = BlockEntity::for_block(block) else {
+        let Some(mut entity) = generated_block_entity(block, nbt) else {
             continue;
         };
-        // MonsterRoomFeature and the structures' setEntityId.
-        if let BlockEntity::Spawner(s) = &mut entity {
-            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::TrialSpawner(s) = &mut entity {
-            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::Vault(v) = &mut entity {
-            **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone()));
-        }
-        if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
-            (&mut entity, text(nbt, "LootTable"), loot)
-        {
-            let seed = match nbt.get(&JavaString::from("LootTableSeed")) {
-                Some(Tag::Long(seed)) => *seed,
-                // Seed 0 means "the level's random": derive one from the position.
-                _ => horizon_core::random::position_seed(horizon_core::position::BlockPos::new(
-                    x, y, z,
-                )),
-            };
-            let biome = chunk.biome_at(x, y, z);
-            for (slot, stack) in slots
-                .iter_mut()
-                .zip(loot.fill(&table, seed, 27, Some(biome)))
-            {
-                *slot = stack.map(|s| {
-                    let mut item = loot_item(&s);
-                    // An ominous bottle's level (the default, 0, is no component).
-                    if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
-                        item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
-                    }
-                    item
-                });
-            }
+        if let (BlockEntity::Chest(slots), Some(table)) = (&mut entity, text(nbt, "LootTable")) {
+            let seed = loot_seed(&Tag::Compound(nbt.clone()));
+            rolled.push(roll_container(
+                slots,
+                loot,
+                table,
+                seed,
+                (x, y, z),
+                chunk.biome_at(x, y, z),
+            ));
         }
         out.push(((x, y, z), entity));
     }
-    out
-}
-
-/// Chest minecarts placed with a loot table (mineshafts): the table rolled
-/// into `Items` as `unpackLootTable` would on first open.
-pub fn unpack_entity_loot(
-    chunk: &ProtoChunk,
-    mut nbt: horizon_world::nbt::Compound,
-    loot: Option<&LootData>,
-) -> horizon_world::nbt::Compound {
-    let (Some(table), Some(loot)) = (
-        match nbt.get(&JavaString::from("LootTable")) {
-            Some(Tag::String(s)) => Some(s.to_string_lossy()),
-            _ => None,
-        },
-        loot,
-    ) else {
-        return nbt;
-    };
-    let seed = match nbt.get(&JavaString::from("LootTableSeed")) {
-        Some(Tag::Long(seed)) => *seed,
-        _ => 0,
-    };
-    let pos = match nbt.get(&JavaString::from("Pos")) {
-        Some(Tag::List(p)) => std::array::from_fn(|i| match p.get(i) {
-            Some(Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
-            _ => 0,
-        }),
-        _ => [0; 3],
-    };
-    let biome = chunk.biome_at(pos[0], pos[1], pos[2]);
-    let slots: Vec<Option<ItemStack>> = loot
-        .fill(&table, seed, 27, Some(biome))
-        .into_iter()
-        .map(|s| s.map(|s| loot_item(&s)))
-        .collect();
-    nbt.remove(&JavaString::from("LootTable"));
-    nbt.remove(&JavaString::from("LootTableSeed"));
-    nbt.insert("Items".into(), crate::save::encode_items(&slots));
-    nbt
+    (out, rolled)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use horizon_world::loot::{ExplorationMap, LootStack};
+
+    #[test]
+    fn generated_end_gateway_keeps_its_exit() {
+        let Tag::Compound(nbt) = Tag::compound([
+            ("exit_portal", Tag::IntArray(vec![100, 50, 0])),
+            ("ExactTeleport", Tag::Byte(1)),
+        ]) else {
+            unreachable!()
+        };
+        let Some(BlockEntity::EndGateway(g)) =
+            generated_block_entity("minecraft:end_gateway", &nbt)
+        else {
+            panic!("gateway");
+        };
+        assert_eq!(g.exit_portal, Some([100, 50, 0]));
+        assert!(g.exact_teleport);
+    }
+
+    #[test]
+    fn placed_chest_loot_keeps_its_enchantments_and_potions() {
+        let stack =
+            |item: &str, enchantments: Vec<(String, i32)>, potion: Option<&str>| LootStack {
+                item: item.into(),
+                count: 1,
+                damage: 0,
+                enchantments,
+                potion: potion.map(str::to_owned),
+                map: false,
+                exploration: None,
+                ominous_amplifier: None,
+                stew_effects: Vec::new(),
+                names: Vec::new(),
+                components: Vec::new(),
+            };
+        // An End city chest's enchant_with_levels roll.
+        let boots = loot_item_with_components(&stack(
+            "minecraft:diamond_boots",
+            vec![
+                ("minecraft:protection".into(), 3),
+                ("minecraft:unbreaking".into(), 2),
+            ],
+            None,
+        ));
+        assert_eq!(boots.enchantments().len(), 2);
+        // A book's go into stored_enchantments.
+        let book = loot_item_with_components(&stack(
+            "minecraft:enchanted_book",
+            vec![("minecraft:mending".into(), 1)],
+            None,
+        ));
+        assert!(book.enchantments().is_empty());
+        assert_eq!(book.stored_enchantments().len(), 1);
+        let arrow = loot_item_with_components(&stack(
+            "minecraft:tipped_arrow",
+            Vec::new(),
+            Some("minecraft:slowness"),
+        ));
+        assert_eq!(arrow.potion(), Some("minecraft:slowness"));
+    }
+
+    /// Opening a world keeps the loot data world generation loaded when the
+    /// packs are the same, and loads it again when they differ.
+    #[test]
+    fn a_world_open_reuses_loot_data_of_the_same_packs() {
+        use horizon_world::loot::PackOverlay;
+        let root = std::env::temp_dir().join(format!("horizon-loot-reuse-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
+        std::fs::write(root.join("items.json"), "{}").unwrap();
+        let mut slot = None;
+        let first = reuse_or_load(&mut slot, &root, &PackOverlay::NONE).expect("loot data");
+        let again = reuse_or_load(&mut slot, &root, &PackOverlay::NONE).unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        let files = [(
+            "loot_table/chests/x".to_owned(),
+            vec![br#"{"pools": []}"#.to_vec()],
+        )];
+        let packs = PackOverlay { files: &files };
+        let other = reuse_or_load(&mut slot, &root, &packs).unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_container_rolled_without_loot_data_saves_its_table() {
+        let mut slots = vec![None; 27];
+        let rolled = roll_container(
+            &mut slots,
+            None,
+            "minecraft:chests/simple_dungeon".into(),
+            Some(7),
+            (1, 2, 3),
+            "minecraft:plains",
+        );
+        let mut saved = horizon_world::nbt::Compound::new();
+        saved.insert("Items".into(), crate::save::encode_items(&slots));
+        assert!(rolled.restore(&mut saved));
+        assert!(!saved.contains_key(&"Items".into()));
+        assert_eq!(saved.get(&"LootTableSeed".into()), Some(&Tag::Long(7)));
+    }
 
     #[test]
     fn exploration_maps_wait_in_custom_data_until_searched() {
@@ -240,6 +423,9 @@ mod tests {
                 "zoom": 1
             })))),
             ominous_amplifier: None,
+            stew_effects: Vec::new(),
+            names: Vec::new(),
+            components: Vec::new(),
         };
         let mut item = loot_item(&stack);
         assert!(has_pending_map(&item));
@@ -277,5 +463,44 @@ mod tests {
         // A plain item has nothing pending.
         stack.exploration = None;
         assert!(!has_pending_map(&loot_item(&stack)));
+    }
+
+    /// The End cities' tower tops save their banners' patterns in the
+    /// template; the placed banner must keep them (`EndCityPieces`).
+    #[test]
+    fn a_generated_banner_keeps_its_template_patterns() {
+        let patterns = Tag::List(vec![
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_top".into())),
+            ]),
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_bottom".into())),
+            ]),
+        ]);
+        let nbt = Tag::compound([
+            ("id", Tag::String("minecraft:banner".into())),
+            ("patterns", patterns),
+        ]);
+        let Tag::Compound(nbt) = nbt else {
+            unreachable!()
+        };
+        let Some(BlockEntity::Banner(banner)) =
+            generated_block_entity("minecraft:magenta_banner", &nbt)
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert_eq!(banner.layers.len(), 2);
+        assert_eq!(&*banner.layers[0].pattern, "minecraft:triangle_top");
+        assert_eq!(&*banner.layers[1].pattern, "minecraft:triangle_bottom");
+        assert_eq!(&*banner.layers[0].color, "black");
+        // A banner the template saved without patterns stays bare.
+        let Some(BlockEntity::Banner(bare)) =
+            generated_block_entity("minecraft:white_banner", &Compound::new())
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert!(bare.layers.is_empty());
     }
 }

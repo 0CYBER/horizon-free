@@ -1,16 +1,16 @@
 //! The running game's tools in the launcher's MCP, so an agent needs one server
 //! (docs/agent-control.md): the selected version's `horizon-ctl mcp` runs as a child, its tools
-//! are offered as `game_<name>`, and calls go to it unchanged. `launch_client` starts the game
+//! are offered as `game_<name>`, and calls go to it unchanged. `play` starts the game
 //! with the control socket that child talks to.
 use horizon_launcher::backend;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 
 pub const PREFIX: &str = "game_";
 
-/// horizon-ctl tools the launcher covers itself: `launch_client` starts the game.
+/// horizon-ctl tools the launcher covers itself: `play` starts the game.
 const HIDDEN: &[&str] = &["launch"];
 
 const CTL: &str = if cfg!(windows) {
@@ -19,7 +19,7 @@ const CTL: &str = if cfg!(windows) {
     "horizon-ctl"
 };
 
-/// The control endpoint of a game started by `launch_client`: a Unix socket, or on Windows the
+/// The control endpoint of a game started by `play`: a Unix socket, or on Windows the
 /// file naming a localhost port and its token.
 pub fn socket_path() -> PathBuf {
     backend::data_dir().join(if cfg!(unix) {
@@ -61,7 +61,7 @@ impl GameTools {
         if !ctl.exists() {
             return Err(format!("{tag} has no {CTL}"));
         }
-        let mut child = Command::new(&ctl)
+        let mut child = horizon_launcher::process::command(&ctl)
             .arg("--socket")
             .arg(socket_path())
             .arg("mcp")
@@ -151,7 +151,7 @@ fn prefixed(tools: &Value) -> Vec<Value> {
             let mut t = t.clone();
             t["name"] = format!("{PREFIX}{}", t["name"].as_str().unwrap_or_default()).into();
             t["description"] = format!(
-                "In the running game (start it with launch_client): {}",
+                "In the running game (start it with play): {}",
                 t["description"].as_str().unwrap_or_default()
             )
             .into();
@@ -173,7 +173,7 @@ fn explain_unreachable(mut result: Value) -> Value {
         });
     if unreachable {
         result["content"] = json!([{ "type": "text", "text": json!({
-            "error": "The game is not running under agent control. Start it with launch_client, then game_wait_ready.",
+            "error": "The game is not running under agent control. Start it with play, then game_wait_ready.",
             "kind": "state",
         }).to_string() }]);
     }
@@ -209,7 +209,7 @@ mod tests {
         assert!(result["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("launch_client"));
+            .contains("with play"));
         let other = json!({ "content": [{ "type": "text", "text": "{\"error\":\"no world\"}" }], "isError": true });
         assert_eq!(explain_unreachable(other.clone()), other);
     }

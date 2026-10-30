@@ -1,5 +1,5 @@
 //! Modrinth's public API (api.modrinth.com/v2): no key, files with SHA-512 and SHA-1.
-use super::{FileRef, Kind, Project, Query, Source, SourceId, Version, GAME};
+use super::{details, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME};
 use serde_json::Value;
 
 const API: &str = "https://api.modrinth.com/v2";
@@ -11,28 +11,55 @@ pub struct Modrinth;
 fn project_type(kind: Kind) -> &'static str {
     match kind {
         Kind::ResourcePack => "resourcepack",
-        Kind::ShaderPack => "shader",
         Kind::Modpack => "modpack",
+        Kind::Mod => "mod",
+        Kind::Shader => "shader",
+        Kind::DataPack => "datapack",
     }
 }
 
+/// The kind of a Modrinth project; its shader packs (the shaders/ format) are not offered. A
+/// data pack says it is a `mod` (most also ship a mod build): the search for data packs marks
+/// its hits, and an install into a world asks for its data pack files.
 fn kind_of(project_type: &str) -> Option<Kind> {
     Kind::ALL
         .into_iter()
+        .filter(|k| !matches!(k, Kind::Shader | Kind::DataPack))
         .find(|k| self::project_type(*k) == project_type)
 }
 
-/// The search's facets (AND of ORs): the kind, and unless `everything` what runs.
+/// The search's facets (AND of ORs): the kind, the filters, and unless `everything` what runs.
 pub(super) fn facets(query: &Query) -> String {
+    let f = &query.filters;
     let mut all = vec![vec![format!("project_type:{}", project_type(query.kind))]];
-    if !query.everything {
-        match query.kind {
-            Kind::ResourcePack => all.push(vec![format!("versions:{GAME}")]),
-            Kind::ShaderPack => {
-                all.push(vec!["categories:iris".into(), "categories:optifine".into()])
-            }
-            Kind::Modpack => {}
+    match &f.game_version {
+        Some(v) => all.push(vec![format!("versions:{v}")]),
+        None if !query.everything
+            && matches!(query.kind, Kind::ResourcePack | Kind::Mod | Kind::DataPack) =>
+        {
+            all.push(vec![format!("versions:{GAME}")])
         }
+        None => {}
+    }
+    let loaders: Vec<String> = match &f.loader {
+        // Quilt loads Fabric mods: what runs on Quilt.
+        Some(l) if l == "quilt" => vec!["categories:quilt".into(), "categories:fabric".into()],
+        Some(l) => vec![format!("categories:{l}")],
+        None => details::default_loaders(query.kind)
+            .iter()
+            .map(|l| format!("categories:{l}"))
+            .collect(),
+    };
+    if !loaders.is_empty() {
+        all.push(loaders);
+    }
+    for c in &f.categories {
+        all.push(vec![format!("categories:{c}")]);
+    }
+    match f.environment {
+        Some(details::Environment::Client) => all.push(vec!["client_side!=unsupported".into()]),
+        Some(details::Environment::Server) => all.push(vec!["server_side!=unsupported".into()]),
+        None => {}
     }
     serde_json::to_string(&all).unwrap_or_default()
 }
@@ -41,11 +68,7 @@ pub(super) fn search_url(query: &Query) -> String {
     let mut url = format!(
         "{API}/search?facets={}&index={}&offset={}&limit={}",
         encode(&facets(query)),
-        if query.text.is_empty() {
-            "downloads"
-        } else {
-            "relevance"
-        },
+        query.filters.sort(&query.text).modrinth(),
         query.offset,
         query.limit.clamp(1, 100),
     );
@@ -126,6 +149,7 @@ pub(super) fn parse_version(v: &Value) -> Option<Version> {
                 name: f["filename"].as_str()?.to_owned(),
                 size: f["size"].as_u64().unwrap_or(0),
                 sha512: f["hashes"]["sha512"].as_str().map(str::to_ascii_lowercase),
+                sha256: None,
                 sha1: f["hashes"]["sha1"].as_str().map(str::to_ascii_lowercase),
                 primary: f["primary"].as_bool().unwrap_or(false),
             })
@@ -150,18 +174,33 @@ pub(super) fn parse_version(v: &Value) -> Option<Version> {
     })
 }
 
+/// The files of one version (`GET /version/{id}`), with their downloads and checksums.
+pub fn version_files(version: &str) -> Result<Vec<FileRef>, String> {
+    let v = get(&format!("{API}/version/{}", encode(version)))?;
+    parse_version(&v)
+        .map(|v| v.files)
+        .ok_or_else(|| format!("Modrinth: no version {version}."))
+}
+
 impl Source for Modrinth {
     fn id(&self) -> SourceId {
         SourceId::Modrinth
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
+        if query.kind == Kind::Shader {
+            return Err(super::SHADERS_ON_HORIZON.into());
+        }
         let found = get(&search_url(query))?;
         Ok(found["hits"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(parse_hit)
+            .map(|p| match query.kind {
+                Kind::DataPack => p.as_datapack(),
+                _ => p,
+            })
             .collect())
     }
 
@@ -183,10 +222,39 @@ impl Source for Modrinth {
         all.sort_by(|a, b| b.published.cmp(&a.published));
         Ok(all)
     }
+
+    fn details(&self, project: &Project) -> Result<details::Details, String> {
+        let id = encode(&project.id);
+        let p = get(&format!("{API}/project/{id}"))?;
+        let members = get(&format!("{API}/project/{id}/members")).unwrap_or_default();
+        Ok(details::modrinth_details(&p, &members))
+    }
+
+    fn tags(&self, kind: Kind) -> Result<details::Tags, String> {
+        static TAGS: std::sync::Mutex<Option<(Value, Value, Value)>> = std::sync::Mutex::new(None);
+        let mut cached = TAGS.lock().map_err(|_| "tags".to_string())?;
+        if cached.is_none() {
+            *cached = Some((
+                get(&format!("{API}/tag/category"))?,
+                get(&format!("{API}/tag/loader"))?,
+                get(&format!("{API}/tag/game_version"))?,
+            ));
+        }
+        let (c, l, v) = cached.as_ref().expect("filled above");
+        // Data packs share the mods' categories; their one loader is `datapack`.
+        let mut tags = match kind {
+            Kind::DataPack => details::modrinth_tags("mod", c, l, v),
+            _ => details::modrinth_tags(project_type(kind), c, l, v),
+        };
+        if kind == Kind::DataPack {
+            tags.loaders.clear();
+        }
+        Ok(tags)
+    }
 }
 
 fn get(url: &str) -> Result<Value, String> {
-    let response = super::download::agent()
+    let response = super::download::agent(url)
         .get(url)
         .call()
         .map_err(|e| match e {

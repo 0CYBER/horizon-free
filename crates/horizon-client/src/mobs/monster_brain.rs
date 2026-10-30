@@ -11,9 +11,10 @@
 //! seeded when the brain is built.
 use super::{
     Mob, MobEvent, MobWorld, Species, Who,
+    brain::{Timed, living_near},
     goals::Cx,
     path::Path,
-    villager_brain::{NEVER, Slot, Tracker, Visible, WalkTarget},
+    villager_brain::{NEVER, Slot, Tracker, Visible, WalkTarget, compute_path, reached},
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{
@@ -128,6 +129,10 @@ fn brain_mut(m: &mut Mob) -> &mut Brain {
 }
 fn mem(m: &mut Mob) -> &mut Memories {
     &mut brain_mut(m).mem
+}
+/// `CANT_REACH_WALK_TARGET_SINCE`, for `compute_path`.
+fn cant_reach(m: &mut Mob) -> &mut Slot<i64> {
+    &mut mem(m).cant_reach_walk_target_since
 }
 fn mem_ref(m: &Mob) -> &Memories {
     &brain(m).expect("brain").mem
@@ -250,10 +255,6 @@ pub fn nearest_players(m: &Mob) -> Vec<Who> {
         .and_then(|b| b.mem.nearest_players.value())
         .unwrap_or_default()
 }
-/// The damage the brain remembers (`HURT_BY`).
-pub fn hurt_by_present(m: &Mob) -> bool {
-    brain(m).is_some_and(|b| b.mem.hurt_by.present())
-}
 /// `HURT_BY`'s damage source entity, if a living one.
 fn hurt_by_entity(m: &Mob, w: &MobWorld) -> Option<Who> {
     let t = brain(m)?.mem.hurt_by.value()?;
@@ -296,22 +297,7 @@ fn tick_sensors(m: &mut Mob, w: &MobWorld) {
 /// `NearestLivingEntitySensor`: everything alive within the follow range,
 /// nearest first.
 fn sense_living(m: &mut Mob, w: &MobWorld) {
-    let r = m.attrs.follow_range;
-    let area = m.bounds().inflate(Vec3::new(r, r, r));
-    let mut found: Vec<(Who, f64)> = Vec::new();
-    for o in w.others {
-        if o.id != m.id && o.alive && o.bounds.intersects(area) {
-            found.push((Who::Mob(o.id), m.distance_sqr(o.position)));
-        }
-    }
-    if let Some(p) = &w.player
-        && p.alive
-        && p.bounds.intersects(area)
-    {
-        found.push((Who::Player, m.distance_sqr(p.position)));
-    }
-    found.sort_by(|a, b| a.1.total_cmp(&b.1));
-    let list: Vec<Who> = found.into_iter().map(|(w, _)| w).collect();
+    let list = living_near(m, w);
     let mm = mem(m);
     mm.mobs.set_list(list.clone());
     mm.visible_mobs.set(Visible {
@@ -373,11 +359,14 @@ fn can_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
 /// `Sensor.isEntityAttackable`: `TargetingConditions.forCombat()` within the
 /// follow range, in sight.
 fn attackable(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
+    // The current ATTACK_TARGET is tested with ignoreInvisibilityTesting.
+    let current = mem_ref(m).attack_target.value() == Some(who);
     let range = m.attrs.follow_range;
     if !can_attack(m, w, who) {
         return false;
     }
     match who {
+        Who::Player if current => m.can_keep_target_player(w, range),
         Who::Player => m.can_target_player(w, range, true),
         Who::Mob(id) => {
             let Some(s) = w.seen(id) else { return false };
@@ -459,31 +448,6 @@ fn sense_breeze_attack(m: &mut Mob, w: &MobWorld) {
 }
 
 // ---- Behaviours ---------------------------------------------------------
-
-/// `Behavior`'s bookkeeping: running, and until when.
-#[derive(Clone, Debug)]
-struct Timed {
-    running: bool,
-    end: i64,
-    min: i32,
-    max: i32,
-}
-impl Timed {
-    fn new(min: i32, max: i32) -> Self {
-        Self {
-            running: false,
-            end: 0,
-            min,
-            max,
-        }
-    }
-    /// `Behavior.tryStart`'s duration draw from the level random.
-    fn begin(&mut self, cx: &mut Bx) {
-        self.running = true;
-        let d = self.min + cx.lr.next_int_bound(self.max + 1 - self.min).unwrap_or(0);
-        self.end = cx.now + i64::from(d);
-    }
-}
 
 /// `StartAttacking`'s target finders.
 #[derive(Clone, Copy, Debug)]
@@ -611,14 +575,14 @@ impl B {
                 if *creaking && !super::creaking::can_move(m) || !swim_condition(m) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::LookAtTargetSink(t) => {
                 if !mem(m).look_target.present() {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::MoveToTargetSink {
@@ -640,12 +604,12 @@ impl B {
                 }
                 let walk = mm.walk_target.value().unwrap();
                 let reached = reached(m, cx.w, &walk);
-                if !reached && compute_path(m, cx, &walk, path, speed) {
+                if !reached && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                     *last_target = walk.target.block(cx.w);
-                    t.begin(cx);
+                    t.begin(cx.lr, cx.now);
                     // start
                     mem(m).path.set_opt(path.clone());
-                    m.nav_move_to_path(path.clone(), f64::from(*speed));
+                    m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     if *slide {
                         // SlideToTargetSink.start
                         let at = m.center();
@@ -716,14 +680,14 @@ impl B {
                             .is_some_and(|l| l.contains(&Who::Player));
                     !reachable
                 };
-                if !(can_attack(m, cx.w, target) && !tired && alive && !stop_when) {
+                if !can_attack(m, cx.w, target) || tired || !alive || stop_when {
                     set_attack_target(m, None);
                 }
                 *running = true;
                 true
             }
             B::DoNothing(t) => {
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::RandomStroll(running, speed) => {
@@ -819,6 +783,7 @@ impl B {
                 m.swing();
                 let mut gcx = Cx {
                     w,
+                    lr: cx.lr,
                     events: cx.events,
                 };
                 super::ai::do_hurt_target(m, target, &mut gcx);
@@ -852,7 +817,7 @@ impl B {
                     mem(m).breeze_shoot.clear();
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 // start
                 super::breeze::set_pose(m, super::breeze::SHOOTING);
                 mem(m).breeze_shoot_charging.set_ttl((), 15);
@@ -871,7 +836,7 @@ impl B {
                 if !long_jump_can_run(m, cx) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 // start
                 if !mem(m).breeze_jump_inhaling.present() {
                     mem(m).breeze_jump_inhaling.set_ttl((), 10);
@@ -909,7 +874,7 @@ impl B {
                 if !stuck {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 mem(m).breeze_shoot.set_ttl((), 60);
                 true
             }
@@ -928,7 +893,7 @@ impl B {
                 {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 slide_start(m, cx);
                 true
             }
@@ -993,10 +958,10 @@ impl B {
                     && let Some(now_target) = walk.target.block(cx.w)
                 {
                     let d = manhattan_sq(now_target, last);
-                    if d > 4 && compute_path(m, cx, &walk, path, speed) {
+                    if d > 4 && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                         *last_target = Some(now_target);
                         mem(m).path.set_opt(path.clone());
-                        m.nav_move_to_path(path.clone(), f64::from(*speed));
+                        m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     }
                 }
             }
@@ -1126,53 +1091,6 @@ fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {
         _ => true,
     }
 }
-/// `MoveToTargetSink.reachedTarget`.
-fn reached(m: &Mob, w: &MobWorld, walk: &WalkTarget) -> bool {
-    walk.target.block(w).is_some_and(|p| {
-        let h = block_of(m.position);
-        (p[0] - h[0]).abs() + (p[1] - h[1]).abs() + (p[2] - h[2]).abs() <= walk.close
-    })
-}
-/// `MoveToTargetSink.tryComputePath`.
-fn compute_path(
-    m: &mut Mob,
-    cx: &mut Bx,
-    walk: &WalkTarget,
-    path: &mut Option<Path>,
-    speed: &mut f32,
-) -> bool {
-    let Some(target) = walk.target.block(cx.w) else {
-        return false;
-    };
-    *path = m.create_path_to(cx.w, target, 0);
-    *speed = walk.speed;
-    if reached(m, cx.w, walk) {
-        mem(m).cant_reach_walk_target_since.clear();
-    } else {
-        let can_reach = path.as_ref().is_some_and(|p| p.reached);
-        let mm = mem(m);
-        if can_reach {
-            mm.cant_reach_walk_target_since.clear();
-        } else if !mm.cant_reach_walk_target_since.present() {
-            mm.cant_reach_walk_target_since.set(cx.now);
-        }
-        if path.is_some() {
-            return true;
-        }
-        let to = [
-            f64::from(target[0]) + 0.5,
-            f64::from(target[1]),
-            f64::from(target[2]) + 0.5,
-        ];
-        if let Some(step) =
-            m.default_random_pos_towards(cx.w, 10, 7, to, f64::from(std::f32::consts::FRAC_PI_2))
-        {
-            *path = m.create_path_to(cx.w, block_of(Vec3::new(step[0], step[1], step[2])), 0);
-            return path.is_some();
-        }
-    }
-    false
-}
 /// `BehaviorUtils.isWithinAttackRange(body, target, 1)` for a mob without a
 /// ranged weapon: `Mob.isWithinMeleeAttackRange`.
 fn within_attack_range(m: &Mob, w: &MobWorld, target: Who) -> bool {
@@ -1223,6 +1141,7 @@ struct Quarry {
     position: Vec3,
     head_yaw: f32,
     height: f64,
+    passenger: bool,
 }
 fn quarry(w: &MobWorld, who: Who) -> Option<Quarry> {
     let t = w.target_info(who)?;
@@ -1234,6 +1153,7 @@ fn quarry(w: &MobWorld, who: Who) -> Option<Quarry> {
         position: t.position,
         head_yaw,
         height: t.bounds.max_position().y - t.bounds.min_position().y,
+        passenger: t.passenger,
     })
 }
 /// `BreezeUtil.randomPointBehindTarget`.
@@ -1319,7 +1239,8 @@ fn shoot_tick(m: &mut Mob, cx: &mut Bx) {
     let firing = super::breeze::firing_y(m);
     let (xd, yd, zd) = (
         q.position.x - m.position.x,
-        q.position.y + q.height * 0.3 - firing,
+        // target.getY(target.isPassenger() ? 0.8 : 0.3).
+        q.position.y + q.height * if q.passenger { 0.8 } else { 0.3 } - firing,
         q.position.z - m.position.z,
     );
     let start = Vec3::new(m.position.x, firing, m.position.z);
@@ -1328,14 +1249,19 @@ fn shoot_tick(m: &mut Mob, cx: &mut Bx) {
         start,
         Some(Who::Mob(m.id)),
     );
-    // The new entity's own random spreads the shot (5 - difficulty * 4 at
-    // normal): not the breeze's.
+    // The new entity's own random spreads the shot (5 - difficulty id * 4):
+    // not the breeze's.
     let mut own = LegacyRandom::new(
         cx.now
             .wrapping_mul(0x5DEE_CE66)
             .wrapping_add(i64::from(m.id)),
     );
-    p.shoot(&mut own, [xd, yd, zd], 0.7, -3.0);
+    p.shoot(
+        &mut own,
+        [xd, yd, zd],
+        0.7,
+        5.0 - f32::from(cx.w.difficulty.id) * 4.0,
+    );
     cx.events.push(MobEvent::Projectile(p));
     breeze_sound(m, cx, "entity.breeze.shoot", 1.5);
 }

@@ -7,6 +7,11 @@ Until 0.2 the game was tagged by date (`v2026.10.19.15`) and the launcher counte
 From 0.2 both follow [semantic versioning](https://semver.org) and share one release line: **Horizon 0.2.x** is the
 game and the launcher of the 0.2 line.
 
+**Since 2026-10-28 the game ships only Nightlies** ([release-flow.md](release-flow.md#nightly-only)): no new `vX.Y.Z`
+game tag is made, and a game build is named `nightly-<date>-<commit>` (its release title, "Nightly <date> ·
+<commit>"), which launchers and servers rank after every `vX.Y.Z`. The launcher keeps its `launcher@X.Y.Z` tags on
+the release line. What follows describes the `vX.Y.Z` game tags as they were.
+
 ## Tags
 
 | | Game | Launcher |
@@ -22,9 +27,10 @@ game and the launcher of the 0.2 line.
   0.2. A `feature` label no longer bumps anything: it only lists the change under **New**.
 - **Patch releases** are every release the train makes: the patch after the newest release tagged on the line, game
   and launcher counted separately (the game releases more often, so `v0.2.14` can go with `launcher@0.2.3`).
-- **Betas** are not separate tags. As before, every game release is published as a GitHub pre-release (a beta) under
-  its final tag and promoted in place to stable after 6 hours ([Channels](release-flow.md#channels)). `v0.2.4` is
-  the same build whether it is still a beta or already stable.
+- **One channel** (since 2026-10-23): every game release is published under its final tag as the release and
+  GitHub's latest, once its smoke test passed and no `release-blocker` is open
+  ([One channel](release-flow.md#one-channel)). The game pre-releases from before (v0.2.1 on, the old Alpha
+  channel) keep their tags and stay pre-releases.
 - **Pre-release tags** (`v0.3.0-rc.1`, `v0.3.0-beta.2`) are semver's and are reserved for a hand-made preview of a
   new line; the train never makes them. Every reader orders them before their release and after the release
   before (`v0.2.9` < `v0.3.0-beta.1` < `v0.3.0-rc.1` < `v0.3.0`).
@@ -42,8 +48,8 @@ Every 0.2 tag is newer than every tag from before 0.2. Within each:
 A tag is a 0.2 tag when it is `v` or `launcher@` followed by exactly three numbers (and an optional `-PRE`) with a
 major below 1000; a date's first number is a year, so `v2026.10.21` never is. The rule is written once per
 language, with the same tests: `crates/horizon-server/src/update.rs` (`newer`), `launcher/src/backend.rs`
-(`release_order`), `tools/release_train.py` (`tag_key`, also used by `tools/release_channels.py`) and
-`website/src/versions.js`.
+(`release_order`), `tools/release_train.py` (`tag_key`) and
+the website's `src/versions.js` (horizon-rust/horizon-site).
 
 ## The workflows
 
@@ -54,9 +60,6 @@ language, with the same tests: `crates/horizon-server/src/update.rs` (`newer`), 
 - **`launcher.yml`**: `decide --kind launcher` picks `launcher@0.2.N`; the build gets `HORIZON_LAUNCHER_VERSION`
   (`0.2.N`) and `HORIZON_LAUNCHER_TAG` (`launcher@0.2.N`). The tag tells the launcher which line it is on: a release
   built with only the version (every launcher before 0.2) is a `launcher-v` one.
-- **`promote.yml`**: `tools/release_channels.py` promotes the newest due beta, never one older than the stable
-  release; with the shared order, `v0.2.0` follows the last dated stable release and no dated beta can follow
-  `v0.2.0`.
 - **Notes**: a line's first release (`X.Y.0`) opens with a paragraph saying so; `v0.2.0`'s and `launcher@0.2.0`'s say
   that releases are numbered from now on, and tell server owners to run `horizon-server update` (or, if their server
   says it is up to date, `horizon-server update --version v0.2.0`).
@@ -97,6 +100,9 @@ the fleet's `release-kick` and the orchestrator's heartbeat prompts.
 
 ## The day Ludovic says go
 
+Done on 2026-10-22; kept as the record of how 0.2 went out. `promote.yml` and `tools/release_channels.py`, which
+it uses, are gone since the single channel (2026-10-23, [One channel](release-flow.md#one-channel)).
+
 Run by the orchestrator, in this order. Until step 3, nothing is published.
 
 1. Merge, in order: this page, the `horizon-server update` order, the launcher order, the release line (train,
@@ -124,8 +130,9 @@ Run by the orchestrator, in this order. Until step 3, nothing is published.
 4. Let the game bridge become stable on its normal schedule: about 6 hours after it was published, the promote run
    makes it *latest*. Do not force it (`promote` with `force=true`): it carries about 43 player-facing pull requests
    from the freeze and needs its beta like any release. Check it is *latest*:
-   `gh api repos/ludovic111/horizon/releases/latest --jq .tag_name`.
-5. Only then mark the switch pull request (#1132) ready and merge it (`.github/release-line.txt` = `0.2`, and the
+   `gh api repos/horizon-rust/horizon/releases/latest --jq .tag_name`.
+5. Only then merge the update channels pull request (the launcher's Stable and Alpha, the daily promotion), then
+   mark the switch pull request (#1132) ready and merge it (`.github/release-line.txt` = `0.2`, and the
    docs that talk about 0.2). On the next run, about 10 minutes, the train publishes `v0.2.0` as a beta and
    `launcher@0.2.0`, both "the first release of 0.2", built from the same code as the bridges plus that pull request.
 6. Check the way over from an old launcher, in a scratch folder:
@@ -135,7 +142,8 @@ Run by the orchestrator, in this order. Until step 3, nothing is published.
    # with launcher-v0.17.0's binary:  update --check --json  ->  "launcher": "0.2.0", "horizon": "v0.2.0" (with Beta builds on)
    ```
    and `gh release view v0.2.0 --json assets`, `horizon-server --version` in the Linux server archive.
-7. `v0.2.0` becomes stable after 6 hours (or `gh workflow run promote -f tag=v0.2.0`). While it is a beta, *latest*
+7. `v0.2.0` becomes stable in the first daily promotion (20:00 UTC) it has been out 6 hours for (or
+   `gh workflow run promote -f tag=v0.2.0`). While it is a beta, *latest*
    stays the bridge, so keeping it in beta for longer catches more servers (Ludovic's call). From then on everything
    is automatic again: `v0.2.1`, `launcher@0.2.1`, ….
 8. Point Kira, `release-kick` and the heartbeat prompts at the new tags (outside this repository).

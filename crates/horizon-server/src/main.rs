@@ -10,6 +10,9 @@ mod http;
 mod init;
 mod lists;
 mod panel;
+mod process;
+#[cfg(test)]
+mod reference;
 mod service;
 mod settings;
 mod signals;
@@ -17,6 +20,13 @@ mod supervisor;
 mod update;
 
 use std::{path::PathBuf, process::ExitCode};
+
+/// This release's version: release.yml builds it with `HORIZON_VERSION` from the tag
+/// (docs/versioning.md); a build from source says Cargo.toml's.
+const VERSION: &str = match option_env!("HORIZON_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};
 
 const HELP: &str = "\
 horizon-server: host a Horizon (Minecraft Java Edition 26.3) server
@@ -34,6 +44,9 @@ Usage: horizon-server [--dir DIR] <command>
               Up or not, TPS, MSPT, players, RAM and CPU
   cmd COMMAND...
               Run a console command on the running server and print what it answers
+  report [SECONDS]
+              Record a performance report for SECONDS (default 60): where the ticks' time goes,
+              entities, chunks, network, memory; saved in reports/ (JSON and text, no player data)
   logs [-f] [-n N]
               The last N lines of the log (default 50); -f follows it
   backup [NAME]
@@ -86,7 +99,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some("version" | "-V" | "--version") => {
-            println!("horizon-server {}", env!("CARGO_PKG_VERSION"));
+            println!("horizon-server {VERSION}");
             Ok(())
         }
         Some("init") => init_answers(&args[1..]).and_then(|a| init::run(&dir, a)),
@@ -96,6 +109,7 @@ fn main() -> ExitCode {
         Some("restart") => cli::stop(&dir, true),
         Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
         Some("cmd") => cli::command(&dir, &args[1..]),
+        Some("report") => cli::report(&dir, &args[1..]),
         Some("logs") => logs(&dir, &args[1..]),
         Some("panel") => cli::panel(&dir),
         Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),

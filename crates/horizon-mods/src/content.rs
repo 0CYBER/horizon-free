@@ -11,7 +11,7 @@
 use crate::manifest::{Capability, MANIFEST, Manifest};
 use serde::Deserialize;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::Read,
     path::{Path, PathBuf},
 };
@@ -75,12 +75,23 @@ pub struct BlockProperties {
     pub sounds: Option<String>,
 }
 
+/// Per-state outline and collision boxes, selected by one state property.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BlockShapes {
+    pub property: String,
+    pub values: BTreeMap<String, Vec<[f64; 6]>>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BlockFile {
     template: String,
     #[serde(default)]
     properties: BlockProperties,
+    shapes: Option<BlockShapes>,
+    #[serde(default)]
+    default_state: BTreeMap<String, String>,
     #[serde(default = "yes")]
     item: bool,
 }
@@ -97,6 +108,9 @@ pub struct Block {
     /// The vanilla block it copies, `minecraft:<path>`.
     pub template: String,
     pub properties: BlockProperties,
+    pub shapes: Option<BlockShapes>,
+    /// State properties overlaid on the template default.
+    pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
 }
@@ -116,6 +130,8 @@ struct ItemFile {
     template: String,
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
+    #[serde(default)]
+    components: BTreeMap<String, serde_json::Value>,
 }
 
 /// An item the mod adds: a vanilla template item's components under a new
@@ -127,6 +143,8 @@ pub struct Item {
     pub template: String,
     pub max_stack_size: Option<u8>,
     pub rarity: Option<Rarity>,
+    /// A 26.3 data component patch over the template's: `!minecraft:<type>` removes one.
+    pub components: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -145,6 +163,33 @@ pub struct Content {
     pub items: Vec<Item>,
     /// The namespaces it owns: the mod id, then the manifest's `namespaces`.
     pub namespaces: Vec<String>,
+}
+
+/// Reads a mod's content files ([`Content::reader`]).
+pub enum FileReader<'a> {
+    Dir(&'a Path),
+    Zip(Box<zip::ZipArchive<std::fs::File>>),
+}
+impl FileReader<'_> {
+    /// One content file's bytes.
+    pub fn read(&mut self, name: &str) -> Result<Vec<u8>, String> {
+        check_path(name)?;
+        let reader: Box<dyn Read + '_> = match self {
+            Self::Dir(root) => {
+                Box::new(std::fs::File::open(root.join(name)).map_err(|e| format!("{name}: {e}"))?)
+            }
+            Self::Zip(zip) => Box::new(zip.by_name(name).map_err(|e| format!("{name}: {e}"))?),
+        };
+        let mut out = Vec::new();
+        reader
+            .take(MAX_FILE + 1)
+            .read_to_end(&mut out)
+            .map_err(|e| format!("{name}: {e}"))?;
+        if out.len() as u64 > MAX_FILE {
+            return Err(format!("{name} is over {} MiB", MAX_FILE >> 20));
+        }
+        Ok(out)
+    }
 }
 
 /// Why two content mods cannot be on together: a namespace both own (one's
@@ -222,29 +267,16 @@ impl Content {
 
     /// One content file's bytes.
     pub fn file(&self, name: &str) -> Result<Vec<u8>, String> {
-        check_path(name)?;
-        let mut out = Vec::new();
-        match &self.source {
-            Source::Dir(root) => {
-                let file =
-                    std::fs::File::open(root.join(name)).map_err(|e| format!("{name}: {e}"))?;
-                file.take(MAX_FILE + 1)
-                    .read_to_end(&mut out)
-                    .map_err(|e| format!("{name}: {e}"))?;
-            }
-            Source::Zip(path) => {
-                let mut zip = open_zip(path)?;
-                let entry = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
-                entry
-                    .take(MAX_FILE + 1)
-                    .read_to_end(&mut out)
-                    .map_err(|e| format!("{name}: {e}"))?;
-            }
-        }
-        if out.len() as u64 > MAX_FILE {
-            return Err(format!("{name} is over {} MiB", MAX_FILE >> 20));
-        }
-        Ok(out)
+        self.reader()?.read(name)
+    }
+
+    /// A reader of its content files. A packaged mod's archive is opened
+    /// once for all of them (opening it reads its whole index).
+    pub fn reader(&self) -> Result<FileReader<'_>, String> {
+        Ok(match &self.source {
+            Source::Dir(root) => FileReader::Dir(root),
+            Source::Zip(path) => FileReader::Zip(Box::new(open_zip(path)?)),
+        })
     }
 
     /// Where content may go, and the declarations.
@@ -315,6 +347,8 @@ impl Content {
                 id: block,
                 template: file.template,
                 properties: file.properties,
+                shapes: file.shapes,
+                default_state: file.default_state,
                 item: file.item,
             });
         }
@@ -330,6 +364,7 @@ impl Content {
             if file.max_stack_size.is_some_and(|n| !(1..=99).contains(&n)) {
                 return Err(format!("{name}: max_stack_size is 1 to 99"));
             }
+            check_components(&file.components).map_err(|e| format!("{name}: {e}"))?;
             if !ids.insert(item.clone()) {
                 return Err(format!("{name}: {item} is also a block's item"));
             }
@@ -338,10 +373,33 @@ impl Content {
                 template: file.template,
                 max_stack_size: file.max_stack_size,
                 rarity: file.rarity,
+                components: file.components,
             });
         }
         Ok(())
     }
+}
+
+/// Vanilla component types only, removals as `{}`, none the item file has its own key for.
+fn check_components(components: &BTreeMap<String, serde_json::Value>) -> Result<(), String> {
+    for (key, value) in components {
+        let (removed, kind) = match key.strip_prefix('!') {
+            Some(kind) => (true, kind),
+            None => (false, key.as_str()),
+        };
+        if !vanilla_id(kind) {
+            return Err(format!(
+                "component {key:?} is not a vanilla type (minecraft:...)"
+            ));
+        }
+        if let Some(own @ ("max_stack_size" | "rarity")) = kind.strip_prefix("minecraft:") {
+            return Err(format!("component {key:?}: set {own} instead"));
+        }
+        if removed && !value.as_object().is_some_and(|o| o.is_empty()) {
+            return Err(format!("component {key:?}: a removal's value is {{}}"));
+        }
+    }
+    Ok(())
 }
 
 fn check_block(file: &BlockFile) -> Result<(), String> {
@@ -350,6 +408,20 @@ fn check_block(file: &BlockFile) -> Result<(), String> {
             "template {:?} is not a vanilla block (minecraft:...)",
             file.template
         ));
+    }
+    if let Some(shapes) = &file.shapes {
+        if shapes.property.is_empty() || shapes.values.is_empty() {
+            return Err("shapes needs a property and values".into());
+        }
+        for boxes in shapes.values.values() {
+            if boxes.len() > 16
+                || boxes
+                    .iter()
+                    .any(|b| b.iter().any(|n| !n.is_finite()) || (0..3).any(|i| b[i] > b[i + 3]))
+            {
+                return Err("shape needs at most 16 finite boxes with ordered bounds".into());
+            }
+        }
     }
     let p = &file.properties;
     let finite = |v: Option<f32>| v.is_none_or(f32::is_finite);
@@ -457,6 +529,8 @@ capabilities = ["registries"]
             [Block {
                 id: "ruby:ruby_block".into(),
                 template: "minecraft:iron_block".into(),
+                shapes: None,
+                default_state: BTreeMap::new(),
                 properties: BlockProperties {
                     hardness: Some(4.0),
                     light: Some(3),
@@ -468,6 +542,29 @@ capabilities = ["registries"]
         );
         assert_eq!(content.items[0].id, "ruby:ruby");
         assert_eq!(content.items[0].rarity, Some(Rarity::Uncommon));
+        assert!(content.items[0].components.is_empty());
+    }
+
+    #[test]
+    fn items_patch_their_template_components() {
+        let sword = br#"{"template": "minecraft:iron_sword", "components": {
+            "minecraft:max_damage": 900,
+            "minecraft:attribute_modifiers": [{"type": "minecraft:attack_damage",
+                "id": "minecraft:base_attack_damage", "amount": 7.0,
+                "operation": "add_value", "slot": "mainhand"}],
+            "!minecraft:repairable": {}}}"#;
+        let files: &[(&str, &[u8])] = &[("data/ruby/horizon/item/ruby_sword.json", sword)];
+        let content = hmod("components", MANIFEST_TEXT, files).unwrap();
+        let components = &content.items[0].components;
+        assert_eq!(
+            components.keys().collect::<Vec<_>>(),
+            [
+                "!minecraft:repairable",
+                "minecraft:attribute_modifiers",
+                "minecraft:max_damage"
+            ]
+        );
+        assert_eq!(components["minecraft:max_damage"], 900);
     }
 
     #[test]
@@ -526,6 +623,15 @@ capabilities = ["registries"]
                 br#"{"template": "minecraft:stone", "glow": true}"#,
             )],
         );
+        refused("shape-reversed", &[("data/ruby/horizon/block/a.json", br#"{"template":"minecraft:stone","shapes":{"property":"axis","values":{"x":[[1,0,0,0,1,1]]}}}"#)]);
+        refused("shape-malformed", &[("data/ruby/horizon/block/a.json", br#"{"template":"minecraft:stone","shapes":{"property":"axis","values":{"x":[[0,0,0,1,1]]}}}"#)]);
+        refused(
+            "shape-no-values",
+            &[(
+                "data/ruby/horizon/block/a.json",
+                br#"{"template":"minecraft:stone","shapes":{"property":"axis","values":{}}}"#,
+            )],
+        );
         let e = refused(
             "clash",
             &[
@@ -542,6 +648,37 @@ capabilities = ["registries"]
                 br#"{"template": "minecraft:stick", "max_stack_size": 100}"#,
             )],
         );
+        for (case, components, why) in [
+            (
+                "modded-component",
+                r#"{"ruby:mana": 3}"#,
+                "not a vanilla type",
+            ),
+            (
+                "bare-component",
+                r#"{"max_damage": 3}"#,
+                "not a vanilla type",
+            ),
+            (
+                "own-key",
+                r#"{"minecraft:rarity": "epic"}"#,
+                "set rarity instead",
+            ),
+            (
+                "own-removal",
+                r#"{"!minecraft:max_stack_size": {}}"#,
+                "set max_stack_size",
+            ),
+            (
+                "removal-value",
+                r#"{"!minecraft:food": true}"#,
+                "a removal's value is {}",
+            ),
+        ] {
+            let item = format!(r#"{{"template": "minecraft:stick", "components": {components}}}"#);
+            let e = refused(case, &[("data/ruby/horizon/item/a.json", item.as_bytes())]);
+            assert!(e.contains(why), "{case}: {e}");
+        }
     }
 
     #[test]

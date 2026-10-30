@@ -95,6 +95,19 @@ def scripted(s):
     s.tick(5)
     s.add('stopall')
     s.tick(5)
+    # Joining a world: the menu-like track plays, Minecraft.setLevel stops every
+    # sound, and the game music (not replacing) waits its own delay; a respawn
+    # into another dimension then stops the music manager's track too.
+    s.add('start', 11, 'DEFAULT')
+    s.situation(end, 20, 600, 1)
+    s.tick(110)
+    s.add('stopall')
+    s.situation(water, 12000, 24000, 0)
+    s.tick(3, loading=1)
+    s.tick(5)
+    s.add('stopall')
+    s.add('stop')
+    s.tick(5)
     # Events that cannot play.
     for event in ODD:
         s.add('start', 7, 'DEFAULT')
@@ -154,7 +167,7 @@ def main():
         'music', 'VanillaMusicOracle', 'music_fixture', ''.join(l + '\n' for l in lines),
         extra_sources=[h.lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSoundRig.java',
                        h.lab.ROOT / 'crates/horizon-client/src/music.rs',
-                       h.lab.ROOT / 'crates/horizon-client/examples/audio_common/mod.rs'],
+                       h.lab.ROOT / 'crates/horizon-client/examples/probe/audio_common/mod.rs'],
         java_args=[h.RESOURCES], rust_args=[h.RESOURCES],
         scope='Real MusicManager.tick/startPlaying/stopPlaying/fadePlaying/setMinutesBetweenSongs/showNowPlayingToastIfNeeded with a seeded '
               'random over the real SoundEngine: track starts and replacements, nextSongDelay draws, the three music frequencies, the loading '

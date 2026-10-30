@@ -17,21 +17,31 @@ stops; Horizon's (`horizon-client --dedicated --nogui`) creates its own from
 the same server.properties and stops; the `spawn` position of both
 level.dat files is compared.
 
-Vanilla is not deterministic everywhere: trees of neighbouring chunks
-overlap on chunk corners, and which one is placed last depends on the order
-the server's worker threads decorate the chunks. A spawn column on such a
-corner can then stand on different leaves from one vanilla run to the next.
-When the spawns differ, vanilla creates the world up to RETRIES more times;
-Horizon's spawn passes if one of vanilla's runs gives it too, and the seed is
-reported as varying in vanilla.
+Trees of neighbouring chunks overlap on chunk corners, and which one is
+placed first depends on the order the chunks are decorated. With several
+worker threads vanilla's order changes from run to run (seed
+-2080727421395798566 spawned at Y 64, 66 or 72), so its server runs with one
+(`-Dmax.bg.threads`, Util.maxAllowedExecutorThreads): the chunks are then
+decorated in its scheduler's order, the one Horizon follows
+(decoration_order::vanilla_order), and every run gives the same spawn.
 
 Seeds: the player report's seed (1891623539983467248: Horizon spawned at
 -48 -48, vanilla at 152 145), the chunk generation harness's seeds and
 --random seeds from a fixed generator.
 
+tools/parity.py runs it in PARITY_SHARDS parts, each creating the worlds of
+every PARITY_SHARDS-th seed: each seed is a vanilla and a Horizon server start,
+~15 s, and 60 seeds in one run were the longest harness (~25 min).
+
+Under tools/parity.py's oracle reuse (not --fresh or --all) a seed's vanilla
+spawn is kept and reused: vanilla's server is ~11 s of a seed's ~13 s, and its
+spawn depends only on what the key holds (see vanilla_cache). tools/parity_shim.py
+can't do it: a server's console is a pipe, and it never caches those runs.
+
 usage: test_world_spawn_parity.py [--random N] [--jobs N] [--origins-only]
 """
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -43,18 +53,19 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
-    from . import anvil_dump, lab, oracle_harness as oh, test_rust_parity as base
+    from . import anvil_dump, lab, oracle_harness as oh, parity_shard, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port
 except ImportError:
     import anvil_dump
     import lab
     import oracle_harness as oh
+    import parity_shard
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, free_port
 
 NAME = 'world-spawn-parity'
+PARITY_SHARDS = 4
 REPORT = 1891623539983467248
-RETRIES = 3
 SEEDS = [REPORT, 12345, -7046029254386353131, 987654321987, 4242, -1, 0x5DEECE66D, 20260607, 777, 0]
 RESOURCES = lab.RESOURCES
 
@@ -64,21 +75,46 @@ def seeds(count):
     return SEEDS + [rng.randrange(-2**63, 2**63) for _ in range(count)]
 
 
-def target_dir():
+def target_dir(profile='release'):
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    return Path(metadata['target_directory']) / 'release'
+    return Path(metadata['target_directory']) / profile
 
 
 def origins(build, classes, dependencies, all_seeds):
     vanilla_out = build / 'origins-vanilla.txt'
     oh.run_logged(['java', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaWorldSpawnOracle',
                    vanilla_out, *all_seeds], build, 'origins-vanilla')
-    rust = subprocess.run([target_dir() / 'examples/spawn_origin', RESOURCES, *map(str, all_seeds)],
+    rust = subprocess.run([target_dir() / 'examples/world_probe', 'spawn_origin', RESOURCES, *map(str, all_seeds)],
                           capture_output=True, text=True, check=True, cwd=lab.ROOT).stdout
     vanilla = vanilla_out.read_text()
     parse = lambda text: {int(l.split()[0]): tuple(map(int, l.split()[1:])) for l in text.splitlines() if l}
     return parse(vanilla), parse(rust)
+
+
+def properties(seed):
+    """server.properties of a seed's world, without the port."""
+    return {'online-mode': 'false', 'level-seed': str(seed), 'view-distance': '4', 'simulation-distance': '4',
+            'pause-when-empty-seconds': '-1'}
+
+
+def vanilla_cache(lock, command, classpath):
+    """A function giving the file that keeps a seed's vanilla spawn, or None when every vanilla world is created.
+
+    Only under tools/parity.py's oracle reuse (PARITY_SHIM_CACHE; a harness failing on reused results is rerun
+    without it). The key holds what vanilla's spawn depends on: the server jar (verify_artifacts checked it and its
+    libraries against the lock), the JDK, the server's command line and the seed's server.properties."""
+    root = os.environ.get('PARITY_SHIM_CACHE')
+    if not root or os.environ.get('PARITY_JAVA_CACHE') == '0':
+        return None
+    java = subprocess.run(['java', '-version'], capture_output=True, text=True, check=True).stderr
+    server = {'jar': lock['minecraft']['server_sha1'], 'java': java,
+              'command': [part for part in command if part != classpath]}
+
+    def record(seed):
+        identity = json.dumps({**server, 'properties': properties(seed)}, sort_keys=True)
+        return Path(root) / f'world-spawn-{hashlib.sha256(identity.encode()).hexdigest()}.json'
+    return record
 
 
 def world_spawn(command, directory, seed, log_name):
@@ -86,8 +122,7 @@ def world_spawn(command, directory, seed, log_name):
     if directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True)
-    props = {'online-mode': 'false', 'level-seed': str(seed), 'server-port': str(free_port()),
-             'view-distance': '4', 'simulation-distance': '4', 'pause-when-empty-seconds': '-1'}
+    props = {**properties(seed), 'server-port': str(free_port())}
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()), encoding='iso-8859-1')
     (directory / 'eula.txt').write_text('eula=true\n')
     server = Server(command, directory, log_name)
@@ -108,7 +143,7 @@ def main():
     parser.add_argument('--seed', type=int, action='append', help='only these seeds (repeatable)')
     args = parser.parse_args()
     lock, jars, libraries = base.verify_artifacts()
-    build = lab.LOCAL / NAME
+    build = lab.LOCAL / NAME / parity_shard.label()  # shards run at once
     build.mkdir(parents=True, exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     classes = build / 'classes'
@@ -116,8 +151,8 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-cp', dependencies,
                    '-d', classes, lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaWorldSpawnOracle.java'],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'spawn_origin'], build, 'compile-probe')
-    all_seeds = args.seed or seeds(args.random)
+    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'world_probe'], build, 'compile-probe')
+    all_seeds = parity_shard.shard(args.seed or seeds(args.random))
     started = time.time()
 
     vanilla, rust = origins(build, classes, dependencies, all_seeds)
@@ -129,38 +164,47 @@ def main():
     if args.origins_only:
         sys.exit(1 if origin_diffs else 0)
 
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
                   'compile-rust', timeout=3600)
-    binary = target_dir() / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
-    vanilla_server = ['java', '-Xmx2g', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
+    binary = target_dir('fast') / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    # One worker thread: the chunks decorated in a fixed order (see above).
+    vanilla_server = ['java', '-Xmx2g', '-Dmax.bg.threads=1', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', RESOURCES, '--dedicated', '--nogui']
-    os.environ['HORIZON_NO_AUDIO'] = '1'
+    os.environ.update(lab.game_env())
+    cached = vanilla_cache(lock, vanilla_server, dependencies)
+    reused = []
+
+    def vanilla_spawn(seed):
+        record = cached and cached(seed)
+        if record and record.exists():
+            reused.append(seed)
+            return tuple(json.loads(record.read_text()))
+        spawn = world_spawn(vanilla_server, build / f'vanilla-{seed}', seed, f'vanilla-{seed}')
+        if record:
+            temporary = record.with_suffix(f'.{os.getpid()}.tmp')
+            temporary.write_text(json.dumps(spawn))
+            temporary.replace(record)
+        return spawn
 
     def one(seed):
         t0 = time.time()
-        a = world_spawn(vanilla_server, build / f'vanilla-{seed}', seed, f'vanilla-{seed}')
+        a = vanilla_spawn(seed)
         b = world_spawn(horizon_server, build / f'horizon-{seed}', seed, f'horizon-{seed}')
-        runs = [a]
-        while b not in runs and len(runs) <= RETRIES:
-            runs.append(world_spawn(vanilla_server, build / f'vanilla-{seed}-{len(runs)}', seed, f'vanilla-{seed}-{len(runs)}'))
-        return seed, runs, b, time.time() - t0
+        return seed, a, b, time.time() - t0
 
-    spawn_diffs, varying = [], []
+    spawn_diffs = []
     with ThreadPoolExecutor(args.jobs) as pool:
-        for seed, runs, b, took in pool.map(one, all_seeds):
-            ok = b in runs
+        for seed, a, b, took in pool.map(one, all_seeds):
+            ok = a == b
             if not ok:
                 spawn_diffs.append(seed)
-            elif len(set(runs)) > 1:
-                varying.append(seed)
-            seen = ', '.join(' '.join(map(str, r)) for r in dict.fromkeys(runs))
-            print(f'{"ok  " if ok else "DIFF"} {seed}: vanilla {seen} / horizon {b[0]} {b[1]} {b[2]} '
+            print(f'{"ok  " if ok else "DIFF"} {seed}: vanilla {a[0]} {a[1]} {a[2]} / horizon {b[0]} {b[1]} {b[2]} '
                   f'(origin chunk {vanilla[seed][2]} {vanilla[seed][3]}; {took:.0f}s)', flush=True)
             if ok:
                 for path in build.glob(f'*-{seed}*'):
                     shutil.rmtree(path, ignore_errors=True)
     print(f'World spawns: {len(all_seeds) - len(spawn_diffs)}/{len(all_seeds)} seeds match in {time.time() - started:.0f}s'
-          + (f'; vanilla itself gave several spawns for {len(varying)}: {varying}' if varying else ''))
+          + (f' (vanilla reused for {len(reused)})' if reused else ''))
     if origin_diffs or spawn_diffs:
         sys.exit(1)
 

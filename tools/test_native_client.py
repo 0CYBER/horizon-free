@@ -47,6 +47,8 @@ def main():
     sources = [lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock', Path(__file__).resolve(),
                lab.ROOT / 'crates/horizon-client/Cargo.toml', lab.ROOT / 'crates/horizon-assets/Cargo.toml',
                *sorted((lab.ROOT / 'crates/horizon-client/src').rglob('*')),
+               lab.ROOT / 'crates/horizon-client-render/Cargo.toml',
+               *sorted((lab.ROOT / 'crates/horizon-client-render/src').rglob('*')),
                *sorted((lab.ROOT / 'crates/horizon-assets/src').rglob('*.rs'))]
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaGallerySelectionOracle.java'
     helper = oracle.with_name('VanillaCuboidModelOracle.java')
@@ -71,7 +73,7 @@ def main():
         str(executable), '--radius', '1', '--frames', '30',
         '--smoke-report', str(report), '--timeout-seconds', '60']
     with (root / 'startup-smoke.log').open('w') as log:
-        subprocess.run(command, cwd=lab.ROOT, env=environment, check=True,
+        subprocess.run(command, cwd=lab.ROOT, env=lab.game_env(environment), check=True,
                        stdout=log, stderr=subprocess.STDOUT, timeout=120)
     result = json.loads(report.read_text())
     if (result.get('error') is not None or result.get('presented_frames') != 30

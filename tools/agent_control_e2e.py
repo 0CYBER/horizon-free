@@ -8,9 +8,12 @@ small JSON-RPC client, and saves a screenshot of each run. The ui scenario drive
 widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
 the options scenario reads and sets options.txt values by key; the events scenario waits for
 states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
-golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
-pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
-the hotbar and from an item tab, and nothing in survival.
+golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport, then
+holds an eye of ender in use; the pick scenario middle-clicks slots (AbstractContainerScreen's
+cloning): a full stack in creative, from the hotbar and from an item tab, and nothing in survival;
+the suggestions scenario checks slash-command Tab completion on single player's connected client
+after a fresh launch; the no-ai scenario turns No AI on in a scratch game home and checks that
+horizon-ctl, its MCP server and the game's control socket all refuse.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -45,31 +48,41 @@ LOG_KINDS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', '
              'mangrove_log', 'cherry_log']
 # Positional arguments of the commands the scenario uses, for the CLI.
 POSITIONAL = {
+    'key': ['key', 'action'],
     'goto': ['x', 'y', 'z'], 'break': ['x', 'y', 'z'], 'place': ['x', 'y', 'z'], 'block': ['x', 'y', 'z'],
     'find_block': ['block', 'radius'], 'entities': ['radius', 'type'], 'click_slot': ['slot'],
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
     'command': ['command'], 'look_at_block': ['x', 'y', 'z'], 'click': ['id'], 'set': ['id', 'value'],
     'give': ['item', 'count'], 'options_get': ['keys'], 'options_set': ['key', 'value'],
-    'wait_for': ['condition', 'value'],
+    'wait_for': ['condition', 'value'], 'open': ['world', 'seed', 'mode'], 'select': ['slot'],
+    'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
+    'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
+    'world_rename': ['folder', 'name'], 'world_delete': ['folder'], 'mouse': ['button', 'action'],
 }
 # Booleans the game takes as bare words.
-BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift']}
+BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby']}
 
 
 class Failed(Exception):
     pass
 
 
-def game_env(screen):
+def game_env(screen, home=None):
+    """The environment of a game: lab.game_env with HORIZON_HOME `home` (a scratch folder when None), no live-count
+    ping, and on Linux the virtual screen `screen`."""
+    extra = {'HORIZON_TELEMETRY_URL': 'off'}  # no live-count ping from test games
+    if home is not None:
+        extra['HORIZON_HOME'] = home
     if sys.platform == 'darwin':
-        return dict(os.environ, HORIZON_NO_AUDIO='1')
-    env = dict(os.environ, VSCREEN=screen)
+        return lab.game_env(**extra)
+    if not shutil.which('vscreen') and os.environ.get('DISPLAY'):
+        return lab.game_env(**extra)
+    env = lab.game_env(VSCREEN=screen, **extra)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout
     env.pop('DISPLAY', None)
     for match in re.finditer(r'(\w+)=(\S+)', text.split('unset')[0]):
         env[match.group(1)] = match.group(2)
-    env['HORIZON_NO_AUDIO'] = '1'
     if LAVAPIPE.exists():
         env['VK_ICD_FILENAMES'] = str(LAVAPIPE)
     return env
@@ -227,11 +240,18 @@ def scenario(d, out):
         raise Failed('no reachable tree near spawn')
     assert broke['block_before'].startswith(log_id), broke
     assert broke['drops'].get(log_id, 0) >= 1, broke
-    if broke['picked_up'].get(log_id, 0) < 1:
+    # On a client of a server (single player's server thread) the drop and its pickup both come from
+    # the server a few ticks later: wait for the logs in the inventory, or walk to the drop.
+    for _ in range(20):
+        if broke['picked_up'].get(log_id, 0) >= 1 or d('inventory')['counts'].get(log_id, 0) >= 1:
+            break
         items = d('entities', radius=8, type='item')['entities']
-        drop = next(e for e in items if e['item']['item'] == log_id)
-        d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
-        d('wait', ticks=10)
+        drop = next((e for e in items if e['item']['item'] == log_id), None)
+        if drop is not None:
+            d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
+            d('wait', ticks=10)
+            break
+        d('wait', ticks=1)
     inventory = d('inventory')
     assert inventory['counts'].get(log_id, 0) >= 1, inventory
 
@@ -244,29 +264,38 @@ def scenario(d, out):
     d('click_slot', slot=log_slot)           # pick up the logs
     d('click_slot', slot=100, right=True)    # put one in the crafting grid
     d('click_slot', slot=log_slot)           # put the rest back
+    d('wait', ticks=2)                       # the server crafts the result (single player's server thread)
     result = next(s for s in d('screen')['slots'] if s['slot'] == 200)
     assert result.get('item') == planks_id and result['count'] == 4, result
     d('click_slot', slot=200, shift=True)    # craft into the inventory
     d('close')
+    d('wait', ticks=2)
     inventory = d('inventory')
     assert inventory['counts'].get(planks_id, 0) >= 4, inventory
 
     # 5. Place a plank beside the player and read it back.
     p = d('state')['player']['block_pos']
-    target = None
+    hotbar = d('inventory')['hotbar']
+    if not any(s.get('item') == planks_id for s in hotbar):
+        raise Failed(f'{planks_id} did not land in the hotbar: {hotbar}')
+    target = placed = None
     for dx, dz in [(2, 0), (-2, 0), (0, 2), (0, -2), (2, 1), (1, 2), (-2, -1), (-1, -2)]:
         at = (p[0] + dx, p[1], p[2] + dz)
         here = d('block', x=at[0], y=at[1], z=at[2])['block']
         below = d('block', x=at[0], y=at[1] - 1, z=at[2])['block']
-        if here in ('minecraft:air', 'minecraft:short_grass') and below not in ('minecraft:air', 'minecraft:water'):
-            target = at
-            break
+        if here not in ('minecraft:air', 'minecraft:short_grass') or below in ('minecraft:air', 'minecraft:water'):
+            continue
+        # The tree's trunk above the broken log can hide a spot's faces: try the next one.
+        try:
+            placed = d('place', x=at[0], y=at[1], z=at[2], item=planks_id)
+        except Failed as e:
+            if 'no visible face' in str(e):
+                continue
+            raise
+        target = at
+        break
     if target is None:
         raise Failed(f'no free spot beside {p} to place a block')
-    hotbar = d('inventory')['hotbar']
-    if not any(s.get('item') == planks_id for s in hotbar):
-        raise Failed(f'{planks_id} did not land in the hotbar: {hotbar}')
-    placed = d('place', x=target[0], y=target[1], z=target[2], item=planks_id)
     assert placed['changed'], placed
     back = d('block', x=target[0], y=target[1], z=target[2])
     assert back['block'] == planks_id, back
@@ -276,6 +305,15 @@ def scenario(d, out):
         (out / f'{d.name}.png').write_bytes(shot['_image'])
     seen = d('looking_at')
     assert seen['kind'] == 'block' and seen['block']['pos'] == list(target), seen
+
+    # 6. Drop a plank: on a client of a server (single player's server thread) the server must
+    # throw it, not only the window's own world, so ask the server how many planks are left.
+    d('select', slot=planks_id)
+    planks_before = d('inventory')['counts'].get(planks_id, 0)
+    d('drop')
+    d('wait', ticks=5)
+    found = d('command', command=f'clear @s {planks_id} 0')['chat']
+    assert any(f'Found {planks_before - 1} ' in line for line in found), (planks_before, found)
     return {'tree': base, 'log': log_id, 'placed': target}
 
 
@@ -322,6 +360,7 @@ def ui_scenario(d, out):
 
     # 3. The inventory's slots are widgets too, with their stacks.
     d('give', item='oak_log', count=2)
+    d('wait', ticks=2)  # single player's server thread gives them
     d('open_inventory')
     tree = widgets(d)
     log = next(w for w in tree.values() if w['kind'] == 'slot' and (w.get('stack') or {}).get('item') == 'minecraft:oak_log')
@@ -329,6 +368,7 @@ def ui_scenario(d, out):
     d('click', id=log['id'])
     d('click', id='slot-100', right=True)
     d('click', id=log['id'])
+    d('wait', ticks=2)
     assert widgets(d)['slot-200']['stack']['item'] == 'minecraft:oak_planks'
     d('close')
     shot = d('screenshot', path=str(out / f'{d.name}-ui.png'))
@@ -445,7 +485,21 @@ def consume_scenario(d, out):
     assert held(state) is None, state['held']
     assert moved != [0, 0, 0] and abs(moved[0]) <= 8 and abs(moved[2]) <= 8, moved
     d('screenshot', path=str(out / f'consume-{d.name}.png'))
-    return {'teleported': [round(m, 2) for m in moved]}
+    # EnderEyeItem.use: startUsingItem (getUseDuration 0) whether or not a stronghold is found, so a held
+    # button keeps the eye in use, slowing the player, and throws at most one eye until it lets go.
+    d('command', command='clear @s')
+    d('give', item='ender_eye', count=3)
+    d('command', command='tp @s ~ ~ ~ ~ -90')
+    d('mouse', button='right', action='down')
+    d('wait', ticks=12)
+    eye = d('state')
+    d('mouse', button='right', action='up')
+    d('wait', ticks=3)
+    released = d('state')
+    assert eye['using'] is not None, eye['using']
+    assert held(eye) == 'minecraft:ender_eye' and eye['held']['count'] >= 2, eye['held']
+    assert released['using'] is None, released['using']
+    return {'teleported': [round(m, 2) for m in moved], 'eye_use_ticks': eye['using']['ticks']}
 
 
 def pick_scenario(d, out):
@@ -489,23 +543,267 @@ def pick_scenario(d, out):
     d('give', item='oak_log', count=2)
     assert d('open_inventory')['screen'] == 'inventory'
     d('click', id='slot-0', middle=True)
+    # The clone of step 2 lived only on this client: ItemPickerMenu's carried stack is the
+    # inventoryMenu's, and AbstractContainerMenu.removed clears it only for a ServerPlayer. With a
+    # stack in hand, mouseReleased sends CLONE, the server finds the carried stack it was told about
+    # wrong and sends the empty one back (broadcastChanges). On the server thread that takes a
+    # round trip, as in vanilla; in the frame, closing the menu already put the clone away.
+    for _ in range(20):
+        if carried() is None:
+            break
+        d('wait', ticks=1)
     assert carried() is None, carried()
     assert widgets(d)['slot-0']['stack'] == {'item': 'minecraft:oak_log', 'count': 2}
     d('close')
     return {'cloned': shown['item']}
 
 
+def suggestions_scenario(d, out):
+    # Start from the title screen: single player's client joins through memory,
+    # without opening a server world and building its command registries.
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Suggestions')
+    d('click', id='game-mode')  # survival -> hardcore -> creative (commands on)
+    d('click', id='game-mode')
+    d('type', field='seed', text='5')
+    d('click', id='world')
+    d('click', id='world-type')  # superflat: this checks chat, without a spawn search
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+    d('wait_ready', seconds=400)
+
+    cases = [
+        ('/giv', '/give'),
+        ('/fill ^', '/fill ^ ^'),
+        ('/give @s diamond_sw', '/give @s minecraft:diamond_sword'),
+        ('/setblock ~ ~ ~ diamond_blo', '/setblock ~ ~ ~ minecraft:diamond_block'),
+        ('/fill ~ ~ ~ ~1 ~1 ~1 diamond_blo', '/fill ~ ~ ~ ~1 ~1 ~1 minecraft:diamond_block'),
+        ('/setblock ~ ~ ~ oak_stairs[fa', '/setblock ~ ~ ~ oak_stairs[facing='),
+        ('/clear @s diamond_sw', '/clear @s minecraft:diamond_sword'),
+        ('/execute run give @s diamond_sw', '/execute run give @s minecraft:diamond_sword'),
+    ]
+    for text, expected in cases:
+        d('key', key='t', action='tap')
+        d('type', text=text)
+        if text == '/give @s diamond_sw':
+            shot = d('screenshot', path=str((out / f'{d.name}-suggestions.png').resolve()))
+            if '_image' in shot:
+                (out / f'{d.name}-suggestions.png').write_bytes(shot['_image'])
+        d('key', key='tab', action='tap')
+        actual = d('screen')['chat_input']
+        assert actual == expected, (text, expected, actual)
+        d('key', key='esc', action='tap')
+        if d('screen')['screen'] == 'chat':  # Escape first dismisses suggestions
+            d('key', key='esc', action='tap')
+    return {'completions': len(cases)}
+
+
+def manage_scenario(d, out):
+    # The commands that close the audit's gaps: status (F3), entities by right-click, effects and xp,
+    # LAN status, options pages by name, then from the title screen the worlds list, Make Backup,
+    # rename and a delete that needs the player's confirmation.
+    d('open', world='Manage', seed=7)
+    d('wait_for', condition='loaded', timeout=400)
+    assert d('status')['player'] is not None
+    d('give', item='bucket')
+    d('select', slot='bucket')
+    pos = d('state')['player']['position']
+    cow = d('summon', kind='cow', x=pos[0], y=pos[1], z=pos[2] + 2)['id']
+    d('wait', ticks=5)
+    d('interact_entity', id=cow)
+    items = {s.get('item') for s in d('inventory')['hotbar'] if s}
+    assert 'minecraft:milk_bucket' in items, items
+    d('effect', id='speed', seconds=30, amplifier=1)
+    effects = json.dumps(d('effects'))
+    assert 'speed' in effects, effects
+    d('xp', levels=5)
+    assert d('lan', action='status') is not None
+    d('options', page='horizon')
+    assert 'graphics' in widgets(d), widgets(d).keys()
+    d('close')
+    d('pause')
+    d('click', id='save-and-quit-to-title')
+    d('wait_for', condition='screen', value='title', timeout=60)
+    worlds = {w['folder']: w for w in d('worlds')['worlds']}
+    assert worlds['Manage']['mode'] == 'survival', worlds
+    assert d('world_backup', folder='Manage')['bytes'] > 0
+    assert (d.cwd / 'backups').is_dir() and any((d.cwd / 'backups').glob('*_Manage.zip'))
+    d('world_rename', folder='Manage', name='Renamed Base')
+    assert {w['folder']: w for w in d('worlds')['worlds']}['Manage']['name'] == 'Renamed Base'
+    try:
+        d('world_delete', folder='Manage')
+        raise AssertionError('deleted without --confirm')
+    except Failed as e:
+        assert 'confirm' in str(e), e
+    assert (d.cwd / 'saves/Manage').is_dir()
+    d('world_delete', folder='Manage', confirm=True)
+    assert not (d.cwd / 'saves/Manage').exists()
+    assert 'Manage' not in {w['folder'] for w in d('worlds')['worlds']}
+    assert d('servers')['servers'] == []
+    return {'worlds': len(worlds)}
+
+
+def pause_save_scenario(d, out):
+    # IntegratedServer.tickServer: the tick single player pauses saves everything ("Saving and pausing
+    # game...", #3280), so the world is on disk while the pause menu is open.
+    d('open', world='Paused', seed=7)
+    d('wait_for', condition='loaded', timeout=400)
+    d('wait_ready', seconds=400)
+    level = d.cwd / 'saves/Paused/level.dat'
+    d('wait', ticks=40)
+    playing = level.stat().st_mtime_ns
+    d('wait', ticks=40)
+    assert level.stat().st_mtime_ns == playing, 'level.dat was saved without a pause'
+    d('pause')
+    deadline = time.time() + 15
+    while level.stat().st_mtime_ns == playing and time.time() < deadline:
+        time.sleep(0.25)
+    saved = level.stat().st_mtime_ns != playing
+    shot = d('screenshot', path=str(out / f'{d.name}-pause-save.png'))
+    if '_image' in shot:
+        (out / f'{d.name}-pause-save.png').write_bytes(shot['_image'])
+    assert saved, 'pausing single player did not save level.dat'
+    return {'saved_on_pause': saved}
+
+
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
-             'consume': consume_scenario, 'pick': pick_scenario}
+             'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario,
+             'manage': manage_scenario, 'pause-save': pause_save_scenario}
 
 
-def run(mode, ctl, out, resources, which='survival'):
+REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
+
+
+def scratch(mode, resources):
+    """A scratch game home with the prepared resources, and the game's environment for it."""
     work = Path(tempfile.mkdtemp(prefix=f'hzac-{mode}-'))
     (work / '.local').mkdir()
     (work / '.local/horizon-client').mkdir()
     os.symlink(resources, work / '.local/horizon-client' / lab.VERSION)
+    # horizon-ctl reads No AI in the game home: this one, not the player's.
+    env = game_env(os.environ.get('VSCREEN', 'agent-control'), home=work)
+    return work, env
+
+
+def no_ai_check(mode, ctl, resources):
+    """No AI on: horizon-ctl refuses (exit 4, kind denied), so does its MCP server, and the game
+    started with --control-socket never opens it."""
+    work, env = scratch(mode, resources)
     socket = work / 'c.sock'
-    env = game_env(os.environ.get('VSCREEN', 'agent-control'))
+    try:
+        (work / 'horizon-extras.txt').write_text('fps:true\nnoAi:true\n')
+        if mode == 'cli':
+            for words in (['state'], ['launch', '--world', 'NoAi'], ['logs']):
+                r = subprocess.run([str(ctl), '--socket', str(socket), *words], cwd=work, env=env,
+                                   capture_output=True, text=True, timeout=60)
+                reply = json.loads(r.stdout.strip().splitlines()[-1])
+                log(mode, words, reply)
+                assert r.returncode == 4 and reply == {'error': REFUSAL, 'kind': 'denied'}, (r.returncode, reply)
+            client = ctl.with_name('horizon-client')
+            args = [str(client), '--control-socket', str(socket), '--world', 'NoAi', '--world-frames', '30']
+            if sys.platform == 'darwin':
+                args.append('--offscreen')
+            r = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, timeout=600)
+            text = r.stdout + r.stderr + ''.join(
+                p.read_text(errors='replace') for p in (work / 'logs').glob('latest.log'))
+            assert r.returncode == 0, f'game exit {r.returncode}: {text[-2000:]}'
+            assert 'control socket not opened' in text and REFUSAL in text, text[-2000:]
+            assert not socket.exists(), 'the game opened its control socket under No AI'
+        else:
+            r = subprocess.run([str(ctl), '--socket', str(socket), 'mcp'], cwd=work, env=env, input='',
+                               capture_output=True, text=True, timeout=60)
+            log(mode, ['mcp'], {'exit': r.returncode, 'stderr': r.stderr.strip()})
+            assert r.returncode == 4 and r.stderr.strip() == f'horizon-ctl mcp: {REFUSAL}', r
+            # Turned on during a session: the next call refuses.
+            (work / 'horizon-extras.txt').write_text('noAi:false\n')
+            m = Mcp(ctl, socket, work, env)
+            (work / 'horizon-extras.txt').write_text('noAi:true\n')
+            try:
+                m('state')
+                raise AssertionError('state ran under No AI')
+            except Failed as e:
+                assert REFUSAL in str(e) and 'denied' in str(e), e
+            m.close()
+        print(f'[{mode}] PASS: no-ai')
+        return True
+    except (Failed, AssertionError, json.JSONDecodeError, IndexError, subprocess.TimeoutExpired) as e:
+        print(f'[{mode}] FAIL: no-ai: {e!r}')
+        return False
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def setting_check(mode, ctl, out, resources):
+    """Agent Control turned on in Horizon Settings > AI Agent: the game the player starts (no
+    --control) opens the default endpoint, the page shows the agent connected, Copy Connection
+    Details copies the socket, and turning the switch off closes the endpoint at once."""
+    work, env = scratch(mode, resources)
+    socket = work / 'c.sock'
+    env['HORIZON_CONTROL'] = str(socket)  # the default endpoint, this home's
+    (work / 'horizon-extras.txt').write_text('agentControl:true\n')
+    args = [str(ctl.with_name('horizon-client'))]
+    if sys.platform == 'darwin':
+        args.append('--offscreen')
+    game = subprocess.Popen(args, cwd=work, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    d = None
+    try:
+        deadline = time.time() + 300
+        while not socket.exists():
+            assert game.poll() is None, f'the game exited ({game.returncode})'
+            assert time.time() < deadline, 'Agent Control on, but no control socket'
+            time.sleep(0.5)
+        d = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
+        assert d('state')['screen'] == 'title'  # the player's own game, at its title screen
+        d('options', page='horizon')
+        tree = widgets(d)
+        assert {'ai-agent', 'no-ai'} <= set(tree), sorted(tree)
+        d('screenshot', path=str(out / f'{mode}-horizon-settings.png'))
+        d('options', page='agent')
+        tree = widgets(d)
+        switch = next(w for w in tree.values() if w.get('label', '').startswith('Agent Control'))
+        assert switch['label'] == 'Agent Control: On', switch
+        d('screenshot', path=str(out / f'{mode}-ai-agent.png'))
+        copy = next(w for w in tree.values() if w.get('label') == 'Copy Connection Details')
+        d('click', id=copy['id'])
+        # Off: the endpoint goes away and the next command can't reach the game.
+        try:
+            d('click', id=switch['id'])
+        except Failed:
+            pass  # the reply may be lost with the socket
+        deadline = time.time() + 30
+        while socket.exists():
+            assert time.time() < deadline, 'Agent Control off, but the socket stayed'
+            time.sleep(0.5)
+        assert 'agentControl:false' in (work / 'horizon-extras.txt').read_text()
+        assert game.poll() is None, 'the game exited when Agent Control went off'
+        print(f'[{mode}] PASS: setting')
+        return True
+    except (Failed, AssertionError, StopIteration, json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+        print(f'[{mode}] FAIL: setting: {e!r}')
+        return False
+    finally:
+        if d is not None:
+            try:
+                d.close()
+            except Exception:
+                pass
+        game.terminate()
+        try:
+            game.wait(30)
+        except subprocess.TimeoutExpired:
+            game.kill()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def run(mode, ctl, out, resources, which='survival'):
+    if which == 'no-ai':
+        return no_ai_check(mode, ctl, resources)
+    if which == 'setting':
+        return setting_check(mode, ctl, out, resources)
+    work, env = scratch(mode, resources)
+    socket = work / 'c.sock'
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
     started = time.time()
     try:
@@ -532,7 +830,7 @@ def run(mode, ctl, out, resources, which='survival'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--mode', choices=['cli', 'mcp', 'both'], default='both')
-    parser.add_argument('--scenario', choices=[*SCENARIOS, 'all'], default='all')
+    parser.add_argument('--scenario', choices=[*SCENARIOS, 'no-ai', 'setting', 'all'], default='all')
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--out', default=str(ROOT / '.local/agent-control-e2e'), help='screenshots go here')
     args = parser.parse_args()
@@ -550,7 +848,7 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     modes = ['cli', 'mcp'] if args.mode == 'both' else [args.mode]
-    scenarios = list(SCENARIOS) if args.scenario == 'all' else [args.scenario]
+    scenarios = [*SCENARIOS, 'no-ai', 'setting'] if args.scenario == 'all' else [args.scenario]
     results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s) for m in modes for s in scenarios}
     print(json.dumps(results))
     sys.exit(0 if all(results.values()) else 1)

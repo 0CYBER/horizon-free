@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "generated": "2026-10-24T18:00:00Z",
+  "projects": [
+    {
+      "id": "coords_hud",
+      "kind": "mod",
+      "name": "Coordinates HUD",
+      "summary": "Your coordinates, facing and the time of day in a corner of the screen.",
+      "description": "`/where` puts them in chat, `/coords` hides or shows the panel.",
+      "authors": [
+        "Horizon"
+      ],
+      "owners": [
+        "ludovic111"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/horizon-rust/horizon/tree/main/crates/horizon-mod-sdk/examples/coords-hud",
+      "icon": "https://horizon-rust.github.io/horizon-mods/icons/coords_hud.png",
+      "key": "RWTVtuGb/GRXcBf3Re5hzM07EzoStr2sLTJjghJia0xX15ULoZRFFZDb",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "published": "2026-10-24",
+          "api": "0.1",
+          "side": "client",
+          "capabilities": [
+            "game-read",
+            "hud",
+            "chat"
+          ],
+          "api_level": 0,
+          "game": "26.3",
+          "file": {
+            "name": "coords_hud-0.1.0.hmod",
+            "url": "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/coords_hud-0.1.0.hmod",
+            "size": 438,
+            "sha256": "e1135345692f6dd8fd4c51920151944b82333e17049c9bb7d756f27b8deefc53",
+            "signature": "untrusted comment: signature from minisign secret key\nRUTVtuGb/GRXcIa5yCyCHFGFt55tj3T/FLUDv3ecNLVNNiQqQu7xyBrfc3wsvMHmudsEq6yr+QF21XN3+hnr/Ged3ULr5rv3zgE=\ntrusted comment: coords_hud 0.1.0\nIESQkJdTzLOvWegcGFxOMrQbnwJp2OKSSxoCKAxdfwyRb+9atdF+Q5/OpbdYurMnrNN1X1ybb43AszPVecdiCw==\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cozy",
+      "kind": "modpack",
+      "name": "Cozy",
+      "summary": "Coordinates and a calm render distance.",
+      "authors": [
+        "Horizon"
+      ],
+      "owners": [
+        "ludovic111"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/horizon-rust/horizon-mods",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "published": "2026-10-24",
+          "api": "1",
+          "game": "26.3",
+          "requires": [
+            {
+              "id": "coords_hud",
+              "version": "0.1.0",
+              "sha256": "e1135345692f6dd8fd4c51920151944b82333e17049c9bb7d756f27b8deefc53"
+            }
+          ],
+          "file": {
+            "name": "cozy-1.0.0.hpack",
+            "url": "https://github.com/horizon-rust/horizon-mods/releases/download/cozy-1.0.0/cozy-1.0.0.hpack",
+            "size": 471,
+            "sha256": "241ac840f9c5ea3f6252d849da10c90d36cb1da4d6cd8d1d268c2760a353cd65"
+          }
+        }
+      ]
+    },
+    {
+      "id": "glow",
+      "kind": "shader",
+      "name": "Soft Glow",
+      "summary": "A post-processing pass over the world.",
+      "authors": [
+        "Horizon"
+      ],
+      "owners": [
+        "ludovic111"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/horizon-rust/horizon-mods",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "published": "2026-10-26",
+          "api": "0.1",
+          "game": "26.3",
+          "file": {
+            "name": "glow-1.0.0.hshader",
+            "url": "https://github.com/horizon-rust/horizon-mods/releases/download/glow-1.0.0/glow-1.0.0.hshader",
+            "size": 689,
+            "sha256": "331cfe29a666a0de804e9a9ff3d19d246eebcfbfa70b4f49bba8482d30ad9f02"
+          }
+        }
+      ]
+    },
+    {
+      "id": "skyblock_start",
+      "kind": "world",
+      "name": "Skyblock start",
+      "summary": "A kind this reader doesn't know yet: kept, not offered.",
+      "license": "CC0-1.0",
+      "source": "https://example.org/skyblock",
+      "future_field": true,
+      "versions": [
+        {
+          "version": "1",
+          "api": "1",
+          "game": "26.3",
+          "file": {
+            "name": "skyblock.hworld",
+            "url": "https://example.org/skyblock.hworld",
+            "size": 1,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      ]
+    }
+  ],
+  "revoked": [
+    {
+      "id": "bad_mod",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "reason": "Sent chat messages it didn't declare.",
+      "date": "2026-10-24"
+    }
+  ]
+}

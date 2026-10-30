@@ -602,8 +602,18 @@ pub(crate) fn clamp(value: f64, min: f64, max: f64) -> f64 {
         java_min(value, max)
     }
 }
+/// `Mth.floor`, which is `(int) Math.floor(v)`: truncate, then step down for
+/// negative fractions. A truncating conversion and a compare, where
+/// `f64::floor` is a libm call on baseline x86-64. Both casts saturate (NaN is
+/// 0), so the step down saturates too: below `i32::MIN` stays `i32::MIN`.
+#[inline]
 pub(crate) fn floor_i32(value: f64) -> i32 {
-    value.floor() as i32
+    let truncated = value as i32;
+    if value < f64::from(truncated) {
+        truncated.saturating_sub(1)
+    } else {
+        truncated
+    }
 }
 fn lerp(amount: f64, start: f64, end: f64) -> f64 {
     start + amount * (end - start)
@@ -635,6 +645,42 @@ fn next_down(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floor_i32_is_mths_floor() {
+        for v in [
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            1.0,
+            -1.0,
+            2.999,
+            -2.999,
+            1e-300,
+            -1e-300,
+            16_777_215.5,
+            -16_777_215.5,
+            // Past the i32 range `(int) Math.floor` saturates (vanilla 26.3's
+            // BlockCollisions and BlockPos.containing rely on it).
+            2_147_483_647.5,
+            2_147_483_648.0,
+            -2_147_483_648.0,
+            -2_147_483_648.5,
+            -2_147_483_649.0,
+            3e9,
+            -3e9,
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            assert_eq!(floor_i32(v), v.floor() as i32, "{v}");
+        }
+        assert_eq!(floor_i32(f64::NAN), 0);
+        assert_eq!(floor_i32(-3e9), i32::MIN);
+        assert_eq!(floor_i32(-2_147_483_648.5), i32::MIN);
+    }
     #[test]
     fn ray_faces_and_half_open_bounds() {
         let b = Aabb::block(BlockPos::new(0, 0, 0));

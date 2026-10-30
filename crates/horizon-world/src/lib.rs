@@ -94,6 +94,7 @@ pub mod nbt;
 pub mod object_open_map;
 pub mod object_open_set;
 pub mod piston_movement;
+pub mod piston_push;
 pub mod piston_shape;
 pub mod player_food;
 pub mod player_health;
@@ -137,6 +138,7 @@ pub mod player_equipment;
 
 pub mod living_use_flags;
 pub mod status_effect;
+pub mod stepped_interpolation;
 pub mod synced_values;
 
 pub mod inventory_use;

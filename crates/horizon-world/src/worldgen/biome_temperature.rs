@@ -123,10 +123,12 @@ pub struct BiomeTemperature {
 }
 impl BiomeTemperature {
     pub fn new(settings: BiomeTemperatureSettings) -> Self {
+        // Empty until used: a decoration region makes one per biome, and
+        // most biomes never ask for a temperature.
         Self {
             settings,
-            values: HashMap::with_capacity(1024),
-            order: VecDeque::with_capacity(1024),
+            values: HashMap::new(),
+            order: VecDeque::new(),
         }
     }
     pub fn settings(&self) -> BiomeTemperatureSettings {

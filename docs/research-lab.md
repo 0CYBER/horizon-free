@@ -7,7 +7,7 @@ Horizon started as a decompilation and optimization lab. This page describes the
 Game JARs, decompiled Java, libraries, inventories, worlds and logs live **inside this checkout** under gitignored **`.local/`**. No game code is in Git history or release downloads. Fresh clones rebuild the inspection workspace from your own copy of the game (see [Build from source](../README.md#build-from-source)); nothing of the game is downloaded.
 
 ```sh
-git clone https://github.com/ludovic111/horizon.git
+git clone https://github.com/horizon-rust/horizon.git
 cd horizon
 git config core.hooksPath .githooks
 python3 tools/lab.py prepare --server-jar ~/Downloads/server.jar
@@ -75,10 +75,7 @@ separate implementation. [Geometry and collision scope](collision-geometry.md).
 
 ```sh
 cargo test --workspace
-cargo run --release --bin voxel-bench -- 100 > .local/voxel-benchmark.csv
 ```
-
-The dependency-free occupancy experiment compares scalar and bitset exposed-face counting for synthetic 16³ sections. It has no real mesh, material/AO/light work, neighboring-section context, JNI bridge or game integration. Speedups are kernel-only, not Minecraft FPS.
 
 Public branding and new mod downloads use **Horizon**. The existing Fabric mod
 ID and `dev.horizonlab` namespace remain stable for installed instances and

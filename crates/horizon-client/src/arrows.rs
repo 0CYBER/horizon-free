@@ -9,7 +9,7 @@ use crate::{
     collisions::SceneCollisions,
     mobs::Who,
     motion::{FluidResources, LAVA, WATER},
-    projectiles::{Hit, Projectile},
+    projectiles::{Hit, Projectile, ProjectileKind},
     world::World,
 };
 use horizon_core::{
@@ -94,6 +94,13 @@ pub enum ArrowEvent {
         position: Vec3,
         velocity: Vec3,
     },
+    /// `Level.broadcastEntityEvent(arrow, 0)`: a tipped arrow stuck for 600
+    /// ticks. The clients burst its particles (`Arrow.handleEntityEvent`);
+    /// the arrow itself is a plain one from now on.
+    PotionPuff {
+        id: u32,
+        color: u32,
+    },
     Sound {
         sound: ArrowSound,
         volume: f32,
@@ -130,8 +137,14 @@ pub enum ArrowSound {
     Splash,
     /// The arrow's `soundEvent` (`entity.arrow.hit`), for blocks and entities.
     HitGround,
+    /// An arrow shot from a crossbow: `item.crossbow.hit`.
+    CrossbowHit,
     /// `entity.generic.extinguish_fire`.
     Extinguish,
+    /// A thrown trident's `getDefaultHitGroundSoundEvent` (`item.trident.hit_ground`).
+    TridentHitGround,
+    /// `ThrownTrident.onHitEntity`'s `item.trident.hit`.
+    TridentHit,
 }
 /// What a burning arrow does to the block it hits (`onProjectileHit`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,8 +168,16 @@ pub struct ArrowState {
     pub pickup: Pickup,
     /// `pickupItemStack`: what picking the arrow up gives.
     pub pickup_item: crate::items::ItemStack,
+    /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
+    pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
+    /// `Arrow.ID_EFFECT_COLOR` as a client has it from its server (-1: none).
+    pub effect_color: i32,
+    /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
+    /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
+    /// through (cleared when it sticks in a block).
+    pub pierced: Vec<Who>,
     /// `Entity.remainingFireTicks`.
     pub fire_ticks: i32,
     pub fall_distance: f64,
@@ -165,10 +186,15 @@ pub struct ArrowState {
     pub was_eye_in_water: bool,
     pub first_tick: bool,
     pub has_been_shot: bool,
+    /// `ThrownTrident.dealtDamage`: it has hit an entity (or sat in a block
+    /// for over 4 ticks) and hits no more.
+    pub dealt_damage: bool,
     pub removed: bool,
     /// The arrow's own random (`Entity.random`).
     pub random: LegacyRandom,
     pub events: Vec<ArrowEvent>,
+    /// The speed (`deltaMovement.length()`) it hit a block at, before it stuck.
+    pub hit_speed: f64,
 }
 impl fmt::Debug for ArrowState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -197,8 +223,11 @@ impl ArrowState {
             last_state: None,
             pickup: Pickup::Disallowed,
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
+            fired_from_weapon: None,
             no_physics: false,
+            effect_color: -1,
             pierce: 0,
+            pierced: Vec::new(),
             fire_ticks: 0,
             fall_distance: 0.0,
             fluids: EntityFluidInteraction::new([WATER, LAVA]),
@@ -206,10 +235,18 @@ impl ArrowState {
             was_eye_in_water: false,
             first_tick: true,
             has_been_shot: false,
+            dealt_damage: false,
             removed: false,
             random,
             events: Vec::new(),
+            hit_speed: 0.0,
         }
+    }
+    /// `Arrow.getColor` of the server's own arrow: the colour of the potion on
+    /// its pickup item, None for a plain arrow (`PotionContents.EMPTY`).
+    pub fn potion_color(&self) -> Option<u32> {
+        let potion = self.pickup_item.potion()?;
+        Some(crate::brewing::potion_color(Some(potion)))
     }
     /// The `AbstractArrow` constructor's `pickupItemStack`: the drawn ammo
     /// (one item). Ammo drawn without being used up (`INTANGIBLE_PROJECTILE`)
@@ -354,6 +391,61 @@ impl ArrowScene<'_, '_> {
         true
     }
 }
+/// `AbstractArrow.tick`'s block phase for a thrown trident: the zero-width
+/// `level().clip(new ClipContext(position(), position().add(movement),
+/// ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this))`, then
+/// `AbstractArrow.onHitBlock`'s `position().subtract(signum * 0.05)`. Returns
+/// the position to stop at (pull-back included) and the block that was hit.
+pub fn clip_block_stop(
+    world: &World,
+    facts: &BlockFacts,
+    collision: &BlockCollisionRegistry<'_>,
+    from: Vec3,
+    movement: Vec3,
+) -> Option<(Vec3, BlockPos)> {
+    let to = Vec3::new(
+        from.x + movement.x,
+        from.y + movement.y,
+        from.z + movement.z,
+    );
+    let mut scene = SceneCollisions {
+        world,
+        binding: collision,
+        subject: None,
+    };
+    let hit = horizon_core::geometry::traverse_blocks(from, to, 1024, |p: BlockPos| {
+        let state = world.block(p.x, p.y, p.z);
+        if facts.is_air(state) {
+            return None;
+        }
+        let shape = collision
+            .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+            .ok()?;
+        shape.clip(from, to, p)
+    })
+    .ok()
+    .flatten()?;
+    Some((back_off(hit.location, movement), hit.block))
+}
+/// `AbstractArrow.onHitBlock`'s back-off: vanilla scales `(double) 0.05f` by
+/// `Math.signum` per axis, whose value at zero is zero (not Rust's -1.0).
+pub fn back_off(location: Vec3, movement: Vec3) -> Vec3 {
+    fn signum(v: f64) -> f64 {
+        if v > 0.0 {
+            1.0
+        } else if v < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    }
+    let offset = f64::from(0.05f32);
+    Vec3::new(
+        location.x - signum(movement.x) * offset,
+        location.y - signum(movement.y) * offset,
+        location.z - signum(movement.z) * offset,
+    )
+}
 fn bounds(at: Vec3) -> Aabb {
     // EntityDimensions.makeBoundingBox: half the float width.
     let w = f64::from(WIDTH / 2.0);
@@ -361,6 +453,29 @@ fn bounds(at: Vec3) -> Aabb {
         Vec3::new(at.x - w, at.y, at.z - w),
         Vec3::new(at.x + w, at.y + f64::from(HEIGHT), at.z + w),
     )
+}
+/// The bounding box of an arrow, or a thrown trident, at `at`.
+pub fn arrow_bounds(at: Vec3) -> Aabb {
+    bounds(at)
+}
+/// The blocks an arrow that moved from `from` to `to` was inside
+/// (`Entity.checkInsideBlocks`: the sweep of its box, 16 steps at most), for
+/// the blocks that react to it (`entityInside`).
+pub fn blocks_inside(from: Vec3, to: Vec3) -> Vec<BlockPos> {
+    let deflated = bounds(to).deflate(Vec3::new(
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+    ));
+    let mut inside = Vec::new();
+    let _ = sweep_intersected_blocks(from, to, deflated, 1_000_000, |p, iteration| {
+        if iteration >= 16 {
+            return false;
+        }
+        inside.push(p);
+        true
+    });
+    inside
 }
 /// `Projectile.lerpRotation`.
 fn lerp_rotation(mut old: f32, new: f32) -> f32 {
@@ -417,24 +532,40 @@ pub enum EntityHit {
     Refused,
     /// The entity turned it first (`Entity.deflection`: breezes).
     Deflected,
+    /// The target teleported away from it (`EnderMan.hurtServer` returns true,
+    /// `onHitEntity` returns before the hit sound and the discard): the arrow
+    /// flies on and falls to the ground.
+    Dodged,
 }
 /// The rest of the tick of an arrow that hit an entity: whether to keep it.
 pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: EntityHit) -> bool {
     let Some(mut st) = p.arrow.take() else {
         return false;
     };
+    let trident = matches!(p.kind, ProjectileKind::Trident);
     let mut ticker = Ticker {
         p,
         st: &mut st,
         scene,
     };
     match outcome {
+        EntityHit::Hurt | EntityHit::Refused if trident => ticker.trident_bounce(),
         EntityHit::Hurt => {
             ticker.hit_sound();
-            ticker.st.removed = true;
+            // A piercing arrow flies on (`getPierceLevel() <= 0` discards).
+            if ticker.st.pierce == 0 {
+                ticker.st.removed = true;
+            }
         }
         EntityHit::Refused => ticker.turn_back(),
-        EntityHit::Deflected => {}
+        EntityHit::Dodged => {}
+        EntityHit::Deflected => {
+            // The deflection comes before `onHitEntity` adds the entity to
+            // `piercingIgnoreEntityIds`.
+            if ticker.st.pierce > 0 {
+                ticker.st.pierced.pop();
+            }
+        }
     }
     ticker.finish();
     p.stuck = st.in_ground;
@@ -464,7 +595,16 @@ impl Ticker<'_, '_, '_, '_> {
                 p.z,
             ))
     }
+    /// Whether this is a `ThrownTrident` (`AbstractArrow` with its own water
+    /// inertia, sounds and hit).
+    fn trident(&self) -> bool {
+        matches!(self.p.kind, ProjectileKind::Trident)
+    }
     fn tick(&mut self, targets: &[(Who, Aabb)]) -> Hit {
+        // ThrownTrident.tick.
+        if self.trident() && self.st.in_ground_time > 4 {
+            self.st.dealt_damage = true;
+        }
         let physics = !self.st.no_physics;
         let movement = self.p.velocity;
         let block_pos = self.block_position();
@@ -507,13 +647,27 @@ impl Ticker<'_, '_, '_, '_> {
                 let at = self.position();
                 self.apply_effects_from_blocks(at, at);
             }
+            // Arrow.tick on the server: a tipped arrow stuck for 600 ticks sends
+            // entity event 0 (the clients' burst of particles in its colour,
+            // `handleEntityEvent`) and turns into a plain arrow. The flight
+            // and ground particles are the clients' own (`Level.isClientSide`).
+            if self.st.in_ground_time >= 600
+                && let Some(color) = self.st.potion_color()
+            {
+                self.st.events.push(ArrowEvent::PotionPuff {
+                    id: self.p.id,
+                    color,
+                });
+                self.st.pickup_item = crate::items::ItemStack::new("minecraft:arrow", 1);
+            }
             return Hit::None;
         }
         self.st.in_ground_time = 0;
         let original = self.position();
         if self.st.was_touching_water {
-            // getWaterInertia, then the bubbles behind it.
-            self.p.velocity = self.p.velocity.scale(f64::from(0.6f32));
+            // getWaterInertia (0.99 for a trident), then the bubbles behind it.
+            let inertia = if self.trident() { 0.99f32 } else { 0.6f32 };
+            self.p.velocity = self.p.velocity.scale(f64::from(inertia));
             let v = self.p.velocity;
             for _ in 0..4 {
                 self.st.events.push(ArrowEvent::Particle {
@@ -594,7 +748,7 @@ impl Ticker<'_, '_, '_, '_> {
         if !self.st.first_tick && self.st.fluids.is_in_fluid(&Tags, LAVA) {
             self.st.fall_distance *= 0.5;
         }
-        if self.position().y < f64::from(crate::chunk::MIN_Y - 64) {
+        if self.position().y < f64::from(self.scene.world.bottom_y() - 64) {
             self.st.removed = true;
         }
         self.st.first_tick = false;
@@ -639,7 +793,8 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.life = 0;
     }
     /// `AbstractArrow.stepMoveAndHit`: the nearest entity on the way, else the
-    /// block (piercing is not modelled).
+    /// block. A piercing arrow that hits an entity here goes on from it next
+    /// tick (`finish_entity_hit`); vanilla's loop goes on within the same tick.
     fn step_move_and_hit(&mut self, from: Vec3, to: Vec3, targets: &[(Who, Aabb)]) -> Hit {
         let block = self.scene.clip(from, to);
         let end = block.map_or(to, |b| b.0);
@@ -649,8 +804,14 @@ impl Ticker<'_, '_, '_, '_> {
             .expand_towards(self.p.velocity)
             .inflate(Vec3::new(1.0, 1.0, 1.0));
         let mut best: Option<(Who, Vec3, f64)> = None;
+        // ThrownTrident.findHitEntity: none once it has dealt damage.
+        let targets = if self.st.dealt_damage { &[] } else { targets };
         for (who, b) in targets {
             if Some(*who) == self.p.owner && !self.p.left_owner || !b.intersects(area) {
+                continue;
+            }
+            // canHitEntity: not an entity a piercing arrow has gone through.
+            if self.st.pierced.contains(who) {
                 continue;
             }
             if let Some(at) = self.entity_hit(b, from, end, margin) {
@@ -667,6 +828,15 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.position = next;
         self.apply_effects_from_blocks(from, next);
         if let Some((who, at, _)) = best {
+            // AbstractArrow.onHitEntity: past pierce level + 1 entities the
+            // arrow is discarded before it hurts the next one.
+            if self.st.pierce > 0 {
+                if self.st.pierced.len() > usize::from(self.st.pierce) {
+                    self.st.removed = true;
+                    return Hit::None;
+                }
+                self.st.pierced.push(who);
+            }
             return Hit::Entity { who, at };
         }
         let Some((at, pos, face)) = block else {
@@ -706,11 +876,40 @@ impl Ticker<'_, '_, '_, '_> {
     /// `playSound(soundEvent, 1, 1.2 / (random * 0.2 + 0.9))`.
     fn hit_sound(&mut self) {
         let pitch = 1.2 / (self.st.random.next_float() * 0.2 + 0.9);
+        // CrossbowItem.createProjectile: its arrows hit with the crossbow's sound.
+        let crossbow = self
+            .st
+            .fired_from_weapon
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:crossbow");
+        let sound = if self.trident() {
+            ArrowSound::TridentHitGround
+        } else if crossbow {
+            ArrowSound::CrossbowHit
+        } else {
+            ArrowSound::HitGround
+        };
         self.st.events.push(ArrowEvent::Sound {
-            sound: ArrowSound::HitGround,
+            sound,
             volume: 1.0,
             pitch,
         });
+    }
+    /// `ThrownTrident.onHitEntity` after the hurt, whether it landed or not:
+    /// the hit sound, then `deflect(REVERSE, ..., (0.02, 0.2, 0.02))`. The
+    /// trident keeps flying (it has dealt its damage) and falls.
+    fn trident_bounce(&mut self) {
+        self.st.dealt_damage = true;
+        self.st.events.push(ArrowEvent::Sound {
+            sound: ArrowSound::TridentHit,
+            volume: 1.0,
+            pitch: 1.0,
+        });
+        // ProjectileDeflection.REVERSE.
+        let rotation = 170.0 + self.st.random.next_float() * 20.0;
+        let v = self.p.velocity;
+        self.p.velocity = Vec3::new(v.x * (-0.02 * 0.5), v.y * (-0.2 * 0.5), v.z * (-0.02 * 0.5));
+        self.p.yaw += rotation;
     }
     /// `onHitEntity` when the entity took no damage: `deflect(REVERSE, 0.2)`,
     /// a half turn give or take ten degrees at a tenth of the speed; one
@@ -733,6 +932,8 @@ impl Ticker<'_, '_, '_, '_> {
     /// it moved on, stop, and stick.
     fn on_hit_block(&mut self, pos: BlockPos, state: BlockStateId) {
         self.st.last_state = Some(state);
+        // BlockState.onProjectileHit still sees the deltaMovement it hit at.
+        self.st.hit_speed = self.p.velocity.length();
         // Projectile.onHitBlock: BlockState.onProjectileHit.
         if self.st.on_fire()
             && let Some(reaction) = self.block_reaction(state)
@@ -752,6 +953,7 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.shake = 7;
         self.p.set_critical(false);
         self.st.pierce = 0;
+        self.st.pierced.clear();
     }
     /// `Projectile.mayInteract`: a mob's arrows need `mob_griefing`.
     fn may_interact(&self) -> bool {
@@ -1043,10 +1245,10 @@ impl FluidInteractionWorld for Ticker<'_, '_, '_, '_> {
         Ok(self.scene.world.chunks.contains_key(&(x, z)).then_some(()))
     }
     fn chunk_sections(&mut self, _: ()) -> Result<FluidSections<'_>, Error> {
-        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        let layout = self.scene.world.layout();
         Ok(FluidSections {
-            minimum_section_y: crate::chunk::MIN_Y >> 4,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() >> 4,
+            has_fluid: crate::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {

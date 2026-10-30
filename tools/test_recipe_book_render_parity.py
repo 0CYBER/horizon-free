@@ -11,7 +11,7 @@ the mouse. The Java oracle (VanillaRecipeBookScreenOracle) builds vanilla's
 widgets for that state as RecipeBookComponent.initVisuals and
 RecipeBookPage.init do and records every GuiGraphicsExtractor call of their
 extractRenderState, the tooltips and GhostSlots.extractRenderState, with its
-pose; examples/recipe_book_render_fixture lays out the same state with
+pose; examples/probe/recipe_book_render_fixture lays out the same state with
 horizon_client::recipe_book_screen, which the game paints. The call lists
 must agree.
 """

@@ -76,7 +76,7 @@ pub fn systemd_unit(program: &Path, dir: &Path, user: Option<&str>) -> String {
     format!(
         "[Unit]
 Description=Horizon server in {dir}
-Documentation=https://github.com/ludovic111/horizon/blob/main/docs/server.md
+Documentation=https://github.com/horizon-rust/horizon/blob/main/docs/server.md
 Wants=network-online.target
 After=network-online.target
 
@@ -178,7 +178,7 @@ fn systemd_path(service: &str, system: bool) -> Result<PathBuf, String> {
 }
 
 fn run(program: &str, args: &[&str]) -> Result<(), String> {
-    let status = Command::new(program)
+    let status = crate::process::command(program)
         .args(args)
         .status()
         .map_err(|e| format!("{program}: {e}"))?;
@@ -191,7 +191,7 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
 
 /// A step that may fail harmlessly (stopping what isn't running): its output would only alarm.
 fn quiet(program: &str, args: &[&str]) {
-    let _ = Command::new(program)
+    let _ = crate::process::command(program)
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

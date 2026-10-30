@@ -168,9 +168,6 @@ impl Beardifier {
         self.kernel_junctions = junctions;
         self
     }
-    pub fn affected_bounds(&self) -> Option<StructureBounds> {
-        self.affected
-    }
     fn sample_unchecked(&self, [x, y, z]: [i32; 3]) -> f32 {
         let mut value = 0.;
         // The kernel is a process-wide constant; resolving it once keeps the

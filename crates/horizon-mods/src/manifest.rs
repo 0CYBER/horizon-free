@@ -1,6 +1,10 @@
 //! `horizon-mod.toml`, a mod's manifest, and the `.hmod` file around it.
-use serde::Deserialize;
-use std::{fmt, io::Read, path::Path};
+use serde::{Deserialize, Serialize};
+use std::{
+    fmt,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 /// The manifest's file name, beside `mod.wasm`.
 pub const MANIFEST: &str = "horizon-mod.toml";
@@ -12,10 +16,16 @@ pub const API: &str = "0.1";
 /// The manifest `api` lines this build loads. 0.2 is 0.1 plus content:
 /// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
 /// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
-pub const APIS: [&str; 2] = [API, "0.2"];
+/// 0.3 is a server mod (experimental): the `horizon-server-mod` world.
+pub const APIS: [&str; 3] = [API, "0.2", SERVER_API];
+/// The line of server mods, experimental: `side = "server"`.
+pub const SERVER_API: &str = "0.3";
 /// Namespaces no mod may claim: vanilla's, the convention tags' (mods add
 /// to those, docs/mods.md) and the game's own.
 const RESERVED_NAMESPACES: [&str; 3] = ["minecraft", "c", "horizon"];
+/// A mod's data (capability `storage`), in `horizon-mods/` beside the mods
+/// (`find` never mistakes it for a mod: it has no manifest).
+pub const STORAGE_DIR: &str = ".horizon-mod-data";
 /// The biggest `mod.wasm` a mod may ship.
 const MAX_WASM: u64 = 32 << 20;
 
@@ -42,15 +52,21 @@ pub struct Manifest {
     /// that are on may share one (`content::clash`).
     #[serde(default)]
     pub namespaces: Vec<String>,
+    /// The experimental capabilities the mod opts into (`["ui"]`): each one
+    /// it lists in `capabilities` must be named here too, since it may change
+    /// in any release (docs/api/stability.md). One no longer experimental is
+    /// accepted here, so the manifest keeps loading once it is promoted.
+    #[serde(default)]
+    pub experimental: Vec<Capability>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     /// Runs in the player's game only (HUD, keys, chat commands).
     #[default]
     Client,
-    /// Runs where the world is simulated (rules, blocks); not run yet.
+    /// Runs where the world is simulated (rules, blocks): `api = "0.3"`.
     Server,
     /// Both, and the server tells clients which version it expects.
     Both,
@@ -58,25 +74,58 @@ pub enum Side {
 
 /// What a mod may do beyond writing its log. Each is a WIT interface the
 /// component imports; the player sees them before turning the mod on.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
     GameRead,
     Chat,
     Hud,
     Storage,
+    /// Runs vanilla commands as the player, with the player's permissions.
+    Command,
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
+    /// A screen the mod owns and a settings page in Options > Mods, drawn
+    /// with the menus' own widgets (interface `ui`, calls `ui-events`).
+    Ui,
+    /// Shapes on the HUD and the camera's shake, drawn by the game's own
+    /// renderer (interface `render`).
+    Render,
+    /// The use button on items the mod claims, and its own keys
+    /// (interface `input`).
+    Input,
+    /// The players on the server and messages to them (server mods).
+    Players,
+    /// Blocks in the server's loaded chunks, and changes to them (server
+    /// mods; client mods later, where the game runs the world).
+    World,
+    /// The recipes and items the game knows, for recipe viewers
+    /// (interface `recipes`).
+    Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 5] = [
+    pub const ALL: [Capability; 12] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
+        Capability::Command,
         Capability::Registries,
+        Capability::Ui,
+        Capability::Render,
+        Capability::Input,
+        Capability::Players,
+        Capability::World,
+        Capability::Recipes,
     ];
+    /// Whether a server mod may have it: the others act on a local player.
+    pub fn on_server(self) -> bool {
+        matches!(
+            self,
+            Capability::Storage | Capability::Players | Capability::World
+        )
+    }
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
         match self {
@@ -84,8 +133,23 @@ impl Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
+            Capability::Ui => "ui",
+            Capability::Render => "render",
+            Capability::Input => "input",
+            Capability::Players => "players",
+            Capability::World => "world",
+            Capability::Recipes => "recipes",
         }
+    }
+    /// May change in any release: a mod uses it only with
+    /// `experimental = ["<name>"]` in its manifest.
+    pub fn is_experimental(self) -> bool {
+        matches!(
+            self,
+            Capability::Ui | Capability::Render | Capability::Input | Capability::Recipes
+        )
     }
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
@@ -94,7 +158,18 @@ impl Capability {
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
+            Capability::Command => "run commands as you, with your permissions",
             Capability::Registries => "add blocks and items to your worlds",
+            Capability::Ui => "show its own screens and a settings page",
+            Capability::Render => "draw on your screen, shake and zoom the camera",
+            Capability::Input => {
+                "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
+            }
+            Capability::Players => "see who is on the server and message them",
+            Capability::World => "read and change the world's blocks",
+            Capability::Recipes => {
+                "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -108,6 +183,10 @@ impl Capability {
         }
         if interface == "log" {
             return Ok(None);
+        }
+        // A recipe viewer's panel is part of capability `ui`.
+        if interface == "browser" {
+            return Ok(Some(Capability::Ui));
         }
         Capability::ALL
             .into_iter()
@@ -124,7 +203,14 @@ impl fmt::Display for Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
+            Capability::Ui => "ui",
+            Capability::Render => "render",
+            Capability::Input => "input",
+            Capability::Players => "players",
+            Capability::World => "world",
+            Capability::Recipes => "recipes",
         };
         f.write_str(name)
     }
@@ -153,6 +239,30 @@ impl Manifest {
         if m.capabilities.contains(&Capability::Registries) && m.api == API {
             return Err(format!(
                 "{MANIFEST}: capability registries needs api = \"0.2\""
+            ));
+        }
+        let server = m.side == Side::Server;
+        if server != (m.api == SERVER_API) {
+            return Err(format!(
+                "{MANIFEST}: a server mod is side = \"server\" with api = \"{SERVER_API}\", and only it"
+            ));
+        }
+        if let Some(c) = m
+            .capabilities
+            .iter()
+            .find(|c| c.on_server() != server && **c != Capability::Storage)
+        {
+            let side = if server { "client" } else { "server" };
+            return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
+        }
+        if let Some(c) = m
+            .capabilities
+            .iter()
+            .find(|c| c.is_experimental() && !m.experimental.contains(c))
+        {
+            return Err(format!(
+                "{MANIFEST}: capability {c} is experimental and may change in any release: \
+                 add experimental = [\"{c}\"] to use it"
             ));
         }
         if !m.namespaces.is_empty() && !m.capabilities.contains(&Capability::Registries) {
@@ -282,35 +392,18 @@ impl Package {
     }
 }
 
-/// Turns a `wasm32-unknown-unknown` cdylib built with the SDK into the
-/// component the game loads.
-#[cfg(feature = "pack")]
-pub fn componentize(core: &[u8]) -> Result<Vec<u8>, String> {
-    wit_component::ComponentEncoder::default()
-        .module(core)
-        .and_then(|e| e.validate(true).encode())
-        .map_err(|e| format!("{e:#}"))
-}
-
-/// The names a component imports: `horizon:mods/game@0.1.0`, ...
-#[cfg(feature = "pack")]
-pub fn component_imports(component: &[u8]) -> Result<Vec<String>, String> {
-    use wit_parser::{WorldItem, WorldKey};
-    let wit_component::DecodedWasm::Component(resolve, world) =
-        wit_component::decode(component).map_err(|e| format!("{e:#}"))?
-    else {
-        return Err("a WIT package, not a component".into());
+/// The `.hmod` files and mod folders in `dir`, by name.
+pub fn find(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
     };
-    let names = resolve.worlds[world]
-        .imports
-        .iter()
-        .map(|(key, item)| match (key, item) {
-            (WorldKey::Interface(id), _) | (_, WorldItem::Interface { id, .. }) => resolve
-                .id_of(*id)
-                .unwrap_or_else(|| resolve.name_world_key(key)),
-            _ => resolve.name_world_key(key),
-        });
-    Ok(names.collect())
+    let mut found: Vec<PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "hmod") || p.join(MANIFEST).is_file())
+        .collect();
+    found.sort();
+    found
 }
 
 #[cfg(test)]
@@ -348,6 +441,10 @@ capabilities = ["game-read", "hud"]
             storage,
             Err("uses capability storage, missing from horizon-mod.toml".into())
         );
+        assert_eq!(
+            m.check_imports(["horizon:mods/command@0.1.0"]),
+            Err("uses capability command, missing from horizon-mod.toml".into())
+        );
         let with_storage = EXAMPLE.replace("\"hud\"", "\"hud\", \"storage\"");
         let m = Manifest::parse(&with_storage).unwrap();
         assert_eq!(m.check_imports(["horizon:mods/storage@0.1.0"]), Ok(()));
@@ -357,10 +454,30 @@ capabilities = ["game-read", "hud"]
     fn refuses_bad_ids_and_apis() {
         let bad_id = EXAMPLE.replace("coords_hud", "Coords HUD");
         assert!(Manifest::parse(&bad_id).unwrap_err().contains("is not"));
-        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.3\"");
-        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.3"));
+        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.4\"");
+        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.4"));
         let unknown = format!("{EXAMPLE}network = true\n");
         assert!(Manifest::parse(&unknown).is_err());
+    }
+
+    #[test]
+    fn server_mods_are_api_0_3_with_server_capabilities() {
+        let server = |api: &str, side: &str, caps: &str| {
+            Manifest::parse(&format!(
+                "id = \"w\"\nname = \"W\"\nversion = \"1\"\napi = \"{api}\"\nside = \"{side}\"\ncapabilities = [{caps}]\n"
+            ))
+        };
+        let m = server("0.3", "server", "\"players\", \"storage\"").unwrap();
+        let imports = ["horizon:mods/players@0.1.0", "horizon:mods/storage@0.1.0"];
+        assert_eq!(m.check_imports(imports), Ok(()));
+        for (api, side) in [("0.3", "client"), ("0.3", "both"), ("0.1", "server")] {
+            let e = server(api, side, "").unwrap_err();
+            assert!(e.contains("a server mod is side"), "{e}");
+        }
+        let e = server("0.3", "server", "\"hud\"").unwrap_err();
+        assert!(e.contains("capability hud is for client mods"), "{e}");
+        let e = server("0.1", "client", "\"players\"").unwrap_err();
+        assert!(e.contains("capability players is for server mods"), "{e}");
     }
 
     #[test]
@@ -392,5 +509,22 @@ capabilities = ["game-read", "hud"]
         assert_eq!(p.manifest.id, "coords_hud");
         assert_eq!(p.wasm.as_deref(), Some(&b"\0asm"[..]));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn experimental_capabilities_need_the_opt_in() {
+        let base = "id = \"m\"\nname = \"M\"\nversion = \"1\"\napi = \"0.1\"\n";
+        let err = Manifest::parse(&format!("{base}capabilities = [\"ui\"]\n")).unwrap_err();
+        assert!(err.contains("experimental = [\"ui\"]"), "{err}");
+        let m = Manifest::parse(&format!(
+            "{base}capabilities = [\"ui\"]\nexperimental = [\"ui\"]\n"
+        ))
+        .unwrap();
+        assert_eq!(m.experimental, [Capability::Ui]);
+        // A capability that is (or became) stable is fine in the list.
+        Manifest::parse(&format!(
+            "{base}capabilities = [\"hud\"]\nexperimental = [\"hud\"]\n"
+        ))
+        .unwrap();
     }
 }

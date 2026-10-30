@@ -12,7 +12,7 @@ use super::{
 };
 use horizon_protocol::{
     PROTOCOL_VERSION,
-    connection::{ConnReader, ConnWriter, Connection},
+    connection::{Closer, ConnReader, ConnWriter, Connection},
     crypto::{offline_uuid, server_hash, uuid_string},
     packets::{
         Empty,
@@ -32,9 +32,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// ServerCommonPacketListenerImpl.KEEPALIVE_TIME and the disconnect timeout.
+/// ServerCommonPacketListenerImpl.keepConnectionAlive: a keep-alive every 15 s,
+/// and a client that has not answered the last one by the next is dropped.
 const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(15);
-const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// ReadTimeoutHandler(30) in ServerConnectionListener: a connection that sends
+/// nothing for 30 s.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Packets queued for one client beyond this many bytes disconnect it.
 const MAX_PENDING: usize = 96 << 20;
 /// Vanilla's server-side disconnect during login is a JSON component.
@@ -119,6 +122,88 @@ fn component_value(tag: &horizon_world::nbt::Tag) -> crate::server::json::Json {
     }
 }
 
+/// The inverse of [`component_value`]: a JSON component (a server.properties
+/// prompt) as ComponentSerialization.CODEC writes it with NbtOps. An array is
+/// its first component with the rest appended (`createFromList`); a list of
+/// components mixing plain strings and objects has the strings as `{text}`.
+pub fn component_tag(v: &crate::server::json::Json) -> horizon_world::nbt::Tag {
+    use crate::server::json::Json;
+    use horizon_world::nbt::{JavaString, Tag};
+    fn list(items: &[Json]) -> Tag {
+        same_kind(items.iter().map(component_tag).collect())
+    }
+    fn same_kind(mut tags: Vec<Tag>) -> Tag {
+        if tags.iter().any(|t| matches!(t, Tag::Compound(_))) {
+            for t in &mut tags {
+                if let Tag::String(s) = t {
+                    *t = Tag::compound([("text", Tag::String(s.clone()))]);
+                }
+            }
+        }
+        Tag::List(tags)
+    }
+    fn value(v: &Json) -> Tag {
+        match v {
+            Json::Bool(b) => Tag::Byte(i8::from(*b)),
+            Json::Number(n) => n.parse().map_or_else(
+                |_| Tag::Double(n.parse::<f64>().unwrap_or(0.0).to_bits()),
+                Tag::Int,
+            ),
+            Json::String(s) => Tag::String(JavaString::from(s.as_str())),
+            Json::Array(items) => list(items),
+            Json::Object(members) => Tag::compound(
+                members
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), value(v)))
+                    .collect::<Vec<_>>(),
+            ),
+            Json::Null => Tag::String(JavaString::from("")),
+        }
+    }
+    match v {
+        Json::Array(items) if !items.is_empty() => {
+            let mut first = component_tag(&items[0]);
+            if let Tag::String(s) = &first {
+                first = Tag::compound([("text", Tag::String(s.clone()))]);
+            }
+            if let Tag::Compound(map) = &mut first {
+                let mut extra = match map.remove(&JavaString::from("extra")) {
+                    Some(Tag::List(e)) => e,
+                    _ => Vec::new(),
+                };
+                extra.extend(items[1..].iter().map(component_tag));
+                map.insert(JavaString::from("extra"), same_kind(extra));
+            }
+            first
+        }
+        Json::Object(members) => {
+            if let [(key, Json::String(text))] = members.as_slice()
+                && key == "text"
+            {
+                return Tag::String(JavaString::from(text.as_str()));
+            }
+            Tag::compound(
+                members
+                    .iter()
+                    .map(|(k, v)| {
+                        let tag = match k.as_str() {
+                            "extra" | "with" => match v {
+                                Json::Array(items) => list(items),
+                                other => value(other),
+                            },
+                            _ => value(v),
+                        };
+                        (k.as_str(), tag)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        }
+        Json::String(s) | Json::Number(s) => Tag::String(JavaString::from(s.as_str())),
+        Json::Bool(b) => Tag::String(JavaString::from(b.to_string().as_str())),
+        _ => Tag::String(JavaString::from("")),
+    }
+}
+
 /// StringUtil.isValidPlayerName.
 pub fn valid_name(name: &str) -> bool {
     (1..=16).contains(&name.len()) && name.chars().all(|c| c as u32 > 32 && (c as u32) < 127)
@@ -152,6 +237,8 @@ pub struct PlayerSender {
     held: Arc<Mutex<Vec<Vec<u8>>>>,
     /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
     posted: Arc<AtomicUsize>,
+    /// A network connection's keep-alive clock (none for a test's channel).
+    watch: Option<Arc<KeepAliveWatch>>,
 }
 impl PlayerSender {
     pub fn new(tx: Sender<Out>, pending: Arc<AtomicUsize>) -> Self {
@@ -160,6 +247,19 @@ impl PlayerSender {
             pending,
             held: Arc::default(),
             posted: Arc::default(),
+            watch: None,
+        }
+    }
+    /// Whether the client has answered no keep-alive for too long, read
+    /// without the writer thread, which a client that stops reading blocks.
+    pub fn timed_out(&self) -> bool {
+        self.watch.as_ref().is_some_and(|w| w.timed_out())
+    }
+    /// Close the connection now: the writer and reader threads then end,
+    /// even blocked on it.
+    pub fn close(&self) {
+        if let Some(w) = &self.watch {
+            w.closer.close();
         }
     }
     fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
@@ -299,7 +399,7 @@ fn serve_legacy(mut stream: TcpStream, shared: &Shared) -> Result<(), String> {
     let body = if data.len() == 1 {
         format!("{motd}\u{a7}{online}\u{a7}{max}")
     } else {
-        if data[1] != 1 {
+        if data.get(1) != Some(&1) {
             return Ok(());
         }
         if data.len() > 2 {
@@ -595,9 +695,16 @@ fn serve_login(
         _ => return Err("expected a login hello".into()),
     };
     if !valid_name(&hello.name) {
+        // handleHello's validState throws; Connection.exceptionCaught sends the
+        // exception as the login disconnect.
         login_disconnect(
             &mut c,
-            &translatable("multiplayer.disconnect.invalid_name", &[]),
+            &translatable(
+                "disconnect.genericReason",
+                &[
+                    "Internal Exception: java.lang.IllegalStateException: Invalid characters in username",
+                ],
+            ),
         );
         return Ok(());
     }
@@ -607,9 +714,11 @@ fn serve_login(
         .as_ref()
         .map(|log| user_name(&hello.name, address, log))
         .unwrap_or_default();
-    // handleHello: online mode authenticates first; offline mode derives the
-    // profile from the name.
-    let (uuid, properties) = match &shared.config.online {
+    // handleHello: online mode authenticates first; offline mode, and the
+    // integrated server's own player through memory, derive the profile
+    // from the name.
+    let online = shared.config.online.as_ref().filter(|_| !c.is_memory());
+    let (uuid, properties) = match online {
         Some(online) => match authenticate(&mut c, shared, online, &hello.name, address, &user) {
             Ok(Ok(profile)) => profile,
             Ok(Err(refused)) => {
@@ -695,7 +804,8 @@ fn login_and_configure(
         }
     }
     // Configuration.
-    let sync: &SyncData = &shared.sync;
+    let sync_data = shared.sync();
+    let sync: &SyncData = &sync_data;
     let send = |c: &mut Connection, p: cfg::Clientbound| c.send(&p.encode()).map_err(e);
     send(
         c,
@@ -703,12 +813,23 @@ fn login_and_configure(
             channel: "minecraft:brand".into(),
             data: {
                 let mut w = horizon_protocol::buf::Writer::new();
-                // MinecraftServer.getServerModName.
-                w.string("vanilla");
+                // MinecraftServer.getServerModName: "vanilla" there; a modded
+                // server names itself, and Horizon's says "horizon", as its client does.
+                w.string("horizon");
                 w.data
             },
         }),
     )?;
+    // ServerConfigurationPacketListenerImpl.startConfiguration: links, only
+    // when there are any (MinecraftServer.serverLinks is empty elsewhere).
+    if !shared.config.server_links.is_empty() {
+        send(
+            c,
+            cfg::Clientbound::ServerLinks(cfg::ServerLinks {
+                links: shared.config.server_links.clone(),
+            }),
+        )?;
+    }
     send(
         c,
         cfg::Clientbound::UpdateEnabledFeatures(cfg::UpdateEnabledFeatures {
@@ -741,10 +862,88 @@ fn login_and_configure(
             _ => {}
         }
     };
-    for packet in sync.registry_packets(known_pack) {
+    // horizon-clients-only: the brand the client sent ("vanilla" when it sent
+    // none) must be Horizon's.
+    if shared.config.horizon_clients_only && brand != "horizon" {
+        let text = super::HORIZON_CLIENTS_ONLY_REASON;
+        let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(text));
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        if let Some(log) = &shared.config.log {
+            let line = format!(
+                "Disconnecting {name}: its client is \"{brand}\", not Horizon (horizon-clients-only)"
+            );
+            (log.write)("Server thread", "INFO", &line);
+        }
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
+        return Ok(None);
+    }
+    // A Horizon client hears that this server runs its mods' quiet commands
+    // (horizon_protocol::quiet); a vanilla one is told nothing.
+    if brand == "horizon" {
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: horizon_protocol::quiet::CHANNEL.into(),
+                data: Vec::new(),
+            }),
+        )?;
+    }
+    if brand == "horizon"
+        && let Some(hash) = sync.content_identity
+    {
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: crate::content_identity::CHANNEL.into(),
+                data: hash.to_vec(),
+            }),
+        )?;
+        send(c, cfg::Clientbound::Ping(cfg::Ping { id: 0 }))?;
+        let mut content_match = false;
+        loop {
+            let (id, payload) = c.recv().map_err(e)?;
+            match cfg::Serverbound::decode(id, &payload).map_err(e)? {
+                cfg::Serverbound::CustomPayload(p)
+                    if p.channel == crate::content_identity::CHANNEL =>
+                {
+                    content_match = p.data == hash;
+                }
+                cfg::Serverbound::Pong(p) if p.id == 0 => break,
+                cfg::Serverbound::ClientInformation(i) => info = i,
+                _ => {}
+            }
+        }
+        if !content_match {
+            let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(
+                crate::content_identity::MISMATCH,
+            ));
+            let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+            lost(
+                shared,
+                &format!("{name} ({})", uuid_string(uuid)),
+                crate::content_identity::MISMATCH,
+            );
+            return Ok(None);
+        }
+    }
+    for packet in sync.registry_packets(known_pack, &shared.config.levels) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    // addOptionalTasks: the code of conduct task comes first.
+    if let Some(text) =
+        super::code_of_conduct::pick(&shared.config.code_of_conducts, &info.language)
+    {
+        accept_code_of_conduct(c, text, &mut info)?;
+    }
+    if let Some(pack) = &shared.config.resource_pack
+        && let Some(rejected) = offer_pack(c, pack, &mut info)?
+    {
+        let (reason, text) = pack_rejected(shared, name, rejected);
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), &text);
+        return Ok(None);
+    }
     send(c, cfg::Clientbound::FinishConfiguration(Empty))?;
     loop {
         let (id, payload) = c.recv().map_err(e)?;
@@ -763,27 +962,170 @@ fn login_and_configure(
     }))
 }
 
+/// ServerboundResourcePackPacket.Action.DECLINED.
+const PACK_DECLINED: i32 = 1;
+
+/// ServerCommonPacketListenerImpl.handleResourcePackResponse: a player who
+/// declined the required pack is disconnected. The reason and its text.
+fn pack_rejected(shared: &Shared, name: &str, pack: u128) -> (horizon_world::nbt::Tag, String) {
+    let reason = translatable("multiplayer.requiredTexturePrompt.disconnect", &[]);
+    let Some(log) = &shared.config.log else {
+        return (reason, String::new());
+    };
+    let line = format!(
+        "Disconnecting {name} due to resource pack {} rejection",
+        uuid_string(pack)
+    );
+    (log.write)("Server thread", "INFO", &line);
+    let text = horizon_protocol::text::plain(&reason, &log.lang);
+    (reason, text)
+}
+
+/// RateKickingConnection: a player whose packets a second passed rate-limit
+/// is disconnected ("disconnect.exceeded_packet_rate") with a WARN, as
+/// vanilla's kick logs it.
+fn rate_exceeded(shared: &Shared, average: f32) -> (horizon_world::nbt::Tag, String) {
+    let reason = translatable("disconnect.exceeded_packet_rate", &[]);
+    let Some(log) = &shared.config.log else {
+        return (reason, String::new());
+    };
+    let line = format!(
+        "Player exceeded rate-limit (sent {} packets per second)",
+        crate::java_text::float_to_string(average)
+    );
+    (log.write)("Server thread", "WARN", &line);
+    let text = horizon_protocol::text::plain(&reason, &log.lang);
+    (reason, text)
+}
+
+/// ServerResourcePackConfigurationTask: offer the server's pack, then wait
+/// for the client's final answer (`Action.isTerminal`: anything but
+/// ACCEPTED or DOWNLOADED). The player may take a while to answer the
+/// prompt, so the connection is kept alive meanwhile, as
+/// ServerConfigurationPacketListenerImpl.tick does. The id of a required
+/// pack the client declined, which disconnects it.
+fn offer_pack(
+    c: &mut Connection,
+    pack: &crate::server::properties::ResourcePackInfo,
+    info: &mut ClientInformation,
+) -> Result<Option<u128>, String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    let push = cfg::ResourcePackPush {
+        id: pack.id,
+        url: pack.url.clone(),
+        hash: pack.hash.clone(),
+        required: pack.required,
+        prompt: pack.prompt.as_ref().map(component_tag),
+    };
+    c.send(&cfg::Clientbound::ResourcePackPush(push).encode())
+        .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
+            let rejected = r.action == PACK_DECLINED && pack.required;
+            Some(Ok(rejected.then_some(r.id)))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// ServerCodeOfConductConfigurationTask: send the text, then wait for
+/// ServerboundAcceptCodeOfConductPacket (`handleAcceptCodeOfConduct`),
+/// keeping the connection alive while the player reads. Finishing the
+/// configuration first is `finishCurrentTask` of the wrong task type, an
+/// error that drops the connection.
+fn accept_code_of_conduct(
+    c: &mut Connection,
+    text: &str,
+    info: &mut ClientInformation,
+) -> Result<(), String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    c.send(&cfg::Clientbound::CodeOfConduct(cfg::CodeOfConduct { text: text.into() }).encode())
+        .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::AcceptCodeOfConduct(_)) => Some(Ok(())),
+        Ok(cfg::Serverbound::FinishConfiguration(_)) => {
+            Some(Err("Unexpected configuration task".to_owned()))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// Read configuration packets until `answer` has a result, sending a
+/// keep-alive every `KEEP_ALIVE_EVERY` meanwhile
+/// (ServerConfigurationPacketListenerImpl.tick).
+fn wait_alive<T>(
+    c: &mut Connection,
+    mut answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
+) -> Result<T, String> {
+    std::thread::scope(|scope| {
+        let (stop, stopped) = channel::<()>();
+        let writer = &mut c.writer;
+        scope.spawn(move || {
+            let start = Instant::now();
+            while stopped.recv_timeout(KEEP_ALIVE_EVERY) == Err(RecvTimeoutError::Timeout) {
+                let id = i64::try_from(start.elapsed().as_millis()).unwrap_or(0);
+                let keep_alive = cfg::Clientbound::KeepAlive(cfg::KeepAlive { id });
+                if writer.send(&keep_alive.encode()).is_err() {
+                    break;
+                }
+            }
+        });
+        let result = loop {
+            let packet = match c.reader.recv() {
+                Ok((id, payload)) => {
+                    cfg::Serverbound::decode(id, &payload).map_err(|e| e.to_string())
+                }
+                Err(err) => break Err(err.to_string()),
+            };
+            if let Some(result) = answer(packet) {
+                break result;
+            }
+        };
+        drop(stop);
+        result
+    })
+}
+
 fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::SocketAddr) {
     let conn_id = shared.next_id();
     let events = shared.events.clone();
-    let _ = c.reader.set_read_timeout(Some(KEEP_ALIVE_TIMEOUT));
+    let _ = c.reader.set_read_timeout(Some(READ_TIMEOUT));
     let (mut reader, writer) = c.split();
     let (tx, rx) = channel();
     let pending = Arc::new(AtomicUsize::new(0));
     let latency = Arc::new(AtomicI32::new(0));
     let alive = Arc::new(AtomicI64::new(-1));
-    let sender = PlayerSender::new(tx.clone(), pending.clone());
+    let start = Instant::now();
+    let mut sender = PlayerSender::new(tx.clone(), pending.clone());
+    if let Ok(closer) = reader.closer() {
+        sender.watch = Some(Arc::new(KeepAliveWatch {
+            start,
+            alive: alive.clone(),
+            closer,
+        }));
+    }
     let writer_thread = {
         let (alive, latency, pending) = (alive.clone(), latency.clone(), pending.clone());
         std::thread::Builder::new()
             .name(format!("horizon-lan-out-{conn_id}"))
             .spawn(move || {
-                // A dedicated server's tick comes first (horizon_threads).
+                // Ticks and frames come first (horizon_threads).
                 horizon_threads::behind_server();
-                write_loop(writer, rx, alive, latency, pending)
+                write_loop(writer, rx, start, alive, latency, pending)
             })
             .ok()
     };
+    let name = parts.name.clone();
     let joined = Joined {
         conn: conn_id,
         uuid: parts.uuid,
@@ -795,8 +1137,32 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
         latency,
         address,
     };
+    let required_pack = shared
+        .config
+        .resource_pack
+        .as_ref()
+        .is_some_and(|p| p.required);
     let reason = if events.send(NetEvent::Joined(Box::new(joined))).is_ok() {
-        read_loop(&mut reader, conn_id, &events, &alive)
+        match read_loop(
+            &mut reader,
+            conn_id,
+            &events,
+            &alive,
+            required_pack,
+            shared.config.rate_limit,
+        ) {
+            Ended::Closed(reason) => reason,
+            Ended::PackDeclined(rejected) => {
+                let (reason, text) = pack_rejected(shared, &name, rejected);
+                let _ = tx.send(Out::Disconnect(reason));
+                text
+            }
+            Ended::RateExceeded(average) => {
+                let (reason, text) = rate_exceeded(shared, average);
+                let _ = tx.send(Out::Disconnect(reason));
+                text
+            }
+        }
     } else {
         "server closed".to_owned()
     };
@@ -808,35 +1174,103 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     shared.release(parts.uuid);
 }
 
+/// RateKickingConnection: the packets a second a connection averages, as
+/// Connection.tickSecond keeps it, against server.properties' rate-limit.
+struct PacketRate {
+    limit: f32,
+    received: u32,
+    average: f32,
+    next: Instant,
+}
+impl PacketRate {
+    /// The tracker of a connection, or none when the limit is off (0 or less).
+    fn new(limit: i32, now: Instant) -> Option<Self> {
+        (limit > 0).then(|| Self {
+            limit: limit as f32,
+            received: 0,
+            average: 0.0,
+            next: now + Duration::from_secs(1),
+        })
+    }
+    /// A packet arrived. Every whole second the average updates
+    /// (Mth.lerp(0.75F, received, average)): over the limit, Some of it.
+    fn received(&mut self, now: Instant) -> Option<f32> {
+        let exceeded = if now >= self.next {
+            // One tick with the count, then a packetless tick's 0.75 decay
+            // for each further whole second already gone.
+            let first = self.received as f32 + 0.75 * (self.average - self.received as f32);
+            self.average = first;
+            self.received = 0;
+            let elapsed = (now - self.next).as_secs() + 1;
+            if elapsed > 1 {
+                self.average *= 0.75f32.powi((elapsed - 1) as i32);
+            }
+            self.next += Duration::from_secs(elapsed);
+            (first > self.limit).then_some(first)
+        } else {
+            None
+        };
+        self.received = self.received.saturating_add(1);
+        exceeded
+    }
+}
+
+/// Why a play connection's read loop ended.
+enum Ended {
+    /// The connection closed (the reason for the log).
+    Closed(String),
+    /// The player declined the required resource pack (its id).
+    PackDeclined(u128),
+    /// The average packets a second passed rate-limit (the average).
+    RateExceeded(f32),
+}
+
+/// Forward the player's packets until the connection ends: why it did, the
+/// id of a required resource pack the player declined (with
+/// `required_pack`), or a rate-limit excess, which disconnects them.
 fn read_loop(
     reader: &mut ConnReader,
     conn: u32,
     events: &Sender<NetEvent>,
     alive: &AtomicI64,
-) -> String {
+    required_pack: bool,
+    rate_limit: i32,
+) -> Ended {
+    let mut rate = PacketRate::new(rate_limit, Instant::now());
     loop {
         let (id, payload) = match reader.recv() {
             Ok(p) => p,
             // The client closed the connection: Connection.channelInactive
             // without details, multiplayer.disconnect.generic.
             Err(e)
-                if e.0 == "Connection closed by the server"
+                if e.is_end_of_stream()
                     || e.0.contains("reset by peer")
                     || e.0.contains("aborted") =>
             {
-                return "Disconnected".to_owned();
+                return Ended::Closed("Disconnected".to_owned());
             }
-            Err(e) => return e.to_string(),
+            Err(e) => return Ended::Closed(e.to_string()),
         };
+        if let Some(average) = rate.as_mut().and_then(|r| r.received(Instant::now())) {
+            return Ended::RateExceeded(average);
+        }
         match play::Serverbound::decode(id, &payload) {
             Ok(play::Serverbound::KeepAlive(k)) => alive.store(k.id, Ordering::Relaxed),
+            Ok(play::Serverbound::ResourcePack(r))
+                if r.action == PACK_DECLINED && required_pack =>
+            {
+                return Ended::PackDeclined(r.id);
+            }
             Ok(p) => {
-                if events.send(NetEvent::Packet(conn, Box::new(p))).is_err() {
-                    return "server closed".to_owned();
+                if events
+                    .send(NetEvent::Packet(conn, Box::new(p), payload.len()))
+                    .is_err()
+                {
+                    return Ended::Closed("server closed".to_owned());
                 }
             }
             // A malformed packet disconnects like vanilla's decoder exception.
-            Err(e) => return format!("Invalid packet {id}: {e}"),
+            Err(e) => return Ended::Closed(format!("Invalid packet {id}: {e}")),
         }
     }
 }
@@ -917,14 +1351,33 @@ fn send_body(writer: &mut ConnWriter, body: &[u8]) -> horizon_protocol::Result<(
     }
 }
 
+/// The keep-alive clock of a play connection, shared by the writer thread
+/// (which sends the keep-alives) and the game thread (which watches them).
+struct KeepAliveWatch {
+    /// What keep-alive ids count from: an id is its sending time in ms.
+    start: Instant,
+    /// The id of the last keep-alive the client answered (-1: none yet).
+    alive: Arc<AtomicI64>,
+    closer: Closer,
+}
+impl KeepAliveWatch {
+    /// keepConnectionAlive sends a keep-alive 15 s after the last and drops
+    /// a client that has not answered it 15 s later: nothing answered of
+    /// what was sent in the last 30 s.
+    fn timed_out(&self) -> bool {
+        let answered = u64::try_from(self.alive.load(Ordering::Relaxed)).unwrap_or(0);
+        self.start.elapsed() > Duration::from_millis(answered) + 2 * KEEP_ALIVE_EVERY
+    }
+}
+
 fn write_loop(
     mut writer: ConnWriter,
     rx: Receiver<Out>,
+    start: Instant,
     alive: Arc<AtomicI64>,
     latency: Arc<AtomicI32>,
     pending: Arc<AtomicUsize>,
 ) {
-    let start = Instant::now();
     let mut sent_at: Option<(i64, Instant)> = None;
     let mut next = Instant::now() + KEEP_ALIVE_EVERY;
     loop {
@@ -953,22 +1406,16 @@ fn write_loop(
             Err(RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
-        if let Some((id, at)) = sent_at {
-            if alive.load(Ordering::Relaxed) == id {
-                let ms = i32::try_from(at.elapsed().as_millis()).unwrap_or(i32::MAX);
-                let old = latency.load(Ordering::Relaxed);
-                latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
-                sent_at = None;
-            } else if at.elapsed() > KEEP_ALIVE_TIMEOUT {
-                let _ = writer.send(
-                    &play::Clientbound::Disconnect(cfg::Disconnect {
-                        reason: translatable("disconnect.timeout", &[]),
-                    })
-                    .encode(),
-                );
-                break;
-            }
+        if let Some((id, at)) = sent_at
+            && alive.load(Ordering::Relaxed) == id
+        {
+            let ms = i32::try_from(at.elapsed().as_millis()).unwrap_or(i32::MAX);
+            let old = latency.load(Ordering::Relaxed);
+            latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
+            sent_at = None;
         }
+        // The game thread times a client out ([`PlayerSender::timed_out`]):
+        // this thread may be blocked on a client that stopped reading.
         if sent_at.is_none() && now >= next {
             let id = i64::try_from(start.elapsed().as_millis()).unwrap_or(0);
             if writer
@@ -987,6 +1434,82 @@ fn write_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Logs in through `c` and answers the `LoginFinished` profile.
+    fn login_profile(mut c: Connection, name: &str) -> login::GameProfile {
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port: 0,
+                intent: handshake::LOGIN,
+            })
+            .encode(),
+        )
+        .unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: name.into(),
+                uuid: offline_uuid(name),
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            match login::Clientbound::decode(id, &payload).unwrap() {
+                login::Clientbound::Compression(p) => c.set_compression(p.threshold),
+                login::Clientbound::LoginFinished(p) => return p.profile,
+                other => panic!("unexpected login packet {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn prompts_become_the_components_vanilla_sends() {
+        let tag = |json: &str| {
+            let tag = component_tag(&crate::server::json::parse(json, true).unwrap());
+            component_json(&tag)
+        };
+        assert_eq!(tag(r#"{"text":"Hi"}"#), r#""Hi""#);
+        assert_eq!(tag(r#""Hi""#), r#""Hi""#);
+        assert_eq!(
+            tag(r#"["Hi ",{"text":"there","bold":true}]"#),
+            r#"{"text":"Hi ","extra":[{"text":"there","bold":true}]}"#
+        );
+        assert_eq!(
+            tag(r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#),
+            r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#
+        );
+    }
+
+    /// The owner's login never waits on the profile fetch, even one that
+    /// never answers, and carries no properties.
+    #[test]
+    fn the_owners_login_never_waits_on_the_profile_fetch() {
+        let (_hold, never) = channel::<()>();
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(move || {
+                let _ = never.recv();
+                Vec::new()
+            }))),
+            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let start = Instant::now();
+        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(owner.uuid, offline_uuid("Owner"));
+        assert!(owner.properties.is_empty());
+    }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {
         match out {
@@ -1095,5 +1618,67 @@ mod tests {
         sender.flush();
         assert_eq!(bodies(&rx), [vec![vec![5]], vec![b"disconnect".to_vec()]]);
         assert_eq!(sender.pending.load(Ordering::Relaxed), 5);
+    }
+
+    /// A client that answers no keep-alive is timed out 30 s after the last
+    /// one it answered was sent (or after joining), and closing ends a read
+    /// blocked on its connection.
+    #[test]
+    fn a_silent_client_times_out_and_closes() {
+        let (a, _b) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, _writer) = Connection::local(a).split();
+        let ago = |s| Instant::now().checked_sub(Duration::from_secs(s)).unwrap();
+        let watch = |start, answered| KeepAliveWatch {
+            start,
+            alive: Arc::new(AtomicI64::new(answered)),
+            closer: reader.closer().unwrap(),
+        };
+        assert!(!watch(ago(29), -1).timed_out());
+        assert!(watch(ago(31), -1).timed_out());
+        // Answered the keep-alive sent 15 s in: fine until 45 s.
+        assert!(!watch(ago(44), 15_000).timed_out());
+        assert!(watch(ago(46), 15_000).timed_out());
+        let closer = watch(ago(0), -1).closer;
+        let blocked = std::thread::spawn(move || reader.recv().is_err());
+        std::thread::sleep(Duration::from_millis(50));
+        closer.close();
+        assert!(blocked.join().unwrap(), "the read should end once closed");
+    }
+
+    #[test]
+    fn a_rate_over_the_limit_kicks() {
+        let t0 = Instant::now();
+        let second = Duration::from_secs(1);
+        // Off at 0 (and below).
+        assert!(PacketRate::new(0, t0).is_none());
+        assert!(PacketRate::new(-1, t0).is_none());
+        let mut rate = PacketRate::new(10, t0).unwrap();
+        // 15 packets inside the first second average 3.75 at the tick.
+        for _ in 0..15 {
+            assert_eq!(rate.received(t0), None);
+        }
+        assert_eq!(rate.received(t0 + second), None);
+        // 50 a second averages 12.5: over a limit of 10 at the first tick.
+        let mut rate = PacketRate::new(10, t0).unwrap();
+        for _ in 0..50 {
+            rate.received(t0);
+        }
+        assert_eq!(rate.received(t0 + second), Some(12.5));
+    }
+
+    #[test]
+    fn an_idle_gap_decays_without_a_loop() {
+        let t0 = Instant::now();
+        let mut rate = PacketRate {
+            limit: 100.0,
+            received: 0,
+            average: 40.0,
+            next: t0,
+        };
+        // Ten seconds later: one tick (0 packets: 40 * 0.75 = 30), then ten
+        // more packetless decays — ~1.69 — with `next` past now.
+        assert_eq!(rate.received(t0 + Duration::from_secs(10)), None);
+        assert!(rate.average > 1.5 && rate.average < 2.0, "{}", rate.average);
+        assert!(rate.next > t0 + Duration::from_secs(10));
     }
 }

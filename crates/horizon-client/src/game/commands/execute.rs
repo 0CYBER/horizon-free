@@ -64,6 +64,17 @@ pub(in crate::game) struct ExecState {
     pub function_depth: u32,
 }
 
+/// A modifier that brings the sources to `max_command_forks` ends the chain
+/// (`BuildContexts.ERROR_FORK_LIMIT_REACHED`); the error is only shown when
+/// no fork came before it (`CommandSourceStack.handleError`).
+fn fork_limit_reached(forked: bool, limit: usize) -> R<i32> {
+    if forked {
+        Ok(0)
+    } else {
+        Err(err("command.forkLimit", &[&limit]))
+    }
+}
+
 /// Java's `(int)`/`(short)`/`(byte)` narrowing of a double.
 fn java_int(v: f64) -> i32 {
     v as i32
@@ -145,8 +156,41 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
-            _ => 0.0,
+            // ArmorStand.getDefaultDimensions: a marker's are empty, a small
+            // stand's are BABY_DIMENSIONS, whose eye height is 0.9875F.
+            Target::Stand(id) => match self.armor_stands.iter().find(|a| a.id == id) {
+                Some(a) if a.marker => 0.0,
+                Some(a) if a.small => f64::from(0.9875f32),
+                _ => self.type_eye_height(&self.target_type(t)),
+            },
+            // Entity.getEyeHeight: the type's dimensions.
+            _ => self.type_eye_height(&self.target_type(t)),
         }
+    }
+    /// `EntityType.getDimensions().eyeHeight()` from `entity-types.json`,
+    /// read once: a float, widened as `Entity.getEyeY` does.
+    fn type_eye_height(&self, ty: &str) -> f64 {
+        static EYE_HEIGHTS: std::sync::OnceLock<std::collections::HashMap<String, f64>> =
+            std::sync::OnceLock::new();
+        EYE_HEIGHTS
+            .get_or_init(|| {
+                std::fs::read(self.options.resources.join("entity-types.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| {
+                        v.as_object().map(|o| {
+                            o.iter()
+                                .filter_map(|(k, t)| {
+                                    Some((k.clone(), f64::from(t["eye_height"].as_f64()? as f32)))
+                                })
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default()
+            })
+            .get(ty)
+            .copied()
+            .unwrap_or(0.0)
     }
     /// EntityAnchorArgument.Anchor.apply.
     pub(super) fn anchor_position(&self, s: &Source) -> [f64; 3] {
@@ -155,14 +199,20 @@ impl Game<'_> {
             _ => s.pos,
         }
     }
-    /// Evaluate `f` with `source` as the command source.
+    /// Evaluate `f` with `source` as the command source, in the source's
+    /// level (`CommandSourceStack.getLevel`): a server puts that level in
+    /// place for it.
     pub(in crate::game) fn with_source<T>(
         &mut self,
         source: Source,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let previous = self.command_source.replace(source);
+        let back = self.enter_command_level(source.dimension);
         let out = f(self);
+        if let Some(back) = back {
+            self.enter_command_level(back);
+        }
         self.command_source = previous;
         out
     }
@@ -264,6 +314,8 @@ impl Game<'_> {
 
     /// ExecuteCommand: `ctx` is the context holding the `execute` literal.
     pub(in crate::game) fn run_execute(&mut self, ctx: &Context) -> R<i32> {
+        // BuildContexts: a modifier may not bring the sources to this many.
+        let fork_limit = self.ui.rules.int("max_command_forks") as usize;
         let mut sources = vec![self.command_source.unwrap_or_else(|| self.player_source())];
         let mut c = ctx;
         // A fork modifier (as, at, positioned as, rotated as, facing entity,
@@ -315,6 +367,9 @@ impl Game<'_> {
                     let mut kept = Vec::new();
                     for s in sources {
                         let (keep, _) = self.with_source(s, |g| g.condition(c, want))?;
+                        if kept.len() + usize::from(keep) >= fork_limit {
+                            return fork_limit_reached(forked, fork_limit);
+                        }
                         if keep {
                             kept.push(s);
                         }
@@ -330,7 +385,11 @@ impl Game<'_> {
                     };
                     let mut next = Vec::new();
                     for s in sources {
-                        next.extend(self.with_source(s, |g| g.modify(word, c, s))?);
+                        let new = self.with_source(s, |g| g.modify(word, c, s))?;
+                        if next.len() + new.len() >= fork_limit {
+                            return fork_limit_reached(forked, fork_limit);
+                        }
+                        next.extend(new);
                     }
                     sources = next;
                 }
@@ -447,11 +506,13 @@ impl Game<'_> {
             "at" => targets(self)?
                 .into_iter()
                 .filter_map(|t| {
+                    // CommandSourceStack.withLevel(entity.level()).
+                    let level = self.target_level(t);
                     Some(Source {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
-                        dimension: self.dim,
-                        level: None,
+                        dimension: level,
+                        level: (level != self.dim).then_some(level),
                         ..s
                     })
                 })
@@ -459,9 +520,10 @@ impl Game<'_> {
             "positioned" if c.has("as") => targets(self)?
                 .into_iter()
                 .filter_map(|t| {
+                    // withPosition keeps the anchor (only `positioned <pos>`
+                    // resets it to the feet).
                     Some(Source {
                         pos: self.target_position(t)?,
-                        eyes: false,
                         ..s
                     })
                 })
@@ -598,10 +660,74 @@ impl Game<'_> {
                     .collect(),
                 _ => Vec::new(),
             },
-            Some("vehicle") => match entity {
-                Target::Player => self.riding.map(Target::Mob).into_iter().collect(),
+            // Leashable.getLeashHolder: a fence knot is not an entity here.
+            Some("leasher") => match entity {
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .and_then(|m| m.extra.leash.map(|holder| (holder, m.extra.leash_player)))
+                    .and_then(|(holder, player)| match holder {
+                        // The player who tied it (the host's when unrecorded).
+                        horizon_client::mobs::leash::Holder::Player => {
+                            let uuid = player.or(self.level.player_uuid)?;
+                            self.target_by_uuid(horizon_client::lan::playerdata::ints_uuid(uuid))
+                        }
+                        horizon_client::mobs::leash::Holder::Mob(i) => Some(Target::Mob(i)),
+                        horizon_client::mobs::leash::Holder::Knot(_) => None,
+                    })
+                    .into_iter()
+                    .collect(),
                 _ => Vec::new(),
             },
+            // TraceableEntity.getOwner: who shot a projectile, who threw an
+            // item, who summoned a vex.
+            Some("origin") => match entity {
+                Target::Projectile(id) => self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .find(|p| p.id == id)
+                    .and_then(|p| match (p.owner?, p.guest) {
+                        // A guest's shot: `Who::Player` is them.
+                        (horizon_client::mobs::Who::Player, Some(conn))
+                            if self.lan_acting == Some(conn) =>
+                        {
+                            Some(Target::Player)
+                        }
+                        (horizon_client::mobs::Who::Player, Some(conn)) => {
+                            Some(Target::Guest(conn))
+                        }
+                        (horizon_client::mobs::Who::Player, None) => Some(Target::Player),
+                        (horizon_client::mobs::Who::Mob(id), _) => Some(Target::Mob(id)),
+                    })
+                    .into_iter()
+                    .collect(),
+                Target::Item(id) => self
+                    .dropped
+                    .iter()
+                    .find(|d| d.id == id)
+                    .and_then(|d| d.thrower)
+                    .and_then(|words| {
+                        let uuid = words
+                            .iter()
+                            .fold(0u128, |all, w| all << 32 | u128::from(*w as u32));
+                        self.target_by_uuid(uuid)
+                    })
+                    .into_iter()
+                    .collect(),
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && m.kind.id == "minecraft:vex")
+                    .map(|m| m.extra.counter2 as u32)
+                    .filter(|owner| *owner != 0)
+                    .map(Target::Mob)
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            },
+            Some("vehicle") => self.ride_vehicle(entity).into_iter().collect(),
             Some("controller") | Some("passengers") => match entity {
                 Target::Mob(id) if self.mobs.iter().any(|m| m.id == id && m.rider.is_some()) => {
                     vec![Target::Player]
@@ -659,8 +785,8 @@ impl Game<'_> {
     }
     /// The highest block of a heightmap type at a column (`Level.getHeight`).
     fn heightmap_at(&self, kind: &str, x: i32, z: i32) -> i32 {
-        let top = horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT;
-        for y in (horizon_client::chunk::MIN_Y..top).rev() {
+        let top = self.world.top_y();
+        for y in (self.world.bottom_y()..top).rev() {
             let state = self.world.block(x, y, z);
             if state == self.world.air {
                 continue;
@@ -683,7 +809,7 @@ impl Game<'_> {
                 return y + 1;
             }
         }
-        horizon_client::chunk::MIN_Y
+        self.world.bottom_y()
     }
     /// A `store` modifier: a new callback in the source's chain.
     fn store_source(&mut self, c: &Context, s: Source) -> R<Source> {
@@ -802,10 +928,12 @@ impl Game<'_> {
                 .coords(c, "pos")
                 .map(|co| co.block(self.source_position(), self.source_rotation()));
             let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
-            return Ok(flag(
-                dimension == self.dim
-                    && p.is_some_and(|p| self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))),
-            ));
+            // ExecuteCommand.isChunkLoaded: ENTITY_TICKING, which is past lit.
+            let loaded = |p: [i32; 3]| {
+                let key = (p[0] >> 4, p[2] >> 4);
+                self.world.chunks.contains_key(&key) && self.streaming.is_lit(key.0, key.1)
+            };
+            return Ok(flag(dimension == self.dim && p.is_some_and(loaded)));
         }
         if c.has("dimension") {
             let dimension = self.command_source.map_or(self.dim, |s| s.dimension);

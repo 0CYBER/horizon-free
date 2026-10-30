@@ -636,7 +636,4 @@ impl LevelTicks {
     pub fn copy_area(&mut self, area: TickArea, offset: BlockPos) {
         self.schedule_copy(self.area_ticks(area), offset);
     }
-    pub fn copy_area_from(&mut self, source: &Self, area: TickArea, offset: BlockPos) {
-        self.schedule_copy(source.area_ticks(area), offset);
-    }
 }

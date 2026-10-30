@@ -16,6 +16,7 @@ use super::{
     nav::NavKind,
     path::PathType,
 };
+use crate::beehive::BeehiveExt;
 use horizon_core::random::{LegacyRandom, RandomSource};
 use std::collections::HashMap;
 
@@ -103,6 +104,17 @@ pub fn has_stung(m: &Mob) -> bool {
 pub fn rolling(m: &Mob) -> bool {
     flag(m, FLAG_ROLL)
 }
+/// A client's bee from the server's `DATA_FLAGS_ID` and `DATA_ANGER_END_TIME`
+/// (the texture and the roll read them).
+pub fn set_synced(m: &mut Mob, flags: Option<u8>, anger_end: Option<i64>) {
+    let b = st(m);
+    if let Some(flags) = flags {
+        b.flags = flags;
+    }
+    if let Some(anger_end) = anger_end {
+        b.anger_end = anger_end;
+    }
+}
 /// `Bee.setHasNectar`: nectar resets the time without it.
 pub fn set_has_nectar(m: &mut Mob, value: bool) {
     if value {
@@ -138,7 +150,7 @@ pub fn register(m: &mut Mob) {
     };
     m.ai.nav.kind = NavKind::Flying;
     m.ai.nav.can_open_doors = false;
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
     m.set_malus(PathType::Fire, -1.0);
     m.set_malus(PathType::Water, -1.0);
     m.set_malus(PathType::WaterBorder, 16.0);
@@ -196,6 +208,12 @@ pub fn stop_being_angry(m: &mut Mob) {
     let b = st(m);
     b.angry_at = None;
     b.anger_end = -1;
+}
+/// `NeutralMob.playerDied`: the anger at the player who died ends.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if get(m).and_then(|b| b.angry_at) == Some(Who::Player) {
+        stop_being_angry(m);
+    }
 }
 /// `Bee.startPersistentAngerTimer`: 20 to 39 seconds.
 fn start_anger_timer(m: &mut Mob, w: &MobWorld) {
@@ -322,13 +340,24 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
     let amount = (m.attrs.attack_damage as i32) as f32;
     match who {
         Who::Player => {
-            cx.events.push(MobEvent::AttackPlayer(amount, from));
-            let seconds = if cx.w.difficulty.hard { 18 } else { 10 };
-            cx.events.push(MobEvent::EffectPlayer {
-                effect: "minecraft:poison",
-                ticks: seconds * 20,
-                amplifier: 0,
-            });
+            // Bee.doHurtTarget: the poison only when the sting hurt, and
+            // only on normal (10 s) and hard (18 s).
+            let seconds = match cx.w.difficulty.id {
+                2 => 10,
+                3 => 18,
+                _ => 0,
+            };
+            if seconds > 0 {
+                cx.events.push(MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
+                    effect: "minecraft:poison",
+                    ticks: seconds * 20,
+                    amplifier: 0,
+                });
+            } else {
+                cx.events.push(MobEvent::AttackPlayer(amount, from));
+            }
         }
         Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
             target: id,
@@ -421,10 +450,10 @@ pub fn drop_off_nectar(m: &mut Mob) {
     set_has_nectar(m, false);
     st(m).crops_grown = 0;
 }
-/// `Bee.setStayOutOfHiveCountdown`, which in 26.3 only resets the time
-/// without nectar.
+/// `Bee.setStayOutOfHiveCountdown`: the bee will not enter a hive for 400
+/// ticks (the hive passes that when a sedated hive lets its bees out).
 pub fn set_stay_out_of_hive_countdown(m: &mut Mob) {
-    st(m).ticks_without_nectar = 0;
+    st(m).stay_out_of_hive = 400;
 }
 fn drop_hive(m: &mut Mob) {
     let b = st(m);
@@ -917,7 +946,7 @@ impl GoToHive {
         let close_enough = if closer_than(m, p, 3) { 1 } else { 2 };
         m.ai.nav.max_visited_multiplier = 10.0;
         let path = m.create_path_to(w, p, close_enough);
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(w, path, 1.0);
         m.ai.nav.path.as_ref().is_some_and(|path| path.reached)
     }
 }
@@ -1046,7 +1075,7 @@ impl Goal for GrowCrop {
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         // The 0.3 roll comes only after the crop count: it draws randomness.
-        let usable = !get(m).is_some_and(|b| b.crops_grown >= 10)
+        let usable = get(m).is_none_or(|b| b.crops_grown < 10)
             && m.random.next_float() >= 0.3
             && has_nectar(m)
             && hive_valid(m, cx.w);
@@ -1159,7 +1188,7 @@ impl Goal for Wander {
                 at[2].floor() as i32,
             ];
             let path = m.create_path_to(cx.w, p, 1);
-            m.nav_move_to_path(path, 1.0);
+            m.nav_move_to_path(cx.w, path, 1.0);
         }
     }
 }

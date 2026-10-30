@@ -9,7 +9,7 @@ id), rows of the wrong size or type and garbage. The Java oracle
 (VanillaHotbarOracle) writes the file and loads it with the client's real
 HotbarManager and DataFixers (DataFixTypes.HOTBAR, so EmptyItemInHotbarFix
 and every item stack fixer), then Hotbar.load on each row;
-examples/hotbar_fixture runs horizon_client::hotbar on the same tag. The nine
+examples/probe/hotbar_fixture runs horizon_client::hotbar on the same tag. The nine
 rows' stacks are compared.
 """
 import argparse

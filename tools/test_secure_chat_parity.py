@@ -41,12 +41,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
-    from .test_dedicated_server_parity import Server, free_port
+    from .test_dedicated_server_parity import Server
 except ImportError:
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
-    from test_dedicated_server_parity import Server, free_port
+    from test_dedicated_server_parity import Server
 
 NAME = 'secure-chat-parity'
 SCENARIOS = {
@@ -153,20 +153,10 @@ def dashed(u):
     return f'{u[:8]}-{u[8:12]}-{u[12:16]}-{u[16:20]}-{u[20:]}'
 
 
-def varint(n):
-    out = b''
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        out += bytes([b | (0x80 if n else 0)])
-        if not n:
-            return out
-
-
 def status(port):
     """The status response's JSON (ServerStatus)."""
     def packet(body):
-        return varint(len(body)) + body
+        return lab.varint(len(body)) + body
 
     def read_varint(s):
         value = 0
@@ -177,7 +167,7 @@ def status(port):
                 return value
     with socket.create_connection(('127.0.0.1', port), timeout=10) as s:
         host = b'127.0.0.1'
-        s.sendall(packet(b'\x00' + varint(777) + varint(len(host)) + host + port.to_bytes(2, 'big') + b'\x01'))
+        s.sendall(packet(b'\x00' + lab.varint(777) + lab.varint(len(host)) + host + port.to_bytes(2, 'big') + b'\x01'))
         s.sendall(packet(b'\x00'))
         length = read_varint(s)
         data = b''
@@ -212,7 +202,7 @@ def chat_lines(lines):
 
 
 def run_side(label, scenario, command, directory, client):
-    port = free_port()
+    port = lab.free_port()
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
     props = dict(PROPERTIES, **SCENARIOS[scenario], **{'server-port': str(port)})
@@ -236,10 +226,18 @@ def run_side(label, scenario, command, directory, client):
                 time.sleep(2)
         out = directory.parent / f'{label}-{scenario}.txt'
         client(port, scenario, out)
+        # Carol leaves last: stopping before the server saw her go would log another reason.
+        server.wait_for(r'Carol lost connection', timeout=30)
         transcript = [f'status enforcesSecureChat {enforces}'] + out.read_text(encoding='utf-8').splitlines()
     finally:
         server.stop()
-    return transcript, chat_lines(server.lines)
+    # A player the server disconnects (the transcript has the reason it sent, compared there) is logged as
+    # "lost connection: <that reason>", or as "Disconnected" when vanilla's network thread closed the connection
+    # before its disconnect(reason) ran: a race in vanilla, so the log's reason is left out for them.
+    kicked = {m.group(1) for line in transcript if (m := re.match(r'(\w+) disconnected ', line))}
+    log = [re.sub(r'^(\[\w+\] (\w+) lost connection: ).*', lambda m: m.group(1) + '(the reason sent)'
+                  if m.group(2) in kicked else m.group(0), line) for line in chat_lines(server.lines)]
+    return transcript, log
 
 
 def main():
@@ -256,17 +254,17 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     java = ['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
             'dev.horizonlab.parity.SecureChatClient']
     oh.run_logged([*java, 'keys', build], build, 'keys')
     services = Services(json.loads((build / 'publickeys.json').read_text()))
     discovery = services.url + '/minecraft/client'
-    os.environ.update(HORIZON_NO_AUDIO='1', HORIZON_API_DISCOVERY=discovery)
+    os.environ.update(lab.game_env(HORIZON_API_DISCOVERY=discovery))
     servers = {
         'vanilla': ['java', '-Xmx2g', '-Duser.timezone=UTC', f'-Dminecraft.api.discovery.host={discovery}',
                     '-cp', dependencies, 'net.minecraft.server.Main', 'nogui'],
