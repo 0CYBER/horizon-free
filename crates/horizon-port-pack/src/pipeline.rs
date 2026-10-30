@@ -329,6 +329,7 @@ pub fn port(
         Ok(r) => r,
         Err(_) => inventory(work, false, log)?,
     };
+    crate::resourcepacks::fetch(work, log)?;
     let fetched = fetch::fetch(work, &records, from, &portable, log)?;
     // The jars tell classes and tiers better than metadata alone.
     let records = inventory(work, true, log)?;

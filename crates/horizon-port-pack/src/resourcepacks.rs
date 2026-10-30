@@ -219,6 +219,16 @@ fn groups(files: Files) -> Result<BTreeMap<String, Files>, String> {
 fn publish(root: &Path, name: &str, files: &Files) -> Result<Outcome, String> {
     directory(root)?;
     let target = root.join(name);
+    for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let existing = entry.file_name().to_string_lossy().into_owned();
+        if existing != name && existing.to_lowercase() == name.to_lowercase() {
+            return Ok(Outcome {
+                state: State::Conflict,
+                detail: format!("case-conflicting existing pack {existing} preserved"),
+            });
+        }
+    }
     match fs::symlink_metadata(&target) {
         Ok(_) => {
             let mut old = Files::new();
@@ -381,6 +391,91 @@ pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, 
             _ => {}
         }
     }
+    Ok(report)
+}
+
+/// Obtain index-listed client resource packs with the same host and checksum rules as mod jars.
+pub fn fetch(work: &Path, log: pipeline::Log) -> Result<Report, String> {
+    fetch_with(work, log, &|url, hash, dest| {
+        crate::fetch::download(url, Some(hash), dest, false)
+    })
+}
+
+fn fetch_with(
+    work: &Path,
+    log: pipeline::Log,
+    download: &dyn Fn(&str, &str, &Path) -> Result<(), String>,
+) -> Result<Report, String> {
+    let pack: import::Pack = pipeline::read_json(&work.join("pack.json"))?;
+    let cache = crate::modrinth::Cache::load(&work.join("modrinth.json"));
+    let mut report = Report::load(work);
+    for file in &pack.files {
+        if file.kind() != "resourcepacks" {
+            continue;
+        }
+        let result = (|| {
+            if file.client == "unsupported" {
+                return Ok(Outcome {
+                    state: State::Unsupported,
+                    detail: "not supported on the client".into(),
+                });
+            }
+            check_path(&file.path)?;
+            if file.path.split('/').count() != 2 || !file.path.ends_with(".zip") {
+                return Err("indexed resource packs must name resourcepacks/<name>.zip".into());
+            }
+            let hash = file
+                .sha1
+                .as_deref()
+                .filter(|h| h.len() == 40 && h.bytes().all(|c| c.is_ascii_hexdigit()))
+                .ok_or("resource-pack download has no valid SHA-1")?;
+            let root = work.join("resourcepacks");
+            directory(&root)?;
+            let dest = root.join(file.file_name());
+            match fs::symlink_metadata(&dest) {
+                Ok(_) => {
+                    if !regular(&dest)?.is_file() {
+                        return Err("resource-pack destination is a directory".into());
+                    }
+                    let bytes =
+                        read_limited(fs::File::open(&dest).map_err(|e| e.to_string())?, MAX_BYTES)?;
+                    return Ok(Outcome {
+                        state: if import::sha1_hex(&bytes).eq_ignore_ascii_case(hash) {
+                            State::Available
+                        } else {
+                            State::Conflict
+                        },
+                        detail: "existing resource pack preserved".into(),
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.to_string()),
+            }
+            let Some(url) = crate::fetch::url_of(file, &cache) else {
+                return Ok(Outcome {
+                    state: State::Missing,
+                    detail: "no permitted download link in the pack".into(),
+                });
+            };
+            download(&url, hash, &dest)?;
+            Ok(Outcome {
+                state: State::Available,
+                detail:
+                    "downloaded and hash checked; enable in Resource Packs (rendering not checked)"
+                        .into(),
+            })
+        })();
+        let outcome = result.unwrap_or_else(|detail| Outcome {
+            state: State::Failed,
+            detail,
+        });
+        log(format!(
+            "{}: {:?}: {}",
+            file.path, outcome.state, outcome.detail
+        ));
+        report.files.insert(file.path.clone(), outcome);
+    }
+    report.save(work)?;
     Ok(report)
 }
 

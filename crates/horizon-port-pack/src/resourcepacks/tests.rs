@@ -219,3 +219,132 @@ fn symlinks_at_source_and_destination_are_rejected() {
         b"good"
     );
 }
+
+#[test]
+fn indexed_downloads_are_hash_checked_and_failures_do_not_discard_other_packs() {
+    use import::PackFile;
+    let t = Temp::new();
+    fs::create_dir(t.work()).unwrap();
+    let file = |name: &str| PackFile {
+        path: format!("resourcepacks/{name}.zip"),
+        sha1: Some(import::sha1_hex(b"pack")),
+        downloads: vec![format!("https://cdn.modrinth.com/{name}.zip")],
+        ..PackFile::default()
+    };
+    let mut excluded = file("server");
+    excluded.client = "unsupported".into();
+    let mut missing = file("missing");
+    missing.downloads = vec!["https://untrusted.example/pack.zip".into()];
+    let mut no_hash = file("nohash");
+    no_hash.sha1 = None;
+    let pack = import::Pack {
+        files: vec![file("good"), file("bad"), excluded, missing, no_hash],
+        ..import::Pack::default()
+    };
+    pipeline::write_json(&t.work().join("pack.json"), &pack).unwrap();
+    let report = fetch_with(&t.work(), &|_| {}, &|url, hash, dest| {
+        let bytes: &[u8] = if url.ends_with("bad.zip") {
+            b"corrupt"
+        } else {
+            b"pack"
+        };
+        crate::fetch::store_download(bytes, Some(hash), dest, false)
+    })
+    .unwrap();
+    assert_eq!(
+        report.files["resourcepacks/good.zip"].state,
+        State::Available
+    );
+    assert_eq!(report.files["resourcepacks/bad.zip"].state, State::Failed);
+    assert_eq!(
+        report.files["resourcepacks/server.zip"].state,
+        State::Unsupported
+    );
+    assert_eq!(
+        report.files["resourcepacks/missing.zip"].state,
+        State::Missing
+    );
+    assert_eq!(
+        report.files["resourcepacks/nohash.zip"].state,
+        State::Failed
+    );
+    assert!(!t.work().join("resourcepacks/bad.zip").exists());
+    let again = fetch_with(&t.work(), &|_| {}, &|_, _, _| Err("offline".into())).unwrap();
+    assert_eq!(
+        again.files["resourcepacks/good.zip"].state,
+        State::Available
+    );
+    put(&t.work().join("resourcepacks/good.zip"), b"user edit");
+    let again = fetch_with(&t.work(), &|_| {}, &|url, _, _| {
+        assert!(
+            !url.ends_with("good.zip"),
+            "must not download over an existing file"
+        );
+        Err("offline".into())
+    })
+    .unwrap();
+    assert_eq!(again.files["resourcepacks/good.zip"].state, State::Conflict);
+    assert_eq!(
+        fs::read(t.work().join("resourcepacks/good.zip")).unwrap(),
+        b"user edit"
+    );
+}
+
+#[test]
+fn interrupted_downloads_publish_nothing_and_keep_existing_files() {
+    struct Interrupted;
+    impl Read for Interrupted {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "interrupted",
+            ))
+        }
+    }
+    let t = Temp::new();
+    let dest = t.0.join("pack.zip");
+    assert!(crate::fetch::store_download(Interrupted, None, &dest, false).is_err());
+    assert!(!dest.exists());
+    put(&dest, b"existing");
+    assert!(
+        crate::fetch::store_download(&b"bad"[..], Some(&import::sha1_hex(b"good")), &dest, false)
+            .is_err()
+    );
+    assert_eq!(fs::read(&dest).unwrap(), b"existing");
+    assert_eq!(fs::read_dir(&t.0).unwrap().count(), 1);
+}
+
+#[test]
+fn reports_include_embedded_packs_and_never_count_shaders_as_working() {
+    let t = Temp::new();
+    let src = t.0.join("report.mrpack");
+    archive(&src, &[
+        ("modrinth.index.json", br#"{"files":[{"path":"resourcepacks/missing.zip"},{"path":"shaderpacks/later.zip"}]}"#),
+        ("overrides/resourcepacks/look.zip", b"original"),
+    ]);
+    imported(&src, &t.work()).unwrap();
+    pipeline::inventory(&t.work(), true, &|_| {}).unwrap();
+    let rows = pipeline::report(&t.work(), &|_| {}).unwrap();
+    assert_eq!(rows.len(), 3);
+    let row = |path: &str| rows.iter().find(|r| r.key == path).unwrap();
+    assert_eq!(
+        row("resourcepacks/look.zip").status,
+        crate::report::Status::Partial
+    );
+    assert!(
+        row("resourcepacks/look.zip")
+            .reason
+            .contains("rendering not checked")
+    );
+    assert_eq!(
+        row("shaderpacks/later.zip").status,
+        crate::report::Status::NotYet
+    );
+    assert_eq!(
+        row("resourcepacks/missing.zip").status,
+        crate::report::Status::NotYet
+    );
+    // An old work directory without resourcepacks.json remains readable.
+    fs::remove_file(t.work().join("resourcepacks.json")).unwrap();
+    assert!(pipeline::report(&t.work(), &|_| {}).is_ok());
+}
