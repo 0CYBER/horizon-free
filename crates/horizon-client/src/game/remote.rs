@@ -215,6 +215,9 @@ pub(super) struct Remote {
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
+    /// The player's own shared flag 5 (`Entity.isInvisible`) as the server
+    /// last set it.
+    pub(super) own_invisible: bool,
     /// The local player's profile UUID (always in the level).
     profile: u128,
     /// The local player's profile name: its score holder and team member.
@@ -544,6 +547,7 @@ impl Game<'_> {
             level_player_names: HashMap::new(),
             level_player_textures: HashMap::new(),
             glowing: Default::default(),
+            own_invisible: false,
             profile: 0,
             profile_name: String::new(),
             destroying: None,
@@ -2051,6 +2055,7 @@ impl Game<'_> {
                 self.potions.effects.clear();
                 if let Some(r) = self.remote.as_mut() {
                     r.carried = Some(0);
+                    r.own_invisible = false;
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
                     // handleLogin: the new LocalPlayer is the camera.
@@ -2080,6 +2085,11 @@ impl Game<'_> {
                 // passengers. A dimension change keeps the vehicle it travels in.
                 if p.keep & 2 == 0 {
                     self.riding = None;
+                    // KEEP_ENTITY_DATA copies the old player's synched data
+                    // (its shared flags) to the new one; without it they reset.
+                    if let Some(r) = self.remote.as_mut() {
+                        r.own_invisible = false;
+                    }
                 }
                 let dimension_changed = self.dim != Dim::from_id(&p.spawn.dimension);
                 self.enter_remote_dimension(&p.spawn, true);
@@ -2482,9 +2492,15 @@ impl Game<'_> {
                             // server stops the sprint after a hit's extra
                             // knockback (the flag only, as assignValues sets
                             // it: the speed modifier and wasSprinting stay).
+                            // Its invisible bit (Entity.isInvisible): the
+                            // Invisibility effect's, or a plugin's that hides
+                            // the real body under a pose (#3788).
                             (0, Value::Byte(flags)) => {
                                 if let Some(pl) = self.player.as_mut() {
                                     pl.sprinting = flags & 0x08 != 0;
+                                }
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_invisible = flags & 0x20 != 0;
                                 }
                             }
                             // Entity.DATA_AIR_SUPPLY_ID and

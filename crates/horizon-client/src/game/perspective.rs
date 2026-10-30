@@ -123,15 +123,18 @@ impl CameraType {
         }
     }
 }
+/// `Entity.isInvisible` for the window's player: shared flag 5 as its server
+/// sets it (`shared_flag`), with the Invisibility effect or by a plugin's
+/// `setInvisible` alone, as pose plugins hide the real body under the pose
+/// (#3788); a world in the frame has only the effect.
+fn own_invisible(effects: &horizon_client::effects::PlayerEffects, shared_flag: bool) -> bool {
+    shared_flag || effects.get("invisibility").is_some()
+}
 /// `LivingEntityRenderer.isBodyVisible` and `isInvisibleTo` for the player's
-/// own body, seen by itself: the Invisibility effect (`Entity.isInvisible`)
-/// hides it unless its team sees friendly invisibles, where vanilla draws it
+/// own body, seen by itself: an invisible player (`own_invisible`) hides it
+/// unless its team sees friendly invisibles, where vanilla draws it
 /// translucent.
-fn body_visible(
-    effects: &horizon_client::effects::PlayerEffects,
-    team: Option<&horizon_client::scoreboard::Team>,
-) -> bool {
-    let invisible = effects.get("invisibility").is_some();
+fn body_visible(invisible: bool, team: Option<&horizon_client::scoreboard::Team>) -> bool {
     !horizon_client::scoreboard::invisible_to(team, team, false, invisible)
 }
 /// The player's model type (`PlayerModel` with the default skin).
@@ -536,9 +539,16 @@ impl Game<'_> {
             None => self.player_team(),
         }
     }
+    /// `Entity.isInvisible` for the player itself (`own_invisible`).
+    pub(super) fn own_invisible(&self) -> bool {
+        own_invisible(
+            &self.potions.effects,
+            self.remote.as_ref().is_some_and(|r| r.own_invisible),
+        )
+    }
     /// Whether the player's own body is drawn (`body_visible`).
     pub(super) fn own_body_visible(&self) -> bool {
-        body_visible(&self.potions.effects, self.own_team())
+        body_visible(self.own_invisible(), self.own_team())
     }
     /// The player's model for the entity pass in third person.
     pub(super) fn player_model_geometry(
@@ -580,7 +590,7 @@ impl Game<'_> {
         );
         let chest = self.armor[1].as_ref().map(|s| &*s.item);
         // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks).
-        if self.potions.effects.get("invisibility").is_none() {
+        if !self.own_invisible() {
             self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
         }
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
@@ -671,7 +681,7 @@ impl Game<'_> {
             &mut verts,
         );
         let chest = self.armor[1].as_ref().map(|s| &*s.item);
-        if self.potions.effects.get("invisibility").is_none() {
+        if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
@@ -1128,15 +1138,32 @@ mod preview_tests {
             .unwrap()
             .id;
         let mut effects = horizon_client::effects::PlayerEffects::default();
-        assert!(body_visible(&effects, None));
+        assert!(body_visible(own_invisible(&effects, false), None));
         effects.add(EffectInstance::new(id, 3600, 0));
-        assert!(!body_visible(&effects, None), "no team: the body is hidden");
+        let invisible = own_invisible(&effects, false);
+        assert!(
+            !body_visible(invisible, None),
+            "no team: the body is hidden"
+        );
         // Entity.isInvisibleTo: a team that sees friendly invisibles sees it.
         let mut board = Scoreboard::default();
         let team = board.add_team("blue");
-        assert!(body_visible(&effects, Some(team)));
+        assert!(body_visible(invisible, Some(team)));
         team.see_friendly_invisibles = false;
-        assert!(!body_visible(&effects, Some(team)));
+        assert!(!body_visible(invisible, Some(team)));
+    }
+
+    /// #3788: a pose plugin's `Player.setInvisible(true)` sets only the
+    /// shared flag (no effect); `Entity.isInvisible` reads that flag, so the
+    /// real body under the pose is not drawn.
+    #[test]
+    fn the_servers_invisible_flag_hides_the_own_body_without_the_effect() {
+        let effects = horizon_client::effects::PlayerEffects::default();
+        assert!(own_invisible(&effects, true));
+        assert!(!body_visible(own_invisible(&effects, true), None));
+        let mut board = horizon_client::scoreboard::Scoreboard::default();
+        let team = board.add_team("blue");
+        assert!(body_visible(own_invisible(&effects, true), Some(team)));
     }
 
     /// LivingEntityRenderer.submit: an invisible body is not drawn, its
