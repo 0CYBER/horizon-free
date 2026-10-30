@@ -850,6 +850,7 @@ impl Game<'_> {
         self.tick_sniffer_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
+        self.sulfur_cube_power_priming();
         // Hurt and death sounds of damage dealt outside the mob ticks.
         let mut queued = Vec::new();
         for m in &mut self.mobs {
