@@ -326,11 +326,11 @@ A mapping table from intermediary and SRG names so pre-26.1 jars can be classifi
 
 #### A modpack's own resource and shader packs
 
-Importing a modpack also brings the resource packs and shader packs it ships with, where Horizon can use them.
+Imported modpacks carry their resource packs into a profile of their own. Shader-pack conversion is still pending.
 
 <details><summary>Technical</summary>
 
-Porting a pack carries data, assets and worldgen today; the resource packs and shader packs bundled with it are left out. Resource packs can be carried as they are; shader packs go through the converter ([docs/modpacks.md](docs/modpacks.md)).
+Resource-pack carry-over is implemented locally: Modrinth common/client overrides, CurseForge's override folder, installed instances (ZIP and directory packs), and hash-checked indexed ZIP downloads. The launcher keeps profile edits and lets resource-only profiles play; packs are enabled in Resource Packs. Synthetic import and profile tests cover the file pipeline; in-game rendering has not been verified. Shader-pack conversion is still pending, so this combined item remains partial ([docs/modpacks.md](docs/modpacks.md)).
 
 </details>
 

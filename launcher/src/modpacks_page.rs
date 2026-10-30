@@ -358,7 +358,7 @@ impl Launcher {
             format!("Play with {} mods", p.mods.len())
         };
         let mut play = button("pack-play", play_label, Kind::Primary, &t);
-        if p.mods.is_empty() || !can_play || self.pack_busy {
+        if !p.can_play() || !can_play || self.pack_busy {
             play = disabled(play);
         } else {
             let work = p.work.clone();
@@ -367,10 +367,19 @@ impl Launcher {
                 cx.notify();
             }));
         }
-        let port_label = format!("Port {} mods", p.portable);
+        let port_label = if p.indexed_resources == 0 {
+            format!("Port {} mods", p.portable)
+        } else if p.portable == 0 {
+            format!("Get {} resource packs", p.indexed_resources)
+        } else {
+            format!(
+                "Port {} mods + {} resource packs",
+                p.portable, p.indexed_resources
+            )
+        };
         let mut port = button("pack-port", port_label, Kind::Secondary, &t);
         let mut from = button("pack-from", "Use jars from my instance…", Kind::Ghost, &t);
-        if self.pack_busy || p.portable == 0 {
+        if self.pack_busy || !p.can_port() {
             port = disabled(port);
             from = disabled(from);
         } else {
@@ -378,10 +387,14 @@ impl Launcher {
                 this.port_pack(false, cx);
                 cx.notify();
             }));
-            from = from.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.port_pack(true, cx);
-                cx.notify();
-            }));
+            if p.portable == 0 {
+                from = disabled(from);
+            } else {
+                from = from.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.port_pack(true, cx);
+                    cx.notify();
+                }));
+            }
         }
         let confirming = self.confirm_remove.as_deref() == Some(p.slug.as_str());
         let slug = p.slug.clone();
@@ -425,6 +438,10 @@ impl Launcher {
             p.portable,
             short(&p.work)
         )];
+        notes.push(format!(
+            "{} resource packs available. Enable them in the game's Resource Packs screen.",
+            p.resourcepacks
+        ));
         if let Some(jars) = p.jars() {
             notes.push(jars);
         }

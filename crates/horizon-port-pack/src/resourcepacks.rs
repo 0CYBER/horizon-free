@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -133,28 +133,41 @@ fn read_limited(reader: impl Read, limit: u64) -> Result<Vec<u8>, String> {
 }
 
 fn validate(files: &Files) -> Result<(), String> {
-    let mut names = BTreeMap::<String, String>::new();
+    if files.len() > MAX_FILES {
+        return Err(format!("more than {MAX_FILES} resource-pack files"));
+    }
+    let mut names = BTreeMap::new();
     for path in files.keys() {
+        if names.insert(path.to_lowercase(), path.as_str()).is_some() {
+            return Err(format!("case-conflicting resource-pack path: {path}"));
+        }
+    }
+    // Keep one key per file rather than every directory prefix of every file.
+    let mut previous: Option<&str> = None;
+    for path in names.values().copied() {
         let mut prefix = String::new();
         for part in path.split('/') {
             if !prefix.is_empty() {
                 prefix.push('/');
             }
             prefix.push_str(part);
-            let key = prefix.to_lowercase();
-            if let Some(original) = names.get(&key) {
-                if original != &prefix {
-                    return Err(format!(
-                        "case-conflicting resource-pack paths: {original} and {prefix}"
-                    ));
-                }
-            } else {
-                names.insert(key, prefix.clone());
-            }
-            if prefix != *path && files.contains_key(&prefix) {
+            if prefix != path && names.contains_key(&prefix.to_lowercase()) {
                 return Err(format!("file is also a resource-pack directory: {prefix}"));
             }
         }
+        if let Some(previous) = previous {
+            for (left, right) in previous.split('/').zip(path.split('/')) {
+                if left.to_lowercase() != right.to_lowercase() {
+                    break;
+                }
+                if left != right {
+                    return Err(format!(
+                        "case-conflicting resource-pack directories: {previous} and {path}"
+                    ));
+                }
+            }
+        }
+        previous = Some(path);
     }
     Ok(())
 }
@@ -198,22 +211,17 @@ fn walk(root: &Path, relative: &str, files: &mut Files, total: &mut u64) -> Resu
 }
 
 // Each top-level ZIP or directory with pack.mcmeta is one selectable resource pack.
-fn groups(files: Files) -> Result<BTreeMap<String, Files>, String> {
+fn groups(files: Files) -> BTreeMap<String, Files> {
     let mut groups: BTreeMap<String, Files> = BTreeMap::new();
     for (path, bytes) in files {
         let top = path.split('/').next().unwrap_or_default().to_owned();
         groups.entry(top).or_default().insert(path, bytes);
     }
-    for (name, files) in &groups {
-        if !(files.contains_key(&format!("{name}/pack.mcmeta"))
-            || (name.ends_with(".zip") && files.contains_key(name)))
-        {
-            return Err(format!(
-                "{name}: expected a ZIP pack or directory containing pack.mcmeta"
-            ));
-        }
-    }
-    Ok(groups)
+    groups.retain(|name, files| {
+        files.contains_key(&format!("{name}/pack.mcmeta"))
+            || (name.ends_with(".zip") && files.contains_key(name))
+    });
+    groups
 }
 
 fn publish(root: &Path, name: &str, files: &Files) -> Result<Outcome, String> {
@@ -287,6 +295,37 @@ fn publish(root: &Path, name: &str, files: &Files) -> Result<Outcome, String> {
     })
 }
 
+// zip 2.x silently collapses duplicate names. Count central records before extracting anything.
+fn reject_duplicate_entries(source: &Path, zip: &zip::ZipArchive<fs::File>) -> Result<(), String> {
+    let mut reader = fs::File::open(source).map_err(|e| e.to_string())?;
+    reader
+        .seek(SeekFrom::Start(zip.central_directory_start()))
+        .map_err(|e| e.to_string())?;
+    for _ in 0..zip.len() {
+        // ZIP central directory: 46 fixed bytes, then name, extra data and comment.
+        let mut header = [0; 46];
+        reader.read_exact(&mut header).map_err(|e| e.to_string())?;
+        if &header[..4] != b"PK\x01\x02" {
+            return Err("invalid ZIP central directory".into());
+        }
+        let length: u64 = [28, 30, 32]
+            .into_iter()
+            .map(|i| u64::from(u16::from_le_bytes([header[i], header[i + 1]])))
+            .sum();
+        reader
+            .seek(SeekFrom::Current(length as i64))
+            .map_err(|e| e.to_string())?;
+    }
+    let mut signature = [0; 4];
+    reader
+        .read_exact(&mut signature)
+        .map_err(|e| e.to_string())?;
+    if &signature == b"PK\x01\x02" {
+        return Err("duplicate ZIP archive entries refused".into());
+    }
+    Ok(())
+}
+
 /// Stage embedded packs while the archive/instance is still available. Client overrides win.
 pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, String> {
     let mut files = Files::new();
@@ -311,6 +350,7 @@ pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, 
         regular(source)?;
         let mut zip = zip::ZipArchive::new(fs::File::open(source).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
+        reject_duplicate_entries(source, &zip)?;
         let roots = if pack.format == "mrpack" {
             vec!["overrides".to_owned(), "client-overrides".to_owned()]
         } else {
@@ -364,7 +404,7 @@ pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, 
     }
     // Catch file/directory and case collisions across override layers before publishing anything.
     validate(&files)?;
-    for (name, files) in groups(files)? {
+    for (name, files) in groups(files) {
         report.files.insert(
             format!("resourcepacks/{name}"),
             publish(&work.join("resourcepacks"), &name, &files)?,
@@ -504,17 +544,20 @@ pub fn available(work: &Path) -> Vec<PathBuf> {
 /// Copy missing whole packs. Never merge into or overwrite an existing profile pack.
 pub fn install(work: &Path, home: &Path) -> Result<Report, String> {
     let mut report = Report::default();
-    let mut files = Files::new();
     let root = work.join("resourcepacks");
-    if !available(work).is_empty() {
-        walk(&root, "", &mut files, &mut 0)?;
+    // Indexed packs may exceed the embedded-import total together. Bound memory per pack.
+    for path in available(work) {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("non-UTF-8 resource-pack name")?;
+        let mut files = Files::new();
+        walk(&root, name, &mut files, &mut 0)?;
         validate(&files)?;
-        for (name, files) in groups(files)? {
-            report.files.insert(
-                format!("resourcepacks/{name}"),
-                publish(&home.join("resourcepacks"), &name, &files)?,
-            );
-        }
+        report.files.insert(
+            format!("resourcepacks/{name}"),
+            publish(&home.join("resourcepacks"), name, &files)?,
+        );
     }
     Ok(report)
 }

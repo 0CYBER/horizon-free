@@ -55,6 +55,7 @@ fn mrpack_client_override_wins_and_server_and_unrelated_overrides_stay_out() {
             ("client-overrides/resourcepacks/look.zip", b"client"),
             ("server-overrides/resourcepacks/server.zip", b"server"),
             ("overrides/options.txt", b"do not copy"),
+            ("overrides/resourcepacks/README.txt", b"not a pack"),
         ],
     );
     let report = imported(&src, &t.work()).unwrap();
@@ -64,6 +65,7 @@ fn mrpack_client_override_wins_and_server_and_unrelated_overrides_stay_out() {
     );
     assert!(!t.work().join("resourcepacks/server.zip").exists());
     assert!(!t.work().join("options.txt").exists());
+    assert!(!t.work().join("resourcepacks/README.txt").exists());
     assert_eq!(
         report.files["resourcepacks/look.zip"].state,
         State::Available
@@ -292,9 +294,14 @@ fn indexed_downloads_are_hash_checked_and_failures_do_not_discard_other_packs() 
 
 #[test]
 fn interrupted_downloads_publish_nothing_and_keep_existing_files() {
-    struct Interrupted;
+    struct Interrupted(bool);
     impl Read for Interrupted {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if !self.0 {
+                self.0 = true;
+                out[0] = b'x';
+                return Ok(1);
+            }
             Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "interrupted",
@@ -303,11 +310,16 @@ fn interrupted_downloads_publish_nothing_and_keep_existing_files() {
     }
     let t = Temp::new();
     let dest = t.0.join("pack.zip");
-    assert!(crate::fetch::store_download(Interrupted, None, &dest, false).is_err());
+    assert!(crate::fetch::store_download(Interrupted(false), None, &dest, false).is_err());
     assert!(!dest.exists());
     put(&dest, b"existing");
     assert!(
         crate::fetch::store_download(&b"bad"[..], Some(&import::sha1_hex(b"good")), &dest, false)
+            .is_err()
+    );
+    assert_eq!(fs::read(&dest).unwrap(), b"existing");
+    assert!(
+        crate::fetch::store_download(&b"new"[..], Some(&import::sha1_hex(b"new")), &dest, false)
             .is_err()
     );
     assert_eq!(fs::read(&dest).unwrap(), b"existing");
@@ -347,4 +359,51 @@ fn reports_include_embedded_packs_and_never_count_shaders_as_working() {
     // An old work directory without resourcepacks.json remains readable.
     fs::remove_file(t.work().join("resourcepacks.json")).unwrap();
     assert!(pipeline::report(&t.work(), &|_| {}).is_ok());
+}
+
+#[test]
+fn duplicate_archive_entries_are_rejected() {
+    let t = Temp::new();
+    let src = t.0.join("duplicate.mrpack");
+    archive(
+        &src,
+        &[
+            ("modrinth.index.json", b"{}"),
+            ("overrides/resourcepacks/a.zip", b"first"),
+            ("overrides/resourcepacks/b.zip", b"second"),
+        ],
+    );
+    // Rename both the local and central ZIP records; ZipWriter otherwise refuses duplicates.
+    let mut bytes = fs::read(&src).unwrap();
+    for i in 0..bytes.len().saturating_sub(4) {
+        if &bytes[i..i + 5] == b"b.zip" {
+            bytes[i] = b'a';
+        }
+    }
+    fs::write(&src, bytes).unwrap();
+    assert!(imported(&src, &t.work()).is_err());
+    assert!(available(&t.work()).is_empty());
+}
+
+#[test]
+fn archive_symlinks_are_refused_and_file_counts_are_bounded() {
+    let t = Temp::new();
+    let src = t.0.join("link.mrpack");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&src).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file("modrinth.index.json", options).unwrap();
+    zip.write_all(b"{}").unwrap();
+    zip.add_symlink(
+        "overrides/resourcepacks/link.zip",
+        "../../outside.zip",
+        options,
+    )
+    .unwrap();
+    zip.finish().unwrap();
+    assert!(imported(&src, &t.work()).is_err());
+    assert!(available(&t.work()).is_empty());
+    let mut files: Files = (0..MAX_FILES)
+        .map(|n| (format!("pack/{n}"), Vec::new()))
+        .collect();
+    assert!(add(&mut files, "pack/one-more", &b""[..], &mut 0).is_err());
 }
