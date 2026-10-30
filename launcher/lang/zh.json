@@ -106,7 +106,6 @@
   "Playing offline": "离线游玩中",
   "Online servers need a Microsoft account.": "在线服务器需要 Microsoft 账户。",
   "Accounts…": "账户…",
-  "The first preparation takes a few minutes.": "第一次准备需要几分钟。",
   "Horizon crashed": "Horizon 崩溃了",
   "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing.": "在 Discord 上报告时，请附上崩溃报告文件（或用“复制报告”粘贴），并说明你当时在做什么。",
   "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing.": "游戏结束了，但没有生成崩溃报告。在 Discord 上报告时，请附上日志文件夹里的 latest.log，并说明你当时在做什么。",
@@ -209,5 +208,15 @@
   "Loader": "加载器",
   "newest stable version": "最新稳定版",
   "Play downloads the game from Mojang for your account the first time, with the Java it needs.": "首次游玩时会为你的账户从 Mojang 下载游戏及其所需的 Java。",
-  "Mojang's version list isn't here yet.": "尚未获取到 Mojang 的版本列表。"
+  "Mojang's version list isn't here yet.": "尚未获取到 Mojang 的版本列表。",
+  "Sign in to play": "登录以开始游戏",
+  "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "无需安装 Minecraft：Horizon 会为你的账户从 Mojang 下载。",
+  "Waiting for Microsoft… the window goes on by itself.": "正在等待 Microsoft… 窗口会自动继续。",
+  "Downloading Minecraft {version} from Mojang · {done} of {total} files": "正在从 Mojang 下载 Minecraft {version} · {done} / {total} 个文件",
+  "Downloading from Mojang · {done} of {total} files": "正在从 Mojang 下载 · {done} / {total} 个文件",
+  "Getting ready…": "正在准备…",
+  "about a minute left": "还剩约 1 分钟",
+  "about {n} min left": "还剩约 {n} 分钟",
+  "Game files": "游戏文件",
+  "Sounds": "声音"
 }

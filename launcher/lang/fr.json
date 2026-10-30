@@ -107,7 +107,6 @@
   "Playing offline": "Jeu hors ligne",
   "Online servers need a Microsoft account.": "Les serveurs en ligne demandent un compte Microsoft.",
   "Accounts…": "Comptes…",
-  "The first preparation takes a few minutes.": "La première préparation prend quelques minutes.",
   "Horizon crashed": "Horizon a planté",
   "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing.": "Pour le signaler sur Discord, joignez le rapport de plantage (ou collez-le avec Copier le rapport) et dites ce que vous faisiez.",
   "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing.": "Le jeu s'est arrêté sans rapport de plantage. Pour le signaler sur Discord, joignez latest.log du dossier des journaux et dites ce que vous faisiez.",
@@ -209,5 +208,15 @@
   "Loader": "Chargeur",
   "newest stable version": "dernière version stable",
   "Play downloads the game from Mojang for your account the first time, with the Java it needs.": "Jouer télécharge le jeu depuis Mojang pour votre compte la première fois, avec le Java qu'il lui faut.",
-  "Mojang's version list isn't here yet.": "La liste des versions de Mojang n'est pas encore arrivée."
+  "Mojang's version list isn't here yet.": "La liste des versions de Mojang n'est pas encore arrivée.",
+  "Sign in to play": "Connectez-vous pour jouer",
+  "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "Pas besoin d'avoir Minecraft installé : Horizon le télécharge depuis Mojang pour votre compte.",
+  "Waiting for Microsoft… the window goes on by itself.": "En attente de Microsoft… la fenêtre continue toute seule.",
+  "Downloading Minecraft {version} from Mojang · {done} of {total} files": "Téléchargement de Minecraft {version} depuis Mojang · {done} fichiers sur {total}",
+  "Downloading from Mojang · {done} of {total} files": "Téléchargement depuis Mojang · {done} fichiers sur {total}",
+  "Getting ready…": "Préparation…",
+  "about a minute left": "environ une minute restante",
+  "about {n} min left": "environ {n} min restantes",
+  "Game files": "Fichiers du jeu",
+  "Sounds": "Sons"
 }
