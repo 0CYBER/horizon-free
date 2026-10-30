@@ -51,7 +51,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 7;
+pub(crate) const NATIVE_HOOKS_API: u32 = 8;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -434,7 +434,7 @@ impl Game<'_> {
     }
     /// A menu opens on this client for block `block`, a mod's: set `screen`
     /// when the block is yours, to lay its screen out (`native_screen_draw`
-    /// draws it). The server's menu stays as it is. API 3.
+    /// draws it). The server's menu stays as it is. API 8.
     pub(super) fn native_screen(&self, block: &str, screen: &mut Option<NativeScreen>) {
         let _ = (block, screen);
     }
@@ -442,7 +442,7 @@ impl Game<'_> {
     /// over a plain panel with its slots' frames and under the items and
     /// labels, from the menu's data slots `data` (the block entity's `data`
     /// on the server). Draw with `native_sprite`, `native_fill` and
-    /// `native_text`. API 3.
+    /// `native_text`. API 8.
     pub(super) fn native_screen_draw(
         &self,
         block: &str,
@@ -548,7 +548,7 @@ impl Game<'_> {
     /// Part `src` (`[x, y, w, h]` in the sprite's own pixels) of sprite
     /// `name` (vanilla's `gui/...`, or a content mod's GUI texture
     /// `mymod:gui/...`), drawn stretched into `dst` (`[x, y, w, h]` in GUI
-    /// pixels). False when there is no such sprite. API 3.
+    /// pixels). False when there is no such sprite. API 8.
     pub(super) fn native_sprite(
         &self,
         batch: &mut HudBatch,
@@ -567,7 +567,7 @@ impl Game<'_> {
         batch.rect_uv(dst[0], dst[1], dst[2], dst[3], r, u32::MAX);
         true
     }
-    /// The size of sprite `name` in its own pixels, if there is one. API 3.
+    /// The size of sprite `name` in its own pixels, if there is one. API 8.
     pub(super) fn native_sprite_size(&self, name: &str) -> Option<[f32; 2]> {
         let r = self.gui.atlas.sprites.get(name)?;
         Some([r.w as f32, r.h as f32])
