@@ -380,9 +380,7 @@ impl Launcher {
                 return None;
             }
         };
-        let spent = since.elapsed();
-        (spent >= Duration::from_secs(5) && done > from)
-            .then(|| spent.mul_f64((total - done) as f64 / (done - from) as f64))
+        time_left(since.elapsed(), from, done, total)
     }
 
     /// Under Play while it prepares: a bar, what is happening and the time left, and the steps,
@@ -499,4 +497,34 @@ pub(super) fn getting_ready_preview() -> bool {
 /// The download under way, files done of how many.
 fn download_progress() -> Option<(usize, usize)> {
     horizon_launcher::mojang::progress().or_else(|| getting_ready_preview().then_some((1754, 5160)))
+}
+
+/// The time `total - done` files take at the pace of `done - from` in `spent`: none for the
+/// first 5 s, or before a file is done.
+fn time_left(spent: Duration, from: usize, done: usize, total: usize) -> Option<Duration> {
+    (spent >= Duration::from_secs(5) && done > from)
+        .then(|| spent.mul_f64(total.saturating_sub(done) as f64 / (done - from) as f64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_left_follows_the_pace_since_first_seen() {
+        let s = Duration::from_secs;
+        assert_eq!(time_left(s(10), 100, 600, 3100), Some(s(50)));
+        assert_eq!(time_left(s(4), 100, 600, 3100), None, "too early");
+        assert_eq!(time_left(s(10), 600, 600, 3100), None, "nothing done yet");
+        assert_eq!(time_left(s(10), 0, 50, 50), Some(s(0)));
+    }
+
+    #[test]
+    fn steps_run_in_their_order() {
+        use backend::PrepareStep::*;
+        assert_eq!(backend::PrepareStep::ALL, [Files, Java, Sounds, Prepare]);
+        for s in backend::PrepareStep::ALL {
+            assert_eq!(backend::PrepareStep::ALL[s as usize], s);
+        }
+    }
 }
