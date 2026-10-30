@@ -423,6 +423,7 @@ impl Game<'_> {
         // LivingEntity.getBedOrientation: the model lies in the bed as
         // another player's does (`villager::sleep_pose`).
         let bed = self.sleeping.map_or(0, |head| self.bed_facing(head));
+        let spectator = self.spectator();
         let Some(m) = self.player_model.as_mut() else {
             return;
         };
@@ -494,6 +495,7 @@ impl Game<'_> {
         };
         m.extra.main_hand_left = self.settings.main_hand_left;
         m.extra.hidden_model_parts = !self.settings.file.model_customisation() & 0x7F;
+        m.extra.spectator = spectator;
         m.extra.using_item = using;
         m.extra.using_off_hand = using_off_hand;
         m.extra.blocking = blocking;

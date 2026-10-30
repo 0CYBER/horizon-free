@@ -879,6 +879,8 @@ pub struct Extra {
     /// The skin layers a player hides (`PlayerModelPart` bits, set to
     /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
     pub hidden_model_parts: u8,
+    /// `AvatarRenderState.isSpectator`: a player in spectator mode shows only its head.
+    pub spectator: bool,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,
     /// `ClientAvatarState` of a player: the cloak, bob and walked distance its cape swings with.
