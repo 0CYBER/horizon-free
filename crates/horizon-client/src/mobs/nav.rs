@@ -50,9 +50,6 @@ pub struct Navigation {
     pub below_surface: bool,
     /// WallClimberNavigation.pathToPosition
     climb_to: Option<[i32; 3]>,
-    /// `PathNavigation.moveTo` stored a path that `trimPath` has not seen
-    /// yet: it runs on the navigation's next tick, which has the world.
-    trim_pending: bool,
 }
 impl Default for Navigation {
     fn default() -> Self {
@@ -83,7 +80,6 @@ impl Default for Navigation {
             avoid_sun: false,
             below_surface: false,
             climb_to: None,
-            trim_pending: false,
         }
     }
 }
@@ -311,7 +307,9 @@ impl Mob {
         ];
         self.create_path_to(w, p, reach)
     }
-    pub fn nav_move_to_path(&mut self, path: Option<Path>, speed: f64) -> bool {
+    /// `PathNavigation.moveTo(Path, speed)`: `trimPath` runs before the
+    /// node count is checked, so a path the trim empties is refused.
+    pub fn nav_move_to_path(&mut self, w: &MobWorld, path: Option<Path>, speed: f64) -> bool {
         let Some(path) = path else {
             self.ai.nav.path = None;
             return false;
@@ -322,10 +320,10 @@ impl Mob {
         if self.ai.nav.is_done() {
             return false;
         }
+        self.trim_path(w);
         if self.ai.nav.path.as_ref().is_none_or(|p| p.nodes.is_empty()) {
             return false;
         }
-        self.ai.nav.trim_pending = true;
         self.ai.nav.speed_modifier = speed;
         self.ai.nav.last_stuck_check = self.ai.nav.tick;
         // getTempMobPos needs the world for ground navigation; position is close enough
@@ -341,7 +339,7 @@ impl Mob {
             at[2].floor() as i32,
         ];
         let path = self.create_path_to(w, p, 1);
-        self.nav_move_to_path(path, speed)
+        self.nav_move_to_path(w, path, speed)
     }
     pub fn nav_move_to_entity(
         &mut self,
@@ -361,7 +359,7 @@ impl Mob {
             self.ai.nav.speed_modifier = speed;
             return true;
         }
-        path.is_some() && self.nav_move_to_path(path, speed)
+        path.is_some() && self.nav_move_to_path(w, path, speed)
     }
     pub fn nav_stop(&mut self) {
         self.ai.nav.path = None;
@@ -402,9 +400,6 @@ impl Mob {
     /// PathNavigation.tick.
     pub fn nav_tick(&mut self, w: &MobWorld) {
         self.ai.nav.tick += 1;
-        if std::mem::take(&mut self.ai.nav.trim_pending) {
-            self.trim_path(w);
-        }
         if self.ai.nav.delayed_recompute {
             self.recompute_path(w);
         }

@@ -380,8 +380,8 @@ impl Goal for ObtainBanner {
     fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
         !m.ai.nav.is_done() && state(m).is_some_and(|s| s.banner_at.is_some())
     }
-    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        m.nav_move_to_path(self.path_to_banner.take(), 1.15);
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to_path(cx.w, self.path_to_banner.take(), 1.15);
     }
 }
 

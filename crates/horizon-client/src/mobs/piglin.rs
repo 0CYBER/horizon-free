@@ -240,9 +240,9 @@ impl Goal for HoglinAvoidRepellent {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(cx.w, path, 1.0);
     }
 }
 /// Baby hoglins flee what hurts them; adults stand their ground.
@@ -309,9 +309,9 @@ impl Goal for PiglinAvoidRepellent {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(cx.w, path, 1.0);
     }
 }
 /// Admiring a gold item held in the off hand: stand and look at it.
