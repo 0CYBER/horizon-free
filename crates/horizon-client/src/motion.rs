@@ -338,6 +338,9 @@ pub struct PlayerMotion {
     /// `LocalPlayer.isSlowDueToUsingItem`: an item in use whose `use_effects`
     /// do not allow sprinting.
     pub item_use_slows_sprint: bool,
+    /// `LocalPlayer.xxa` and `zza` as this tick's move used them; `None` for a
+    /// player the server steps (`Entity.isHorizontalCollisionMinor` is false).
+    pub local_input: Option<[f32; 2]>,
     pub last_climbable: Option<BlockPos>,
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
@@ -538,6 +541,7 @@ impl PlayerMotion {
             speed: 0.0,
             item_use_speed: None,
             item_use_slows_sprint: false,
+            local_input: None,
             last_climbable: None,
             steps: MovementDistances {
                 next_step: 1.0,
@@ -1055,6 +1059,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.no_jump_delay -= 1;
         }
         self.player.drop_tiny_velocity();
+        let local = matches!(input, TickInput::PreparedLocal { .. });
         let mut input = match input {
             TickInput::Living(v) => Vec3::new(
                 f64::from(v[0] * 0.98),
@@ -1071,6 +1076,7 @@ impl MotionWorld<'_, '_, '_> {
             input.x = 0.0;
             input.z = 0.0;
         }
+        self.player.local_input = local.then_some([input.x as f32, input.z as f32]);
         self.jump_phase()?;
         let before_travel = self.player.bounds();
         self.player_travel(input)?;
@@ -2086,8 +2092,26 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         )?;
         Ok(())
     }
-    fn minor_horizontal_collision(&mut self, _: Vec3) -> Result<bool> {
-        Ok(false)
+    /// `LocalPlayer.isHorizontalCollisionMinor`: the move that was blocked
+    /// points within 8 degrees of the direction the player pushed.
+    fn minor_horizontal_collision(&mut self, movement: Vec3) -> Result<bool> {
+        use horizon_core::geometry::trig;
+        let Some([xxa, zza]) = self.player.local_input else {
+            return Ok(false);
+        };
+        let rad = f64::from(self.player.yaw * trig::DEG_TO_RAD);
+        let (sin, cos) = (f64::from(trig::sin(rad)), f64::from(trig::cos(rad)));
+        let global_x = f64::from(xxa) * cos - f64::from(zza) * sin;
+        let global_z = f64::from(zza) * cos + f64::from(xxa) * sin;
+        let input_sqr = global_x * global_x + global_z * global_z;
+        let moved_sqr = movement.x * movement.x + movement.z * movement.z;
+        let tiny = f64::from(1.0e-5f32);
+        if input_sqr < tiny || moved_sqr < tiny {
+            return Ok(false);
+        }
+        let dot = global_x * movement.x + global_z * movement.z;
+        let angle = horizon_core::jmath::acos(dot / (input_sqr * moved_sqr).sqrt());
+        Ok(angle < f64::from(0.13962634f32))
     }
     fn legacy_on_position(&mut self) -> Result<BlockPos> {
         self.support(movement_support::LEGACY_SUPPORT_OFFSET)
