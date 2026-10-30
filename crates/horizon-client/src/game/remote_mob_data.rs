@@ -455,6 +455,10 @@ pub(super) fn client_defaults(m: &mut Mob) {
         // Bat's constructor sets resting only on the server; the data default is 0.
         bat::set_resting(m, false);
     }
+    // A horse's jump strength until the server syncs its own: the type's.
+    if equine::moved_by_rider(m.species()) {
+        m.extra.vector[0] = m.kind.jump_strength;
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +489,23 @@ mod tests {
         let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
         client_defaults(&mut m);
         Some(m)
+    }
+
+    /// #2920: a server's horse is moved by its rider's client, which jumps
+    /// it by the type's jump strength (`createBaseHorseAttributes`,
+    /// `createBaseChestedHorseAttributes`) until the server syncs its own.
+    #[test]
+    fn a_servers_horse_jumps_its_types_strength() {
+        for (kind, strength) in [("horse", 0.7), ("donkey", 0.5), ("mule", 0.5)] {
+            let Some(m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert!(
+                (m.extra.vector[0] - strength).abs() < 1e-6,
+                "{kind}: {}",
+                m.extra.vector[0]
+            );
+        }
     }
 
     #[test]
