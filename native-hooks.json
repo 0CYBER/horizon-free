@@ -79,6 +79,16 @@
       "name": "panel_event",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
+    },
+    {
+      "name": "register_commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
+    },
+    {
+      "name": "perform_command",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_perform_command"
     }
   ]
 }
