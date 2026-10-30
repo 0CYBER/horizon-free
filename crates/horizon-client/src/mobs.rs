@@ -2069,6 +2069,17 @@ pub struct PlayerView {
     pub sleep_timer: u32,
     /// `isPassenger`.
     pub passenger: bool,
+    /// The boat or nautilus the player rides and steers
+    /// (`getControllingPassenger`).
+    pub vehicle: Option<Vehicle>,
+}
+/// What a player rides, for the mobs that follow it (`FollowPlayerRiddenEntityGoal`).
+#[derive(Clone, Debug)]
+pub struct Vehicle {
+    pub nautilus: bool,
+    pub bounds: Aabb,
+    /// `Entity.getKnownSpeed`: what it moved in its last tick.
+    pub velocity: Vec3,
 }
 impl PlayerView {
     /// `LivingEntity.getVisibilityPercent` without the worn-skull scaling.

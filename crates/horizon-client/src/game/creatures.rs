@@ -269,6 +269,28 @@ impl Game<'_> {
             sleeping: self.sleeping.is_some(),
             sleep_timer: self.sleep_timer,
             passenger: self.riding.is_some(),
+            vehicle: self.riding.and_then(|id| {
+                if let Some(b) = self.boats.iter().find(|b| b.id == id) {
+                    // A boat's box: 1.375 wide and 0.5625 high around its position.
+                    let w = 0.6875;
+                    return Some(horizon_client::mobs::Vehicle {
+                        nautilus: false,
+                        bounds: Aabb::new(
+                            Vec3::new(b.position.x - w, b.position.y, b.position.z - w),
+                            Vec3::new(b.position.x + w, b.position.y + 0.5625, b.position.z + w),
+                        ),
+                        velocity: b.velocity,
+                    });
+                }
+                let m = self.mobs.iter().find(|m| m.id == id)?;
+                matches!(m.species(), Species::Nautilus | Species::ZombieNautilus).then(|| {
+                    horizon_client::mobs::Vehicle {
+                        nautilus: true,
+                        bounds: m.bounds(),
+                        velocity: m.velocity,
+                    }
+                })
+            }),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
