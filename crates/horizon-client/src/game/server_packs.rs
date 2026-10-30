@@ -3,7 +3,7 @@
 //! and `DownloadedPackSource` as `Minecraft` drives it): the prompt, the
 //! server list's setting, downloads into `downloads/`, and a resource reload
 //! with the server's packs on top of the player's own.
-use super::{Game, Progress};
+use super::{Game, packs::ReloadKind};
 use horizon_client::{
     Result,
     confirm_screen::Confirm,
@@ -82,16 +82,13 @@ pub(super) struct ServerPackState {
     queue: Option<download::Queue>,
     pub(super) prompt: Option<PackPrompt>,
     /// The server list entry the setting is saved to (none: a direct join).
-    address: Option<String>,
+    pub(super) address: Option<String>,
     /// The account the downloads are made for (the download headers).
     user: (String, u128),
     /// The packs loaded on top of the player's own, bottom first.
     pub(super) active: Vec<packs::Pack>,
     /// The download batches' notifiers, oldest first.
     notifiers: Vec<PackNotifier>,
-    /// A `tick`-asked reload staged on a worker (`LoadingOverlay`): the
-    /// frame draws its progress until `tick_server_packs` applies it.
-    pub(super) reload: Option<PackReload>,
 }
 /// `DownloadedPackSource.createDownloadNotifier`: one batch's progress in its
 /// own `SystemToast`.
@@ -197,26 +194,27 @@ fn human_readable(bytes: u64) -> String {
     format!("{} {prefix}B", java_text::format_fixed(value, 1))
 }
 
-fn saves() -> PathBuf {
+pub(super) fn saves() -> PathBuf {
     std::env::current_dir().unwrap_or_default().join("saves")
 }
 
-/// `LoadingOverlay`'s stage lines for a pack reload, indexed by `progress`.
-const RELOAD_LINES: [&str; 4] = [
-    "Preparing resources",
-    "Loading assets",
-    "Loading pack tables",
-    "Applying resources",
-];
-/// A pack reload `ServerPacks::tick` asked for: the CPU half runs on a
-/// worker while `progress` feeds the loading screen, then the apply lands
-/// on the render thread.
-pub(super) struct PackReload {
-    pub(super) progress: Progress,
-    handle: std::thread::JoinHandle<std::result::Result<super::packs::StagedPack, String>>,
-}
+/// `WorldOpenFlows.WORLD_PACK_ID`: the id of a world's own resource pack.
+const WORLD_PACK_ID: u128 = 0x640a6a92_b6cb_48a0_b391_831586500359;
 
 impl Game<'_> {
+    /// `WorldOpenFlows.loadBundledResourcePack`: a world's own
+    /// `resourcepacks/resources.zip` is pushed as a local pack before the world
+    /// connects, after `configureForLocalWorld` so the pack is accepted at once.
+    pub(super) fn server_packs_world_pack(&mut self, folder: &str) {
+        let path = saves()
+            .join(folder)
+            .join("resourcepacks")
+            .join("resources.zip");
+        if path.is_file() {
+            self.server_packs.packs.local_world();
+            self.server_packs.packs.push_local(WORLD_PACK_ID, path);
+        }
+    }
     /// `ConnectScreen`: the server's setting decides what its packs do
     /// (`configureForServerControl`); single player's own server takes them
     /// all, quietly (`configureForLocalWorld`).
@@ -342,6 +340,13 @@ impl Game<'_> {
             return;
         }
         self.drive_pack_reload();
+        // One reload at a time: the player's own waits under its overlay
+        // before the server's packs can ask for theirs (`ServerPacks` keeps
+        // its own reload from overlapping).
+        let selection_reloading = self
+            .pack_reload
+            .as_ref()
+            .is_some_and(|r| r.kind() == ReloadKind::Selection);
         let finished = self
             .server_packs
             .queue
@@ -351,7 +356,7 @@ impl Game<'_> {
         for batch in finished {
             self.server_packs.packs.downloaded(batch);
         }
-        while self.server_packs.packs.wants_tick() {
+        while !selection_reloading && self.server_packs.packs.wants_tick() {
             let tick = self.server_packs.packs.tick();
             if !tick.download.is_empty() {
                 self.start_pack_downloads(tick.download);
@@ -415,75 +420,14 @@ impl Game<'_> {
             self.finish_pack_reload(false);
             return;
         };
-        self.server_packs.active = server.clone();
-        // The overlay swallows input until the apply (`LoadingOverlay`):
-        // release what is held so nothing keeps acting while it covers the
-        // frame (`KeyMapping.releaseAll` when a screen opens).
-        self.keys.clear();
-        self.physical_keys.clear();
-        self.left = false;
-        self.right = false;
-        let vanilla = self.vanilla_root();
-        if self.ui.vanilla_root.as_os_str().is_empty() {
-            self.ui.vanilla_root = vanilla.clone();
+        self.server_packs.active = server;
+        if let Err(e) = self.spawn_pack_reload(ReloadKind::Server) {
+            log::error!("Horizon: could not start the pack reload worker: {e}");
+            self.finish_pack_reload(false);
         }
-        let (selected, mods, dev_mods) = (
-            self.settings.resource_packs.clone(),
-            self.settings.mods.enabled.clone(),
-            self.options.dev_mods.clone(),
-        );
-        let (assets, res, context) = (
-            self.pack.assets.clone(),
-            self.res.clone(),
-            self.pack.context.clone(),
-        );
-        let (unicode, japanese) = (self.settings.force_unicode, self.settings.japanese_glyphs);
-        let progress = Progress::with(&RELOAD_LINES);
-        let worker = progress.clone();
-        let handle = std::thread::Builder::new()
-            .name("server-pack-reload".into())
-            .spawn(move || {
-                super::packs::stage_pack(
-                    &vanilla, &selected, &server, &mods, &dev_mods, &assets, &res, &context,
-                    unicode, japanese, &worker,
-                )
-                .map_err(|e| e.to_string())
-            });
-        match handle {
-            Ok(handle) => self.server_packs.reload = Some(PackReload { progress, handle }),
-            Err(e) => {
-                log::error!("Horizon: could not start the pack reload worker: {e}");
-                self.finish_pack_reload(false);
-            }
-        }
-    }
-    /// `PackReloadConfig.Callbacks`: applies the staged reload once its
-    /// worker is done; on failure the packs active before reload again.
-    fn drive_pack_reload(&mut self) {
-        let Some(reload) = &self.server_packs.reload else {
-            return;
-        };
-        if !reload.handle.is_finished() {
-            return;
-        }
-        let reload = self.server_packs.reload.take().unwrap();
-        let staged = reload
-            .handle
-            .join()
-            .unwrap_or_else(|_| Err("the pack reload worker panicked".into()));
-        let ok = match staged
-            .and_then(|staged| self.apply_staged_pack(staged).map_err(|e| e.to_string()))
-        {
-            Ok(()) => true,
-            Err(e) => {
-                log::warn!("Horizon: server resource pack reload failed: {e}");
-                false
-            }
-        };
-        self.finish_pack_reload(ok);
     }
     /// `ServerPacks::reloaded` and the recovery reload it can ask for.
-    fn finish_pack_reload(&mut self, ok: bool) {
+    pub(super) fn finish_pack_reload(&mut self, ok: bool) {
         if let Some(recovery) = self.server_packs.packs.reloaded(ok) {
             self.start_pack_reload(&recovery);
         }

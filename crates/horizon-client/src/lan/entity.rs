@@ -128,6 +128,9 @@ impl States {
     pub fn as_slice(&self) -> &[EntityState] {
         &self.list[..self.len]
     }
+    pub fn as_mut_slice(&mut self) -> &mut [EntityState] {
+        &mut self.list[..self.len]
+    }
 }
 
 impl Extend<EntityState> for States {
@@ -954,6 +957,27 @@ mod tests {
         let mut out = Vec::new();
         s.send_changes(e, &Riding::default(), &mut out);
         out
+    }
+
+    #[test]
+    fn furnace_cart_sends_unpowered_metadata_when_fuel_runs_out() {
+        let mut powered = state(0.0);
+        powered.kind = "minecraft:furnace_minecart".into();
+        powered
+            .defaults
+            .push((13, serializer::BOOLEAN, Value::Bool(false)));
+        powered
+            .meta
+            .push((13, serializer::BOOLEAN, Value::Bool(true)));
+        let mut tracker = added(&powered);
+        let mut empty = powered.clone();
+        empty.meta.clear();
+        let mut packets = Vec::new();
+        tracker.send_dirty(&empty, true, &mut packets);
+        assert!(packets.iter().any(|packet| matches!(packet,
+            play::Clientbound::SetEntityData(data)
+                if data.values.contains(&(13, serializer::BOOLEAN, Value::Bool(false)))
+        )));
     }
 
     #[test]

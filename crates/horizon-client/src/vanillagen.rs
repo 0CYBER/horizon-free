@@ -2,7 +2,7 @@
 //! aquifers, surface rules, carvers and placed features) to chunk streaming.
 use crate::{
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
+    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Section},
     save::SavedProto,
     streaming::{ChunkGenerator, LodSampler, Proto},
 };
@@ -13,12 +13,15 @@ use horizon_core::{
 };
 use horizon_world::{
     heightmap::HeightmapType,
+    loot::PackOverlay,
     nbt::Tag,
     registry::BlockRegistry,
     worldgen::{
         generator::{
             GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
         },
+        overrides::WorldgenOverrides,
+        structure::legacy::PieceRandom,
         terrain::PreLightChunkStage,
     },
 };
@@ -77,7 +80,7 @@ fn add_default_block_entities(kinds: &[Option<&str>], out: &mut Chunk, raw: &mut
             let i = i as i32;
             let pos = [
                 out.x * 16 + (i & 15),
-                MIN_Y + si as i32 * 16 + (i >> 8),
+                out.min_y() + si as i32 * 16 + (i >> 8),
                 out.z * 16 + ((i >> 4) & 15),
             ];
             let at = |t: &Tag| {
@@ -154,13 +157,40 @@ impl VanillaTerrain {
         dimension: &str,
         structures: bool,
     ) -> crate::Result<Self> {
-        let data: Arc<GeneratorData> = shared_data(dir, registry)?;
+        let none = WorldgenOverrides::default();
+        Self::for_world_with(
+            dir, &none, registry, biomes, seed, preset, dimension, structures,
+        )
+    }
+    /// `for_world` with the world's data packs over the bundle at `dir`
+    /// (`datapack::worldgen_overrides`).
+    pub fn for_world_with(
+        dir: &Path,
+        overrides: &WorldgenOverrides,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+        preset: &str,
+        dimension: &str,
+        structures: bool,
+    ) -> crate::Result<Self> {
+        let data: Arc<GeneratorData> = shared_data_with(dir, overrides, registry)?;
         let biome_map = data
             .biome_names()
             .iter()
             .map(|name| biomes.id(name))
             .collect();
         let generator = OverworldGenerator::for_world(data, seed, preset, dimension, structures)?;
+        if let Some((asked, kept)) = generator.noise_clamped() {
+            log::warn!(
+                "Horizon: {dimension}'s noise settings reach y {}..{}, past its build height; \
+                 only y {}..{} generates",
+                asked.min_y,
+                asked.min_y + asked.height,
+                kept.min_y,
+                kept.min_y + kept.height
+            );
+        }
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(
@@ -174,7 +204,9 @@ impl VanillaTerrain {
                 );
             }
         }
-        let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
+        let loot = dir
+            .parent()
+            .and_then(|root| crate::structure_blocks::loot_data(root, &PackOverlay::NONE));
         if let Some(root) = dir.parent() {
             crate::mobs::trial_spawner::load_registry(root);
         }
@@ -216,21 +248,44 @@ impl VanillaTerrain {
             created: std::time::Instant::now(),
         })
     }
+    /// The column the dimension's chunks hold (its build range's).
+    fn layout(&self) -> ColumnLayout {
+        let (min_y, height) = self.generator.level();
+        ColumnLayout::of_level(min_y, height)
+    }
     /// The difficulty (0 peaceful to 3 hard) and overworld clock structure
     /// mobs are finalized with.
     pub fn set_spawn_conditions(&self, difficulty: u8, day_time: i64) {
         self.structure_mobs.set_conditions(difficulty, day_time);
     }
+    /// The random a chunk's generation steps draw from (`WorldGenRegion`).
+    pub fn region_random(&self, cx: i32, cz: i32) -> Box<dyn PieceRandom> {
+        self.generator.region_random(ChunkPos::new(cx, cz))
+    }
+    /// A mob chunk generation spawns, as the chunk saves it
+    /// (`StructureMobFinalizer::spawn_generated`).
+    pub fn spawn_generated(
+        &self,
+        kind: &str,
+        position: horizon_core::geometry::Vec3,
+        yaw: f32,
+        biome: &str,
+        random: &mut dyn PieceRandom,
+        group: &mut Option<crate::mobs::finalize::Group>,
+    ) -> Option<horizon_world::nbt::Compound> {
+        self.structure_mobs
+            .spawn_generated(kind, position, yaw, biome, random, group)
+    }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
     /// marks as a column.
     fn column(&self, chunk: &ProtoChunk) -> Chunk {
         let pos = chunk.position();
-        let mut out = Chunk::empty(pos.x, pos.z);
+        let mut out = Chunk::with_layout(pos.x, pos.z, self.layout());
         let (bx, bz) = (pos.x * 16, pos.z * 16);
         // Only the generated range (the Nether is 0..256) is copied.
         let (lo, hi) = (
-            chunk.terrain.min_y().max(MIN_Y),
-            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+            chunk.terrain.min_y().max(out.min_y()),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(out.max_y()),
         );
         out.structure_refs = chunk
             .structures()
@@ -239,8 +294,8 @@ impl VanillaTerrain {
             .collect();
         out.structure_starts = chunk.own_starts();
         let mut values = Box::new([0u32; 4096]);
-        for si in 0..SECTIONS as i32 {
-            let base = MIN_Y + si * 16;
+        for si in 0..out.sections.len() as i32 {
+            let base = out.min_y() + si * 16;
             if base + 16 <= lo || base >= hi {
                 continue;
             }
@@ -296,11 +351,11 @@ impl VanillaTerrain {
                 }
             }
         }
-        for si in 0..SECTIONS as i32 {
+        for si in 0..out.sections.len() as i32 {
             let mut cells = [0u32; 64];
             for (j, cell) in cells.iter_mut().enumerate() {
                 let (qx, qz, qy) = (j as i32 & 3, (j as i32 >> 2) & 3, si * 4 + (j as i32 >> 4));
-                let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
+                let y = (out.min_y() + qy * 4).clamp(lo, hi - 1);
                 let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
                 *cell = u32::from(self.biome_map.get(id.0 as usize).copied().unwrap_or(0));
             }
@@ -407,8 +462,12 @@ impl VanillaTerrain {
         u64::try_from(self.created.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
-static SHARED_DATA: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> =
-    std::sync::Mutex::new(Vec::new());
+/// A bundle directory, the data packs over it, and what loading them gave.
+type SharedEntry = (std::path::PathBuf, WorldgenOverrides, Arc<GeneratorData>);
+static SHARED_DATA: std::sync::Mutex<Vec<SharedEntry>> = std::sync::Mutex::new(Vec::new());
+/// Bundles with data packs kept besides the plain ones: a world's dimensions
+/// share one, and returning to a world finds it.
+const SHARED_WITH_PACKS: usize = 2;
 /// Let go of the bundles `shared_data` loaded: for a preload no world used
 /// (game/world_loading.rs). A generator that holds one keeps it.
 pub fn forget_shared_data() {
@@ -423,14 +482,35 @@ pub fn shared_data(
     dir: &Path,
     registry: &'static BlockRegistry,
 ) -> crate::Result<Arc<GeneratorData>> {
+    shared_data_with(dir, &WorldgenOverrides::default(), registry)
+}
+/// `shared_data` with a world's data packs over the bundle: loaded once for
+/// each set of packs' entries, the most recent few kept.
+pub fn shared_data_with(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+    registry: &'static BlockRegistry,
+) -> crate::Result<Arc<GeneratorData>> {
     let mut cache = SHARED_DATA.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
+    if let Some((_, _, data)) = cache
+        .iter()
+        .find(|(path, o, _)| path == dir && o == overrides)
+    {
         return Ok(data.clone());
     }
     let started = std::time::Instant::now();
-    let data = GeneratorData::load(dir, registry)?;
+    let data = GeneratorData::load_with(dir, registry, overrides)?;
     log::info!("Horizon: worldgen data loaded in {:?}", started.elapsed());
-    cache.push((dir.to_owned(), data.clone()));
+    for warning in data.warnings() {
+        log::warn!("Horizon: data pack worldgen: {warning}");
+    }
+    if !overrides.is_empty()
+        && cache.iter().filter(|e| !e.1.is_empty()).count() >= SHARED_WITH_PACKS
+    {
+        let oldest = cache.iter().position(|e| !e.1.is_empty());
+        cache.remove(oldest.expect("counted"));
+    }
+    cache.push((dir.to_owned(), overrides.clone(), data.clone()));
     Ok(data)
 }
 impl ChunkGenerator for VanillaTerrain {
@@ -442,6 +522,9 @@ impl ChunkGenerator for VanillaTerrain {
     }
     fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
         Box::new(VanillaLodSampler::new(self))
+    }
+    fn idle(&self, worker: &mut GeneratorWorker) {
+        worker.release();
     }
     fn lod_surface(
         &self,
@@ -562,8 +645,8 @@ impl ChunkGenerator for VanillaTerrain {
         let column = &saved.column;
         let (bx, bz) = (column.x * 16, column.z * 16);
         let (lo, hi) = (
-            chunk.terrain.min_y().max(MIN_Y),
-            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+            chunk.terrain.min_y().max(column.min_y()),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(column.max_y()),
         );
         for y in lo..hi {
             for z in 0..16 {
@@ -634,14 +717,14 @@ impl ChunkGenerator for VanillaTerrain {
         let proto = proto.downcast::<VanillaProto>().expect("vanilla proto");
         let mut chunk = match *proto {
             VanillaProto::Ready(c) => c,
-            VanillaProto::Failed(x, z) => return Chunk::empty(x, z),
+            VanillaProto::Failed(x, z) => return Chunk::with_layout(x, z, self.layout()),
         };
         let mut out = self.column(&chunk);
         let (block_entities, rolled_loot) =
             crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
         out.block_entities = block_entities;
         // The block entities Horizon does not model (decorated pots with their
-        // sherds and loot table, brushable blocks) stay as placed, like a
+        // sherds and loot table) stay as placed, like a
         // loaded chunk's.
         let mut unmodelled: Vec<Tag> = chunk
             .block_entities
@@ -698,7 +781,7 @@ mod default_block_entity_tests {
         out.set(4, -40, 9, 7);
         out.set(5, -40, 9, 6);
         let mut kinds = vec![None; 8];
-        kinds[6] = Some("minecraft:potent_sulfur");
+        kinds[6] = Some("minecraft:conduit");
         kinds[7] = Some("minecraft:sculk_sensor");
         let mut raw = vec![];
         add_default_block_entities(&kinds, &mut out, &mut raw);
@@ -709,7 +792,7 @@ mod default_block_entity_tests {
         assert_eq!(raw.len(), 1);
         assert_eq!(
             raw[0].get("id"),
-            Some(&Tag::String("minecraft:potent_sulfur".into()))
+            Some(&Tag::String("minecraft:conduit".into()))
         );
         add_default_block_entities(&kinds, &mut out, &mut raw);
         assert_eq!(

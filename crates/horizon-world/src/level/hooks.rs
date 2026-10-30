@@ -18,6 +18,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         changed: BlockId,
         moved: bool,
     ) {
+        self.level
+            .observe_neighbor_changed(pos, state, changed, moved);
         let b = self.b;
         let block = b.block(state);
         let chain = &b.data(state).chain;
@@ -165,6 +167,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.piston_check_if_extend(pos, state);
                     }
                 }
+                Class::PotentSulfur => self.potent_sulfur_on_place(pos, state),
                 Class::Observer => {
                     if !same
                         && b.table.bool(state, b.props.powered)
@@ -433,6 +436,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.level_event(2001, head_pos, head.0 as i32);
             }
         }
+        // PistonHeadBlock.playerWillDestroy: in creative, destroy the base piston
+        // without drops so removing the head does not drop a piston item.
+        if creative && data.is(Class::PistonHead) {
+            let base_pos = rel(pos, b.facing(state).opposite());
+            let base = self.state(base_pos);
+            if self.piston_head_fitting_base(state, base) {
+                self.destroy_block(base_pos, false, super::flags::UPDATE_LIMIT);
+            }
+        }
         // TntBlock.playerWillDestroy: unstable TNT primes unless instabuild.
         if !creative && data.is(Class::Tnt) && b.table.bool(state, p.unstable) {
             self.prime_tnt(pos);
@@ -548,7 +560,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let state = self.state(pos);
                 if !b.is_water_fluid(self.fluid_at(pos).kind()) {
                     false
-                } else if self.pickup_block(pos, state) {
+                } else if self.pickup_block(pos, state, false) {
                     true
                 } else {
                     if b.instance_of(state, Class::Liquid) {

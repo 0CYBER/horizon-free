@@ -26,11 +26,104 @@ use horizon_world::nbt::{JavaString, Tag};
 use std::{
     io::Write,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock, mpsc},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
 mod status;
+
+/// What the tick loop tells `ServerWatchdog`: when the tick in progress was
+/// due (`getNextTickTime`), how long a tick is, and whether the server runs.
+struct Watchdog {
+    base: Instant,
+    next_nanos: AtomicU64,
+    tick_nanos: AtomicU64,
+    running: AtomicBool,
+}
+
+impl Watchdog {
+    /// `DedicatedServer.initServer`: a thread that stops a server whose tick
+    /// runs `max_tick_time` ms past its due time; none when that is 0 or less.
+    fn start(max_tick_time: i64) -> Option<Arc<Self>> {
+        let max = Duration::from_millis(u64::try_from(max_tick_time).ok().filter(|m| *m > 0)?);
+        let watchdog = Arc::new(Self {
+            base: Instant::now(),
+            next_nanos: AtomicU64::new(0),
+            tick_nanos: AtomicU64::new(50_000_000),
+            running: AtomicBool::new(true),
+        });
+        let shared = watchdog.clone();
+        std::thread::Builder::new()
+            .name("Server Watchdog".into())
+            .spawn(move || shared.run(max))
+            .ok()?;
+        Some(watchdog)
+    }
+    /// The tick loop is about to run the tick due at `next`.
+    fn tick_due(&self, next: Instant, tick: Duration) {
+        let nanos = next.saturating_duration_since(self.base).as_nanos();
+        self.next_nanos
+            .store(u64::try_from(nanos).unwrap_or(u64::MAX), Ordering::Relaxed);
+        let tick = u64::try_from(tick.as_nanos()).unwrap_or(u64::MAX);
+        self.tick_nanos.store(tick, Ordering::Relaxed);
+    }
+    /// `ServerWatchdog.run`.
+    fn run(&self, max: Duration) {
+        let max = u64::try_from(max.as_nanos()).unwrap_or(u64::MAX);
+        while self.running.load(Ordering::Relaxed) {
+            let next = self.next_nanos.load(Ordering::Relaxed);
+            let now = u64::try_from(self.base.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let behind = now.saturating_sub(next);
+            if behind > max {
+                let took = format!("{:.2}", behind as f32 / 1e9);
+                let should = format!(
+                    "{:.2}",
+                    self.tick_nanos.load(Ordering::Relaxed) as f32 / 1e9
+                );
+                log_from(
+                    "Server Watchdog",
+                    "ERROR",
+                    &format!("A single server tick took {took} seconds (should be max {should})"),
+                );
+                log_from(
+                    "Server Watchdog",
+                    "ERROR",
+                    "Considering it to be crashed, server will forcibly shutdown.",
+                );
+                let message = format!(
+                    "ServerWatchdog detected that a single server tick took {took} seconds (should be max {should})"
+                );
+                match horizon_client::crash::report_watchdog(
+                    std::path::Path::new("."),
+                    "server",
+                    message,
+                ) {
+                    Some(path) => log_from(
+                        "Server Watchdog",
+                        "ERROR",
+                        &format!(
+                            "This crash report has been saved to: {}",
+                            path.canonicalize().unwrap_or(path).display()
+                        ),
+                    ),
+                    None => log_from(
+                        "Server Watchdog",
+                        "ERROR",
+                        "We were unable to save this crash report to disk.",
+                    ),
+                }
+                std::process::exit(1);
+            }
+            // Thread.sleep(nextTickTime + maxTickTime - now).
+            let wait = (next + max).saturating_sub(now).max(1_000_000);
+            std::thread::sleep(Duration::from_nanos(wait));
+        }
+    }
+}
 
 /// Double.toString for the magnitudes positions have (no exponent form
 /// between 1e-3 and 1e7).
@@ -298,15 +391,14 @@ impl Lists {
     }
 }
 
-/// The world presets of 26.3's `worldgen/world_preset`.
-const WORLD_PRESETS: [&str; 7] = [
-    "minecraft:normal",
-    "minecraft:flat",
-    "minecraft:large_biomes",
-    "minecraft:amplified",
-    "minecraft:single_biome_surface",
-    "minecraft:debug_all_block_states",
-    "minecraft:flat_all_dimensions",
+/// DedicatedServerProperties.LEGACY_PRESET_NAMES: the old `level-type`
+/// names, before the presets had their own ids.
+const LEGACY_PRESET_NAMES: [(&str, horizon_client::save::WorldPreset); 2] = [
+    ("default", horizon_client::save::WorldPreset::Normal),
+    (
+        "largebiomes",
+        horizon_client::save::WorldPreset::LargeBiomes,
+    ),
 ];
 
 /// Identifier.tryParse: `namespace:path`, or a path in `minecraft`.
@@ -323,11 +415,18 @@ impl Game<'_> {
     /// DedicatedServerProperties.createDimensions for a world that doesn't
     /// exist yet: `level-type`'s preset, a flat world's `generator-settings`
     /// and `generate-structures`, written before the world opens so that
-    /// streaming reads them. Horizon generates the normal and flat presets.
+    /// streaming reads them.
     fn write_world_gen(&self, dir: &std::path::Path, props: &ServerProperties) -> Result<()> {
         let level_type = &props.level_type;
         let preset = parse_identifier(level_type)
-            .filter(|id| WORLD_PRESETS.contains(&id.as_str()))
+            .as_deref()
+            .and_then(horizon_client::save::WorldPreset::of_id)
+            .or_else(|| {
+                LEGACY_PRESET_NAMES
+                    .iter()
+                    .find(|(name, _)| *name == level_type)
+                    .map(|(_, preset)| *preset)
+            })
             .unwrap_or_else(|| {
                 log_from(
                     "Worker-Main-1",
@@ -336,18 +435,9 @@ impl Game<'_> {
                         "Failed to parse level-type {level_type}, defaulting to minecraft:normal"
                     ),
                 );
-                "minecraft:normal".to_owned()
+                horizon_client::save::WorldPreset::Normal
             });
-        let flat = preset == "minecraft:flat";
-        if !flat && preset != "minecraft:normal" {
-            log_from(
-                "Worker-Main-1",
-                "WARN",
-                &format!(
-                    "Horizon doesn't generate the {preset} world preset yet: using minecraft:normal"
-                ),
-            );
-        }
+        let flat = preset == horizon_client::save::WorldPreset::Flat;
         let settings = if flat {
             let biomes = self.res.biomes();
             let (settings, errors) = horizon_client::flatgen::settings_from_json(
@@ -363,7 +453,7 @@ impl Game<'_> {
             None
         };
         let options = horizon_client::save::WorldGen {
-            flat,
+            preset,
             structures: props.generate_structures,
             bonus_chest: false,
         };
@@ -441,7 +531,17 @@ const BROADCAST: &[&str] = &[
 
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
+    // The epoch starts at world open; failures before that send no lifecycle event.
     pub(super) fn run_dedicated(&mut self) -> Result<()> {
+        let result = self.run_dedicated_inner();
+        if let Err(error) = &result {
+            self.native_lifecycle_world_failed(&error.to_string());
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_dedicated_inner(&mut self) -> Result<()> {
         // This thread ticks the server (MinecraftServer.spin's priority).
         horizon_threads::favour_current();
         self.join_world_rest()?;
@@ -519,13 +619,9 @@ impl Game<'_> {
         // MinecraftServer.initializeKeyPair (only online mode uses it).
         log("INFO", "Generating keypair");
         let online = if props.online_mode {
-            let key = horizon_protocol::rsa::RsaPrivateKey::generate(1024)
-                .map_err(|e| format!("Failed to generate key pair: {e}"))?;
-            Some(Arc::new(OnlineMode {
-                public_der: key.public_der(),
-                key,
-                prevent_proxy: props.prevent_proxy_connections,
-            }))
+            Some(Arc::new(OnlineMode::generate(
+                props.prevent_proxy_connections,
+            )?))
         } else {
             None
         };
@@ -561,6 +657,7 @@ impl Game<'_> {
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
+        self.native_lifecycle_open_started();
         self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),
@@ -586,7 +683,8 @@ impl Game<'_> {
         }
         self.settings.render_distance = props.view_distance.clamp(2, 32);
         self.settings.simulation_distance = props.simulation_distance.clamp(2, 32);
-        self.streaming.radius = self.settings.render_distance;
+        // Nothing is kept around the spawn while nobody is on.
+        self.streaming.radius = -1;
         self.settle_spawn()?;
         let gate_lists = lists.clone();
         let gate: LoginGate = Arc::new(move |address, uuid, name| {
@@ -608,6 +706,7 @@ impl Game<'_> {
             motd: props.motd.clone(),
             max_players: props.max_players.max(0) as usize,
             compression_threshold: props.network_compression_threshold,
+            rate_limit: props.rate_limit,
             enable_status: props.enable_status,
             hide_online_players: props.hide_online_players,
             favicon,
@@ -676,6 +775,8 @@ impl Game<'_> {
         self.sync_ops(&lists);
         if let Some(host) = self.lan.as_mut() {
             host.hub.spawn_protection = props.spawn_protection;
+            host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
+            host.hub.command_spam_threshold = props.command_spam_threshold_seconds.wrapping_mul(20);
         }
         log(
             "INFO",
@@ -690,6 +791,8 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut() {
             host.hub.entity_range_percent = props.entity_broadcast_range_percentage;
         }
+        // The dedicated server's open is complete before its first tick.
+        self.native_lifecycle_world_ready();
         let mut state = ServerState {
             lists,
             console,
@@ -704,8 +807,13 @@ impl Game<'_> {
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
         let mut next = Instant::now();
+        self.fns.permission = Some(props.function_permission_level.clamp(0, 4) as u8);
+        let watchdog = Watchdog::start(props.max_tick_time);
         while !state.stop {
             let tick_start = Instant::now();
+            if let Some(watchdog) = &watchdog {
+                watchdog.tick_due(next, self.clock.tick_duration());
+            }
             while let Ok(line) = state.console.try_recv() {
                 self.console_line(&mut state, &line);
             }
@@ -746,13 +854,45 @@ impl Game<'_> {
             state.ticked(Instant::now());
             self.wait_for_next_server_tick(&mut next, paused);
         }
+        if let Some(watchdog) = &watchdog {
+            watchdog.running.store(false, Ordering::Relaxed);
+        }
         self.stop_dedicated()
     }
 
+    /// A dedicated server of its own, not single player's server thread
+    /// (which runs with `options.dedicated` too).
+    pub(super) fn standalone_server(&self) -> bool {
+        self.options.dedicated.is_some() && self.serving.is_none()
+    }
     /// Load the spawn area and find the world spawn as single player does,
-    /// without keeping a player there.
+    /// without keeping a player there. A dedicated server only finds the world
+    /// spawn (MinecraftServer.setInitialSpawn): a player's spawn is found as
+    /// one joins.
     pub(super) fn settle_spawn(&mut self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(600);
+        if self.standalone_server() {
+            if self.level.spawn.is_none() {
+                let [x, y, z] = loop {
+                    self.update_world();
+                    if let Some(pos) = self.find_world_spawn()? {
+                        break pos;
+                    }
+                    if Instant::now() > deadline {
+                        return Err("the spawn area did not load".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                };
+                self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+                self.level.world_spawn.get_or_insert([x, y, z]);
+                self.streaming.extra.clear();
+            }
+            self.spawn = self
+                .level
+                .spawn
+                .map(|s| horizon_core::geometry::Vec3::new(s[0] + 0.5, s[1], s[2] + 0.5));
+            return Ok(());
+        }
         while self.player.is_none() {
             self.update_world();
             self.spawn_player()?;
@@ -765,24 +905,28 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// The chunks to keep loaded: the players' (lan_update_streaming), or
-    /// the spawn chunk while nobody is online.
+    /// The chunks to keep loaded: the players' (lan_update_streaming). While
+    /// nobody is online a dedicated server keeps none (vanilla has no spawn
+    /// ticket), an integrated one the spawn chunk's.
     pub(super) fn update_dedicated_streaming(&mut self) {
-        let center = self
-            .lan
-            .as_ref()
-            .and_then(|h| {
-                h.hub
-                    .guests
-                    .iter()
-                    .find(|g| h.hub.here(g))
-                    .map(|g| g.chunk())
-            })
-            .or_else(|| {
-                self.spawn
-                    .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4))
-            });
-        if let Some(c) = center {
+        let guest = self.lan.as_ref().and_then(|h| {
+            h.hub
+                .guests
+                .iter()
+                .find(|g| h.hub.here(g))
+                .map(|g| g.chunk())
+        });
+        if self.standalone_server() {
+            self.streaming.radius = if guest.is_some() {
+                self.settings.render_distance
+            } else {
+                -1
+            };
+        }
+        let spawn = self
+            .spawn
+            .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4));
+        if let Some(c) = guest.or(spawn) {
             self.streaming.center = c;
         }
     }
@@ -1353,6 +1497,8 @@ impl Game<'_> {
     }
 
     fn stop_dedicated(&mut self) -> Result<()> {
+        // The close request starts before player and world saves.
+        self.native_lifecycle.begin_close();
         log("INFO", "Stopping server");
         log("INFO", "Saving players");
         if let Some(h) = self.lan.as_mut() {
@@ -1380,6 +1526,8 @@ impl Game<'_> {
         self.free_player_beds()?;
         self.save_game()?;
         self.log_saved_levels();
+        // Only a successful final save closes the epoch; storage is still held.
+        self.native_lifecycle_world_closed();
         self.lan_close(false);
         Ok(())
     }

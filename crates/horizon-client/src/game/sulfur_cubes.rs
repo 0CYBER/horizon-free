@@ -52,7 +52,7 @@ impl Game<'_> {
         }
         // shortcut: the body slot retains only an item id; preserve the stack
         // before supporting its block-state components here.
-        let Some(state) = self.res.items().get(item).and_then(|item| item.block) else {
+        let Some(state) = self.items().get(item).and_then(|item| item.block) else {
             return;
         };
         let start = out.len();
@@ -101,8 +101,9 @@ impl Game<'_> {
             return false;
         }
         if m.is_baby() {
-            // Slime balls grow a baby up by a tenth.
-            if !m.kind.food.iter().any(|f| f == item) || m.extra.age_locked {
+            // Slime balls grow a baby up by a tenth (`canAgeUp`: not while an
+            // age lock holds it).
+            if !m.kind.food.iter().any(|f| f == item) || !horizon_client::mobs::ai::can_age_up(m) {
                 return false;
             }
             let m = &mut self.mobs[index];

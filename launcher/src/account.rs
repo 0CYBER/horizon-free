@@ -334,25 +334,43 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
         return Err("Xbox Live refused the sign-in.".into());
     };
     let xuid = claims.and_then(|c| str_field(c, "xid"));
+    let (token, expires_in) = minecraft_token(ep, &format!("XBL3.0 x={uhs};{xsts_token}"))?;
+    Ok(Minecraft {
+        token,
+        expires_at: now() + expires_in,
+        xuid,
+    })
+}
+
+/// The Minecraft access token and its lifetime from the XSTS one (`XBL3.0 x=<uhs>;<token>`).
+/// `launcher/login` first: a new account's token from `login_with_xbox` names no profile, so
+/// joining an online-mode server answers "Profile not found" (found and diagnosed by
+/// martipops). `login_with_xbox` stays the fallback, so a sign-in that worked before still does
+/// when the other refuses.
+fn minecraft_token(ep: &Endpoints, xtoken: &str) -> Result<(String, u64), String> {
+    let lifetime = |v: &Value| v.get("expires_in").and_then(Value::as_u64).unwrap_or(86400);
+    let launcher = send(
+        request_to("POST", &format!("{}/launcher/login", ep.minecraft)),
+        Some(Body::Json(
+            json!({ "xtoken": xtoken, "platform": "PC_LAUNCHER" }),
+        )),
+        "the Minecraft services",
+    );
+    if let Ok((200, v)) = &launcher {
+        if let Some(token) = str_field(v, "access_token") {
+            return Ok((token, lifetime(v)));
+        }
+    }
     let (status, mc) = send(
         request_to(
             "POST",
             &format!("{}/authentication/login_with_xbox", ep.minecraft),
         ),
-        Some(Body::Json(
-            json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") }),
-        )),
+        Some(Body::Json(json!({ "identityToken": xtoken }))),
         "the Minecraft services",
     )?;
     match (status, str_field(&mc, "access_token")) {
-        (200, Some(token)) => Ok(Minecraft {
-            token,
-            expires_at: now()
-                + mc.get("expires_in")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(86400),
-            xuid,
-        }),
+        (200, Some(token)) => Ok((token, lifetime(&mc))),
         // New Azure apps are refused until Mojang approves them (Minecraft API access).
         (403, _) => Err(
             "The Minecraft services refused this launcher: its app is not approved by Mojang yet."
@@ -574,7 +592,24 @@ pub struct SystemStore;
 impl SystemStore {
     fn keyring() -> Result<oo7::Keyring, String> {
         futures_lite::future::block_on(async {
-            let keyring = oo7::Keyring::new().await.map_err(|e| e.to_string())?;
+            // `oo7::Keyring::new` takes `GTK_USE_PORTAL=1` (set by many KDE desktops) for a
+            // sandbox, and then keeps the secrets in a file under a key the Secret portal gives
+            // per app id. Outside a sandbox that id comes from how the launcher was started (the
+            // menu or a terminal), so the file opened in one start and not the next (#3249).
+            // Flatpak (`/.flatpak-info`) and Snap (`$SNAP`) keep the portal's file.
+            let sandboxed =
+                Path::new("/.flatpak-info").exists() || std::env::var_os("SNAP").is_some();
+            let keyring = if sandboxed {
+                oo7::Keyring::new().await.map_err(|e| e.to_string())?
+            } else {
+                let service = oo7::dbus::Service::new().await.map_err(|e| e.to_string())?;
+                oo7::Keyring::DBus(
+                    service
+                        .default_collection()
+                        .await
+                        .map_err(|e| e.to_string())?,
+                )
+            };
             keyring.unlock().await.map_err(|e| e.to_string())?;
             Ok(keyring)
         })
@@ -632,10 +667,10 @@ impl SecretStore for SystemStore {
 pub struct SystemStore;
 
 /// Bytes of UTF-8 per keychain item: at most twice as many in UTF-16, well under 2560.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const PIECE: usize = 1000;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn piece_key(key: &str, n: usize) -> String {
     if n == 0 {
         key.to_string()
@@ -645,7 +680,7 @@ fn piece_key(key: &str, n: usize) -> String {
 }
 
 /// `secret` cut into pieces of at most `PIECE` bytes, on character boundaries.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn split_secret(mut secret: &str) -> Vec<&str> {
     let mut pieces = Vec::new();
     while secret.len() > PIECE {
@@ -661,66 +696,137 @@ fn split_secret(mut secret: &str) -> Vec<&str> {
     pieces
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn read_item(key: &str) -> Result<Option<String>, String> {
-    match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+/// One keychain item per key: what a secret's pieces are kept in.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+trait Items {
+    fn read(&self, key: &str) -> Result<Option<String>, String>;
+    fn write(&self, key: &str, piece: &str) -> Result<(), String>;
+    /// Removes one item; false when there was none.
+    fn remove(&self, key: &str) -> Result<bool, String>;
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn get_pieces(items: &dyn Items, key: &str) -> Result<Option<String>, String> {
+    let Some(mut secret) = items.read(key)? else {
+        return Ok(None);
+    };
+    for n in 1.. {
+        match items.read(&piece_key(key, n))? {
+            Some(piece) => secret.push_str(&piece),
+            None => break,
+        }
     }
+    Ok(Some(secret))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn write_item(key: &str, secret: &str) -> Result<(), String> {
-    keyring::Entry::new(SERVICE, key)
-        .and_then(|e| e.set_password(secret))
-        .map_err(|e| e.to_string())
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn set_pieces(items: &dyn Items, key: &str, secret: &str) -> Result<(), String> {
+    let before = get_pieces(items, key).ok().flatten();
+    let pieces = split_secret(secret);
+    for (n, piece) in pieces.iter().enumerate() {
+        if let Err(e) = items.write(&piece_key(key, n), piece) {
+            // New pieces before old ones read back as no secret at all (the account would be
+            // signed out at the next start): the old secret goes back, which fit before.
+            if n > 0 {
+                let _ = delete_pieces(items, key);
+                if let Some(before) = &before {
+                    for (n, piece) in split_secret(before).iter().enumerate() {
+                        let _ = items.write(&piece_key(key, n), piece);
+                    }
+                }
+            }
+            return Err(e);
+        }
+    }
+    // Pieces left over from a longer secret would be read back as part of this one.
+    for n in pieces.len().. {
+        if !items.remove(&piece_key(key, n))? {
+            break;
+        }
+    }
+    Ok(())
 }
 
-/// Removes one item; false when there was none.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn delete_pieces(items: &dyn Items, key: &str) -> Result<(), String> {
+    for n in 0.. {
+        if !items.remove(&piece_key(key, n))? {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Credential Manager's error 8 (`ERROR_NOT_ENOUGH_MEMORY`) on a write: not the computer's memory,
+/// the player's credential store is full (an undocumented limit of its total size). The Xbox app
+/// and the Minecraft Launcher are known to leave hundreds of items there (#4313, #4366).
+#[cfg(any(target_os = "windows", test))]
+pub const CREDENTIAL_MANAGER_FULL: &str = "Windows Credential Manager is full, so Horizon can't \
+     keep your sign-in (Windows error 8; it isn't your computer's memory). Open Credential Manager \
+     from the Start menu, go to Windows Credentials and remove entries you no longer use, then sign \
+     in again. The Xbox app and the Minecraft Launcher often leave many XblGrts and Xbl| entries \
+     there; removing an entry can sign the app that made it out.";
+
+/// What the launcher says for a Windows error code Credential Manager gave when writing an item,
+/// when it says more than the code.
+#[cfg(any(target_os = "windows", test))]
+fn credential_manager_says(code: u32) -> Option<&'static str> {
+    const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
+    (code == ERROR_NOT_ENOUGH_MEMORY).then_some(CREDENTIAL_MANAGER_FULL)
+}
+
+/// The keyring crate's error as the player reads it.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn remove_item(key: &str) -> Result<bool, String> {
-    match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
-        Ok(()) => Ok(true),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(e.to_string()),
+fn write_error(e: keyring::Error) -> String {
+    #[cfg(target_os = "windows")]
+    if let keyring::Error::PlatformFailure(inner) = &e {
+        if let Some(said) = inner
+            .downcast_ref::<keyring::windows::Error>()
+            .and_then(|code| credential_manager_says(code.0))
+        {
+            return said.to_string();
+        }
+    }
+    e.to_string()
+}
+
+/// The OS keychain's items, under [`SERVICE`].
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+struct KeyringItems;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl Items for KeyringItems {
+    fn read(&self, key: &str) -> Result<Option<String>, String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn write(&self, key: &str, piece: &str) -> Result<(), String> {
+        keyring::Entry::new(SERVICE, key)
+            .and_then(|e| e.set_password(piece))
+            .map_err(write_error)
+    }
+    fn remove(&self, key: &str) -> Result<bool, String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SecretStore for SystemStore {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let Some(mut secret) = read_item(key)? else {
-            return Ok(None);
-        };
-        for n in 1.. {
-            match read_item(&piece_key(key, n))? {
-                Some(piece) => secret.push_str(&piece),
-                None => break,
-            }
-        }
-        Ok(Some(secret))
+        get_pieces(&KeyringItems, key)
     }
     fn set(&self, key: &str, secret: &str) -> Result<(), String> {
-        let pieces = split_secret(secret);
-        for (n, piece) in pieces.iter().enumerate() {
-            write_item(&piece_key(key, n), piece)?;
-        }
-        // Pieces left over from a longer secret would be read back as part of this one.
-        for n in pieces.len().. {
-            if !remove_item(&piece_key(key, n))? {
-                break;
-            }
-        }
-        Ok(())
+        set_pieces(&KeyringItems, key, secret)
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        for n in 0.. {
-            if !remove_item(&piece_key(key, n))? {
-                break;
-            }
-        }
-        Ok(())
+        delete_pieces(&KeyringItems, key)
     }
     fn persistent(&self) -> bool {
         true
@@ -729,7 +835,23 @@ impl SecretStore for SystemStore {
 
 pub const NO_KEYCHAIN: &str = "No keychain available: you are signed in until the launcher closes, then you will have to sign in again.";
 
-/// The keychain if it answers, else memory for this run (said once in the UI with NO_KEYCHAIN).
+/// What the keychain answered when [`store`] fell back to memory.
+static NO_KEYCHAIN_WHY: OnceLock<String> = OnceLock::new();
+
+/// What the window and the CLI say when sign-ins last only this run: [`NO_KEYCHAIN`] and why.
+/// None while the keychain keeps them.
+pub fn no_keychain() -> Option<String> {
+    if store().persistent() {
+        return None;
+    }
+    Some(match NO_KEYCHAIN_WHY.get() {
+        Some(why) => format!("{NO_KEYCHAIN} The keychain said: {why}"),
+        None => NO_KEYCHAIN.into(),
+    })
+}
+
+/// The keychain if it answers, else memory for this run (said in the UI with [`no_keychain`]).
+/// Never a file of its own: secrets are kept by the system or not at all.
 pub fn store() -> &'static dyn SecretStore {
     static STORE: OnceLock<Box<dyn SecretStore>> = OnceLock::new();
     STORE
@@ -744,9 +866,15 @@ pub fn store() -> &'static dyn SecretStore {
                     target_os = "windows"
                 )
             ))]
-            if std::env::var_os("HORIZON_NO_KEYCHAIN").is_none() && SystemStore.get("probe").is_ok()
             {
-                return Box::new(SystemStore);
+                let why = match std::env::var_os("HORIZON_NO_KEYCHAIN") {
+                    Some(_) => "HORIZON_NO_KEYCHAIN is set.".to_string(),
+                    None => match SystemStore.get("probe") {
+                        Ok(_) => return Box::new(SystemStore),
+                        Err(e) => e,
+                    },
+                };
+                let _ = NO_KEYCHAIN_WHY.set(why);
             }
             Box::<MemoryStore>::default()
         })
@@ -1002,6 +1130,17 @@ pub struct Launch {
     /// An account the services said owns the game just now, the selected one first: who the
     /// launcher may download the game for.
     pub owner: Option<(Account, Secrets)>,
+    /// A renewed sign-in the keychain refused to keep: it plays now, and may have to sign in
+    /// again next time.
+    pub unsaved: Option<String>,
+}
+
+/// The last [`Launch::unsaved`], for the window or the terminal to show once.
+static UNSAVED: Mutex<Option<String>> = Mutex::new(None);
+
+/// What the last launch couldn't save in the keychain, once.
+pub fn take_unsaved() -> Option<String> {
+    UNSAVED.lock().ok()?.take()
 }
 
 /// The owner gate: the game starts only while an account in the launcher owns Minecraft: Java
@@ -1054,8 +1193,18 @@ pub fn launch(
         let after = serde_json::to_string(&secrets).ok();
         if after != before {
             if let Some(text) = after {
-                // A store that refuses costs only this answer: the next launch asks again.
-                let _ = store.set(&account.uuid, &text);
+                // The game still starts; the player hears why the next launch may ask again.
+                if let Err(e) = store.set(&account.uuid, &text) {
+                    let said = format!(
+                        "{}'s renewed sign-in couldn't be saved in the keychain ({e}): you may \
+                         have to sign in again next time.",
+                        account.name
+                    );
+                    if let Ok(mut last) = UNSAVED.lock() {
+                        *last = Some(said.clone());
+                    }
+                    pass.unsaved = Some(said);
+                }
             }
         }
     }
@@ -1198,6 +1347,48 @@ pub fn session_for_game(
         Ok(file) => Ok((Some(file), None)),
         Err(e) => Ok((None, Some(e))),
     }
+}
+
+/// Who plays the real Minecraft: Java Edition (a Java instance), past the owner gate itself
+/// ([`launch`]): the selected account when it owns the game, else one that does. With no answer
+/// from the services, an account that owned it plays with its last token. Mojang's game takes the
+/// token on its command line, as Mojang's launcher gives it; that command is never logged.
+pub fn java_player() -> Result<crate::java_launch::Player, String> {
+    let mut accounts = Accounts::load();
+    let player = java_player_with(
+        &Endpoints::live(),
+        client_id().as_deref(),
+        store(),
+        &mut accounts,
+    );
+    let _ = accounts.save();
+    player
+}
+
+fn java_player_with(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    accounts: &mut Accounts,
+) -> Result<crate::java_launch::Player, String> {
+    let pass = launch(ep, client_id, store, accounts).map_err(|e| e.to_string())?;
+    let kept = || {
+        let order = accounts.selected().into_iter().chain(&accounts.accounts);
+        order
+            .into_iter()
+            .find_map(|a| Some((a.clone(), secrets_in(store, &a.uuid).filter(|s| s.owns)?)))
+    };
+    let (account, secrets) = pass
+        .session
+        .or(pass.owner)
+        .or_else(kept)
+        .ok_or_else(|| NoOwner.to_string())?;
+    Ok(crate::java_launch::Player {
+        name: account.name,
+        uuid: account.uuid,
+        token: secrets.minecraft_token,
+        xuid: secrets.xuid.unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]
