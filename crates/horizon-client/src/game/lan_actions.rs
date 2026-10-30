@@ -1257,12 +1257,29 @@ impl Game<'_> {
             }
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
-                // handleUseItemOn: within reach, and the hit point within the block.
+                // handleUseItemOn: within reach, then the hit point within
+                // a block of the block's centre (logged when it isn't).
+                if !host.hub.guests[gi].may_reach_block(p.pos) {
+                    return;
+                }
                 let inside = p
                     .cursor
                     .iter()
                     .all(|&c| (f64::from(c) - 0.5).abs() < 1.0000001);
-                if !(inside && host.hub.guests[gi].may_reach_block(p.pos)) {
+                if !inside {
+                    let d = horizon_client::java_text::double_to_string;
+                    let at = |k: usize| d(f64::from(p.pos[k]) + f64::from(p.cursor[k]));
+                    let line = format!(
+                        "Rejecting UseItemOnPacket from {}: Location ({}, {}, {}) too far away from hit block BlockPos{{x={}, y={}, z={}}}.",
+                        host.hub.guests[gi].name,
+                        at(0),
+                        at(1),
+                        at(2),
+                        p.pos[0],
+                        p.pos[1],
+                        p.pos[2]
+                    );
+                    self.lan_log_event(horizon_client::lan::hub::HostEvent::Warn(line));
                     return;
                 }
                 let face = direction(p.face);
@@ -1343,6 +1360,15 @@ impl Game<'_> {
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
+                // handleInteract: within the entity interaction range plus 3
+                // of the target's box, or nothing happens.
+                if let Some(target) = self.guest_target_box(host, gi, p.id)
+                    && self.as_guest(host, conn, |g| {
+                        g.within_entity_interaction_range(&target, 3.0)
+                    }) != Some(true)
+                {
+                    return;
+                }
                 let before = host.hub.guests[gi].vehicle;
                 if self
                     .look_at_entity(host, gi, p.id, Some(p.location))
@@ -1930,11 +1956,54 @@ impl Game<'_> {
         }
     }
 
+    /// `Level.getEntityOrPart(id).getBoundingBox()` for a guest's attack or
+    /// interaction: the host, another player, a mob, a vehicle or object, a
+    /// dragon part or crystal, a projectile. None for an id the level doesn't
+    /// have (the handlers then find nothing either).
+    fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
+        let conn = host.hub.guests[gi].conn;
+        if id == host.host_entity {
+            return self.player.as_ref().map(|p| p.bounds());
+        }
+        if let Some(g) = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g))
+        {
+            return Some(g.bounds());
+        }
+        if let Some(m) = self.mobs.iter().find(|m| m.id as i32 == id) {
+            return Some(m.bounds());
+        }
+        if let Some((lo, hi, _)) = self.object_target(id) {
+            return Some(Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            ));
+        }
+        if let Some(b) = self.tracked_special_box(id) {
+            return Some(b);
+        }
+        self.creatures
+            .projectiles
+            .iter()
+            .find(|p| p.id != 0 && p.id as i32 == id)
+            .map(|p| p.bounds())
+    }
+
     fn guest_attack(&mut self, host: &mut LanHost, conn: u32, id: i32) {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
         if host.hub.guests[gi].spectator() {
+            return;
+        }
+        // handleAttack: `isWithinAttackRange(mainHandItem, box, 3.0)` before
+        // anything else, players, mobs, objects and fireballs alike.
+        if let Some(target) = self.guest_target_box(host, gi, id)
+            && self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true)
+        {
             return;
         }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
