@@ -1,7 +1,8 @@
 //! Commands of the hosted game rather than the world: `/dialog`, `/kick`,
 //! `/posteffect`, `/fetchprofile`, `/spectate`, `/publish`, `/unpublish`,
 //! `/waypoint`, `/debug`, `/jfr` and `/test`; on a dedicated server only,
-//! `/op`, `/deop`, `/ban`, `/pardon` and `/whitelist`.
+//! `/op`, `/deop`, `/ban`, `/ban-ip`, `/banlist`, `/pardon`, `/pardon-ip` and
+//! `/whitelist`.
 use super::{
     Dispatcher,
     args::ArgType,
@@ -212,6 +213,21 @@ pub fn register(d: &mut Dispatcher, root: usize) {
 /// (`Commands.CommandSelection.includeDedicated`): an integrated server, and
 /// so single player and a LAN world, has none of them.
 pub fn register_dedicated(d: &mut Dispatcher, root: usize) {
+    // BanIpCommands, BanListCommands
+    let ban_ip = d.literal(root, "ban-ip");
+    d.requires(ban_ip, ADMINS);
+    let t = d.argument(ban_ip, "target", ArgType::Word);
+    d.executes(t, "ban-ip");
+    let reason = d.argument(t, "reason", ArgType::Message);
+    d.executes(reason, "ban-ip");
+    let banlist = d.literal(root, "banlist");
+    d.requires(banlist, ADMINS);
+    d.executes(banlist, "banlist");
+    for (word, id) in [("ips", "banlist.ips"), ("players", "banlist.players")] {
+        let w = d.literal(banlist, word);
+        d.executes(w, id);
+    }
+
     // OpCommand, DeOpCommands, BanPlayerCommands, PardonCommand
     for (name, id) in [("op", "op"), ("deop", "deop"), ("pardon", "pardon")] {
         let n = d.literal(root, name);
@@ -219,6 +235,12 @@ pub fn register_dedicated(d: &mut Dispatcher, root: usize) {
         let t = d.argument(n, "targets", ArgType::GameProfile);
         d.executes(t, id);
     }
+    // PardonIpCommand
+    let pardon_ip = d.literal(root, "pardon-ip");
+    d.requires(pardon_ip, ADMINS);
+    let t = d.argument(pardon_ip, "target", ArgType::Word);
+    d.executes(t, "pardon-ip");
+
     let ban = d.literal(root, "ban");
     d.requires(ban, ADMINS);
     let t = d.argument(ban, "targets", ArgType::GameProfile);
