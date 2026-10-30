@@ -1,6 +1,7 @@
 //! Non-player entities simulated on the client world. Dropped items follow
 //! `ItemEntity.tick`: gravity 0.04, 0.98 drag (block friction on the ground),
-//! a ground bounce of -0.5, water buoyancy, pickup delay and 6000-tick despawn.
+//! a ground bounce of -0.5, water buoyancy, pickup delay, 6000-tick despawn,
+//! and `HoneyBlock.entityInside` when falling against a honey block's side.
 use crate::{
     blocks::{BlockFacts, Fluid},
     collisions::SceneCollisions,
@@ -237,6 +238,8 @@ impl ItemEntity {
             if moved.y != wanted.y {
                 self.velocity.y = 0.0;
             }
+            // Entity.move -> applyEffectsFromBlocks: HoneyBlock.entityInside.
+            self.apply_honey_slide(world, facts);
             let mut friction = 0.98;
             if self.on_ground {
                 let below = world.block(
@@ -259,6 +262,51 @@ impl ItemEntity {
         // ItemEntity.tick refreshes immersion and pushes again after moving.
         self.update_fluids(world, fluids);
         self.age < 6000 && self.position.y > -128.0
+    }
+    /// `HoneyBlock.entityInside` for the honey blocks this item's box is in
+    /// (`Entity.checkInsideBlocks`, deflated by `1.0E-5`). Slide sounds and
+    /// entity event 53 are skipped (`doesEntityDoHoneyBlockSlideEffects` is
+    /// false for an item).
+    fn apply_honey_slide(&mut self, world: &World, facts: &BlockFacts) {
+        let b = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+        let (lo, hi) = (b.min_position(), b.max_position());
+        for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
+            for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
+                for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
+                    if &*facts.get(world.block(x, y, z)).name == "minecraft:honey_block" {
+                        self.honey_block_inside([x, y, z]);
+                    }
+                }
+            }
+        }
+    }
+    /// `HoneyBlock.isSlidingDown` then `doSlideMovement`. `getOldDeltaY` /
+    /// `getNewDeltaY` wrap the stored velocity the same way they do for every
+    /// entity (`vy / 0.98F + 0.08`).
+    pub(crate) fn honey_block_inside(&mut self, pos: [i32; 3]) {
+        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+        let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+        let [x, y, z] = pos.map(f64::from);
+        if self.on_ground
+            || self.position.y > y + 0.9375 - 1.0e-7
+            || old_delta_y(self.velocity.y) >= -0.08
+        {
+            return;
+        }
+        let dx = (x + 0.5 - self.position.x).abs();
+        let dz = (z + 0.5 - self.position.z).abs();
+        let overlap = 0.4375 + Self::WIDTH / 2.0;
+        if dx + 1.0e-7 <= overlap && dz + 1.0e-7 <= overlap {
+            return;
+        }
+        let v = self.velocity;
+        let old = old_delta_y(v.y);
+        self.velocity = if old < -0.13 {
+            let factor = -0.05 / old;
+            Vec3::new(v.x * factor, new_delta_y(-0.05), v.z * factor)
+        } else {
+            Vec3::new(v.x, new_delta_y(-0.05), v.z)
+        };
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
     /// delay isn't infinite, before its lifetime ends.
@@ -1270,5 +1318,91 @@ mod merge_tests {
         merge_with_neighbours(&mut items, &mut removed, &mut cells, 0, &max_stack);
         assert_eq!(removed, [true, false]);
         assert_eq!(items[1].stack.count, 2);
+    }
+}
+
+#[cfg(test)]
+mod honey_slide_tests {
+    use super::*;
+
+    fn falling_item(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) -> ItemEntity {
+        let at = Vec3::new(x, y, z);
+        ItemEntity {
+            id: 1,
+            thrower: None,
+            target: None,
+            stack: ItemStack {
+                item: std::sync::Arc::from("minecraft:stone"),
+                count: 1,
+                damage: 0,
+                extra: None,
+            },
+            health: 5,
+            fire_ticks: 0,
+            position: at,
+            previous: at,
+            velocity: Vec3::new(vx, vy, vz),
+            on_ground: false,
+            age: 10,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+            ticks: 10,
+        }
+    }
+
+    fn old_delta_y(dy: f64) -> f64 {
+        dy / f64::from(0.98_f32) + 0.08
+    }
+    fn new_delta_y(dy: f64) -> f64 {
+        (dy - 0.08) * f64::from(0.98_f32)
+    }
+
+    #[test]
+    fn a_falling_item_beside_honey_slides_down() {
+        // Item width 0.25: overlap 0.5625. Honey at (0, 10, 0); centre 0.5.
+        // x = -0.0625 is against the west face (inset 1/16).
+        let mut item = falling_item(-0.0625, 10.4, 0.5, 0.12, -0.20, 0.04);
+        assert!(old_delta_y(-0.20) < -0.08);
+        assert!(old_delta_y(-0.20) >= -0.13);
+        item.honey_block_inside([0, 10, 0]);
+        assert_eq!(item.velocity.x, 0.12);
+        assert_eq!(item.velocity.z, 0.04);
+        assert_eq!(item.velocity.y, new_delta_y(-0.05));
+    }
+
+    #[test]
+    fn a_fast_fall_scales_the_horizontal_speed() {
+        let mut item = falling_item(-0.0625, 10.4, 0.5, 0.2, -0.30, -0.1);
+        let old = old_delta_y(-0.30);
+        assert!(old < -0.13);
+        item.honey_block_inside([0, 10, 0]);
+        let factor = -0.05 / old;
+        assert_eq!(item.velocity.x, 0.2 * factor);
+        assert_eq!(item.velocity.z, -0.1 * factor);
+        assert_eq!(item.velocity.y, new_delta_y(-0.05));
+    }
+
+    #[test]
+    fn an_item_on_the_ground_or_on_top_does_not_slide() {
+        let mut grounded = falling_item(-0.0625, 10.4, 0.5, 0.0, -0.20, 0.0);
+        grounded.on_ground = true;
+        grounded.honey_block_inside([0, 10, 0]);
+        assert_eq!(grounded.velocity.y, -0.20);
+
+        let mut on_top = falling_item(0.5, 10.9375, 0.5, 0.0, -0.20, 0.0);
+        on_top.honey_block_inside([0, 10, 0]);
+        assert_eq!(on_top.velocity.y, -0.20, "standing on the honey");
+    }
+
+    #[test]
+    fn a_centred_or_slow_item_does_not_slide() {
+        let mut centred = falling_item(0.5, 10.4, 0.5, 0.0, -0.20, 0.0);
+        centred.honey_block_inside([0, 10, 0]);
+        assert_eq!(centred.velocity.y, -0.20, "inside, not on a side");
+
+        let mut slow = falling_item(-0.0625, 10.4, 0.5, 0.0, -0.04, 0.0);
+        assert!(old_delta_y(-0.04) >= -0.08);
+        slow.honey_block_inside([0, 10, 0]);
+        assert_eq!(slow.velocity.y, -0.04);
     }
 }
