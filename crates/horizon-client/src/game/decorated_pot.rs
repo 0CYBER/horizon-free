@@ -74,7 +74,10 @@ impl Game<'_> {
                 ("z", Tag::Int(pos[2])),
             ])
         });
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         unpack_loot(
             &mut tag,
             loot.as_deref(),
@@ -131,6 +134,8 @@ impl Game<'_> {
             map.insert("item".into(), save::item_to_nbt(item));
         }
         spill::put_saved_entity(&mut self.world, pos, tag);
+        // The sherds and item go to the guests (BlockEntityData).
+        self.mark_block_entity_updated((pos[0], pos[1], pos[2]));
         self.consume_held();
         self.audio.play(
             "minecraft:block.decorated_pot.insert",

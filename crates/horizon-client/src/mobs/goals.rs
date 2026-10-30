@@ -4,7 +4,7 @@ use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     jmath,
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use std::sync::Arc;
 
@@ -16,10 +16,16 @@ pub const TARGET: u8 = 8;
 /// What goals may read and emit during a tick.
 pub struct Cx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
+    /// The level's random (`level.getRandom()`), for the draws vanilla's
+    /// behaviours make from it rather than from the mob's own.
+    pub lr: &'a mut LegacyRandom,
     pub events: &'a mut Vec<MobEvent>,
 }
 pub trait Goal: std::fmt::Debug {
     fn flags(&self) -> u8;
+    /// A goal that draws its first start delay in its constructor (a schooling fish's
+    /// `FollowFlockLeaderGoal`): the delay again, when the mob's random is seeded afterwards.
+    fn set_start_delay(&mut self, _ticks: i32) {}
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool;
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.can_use(m, cx)
@@ -83,6 +89,14 @@ impl GoalSelector {
             goal: Box::new(goal),
             running: false,
         });
+    }
+    /// `Goal::set_start_delay` of the goal of this name.
+    pub fn set_start_delay(&mut self, name: &str, ticks: i32) {
+        for g in &mut self.goals {
+            if g.goal.name() == name {
+                g.goal.set_start_delay(ticks);
+            }
+        }
     }
     pub fn clear(&mut self) {
         self.goals.clear();
@@ -182,11 +196,11 @@ fn move_up_to_above_solid(w: &MobWorld, mut p: [i32; 3], above: i32) -> [i32; 3]
         return p;
     }
     p[1] += 1;
-    while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+    while p[1] < w.world.top_y() && w.solid(p[0], p[1], p[2]) {
         p[1] += 1;
     }
     let first = p[1];
-    while p[1] <= 319 && p[1] - first < above {
+    while p[1] < w.world.top_y() && p[1] - first < above {
         p[1] += 1;
         if w.solid(p[0], p[1], p[2]) {
             p[1] -= 1;
@@ -280,8 +294,8 @@ impl Mob {
         near && !within_home(c, r, p)
     }
     fn default_check(&self, w: &MobWorld, h: f64, p: [i32; 3]) -> bool {
-        p[1] >= crate::chunk::MIN_Y
-            && p[1] < 320
+        p[1] >= w.world.bottom_y()
+            && p[1] < w.world.top_y()
             && !self.restricted(h, p)
             && self.stable_destination(w, p)
             && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0
@@ -360,7 +374,7 @@ impl Mob {
     fn land_up_out_of_solid(&self, w: &MobWorld, mut p: [i32; 3]) -> Option<[i32; 3]> {
         if w.solid(p[0], p[1], p[2]) {
             p[1] += 1;
-            while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+            while p[1] < w.world.top_y() && w.solid(p[0], p[1], p[2]) {
                 p[1] += 1;
             }
         }
@@ -374,6 +388,20 @@ impl Mob {
         let x = self.previous_head_pitch * to_rad;
         // LivingEntity.getViewYRot(0): the head's yaw of the last tick.
         let y = -self.previous_head_yaw * to_rad;
+        let (y_cos, y_sin, x_cos, x_sin) = (y.mcos(), y.msin(), x.mcos(), x.msin());
+        [
+            f64::from(y_sin * x_cos),
+            f64::from(-x_sin),
+            f64::from(y_cos * x_cos),
+        ]
+    }
+    /// `Entity.getLookAngle`: `calculateViewVector(xRot, yRot)`, the facing
+    /// of the body (`getHeadLookAngle` is the one with the head's yaw).
+    pub fn look_angle(&self) -> [f64; 3] {
+        use horizon_core::geometry::trig::Mth;
+        let to_rad = std::f32::consts::PI / 180.0;
+        let x = self.head_pitch * to_rad;
+        let y = -self.yaw * to_rad;
         let (y_cos, y_sin, x_cos, x_sin) = (y.mcos(), y.msin(), x.mcos(), x.msin());
         [
             f64::from(y_sin * x_cos),
@@ -412,13 +440,14 @@ impl Mob {
     ) -> Option<[i32; 3]> {
         let d = self.random_direction_within(0.0, f64::from(h), v, fly_height, xd, zd, max_rad)?;
         let mut p = self.toward(f64::from(h), d);
-        if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || self.restricted(f64::from(h), p) {
+        if p[1] < w.world.bottom_y() || p[1] >= w.world.top_y() || self.restricted(f64::from(h), p)
+        {
             return None;
         }
         // RandomPos.moveUpOutOfSolid
         if w.solid(p[0], p[1], p[2]) {
             p[1] += 1;
-            while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+            while p[1] < w.world.top_y() && w.solid(p[0], p[1], p[2]) {
                 p[1] += 1;
             }
         }
@@ -460,8 +489,8 @@ impl Mob {
             let d = m.random_direction_within(0.0, f64::from(h), v, 0, xd, zd, max_rad)?;
             // LandRandomPos.generateRandomPosTowardDirection
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
             {
@@ -477,13 +506,21 @@ impl Mob {
             (!water && m.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
         })
     }
+    /// `WaterAvoidingRandomFlyingGoal.getPosition`: a hover spot ahead, else
+    /// any air or water spot ahead.
+    pub fn flying_stroll_pos(&mut self, w: &MobWorld) -> Option<[f64; 3]> {
+        let [xd, _, zd] = self.view_vector();
+        let max_rad = f64::from(std::f32::consts::FRAC_PI_2);
+        self.hover_random_pos(w, 8, 7, xd, zd, max_rad, 3, 1)
+            .or_else(|| self.air_and_water_random_pos(w, 8, 4, -2, xd, zd))
+    }
     /// LandRandomPos.getPos
     pub fn land_random_pos(&mut self, w: &MobWorld, h: i32, v: i32) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {
             let d = m.random_direction(h, v);
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
             {
@@ -505,7 +542,11 @@ impl Mob {
         for _ in 0..10 {
             let d = self.random_direction(h, v);
             let p = self.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !self.stable_destination(w, p) {
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
+                || self.restricted(f64::from(h), p)
+                || !self.stable_destination(w, p)
+            {
                 continue;
             }
             if let Some(p) = self.land_up_out_of_solid(w, p) {
@@ -524,11 +565,22 @@ impl Mob {
             ]
         })
     }
-    /// LandRandomPos.getPosAway
+    /// `LandRandomPos.getPosAway`: a spot away from `away`, the best of ten tries.
     pub fn land_random_pos_away(
         &mut self,
         w: &MobWorld,
         h: i32,
+        v: i32,
+        away: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        self.land_random_pos_away_between(w, 0.0, f64::from(h), v, away)
+    }
+    /// `LandRandomPos.getPosAway(mob, minHorizontalDist, maxHorizontalDist, verticalDist, avoidPos)`.
+    pub fn land_random_pos_away_between(
+        &mut self,
+        w: &MobWorld,
+        min_h: f64,
+        max_h: f64,
         v: i32,
         away: [f64; 3],
     ) -> Option<[f64; 3]> {
@@ -537,20 +589,45 @@ impl Mob {
             xd = self.random.next_double() - 0.5;
             zd = self.random.next_double() - 0.5;
         }
+        self.land_pos_in_direction(w, min_h, max_h, v, xd, zd)
+    }
+    /// `LandRandomPos.getPosTowards`: a spot within a quarter turn of the
+    /// way to `to`, the best of ten tries.
+    pub fn land_random_pos_towards(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        to: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
+        self.land_pos_in_direction(w, 0.0, f64::from(h), v, xd, zd)
+    }
+    /// `LandRandomPos.getPosInDirection`: ten tries within a quarter turn
+    /// (`(float) (Math.PI / 2)`) of the direction `(xd, zd)`.
+    fn land_pos_in_direction(
+        &mut self,
+        w: &MobWorld,
+        min_h: f64,
+        max_h: f64,
+        v: i32,
+        xd: f64,
+        zd: f64,
+    ) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {
             let d = m.random_direction_within(
-                0.0,
-                f64::from(h),
+                min_h,
+                max_h,
                 v,
                 0,
                 xd,
                 zd,
-                std::f64::consts::FRAC_PI_2,
+                f64::from(std::f32::consts::FRAC_PI_2),
             )?;
-            let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
-                || m.restricted(f64::from(h), p)
+            let p = m.toward(max_h, d);
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
+                || m.restricted(max_h, p)
                 || !m.stable_destination(w, p)
             {
                 return None;
@@ -580,32 +657,61 @@ impl Mob {
         let b = self.bounds().inflate(Vec3::new(reach, 0.0, reach));
         b.intersects(t.bounds)
     }
+    /// `IronGolem.canAttack`: a golem a player built never attacks players.
+    pub fn spares_players(&self) -> bool {
+        self.species() == Species::IronGolem && self.extra.player_created
+    }
     /// TargetingConditions.forCombat().test for the player: alive, not
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
+        if self.spares_players() {
+            return false;
+        }
         // TargetingConditions.isCombat: never an ally.
         if p.creative || p.allies.contains(&self.id) {
             return false;
         }
-        self.player_in_range(w, range, check_sight)
+        self.player_in_range(w, range, check_sight, true)
+    }
+    /// forCombat().ignoreInvisibilityTesting() for the player: the check for
+    /// a target the mob already has, which ignores the visibility scaling.
+    pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
+        let Some(p) = &w.player else { return false };
+        if self.spares_players() {
+            return false;
+        }
+        if p.creative || p.allies.contains(&self.id) {
+            return false;
+        }
+        self.player_in_range(w, range, true, false)
     }
     /// TargetingConditions.forNonCombat().range(range).test for the player
     /// (seen by anyone, within range scaled by visibility, in sight).
     pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
-        self.player_in_range(w, range, true)
+        self.player_in_range(w, range, true, true)
     }
-    fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+    /// `TargetingConditions.forNonCombat().range(range).ignoreLineOfSight()`
+    /// for the player (still scaled by visibility).
+    pub fn can_see_player_through_walls(&mut self, w: &MobWorld, range: f64) -> bool {
+        self.player_in_range(w, range, false, true)
+    }
+    /// `scale` is `TargetingConditions.testInvisible`: scale the range by
+    /// the player's visibility.
+    fn player_in_range(
+        &mut self,
+        w: &MobWorld,
+        range: f64,
+        check_sight: bool,
+        scale: bool,
+    ) -> bool {
         let Some(p) = &w.player else { return false };
         if !p.alive || p.spectator {
             return false;
         }
         // LivingEntity.getVisibilityPercent
-        let mut visibility = 1.0;
-        if p.sneaking {
-            visibility *= 0.8;
-        }
-        if let Some(head) = &p.head {
+        let mut visibility = if scale { p.visibility_percent() } else { 1.0 };
+        if let Some(head) = p.head.as_ref().filter(|_| scale) {
             let skull = match self.species() {
                 Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {
                     "minecraft:zombie_head"
@@ -649,19 +755,68 @@ impl Goal for Float {
         }
     }
 }
+/// `ClimbOnTopOfPowderSnowGoal`: a powder-snow walker standing in powder snow
+/// jumps while the block above is powder snow or has no collision.
+#[derive(Clone, Debug)]
+pub struct ClimbOnTopOfPowderSnow;
+impl Goal for ClimbOnTopOfPowderSnow {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // wasInPowderSnow || isInPowderSnow: the freeze tick has read the
+        // powder snow the mob's box touches before the goals run.
+        if !super::ai::in_powder_snow(m, cx.w)
+            || !cx
+                .w
+                .data
+                .entity_has("minecraft:powder_snow_walkable_mobs", &m.kind.id)
+        {
+            return false;
+        }
+        // Mob.blockPosition().above()
+        let above = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32 + 1,
+            m.position.z.floor() as i32,
+        ];
+        cx.w.block_name(above[0], above[1], above[2]) == "minecraft:powder_snow"
+            || cx.w.collision_bounds(above).is_none()
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    /// `ClimbOnTopOfPowderSnowGoal.tick`: ask the mob to jump.
+    fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.jump = true;
+    }
+}
 /// PanicGoal: flee to a random position after panic-causing damage (or
 /// towards water while burning).
 #[derive(Clone, Debug)]
 pub struct Panic {
     pub speed: f64,
+    /// Only the damage of `#panic_environmental_causes` (an armadillo).
+    pub environmental: bool,
+    /// `TurtlePanicGoal`: always look for water this far away, not only
+    /// when on fire.
+    pub water_range: Option<i32>,
     pos: [f64; 3],
 }
 impl Panic {
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
+            environmental: false,
+            water_range: None,
             pos: [0.0; 3],
         }
+    }
+    /// `TurtlePanicGoal`.
+    pub fn looking_for_water(mut self, range: i32) -> Self {
+        self.water_range = Some(range);
+        self
     }
 }
 pub fn should_panic(m: &Mob) -> bool {
@@ -675,21 +830,29 @@ impl Goal for Panic {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !should_panic(m) {
+        let wanted = if self.environmental {
+            m.last_damage.is_some_and(|(d, t)| {
+                super::armadillo::environmental(d.kind) && i64::from(m.age) - t <= 40
+            }) || m.fire_ticks > 0 && !m.kind.flags.fire_immune
+        } else {
+            should_panic(m)
+        };
+        if !wanted {
             return false;
         }
-        if m.fire_ticks > 0 {
+        let range = self.water_range.or((m.fire_ticks > 0).then_some(5));
+        if let Some(range) = range {
             let (bx, by, bz) = (
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             );
             if cx.w.data.state(cx.w.world.block(bx, by, bz)).top == 0.0 {
-                // findBlocksInBoxByManhattanDistance(pos, 5, 1) for water.
+                // findBlocksInBoxByManhattanDistance(pos, range, 1) for water.
                 let mut best: Option<([i32; 3], i32)> = None;
                 for dy in -1i32..=1 {
-                    for dx in -5i32..=5 {
-                        for dz in -5i32..=5 {
+                    for dx in -range..=range {
+                        for dz in -range..=range {
                             let d = dx.abs() + dy.abs() + dz.abs();
                             if cx.w.fluid(bx + dx, by + dy, bz + dz) == crate::blocks::Fluid::Water
                                 && best.is_none_or(|b| d < b.1)
@@ -734,10 +897,21 @@ pub struct Stroll {
     pub water_avoiding: Option<f32>,
     /// RandomSwimmingGoal: BehaviorUtils.getRandomSwimmablePos.
     pub swim: bool,
+    /// WaterAvoidingRandomFlyingGoal: a hover spot, else an air or water pos.
+    pub flying: bool,
+    /// `Parrot.ParrotWanderGoal`: to a tree, else as `flying`.
+    pub parrot: bool,
     pub force: bool,
     wanted: [f64; 3],
+    /// A subclass's `getPosition` in place of the default pick
+    /// (`GolemRandomStrollInVillageGoal`, `MoveBackToVillageGoal`).
+    position: Option<fn(&mut Mob, &mut Cx) -> Option<[f64; 3]>>,
+    /// A subclass's own `canUse` test, run before the interval's draw.
+    gate: Option<fn(&Mob, &MobWorld) -> bool>,
+    label: Option<&'static str>,
 }
 impl Stroll {
+    /// `RandomStrollGoal.<init>` (interval 120, checks the no-action time).
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
@@ -745,9 +919,29 @@ impl Stroll {
             check_no_action: true,
             water_avoiding: None,
             swim: false,
+            flying: false,
+            parrot: false,
             force: false,
             wanted: [0.0; 3],
+            position: None,
+            gate: None,
+            label: None,
         }
+    }
+    /// The stroll's spot comes from `f` (an overridden `getPosition`).
+    pub fn position(mut self, f: fn(&mut Mob, &mut Cx) -> Option<[f64; 3]>) -> Self {
+        self.position = Some(f);
+        self
+    }
+    /// The stroll may only start while `f` holds (an overridden `canUse`).
+    pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
+        self.gate = Some(f);
+        self
+    }
+    /// The goal's class name, for debugging.
+    pub fn named(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
     }
     pub fn avoiding_water(speed: f64) -> Self {
         Self {
@@ -761,7 +955,18 @@ impl Stroll {
     }
     /// WaterAvoidingRandomFlyingGoal (a nearby air position).
     pub fn flying(speed: f64) -> Self {
-        Self::new(speed)
+        Self {
+            flying: true,
+            ..Self::new(speed)
+        }
+    }
+    /// `Parrot.ParrotWanderGoal(speed)`, a WaterAvoidingRandomFlyingGoal.
+    pub fn parrot(speed: f64) -> Self {
+        Self {
+            water_avoiding: Some(0.001),
+            parrot: true,
+            ..Self::new(speed)
+        }
     }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
@@ -774,7 +979,11 @@ impl Stroll {
 impl Goal for Stroll {
     goal_clone!();
     fn name(&self) -> &'static str {
-        if self.water_avoiding.is_some() {
+        if let Some(label) = self.label {
+            label
+        } else if self.parrot {
+            "ParrotWander"
+        } else if self.water_avoiding.is_some() {
             "Stroll"
         } else if self.swim {
             "RandomSwimming"
@@ -786,6 +995,9 @@ impl Goal for Stroll {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.gate.is_some_and(|gate| !gate(m, cx.w)) {
+            return false;
+        }
         if !self.force {
             if self.check_no_action && m.ai.no_action_time >= 100 {
                 return false;
@@ -795,6 +1007,8 @@ impl Goal for Stroll {
             }
         }
         let pos = match self.water_avoiding {
+            _ if self.position.is_some() => self.position.and_then(|pick| pick(m, cx)),
+            Some(_) if self.parrot => super::parrot::wander_pos(m, cx.w),
             Some(prob) => {
                 if m.fluids.in_water {
                     m.land_random_pos(cx.w, 15, 7)
@@ -822,6 +1036,7 @@ impl Goal for Stroll {
                 }
                 p
             }
+            None if self.flying => m.flying_stroll_pos(cx.w),
             None => m.default_random_pos(cx.w, 10, 7),
         };
         let Some(p) = pos else { return false };
@@ -1017,6 +1232,8 @@ pub struct MeleeAttack {
     pub speed: f64,
     pub follow_unseen: bool,
     pub zombie: bool,
+    /// `PolarBear.PolarBearMeleeAttackGoal`: rears up before each strike.
+    pub polar_bear: bool,
     path_target: [f64; 3],
     recalc: i32,
     pub until_attack: i32,
@@ -1024,6 +1241,10 @@ pub struct MeleeAttack {
     raise_arm: i32,
     /// Ticks between attacks (20 unless set).
     pub interval: i32,
+    /// Ticks between attacks for a baby, when they differ.
+    pub baby_interval: Option<i32>,
+    /// The sound played after each strike (a fox's bite).
+    pub bite: Option<&'static str>,
 }
 impl MeleeAttack {
     pub fn new(speed: f64, follow_unseen: bool) -> Self {
@@ -1031,20 +1252,38 @@ impl MeleeAttack {
             speed,
             follow_unseen,
             zombie: false,
+            polar_bear: false,
             path_target: [0.0; 3],
             recalc: 0,
             until_attack: 0,
             last_check: 0,
             raise_arm: 0,
             interval: 20,
+            baby_interval: None,
+            bite: None,
         }
     }
     pub fn zombie(mut self) -> Self {
         self.zombie = true;
         self
     }
+    pub fn polar_bear(mut self) -> Self {
+        self.polar_bear = true;
+        self
+    }
     pub fn interval(mut self, ticks: i32) -> Self {
         self.interval = ticks;
+        self
+    }
+    /// `MeleeAttack.create(adult)` for adults, `create(baby)` for babies.
+    pub fn intervals(mut self, adult: i32, baby: i32) -> Self {
+        self.interval = adult;
+        self.baby_interval = Some(baby);
+        self
+    }
+    /// `FoxMeleeAttackGoal.checkAndPerformAttack`: the bite after each strike.
+    pub fn bite(mut self, sound: &'static str) -> Self {
+        self.bite = Some(sound);
         self
     }
 }
@@ -1081,9 +1320,9 @@ impl Goal for MeleeAttack {
         }
         !(t.is_player && t.creative)
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.speed);
+        m.nav_move_to_path(cx.w, path, self.speed);
         m.ai.aggressive = true;
         self.recalc = 0;
         self.until_attack = 0;
@@ -1098,6 +1337,9 @@ impl Goal for MeleeAttack {
         }
         m.ai.aggressive = false;
         m.nav_stop();
+        if self.polar_bear {
+            super::polar_bear::set_standing(m, false);
+        }
     }
     fn every_tick(&self) -> bool {
         true
@@ -1131,10 +1373,28 @@ impl Goal for MeleeAttack {
             self.recalc = adjusted(true, self.recalc);
         }
         self.until_attack = (self.until_attack - 1).max(0);
-        if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
-            self.until_attack = adjusted(true, self.interval);
+        if self.polar_bear {
+            let cooldown = adjusted(true, self.interval);
+            super::polar_bear::check_and_perform_attack(
+                &mut self.until_attack,
+                cooldown,
+                m,
+                who,
+                &t,
+                cx,
+            );
+        } else if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
+            let interval = match self.baby_interval {
+                Some(baby) if m.is_baby() => baby,
+                _ => self.interval,
+            };
+            self.until_attack = adjusted(true, interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
+            if let Some(sound) = self.bite {
+                let at = [m.position.x, m.position.y, m.position.z];
+                cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            }
         }
         if self.zombie {
             self.raise_arm += 1;
@@ -1210,6 +1470,9 @@ pub struct NearestTarget {
     pub interval: i32,
     /// Extra condition on the attacker, checked after the random interval.
     pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// Mobs closer than this squared distance are not picked
+    /// (`GuardianAttackSelector`: `distanceToSqr > 9`).
+    pub beyond_sqr: Option<f64>,
     /// A condition checked before anything else, by subclasses overriding
     /// `canUse` (SpiderTargetGoal: only in the dark).
     pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
@@ -1242,6 +1505,7 @@ impl NearestTarget {
             must_reach: false,
             interval: reduced(10),
             when: None,
+            beyond_sqr: None,
             gate: None,
             label: None,
             found: None,
@@ -1274,6 +1538,10 @@ impl NearestTarget {
         self.when = Some(f);
         self
     }
+    pub fn beyond(mut self, distance_sqr: f64) -> Self {
+        self.beyond_sqr = Some(distance_sqr);
+        self
+    }
     pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
         self.gate = Some(f);
         self
@@ -1284,13 +1552,29 @@ impl NearestTarget {
         self
     }
 }
+/// `AbstractIllager.canAttack`: a baby `AbstractVillager` is never attacked.
+fn illager_spares(attacker: Species, target: &Seen) -> bool {
+    matches!(
+        attacker,
+        Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+    ) && target.baby
+        && matches!(target.species, Species::Villager | Species::WanderingTrader)
+}
 /// TargetGoal.canContinueToUse
 pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
     let Some(who) = m.ai.target else { return false };
+    if let Who::Mob(id) = who
+        && cx
+            .w
+            .seen(id)
+            .is_some_and(|s| illager_spares(m.species(), s))
+    {
+        return false;
+    }
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
-    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && t.creative {
+    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && (t.creative || m.spares_players()) {
         return false;
     }
     let follow = m.attrs.follow_range * st.follow_scale;
@@ -1345,10 +1629,12 @@ impl Goal for NearestTarget {
             prey => {
                 let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
                 let id = m.id;
+                let attacker = m.species();
                 let candidates: Vec<(u32, Vec3)> =
                     cx.w.nearby(pos, range, move |s| {
                         s.id != id
                             && !s.playing_dead
+                            && !illager_spares(attacker, s)
                             && match prey {
                                 Prey::Species(list) => list.contains(&s.species),
                                 Prey::Filter(f) => f(s),
@@ -1359,6 +1645,9 @@ impl Goal for NearestTarget {
                     .collect();
                 for (cid, cpos) in candidates {
                     if m.distance_sqr(cpos) > range * range {
+                        continue;
+                    }
+                    if self.beyond_sqr.is_some_and(|d| m.distance_sqr(cpos) <= d) {
                         continue;
                     }
                     if !m.sees(cx.w, Who::Mob(cid)) {
@@ -1393,6 +1682,12 @@ pub struct HurtByTarget {
     /// `Bee.BeeHurtByOtherGoal`: kept only while angry, and alerting others
     /// only when the attacker is in sight.
     pub bee: bool,
+    /// Whom `alertOther` calls: a filter on the mob (`PandaHurtByTargetGoal`
+    /// calls aggressive pandas only).
+    pub alert_if: Option<fn(&Seen) -> bool>,
+    /// `PolarBear.PolarBearHurtByTargetGoal`: a hurt cub only calls the
+    /// adult bears and drops the target itself.
+    pub polar_bear: bool,
     timestamp: i32,
     st: TargetState,
 }
@@ -1403,6 +1698,8 @@ impl HurtByTarget {
             alert_except: vec![],
             ignore: vec![],
             bee: false,
+            alert_if: None,
+            polar_bear: false,
             timestamp: 0,
             st: TargetState {
                 unseen_memory: 300,
@@ -1422,6 +1719,14 @@ impl HurtByTarget {
         self.bee = true;
         self
     }
+    pub fn alert_if(mut self, f: fn(&Seen) -> bool) -> Self {
+        self.alert_if = Some(f);
+        self
+    }
+    pub fn polar_bear(mut self) -> Self {
+        self.polar_bear = true;
+        self
+    }
 }
 impl Default for HurtByTarget {
     fn default() -> Self {
@@ -1433,6 +1738,8 @@ impl Goal for HurtByTarget {
     fn name(&self) -> &'static str {
         if self.bee {
             "BeeHurtByOtherGoal"
+        } else if self.polar_bear {
+            "PolarBearHurtByTargetGoal"
         } else {
             "HurtByTarget"
         }
@@ -1458,7 +1765,7 @@ impl Goal for HurtByTarget {
         let Some(t) = cx.w.target_info(by) else {
             return false;
         };
-        t.alive && t.can_be_seen_as_enemy && !(t.is_player && t.creative)
+        t.alive && t.can_be_seen_as_enemy && !(t.is_player && (t.creative || m.spares_players()))
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.bee && !super::bee::angry(m, cx.w) {
@@ -1471,13 +1778,27 @@ impl Goal for HurtByTarget {
         self.timestamp = m.ai.last_hurt_by_time;
         self.st.unseen_memory = 300;
         self.st.unseen = 0;
-        if self.alert
+        // PolarBearHurtByTargetGoal.start: a cub alerts the adults itself.
+        let cub = self.polar_bear && m.is_baby();
+        if (self.alert || cub)
             && let Some(by) = m.ai.target
         {
             let range = m.attrs.follow_range;
             let species = m.species();
             let id = m.id;
             let pos = m.position;
+            // TamableAnimal: its owner (`getOwner`, none for a wild one) and
+            // whether it is a pet at all.
+            let tamable = matches!(
+                species,
+                Species::Wolf
+                    | Species::Cat
+                    | Species::Parrot
+                    | Species::Nautilus
+                    | Species::ZombieNautilus
+            );
+            let owner = m.extra.tame.then_some(m.extra.owner).flatten();
+            let player = cx.w.player.as_ref().map(|p| p.uuid);
             let ids: Vec<u32> =
                 cx.w.others
                     .iter()
@@ -1491,7 +1812,22 @@ impl Goal for HurtByTarget {
                             && (s.position.z - pos.z).abs() <= range + 1.0
                     })
                     .filter(|s| !self.alert_except.contains(&s.species))
+                    .filter(|s| self.alert_if.is_none_or(|f| f(s)))
+                    // PolarBearHurtByTargetGoal.alertOther: adults only.
+                    .filter(|s| !(self.polar_bear && s.baby))
                     .filter(|s| Who::Mob(s.id) != by)
+                    // HurtByTargetGoal.alertOthers: a pet is only called by a
+                    // pet with the same owner.
+                    .filter(|s| !tamable || s.tame.then_some(s.owner).flatten() == owner)
+                    // TamableAnimal.considersEntityAsAlly: a pet tamed by the
+                    // player who hurt it is allied with them, so it is not called.
+                    .filter(|s| {
+                        !(tamable
+                            && by == Who::Player
+                            && s.tame
+                            && s.owner.is_some()
+                            && s.owner == player)
+                    })
                     .map(|s| s.id)
                     .collect();
             // Bee.BeeHurtByOtherGoal.alertOther: only with the attacker in sight.
@@ -1504,6 +1840,9 @@ impl Goal for HurtByTarget {
                     target: by,
                 });
             }
+        }
+        if cub {
+            m.ai.target = None;
         }
     }
     fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
@@ -1525,6 +1864,10 @@ pub struct AvoidEntity {
     pub sprint: f64,
     /// Extra condition on the avoider (e.g. untamed cats only).
     pub when: Option<fn(&Mob) -> bool>,
+    /// Extra condition on the player or mob avoided (`AvoidEntityGoal`'s
+    /// predicate: a sneaking player, a tame wolf).
+    pub player_when: Option<fn(&super::PlayerView) -> bool>,
+    pub seen_when: Option<fn(&Seen) -> bool>,
     from: Vec3,
     /// The mob being avoided (`toAvoid`), when it is one.
     pub found: Option<u32>,
@@ -1537,12 +1880,22 @@ impl AvoidEntity {
             walk,
             sprint,
             when: None,
+            player_when: None,
+            seen_when: None,
             from: Vec3::ZERO,
             found: None,
         }
     }
     pub fn when(mut self, f: fn(&Mob) -> bool) -> Self {
         self.when = Some(f);
+        self
+    }
+    pub fn player_when(mut self, f: fn(&super::PlayerView) -> bool) -> Self {
+        self.player_when = Some(f);
+        self
+    }
+    pub fn seen_when(mut self, f: fn(&Seen) -> bool) -> Self {
+        self.seen_when = Some(f);
         self
     }
 }
@@ -1565,6 +1918,7 @@ impl Goal for AvoidEntity {
                     .filter(|p| {
                         p.alive
                             && !p.creative
+                            && self.player_when.is_none_or(|f| f(p))
                             && m.distance_sqr(p.position) <= max * max
                             && (p.position.y - m.position.y).abs() <= max + 3.0
                     })
@@ -1573,10 +1927,12 @@ impl Goal for AvoidEntity {
             Avoid::Species(list) => {
                 let id = m.id;
                 let y = m.position.y;
+                let seen_when = self.seen_when;
                 let hit =
                     cx.w.nearby(m.position, max, move |s| {
                         s.id != id
                             && list.contains(&s.species)
+                            && seen_when.is_none_or(|f| f(s))
                             && (s.position.y - y).abs() <= 3.0 + max
                     })
                     .map(|s| (s.id, s.position))
@@ -1613,9 +1969,9 @@ impl Goal for AvoidEntity {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.walk);
+        m.nav_move_to_path(cx.w, path, self.walk);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let from = match &self.what {
@@ -1712,7 +2068,7 @@ impl Goal for Tempt {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(p) = cx.w.player.clone() else { return };
-        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.kind.max_head_x_rot);
+        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.max_head_x_rot());
         m.look_at_speed(p.eye, y, x);
         if m.distance_sqr(p.position) < self.stop_distance * self.stop_distance {
             m.nav_stop();
@@ -1762,6 +2118,14 @@ impl Goal for Breed {
         if tamable && (!m.extra.tame || m.extra.sitting) {
             return false;
         }
+        // AbstractHorse.canMate is false and Mule keeps it: mules never breed.
+        if species == Species::Mule {
+            return false;
+        }
+        // TurtleBreedGoal.canUse: not while carrying an egg.
+        if species == Species::Turtle && super::turtle::has_egg(m) {
+            return false;
+        }
         let id = m.id;
         // Horses and donkeys breed together (AbstractHorse.canParent: tame).
         // Sniffer.canMate: calm states only.
@@ -1771,11 +2135,16 @@ impl Goal for Breed {
         }
         let llama = super::llama::is_llama(species);
         let equine = matches!(species, Species::Horse | Species::Donkey) || llama;
-        if equine && !m.extra.tame {
-            return false;
-        }
-        // Llama.canParent: not ridden, and at full health.
-        if llama && (m.rider.is_some() || m.health < m.attrs.max_health) {
+        // AbstractHorse.canParent: tame, an adult, not a vehicle or passenger
+        // and at full health.
+        if equine
+            && (!m.extra.tame
+                || m.is_baby()
+                || m.rider.is_some()
+                || m.extra.rider.is_some()
+                || m.extra.mount.is_some()
+                || m.health < m.attrs.max_health)
+        {
             return false;
         }
         self.partner =
@@ -1788,7 +2157,10 @@ impl Goal for Breed {
                     && s.in_love
                     && !s.baby
                     && (!tamable || s.tame)
-                    && (!equine || s.tame)
+                    // Wolf.canMate: a sitting wolf is no partner.
+                    && !(species == Species::Wolf && s.sitting)
+                    // AbstractHorse.canParent of the partner.
+                    && (!equine || s.tame && !s.ridden && s.health >= s.stats[0] as f32)
                     && (!sniffer || super::sniffer::can_mate_state(s.variant))
             })
             .map(|s| s.id)
@@ -1809,7 +2181,7 @@ impl Goal for Breed {
         let Some(p) = self.partner.and_then(|p| cx.w.seen(p)).cloned() else {
             return;
         };
-        let x = m.kind.max_head_x_rot;
+        let x = m.max_head_x_rot();
         m.look_at_speed([p.position.x, p.eye_y, p.position.z], 10.0, x);
         m.nav_move_to_entity(
             cx.w,
@@ -1832,6 +2204,14 @@ impl Goal for Breed {
             });
             m.extra.in_love = 0;
             m.extra.age = 6000;
+            // TurtleBreedGoal.breed: the mother carries an egg, not a baby.
+            if m.species() == Species::Turtle {
+                m.extra.flag = true;
+            }
+            // Frog.spawnChildFromBreeding: IS_PREGNANT instead of a baby.
+            if m.species() == Species::Frog {
+                super::frog::set_pregnant(m, true);
+            }
             cx.events.push(MobEvent::Breed {
                 parent: m.id,
                 partner: p.id,
@@ -1939,6 +2319,30 @@ impl Goal for RestrictSun {
         m.ai.nav.avoid_sun = false;
     }
 }
+/// `FleeSunGoal.getHidePos`: a spot within 10 blocks that the sky does not
+/// see and the mob likes.
+pub fn hide_pos(m: &mut Mob, w: &MobWorld) -> Option<[f64; 3]> {
+    let (bx, by, bz) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    for _ in 0..10 {
+        let p = [
+            bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
+            by + m.random.next_int_bound(6).unwrap_or(0) - 3,
+            bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
+        ];
+        if !w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(w, p) < 0.0 {
+            return Some([
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]);
+        }
+    }
+    None
+}
 /// FleeSunGoal: find shade while burning.
 #[derive(Clone, Debug)]
 pub struct FleeSun {
@@ -1970,22 +2374,13 @@ impl Goal for FleeSun {
         if !cx.w.can_see_sky(bx, by, bz) {
             return false;
         }
-        for _ in 0..10 {
-            let p = [
-                bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
-                by + m.random.next_int_bound(6).unwrap_or(0) - 3,
-                bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
-            ];
-            if !cx.w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(cx.w, p) < 0.0 {
-                self.wanted = [
-                    f64::from(p[0]) + 0.5,
-                    f64::from(p[1]),
-                    f64::from(p[2]) + 0.5,
-                ];
-                return true;
+        match hide_pos(m, cx.w) {
+            Some(at) => {
+                self.wanted = at;
+                true
             }
+            None => false,
         }
-        false
     }
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
@@ -2018,9 +2413,17 @@ impl Goal for EatBlock {
         cx.w.has_tag("minecraft:edible_for_sheep", &here)
             || cx.w.block_name(x, y - 1, z) == "minecraft:grass_block"
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.tick = reduced(40);
         m.extra.anim_ticks = 40;
+        // EatBlockGoal.start: broadcastEntityEvent 10, so the head goes down
+        // on every client.
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events.push(MobEvent::EntityEvent {
+            mob: m.id,
+            event: 10,
+            at,
+        });
         m.nav_stop();
     }
     fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
@@ -2049,6 +2452,7 @@ impl Goal for EatBlock {
                     pos: [x, y - 1, z],
                     name: "minecraft:dirt",
                     effect: true,
+                    flags: horizon_world::level::flags::UPDATE_CLIENTS,
                 });
                 super::ai::ate(m);
             }

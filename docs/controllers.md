@@ -25,7 +25,7 @@ Select/Start). No second windowing or event stack: gilrs is polled once per
 loop iteration next to winit's events.
 
 - The pure logic (mapping table, deadzones and curves, button edges, the
-  settings file, glyph choice) lives in `crates/horizon-client/src/gamepad.rs`
+  settings file, glyph choice) lives in `crates/horizon-client-input/src/gamepad.rs`
   and is unit-tested. The game owns a thin gilrs backend and applies actions.
 - Controller actions go through the same path a keyboard key takes after
   rebinding: an action names a vanilla key mapping (`key.jump`, `key.attack`,
@@ -36,7 +36,10 @@ loop iteration next to winit's events.
   move vector directly (a half-tilted stick walks slowly, like Bedrock),
   instead of being rounded to WASD. The forward/back/left/right flags other
   code reads (sprint start, boats, minecarts, the server's input packet) are
-  set when the stick passes a threshold.
+  set when the stick passes a threshold. On a server (not this game's own
+  server thread) the stick moves as those keys do, in 8 directions at full
+  speed, as the server only hears the keys: an anticheat predicting from them
+  pulls back a player moving at the stick's own angle and speed.
 - The pad last touched is the active one. Several pads are not merged.
 - `horizon-ctl pad ...` injects a virtual pad (buttons, sticks, triggers) into
   a running game, for tests without hardware.

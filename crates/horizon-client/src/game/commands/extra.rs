@@ -8,6 +8,10 @@ use horizon_client::{
     command::CommandError,
     text::{self, Style, Text},
 };
+use horizon_protocol::packets::{
+    Empty,
+    play::{self, Clientbound as C, DialogHolder},
+};
 use std::{collections::HashMap, time::Instant};
 
 /// Waypoint.Icon: the locator bar style and colour of a transmitter.
@@ -43,8 +47,6 @@ pub(in crate::game) struct CommandExtras {
     pub jfr: Option<(Instant, u64, String)>,
     /// Waypoint icons changed by `/waypoint modify`.
     pub waypoint_icons: HashMap<Target, WaypointIcon>,
-    /// The dialog `/dialog show` opened (its id or inline definition).
-    pub dialog: Option<String>,
     /// `/datapack disable vanilla` took the built-in pack out of the selection.
     pub vanilla_disabled: bool,
     /// The waypoint manager's tracked transmitters (None until first used).
@@ -57,6 +59,8 @@ pub(in crate::game) struct CommandExtras {
     /// The `CommandResultCallback` results of the outermost source, when a
     /// harness records them.
     pub results: Option<Vec<(bool, i32)>>,
+    /// The running `/pregen` task.
+    pub pregen: Option<super::pregen::PregenTask>,
 }
 
 use horizon_core::version::{BUILD_TIME, DATA_VERSION, STABLE, VANILLA_VERSION, VERSION_ID};
@@ -212,8 +216,22 @@ impl Game<'_> {
 
     // ---- /waypoint ------------------------------------------------------
 
+    /// A guest's body is only `Player` during its turn; retained command state
+    /// must use its connection so the next server tick still finds that body.
+    pub(super) fn waypoint_target(&self, t: Target) -> Target {
+        match t {
+            Target::Player => self.lan_acting.map_or(t, Target::Guest),
+            _ => t,
+        }
+    }
+
     /// A living entity's `waypoint_transmit_range` (`isTransmittingWaypoint`).
     fn transmit_range(&mut self, t: Target) -> f64 {
+        if matches!(t, Target::Guest(_)) {
+            return self
+                .for_player(t, |g| g.transmit_range(Target::Player))
+                .unwrap_or(0.0);
+        }
         if t == Target::Player {
             return self
                 .player
@@ -242,7 +260,7 @@ impl Game<'_> {
     fn waypoint_transmitters(&mut self) -> Vec<Target> {
         if self.cmds.waypoints.is_none() {
             let tracked = if self.transmit_range(Target::Player) > 0.0 {
-                vec![Target::Player]
+                vec![self.waypoint_target(Target::Player)]
             } else {
                 Vec::new()
             };
@@ -255,6 +273,12 @@ impl Game<'_> {
             .collect();
         self.cmds.waypoints = Some(alive.clone());
         alive
+            .into_iter()
+            .map(|t| match t {
+                Target::Guest(conn) if self.lan_acting == Some(conn) => Target::Player,
+                _ => t,
+            })
+            .collect()
     }
     /// The waypoint part of a living entity's tick: dirty transmit ranges
     /// track or untrack it.
@@ -277,7 +301,7 @@ impl Game<'_> {
     fn waypoint_icon(&self, t: Target) -> WaypointIcon {
         self.cmds
             .waypoint_icons
-            .get(&t)
+            .get(&self.waypoint_target(t))
             .cloned()
             .unwrap_or_default()
     }
@@ -387,6 +411,7 @@ impl Game<'_> {
                 &[Text::colored(name, rgb)],
             )
         };
+        let t = self.waypoint_target(t);
         self.cmds.waypoint_icons.insert(t, icon);
         // WaypointCommand.mutateIcon: untrack, change, track again.
         self.waypoint_transmitters();
@@ -407,9 +432,9 @@ impl Game<'_> {
             let Some(Arg::Resource(dialog)) = ctx.get("dialog").cloned() else {
                 return Ok(0);
             };
-            self.open_dialog(&dialog)?;
+            self.show_dialog_to(&targets, &dialog);
         } else {
-            self.close_dialog();
+            self.clear_dialog_to(&targets);
         }
         let (single, multiple) = if id == "dialog.show" {
             (
@@ -606,6 +631,7 @@ impl Game<'_> {
                 .hub
                 .guests
                 .iter()
+                .filter(|g| lan.hub.singleplayer_owner != Some(g.uuid))
                 .filter(|g| match &s.player_name {
                     Some(name) => g.name.eq_ignore_ascii_case(name),
                     None => s.kind == 'a' || s.kind == 'e',
@@ -617,7 +643,7 @@ impl Game<'_> {
         if host.is_empty() && guests.is_empty() {
             return Err(err("argument.entity.notfound.player", &[]));
         }
-        if self.lan.is_none() {
+        if self.lan.is_none() || (self.serving() && self.published_port().is_none()) {
             return Err(err("commands.kick.singleplayer.failed", &[]));
         }
         let reason_raw = match ctx.get("reason") {
@@ -1015,22 +1041,101 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
-    /// `ServerPlayer.openDialog`: the dialog screen for a dialog id or inline
-    /// definition.
-    pub(in crate::game) fn open_dialog(&mut self, dialog: &str) -> R<()> {
-        self.cmds.dialog = Some(dialog.to_owned());
-        Ok(())
+    /// `ServerPlayer.openDialog` for every target of `/dialog show`: a guest
+    /// is sent `ClientboundShowDialogPacket`, the window's own player opens
+    /// the dialog on its screen.
+    fn show_dialog_to(&mut self, targets: &[Target], dialog: &str) {
+        let Some(holder) = self.dialog_holder(dialog) else {
+            return;
+        };
+        self.send_dialog(targets, &holder);
     }
-    /// `ClientboundClearDialogPacket`: close the dialog screen.
-    pub(in crate::game) fn close_dialog(&mut self) {
-        self.cmds.dialog = None;
+    /// `ServerPlayer.openDialog` for the dialog of a `show_dialog` click
+    /// event (a sign's): a registry id or the dialog itself, opened for the
+    /// player the game acts for.
+    pub(in crate::game) fn show_click_dialog(&mut self, dialog: &horizon_world::nbt::Tag) {
+        let holder = match dialog {
+            horizon_world::nbt::Tag::String(id) => self.dialog_holder(&id.to_string_lossy()),
+            direct => Some(DialogHolder::Direct(direct.clone())),
+        };
+        if let Some(holder) = holder {
+            self.send_dialog(&[Target::Player], &holder);
+        }
+    }
+    /// `ServerPlayer.openDialog` for each target: the packet to a guest, the
+    /// screen to the window's own player.
+    fn send_dialog(&mut self, targets: &[Target], holder: &DialogHolder) {
+        let packet = C::ShowDialog(play::ShowDialog {
+            dialog: holder.clone(),
+        });
+        for &t in targets {
+            match t {
+                Target::Player if self.lan_acting.is_some() => {
+                    self.guest_packets.push(packet.clone());
+                }
+                Target::Player => self.show_play_dialog(holder),
+                Target::Guest(conn) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    /// `ServerPlayer.closeDialog` for every target of `/dialog clear`.
+    fn clear_dialog_to(&mut self, targets: &[Target]) {
+        let packet = C::ClearDialog(Empty);
+        for &t in targets {
+            match t {
+                Target::Player if self.lan_acting.is_some() => {
+                    self.guest_packets.push(packet.clone());
+                }
+                Target::Player => self.clear_dialog(),
+                Target::Guest(conn) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    /// `ServerPlayer.openDialog`'s dialog: an entry of the `minecraft:dialog`
+    /// registry, or the dialog an inline `ResourceOrIdArgument` carries.
+    fn dialog_holder(&self, dialog: &str) -> Option<DialogHolder> {
+        let text = dialog.trim();
+        if text.starts_with('{') {
+            return horizon_client::command::snbt::parse_fully(text)
+                .ok()
+                .map(DialogHolder::Direct);
+        }
+        // A registry id, written with or without its namespace.
+        let id = if text.contains(':') {
+            text.to_owned()
+        } else {
+            format!("minecraft:{text}")
+        };
+        let index = self
+            .ui
+            .registries
+            .ids("minecraft:dialog")
+            .iter()
+            .position(|name| *name == id);
+        match index {
+            Some(i) => Some(DialogHolder::Registry(i as i32)),
+            None => {
+                log::warn!("Horizon: no dialog {id} in the registry");
+                None
+            }
+        }
     }
 }
 impl Game<'_> {
-    /// The player's profile id as `UUID.toString()`: the saved id, else the
-    /// offline id of the player's name.
-    pub(in crate::game) fn player_uuid_string(&self) -> String {
-        let id = self.level.player_uuid.map_or_else(
+    /// The player's profile id: the saved id, else the offline id of the
+    /// player's name.
+    pub(in crate::game) fn player_uuid(&self) -> u128 {
+        self.level.player_uuid.map_or_else(
             || horizon_protocol::crypto::offline_uuid(super::super::chat::PLAYER_NAME),
             |[a, b, c, d]| {
                 (u128::from(a as u32) << 96)
@@ -1038,15 +1143,6 @@ impl Game<'_> {
                     | (u128::from(c as u32) << 32)
                     | u128::from(d as u32)
             },
-        );
-        let h = format!("{id:032x}");
-        format!(
-            "{}-{}-{}-{}-{}",
-            &h[..8],
-            &h[8..12],
-            &h[12..16],
-            &h[16..20],
-            &h[20..]
         )
     }
 }

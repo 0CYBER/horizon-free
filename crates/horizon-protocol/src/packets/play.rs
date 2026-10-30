@@ -8,13 +8,14 @@ use crate::{
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
-    item::{Hashed, HashedSlot, Slot, Stack},
+    item::{Component, DelimitedSlot, Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
         configuration::{
-            ClientInformation, CustomPayload, Disconnect, KeepAlive, Ping, ResourcePackPop,
-            ResourcePackPush, ResourcePackResponse, UpdateTags,
+            ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
+            Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
+            ServerLinks, StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -87,11 +88,32 @@ packet!(ContainerSetContent {
     carried: Option<Stack> => Slot,
 });
 /// ItemCost.STREAM_CODEC: item, count, then the exact component predicate
-/// (Horizon sends and reads it as a component patch without removals).
+/// (a list of typed component values, with no patch removal count).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NetCost {
     pub item: i32,
     pub count: i32,
+    pub components: Vec<(i32, Component)>,
+}
+impl From<Stack> for NetCost {
+    fn from(stack: Stack) -> Self {
+        Self {
+            item: stack.item,
+            count: stack.count,
+            components: stack.added,
+        }
+    }
+}
+impl From<NetCost> for Stack {
+    fn from(cost: NetCost) -> Self {
+        Self {
+            item: cost.item,
+            count: cost.count,
+            added: cost.components,
+            removed: Vec::new(),
+            wire: Default::default(),
+        }
+    }
 }
 /// MerchantOffer.STREAM_CODEC.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,10 +135,17 @@ impl Codec<Vec<NetOffer>> for Offers {
         fn cost(r: &mut Reader) -> Result<NetCost> {
             let item = r.varint()?;
             let count = r.varint()?;
-            if r.varint()? != 0 {
-                return Err(Error::new("item cost components are not supported"));
+            let n = r.count(r.remaining())?;
+            let mut components = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                let kind = r.varint()?;
+                components.push((kind, Component::read(kind, r)?));
             }
-            Ok(NetCost { item, count })
+            Ok(NetCost {
+                item,
+                count,
+                components,
+            })
         }
         let n = r.count(r.remaining())?;
         let mut out = Vec::with_capacity(n.min(64));
@@ -143,7 +172,11 @@ impl Codec<Vec<NetOffer>> for Offers {
         fn cost(c: &NetCost, w: &mut Writer) {
             w.varint(c.item);
             w.varint(c.count);
-            w.varint(0);
+            w.varint(c.components.len() as i32);
+            for (kind, value) in &c.components {
+                w.varint(*kind);
+                value.write(*kind, w);
+            }
         }
         w.varint(v.len() as i32);
         for o in v {
@@ -175,6 +208,21 @@ packet!(
     }
 );
 packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i16 => Short });
+// ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
+// its entry lasts (0 ends it).
+packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
+packet!(
+    /// ClientboundCustomChatCompletionsPacket: how the server changes the
+    /// extra chat completions (`custom_chat_action`) and the entries.
+    CustomChatCompletions { action: i32 => VarInt, entries: Vec<String> => List<Str> }
+);
+/// ClientboundCustomChatCompletionsPacket.Action, by id (`ByIdMap.continuous`
+/// with `OutOfBoundsStrategy.ZERO`: an unknown id is `ADD`).
+pub mod custom_chat_action {
+    pub const ADD: i32 = 0;
+    pub const REMOVE: i32 = 1;
+    pub const SET: i32 = 2;
+}
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -189,6 +237,35 @@ impl Codec<i32> for HolderId {
         w.varint(v + 1)
     }
 }
+/// `Holder<Dialog>` as Dialog.STREAM_CODEC sends it: an entry of the
+/// `minecraft:dialog` registry the server sent in configuration, or the
+/// dialog itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DialogHolder {
+    Registry(i32),
+    Direct(Tag),
+}
+impl Codec<DialogHolder> for DialogHolder {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(match r.varint()? {
+            0 => Self::Direct(r.nbt()?),
+            id => Self::Registry(id - 1),
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match v {
+            Self::Registry(id) => w.varint(id + 1),
+            Self::Direct(tag) => {
+                w.varint(0);
+                w.nbt(tag);
+            }
+        }
+    }
+}
+packet!(
+    /// ClientboundShowDialogPacket.
+    ShowDialog { dialog: DialogHolder => DialogHolder }
+);
 packet!(
     /// ChatType.Bound.
     ChatTypeBound { chat_type: i32 => HolderId, name: Tag => Nbt, target: Option<Tag> => Opt<Nbt> }
@@ -242,6 +319,39 @@ impl Codec<PositionPath> for PositionPath {
 }
 packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPath, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool });
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
+packet!(
+    /// ClientboundChunksBiomesPacket.ChunkBiomeData: a column and its
+    /// sections' biome containers, in order (`extractChunkData`).
+    ChunkBiomeData { pos: [i32; 2] => ChunkPos, buffer: Vec<u8> => BytesN<2097152> }
+);
+impl ChunkBiomeData {
+    /// `LevelChunk.replaceBiomes`' read: `count` sections' biome
+    /// containers, one after another.
+    pub fn biomes(&self, count: usize, biome_bits: u8) -> Result<Vec<crate::chunk::Paletted>> {
+        let mut r = Reader::new(&self.buffer);
+        (0..count)
+            .map(|_| {
+                crate::chunk::Paletted::read(&mut r, crate::chunk::Strategy::Biomes, biome_bits)
+            })
+            .collect()
+    }
+    /// `extractChunkData`: the sections' biome containers, in order.
+    pub fn from_biomes(pos: [i32; 2], biomes: &[crate::chunk::Paletted]) -> Self {
+        let mut w = Writer::new();
+        for b in biomes {
+            b.write(&mut w);
+        }
+        Self {
+            pos,
+            buffer: w.data,
+        }
+    }
+}
+packet!(
+    /// ClientboundChunksBiomesPacket: columns whose biomes changed
+    /// (`/fillbiome`, through `ChunkMap.resendBiomesForChunks`).
+    ChunksBiomes { chunks: Vec<ChunkBiomeData> => List<ChunkBiomeData> }
+);
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
 packet!(
@@ -533,6 +643,11 @@ packet!(PlayerChat {
     filter: (i32, Vec<i64>) => FilterMask,
     chat_type: ChatTypeBound => ChatTypeBound,
 });
+packet!(
+    /// ClientboundDeleteChatPacket: the server deleted a player message,
+    /// named by its packed signature.
+    DeleteChat { signature: (i32, Option<Vec<u8>>) => PackedSignature }
+);
 packet!(PlayerCombatKill { id: i32 => VarInt, message: Tag => Nbt });
 packet!(PlayerInfoRemove { uuids: Vec<u128> => List<Uuid> });
 /// One ClientboundPlayerInfoUpdatePacket entry; fields are set for the
@@ -657,6 +772,20 @@ packet!(
     /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
     ProjectilePower { id: i32 => VarInt, power: f64 => Double }
 );
+packet!(
+    /// ClientboundPlayerLookAtPacket's entity target: its id and the anchor
+    /// (`EntityAnchorArgument.Anchor`: 0 feet, 1 eyes) to look at on it.
+    LookAtEntity { id: i32 => VarInt, anchor: i32 => VarInt }
+);
+packet!(
+    /// ClientboundPlayerLookAtPacket: turn this player's `from` anchor towards
+    /// a point, or towards an entity when the client knows it.
+    PlayerLookAt {
+        from: i32 => VarInt,
+        target: [f64; 3] => Vec3d,
+        entity: Option<LookAtEntity> => Opt<LookAtEntity>,
+    }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -718,6 +847,11 @@ packet!(SetEquipment { id: i32 => VarInt, slots: Vec<(u8, Option<Stack>)> => Equ
 packet!(SetExperience { progress: f32 => Float, level: i32 => VarInt, total: i32 => VarInt });
 packet!(SetHealth { health: f32 => Float, food: i32 => VarInt, saturation: f32 => Float });
 packet!(SetHeldSlot { slot: i32 => VarInt });
+packet!(
+    /// ClientboundSetCameraPacket: the entity the view is attached to (the
+    /// player's own id puts it back on the player).
+    SetCamera { camera_id: i32 => VarInt }
+);
 packet!(SetPlayerInventory { slot: i32 => VarInt, item: Option<Stack> => Slot });
 packet!(
     /// ClockNetworkState for one world clock (registry id).
@@ -759,6 +893,11 @@ packet!(Sound {
     seed: i64 => Long,
 });
 packet!(SystemChat { content: Tag => Nbt, overlay: bool => Bool });
+packet!(
+    /// ClientboundTagQueryPacket: the answer to a debug NBT query (F3+I), with
+    /// the transaction it answers; `Tag::End` when there was no block entity.
+    TagQuery { transaction: i32 => VarInt, tag: Tag => Nbt }
+);
 packet!(TakeItemEntity { item: i32 => VarInt, player: i32 => VarInt, amount: i32 => VarInt });
 packet!(TeleportEntity {
     id: i32 => VarInt,
@@ -1118,6 +1257,42 @@ packet!(SoundEntity {
     pitch: f32 => Float,
     seed: i64 => Long,
 });
+
+/// ClientboundStopSoundPacket: bit 0 selects a source, bit 1 an event id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StopSound {
+    pub source: Option<i32>,
+    pub sound: Option<String>,
+}
+impl Codec<StopSound> for StopSound {
+    fn read(r: &mut Reader) -> crate::Result<Self> {
+        let flags = r.u8()?;
+        let source = if flags & 1 != 0 {
+            let value = r.varint()?;
+            if !(0..11).contains(&value) {
+                return Err(crate::Error::new("invalid sound source"));
+            }
+            Some(value)
+        } else {
+            None
+        };
+        let sound = if flags & 2 != 0 {
+            Some(r.string(32767)?)
+        } else {
+            None
+        };
+        Ok(Self { source, sound })
+    }
+    fn write(p: &Self, w: &mut Writer) {
+        w.u8(u8::from(p.source.is_some()) | (u8::from(p.sound.is_some()) << 1));
+        if let Some(source) = p.source {
+            w.varint(source);
+        }
+        if let Some(sound) = &p.sound {
+            w.string(sound);
+        }
+    }
+}
 /// One entry of ClientboundCommandsPacket: a literal or an argument node.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandNode {
@@ -1580,6 +1755,125 @@ impl Codec<Vec<(i32, i32, i32)>> for StatList {
     }
 }
 
+/// `ClientboundBossEventPacket` (`boss_event`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum BossAction {
+    Add {
+        name: Tag,
+        progress: f32,
+        /// `BossBarColor` ordinal.
+        color: i32,
+        /// `BossBarOverlay` ordinal.
+        overlay: i32,
+        darken: bool,
+        music: bool,
+        fog: bool,
+    },
+    Remove,
+    UpdateProgress {
+        progress: f32,
+    },
+    UpdateName {
+        name: Tag,
+    },
+    UpdateStyle {
+        color: i32,
+        overlay: i32,
+    },
+    UpdateProperties {
+        darken: bool,
+        music: bool,
+        fog: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BossEvent {
+    pub id: u128,
+    pub action: BossAction,
+}
+fn boss_flags(darken: bool, music: bool, fog: bool) -> u8 {
+    u8::from(darken) | (u8::from(music) << 1) | (u8::from(fog) << 2)
+}
+fn split_flags(flags: u8) -> (bool, bool, bool) {
+    (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0)
+}
+impl Codec<BossEvent> for BossEvent {
+    fn read(r: &mut Reader) -> Result<BossEvent> {
+        let id = r.uuid()?;
+        let action = match r.varint()? {
+            0 => {
+                let name = r.nbt()?;
+                let progress = r.f32()?;
+                let color = r.varint()?;
+                let overlay = r.varint()?;
+                let (darken, music, fog) = split_flags(r.u8()?);
+                BossAction::Add {
+                    name,
+                    progress,
+                    color,
+                    overlay,
+                    darken,
+                    music,
+                    fog,
+                }
+            }
+            1 => BossAction::Remove,
+            2 => BossAction::UpdateProgress { progress: r.f32()? },
+            3 => BossAction::UpdateName { name: r.nbt()? },
+            4 => BossAction::UpdateStyle {
+                color: r.varint()?,
+                overlay: r.varint()?,
+            },
+            5 => {
+                let (darken, music, fog) = split_flags(r.u8()?);
+                BossAction::UpdateProperties { darken, music, fog }
+            }
+            op => return Err(Error::new(format!("unknown boss event operation {op}"))),
+        };
+        Ok(BossEvent { id, action })
+    }
+    fn write(v: &BossEvent, w: &mut Writer) {
+        w.uuid(v.id);
+        match &v.action {
+            BossAction::Add {
+                name,
+                progress,
+                color,
+                overlay,
+                darken,
+                music,
+                fog,
+            } => {
+                w.varint(0);
+                w.nbt(name);
+                w.f32(*progress);
+                w.varint(*color);
+                w.varint(*overlay);
+                w.u8(boss_flags(*darken, *music, *fog));
+            }
+            BossAction::Remove => w.varint(1),
+            BossAction::UpdateProgress { progress } => {
+                w.varint(2);
+                w.f32(*progress);
+            }
+            BossAction::UpdateName { name } => {
+                w.varint(3);
+                w.nbt(name);
+            }
+            BossAction::UpdateStyle { color, overlay } => {
+                w.varint(4);
+                w.varint(*color);
+                w.varint(*overlay);
+            }
+            BossAction::UpdateProperties { darken, music, fog } => {
+                w.varint(5);
+                w.u8(boss_flags(*darken, *music, *fog));
+            }
+        }
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
@@ -1590,6 +1884,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     BlockEntityData(BlockEntityData) = BLOCK_ENTITY_DATA,
     BlockEvent(BlockEvent) = BLOCK_EVENT,
     BlockUpdate(BlockUpdate) = BLOCK_UPDATE,
+    BossEvent(BossEvent) = BOSS_EVENT,
     ChangeDifficulty(ChangeDifficulty) = CHANGE_DIFFICULTY,
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
@@ -1603,11 +1898,16 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetContent(ContainerSetContent) = CONTAINER_SET_CONTENT,
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
+    CookieRequest(CookieRequest) = COOKIE_REQUEST,
+    Cooldown(Cooldown) = COOLDOWN,
+    CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
+    DeleteChat(DeleteChat) = DELETE_CHAT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
     EntityEvent(EntityEvent) = ENTITY_EVENT,
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
+    ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
@@ -1635,6 +1935,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerCombatKill(PlayerCombatKill) = PLAYER_COMBAT_KILL,
     PlayerInfoRemove(PlayerInfoRemove) = PLAYER_INFO_REMOVE,
     PlayerInfoUpdate(PlayerInfoUpdate) = PLAYER_INFO_UPDATE,
+    PlayerLookAt(PlayerLookAt) = PLAYER_LOOK_AT,
     PlayerPosition(PlayerPosition) = PLAYER_POSITION,
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
@@ -1653,6 +1954,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetBorderWarningDelay(SetBorderWarningDelay) = SET_BORDER_WARNING_DELAY,
     SetBorderWarningDistance(SetBorderWarningDistance) = SET_BORDER_WARNING_DISTANCE,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
+    SetCamera(SetCamera) = SET_CAMERA,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
     SetCursorItem(SetCursorItem) = SET_CURSOR_ITEM,
     SetDefaultSpawnPosition(SetDefaultSpawnPosition) = SET_DEFAULT_SPAWN_POSITION,
@@ -1678,14 +1980,21 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetTitlesAnimation(TitlesAnimation) = SET_TITLES_ANIMATION,
     Sound(Sound) = SOUND,
     SoundEntity(SoundEntity) = SOUND_ENTITY,
+    StopSound(StopSound) = STOP_SOUND,
     StartConfiguration(Empty) = START_CONFIGURATION,
+    StoreCookie(StoreCookie) = STORE_COOKIE,
+    // A common packet: the same `configuration::ServerLinks` the
+    // configuration phase sends.
+    ServerLinks(ServerLinks) = SERVER_LINKS,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
+    TagQuery(TagQuery) = TAG_QUERY,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
     TickingState(TickingState) = TICKING_STATE,
     TickingStep(TickingStep) = TICKING_STEP,
+    Transfer(Transfer) = TRANSFER,
     UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
     UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
     LevelParticles(LevelParticles) = LEVEL_PARTICLES,
@@ -1693,6 +2002,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
+    ClearDialog(Empty) = CLEAR_DIALOG,
+    ShowDialog(ShowDialog) = SHOW_DIALOG,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
@@ -1816,6 +2127,12 @@ impl Codec<TrackedWaypoint> for TrackedWaypoint {
 
 packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float });
 packet!(Attack { id: i32 => VarInt });
+packet!(TeleportToEntity { uuid: u128 => Uuid });
+packet!(
+    /// ServerboundSpectatorActionPacket: the entity a spectator clicked, or
+    /// none for a click on nothing.
+    SpectatorAction { target: Option<i32> => OptVarInt }
+);
 packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
@@ -1916,6 +2233,16 @@ packet!(
 );
 packet!(SelectTrade { item: i32 => VarInt });
 packet!(
+    /// ServerboundBlockEntityTagQueryPacket: an operator's F3+I asks for the
+    /// block entity's data at a position.
+    BlockEntityTagQuery { transaction: i32 => VarInt, pos: [i32; 3] => Pos }
+);
+packet!(
+    /// ServerboundEntityTagQueryPacket: an operator's F3+I asks for an
+    /// entity's data, by its network id.
+    EntityTagQuery { transaction: i32 => VarInt, entity: i32 => VarInt }
+);
+packet!(
     /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
     /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
     ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
@@ -1932,6 +2259,12 @@ packet!(
 packet!(
     /// ServerboundSignUpdatePacket: the four lines the player wrote on a side.
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
+);
+packet!(
+    /// ServerboundSetCommandBlockPacket: the command block's command, its
+    /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
+    /// conditional (2) and automatic (4) flags.
+    SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
 );
 packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
@@ -2007,6 +2340,7 @@ packet!(
     PaddleBoat { left: bool => Bool, right: bool => Bool }
 );
 packet!(PickItemFromBlock { pos: [i32; 3] => Pos, include_data: bool => Bool });
+packet!(PickItemFromEntity { id: i32 => VarInt, include_data: bool => Bool });
 packet!(
     /// ServerboundPlayerActionPacket.Action: 0 start destroy, 1 change destroy
     /// direction, 2 abort, 3 stop destroy, 4 drop all, 5 drop item, 6 release
@@ -2022,8 +2356,13 @@ packet!(
     /// Input flags: forward 1, backward 2, left 4, right 8, jump 16, shift 32, sprint 64.
     PlayerInput { flags: u8 => UByte }
 );
+packet!(
+    /// ServerboundSelectBundleItemPacket: the menu slot of a bundle and the
+    /// index of its selected item (-1: none).
+    SelectBundleItem { slot: i32 => VarInt, index: i32 => VarInt }
+);
 packet!(SetCarriedItem { slot: i16 => Short });
-packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => Slot });
+packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => DelimitedSlot });
 packet!(UseItem { hand: i32 => VarInt, sequence: i32 => VarInt, yaw: f32 => Float, pitch: f32 => Float });
 packet!(UseItemOn {
     hand: i32 => VarInt,
@@ -2051,6 +2390,10 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    BlockEntityTagQuery(BlockEntityTagQuery) = BLOCK_ENTITY_TAG_QUERY,
+    EntityTagQuery(EntityTagQuery) = ENTITY_TAG_QUERY,
+    TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
+    SpectatorAction(SpectatorAction) = SPECTATOR_ACTION,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -2058,6 +2401,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
     ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
+    RecipeBookChangeSettings(super::recipes::RecipeBookChangeSettings) = RECIPE_BOOK_CHANGE_SETTINGS,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
@@ -2066,7 +2410,9 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerButtonClick(ContainerButtonClick) = CONTAINER_BUTTON_CLICK,
     ContainerClick(ContainerClick) = CONTAINER_CLICK,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
+    CookieResponse(CookieResponse) = COOKIE_RESPONSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
+    CustomClickAction(CustomClickAction) = CUSTOM_CLICK_ACTION,
     EditBook(EditBook) = EDIT_BOOK,
     Interact(Interact) = INTERACT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
@@ -2077,6 +2423,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MoveVehicle(MoveVehicleRequest) = MOVE_VEHICLE,
     PaddleBoat(PaddleBoat) = PADDLE_BOAT,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
+    PickItemFromEntity(PickItemFromEntity) = PICK_ITEM_FROM_ENTITY,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
     PlayerAction(PlayerAction) = PLAYER_ACTION,
@@ -2088,9 +2435,11 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
+    SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
+    SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
@@ -2101,6 +2450,67 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
 mod tests {
     use super::*;
     use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
+
+    #[test]
+    fn merchant_cost_predicate_is_a_typed_list_without_patch_counts() {
+        // ItemCost.STREAM_CODEC: item=7, count=1, one typed component,
+        // potion_contents=53, potion present (water=0), no color/effects/name.
+        // Result: count=1, item=8, empty component patch. Secondary cost:
+        // item=9, count=2, empty predicate, followed by the offer fields.
+        let mut bytes = vec![1, 7, 1, 1, 53, 1, 0, 0, 0, 0, 1, 8, 0, 0, 1, 9, 2, 0, 0];
+        bytes.extend_from_slice(&[0; 4]); // uses
+        bytes.extend_from_slice(&2i32.to_be_bytes()); // max uses
+        bytes.extend_from_slice(&[0; 16]); // xp, special price, multiplier, demand
+        let mut r = Reader::new(&bytes);
+        let offers = Offers::read(&mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        assert_eq!(
+            offers[0].cost_a.components,
+            vec![(
+                53,
+                Component::Potion {
+                    potion: Some(0),
+                    color: None,
+                    rest: Vec::new()
+                }
+            )]
+        );
+        assert!(offers[0].cost_b.as_ref().unwrap().components.is_empty());
+        let mut w = Writer::new();
+        Offers::write(&offers, &mut w);
+        assert_eq!(w.data, bytes);
+        for len in 0..bytes.len() {
+            assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
+        }
+    }
+
+    #[test]
+    fn custom_chat_completions_are_an_action_and_a_string_list() {
+        // ClientboundCustomChatCompletionsPacket.STREAM_CODEC: Action.STREAM_CODEC
+        // (ByteBufCodecs.idMapper, a VarInt), then STRING_UTF8 in a list.
+        let payload = b"Steve#tag";
+        let packet = Clientbound::CustomChatCompletions(CustomChatCompletions {
+            action: custom_chat_action::SET,
+            entries: vec!["Steve".into(), "#tag".into()],
+        });
+        assert_eq!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                payload
+            )
+            .unwrap(),
+            packet
+        );
+        assert_eq!(&packet.encode()[1..], payload);
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        assert!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                &payload[..payload.len() - 1]
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn serverbound_abilities_carry_only_flying() {
@@ -2306,6 +2716,18 @@ mod tests {
                 pitch: 2.0,
                 on_ground: true,
             }),
+            Clientbound::ChunksBiomes(ChunksBiomes {
+                chunks: vec![
+                    ChunkBiomeData {
+                        pos: [-3, 7],
+                        buffer: vec![0, 4, 1, 2],
+                    },
+                    ChunkBiomeData {
+                        pos: [i32::MAX, i32::MIN],
+                        buffer: Vec::new(),
+                    },
+                ],
+            }),
             Clientbound::ForgetLevelChunk(ForgetLevelChunk { pos: [-1, 2] }),
             Clientbound::GameEvent(GameEvent {
                 event: 13,
@@ -2378,9 +2800,9 @@ mod tests {
             Clientbound::MerchantOffers(MerchantOffers {
                 container: 3,
                 offers: vec![NetOffer {
-                    cost_a: NetCost { item: 5, count: 24 },
+                    cost_a: Stack::new(5, 24).into(),
                     result: Stack::new(7, 1),
-                    cost_b: Some(NetCost { item: 9, count: 1 }),
+                    cost_b: Some(Stack::new(9, 1).into()),
                     out_of_stock: false,
                     uses: 2,
                     max_uses: 16,
@@ -2393,6 +2815,12 @@ mod tests {
                 xp: 12,
                 show_progress: true,
                 can_restock: true,
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None),
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![9; 256])),
             }),
             Clientbound::PlayerChat(PlayerChat {
                 global_index: 0,
@@ -2591,6 +3019,27 @@ mod tests {
     }
 
     #[test]
+    fn delete_chat_decodes_a_packed_signature() {
+        use crate::ids::play::clientbound::DELETE_CHAT;
+        // MessageSignature.Packed: id + 1, so 5 names cache slot 4...
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &[5]).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None)
+            })
+        );
+        // ...and 0 carries the full 256-byte signature.
+        let mut full = vec![0];
+        full.extend([3; 256]);
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &full).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![3; 256]))
+            })
+        );
+    }
+
+    #[test]
     fn serverbound_round_trips() {
         let packets = vec![
             Serverbound::PingRequest(crate::packets::status::Ping { time: -7 }),
@@ -2733,6 +3182,72 @@ mod tests {
     }
 
     #[test]
+    fn a_cooldown_packet_carries_its_group_and_ticks() {
+        let packet = Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 20,
+        });
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        // The group is an identifier, the ticks a VarInt; a duration of 0
+        // removes the entry.
+        let body = Clientbound::encode(&Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 0,
+        }));
+        assert_eq!(body[0], crate::ids::play::clientbound::COOLDOWN as u8);
+        assert_eq!(&body[1..3], [21, b'm']);
+        assert_eq!(body[body.len() - 1], 0);
+    }
+
+    #[test]
+    fn debug_tag_queries_decode_as_their_packets() {
+        use crate::ids::play::{clientbound, serverbound};
+        // ServerboundBlockEntityTagQueryPacket: VarInt transaction, BlockPos.
+        let pos = [3, 64, -2];
+        let mut body = vec![7];
+        body.extend_from_slice(&crate::buf::pack_block_pos(pos).to_be_bytes());
+        let packet = Serverbound::decode(serverbound::BLOCK_ENTITY_TAG_QUERY, &body).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::BlockEntityTagQuery(BlockEntityTagQuery {
+                transaction: 7,
+                pos
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ServerboundEntityTagQueryPacket: VarInt transaction, VarInt entity id.
+        let packet = Serverbound::decode(serverbound::ENTITY_TAG_QUERY, &[0, 42]).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::EntityTagQuery(EntityTagQuery {
+                transaction: 0,
+                entity: 42
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ClientboundTagQueryPacket: VarInt transaction, then the nullable
+        // compound of FriendlyByteBuf.writeNbt (a bare End tag for null).
+        let packet = Clientbound::decode(clientbound::TAG_QUERY, &[1, 0]).unwrap();
+        assert_eq!(
+            packet,
+            Clientbound::TagQuery(TagQuery {
+                transaction: 1,
+                tag: Tag::End
+            })
+        );
+        let mut items = horizon_world::nbt::Compound::new();
+        items.insert("Lock".into(), Tag::String("key".into()));
+        round_trip(
+            Clientbound::TagQuery(TagQuery {
+                transaction: 2,
+                tag: Tag::Compound(items),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
     fn change_game_mode_uses_the_game_type_varint() {
         for mode in 0..=3 {
             let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
@@ -2760,11 +3275,121 @@ mod tests {
     }
 
     #[test]
+    fn player_look_at_round_trips() {
+        let at_point = PlayerLookAt {
+            from: 1,
+            target: [1.5, 64.0, -2.25],
+            entity: None,
+        };
+        let at_entity = PlayerLookAt {
+            from: 0,
+            target: [0.0, 70.0, 0.0],
+            entity: Some(LookAtEntity { id: 42, anchor: 1 }),
+        };
+        for p in [at_point, at_entity] {
+            let bytes = Clientbound::PlayerLookAt(p.clone()).encode();
+            // 1 id byte, 1 anchor, 3 doubles, the flag; the entity adds 2 VarInts.
+            let len = 1 + 1 + 24 + 1 + if p.entity.is_some() { 2 } else { 0 };
+            assert_eq!(bytes.len(), len);
+            assert_eq!(
+                Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &bytes[1..])
+                    .unwrap(),
+                Clientbound::PlayerLookAt(p)
+            );
+        }
+    }
+
+    /// ClientboundChunksBiomesPacket is read, not passed through as an
+    /// unknown packet: one column (1, -2) with two bytes of biomes.
+    #[test]
+    fn chunks_biomes_is_a_known_packet() {
+        let id = crate::ids::play::clientbound::CHUNKS_BIOMES;
+        let payload = [1, 0xFF, 0xFF, 0xFF, 0xFE, 0, 0, 0, 1, 2, 5, 6];
+        let p = Clientbound::decode(id, &payload).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert_eq!(p.encode()[1..], payload);
+        // Cut short, it is an error rather than a packet.
+        assert!(Clientbound::decode(id, &payload[..10]).is_err());
+    }
+
+    /// ClientboundChunksBiomesPacket.STREAM_CODEC: a list of (ChunkPos as
+    /// one long, x low and z high; `byteArray(2097152)`), the bytes being
+    /// each section's biome container (`ChunkBiomeData.extractChunkData`).
+    #[test]
+    fn chunks_biomes_wire_and_biomes() {
+        let p = Clientbound::ChunksBiomes(ChunksBiomes {
+            chunks: vec![ChunkBiomeData {
+                pos: [1, -2],
+                buffer: vec![5, 6],
+            }],
+        });
+        let bytes = p.encode();
+        assert_eq!(
+            bytes,
+            [
+                crate::ids::play::clientbound::CHUNKS_BIOMES as u8,
+                1,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFE,
+                0,
+                0,
+                0,
+                1,
+                2,
+                5,
+                6
+            ]
+        );
+        assert_eq!(
+            Clientbound::decode(bytes[0].into(), &bytes[1..]).unwrap(),
+            p
+        );
+        use crate::chunk::{Paletted, Strategy};
+        let sections = [
+            Paletted::from_values(&[3; 64], Strategy::Biomes, 6),
+            Paletted::from_values(
+                &(0..64).map(|i| i % 5).collect::<Vec<_>>(),
+                Strategy::Biomes,
+                6,
+            ),
+        ];
+        let data = ChunkBiomeData::from_biomes([4, 4], &sections);
+        assert_eq!(data.biomes(2, 6).unwrap(), sections);
+    }
+
+    /// ClientboundSetCameraPacket: one VarInt, the camera entity's id.
+    #[test]
+    fn set_camera_is_the_camera_entity_id() {
+        // 300 as a VarInt: 0xAC 0x02.
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::SET_CAMERA, &[0xAC, 0x02]).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert!(format!("{p:?}").contains("camera_id: 300"), "{p:?}");
+        assert_eq!(p.encode()[1..], [0xAC, 0x02]);
+    }
+
+    /// ServerboundSpectatorActionPacket: `OPTIONAL_VAR_INT`, the clicked
+    /// entity's id plus one, or 0 for a click on nothing.
+    #[test]
+    fn spectator_action_is_an_optional_entity_id() {
+        let id = crate::ids::play::serverbound::SPECTATOR_ACTION;
+        for (bytes, shown) in [([8u8], "Some(7)"), ([0u8], "None")] {
+            let p = Serverbound::decode(id, &bytes).unwrap();
+            assert!(!matches!(p, Serverbound::Unknown(..)), "{p:?}");
+            assert!(format!("{p:?}").contains(shown), "{p:?}");
+            assert_eq!(p.encode()[1..], bytes);
+        }
+    }
+
+    #[test]
     fn unknown_packets_keep_their_payload() {
-        let p = Clientbound::decode(crate::ids::play::clientbound::BOSS_EVENT, &[1, 2, 3]).unwrap();
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::DEBUG_SAMPLE, &[1, 2, 3]).unwrap();
         assert_eq!(
             p,
-            Clientbound::Unknown(crate::ids::play::clientbound::BOSS_EVENT, vec![1, 2, 3])
+            Clientbound::Unknown(crate::ids::play::clientbound::DEBUG_SAMPLE, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
     }
@@ -2860,5 +3485,67 @@ mod tests {
         let mut w = Writer::new();
         w.varint(101);
         assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
+    }
+
+    #[test]
+    fn boss_event_round_trips() {
+        let add = Clientbound::BossEvent(BossEvent {
+            id: 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+            action: BossAction::Add {
+                name: Tag::String("Wither".into()),
+                progress: 0.5,
+                color: 5,
+                overlay: 0,
+                darken: true,
+                music: false,
+                fog: true,
+            },
+        });
+        let body = add.encode();
+        // Packet id 9, then the uuid, operation 0, and the property byte
+        // (darken 1, fog 4).
+        assert_eq!(body[0], 9);
+        assert_eq!(*body.last().unwrap(), 5);
+        round_trip(add, Clientbound::encode, Clientbound::decode);
+        round_trip(
+            Clientbound::BossEvent(BossEvent {
+                id: 7,
+                action: BossAction::UpdateProgress { progress: 0.25 },
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+        round_trip(
+            Clientbound::BossEvent(BossEvent {
+                id: 7,
+                action: BossAction::Remove,
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    /// A registry entry is its id + 1, the dialog itself a 0 then its NBT.
+    #[test]
+    fn dialogs_round_trip() {
+        let notice = Tag::compound([("type", Tag::String("minecraft:notice".into()))]);
+        for dialog in [DialogHolder::Registry(3), DialogHolder::Direct(notice)] {
+            crate::packets::round_trip(
+                Clientbound::ShowDialog(ShowDialog { dialog }),
+                Clientbound::encode,
+                Clientbound::decode,
+            );
+        }
+        let mut w = Writer::new();
+        DialogHolder::write(&DialogHolder::Registry(3), &mut w);
+        assert_eq!(w.data, [4]);
+        crate::packets::round_trip(
+            Serverbound::CustomClickAction(CustomClickAction {
+                id: "minecraft:custom".into(),
+                payload: None,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
     }
 }

@@ -16,7 +16,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{self, BufReader},
+    io,
     path::Path,
     sync::Arc,
 };
@@ -116,8 +116,9 @@ pub(crate) fn analyse_shape(shape: &VoxelShape) -> io::Result<ShapeInfo> {
     let err = |e: horizon_core::geometry::ShapeError| invalid(e.to_string());
     let mut info = ShapeInfo::default();
     let block = VoxelShape::block();
+    // The faces are not kept on the shape: only these facts are.
     for direction in Direction::ALL {
-        let face = shape.face_shape(direction).map_err(err)?;
+        let face = shape.face_shape_transient(direction).map_err(err)?;
         if !block.join_is_not_empty(&face, ShapeOp::XOR).map_err(err)? {
             info.full_faces |= 1 << direction as u8;
         }
@@ -125,7 +126,7 @@ pub(crate) fn analyse_shape(shape: &VoxelShape) -> io::Result<ShapeInfo> {
             info.nonempty_faces |= 1 << direction as u8;
         }
     }
-    let above = shape.face_shape(Direction::Down).map_err(err)?;
+    let above = shape.face_shape_transient(Direction::Down).map_err(err)?;
     let px = |v: f64| v / 16.0;
     let tests = [
         (7.0, 7.0, 9.0, 9.0),
@@ -567,10 +568,17 @@ props! {
     creaking_heart_state = "creaking_heart_state",
     cracked = "cracked",
     has_book = "has_book",
+    has_record = "has_record",
     signal_fire = "signal_fire",
     orientation = "orientation",
     crafting = "crafting",
     side_chain = "side_chain",
+    slot_0_occupied = "slot_0_occupied",
+    slot_1_occupied = "slot_1_occupied",
+    slot_2_occupied = "slot_2_occupied",
+    slot_3_occupied = "slot_3_occupied",
+    slot_4_occupied = "slot_4_occupied",
+    slot_5_occupied = "slot_5_occupied",
     copper_golem_pose = "copper_golem_pose",
     sculk_sensor_phase = "sculk_sensor_phase",
     shrieking = "shrieking",
@@ -582,8 +590,10 @@ fn fail(message: &str) -> io::Error {
     invalid(message)
 }
 
+/// From the file's bytes in memory: several times faster than through a
+/// reader on gameplay-facts.json (55 MB), which a first start parses.
 fn read_json(path: &Path) -> io::Result<Value> {
-    serde_json::from_reader(BufReader::new(File::open(path)?)).map_err(|e| invalid(e.to_string()))
+    serde_json::from_slice(&fs::read(path)?).map_err(|e| invalid(e.to_string()))
 }
 
 fn interned(cache: &mut HashMap<String, Arc<str>>, text: &str) -> Arc<str> {

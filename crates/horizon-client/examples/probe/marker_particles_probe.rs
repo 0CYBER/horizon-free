@@ -49,7 +49,7 @@ pub fn main() -> Result<()> {
             }
         }
     }
-    let mut engine = ParticleEngine::new(root, &HashMap::new());
+    let mut engine = ParticleEngine::new(root, &HashMap::new(), &Default::default());
     let mut out = BufWriter::new(File::create(&args[2])?);
     for line in BufReader::new(File::open(&args[1])?).lines() {
         let case: Value = serde_json::from_str(&line?)?;
@@ -74,7 +74,15 @@ pub fn main() -> Result<()> {
             biomes: &biomes,
             registry: assets.registry,
             raining_at: &|_| false,
+            height_no_leaves: &|_| 0,
+            firefly_bush_sounds: false,
+            creaking_active: false,
+            sky_darken: 0,
             marker: target.map(|name| (name, &options as &dyn Fn(_) -> _)),
+            model_offset: &|_, _, _| None,
+            gateway_particles: &|_, _| 0,
+            thundering: false,
+            ultrawarm: false,
         };
         engine.seed_randoms(1057, 0, 0);
         engine.requested = Some(Vec::new());

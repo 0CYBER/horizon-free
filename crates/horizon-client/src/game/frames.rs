@@ -2,11 +2,12 @@
 //! `ItemFrame.survives`, `interact` (put an item in, then rotate it),
 //! `hurtServer` (take the item out, then break the frame) and
 //! `ItemFrameRenderer` (the frame model and the item at a 45 degree step).
-use super::{Game, Hit, view_vector};
+use super::{Game, Hit};
 use horizon_assets::{bake::bake_model, model::CuboidModel, resolve::ModelLibrary};
 use horizon_client::{entities::ItemFrame, items::ItemStack, mesher::Vertex};
 use horizon_core::{
     geometry::{Aabb, Vec3},
+    position::BlockPos,
     random::RandomSource,
 };
 use std::sync::Arc;
@@ -131,7 +132,21 @@ impl Game<'_> {
             "minecraft:glow_item_frame" => true,
             _ => return false,
         };
-        let pos = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
+        let invisible = stack.extra.as_ref().is_some_and(|extra| {
+            extra.other.iter().any(|(k, v)| {
+                (k == "minecraft:entity_data" || k == "entity_data")
+                    && horizon_client::save::number(v.get("Invisible")).unwrap_or(0) != 0
+            })
+        });
+        let pos: [i32; 3] = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
+        // `ItemFrameItem.mayPlace`: `Level.isInsideBuildHeight(blockPos)`, so a frame is not
+        // placed on the top face of the highest block or under the lowest one.
+        if !(horizon_client::chunk::MIN_Y
+            ..horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT)
+            .contains(&pos[1])
+        {
+            return false;
+        }
         let frame = ItemFrame {
             id: self.next_entity + 1,
             pos,
@@ -141,7 +156,7 @@ impl Game<'_> {
             rotation: 0,
             drop_chance: 1.0,
             fixed: false,
-            invisible: false,
+            invisible,
             check_interval: 0,
         };
         if !self.frame_survives(&frame) {
@@ -159,8 +174,7 @@ impl Game<'_> {
     }
     /// The frame under the crosshair within reach and its distance.
     pub(super) fn frame_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, f) in self.item_frames.iter().enumerate() {
@@ -188,7 +202,7 @@ impl Game<'_> {
     /// Nearer than the targeted block?
     pub(super) fn before_block(&self, distance: f64) -> bool {
         self.pick().is_none_or(|h| {
-            let eye = self.eye_position().unwrap_or_default();
+            let eye = self.aim().map(|(eye, _)| eye).unwrap_or_default();
             (0..3)
                 .map(|a| (h.point[a] - eye[a]).powi(2))
                 .sum::<f64>()
@@ -223,6 +237,7 @@ impl Game<'_> {
         }
         let p = self.item_frames[i].pos;
         self.world.modified.insert((p[0] >> 4, p[2] >> 4));
+        self.frame_output_changed(p);
         self.swing_arm();
         true
     }
@@ -255,7 +270,16 @@ impl Game<'_> {
         }
         self.drop_frame_items(&f, with_frame, true);
         self.world.modified.insert((f.pos[0] >> 4, f.pos[2] >> 4));
+        if f.item.is_some() {
+            self.frame_output_changed(f.pos);
+        }
         true
+    }
+    /// `ItemFrame.setItem` / `setRotation`: `updateNeighbourForOutputSignal`, so
+    /// the comparators reading the frame take its new signal.
+    fn frame_output_changed(&mut self, pos: [i32; 3]) {
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
     }
     /// `ItemFrame.dropItem`: the frame (when breaking) and the held item.
     fn drop_frame_items(&mut self, f: &ItemFrame, with_frame: bool, by_player: bool) {
@@ -280,6 +304,42 @@ impl Game<'_> {
             self.spawn_item(item, at, [0.0; 3], 10);
         }
     }
+    /// `ServerExplosion.hurtEntities` for item frames: a frame within the blast
+    /// is killed and dropped with its item (`BlockAttachedEntity.hurtServer`).
+    /// A fixed frame is not hurt by an explosion, and `blast_spares_decorations`
+    /// keeps every frame without `mobGriefing`.
+    /// Not ported: `ignoreExplosion` also spares frames when the exploding
+    /// entity is in water.
+    pub(super) fn explosion_breaks_frames(
+        &mut self,
+        blast: [f64; 3],
+        diameter: f64,
+        interaction: super::explosion::BlockInteraction,
+    ) {
+        if self.blast_spares_decorations(interaction) {
+            return;
+        }
+        let mut i = 0;
+        while i < self.item_frames.len() {
+            let c = center(&self.item_frames[i]);
+            let dist =
+                ((c[0] - blast[0]).powi(2) + (c[1] - blast[1]).powi(2) + (c[2] - blast[2]).powi(2))
+                    .sqrt()
+                    / diameter;
+            if dist > 1.0 || self.item_frames[i].fixed {
+                i += 1;
+                continue;
+            }
+            let f = self.item_frames.remove(i);
+            self.audio
+                .play(&sound(&f, "break"), Some(center(&f)), 1.0, 1.0);
+            self.drop_frame_items(&f, true, false);
+            self.world.modified.insert((f.pos[0] >> 4, f.pos[2] >> 4));
+            if f.item.is_some() {
+                self.frame_output_changed(f.pos);
+            }
+        }
+    }
     /// BlockAttachedEntity.tick for frames.
     pub(super) fn tick_item_frames(&mut self) {
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
@@ -300,6 +360,9 @@ impl Game<'_> {
                     self.audio
                         .play(&sound(&f, "break"), Some(center(&f)), 1.0, 1.0);
                     self.drop_frame_items(&f, true, false);
+                    if f.item.is_some() {
+                        self.frame_output_changed(f.pos);
+                    }
                     continue;
                 }
             }
@@ -311,8 +374,9 @@ impl Game<'_> {
         let sprites = &self.gui.atlas.sprites;
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
-        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at 100%.
-        let range = 16.0 * 64.0 * f64::from(self.settings.entity_distance);
+        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at a view scale
+        // of 1.
+        let range = 16.0 * 64.0 * self.view_scale();
         for f in &self.item_frames {
             let entity_start = out.len();
             let map = f.item.as_ref().and_then(super::maps::map_id);
@@ -355,17 +419,30 @@ impl Game<'_> {
                 * glam::DMat4::from_rotation_y(y_rot.to_radians());
             let light = self.world.light(f.pos[0], f.pos[1], f.pos[2]);
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            // ItemFrameRenderer.getBlockLightLevel: a glow frame's model is at least 5 bright.
+            let frame_light = if f.glow {
+                (light & 0xF0) | (light & 15).max(5)
+            } else {
+                light
+            };
+            let frame_packed =
+                (u32::from(frame_light >> 4) * 16) | ((u32::from(frame_light & 15) * 16) << 8);
             let mut quad =
                 |m: &glam::DMat4, corners: [[f64; 3]; 4], uv: [[f32; 2]; 4], light: u32| {
-                    for (c, uv) in corners.iter().zip(uv) {
-                        let p = m.transform_point3(glam::DVec3::from_array(*c));
+                    // The frame model is drawn with the entity shader, lit by its face normal.
+                    let at = corners.map(|c| m.transform_point3(glam::DVec3::from_array(c)));
+                    let n = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
+                    let normal = [0, 1, 2].map(|k| (n[k].clamp(-1.0, 1.0) * 127.0) as i8);
+                    for (p, uv) in at.into_iter().zip(uv) {
                         out.push(Vertex {
-                            normal: [0; 4],
+                            normal: [normal[0], normal[1], normal[2], -127],
                             pos: p.as_vec3().to_array(),
                             uv,
                             layer: 0,
                             color: 0xFFFF_FFFF,
                             light,
+
+                            glint_uv: [0.0, 0.0],
                         });
                     }
                 };
@@ -393,7 +470,7 @@ impl Game<'_> {
                             ]
                         }),
                         map_uv(r, *uv),
-                        packed,
+                        frame_packed,
                     );
                 }
             }
@@ -401,7 +478,9 @@ impl Game<'_> {
             if let Some(id) = map {
                 // ItemFrameRenderer: the map fills the face, in 90-degree steps.
                 let depth = if f.invisible { 0.5 } else { 0.4375 };
-                let item_light = if f.glow { 240 | 240 << 8 } else { packed };
+                // A glow frame's map is 15728850 = 0xF000D2 (sky coordinate 240,
+                // block coordinate 210), not full bright.
+                let item_light = if f.glow { 240 | 210 << 8 } else { packed };
                 let m = pose
                     * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
                     * glam::DMat4::from_rotation_z(
@@ -445,7 +524,7 @@ impl Game<'_> {
         }
         for (id, m, light) in maps {
             let entity_start = out.len();
-            self.map_vertices(id, m, light, out);
+            self.map_vertices(id, true, m, light, out);
             self.cull_entity_vertices(out, entity_start);
         }
     }

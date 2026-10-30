@@ -1,16 +1,19 @@
 //! Horizon's design tokens, the one source of truth for the launcher (`launcher/src/theme.rs`),
-//! the game's on-screen keyboard (`horizon-client`'s `ui_theme`) and the website (`website/src/tokens.css`,
-//! generated from [`css`] by `cargo run -p xtask -- tokens`). Change a value here and all three
+//! the game's on-screen keyboard (`horizon-client`'s `ui_theme`) and the website (`tokens.css` in this crate,
+//! generated from [`css`] by `cargo run -p xtask -- tokens`, which the site's build reads from main). Change a value here and all three
 //! follow. The system is described in `docs/design-system.md`.
 //!
-//! Cool neutrals in two appearances and one violet accent; Geist and Geist Mono only, bundled
-//! here under the SIL Open Font License (`fonts/OFL-Geist.txt`). Colours are `0xRRGGBB`; sizes
+//! Cool neutrals in two appearances and one violet accent; Geist and Geist Mono, bundled here
+//! under the SIL Open Font License (`fonts/OFL-Geist.txt`). The launcher's night look and its
+//! Bricolage Grotesque are in [`night`]. Colours are `0xRRGGBB`; sizes
 //! are in logical pixels.
 use std::fmt::Write as _;
 use std::time::Duration;
 
 pub const FONT: &str = "Geist";
 pub const MONO: &str = "Geist Mono";
+pub mod night;
+
 /// The launcher's and the website's display face (headings, navigation, buttons, badges only):
 /// Pixelify Sans, bundled under the SIL Open Font License (`fonts/OFL-PixelifySans.txt`).
 pub const PIXEL: &str = "Pixelify Sans";
@@ -24,6 +27,14 @@ pub mod fonts {
     pub const PIXEL_MEDIUM: &[u8] = include_bytes!("../fonts/PixelifySans-Medium.ttf");
     pub const PIXEL_SEMIBOLD: &[u8] = include_bytes!("../fonts/PixelifySans-SemiBold.ttf");
     pub const PIXEL_BOLD: &[u8] = include_bytes!("../fonts/PixelifySans-Bold.ttf");
+    /// [`crate::night`]'s faces, cut from upstream's variable font by `tools/bake_bricolage.py`.
+    pub const BRICOLAGE_REGULAR: &[u8] = include_bytes!("../fonts/BricolageGrotesque-Regular.ttf");
+    pub const BRICOLAGE_MEDIUM: &[u8] = include_bytes!("../fonts/BricolageGrotesque-Medium.ttf");
+    pub const BRICOLAGE_SEMIBOLD: &[u8] =
+        include_bytes!("../fonts/BricolageGrotesque-SemiBold.ttf");
+    pub const BRICOLAGE_BOLD: &[u8] = include_bytes!("../fonts/BricolageGrotesque-Bold.ttf");
+    pub const BRICOLAGE_DISPLAY_BOLD: &[u8] =
+        include_bytes!("../fonts/BricolageGrotesqueDisplay-Bold.ttf");
 }
 
 /// The launcher's pixel icons: Pixelarticons (MIT, `icons/pixel/LICENSE-pixelarticons.txt`), 24
@@ -67,6 +78,8 @@ pub mod icons {
         "search",
         "server",
         "sliders",
+        // Not Pixelarticons': drawn for Horizon's ratings, in the same 2-unit grid.
+        "star",
         "terminal",
         "trash",
         "user",
@@ -526,7 +539,7 @@ pub fn contrast(a: u32, b: u32) -> f32 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-/// `website/src/tokens.css`: every token as a CSS custom property, the light palette by
+/// `tokens.css`: every token as a CSS custom property, the light palette by
 /// default, the dark one when the system asks for it or the page sets `data-theme="dark"`.
 pub fn css() -> String {
     let mut s = String::new();
@@ -545,6 +558,8 @@ pub fn css() -> String {
             "  color-scheme: {};",
             if p.dark { "dark" } else { "light" }
         );
+        // The launcher's night look, for pages that wear it.
+        s.push_str(&if p.dark { night::NIGHT } else { night::DAWN }.css());
     };
     s.push_str(
         "/* Generated from crates/horizon-theme by `cargo run -p xtask -- tokens`; do not edit.\n   \
@@ -553,7 +568,10 @@ pub fn css() -> String {
     colors(&mut s, &BLOCKS_LIGHT);
     let _ = writeln!(
         s,
-        "  --font: \"{FONT}\", ui-sans-serif, system-ui, sans-serif;\n  --mono: \"{MONO}\", ui-monospace, monospace;\n  --pixel: \"{PIXEL}\", \"{FONT}\", ui-sans-serif, sans-serif;"
+        "  --font: \"{FONT}\", ui-sans-serif, system-ui, sans-serif;\n  --mono: \"{MONO}\", ui-monospace, monospace;\n  --pixel: \"{PIXEL}\", \"{FONT}\", ui-sans-serif, sans-serif;\n  --night-font: \"{}\", \"{FONT}\", ui-sans-serif, sans-serif;\n  --night-display-font: \"{}\", \"{}\", ui-sans-serif, sans-serif;",
+        night::FONT,
+        night::DISPLAY_FONT,
+        night::FONT
     );
     for (name, v) in [
         ("block-outline", BLOCK_OUTLINE),
@@ -562,7 +580,7 @@ pub fn css() -> String {
     ] {
         let _ = writeln!(s, "  --{name}: {}px;", num(v));
     }
-    for step in TYPE {
+    for step in TYPE.iter().chain(&night::TYPE) {
         let size = match step.web {
             Web::Fixed => format!("{}px", num(step.px)),
             Web::Fluid(min, max) => format!(
@@ -598,6 +616,9 @@ pub fn css() -> String {
         ("index", INDEX),
         ("plate-bleed", PLATE_BLEED),
         ("rise", RISE),
+        ("night-pixel-corner", night::PIXEL_CORNER),
+        ("night-radius-control", night::RADIUS_CONTROL),
+        ("night-play", night::PLAY),
     ] {
         let _ = writeln!(s, "  --{name}: {}px;", num(v));
     }
@@ -672,7 +693,12 @@ mod tests {
     /// main action's label too, and the focus ring (the accent) reaches 3:1 (WCAG 1.4.11).
     #[test]
     fn blocks_text_meets_wcag_aa_in_both_appearances() {
-        for p in [BLOCKS_DARK, BLOCKS_LIGHT] {
+        for p in [
+            BLOCKS_DARK,
+            BLOCKS_LIGHT,
+            night::NIGHT.blocks(),
+            night::DAWN.blocks(),
+        ] {
             let theme = if p.dark { "dark" } else { "light" };
             let backgrounds = [
                 ("page", p.page),
@@ -769,15 +795,15 @@ mod tests {
         assert!((bezier([0., 0., 1., 1.], 0.3) - 0.3).abs() < 1e-3);
     }
 
-    /// `website/src/tokens.css` is what [`css`] writes; regenerate it with
-    /// `cargo run -p xtask -- tokens`.
+    /// `tokens.css` (beside Cargo.toml, read by the website's build) is what [`css`] writes;
+    /// regenerate it with `cargo run -p xtask -- tokens`.
     #[test]
-    fn website_tokens_are_up_to_date() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../website/src/tokens.css");
+    fn tokens_css_is_up_to_date() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tokens.css");
         let written = std::fs::read_to_string(path).unwrap_or_default();
         assert!(
             written == css(),
-            "website/src/tokens.css is out of date: run `cargo run -p xtask -- tokens`"
+            "crates/horizon-theme/tokens.css is out of date: run `cargo run -p xtask -- tokens`"
         );
     }
 }

@@ -15,7 +15,7 @@ missing; [Rust rewrite status](rust-parity.md) has the details.
 ## Run from a checkout
 
 Use current stable Rust (1.90+) and JDK 25 (Python 3.10+ only for the development
-harnesses). Horizon never
+harnesses). A checkout never
 downloads the game: resource preparation imports **your own copy** (the 26.3
 client from your official launcher install, and the 26.3 server jar you
 downloaded yourself; see [Build from source](../README.md#build-from-source)),
@@ -48,7 +48,7 @@ Development builds that link quickly: `cargo build --profile fast -p horizon-cli
 | `--world NAME` | World folder under `saves/` (default "New World"); reopened if it exists |
 | `--seed N` | Seed for a new world (numbers or text, like vanilla) |
 | `--creative` | Creative mode (instant breaking, pick block) |
-| `--render-distance N` | Chunks, 2..64 (default 12) |
+| `--render-distance N` | Chunks, 2..128 (default 12) |
 | `--resources PATH` | Prepared resource directory |
 
 | Control | Action |
@@ -207,6 +207,28 @@ constant speed and replies with the same summary as `bench` (avg/1%-low FPS and
 p50/p95/p99/max frame times), plus CPU and GPU time per frame; [the graphics
 benchmark](graphics.md#benchmark) is built on it. Frame times include waits for
 presentation, so `bench` reports what is on screen.
+
+### Discord Rich Presence
+
+While Discord runs on the same computer, the player's Discord profile shows
+"Playing Horizon" and what they are doing: "In the menus", "Singleplayer",
+"Multiplayer" or "Hosting a world" (with the party size, of 8), the dimension
+("In the Nether") and the time since they entered the world. It never shows a
+world's name or a server's address. Horizon Settings has the switch
+(**Discord Rich Presence**, on by default; `discordPresence` in
+`horizon-extras.txt`), and `HORIZON_NO_DISCORD=1` turns it off for one run.
+
+`crates/horizon-client/src/discord_presence.rs` speaks Discord's local IPC
+itself (the `discord-ipc-N` socket or named pipe, no SDK) from a thread of its
+own: the frame only hands it a status when it changes. It retries every 15 s
+while Discord isn't running and stays within Discord's 5 updates per 20 s.
+Dedicated servers never start it, and automated runs (offscreen, benchmarks)
+only talk to a fake Discord: `lab.game_env` sets `HORIZON_NO_DISCORD=1`, and
+`tools/discord_presence_e2e.py` points games at a fake server with
+`HORIZON_DISCORD_IPC_DIR` (title, world, Nether and quit on both single-player
+paths; a LAN host and guest; the switch; a Discord started after the game).
+`DISCORD_APP_ID` is Discord's "Horizon" application, whose `horizon` image is
+the large one; there are no game-mode images yet.
 
 ### Play on another of your machines
 

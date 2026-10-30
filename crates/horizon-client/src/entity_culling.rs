@@ -26,6 +26,20 @@ impl Culler {
         start: usize,
         opaque: impl FnMut([i32; 3]) -> bool,
     ) -> bool {
+        let hidden = self.hidden(vertices, start, opaque);
+        if hidden {
+            vertices.truncate(start);
+        }
+        hidden
+    }
+
+    /// Whether this entity's completed camera-relative mesh (`vertices[start..]`) is hidden.
+    pub fn hidden(
+        &self,
+        vertices: &[crate::mesher::Vertex],
+        start: usize,
+        opaque: impl FnMut([i32; 3]) -> bool,
+    ) -> bool {
         if start >= vertices.len() || self.remaining.get() == 0 {
             return false;
         }
@@ -42,11 +56,7 @@ impl Culler {
             }
         }
         // Cover floating-point and rasterization edges as well as the vertices.
-        if self.occluded(min.map(|v| v - 0.05), max.map(|v| v + 0.05), opaque) {
-            vertices.truncate(start);
-            return true;
-        }
-        false
+        self.occluded(min.map(|v| v - 0.05), max.map(|v| v + 0.05), opaque)
     }
 
     /// Returns true only when a complete opaque block plane covers the bounds.
@@ -176,6 +186,8 @@ mod tests {
             color: u32::MAX,
             light: 0,
             normal: [0; 4],
+
+            glint_uv: [0.0, 0.0],
         };
         let prior = vertex([0.0; 3]);
         let body = [vertex([8.0, -1.0, -1.0]), vertex([10.0, 1.0, 1.0])];

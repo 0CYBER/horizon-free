@@ -4,15 +4,15 @@ use crate::json::{Result, error};
 use horizon_core::random::RandomSource;
 
 #[derive(Clone, Debug)]
-enum Choice {
-    Single(Variant),
+enum Choice<T> {
+    Single(T),
     Weighted {
-        variants: Vec<Variant>,
+        variants: Vec<T>,
         ends: Vec<i32>,
         total: i32,
     },
 }
-impl Choice {
+impl Choice<Variant> {
     fn new(value: &VariantSet) -> Result<Self> {
         match value {
             VariantSet::Single(value) => Ok(Self::Single(value.clone())),
@@ -41,7 +41,23 @@ impl Choice {
             }
         }
     }
-    fn select(&self, random: &mut impl RandomSource) -> &Variant {
+}
+impl<T> Choice<T> {
+    fn map<U>(&self, f: &mut impl FnMut(&T) -> U) -> Choice<U> {
+        match self {
+            Self::Single(value) => Choice::Single(f(value)),
+            Self::Weighted {
+                variants,
+                ends,
+                total,
+            } => Choice::Weighted {
+                variants: variants.iter().map(&mut *f).collect(),
+                ends: ends.clone(),
+                total: *total,
+            },
+        }
+    }
+    fn select(&self, random: &mut impl RandomSource) -> &T {
         match self {
             Self::Single(value) => value,
             Self::Weighted {
@@ -60,10 +76,11 @@ impl Choice {
 }
 /// Compile once per definition and share across its bound block states. Prefix
 /// sums avoid rebuilding weight totals or scanning all entries during selection.
+/// `map` swaps each variant for what it stands for (its baked model).
 #[derive(Clone, Debug)]
-pub struct CompiledChoices {
-    variants: Vec<Choice>,
-    multipart: Vec<Choice>,
+pub struct CompiledChoices<T = Variant> {
+    variants: Vec<Choice<T>>,
+    multipart: Vec<Choice<T>>,
 }
 impl CompiledChoices {
     pub fn new(definition: &BlockStateDefinition) -> Result<Self> {
@@ -82,10 +99,19 @@ impl CompiledChoices {
                 .collect::<Result<_>>()?,
         })
     }
+}
+impl<T> CompiledChoices<T> {
+    /// The same choices, with `f` of each variant in its place.
+    pub fn map<U>(&self, mut f: impl FnMut(&T) -> U) -> CompiledChoices<U> {
+        CompiledChoices {
+            variants: self.variants.iter().map(|c| c.map(&mut f)).collect(),
+            multipart: self.multipart.iter().map(|c| c.map(&mut f)).collect(),
+        }
+    }
     /// The variant `particleMaterial` comes from: the first entry of a weighted
     /// list (`WeightedVariants`) and, for a multipart root, of its first
     /// selector whether or not that selector applies (`MultiPartModel`).
-    pub fn particle_variant(&self, selected: &SelectedModels) -> Option<&Variant> {
+    pub fn particle_variant(&self, selected: &SelectedModels) -> Option<&T> {
         let choice = match selected {
             SelectedModels::Variant(index) => self.variants.get(*index)?,
             SelectedModels::Multipart(_) => self.multipart.first()?,
@@ -95,14 +121,23 @@ impl CompiledChoices {
             Choice::Weighted { variants, .. } => variants.first()?,
         })
     }
-    /// Append selected variants without allocating intermediate part lists. A
-    /// multipart root consumes nextLong even for an empty selected subset, then
-    /// resets the same random source to that seed before each selected part.
+    /// Append selected variants without allocating intermediate part lists.
     pub fn collect<'a>(
         &'a self,
         selected: &SelectedModels,
         random: &mut impl RandomSource,
-        output: &mut Vec<&'a Variant>,
+        output: &mut Vec<&'a T>,
+    ) -> Result<()> {
+        self.for_each(selected, random, |v| output.push(v))
+    }
+    /// Each selected variant, in order. A multipart root consumes nextLong
+    /// even for an empty selected subset, then resets the same random source
+    /// to that seed before each selected part.
+    pub fn for_each<'a>(
+        &'a self,
+        selected: &SelectedModels,
+        random: &mut impl RandomSource,
+        mut f: impl FnMut(&'a T),
     ) -> Result<()> {
         match selected {
             SelectedModels::Variant(index) => {
@@ -110,7 +145,7 @@ impl CompiledChoices {
                     .variants
                     .get(*index)
                     .ok_or_else(|| error("invalid variant selection"))?;
-                output.push(choice.select(random));
+                f(choice.select(random));
             }
             SelectedModels::Multipart(indices) => {
                 if indices.iter().any(|index| *index >= self.multipart.len()) {
@@ -119,7 +154,7 @@ impl CompiledChoices {
                 let seed = random.next_long();
                 for index in indices {
                     random.set_seed(seed);
-                    output.push(self.multipart[*index].select(random));
+                    f(self.multipart[*index].select(random));
                 }
             }
         }

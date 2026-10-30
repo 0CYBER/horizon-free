@@ -1,8 +1,7 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, zoom, a minimap, an FPS counter, a
-keystroke overlay, auto-reconnect, Mouse Tweaks-style inventory controls and
-inventory sorting. **Every one is off by default**: a fresh
+Optional conveniences built into the client: fullbright, dynamic lights, your own name tag, auto-reconnect,
+Mouse Tweaks-style inventory controls and inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
 
@@ -10,11 +9,11 @@ again restores vanilla's behaviour completely.
 
 | Part | Code |
 |---|---|
-| Settings, parsing and saving | `crates/horizon-client/src/extras.rs` |
-| Zoom curve, FPS and click counters | `extras.rs` (pure logic, unit tested) |
-| Dynamic lights: item glow, nearest sources | `crates/horizon-client/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
-| HUD drawing (FPS, keystrokes, minimap frame) | `crates/horizon-client/src/extras_hud.rs` |
-| Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
+| Settings, parsing and saving | `crates/horizon-client-render/src/extras.rs` |
+| FPS and click counters (for native mods) | `extras.rs` (pure logic, unit tested) |
+| Dynamic lights: item glow, nearest sources | `crates/horizon-client-render/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
+| HUD drawing (a native mod's minimap, corner stacking) | `crates/horizon-client/src/extras_hud.rs` |
+| Minimap colours, tiles and image (for the Minimap native mod) | `crates/horizon-client-render/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
 | Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/tweaks.rs` |
@@ -35,10 +34,9 @@ extras stay out of the way of other input and options work.
 `horizon-graphics.txt`. `options.txt` is untouched, so a vanilla client can share
 the folder. Unknown or broken lines fall back to the defaults.
 
-The zoom key is a Horizon setting stored in that file (`zoomKey:key.keyboard.z`)
-and bound on the Extras page, not in vanilla's Key Binds screen: Horizon has no
-Horizon category in Controls, and adding one would put a non-vanilla mapping into
-`options.txt`.
+Extras' keys (the sort key) are Horizon settings stored in that file and bound on
+the Extras page, not in vanilla's Key Binds screen: Horizon has no Horizon category
+in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 
 ## The extras
 
@@ -62,50 +60,33 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
   nothing measurable (numbers in the pull request, #814).
 
-### Zoom (`zoom`, default off)
-- Hold the zoom key (default **Z**, unused by every vanilla 26.3 key mapping; C
-  is `key.saveToolbarActivator`) to zoom. The key does nothing while zoom is off.
-- It zooms only while playing: in chat, signs, books, text fields and every
-  other screen the key is typed or handled as usual. The key is never taken
-  from vanilla's mappings: one bound to the same key still acts (a key bound
-  twice triggers both, as vanilla's do), and the Extras page marks the zoom key
-  "Also bound" and names the mapping.
-- Starts at the default level (4x, settable 2x to 10x); the scroll wheel changes
-  it while the key is held (and does not move the hotbar then).
-- **Smooth** (default on) goes through vanilla's own FOV easing: the zoom divides
-  the field-of-view modifier target `Camera.tickFov` eases toward, the path the
-  spyglass uses (`AbstractClientPlayer.getFieldOfViewModifier` returns 0.1 while
-  scoping). The modifier keeps vanilla's 0.1 floor, so 10x is the deepest zoom.
-  Off applies the zoom to the final FOV with no easing.
-- While scoping with a spyglass the zoom does nothing: the spyglass view and its
-  overlay stay exactly vanilla's.
-- **Slower turning** (default on) divides mouse turning by the zoom factor.
-- With zoom off (or the key up) the FOV target and mouse are vanilla's, bit for
-  bit; the FOV harness covers this.
+### Moved to native mods
 
-### FPS counter (`fps`, default off)
-- A small "N fps" line in a corner (default top left), optionally followed by
-  the minimum and the 1% low over the last 5 seconds.
-- Separate from the Advanced graphics "Overlay" (the frame-time graph).
+The **FPS counter**, **Keystrokes**, **Zoom** and the **Minimap** are official native mods now (in
+horizon-rust/horizon-mods under `native/<name>/`, [mods.md](mods.md#horizons-official-mods)), with the same look and
+options. Players install them from the launcher's Mods page, and the launcher builds them into the game
+([native-mods.md](native-mods.md)). The game keeps
+the hook points they use (`crates/horizon-client/src/game/native_hooks.rs`), and `horizon-extras.txt` keeps the old
+keys and `movedToMods`.
 
-### Keystrokes (`keystrokes`, default off)
-- W A S D, Space, LMB and RMB keys that light up while held, with clicks per
-  second under the mouse buttons (clicks in the last second). The letters follow
-  the bound keys.
+The game still draws the minimap, for the native mod (`native_minimap` in `native_hooks.rs`, [mods.md](mods.md)):
+- a corner map (top right by default), square or round, small/medium/large, zoom 0.5 to 4 blocks per pixel, rotating
+  with the player or north up, with the player arrow (vanilla's map decoration sprite);
+- vanilla's `MapColor` per block, as map items use, with the map item's height shading and water-depth dithering;
+- underground, in the Nether and under any roof, the floor around the player's height instead of the top block;
+- one cached 16x16 tile per loaded chunk (packed map colour and height), filled nearest first and refreshed when
+  blocks change within 0.3 ms a frame; the 128x128 image is recomposed only when the view moved or a tile changed, and
+  uploaded into a dedicated atlas slot. With no mod showing a map, nothing runs.
 
-### Minimap (`minimap`, default off)
-- A corner map (top right by default), square or round, small/medium/large,
-  zoom 0.5 to 4 blocks per pixel, rotating with the player or north up, with the
-  player arrow (vanilla's map decoration sprite).
-- Colours are vanilla's `MapColor` per block, as map items use, with the map
-  item's height shading and water-depth dithering.
-- Underground, in the Nether and under any roof, it maps the floor around the
-  player's height instead of the top block, so caves read sensibly.
-- Cost: one cached 16x16 tile per loaded chunk (packed map colour and height).
-  Tiles are filled nearest first and refreshed when blocks change, within a time
-  budget of 0.3 ms a frame; composing the 128x128 image is a few thousand
-  lookups, done only when the view moved or a tile changed, and uploaded into a
-  dedicated atlas slot. With the minimap off nothing runs.
+### Own name tag (`ownNameTag`, default off)
+- In third person (F5, either view), the player's own name shows above its head,
+  as other players see it: the profile name in its team's prefix, suffix and
+  colour, the below-name score under it within 10 blocks, faded and without the
+  see-through copy while crouching. Vanilla never names the camera entity
+  (`LivingEntityRenderer.shouldShowName`).
+- Hidden in first person, while sleeping, in spectator mode, while invisible, and
+  whenever the team's name tag visibility would hide it, exactly as the other
+  players' tags (`game/names.rs`, `own_name_tag`). Client-only: nothing is sent.
 
 ### Auto-reconnect (`autoReconnect`, default off)
 - On the "Connection lost" screen after a multiplayer connection drops, a
@@ -124,8 +105,11 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
   written to disk.
 
 ### Mouse Tweaks controls (`mouseTweaks`, default off; `mouseTweaksWheel`, default on)
-In the player inventory and chest-like containers (chests, barrels, ender
-chests, shulker boxes, hoppers, dispensers), in singleplayer and on servers:
+In the player inventory, chest-like containers (chests, barrels, ender chests,
+shulker boxes, hoppers, dispensers and droppers), furnaces (also blast furnaces
+and smokers) and crafting tables, in singleplayer and on servers. Anvils,
+enchanting tables, merchants, beacons, brewing stands, crafters and the other
+workstations keep vanilla's controls:
 - Right-drag holding a stack: one item goes into each slot entered, at once
   (slots holding another item, or full, are skipped).
 - Left-drag holding a stack: each slot entered that holds the same item is
@@ -135,9 +119,15 @@ chests, shulker boxes, hoppers, dispensers), in singleplayer and on servers:
 - Shift + left-drag: every slot entered is quick-moved (with a stack in hand,
   only the slots of its item).
 - The wheel over a slot, with an empty hand (`mouseTweaksWheel`): down moves
-  one item to the other side (container and inventory, or hotbar and main
-  inventory: to a stack of it with room, else the first empty slot, as
-  quick-move picks), up brings one of the same item back.
+  one item where a Shift click would send it (vanilla's `quickMoveStack`: fuel
+  to the fuel slot, a smeltable to the input, into the crafting grid, across a
+  container, between hotbar and main inventory, an armour piece onto the
+  player), up brings one of the same item from the other side.
+- Nothing goes into a result slot. The wheel down over one takes one craft, or a
+  furnace's whole output, to the inventory when it all fits (a result can't be
+  split or put back); the wheel up over one does nothing, and it isn't a source
+  for the wheel up elsewhere. A right-drag skips it, and a right press on it is
+  vanilla's.
 
 Every action is ordinary slot clicks (`ContainerClick` on a server), so a
 vanilla server sees nothing unusual. With the extra off, the hooks return at
@@ -162,11 +152,11 @@ and the container screen tests are unchanged).
   the world, like vanilla's HUD. Extras in the top left corner give way to the
   debug screen (F3), which shows the FPS anyway.
 - Corners stack: extras placed in the same corner stack downward (top corners)
-  or upward (bottom corners) in the order minimap, FPS, keystrokes. The top
+  or upward (bottom corners) in the order a mod's minimap, then mods' panels. The top
   right corner starts below the status effect icons.
 
 ## Perf budget
 
 Off: a flag check per frame per extra (no allocations, no world access).
-On: FPS and keystrokes are a few quads; the minimap stays under 0.3 ms of CPU
+A mod's minimap stays under 0.3 ms of CPU
 per frame (tile budget) plus a 64 KiB texture upload when its image changes.

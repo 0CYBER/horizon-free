@@ -30,9 +30,16 @@ layouts, so the `lithostitched-probe` profile checks its pool elements' limits i
 every start Horizon builds, no `limited` or `guaranteed` element's template appears more often than its
 limit, and how many starts hold one is printed beside the oracle's count.
 
-usage: test_structure_layout_parity.py [--profile lithostitched|betterdungeons|lithostitched-probe]
+The `yung-probe` profiles check YUNG's API's draws with a data pack of the spec team's own (spec-yungsapi
+§3, probe experiments e1-e9: fallback, max_count, empty elements, min_required_depth, ignore_bounds,
+max_y, is_priority). The pack is carried as one more mod, built at run time from the oracle's profile file
+(`.local/structure-oracle/profiles/<profile>.json`), and its starts are read from the oracle's census of
+every start (`all_starts`).
+
+usage: test_structure_layout_parity.py [--profile lithostitched|betterdungeons|lithostitched-probe|yung-probe|yung-probe2]
                                        [--filter REGEX] [--verbose]
 """
+import base64
 import argparse
 import gzip
 import json
@@ -70,6 +77,9 @@ PROFILES = {
                             'structures': r'^minecraft:village_plains$',
                             'limits': {'minecraft:village/taiga/houses/taiga_small_house_1': 1,
                                        'minecraft:village/snowy/houses/snowy_library_1': 1}},
+    **{name: {'side': 'all_starts', 'mods': {'yungsapi': 'YungsApi-1.21.1-NeoForge-5.1.9.jar'},
+              'packs': {'probe': name}, 'carry': ['probe'], 'structures': r'^probe:'}
+       for name in ['yung-probe', 'yung-probe2']},
 }
 BUNDLES = {'structure': 'structures', 'structure_set': 'structure_sets', 'template_pool': 'template_pools',
            'processor_list': 'processor_lists'}
@@ -118,18 +128,19 @@ CENSUS = ['blockstates', 'item_models', 'recipes', 'loot_tables', 'tags', 'world
 
 def pack_jar(work, mod, profile):
     """The data pack an oracle profile added to its world, as a jar of mod `mod`."""
-    files = json.loads((ORACLE / 'profiles' / f'{profile}.json').read_text())['config_files']
+    spec = json.loads((ORACLE / 'profiles' / f'{profile}.json').read_text())
+    files = {**spec['config_files'], **{path: base64.b64decode(data) for path, data in spec.get('binary_files', {}).items()}}
     jar = work / f'{mod}.jar'
     with zipfile.ZipFile(jar, 'w') as z:
-        for path, text in files.items():
+        for path, content in files.items():
             parts = Path(path).parts
             if parts[:2] == ('world', 'datapacks') and len(parts) > 3:
-                z.writestr(str(Path(*parts[3:])), text)
+                z.writestr(str(Path(*parts[3:])), content)
     return jar
 
 
 def carry(profile, mods, carried, packs=None):
-    """`horizon-port-pack carry` of the profile's mods; the carried mods' data folders."""
+    """`horizon-port-pack carry` of the profile's mods and packs; the carried mods' data folders."""
     work = lab.LOCAL / 'structure-layout' / profile / 'work'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -274,6 +285,15 @@ def check_limits(binary, resources, results, profile, pattern):
     return 1 if failed or not starts else 0
 
 
+def census_starts(oracle):
+    """The oracle's census of every start (`all_starts`), as `structures` entries with their `all_starts`."""
+    for chunk in oracle['all_starts']:
+        for start in chunk['starts']:
+            if 'children' in start:
+                yield {'id': start['id'], 'dimension': chunk['dimension'], 'start_chunk': chunk['chunk'],
+                       'all_starts': start['children']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--profile', default='lithostitched', choices=sorted(PROFILES))
@@ -286,9 +306,10 @@ def main():
         return 0
     profile = PROFILES[args.profile]
     missing = [jar for jar in profile['mods'].values() if not jar_path(jar).exists()]
-    missing += [f'profiles/{n}.json' for n in profile.get('packs', {}).values() if not (ORACLE / 'profiles' / f'{n}.json').exists()]
+    missing += [str(ORACLE / 'profiles' / f'{name}.json') for name in profile.get('packs', {}).values()
+                if not (ORACLE / 'profiles' / f'{name}.json').exists()]
     if missing:
-        print(f'SKIP: not in {ORACLE}: {", ".join(missing)}')
+        print(f'SKIP: not found: {", ".join(missing)}')
         return 0
     resources = lab.RESOURCES
     if profile['carry']:
@@ -302,7 +323,7 @@ def main():
         oracle = json.load(gzip.open(path))
         seed = oracle['seed']
         by_dimension = {}
-        for start in oracle['structures']:
+        for start in oracle['structures'] if profile['side'] != 'all_starts' else census_starts(oracle):
             if start.get(profile['side']) is None or not re.search(args.filter, start['id']) \
                     or not re.search(profile['structures'] or '', start['id']):
                 continue

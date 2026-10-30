@@ -16,7 +16,8 @@ promise, how something is deprecated and removed, and the tests that keep old mo
 
 | API | The version | A user names the line they need |
 | --- | --- | --- |
-| Mods | the WIT package (`horizon:mods@0.1.0`) | `api = "0.1"` in `horizon-mod.toml` |
+| Content mods | the manifest's `api` line | `api = "0.2"` in `horizon-mod.toml` |
+| Native mods | the Horizon and horizon-mixins revisions the bundle pins | `horizon_revision` in `horizon-mixin.toml` |
 | Agent control | the control protocol's version (planned: a `hello` reply and MCP `serverInfo`) | `horizon-ctl --api 1` (planned) |
 | Server control API | the path (`/api/v1/`) | the path |
 | `server.toml` | the file's keys; a key is never renamed in place | nothing: old files keep loading |
@@ -26,12 +27,10 @@ promise, how something is deprecated and removed, and the tests that keep old mo
 ## What counts as a breaking change
 
 Breaking: removing or renaming anything; changing a type, a default, a unit or a meaning; making something optional
-required; refusing input that was accepted; a new case in a WIT `enum` or `variant` the game sends to mods (an older
-component cannot decode it); a JSON field that changes type.
+required; refusing input that was accepted; a JSON field that changes type.
 
 Not breaking: a new function, interface, capability, command, endpoint, tool or `server.toml` key; a new optional
-argument or JSON field (readers must ignore fields they don't know); a new WIT case the mod *sends* (the game decodes
-every case it ever served); faster, or fixing behaviour to what the reference already says.
+argument or JSON field (readers must ignore fields they don't know); faster, or fixing behaviour to what the reference already says.
 
 ## Stability levels
 
@@ -55,7 +54,7 @@ Every part of an API has one level, shown in its reference and its surface page.
 ## Deprecation and removal
 
 1. The pull request that deprecates marks it where it is defined (a `/// Deprecated: use X; goes in 0.3.` doc comment,
-   WIT's `@deprecated`, a `deprecated` field in a tool's schema) and adds the replacement in the same release.
+   a `deprecated` field in a tool's schema) and adds the replacement in the same release.
 2. The reference shows it as deprecated, and the surface page's changelog says what replaces it and when it goes.
 3. Using it logs one warning per mod, session or client, naming the replacement; it keeps working.
 4. It is removed only after the window, and only at the next line (preview) or major (stable).
@@ -68,10 +67,12 @@ Every preview and stable API has tests that run old users against the current co
 
 | API | The test |
 | --- | --- |
-| Mods | a test mod per served line, built from source against that line's WIT and SDK, loaded by today's runtime with expected output (`crates/horizon-mods/tests/`); a line is served as long as its test mod passes |
+| Content mods | the content template builds and checks with `cargo horizon-mod`, and `mod_content`'s tests load content mods; a line is served as long as they pass |
+| Native mods | hook points are only ever added, and a test keeps each one hookable (`tests::hook_points_stay_hookable`, `game/native_hooks.rs`) |
 | Agent control | a transcript per protocol version: commands and the reply keys each must have |
 | Server | `api::ROUTES` against `route()` (generated reference); a `server.toml` from each release line parses to the same settings; golden replies per endpoint |
 | Launcher | the generated reference; golden `--json` output per command |
+| Launch | the generated reference, which holds `--launch-api`'s reply; every listed option is accepted |
 | Data formats | a sample file of every version a reader accepts, read by today's reader |
 
 The generated references are the API's own diff: a pull request that changes an API changes its reference, and the
@@ -86,17 +87,16 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 
 | Part | Level | Version |
 | --- | --- | --- |
-| Mod API: `log`, `game`, `chat`, `hud`, `storage`, `events` | preview | 0.1.0 |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
-| Server mods (events, world, server commands) | not started | manifest `api = "0.3"`, experimental first |
-| Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |
-| `cargo horizon-mod` (`new`, `build`, `run`), `horizon-mod-sdk` | preview | 0.1.0 |
+| Native mods (horizon-mixins bundles, [native-mods.md](../native-mods.md)) | experimental | the pinned revisions |
+| `cargo horizon-mod` (`new`, `build`, `run`, `check`) | preview | none yet (unversioned) |
 | Shader API | not started | |
 | `horizon-ctl` commands and MCP tools | preview | none yet (unversioned) |
 | The game's own control-socket commands outside `horizon-ctl`'s table (test hooks) | experimental | |
 | `horizon-server` commands, `server.toml` | stable | `horizon-server --version` |
 | Server control API | stable | `/api/v1` |
 | `horizon-launcher` commands and MCP tools | preview | none yet (unversioned) |
+| Launch API: `horizon-client`'s launch options, session JSON, exit codes | experimental | 0.1.0, `horizon-client --launch-api` |
 | Benchmark report | stable | `"version": 1` |
 | Telemetry batch and consent | stable | `"schema": 1`, consent `2` |
 | `horizon-graphics.txt`, `horizon-extras.txt`, `horizon-mods.txt` | preview | none |

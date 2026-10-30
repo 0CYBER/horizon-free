@@ -15,7 +15,10 @@ use horizon_client::{
     gamerules::Value as RuleValue,
     item_data::{canon_stack, parse_stack},
     items::ItemStack,
-    mobs::{Mob, Species},
+    mobs::{
+        Mob, Species,
+        spawner::{SpawnDataExt, SpawnerExt},
+    },
     motion::PlayerMotion,
     projectiles::ProjectileKind,
     world::World,
@@ -90,6 +93,10 @@ enum Target {
 impl Game<'_> {
     /// Run every case of `spec` ("CASES,OUTPUT") and write the results.
     pub(super) fn dispense_fixture(&mut self, spec: &str) -> Result<()> {
+        assert!(
+            !self.options.execution_role.is_client(),
+            "fixture requires a server Game"
+        );
         let (input, output) = spec
             .split_once(',')
             .ok_or("HORIZON_DISPENSE_FIXTURE=CASES,OUTPUT")?;
@@ -179,6 +186,8 @@ impl Game<'_> {
             Some("end") => self.dim = super::Dim::End,
             _ => {}
         }
+        // The level's build range follows its dimension, as `enter_dimension` sets it.
+        self.world.shape = self.dim.shape();
         // The oracle level's clock stands at day time 6000.
         self.world.day_time = 6000;
         if let Some(rules) = case["rules"].as_object() {
@@ -668,6 +677,7 @@ impl Game<'_> {
         }
         let source = match source.kind {
             horizon_client::mobs::DamageKind::MaceSmash => "minecraft:mace_smash",
+            horizon_client::mobs::DamageKind::Spear => "minecraft:spear",
             _ => "minecraft:player_attack",
         };
         out.push(format!(
@@ -721,6 +731,11 @@ impl Game<'_> {
         match self.world.block_entities.get_mut(&p) {
             Some(BlockEntity::Jukebox(j)) => j.record = stack,
             Some(BlockEntity::Lectern(l)) => l.book = stack,
+            Some(BlockEntity::Campfire(c)) => {
+                if let Some(cell) = c.items.get_mut(slot) {
+                    *cell = stack;
+                }
+            }
             Some(e) => {
                 if let Some(cell) = e.slots_mut().get_mut(slot) {
                     *cell = stack;
@@ -1122,14 +1137,18 @@ impl Game<'_> {
             let (p, v) = (b.position, b.velocity);
             out.push(line(&kind, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
+        // A merged orb prints once per count, as the oracle does: whether orbs
+        // merge depends on entity ids, which differ from vanilla's.
         for o in &self.orbs {
             let (p, v) = (o.position, o.velocity);
-            out.push(line(
-                "minecraft:experience_orb",
-                [p.x, p.y, p.z],
-                [v.x, v.y, v.z],
-                "",
-            ));
+            for _ in 0..o.count.max(1) {
+                out.push(line(
+                    "minecraft:experience_orb",
+                    [p.x, p.y, p.z],
+                    [v.x, v.y, v.z],
+                    "",
+                ));
+            }
         }
         for c in &self.carts {
             let (p, v) = (c.position, c.velocity);

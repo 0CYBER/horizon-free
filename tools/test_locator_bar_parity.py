@@ -23,15 +23,14 @@ import platform
 import shutil
 import subprocess
 import sys
-import time
 
 try:
     from . import lab, test_rust_parity as base
-    from .test_dedicated_server_parity import Server, free_port
+    from .test_dedicated_server_parity import Server, free_port, wait_ticks
 except ImportError:
     import lab
     import test_rust_parity as base
-    from test_dedicated_server_parity import Server, free_port
+    from test_dedicated_server_parity import Server, free_port, wait_ticks
 
 NAME = 'locator-bar-parity'
 PROPERTIES = {
@@ -82,7 +81,7 @@ SCRIPT = [
     ('creative', [], ['cmd Bob gamemode creative', 'cmd Bob tp @s 6.5 100 0.5']),
     ('bob-leaves', [], ['quit Bob']),
 ]
-STEP_SECONDS = 2.0
+STEP_TICKS = 40
 # Vanilla's server moves a player who just joined on their own first ticks (a tiny step and back), which tracks
 # them where they spawned; Horizon does not simulate its guests. These steps compare what the bar shows at
 # their end (Bob has moved by then) rather than every packet.
@@ -147,6 +146,47 @@ def server_dir(directory, world=None):
     return port
 
 
+class Client:
+    """A LocatorBarClient process driven by a script on its stdin. A step ends by the server's clock, not the wall's:
+    every script line has run (`sync`), the server has ticked `ticks` more times, and each client holds what the
+    server sent until then (a last `sync`). A server that stalls under load still gets all its ticks in the step,
+    where a fixed sleep filed a stalled server's packets under the next step."""
+
+    def __init__(self, command, port, out, log):
+        self.log = log
+        self.process = subprocess.Popen([*map(str, command), '127.0.0.1', str(port), str(out)], cwd=lab.ROOT,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True)
+
+    def tell(self, line):
+        self.process.stdin.write(line + '\n')
+        self.process.stdin.flush()
+
+    def sync(self, names):
+        """Every line told so far has run for these joined players, and they have received what the server sent
+        before."""
+        for name in names:
+            self.tell(f'sync {name}')
+        for name in names:
+            while (line := self.process.stdout.readline()) != f'synced {name}\n':
+                if not line:
+                    raise AssertionError(f'the client exited (see {self.log.name})')
+                self.log.write(line)
+
+    def wait(self, server, names, ticks):
+        self.sync(names)
+        wait_ticks(server, ticks)
+        self.sync(names)
+
+    def end(self):
+        self.tell('end')
+        self.log.write(self.process.communicate(timeout=60)[0])
+
+    def kill(self):
+        if self.process.poll() is None:
+            self.process.kill()
+
+
 def generate_world(server_command, build):
     """The flat world both servers load, made once by vanilla: players appear at its spawn itself
     (respawn_radius 0), on the ground at 0 -60 0, and the chunks around it are saved."""
@@ -176,28 +216,26 @@ def run_side(label, server_command, client_command, build, world):
     try:
         server.wait_for(r'Done \(')
         with (build / f'{label}-client.log').open('w') as log:
-            client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
-                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                      text=True)
+            client = Client(client_command, port, out, log)
+            joined = []
             try:
                 for step, console, actions in SCRIPT:
-                    client.stdin.write(f'step {step}\n')
-                    client.stdin.flush()
+                    client.tell(f'step {step}')
                     for command in console:
                         server.console(command)
                     for action in actions:
-                        client.stdin.write(action + '\n')
-                        client.stdin.flush()
-                        if action.startswith('join'):
+                        client.tell(action)
+                        verb, *rest = action.split()
+                        if verb == 'join':
                             # Joining takes the world's first chunks: wait for the server to place the player.
-                            server.wait_for(rf'{action.split()[1]} joined the game', timeout=120)
-                    time.sleep(STEP_SECONDS)
-                client.stdin.write('end\n')
-                client.stdin.flush()
-                client.wait(timeout=60)
+                            server.wait_for(rf'{rest[0]} joined the game', timeout=120)
+                            joined.append(rest[0])
+                        elif verb == 'quit':
+                            joined.remove(rest[0])
+                    client.wait(server, joined, STEP_TICKS)
+                client.end()
             finally:
-                if client.poll() is None:
-                    client.kill()
+                client.kill()
     finally:
         server.stop()
     if not out.exists():
@@ -205,12 +243,13 @@ def run_side(label, server_command, client_command, build, world):
     return out.read_text(encoding='utf-8').splitlines()
 
 
-def main():
+def sides(name):
+    """The vanilla and Horizon dedicated servers and the LocatorBarClient that joins them, built for harness
+    `name`: (lock, build directory, vanilla server, Horizon server, client) commands."""
     lock, jars, libraries = base.verify_artifacts()
-    build = lab.LOCAL / NAME
+    build = lab.LOCAL / name
     build.mkdir(parents=True, exist_ok=True)
-    report = build / 'report.json'
-    report.unlink(missing_ok=True)
+    (build / 'report.json').unlink(missing_ok=True)
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/LocatorBarClient.java'
     classes = build / 'classes'
     shutil.rmtree(classes, ignore_errors=True)
@@ -219,16 +258,77 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
                    check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
     client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.LocatorBarClient']
+    return lock, build, vanilla_server, horizon_server, client
 
+
+def one_player(name, script, shown, check, scope, step_seconds=4.0):
+    """A harness of one player, Alice: on each server she joins, then runs `script`, a list of (step, client
+    actions) that each last `step_seconds` of the server's time (20 ticks a second). The lines `shown(transcript)` keeps must match vanilla's exactly, and
+    `check(vanilla's shown lines, vanilla's transcript)` returns why vanilla's run is no proof (the script did
+    not run), or None."""
+    lock, build, vanilla_server, horizon_server, client = sides(name)
+    ticks = round(step_seconds * 20)
+
+    def run(label, server_command, world):
+        directory = build / label
+        port = server_dir(directory, world)
+        out = build / f'{label}.txt'
+        out.unlink(missing_ok=True)
+        server = Server(server_command, directory, label)
+        try:
+            server.wait_for(r'Done \(')
+            with (build / f'{label}-client.log').open('w') as log:
+                session = Client(client, port, out, log)
+                try:
+                    for line in ['players on', 'state on', 'step joins', 'join Alice']:
+                        session.tell(line)
+                    server.wait_for(r'Alice joined the game', timeout=120)
+                    session.wait(server, ['Alice'], ticks)
+                    for step, actions in script:
+                        session.tell(f'step {step}')
+                        for action in actions:
+                            session.tell(action)
+                        session.wait(server, ['Alice'], ticks)
+                    session.end()
+                finally:
+                    session.kill()
+        finally:
+            server.stop()
+        if not out.exists():
+            raise AssertionError(f'{label}: the client wrote no transcript (see {build}/{label}-client.log)')
+        return out.read_text(encoding='utf-8').splitlines()
+
+    world = generate_world(vanilla_server, build)
+    vanilla_all = run('vanilla', vanilla_server, world)
+    horizon_all = run('horizon', horizon_server, world)
+    errors = [l for l in vanilla_all + horizon_all if ' error ' in f' {l} ' or 'disconnected' in l]
+    vanilla, horizon = shown(vanilla_all), shown(horizon_all)
+    if errors or vanilla != horizon:
+        import difflib
+        diff = '\n'.join(difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=1, lineterm=''))
+        raise AssertionError(f'{len(errors)} errors, transcripts differ (see {build}/vanilla.txt and horizon.txt):\n'
+                             + '\n'.join(errors[:10]) + '\n' + diff[:6000])
+    if (why := check(vanilla, vanilla_all)) is not None:
+        raise AssertionError(f'{why}: the script did not run (see {build})')
+    lab.write_json(build / 'report.json', dict(
+        schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
+        java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
+        lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'), scope=scope))
+    return vanilla
+
+
+def main():
+    lock, build, vanilla_server, horizon_server, client = sides(NAME)
+    report = build / 'report.json'
     world = generate_world(vanilla_server, build)
     vanilla = run_side('vanilla', vanilla_server, client, build, world)
     horizon = run_side('horizon', horizon_server, client, build, world)

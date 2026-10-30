@@ -7,6 +7,7 @@
 //!   least 3 installs only (`summary`), cached; the website's Benchmarks page reads it.
 //! - `POST /v1/live`: a game's anonymous "I'm playing" ping (`live`, in memory only).
 //! - `GET /v1/live`: how many play now, rounded, cached briefly.
+//! - `/hub/…`: the hub's votes (`hub`) and bug reports (`intake`).
 //! - `GET /healthz`.
 //!
 //! Abuse limits: a token bucket per IP address (kept in memory for an hour, never stored), a
@@ -15,6 +16,7 @@
 //! rows expire after `retention_days`; the daily totals stay. One small process and one SQLite
 //! file: see `README.md` for running it.
 use std::collections::HashMap;
+use std::hash::{Hash, RandomState};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,10 +29,14 @@ use axum::routing::{delete, get, post};
 use horizon_telemetry::batch;
 
 pub mod classes;
+pub mod github;
+pub mod hub;
+pub mod intake;
 pub mod live;
 pub mod store;
 pub mod summary;
 
+use github::Filer;
 use horizon_telemetry::live::{MAX_PING_BYTES, Ping};
 use live::Live;
 use store::Store;
@@ -56,6 +62,18 @@ pub struct Config {
     pub live_window: Duration,
     /// Sessions the live count holds at most; a new one past that is refused.
     pub live_max_sessions: usize,
+    /// The hub's votes and reads of their counts an IP address may make an hour.
+    pub hub_per_hour: f64,
+    /// Bug reports an IP address may send an hour.
+    pub hub_posts_per_hour: f64,
+    /// Bug reports taken a day, from everyone: each one opens a GitHub issue.
+    pub hub_reports_per_day: u32,
+    /// Days reports are kept (opened as issues long before).
+    pub hub_keep_days: u32,
+    /// Opens the website's bug reports as issues; unset, `POST /hub/report` answers 503.
+    pub github_token: Option<String>,
+    /// Where those issues go, `owner/name`.
+    pub github_repo: String,
 }
 
 impl Default for Config {
@@ -70,6 +88,12 @@ impl Default for Config {
             live_per_hour: 600.0,
             live_window: horizon_telemetry::live::WINDOW,
             live_max_sessions: 200_000,
+            hub_per_hour: 600.0,
+            hub_posts_per_hour: 20.0,
+            hub_reports_per_day: 30,
+            hub_keep_days: 90,
+            github_token: None,
+            github_repo: "horizon-rust/horizon".into(),
         }
     }
 }
@@ -77,9 +101,16 @@ impl Default for Config {
 impl Config {
     /// The defaults, with `HORIZON_TELEMETRY_RETENTION_DAYS`, `…_MIN_INSTALL_DAYS`,
     /// `…_REQUESTS_PER_HOUR`, `…_ITEMS_PER_DAY`, `…_TRUST_PROXY` (1), `…_ALLOW_ORIGIN`,
-    /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS` and `…_LIVE_MAX_SESSIONS`.
+    /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS`, `…_HUB_PER_HOUR`,
+    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_KEEP_DAYS`, `…_GITHUB_TOKEN` and
+    /// `…_GITHUB_REPO`. An empty token counts as unset.
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(format!("HORIZON_TELEMETRY_{k}")).ok();
+        let secret = |k: &str| {
+            var(k)
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
         let d = Self::default();
         Self {
             retention_days: var("RETENTION_DAYS")
@@ -105,6 +136,20 @@ impl Config {
             live_max_sessions: var("LIVE_MAX_SESSIONS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.live_max_sessions),
+            hub_per_hour: var("HUB_PER_HOUR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.hub_per_hour),
+            hub_posts_per_hour: var("HUB_POSTS_PER_HOUR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.hub_posts_per_hour),
+            hub_reports_per_day: var("HUB_REPORTS_PER_DAY")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.hub_reports_per_day),
+            hub_keep_days: var("HUB_KEEP_DAYS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.hub_keep_days),
+            github_token: secret("GITHUB_TOKEN"),
+            github_repo: var("GITHUB_REPO").unwrap_or(d.github_repo),
         }
     }
 }
@@ -126,6 +171,16 @@ pub struct App {
     summary_cache: Mutex<Option<(Instant, String)>>,
     /// Today, in days since 1970 (a test moves it).
     today: Box<dyn Fn() -> u32 + Send + Sync>,
+    /// The key the hub's buckets hash addresses with, drawn at start and never stored.
+    hub_key: RandomState,
+    /// The hub's votes and vote counts, per hashed address.
+    hub_buckets: Mutex<hub::HashedBuckets>,
+    /// The hub's bug reports, per hashed address.
+    hub_post_buckets: Mutex<hub::HashedBuckets>,
+    /// `GET /hub/votes`'s answer and when it was made.
+    votes_cache: Mutex<Option<(Instant, String)>>,
+    /// Opens bug reports as GitHub issues; None without a token.
+    filer: Option<Arc<Filer>>,
 }
 
 type Buckets = HashMap<IpAddr, (f64, Instant)>;
@@ -146,6 +201,20 @@ impl App {
         config: Config,
         today: Box<dyn Fn() -> u32 + Send + Sync>,
     ) -> Arc<Self> {
+        let filer = config
+            .github_token
+            .clone()
+            .map(|token| Arc::from(github::github(config.github_repo.clone(), token)));
+        Self::with_filer(store, config, today, filer)
+    }
+
+    /// [`Self::with_clock`] with the hub's bug reports opened by `filer` (tests give their own).
+    pub fn with_filer(
+        store: Store,
+        config: Config,
+        today: Box<dyn Fn() -> u32 + Send + Sync>,
+        filer: Option<Arc<Filer>>,
+    ) -> Arc<Self> {
         let live = Live::new(config.live_window, config.live_max_sessions);
         Arc::new(Self {
             store: Mutex::new(store),
@@ -157,6 +226,11 @@ impl App {
             cache: Mutex::default(),
             summary_cache: Mutex::default(),
             today,
+            hub_key: RandomState::new(),
+            hub_buckets: Mutex::default(),
+            hub_post_buckets: Mutex::default(),
+            votes_cache: Mutex::default(),
+            filer,
         })
     }
 
@@ -181,7 +255,7 @@ impl App {
     /// The address requests are counted under, for the rate limits only: kept in memory, never
     /// stored or logged. Behind a proxy (Railway) the TCP peer is the proxy, so it is the proxy's
     /// `X-Real-IP`, else the last `X-Forwarded-For` entry: the one the proxy added, which a client
-    /// can't choose (the first one it can).
+    /// can't choose (the first one it can). An IPv6 client counts by its /64.
     fn client(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> IpAddr {
         let header = |name: &str| headers.get(name)?.to_str().ok();
         let forwarded = self
@@ -200,9 +274,11 @@ impl App {
                     })
             })
             .flatten();
-        forwarded
-            .or(peer.map(|p| p.ip()))
-            .unwrap_or(IpAddr::from([0, 0, 0, 0]))
+        rate_key(
+            forwarded
+                .or(peer.map(|p| p.ip()))
+                .unwrap_or(IpAddr::from([0, 0, 0, 0])),
+        )
     }
 
     /// The day an install's newest row came in, if it has any left.
@@ -217,10 +293,13 @@ impl App {
     }
 
     /// Daily upkeep: totals rebuilt, expired rows removed, idle rate-limit entries and live
-    /// sessions forgotten.
+    /// sessions forgotten, the hub's old reports removed. Reports still waiting for
+    /// their issue are [`Self::file_pending`]'s.
     pub fn maintain(&self) -> rusqlite::Result<usize> {
         let oldest = (self.today)().saturating_sub(self.config.retention_days);
         let removed = self.store().expire(oldest)?;
+        self.expire_intake()?;
+        self.forget_hub_buckets();
         for buckets in [&self.buckets, &self.live_buckets] {
             buckets
                 .lock()
@@ -235,14 +314,14 @@ impl App {
     }
 }
 
-/// Takes a token for `ip` from its bucket in `buckets` (`per_hour`, bursts of a tenth of it);
+/// Takes a token for `key` from its bucket in `buckets` (`per_hour`, bursts of a tenth of it);
 /// false when it has none left.
-fn take(buckets: &Mutex<Buckets>, per_hour: f64, ip: IpAddr) -> bool {
+fn take<K: Hash + Eq>(buckets: &Mutex<HashMap<K, (f64, Instant)>>, per_hour: f64, key: K) -> bool {
     let rate = per_hour / 3600.0;
     let burst = (per_hour / 10.0).max(1.0);
     let mut buckets = buckets.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
-    let (tokens, at) = buckets.entry(ip).or_insert((burst, now));
+    let (tokens, at) = buckets.entry(key).or_insert((burst, now));
     *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * rate).min(burst);
     *at = now;
     if *tokens < 1.0 {
@@ -250,6 +329,22 @@ fn take(buckets: &Mutex<Buckets>, per_hour: f64, ip: IpAddr) -> bool {
     }
     *tokens -= 1.0;
     true
+}
+
+/// The address a client's requests count under: IPv4 (an IPv4-mapped IPv6 address as IPv4 too),
+/// or an IPv6 address's /64, which one home or host holds whole, so addresses rotated inside it
+/// don't get fresh buckets.
+fn rate_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+        v4 => v4,
+    }
 }
 
 fn peer(req: &Request) -> Option<SocketAddr> {
@@ -482,6 +577,29 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/installs/{id}", delete(forget))
         .route("/v1/aggregate", get(aggregate))
         .route("/v1/benchmarks/summary", get(benchmarks))
+        .route("/hub/vote", post(hub::vote).options(hub::preflight))
+        .route("/hub/votes", get(hub::votes))
+        .route("/hub/report", post(intake::report).options(hub::preflight))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv6_rates_count_by_64() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // Rotated inside a /64: one key. Another /64: another key.
+        assert_eq!(rate_key(ip("2001:db8::1")), rate_key(ip("2001:db8::99")));
+        assert_ne!(rate_key(ip("2001:db8::1")), rate_key(ip("2001:db8:1::1")));
+        // IPv4-mapped counts as the IPv4 it is.
+        assert_eq!(
+            rate_key(ip("::ffff:203.0.113.7")),
+            IpAddr::from([203, 0, 113, 7])
+        );
+        // Plain IPv4 unchanged.
+        assert_eq!(rate_key(ip("203.0.113.8")), IpAddr::from([203, 0, 113, 8]));
+    }
 }

@@ -21,7 +21,7 @@ pub const SCHEMA: u32 = 1;
 /// The biggest file the registry takes (a `.hmod` with content, a `.hpack`).
 pub const MAX_FILE: u64 = 64 << 20;
 /// Where files may be downloaded from: the registry's release assets.
-pub const FILE_HOST: &str = "https://github.com/ludovic111/horizon-mods/releases/download/";
+pub const FILE_HOST: &str = "https://github.com/horizon-rust/horizon-mods/releases/download/";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Index {
@@ -43,12 +43,14 @@ pub struct Index {
 pub enum Kind {
     /// A `.hmod`.
     Mod,
+    /// A source-only native mixin bundle, compiled into an isolated game build.
+    NativeMod,
     /// A `.hpack`: registry mods played together as a profile.
     Modpack,
     /// A resource pack (`.zip` with `pack.mcmeta`) made or tested for Horizon.
     ResourcePack,
-    /// A Horizon shader pack (the native WGSL format, not Iris or OptiFine
-    /// packs). Listed by the schema; submissions open with its API.
+    /// A Horizon shader pack (`.hshader`, the native WGSL format of
+    /// docs/shaders.md; not the shaders/-folder packs, which stay on Modrinth).
     Shader,
     Other(String),
 }
@@ -57,6 +59,7 @@ impl Kind {
     pub fn name(&self) -> &str {
         match self {
             Kind::Mod => "mod",
+            Kind::NativeMod => "native-mod",
             Kind::Modpack => "modpack",
             Kind::ResourcePack => "resourcepack",
             Kind::Shader => "shader",
@@ -68,8 +71,10 @@ impl Kind {
     pub fn extension(&self) -> Option<&'static str> {
         match self {
             Kind::Mod => Some("hmod"),
+            Kind::NativeMod => Some("hnmod"),
             Kind::Modpack => Some("hpack"),
-            Kind::ResourcePack | Kind::Shader => Some("zip"),
+            Kind::ResourcePack => Some("zip"),
+            Kind::Shader => Some(horizon_shader_api::EXTENSION),
             Kind::Other(_) => None,
         }
     }
@@ -79,6 +84,7 @@ impl From<String> for Kind {
     fn from(name: String) -> Kind {
         match name.as_str() {
             "mod" => Kind::Mod,
+            "native-mod" => Kind::NativeMod,
             "modpack" => Kind::Modpack,
             "resourcepack" => Kind::ResourcePack,
             "shader" => Kind::Shader,
@@ -121,6 +127,14 @@ pub struct Project {
     pub key: Option<String>,
     /// Newest first.
     pub versions: Vec<Version>,
+    /// Its files' downloads from their releases, all versions together:
+    /// GitHub's counts, added by the registry's publish job (hourly).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub downloads: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -137,6 +151,11 @@ pub struct Version {
     pub side: Option<Side>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
+    /// The mod API level a mod's code needs ([`crate::api_level`]), read
+    /// from its file; none for content and other kinds, and in indexes
+    /// built before levels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_level: Option<u32>,
     /// The Minecraft version it is for.
     pub game: String,
     /// A modpack's mods, as its manifest lists them.
@@ -316,6 +335,21 @@ impl Index {
         Ok(())
     }
 
+    /// A project's newest version for Minecraft `game` that wasn't taken
+    /// down and that a Horizon serving mod API `level` can run (an unknown
+    /// level counts as runnable: the game still checks when it starts it).
+    pub fn installable<'a>(
+        &self,
+        project: &'a Project,
+        game: &str,
+        level: u32,
+    ) -> Option<&'a Version> {
+        project.versions.iter().find(|v| {
+            v.game == game
+                && v.api_level.is_none_or(|l| l <= level)
+                && self.revoked(&project.id, &v.file.sha256).is_none()
+        })
+    }
     pub fn project(&self, id: &str) -> Option<&Project> {
         self.projects.iter().find(|p| p.id == id)
     }
@@ -448,60 +482,142 @@ pub fn check_file(
         (None, None) => Trust::Unsigned,
         _ => return Err("its signature and the project's key don't go together".into()),
     };
-    match project.kind {
-        Kind::Mod => {
-            let m = Package::read(path)?.manifest;
-            crate::Content::read(path, &m)?;
-            let mut caps = m.capabilities.clone();
-            caps.sort();
-            let mut listed = version.capabilities.clone();
-            listed.sort();
-            let differs = m.id != project.id
-                || m.version != version.version
-                || m.api != version.api
-                || Some(m.side) != version.side
-                || caps != listed;
-            if differs {
-                return Err(format!(
-                    "its horizon-mod.toml ({} {}, API {}, {:?}, {}) isn't what the index lists",
-                    m.id,
-                    m.version,
-                    m.api,
-                    m.side,
-                    names(&caps)
-                ));
-            }
-        }
-        Kind::ResourcePack => check_resource_pack(path)?,
-        Kind::Shader | Kind::Other(_) => {
-            return Err(format!(
-                "this Horizon can't install a {} yet",
-                project.kind.name()
-            ));
-        }
-        Kind::Modpack => {
-            let pack = Modpack::read(path)?;
-            let m = &pack.manifest;
-            let mods: Vec<Requirement> = m.mods.iter().map(modpack::PackMod::requirement).collect();
-            if m.id != project.id
-                || m.version != version.version
-                || m.format.to_string() != version.api
-                || m.game != version.game
-                || mods != version.requires
-            {
-                return Err(format!(
-                    "its {} isn't what the index lists",
-                    modpack::MANIFEST
-                ));
-            }
-        }
+    if matches!(project.kind, Kind::Other(_)) {
+        return Err(format!(
+            "this Horizon can't install a {} yet",
+            project.kind.name()
+        ));
     }
+    inspect(&project.kind, path)?.matches(project, version)?;
     Ok(trust)
 }
 
+/// What a file says about itself, read by its kind's own check
+/// ([`inspect`]). The registry's CI writes these into the index; the
+/// launcher compares them with the index before it installs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Facts {
+    /// A mod's or a modpack's manifest id; None for a resource pack.
+    pub id: Option<String>,
+    pub version: Option<String>,
+    /// A mod's API line, a modpack's format, a resource pack's pack format.
+    pub api: String,
+    pub side: Option<Side>,
+    /// In the manifest's order.
+    pub capabilities: Vec<Capability>,
+    /// The mod API level a mod's code needs, from the functions it imports.
+    pub api_level: Option<u32>,
+    /// The Minecraft version, when the file names one (a modpack does).
+    pub game: Option<String>,
+    pub requires: Vec<Requirement>,
+}
+
+impl Facts {
+    /// Whether the file is the one `version` of `project` describes.
+    pub fn matches(&self, project: &Project, version: &Version) -> Result<(), String> {
+        let (mut caps, mut listed) = (self.capabilities.clone(), version.capabilities.clone());
+        caps.sort();
+        listed.sort();
+        let differs = self.id.as_ref().is_some_and(|id| *id != project.id)
+            || self.version.as_ref().is_some_and(|v| *v != version.version)
+            || self.api != version.api
+            || self.side != version.side
+            || caps != listed
+            || version.api_level.is_some() && self.api_level != version.api_level
+            || self.game.as_ref().is_some_and(|g| *g != version.game)
+            || self.requires != version.requires;
+        if !differs {
+            return Ok(());
+        }
+        Err(match project.kind {
+            Kind::Mod => format!(
+                "its horizon-mod.toml ({} {}, API {}, {:?}, {}) isn't what the index lists",
+                self.id.as_deref().unwrap_or("?"),
+                self.version.as_deref().unwrap_or("?"),
+                self.api,
+                self.side,
+                names(&self.capabilities)
+            ),
+            Kind::Modpack => format!("its {} isn't what the index lists", modpack::MANIFEST),
+            Kind::Shader => format!(
+                "its {} ({} {}, shader API {}) isn't what the index lists",
+                horizon_shader_api::MANIFEST,
+                self.id.as_deref().unwrap_or("?"),
+                self.version.as_deref().unwrap_or("?"),
+                self.api
+            ),
+            _ => format!("its pack format {} isn't what the index lists", self.api),
+        })
+    }
+}
+
+/// Reads and checks a file as its kind: a mod's manifest and content, a
+/// modpack's manifest and overrides, a resource pack's `pack.mcmeta` and
+/// paths, a shader pack's `horizon_shader_api::check` (the game's own). Kinds
+/// this build doesn't know are refused: their checks come with their formats.
+pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
+    match kind {
+        Kind::NativeMod => Ok(native::Bundle::read(path)?.manifest.facts()),
+        Kind::Mod => {
+            let Package { manifest: m, wasm } = Package::read(path)?;
+            crate::Content::read(path, &m)?;
+            let api_level = match wasm {
+                Some(wasm) => {
+                    let functions = crate::api_level::imports(&wasm)?;
+                    Some(crate::api_level::needed(functions.iter().map(String::as_str)).0)
+                }
+                None => None,
+            };
+            Ok(Facts {
+                api_level,
+                capabilities: m.capabilities,
+                id: Some(m.id),
+                version: Some(m.version),
+                api: m.api,
+                side: Some(m.side),
+                ..Facts::default()
+            })
+        }
+        Kind::Modpack => {
+            let m = Modpack::read(path)?.manifest;
+            Ok(Facts {
+                requires: m.mods.iter().map(modpack::PackMod::requirement).collect(),
+                id: Some(m.id),
+                version: Some(m.version),
+                api: m.format.to_string(),
+                game: Some(m.game),
+                ..Facts::default()
+            })
+        }
+        Kind::ResourcePack => Ok(Facts {
+            api: check_resource_pack(path)?,
+            ..Facts::default()
+        }),
+        Kind::Shader => {
+            let pack = horizon_shader_api::Pack::read(path)?;
+            if let Err(problems) = horizon_shader_api::check(&pack) {
+                let lines: Vec<String> = problems.iter().map(ToString::to_string).collect();
+                return Err(format!(
+                    "the shader pack fails its check:\n{}",
+                    lines.join("\n")
+                ));
+            }
+            let m = pack.manifest;
+            Ok(Facts {
+                id: Some(m.id),
+                version: Some(m.version),
+                api: m.api,
+                ..Facts::default()
+            })
+        }
+        Kind::Other(name) => Err(format!("this Horizon can't read a {name} yet")),
+    }
+}
+
 /// A resource pack: a zip with `pack.mcmeta` at its root holding a `pack`
-/// object, and only plain paths.
-fn check_resource_pack(path: &Path) -> Result<(), String> {
+/// object, and only plain paths. Returns its pack format (`pack_format`, or
+/// `min_format` in newer packs), empty when it names none.
+fn check_resource_pack(path: &Path) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
@@ -523,10 +639,32 @@ fn check_resource_pack(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("pack.mcmeta: {e}"))?;
     let json: serde_json::Value =
         serde_json::from_str(&meta).map_err(|e| format!("pack.mcmeta: {e}"))?;
-    if !json["pack"].is_object() {
+    let pack = &json["pack"];
+    if !pack.is_object() {
         return Err("pack.mcmeta: no \"pack\" object".into());
     }
-    Ok(())
+    let format = [&pack["pack_format"], &pack["min_format"]]
+        .into_iter()
+        .find(|f| !f.is_null())
+        .map(|f| match f {
+            serde_json::Value::Array(parts) => parts
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("."),
+            other => other.to_string(),
+        })
+        .unwrap_or_default();
+    Ok(format)
+}
+
+/// The kinds the registry takes submissions for; other kinds wait for their
+/// formats.
+pub fn open(kind: &Kind) -> Result<(), String> {
+    match kind {
+        Kind::Mod | Kind::NativeMod | Kind::Modpack | Kind::ResourcePack | Kind::Shader => Ok(()),
+        Kind::Other(name) => Err(format!("the registry doesn't take {name} yet")),
+    }
 }
 
 fn names(caps: &[Capability]) -> String {
@@ -534,5 +672,7 @@ fn names(caps: &[Capability]) -> String {
     format!("[{}]", names.join(", "))
 }
 
+pub mod native;
+pub mod registry;
 #[cfg(test)]
 mod tests;

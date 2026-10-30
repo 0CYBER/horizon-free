@@ -72,7 +72,7 @@ def _remove_scratch_dirs():
 
 def game_env(base=None, **extra):
     """The environment for every run of the game, the launcher or horizon-ctl from a tool or a harness: no audio,
-    and fresh scratch folders for the game's home (logs, saves, options), the launcher's home and the XDG folders,
+    no Discord presence, and fresh scratch folders for the game's home (logs, saves, options), the launcher's home and the XDG folders,
     so a run never writes into a real player's folders (the game falls back to them when HORIZON_HOME is unset).
     A folder the caller already has in `base` (default os.environ) or passes in `extra` is kept. The scratch folders
     are removed when this process exits."""
@@ -80,6 +80,9 @@ def game_env(base=None, **extra):
     env.update({key: str(value) for key, value in extra.items()})
     env["HORIZON_NO_AUDIO"] = "1"
     env["HORIZON_LAUNCHER_NO_SELF_UPDATE"] = "1"
+    # Never a real Discord's Rich Presence; tools/discord_presence_e2e.py points the game at a fake one.
+    if not env.get("HORIZON_DISCORD_IPC_DIR"):
+        env["HORIZON_NO_DISCORD"] = "1"
     for key, prefix in (("HORIZON_HOME", "horizon-home-"), ("HORIZON_LAUNCHER_HOME", "horizon-launcher-home-"),
                         ("XDG_DATA_HOME", "horizon-xdg-data-"), ("XDG_CONFIG_HOME", "horizon-xdg-config-")):
         if not env.get(key):

@@ -1,14 +1,60 @@
 //! Non-player entities simulated on the client world. Dropped items follow
 //! `ItemEntity.tick`: gravity 0.04, 0.98 drag (block friction on the ground),
-//! a ground bounce of -0.5, water buoyancy, pickup delay and 6000-tick despawn.
+//! a ground bounce of -0.5, slime landing restitution (0.8, including a moving
+//! piston that is carrying slime), water buoyancy, pickup delay, 6000-tick despawn,
+//! and `HoneyBlock.entityInside` when falling against a honey block's side.
 use crate::{
     blocks::{BlockFacts, Fluid},
     collisions::SceneCollisions,
     items::ItemStack,
     world::World,
 };
-use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::geometry::{Aabb, Direction, Vec3};
 use horizon_world::block_collision::BlockCollisionRegistry;
+
+/// Gravity applied each tick when the item is not in a fluid (`ItemEntity.tick`).
+const ITEM_GRAVITY: f64 = 0.04;
+/// Non-living slime `bounceRestitution` (`1.0 * 0.8`) from
+/// `Entity.restituteMovementAfterCollisions`.
+const ITEM_SLIME_BOUNCE: f64 = 0.8;
+
+/// After a vertical collision: slime bounces a dropped item by 0.8, matching
+/// non-living `Entity.restituteMovementAfterCollisions`. Anything else zeros Y.
+fn item_vertical_collision_velocity(wanted_y: f64, slime: bool) -> f64 {
+    if slime && wanted_y < 0.0 && -wanted_y > ITEM_GRAVITY {
+        -wanted_y * ITEM_SLIME_BOUNCE
+    } else {
+        0.0
+    }
+}
+
+fn slime_support_name(block: &str, moving_moved: Option<&str>) -> bool {
+    block == "minecraft:slime_block" || moving_moved == Some("minecraft:slime_block")
+}
+
+/// The block under an item, including `Entity.getOnPos` (~1e-5) as well as the
+/// friction sample (`y - 0.999999`). A piston-moved slime is `moving_piston`
+/// with `movedState = slime`, which has the bounce, not the moving piston.
+fn item_support_is_slime(world: &World, facts: &BlockFacts, position: Vec3) -> bool {
+    let x = position.x.floor() as i32;
+    let z = position.z.floor() as i32;
+    let friction_y = (position.y - 0.999_999).floor() as i32;
+    let on_y = (position.y - f64::from(1.0e-5_f32)).floor() as i32;
+    slime_at(world, facts, x, friction_y, z)
+        || (on_y != friction_y && slime_at(world, facts, x, on_y, z))
+}
+
+fn slime_at(world: &World, facts: &BlockFacts, x: i32, y: i32, z: i32) -> bool {
+    let block = &*facts.get(world.block(x, y, z)).name;
+    let moving_moved = world
+        .moving_pistons
+        .iter()
+        .find(|(pos, _)| *pos == [x, y, z])
+        .map(|(_, piston)| &*facts.get(piston.moved_state).name);
+    slime_support_name(block, moving_moved)
+}
+
+mod fluids;
 
 #[derive(Clone, Debug)]
 pub struct ItemEntity {
@@ -17,6 +63,8 @@ pub struct ItemEntity {
     pub id: u32,
     pub stack: ItemStack,
     pub thrower: Option<[i32; 4]>,
+    /// `ItemEntity.target`: the only player who may pick the item up.
+    pub target: Option<[i32; 4]>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -93,6 +141,15 @@ impl ItemEntity {
                 self.health -= fire_damage as i32;
             }
         }
+        // CactusBlock.entityInside: `entity.hurt(cactus, 1.0)`. An item has no
+        // hurt cooldown, so it loses 1 health every tick it touches a cactus
+        // (5 health: gone in 5 ticks). Fire resistance does not help;
+        // `ItemStack.canBeHurtBy` only skips it for a damage_resistant stack.
+        if crate::motion::environment::cactus_contact(world, registry, self.bounds())
+            && !items.resists_cactus(&self.stack)
+        {
+            self.health -= 1;
+        }
         ItemEnvironmentTick {
             alive: self.health > 0,
             lava_hurt,
@@ -165,18 +222,16 @@ impl ItemEntity {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         no_physics: bool,
+        fluids: &crate::motion::FluidResources,
     ) -> bool {
         self.ticks += 1;
         self.previous = self.position;
         if self.pickup_delay > 0 && self.pickup_delay != u32::MAX {
             self.pickup_delay -= 1;
         }
-        let eye = world.block(
-            self.position.x.floor() as i32,
-            (self.position.y + 0.1).floor() as i32,
-            self.position.z.floor() as i32,
-        );
-        let in_water = facts.get(eye).fluid == Fluid::Water;
+        // Entity.baseTick pushes before ItemEntity applies buoyancy and moves.
+        let (water_height, lava_height) = self.update_fluids(world, fluids);
+        let in_water = water_height > f64::from(0.1f32);
         if in_water {
             // ItemEntity.setUnderwaterMovement
             self.velocity = Vec3::new(
@@ -184,7 +239,7 @@ impl ItemEntity {
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
                 self.velocity.z * 0.99,
             );
-        } else if facts.get(eye).fluid == Fluid::Lava {
+        } else if lava_height > f64::from(0.1f32) {
             self.velocity = Vec3::new(
                 self.velocity.x * 0.95,
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
@@ -224,8 +279,14 @@ impl ItemEntity {
                 self.velocity.z = 0.0;
             }
             if moved.y != wanted.y {
-                self.velocity.y = 0.0;
+                // Entity.move restitutes instead of zeroing Y. A slime block
+                // (or a moving piston carrying one) bounces a dropped item;
+                // MovingPistonBlock itself has no bounceRestitution.
+                let slime = item_support_is_slime(world, facts, self.position);
+                self.velocity.y = item_vertical_collision_velocity(wanted.y, slime);
             }
+            // Entity.move -> applyEffectsFromBlocks: HoneyBlock.entityInside.
+            self.apply_honey_slide(world, facts);
             let mut friction = 0.98;
             if self.on_ground {
                 let below = world.block(
@@ -245,7 +306,62 @@ impl ItemEntity {
             }
         }
         self.age += 1;
+        // ItemEntity.tick refreshes immersion and pushes again after moving.
+        self.update_fluids(world, fluids);
         self.age < 6000 && self.position.y > -128.0
+    }
+    /// `PistonMovingBlockEntity.causeBounce` for a dropped item. Vanilla then
+    /// runs `Entity.move(MoverType.PISTON)`, which leaves the ground on an
+    /// upward push; without that, `ItemEntity.tick` skips movement 3 of 4 ticks
+    /// while `onGround` with no horizontal speed and gravity eats the bounce.
+    pub fn piston_slime_bounce(&mut self, movement: Direction) {
+        self.velocity = horizon_world::piston_push::bounce_velocity(movement, self.velocity);
+        self.on_ground = false;
+    }
+    /// `HoneyBlock.entityInside` for the honey blocks this item's box is in
+    /// (`Entity.checkInsideBlocks`, deflated by `1.0E-5`). Slide sounds and
+    /// entity event 53 are skipped (`doesEntityDoHoneyBlockSlideEffects` is
+    /// false for an item).
+    fn apply_honey_slide(&mut self, world: &World, facts: &BlockFacts) {
+        let b = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+        let (lo, hi) = (b.min_position(), b.max_position());
+        for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
+            for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
+                for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
+                    if &*facts.get(world.block(x, y, z)).name == "minecraft:honey_block" {
+                        self.honey_block_inside([x, y, z]);
+                    }
+                }
+            }
+        }
+    }
+    /// `HoneyBlock.isSlidingDown` then `doSlideMovement`. `getOldDeltaY` /
+    /// `getNewDeltaY` wrap the stored velocity the same way they do for every
+    /// entity (`vy / 0.98F + 0.08`).
+    pub(crate) fn honey_block_inside(&mut self, pos: [i32; 3]) {
+        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+        let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+        let [x, y, z] = pos.map(f64::from);
+        if self.on_ground
+            || self.position.y > y + 0.9375 - 1.0e-7
+            || old_delta_y(self.velocity.y) >= -0.08
+        {
+            return;
+        }
+        let dx = (x + 0.5 - self.position.x).abs();
+        let dz = (z + 0.5 - self.position.z).abs();
+        let overlap = 0.4375 + Self::WIDTH / 2.0;
+        if dx + 1.0e-7 <= overlap && dz + 1.0e-7 <= overlap {
+            return;
+        }
+        let v = self.velocity;
+        let old = old_delta_y(v.y);
+        self.velocity = if old < -0.13 {
+            let factor = -0.05 / old;
+            Vec3::new(v.x * factor, new_delta_y(-0.05), v.z * factor)
+        } else {
+            Vec3::new(v.x, new_delta_y(-0.05), v.z)
+        };
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
     /// delay isn't infinite, before its lifetime ends.
@@ -344,7 +460,10 @@ pub fn merge_with_neighbours(
         }
         // ItemEntity.areMergable: both fit one stack of the same item and components.
         let (this, other) = (&items[i].stack, &items[j].stack);
-        if this.count + other.count > max_stack(other) || !this.same_item_same_components(other) {
+        if items[i].target != items[j].target
+            || this.count + other.count > max_stack(other)
+            || !this.same_item_same_components(other)
+        {
             continue;
         }
         let (to, from) = if other.count < this.count {
@@ -383,8 +502,29 @@ pub struct ExperienceOrb {
     pub value: u32,
     pub age: u32,
     pub on_ground: bool,
+    /// `ExperienceOrb.count`: orbs merged into this one; each pickup gives
+    /// `value` once and takes one off.
+    pub count: u32,
+    /// `Entity.tickCount`, which paces `ExperienceOrb.scanForMerges`.
+    pub ticks: u32,
 }
 impl ExperienceOrb {
+    pub fn bounds(&self) -> Aabb {
+        let h = 0.25;
+        Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + 0.5,
+                self.position.z + h,
+            ),
+        )
+    }
+    /// `ExperienceOrb.canMerge(orb, id, value)` for an orb that is not removed:
+    /// the same value and ids a multiple of 40 apart.
+    pub fn can_merge(&self, id: u32, value: u32) -> bool {
+        self.value == value && (self.id as i32).wrapping_sub(id as i32) % 40 == 0
+    }
     /// ExperienceOrb.getExperienceValue: the largest orb size not above `value`.
     pub fn split(value: u32) -> u32 {
         [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3, 1]
@@ -414,7 +554,9 @@ impl ExperienceOrb {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         player: Option<[f64; 3]>,
+        next_float: &mut dyn FnMut() -> f32,
     ) -> bool {
+        self.ticks += 1;
         self.previous = self.position;
         let block = world.block(
             self.position.x.floor() as i32,
@@ -429,6 +571,14 @@ impl ExperienceOrb {
             );
         } else {
             self.velocity.y -= 0.03;
+        }
+        if facts.get(block).fluid == Fluid::Lava {
+            // ExperienceOrb.tick: lava throws the orb back out.
+            self.velocity = Vec3::new(
+                f64::from((next_float() - next_float()) * 0.2),
+                f64::from(0.2f32),
+                f64::from((next_float() - next_float()) * 0.2),
+            );
         }
         if let Some(p) = player {
             let d = [
@@ -447,15 +597,7 @@ impl ExperienceOrb {
                 );
             }
         }
-        let h = 0.25;
-        let bounds = Aabb::new(
-            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(
-                self.position.x + h,
-                self.position.y + 0.5,
-                self.position.z + h,
-            ),
-        );
+        let bounds = self.bounds();
         let mut scene = SceneCollisions {
             world,
             binding: collision,
@@ -492,6 +634,31 @@ impl ExperienceOrb {
         self.age < 6000
     }
 }
+/// `ExperienceOrb.scanForMerges`, run by each orb on `tickCount % 20 == 1`:
+/// it absorbs the orbs that `canMerge` within 0.5 blocks of its box,
+/// adding their counts and keeping the smaller age.
+pub fn merge_orbs(orbs: &mut Vec<ExperienceOrb>) {
+    let mut removed = vec![false; orbs.len()];
+    for i in 0..orbs.len() {
+        if removed[i] || orbs[i].ticks % 20 != 1 {
+            continue;
+        }
+        let area = orbs[i].bounds().inflate(Vec3::new(0.5, 0.5, 0.5));
+        for j in 0..orbs.len() {
+            if j != i
+                && !removed[j]
+                && orbs[j].can_merge(orbs[i].id, orbs[i].value)
+                && orbs[j].bounds().intersects(area)
+            {
+                orbs[i].count += orbs[j].count;
+                orbs[i].age = orbs[i].age.min(orbs[j].age);
+                removed[j] = true;
+            }
+        }
+    }
+    let mut removed = removed.into_iter();
+    orbs.retain(|_| !removed.next().unwrap_or(false));
+}
 /// Player experience (Player.giveExperiencePoints / getXpNeededForNextLevel).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Experience {
@@ -523,17 +690,21 @@ impl Experience {
             7 + level * 2
         }
     }
-    /// Returns true when a level was gained.
-    pub fn give(&mut self, points: i32) -> bool {
-        let start = self.level;
+    /// Returns the first multiple of 5 the player reached, where each level
+    /// gained would play the level-up sound (`Player.giveExperienceLevels`).
+    pub fn give(&mut self, points: i32) -> Option<i32> {
+        let mut sound_level = None;
         self.progress += points as f32 / Self::needed(self.level) as f32;
         self.total = self.total.saturating_add(points).max(0);
         while self.progress >= 1.0 {
             self.progress = (self.progress - 1.0) * Self::needed(self.level) as f32;
             self.level += 1;
+            if self.level % 5 == 0 {
+                sound_level.get_or_insert(self.level);
+            }
             self.progress /= Self::needed(self.level) as f32;
         }
-        self.level > start
+        sound_level
     }
 }
 /// A painting (`Painting`, a `HangingEntity`): the block it hangs in, the
@@ -587,6 +758,57 @@ impl Painting {
             std::array::from_fn(|i| c[i] - size[i] / 2.0),
             std::array::from_fn(|i| c[i] + size[i] / 2.0),
         )
+    }
+}
+/// The `DyeColor` ordinal of a colour name (`DyeColor.byName`), white when
+/// the name is unknown.
+pub fn dye_index(name: &str) -> u8 {
+    crate::mobs::render::DYE_NAMES
+        .iter()
+        .position(|n| *n == name)
+        .unwrap_or(0) as u8
+}
+/// A cushion (`Cushion`, a `BlockAttachedEntity`): a 1 x 0.25 block pillow
+/// that seats a player. It sits on the top face of a block, at the clicked
+/// height, and is coloured by its `DyeColor`.
+#[derive(Clone, Debug)]
+pub struct Cushion {
+    pub id: u32,
+    /// `Entity.position`: the bottom centre of the cushion.
+    pub position: Vec3,
+    /// `BlockAttachedEntity.pos` (the saved `block_pos`).
+    pub pos: [i32; 3],
+    pub yaw: f32,
+    /// `DyeColor` ordinal: white 0, orange 1, ..., black 15.
+    pub color: u8,
+    /// BlockAttachedEntity.ticksSinceLastCheck.
+    pub check_interval: u32,
+}
+impl Cushion {
+    /// `Entity.makeBoundingBox`: x and z half a block out, y to y + 0.25.
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        let p = self.position;
+        (
+            [p.x - 0.5, p.y, p.z - 0.5],
+            [p.x + 0.5, p.y + 0.25, p.z + 0.5],
+        )
+    }
+    /// The `DyeColor` name of the cushion.
+    pub fn color_name(&self) -> &'static str {
+        crate::mobs::render::DYE_NAMES[usize::from(self.color.min(15))]
+    }
+    /// `Cushion.getCushionItemStackWithData`: the matching coloured item.
+    pub fn item(&self) -> String {
+        format!("minecraft:{}_cushion", self.color_name())
+    }
+    /// `Cushion.interact`'s seat: the vehicle's PASSENGER attachment
+    /// `(0, 0.25, 0)` less the player's `(0, 0.6, 0)`.
+    pub fn seat(&self) -> Vec3 {
+        Vec3::new(self.position.x, self.position.y - 0.35, self.position.z)
+    }
+    /// `Entity.getDismountLocationForPassenger`: on top of the cushion.
+    pub fn dismount(&self) -> Vec3 {
+        Vec3::new(self.position.x, self.position.y + 0.25, self.position.z)
     }
 }
 /// An item frame or glow item frame (`ItemFrame`).
@@ -657,9 +879,24 @@ pub struct ArmorStand {
     pub name_visible: bool,
     /// Game time of the last hit (the wobble and the second-hit window).
     pub last_hit: i64,
+    /// `DATA_HEAD_POSE` to `DATA_RIGHT_LEG_POSE`: head, body, left arm, right
+    /// arm, left leg, right leg, in degrees (`POSE_KEYS` order).
+    pub pose: [[f32; 3]; 6],
 }
 impl ArmorStand {
     pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
+    /// The `Pose` compound's keys.
+    pub const POSE_KEYS: [&'static str; 6] =
+        ["Head", "Body", "LeftArm", "RightArm", "LeftLeg", "RightLeg"];
+    /// `ArmorStand.DEFAULT_*_POSE`.
+    pub const DEFAULT_POSE: [[f32; 3]; 6] = [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [-10.0, 0.0, -10.0],
+        [-15.0, 0.0, 10.0],
+        [-1.0, 0.0, -1.0],
+        [1.0, 0.0, 1.0],
+    ];
     pub fn new(id: u32, position: Vec3, yaw: f32) -> Self {
         Self {
             fire_ticks: 0,
@@ -678,6 +915,7 @@ impl ArmorStand {
             custom_name: None,
             name_visible: false,
             last_hit: i64::MIN / 2,
+            pose: Self::DEFAULT_POSE,
         }
     }
     pub fn environment_tick(
@@ -737,15 +975,48 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// LivingEntity.travelInAir (armor stands have no other movement): move
-    /// by the velocity (a landing stops the fall,
-    /// `Block.updateEntityMovementAfterFallOn`), then gravity 0.08 and the
-    /// 0.98 drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
-    pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
+    /// `isInWater`: some water block of the stand's box has its surface
+    /// (`FluidState.getHeight`, a full block under more water) at or above the
+    /// box's bottom, as `Entity.updateFluidHeightAndDoFluidPushing` counts it.
+    pub fn in_water(&self, world: &World, fluids: &crate::motion::FluidResources) -> bool {
+        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        let water = |x: i32, y: i32, z: i32| {
+            let state = fluids.fluid(world.block(x, y, z));
+            (state.kind() == horizon_world::fluid::FluidKind::Water).then_some(state)
+        };
+        (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
+            (lo.y.floor() as i32..hi.y.ceil() as i32).any(|y| {
+                (lo.z.floor() as i32..=hi.z.floor() as i32).any(|z| {
+                    water(x, y, z).is_some_and(|state| {
+                        let height = if water(x, y + 1, z).is_some() {
+                            1.0
+                        } else {
+                            state.own_height()
+                        };
+                        f64::from(y) + f64::from(height) >= lo.y
+                    })
+                })
+            })
+        })
+    }
+    /// LivingEntity.travel (armor stands have no other movement): move by
+    /// the velocity (a landing stops the fall,
+    /// `Block.updateEntityMovementAfterFallOn`), let the blocks it is inside
+    /// push it (`push`: a bubble column), then in water the 0.8 slowdown and
+    /// `getFluidFallingAdjustedMovement`, in air gravity 0.08 and the 0.98
+    /// drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
+    pub fn tick(
+        &mut self,
+        scene: &mut crate::collisions::SceneCollisions,
+        in_water: bool,
+        push: &mut dyn FnMut(Aabb, &mut Vec3),
+    ) {
         if self.marker {
             return;
         }
         let wanted = self.velocity;
+        // `travelInFluid` reads `isFalling` before the move and any push.
+        let falling = wanted.y <= 0.0;
         let mut y = wanted.y;
         if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
             self.position = Vec3::new(
@@ -758,7 +1029,23 @@ impl ArmorStand {
                 y = 0.0;
             }
         }
-        self.velocity = Vec3::new(0.0, (y - 0.08) * f64::from(0.98f32), 0.0);
+        let mut velocity = Vec3::new(0.0, y, 0.0);
+        push(self.bounds(), &mut velocity);
+        self.velocity = if in_water {
+            // travelInWater: slowDown 0.8, then `getFluidFallingAdjustedMovement`
+            // with gravity / 16 (the stand is falling while its fall is not
+            // already nearly stopped).
+            let y = velocity.y * f64::from(0.8f32);
+            let adjusted =
+                if falling && (y - 0.005).abs() >= 0.003 && (y - 0.08 / 16.0).abs() < 0.003 {
+                    -0.003
+                } else {
+                    y - 0.08 / 16.0
+                };
+            Vec3::new(0.0, adjusted, 0.0)
+        } else {
+            Vec3::new(0.0, (velocity.y - 0.08) * f64::from(0.98f32), 0.0)
+        };
     }
 }
 
@@ -796,6 +1083,7 @@ mod experience_tests {
 #[cfg(test)]
 mod fire_environment_tests {
     use super::*;
+    use horizon_world::loot::PackOverlay;
     #[test]
     fn ordinary_items_burn_but_native_netherite_resists_lava() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -807,7 +1095,8 @@ mod fire_environment_tests {
         let assets = crate::assets::Assets::load(&root).unwrap();
         let render = assets.reload(&root).unwrap();
         let facts = BlockFacts::load(&root, assets.registry).unwrap();
-        let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
+        let items =
+            crate::items::Items::load(&root, assets.registry, &facts, &PackOverlay::NONE).unwrap();
         let mut world = World::test_scene(&assets, &render, 3).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         world
@@ -821,6 +1110,7 @@ mod fire_environment_tests {
         let make = |id: &str| ItemEntity {
             id: 1,
             thrower: None,
+            target: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count: 1,
@@ -917,6 +1207,7 @@ mod merge_tests {
         ItemEntity {
             id: 0,
             thrower: None,
+            target: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count,
@@ -1082,5 +1373,182 @@ mod merge_tests {
         merge_with_neighbours(&mut items, &mut removed, &mut cells, 0, &max_stack);
         assert_eq!(removed, [true, false]);
         assert_eq!(items[1].stack.count, 2);
+    }
+}
+
+#[cfg(test)]
+mod honey_slide_tests {
+    use super::*;
+
+    fn falling_item(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) -> ItemEntity {
+        let at = Vec3::new(x, y, z);
+        ItemEntity {
+            id: 1,
+            thrower: None,
+            target: None,
+            stack: ItemStack {
+                item: std::sync::Arc::from("minecraft:stone"),
+                count: 1,
+                damage: 0,
+                extra: None,
+            },
+            health: 5,
+            fire_ticks: 0,
+            position: at,
+            previous: at,
+            velocity: Vec3::new(vx, vy, vz),
+            on_ground: false,
+            age: 10,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+            ticks: 10,
+        }
+    }
+
+    fn old_delta_y(dy: f64) -> f64 {
+        dy / f64::from(0.98_f32) + 0.08
+    }
+    fn new_delta_y(dy: f64) -> f64 {
+        (dy - 0.08) * f64::from(0.98_f32)
+    }
+
+    #[test]
+    fn a_falling_item_beside_honey_slides_down() {
+        // Item width 0.25: overlap 0.5625. Honey at (0, 10, 0); centre 0.5.
+        // x = -0.0625 is against the west face (inset 1/16).
+        let mut item = falling_item(-0.0625, 10.4, 0.5, 0.12, -0.20, 0.04);
+        assert!(old_delta_y(-0.20) < -0.08);
+        assert!(old_delta_y(-0.20) >= -0.13);
+        item.honey_block_inside([0, 10, 0]);
+        assert_eq!(item.velocity.x, 0.12);
+        assert_eq!(item.velocity.z, 0.04);
+        assert_eq!(item.velocity.y, new_delta_y(-0.05));
+    }
+
+    #[test]
+    fn a_fast_fall_scales_the_horizontal_speed() {
+        let mut item = falling_item(-0.0625, 10.4, 0.5, 0.2, -0.30, -0.1);
+        let old = old_delta_y(-0.30);
+        assert!(old < -0.13);
+        item.honey_block_inside([0, 10, 0]);
+        let factor = -0.05 / old;
+        assert_eq!(item.velocity.x, 0.2 * factor);
+        assert_eq!(item.velocity.z, -0.1 * factor);
+        assert_eq!(item.velocity.y, new_delta_y(-0.05));
+    }
+
+    #[test]
+    fn an_item_on_the_ground_or_on_top_does_not_slide() {
+        let mut grounded = falling_item(-0.0625, 10.4, 0.5, 0.0, -0.20, 0.0);
+        grounded.on_ground = true;
+        grounded.honey_block_inside([0, 10, 0]);
+        assert_eq!(grounded.velocity.y, -0.20);
+
+        let mut on_top = falling_item(0.5, 10.9375, 0.5, 0.0, -0.20, 0.0);
+        on_top.honey_block_inside([0, 10, 0]);
+        assert_eq!(on_top.velocity.y, -0.20, "standing on the honey");
+    }
+
+    #[test]
+    fn a_centred_or_slow_item_does_not_slide() {
+        let mut centred = falling_item(0.5, 10.4, 0.5, 0.0, -0.20, 0.0);
+        centred.honey_block_inside([0, 10, 0]);
+        assert_eq!(centred.velocity.y, -0.20, "inside, not on a side");
+
+        let mut slow = falling_item(-0.0625, 10.4, 0.5, 0.0, -0.04, 0.0);
+        assert!(old_delta_y(-0.04) >= -0.08);
+        slow.honey_block_inside([0, 10, 0]);
+        assert_eq!(slow.velocity.y, -0.04);
+    }
+}
+
+#[cfg(test)]
+mod slime_bounce_tests {
+    use super::*;
+
+    #[test]
+    fn landing_on_slime_bounces_a_dropped_item() {
+        assert_eq!(item_vertical_collision_velocity(-1.0, true), 0.8);
+        assert_eq!(item_vertical_collision_velocity(-0.5, true), 0.4);
+        assert_eq!(
+            item_vertical_collision_velocity(-0.04, true),
+            0.0,
+            "gravity alone is not a bounce"
+        );
+        assert_eq!(item_vertical_collision_velocity(-0.041, true), 0.041 * 0.8);
+    }
+
+    #[test]
+    fn landing_on_stone_or_hitting_a_ceiling_zeros_y() {
+        assert_eq!(item_vertical_collision_velocity(-1.0, false), 0.0);
+        assert_eq!(item_vertical_collision_velocity(1.0, true), 0.0);
+        assert_eq!(item_vertical_collision_velocity(0.96, true), 0.0);
+    }
+
+    #[test]
+    fn a_moving_piston_carrying_slime_still_counts_as_slime() {
+        assert!(slime_support_name("minecraft:slime_block", None));
+        assert!(slime_support_name(
+            "minecraft:moving_piston",
+            Some("minecraft:slime_block")
+        ));
+        assert!(slime_support_name(
+            "minecraft:air",
+            Some("minecraft:slime_block")
+        ));
+        assert!(!slime_support_name(
+            "minecraft:moving_piston",
+            Some("minecraft:stone")
+        ));
+        assert!(!slime_support_name("minecraft:stone", None));
+        assert!(!slime_support_name(
+            "minecraft:honey_block",
+            Some("minecraft:honey_block")
+        ));
+    }
+
+    fn grounded_item() -> ItemEntity {
+        let at = Vec3::new(0.5, 2.0, 0.5);
+        ItemEntity {
+            id: 1,
+            thrower: None,
+            target: None,
+            stack: ItemStack {
+                item: std::sync::Arc::from("minecraft:stone"),
+                count: 1,
+                damage: 0,
+                extra: None,
+            },
+            health: 5,
+            fire_ticks: 0,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            age: 10,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+            ticks: 10,
+        }
+    }
+
+    #[test]
+    fn a_piston_slime_bounce_launches_the_item_off_the_ground() {
+        let mut item = grounded_item();
+        item.piston_slime_bounce(Direction::Up);
+        assert_eq!(item.velocity, Vec3::new(0.0, 1.0, 0.0));
+        assert!(!item.on_ground);
+        item.piston_slime_bounce(Direction::East);
+        assert_eq!(item.velocity, Vec3::new(1.0, 1.0, 0.0));
+        assert!(!item.on_ground);
+    }
+
+    #[test]
+    fn a_slime_landing_stays_upward_after_item_friction() {
+        // ItemEntity then multiplies Y by 0.98 and applies -0.5 only if still
+        // negative on the ground. A slime bounce must remain positive.
+        let bounced = item_vertical_collision_velocity(-1.0, true) * 0.98;
+        assert!(bounced > 0.0);
+        assert_eq!(bounced, 0.8 * 0.98);
     }
 }

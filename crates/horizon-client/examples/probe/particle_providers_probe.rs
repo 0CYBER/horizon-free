@@ -76,6 +76,14 @@ fn options(case: &Value) -> Option<ParticleOptions> {
             ..ParticleOptions::simple(ty)
         },
         ParticleType::SculkCharge => ParticleOptions::sculk_charge(scale),
+        ParticleType::Geyser | ParticleType::GeyserPlume => {
+            ParticleOptions::geyser(ty, o["water_blocks"].as_i64()? as i32)
+        }
+        ParticleType::GeyserBase | ParticleType::GeyserPoof => ParticleOptions::geyser_base(
+            ty,
+            o["water_blocks"].as_i64()? as i32,
+            o["burst_impulse_base"].as_f64()? as f32,
+        ),
         ParticleType::Shriek => ParticleOptions::shriek(scale as i32),
         ParticleType::Trail => {
             let t = &o["target"];
@@ -152,7 +160,7 @@ pub fn main() -> Result<()> {
         world(&assets, &facts, false, true)?,
         world(&assets, &facts, true, true)?,
     ];
-    let mut engine = ParticleEngine::new(root, &HashMap::new());
+    let mut engine = ParticleEngine::new(root, &HashMap::new(), &Default::default());
     for (ty, item) in [
         (ParticleType::ItemSlime, "item_slime_ball"),
         (ParticleType::ItemSnowball, "item_snowball"),

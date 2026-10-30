@@ -3,6 +3,7 @@
 //! repository root) and are skipped when those are absent.
 use super::*;
 use crate::chunk::BlockState;
+use horizon_core::random::RandomSource;
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -47,6 +48,8 @@ pub(crate) struct TestLevel {
     pub day_time: i64,
     pub events: Vec<LevelEvent>,
     pub block_light: HashMap<BlockPos, i32>,
+    /// `Level.isClientSide`.
+    pub client_side: bool,
 }
 impl TestLevel {
     fn new(b: &Behaviours) -> Self {
@@ -58,10 +61,14 @@ impl TestLevel {
             day_time: 0,
             events: Vec::new(),
             block_light: HashMap::new(),
+            client_side: false,
         }
     }
 }
 impl LevelAccess for TestLevel {
+    fn is_client_side(&self) -> bool {
+        self.client_side
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.blocks.get(&pos).copied().unwrap_or(self.air)
     }
@@ -195,6 +202,147 @@ macro_rules! world {
         };
         World::new(f)
     }};
+}
+
+#[test]
+fn block_observation_follows_successful_commits_only() {
+    use std::cell::RefCell;
+
+    #[derive(Debug, PartialEq)]
+    enum Observation {
+        Block(BlockPos, BlockStateId, BlockStateId),
+        Neighbor,
+    }
+    struct Observer {
+        inner: TestLevel,
+        loaded: bool,
+        seen: RefCell<Vec<Observation>>,
+    }
+    impl LevelAccess for Observer {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, _pos: BlockPos) -> bool {
+            self.loaded
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+            assert_eq!(self.block_state(pos), new);
+            self.seen
+                .borrow_mut()
+                .push(Observation::Block(pos, old, new));
+        }
+        fn observe_neighbor_changed(&self, _: BlockPos, _: BlockStateId, _: BlockId, _: bool) {
+            self.seen.borrow_mut().push(Observation::Neighbor);
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let mut level = Observer {
+        inner: TestLevel::new(b),
+        loaded: true,
+        seen: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    let pos = BlockPos::new(0, 80, 0);
+    let stone = f.registry.default_state("minecraft:stone").unwrap();
+    assert!(b.set_block(&mut level, &mut ticks, pos, stone, flags::UPDATE_ALL));
+    let seen = level.seen.borrow();
+    assert_eq!(seen[0], Observation::Block(pos, b.air(), stone));
+    assert!(seen[1..].contains(&Observation::Neighbor));
+    drop(seen);
+    level.seen.borrow_mut().clear();
+    assert!(!b.set_block(&mut level, &mut ticks, pos, stone, flags::UPDATE_ALL));
+    level.loaded = false;
+    assert!(!b.set_block(&mut level, &mut ticks, pos, b.air(), flags::UPDATE_ALL));
+    level.loaded = true;
+    assert!(!b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(0, 320, 0),
+        stone,
+        flags::UPDATE_ALL
+    ));
+    assert!(level.seen.borrow().is_empty());
+    assert!(b.set_block(&mut level, &mut ticks, pos, b.air(), flags::UPDATE_ALL));
+    assert_eq!(
+        level.seen.borrow()[0],
+        Observation::Block(pos, stone, b.air())
+    );
+}
+
+#[test]
+fn neighbor_observation_follows_dispatch_order() {
+    use std::cell::RefCell;
+
+    struct Observer {
+        inner: TestLevel,
+        seen: RefCell<Vec<(BlockPos, BlockStateId, BlockId, bool)>>,
+    }
+    impl LevelAccess for Observer {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_neighbor_changed(
+            &self,
+            pos: BlockPos,
+            state: BlockStateId,
+            changed: BlockId,
+            moved: bool,
+        ) {
+            assert_eq!(self.block_state(pos), state);
+            self.seen.borrow_mut().push((pos, state, changed, moved));
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let mut level = Observer {
+        inner: TestLevel::new(b),
+        seen: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    let changed = b.table.block_by_name("minecraft:stone").unwrap();
+    b.update_neighbors_at(&mut level, &mut ticks, BlockPos::new(0, 0, 0), changed);
+    let expected = [
+        (-1, 0, 0),
+        (1, 0, 0),
+        (0, -1, 0),
+        (0, 1, 0),
+        (0, 0, -1),
+        (0, 0, 1),
+    ];
+    let actual = level.seen.borrow();
+    assert_eq!(actual.len(), expected.len());
+    for (event, (x, y, z)) in actual.iter().zip(expected) {
+        assert_eq!(*event, (BlockPos::new(x, y, z), b.air(), changed, false));
+    }
+    drop(actual);
+    b.sim(&mut level, &mut ticks)
+        .neighbor_changed(b.air(), BlockPos::new(3, 4, 5), changed, true);
+    assert_eq!(
+        level.seen.borrow().last(),
+        Some(&(BlockPos::new(3, 4, 5), b.air(), changed, true))
+    );
 }
 
 #[test]
@@ -378,14 +526,16 @@ fn bucket_source_removal_drains_spread_water() {
         &mut w.ticks,
         at,
         BucketContent::Fluid(crate::fluid::FluidKind::Water),
-        "minecraft:item.bucket.empty"
+        "minecraft:item.bucket.empty",
+        false,
+        false
     ));
     for _ in 0..60 {
         w.tick();
     }
     assert_ne!(w.get(BlockPos::new(1, 1, 0)), w.b().air());
     assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
         Some("minecraft:water_bucket")
     );
     for _ in 0..120 {
@@ -633,6 +783,55 @@ impl World<'_> {
             player,
         )
     }
+    /// Right-click the north face of `pos` holding `item` in the main hand.
+    fn use_item(&mut self, pos: BlockPos, item: &str) -> InteractionResult {
+        let player = PlayerContext {
+            yaw: 0.0,
+            pitch: 0.0,
+            may_build: true,
+            can_eat: true,
+            game_master: false,
+        };
+        let hit = horizon_core::geometry::Vec3::new(
+            f64::from(pos.x) + 0.5,
+            f64::from(pos.y) + 0.5,
+            f64::from(pos.z),
+        );
+        self.f.behaviours.use_item_on(
+            &mut self.level,
+            &mut self.ticks,
+            pos,
+            Direction::North,
+            hit,
+            player,
+            Some(item),
+        )
+    }
+}
+
+#[test]
+fn glowstone_charges_a_respawn_anchor_up_to_four() {
+    // RespawnAnchorBlock.useItemOn: glowstone on an anchor below 4 charges
+    // charges it and the click ends (SUCCESS), so no glowstone is placed (#3034).
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let empty = w.id("respawn_anchor", &[("charges", "0")]);
+    w.put(pos, empty);
+    for charges in 1..=4 {
+        assert_eq!(
+            w.use_item(pos, "minecraft:glowstone"),
+            InteractionResult::Success
+        );
+        assert_eq!(w.prop(pos, "charges"), charges.to_string());
+    }
+    // A full anchor can't be charged: TRY_WITH_EMPTY_HAND, then useWithoutItem
+    // (the respawn point), which leaves the charges alone.
+    w.use_item(pos, "minecraft:glowstone");
+    assert_eq!(w.prop(pos, "charges"), "4");
+    // Anything else on an empty anchor passes, so the item is used instead.
+    w.put(pos, empty);
+    assert_eq!(w.use_item(pos, "minecraft:stone"), InteractionResult::Pass);
+    assert_eq!(w.prop(pos, "charges"), "0");
 }
 
 #[test]
@@ -919,6 +1118,235 @@ fn pistons_push_and_sticky_pistons_pull() {
     assert_eq!(w.get(BlockPos::new(2, 1, 0)), air);
 }
 
+/// TntBlock.prime returns false on a client: neither the entity, the removal,
+/// nor its random push may be predicted while replaying a piston update.
+#[test]
+fn tnt_duper_3856_client_neighbor_does_not_prime_or_remove_tnt() {
+    let mut w = world!();
+    let f = w.f;
+    w.level.client_side = true;
+    let pos = BlockPos::new(0, 1, 0);
+    let tnt = w.id("tnt", &[]);
+    let power = w.id("redstone_block", &[]);
+    w.put(pos, tnt);
+    w.put(pos.offset(1, 0, 0), power);
+    let mut random = w.level.random.clone();
+    f.behaviours.handle_neighbor_changed(
+        &mut w.level,
+        &mut w.ticks,
+        pos,
+        f.behaviours.block(power),
+    );
+    assert_eq!(w.get(pos), tnt, "client must wait for server block changes");
+    assert!(
+        w.level.events.is_empty(),
+        "client must not emit TNT effects"
+    );
+    assert_eq!(w.level.random.next_long(), random.next_long());
+}
+
+#[test]
+fn tnt_duper_3856_client_placement_does_not_prime_tnt() {
+    let mut w = world!();
+    w.level.client_side = true;
+    let pos = BlockPos::new(0, 1, 0);
+    let tnt = w.id("tnt", &[]);
+    let power = w.id("redstone_block", &[]);
+    w.put(pos.offset(1, 0, 0), power);
+    w.set(pos, tnt);
+    assert_eq!(w.get(pos), tnt);
+    assert!(w.level.events.is_empty());
+}
+
+#[test]
+fn tnt_duper_3856_server_still_primes_each_powered_tnt() {
+    let mut w = world!();
+    let tnt = w.id("tnt", &[]);
+    let power = w.id("redstone_block", &[]);
+    for pos in [BlockPos::new(0, 1, 0), BlockPos::new(0, 1, 3)] {
+        w.put(pos.offset(1, 0, 0), power);
+        w.set(pos, tnt);
+        assert_eq!(w.get(pos), w.b().air());
+        assert_eq!(
+            w.level
+                .events
+                .iter()
+                .filter(|e| matches!(e, LevelEvent::PrimeTnt { pos: p, .. } if *p == pos))
+                .count(),
+            1,
+        );
+    }
+}
+
+/// Breaking a wall torch next to a BUD-powered TNT updates the old block while
+/// the piston already holds its saved state. This vanilla duplication must
+/// continue to work on the server, without a second TNT from the client.
+#[test]
+fn tnt_duper_3856_piston_keeps_original_and_primes_one_tnt() {
+    let Some(f) = fixture() else {
+        return;
+    };
+    for client in [false, true] {
+        let mut w = World::new(f);
+        w.level.client_side = client;
+        let base = BlockPos::new(0, 2, 0);
+        let piston = w.id("sticky_piston", &[("facing", "east")]);
+        let slime = w.id("slime_block", &[]);
+        let tnt = w.id("tnt", &[]);
+        let torch = w.id("wall_torch", &[("facing", "north")]);
+        let power = w.id("redstone_block", &[]);
+        w.put(base, piston);
+        w.put(base.offset(1, 0, 0), slime);
+        w.put(base.offset(2, 0, 0), slime);
+        w.put(base.offset(2, -1, 0), slime);
+        w.put(base.offset(2, -1, -1), tnt);
+        w.put(base.offset(2, 0, -1), torch);
+        // Raw writes model a powered TNT that has not received an update yet.
+        w.put(base.offset(2, -1, -2), power);
+        w.put(base.offset(-1, 0, 0), power);
+        if client {
+            assert!(f.behaviours.client_block_event(
+                &mut w.level,
+                &mut w.ticks,
+                base,
+                0,
+                Direction::East as i32
+            ));
+        } else {
+            f.behaviours.handle_neighbor_changed(
+                &mut w.level,
+                &mut w.ticks,
+                base,
+                f.behaviours.block(power),
+            );
+            f.behaviours.run_block_events(&mut w.level, &mut w.ticks);
+        }
+        let primed = w
+            .level
+            .events
+            .iter()
+            .filter(|e| matches!(e, LevelEvent::PrimeTnt { .. }))
+            .count();
+        assert_eq!(primed, usize::from(!client), "client={client}");
+        for _ in 0..10 {
+            w.level.time += 1;
+            if client {
+                f.behaviours
+                    .client_tick_block_entities(&mut w.level, &mut w.ticks);
+            } else {
+                f.behaviours.tick_block_entities(&mut w.level, &mut w.ticks);
+            }
+        }
+        assert_eq!(
+            w.get(base.offset(3, -1, -1)),
+            tnt,
+            "original must survive, client={client}"
+        );
+        assert_eq!(
+            w.level
+                .events
+                .iter()
+                .filter(|e| matches!(e, LevelEvent::PrimeTnt { .. }))
+                .count(),
+            usize::from(!client)
+        );
+    }
+}
+
+/// `ServerLevel.runBlockEvents` reports a handled event for the clients
+/// (`ClientboundBlockEventPacket`), carrying the block the event named.
+#[test]
+fn a_handled_block_event_reaches_the_clients() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    w.set(BlockPos::new(0, 1, 0), piston);
+    w.set(BlockPos::new(-1, 1, 0), block);
+    w.level.events.clear();
+    w.full_tick();
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::BlockEntityEvent {
+            pos,
+            state,
+            a: 0,
+            ..
+        } if *pos == BlockPos::new(0, 1, 0) && *state == piston
+    )));
+}
+
+/// `ClientLevel.blockEvent`: the client re-runs `triggerEvent` on its own
+/// level, which builds the moving block entities a piston's `moveBlocks`
+/// makes, and ticks them to the placed block.
+#[test]
+fn a_client_replays_a_pistons_block_event() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("sticky_piston", &[("facing", "east")]);
+    let dirt = w.id("dirt", &[]);
+    let block = w.id("redstone_block", &[]);
+    w.put(BlockPos::new(0, 1, 0), piston);
+    w.put(BlockPos::new(1, 1, 0), dirt);
+    w.put(BlockPos::new(-1, 1, 0), block);
+    w.f.behaviours.client_block_event(
+        &mut w.level,
+        &mut w.ticks,
+        BlockPos::new(0, 1, 0),
+        0,
+        Direction::East as i32,
+    );
+    assert!(
+        w.ticks
+            .moving_pistons
+            .iter()
+            .any(|(p, _)| *p == BlockPos::new(2, 1, 0))
+    );
+    for _ in 0..3 {
+        w.level.time += 1;
+        w.f.behaviours
+            .client_tick_block_entities(&mut w.level, &mut w.ticks);
+    }
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), dirt);
+    assert_eq!(
+        w.name(BlockPos::new(1, 1, 0)),
+        "piston_head[facing=east,short=false,type=sticky]"
+    );
+    assert!(w.ticks.moving_pistons.is_empty());
+}
+
+/// A client's copy of a move doesn't start the pistons the moved block
+/// powers (`checkIfExtend` is server-only): their own block events come from
+/// the server.
+#[test]
+fn a_client_replay_starts_no_other_piston() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    w.level.client_side = true;
+    let piston = w.id("piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    let up = w.id("piston", &[("facing", "up")]);
+    w.put(BlockPos::new(0, 1, 0), piston);
+    w.put(BlockPos::new(1, 1, 0), block);
+    w.put(BlockPos::new(2, 2, 0), up);
+    w.f.behaviours.client_block_event(
+        &mut w.level,
+        &mut w.ticks,
+        BlockPos::new(0, 1, 0),
+        0,
+        Direction::East as i32,
+    );
+    for _ in 0..10 {
+        w.level.time += 1;
+        w.f.behaviours
+            .client_tick_block_entities(&mut w.level, &mut w.ticks);
+    }
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), block);
+    assert_eq!(w.get(BlockPos::new(2, 2, 0)), up);
+    assert!(w.ticks.moving_pistons.is_empty());
+    assert!(w.ticks.block_events.is_empty());
+}
+
 #[test]
 fn pistons_pop_fragile_blocks_and_refuse_obsidian() {
     let mut w = world!();
@@ -1147,18 +1575,21 @@ fn dispenser_buckets_pick_up_and_empty() {
     let at = BlockPos::new(0, 10, 0);
     let water = w.id("water", &[("level", "0")]);
     w.put(at, water);
-    let picked = w.b().bucket_pickup(&mut w.level, &mut w.ticks, at);
+    let picked = w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false);
     assert_eq!(picked, Some("minecraft:water_bucket"));
     assert_eq!(w.get(at), w.b().air());
     // Flowing water gives nothing.
     let flowing = w.id("water", &[("level", "3")]);
     w.put(at, flowing);
-    assert_eq!(w.b().bucket_pickup(&mut w.level, &mut w.ticks, at), None);
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
+        None
+    );
     // A waterlogged slab is drained and stays a slab.
     let slab = w.id("oak_slab", &[("waterlogged", "true")]);
     w.put(at, slab);
     assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
         Some("minecraft:water_bucket")
     );
     assert_eq!(w.prop(at, "waterlogged"), "false");
@@ -1166,31 +1597,63 @@ fn dispenser_buckets_pick_up_and_empty() {
     let snow = w.id("powder_snow", &[]);
     w.put(at, snow);
     assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
         Some("minecraft:powder_snow_bucket")
     );
-    // Emptying water into air makes a source; stone refuses.
+    // A barrier only a creative player fills or drains.
+    let barrier = w.id("barrier", &[]);
+    w.put(at, barrier);
     let sound = "minecraft:item.bucket.empty";
     let content = BucketContent::Fluid(crate::fluid::FluidKind::Water);
     assert!(
+        !w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
+    assert!(
         w.b()
-            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, true)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "true");
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
+        None
+    );
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, true),
+        Some("minecraft:water_bucket")
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
+    // Emptying water into air makes a source; stone refuses.
+    let air = w.b().air();
+    w.put(at, air);
+    assert!(
+        w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
     );
     assert_eq!(w.name(at), "water[level=0]");
     let stone = w.id("stone", &[]);
     w.put(at, stone);
     assert!(
         !w.b()
-            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
     );
     // Water fills a waterloggable slab instead of replacing it.
     let dry = w.id("oak_slab", &[]);
     w.put(at, dry);
     assert!(
         w.b()
-            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
     );
     assert_eq!(w.prop(at, "waterlogged"), "true");
+    // Sneak-clicking the slab refuses: only air takes a fluid under Shift.
+    let dry = w.id("oak_slab", &[]);
+    w.put(at, dry);
+    assert!(
+        !w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, true, false)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
     // Powder snow only goes into empty space.
     let air = w.b().air();
     w.put(at, air);
@@ -1199,7 +1662,9 @@ fn dispenser_buckets_pick_up_and_empty() {
         &mut w.ticks,
         at,
         BucketContent::Powder,
-        "minecraft:item.bucket.empty_powder_snow"
+        "minecraft:item.bucket.empty_powder_snow",
+        false,
+        false
     ));
     assert_eq!(w.name(at), "powder_snow[]");
 }
@@ -1261,7 +1726,7 @@ fn player_breaks_fire_with_extinguish_not_generic_break_event() {
         w.level.events.clear();
         assert!(
             w.f.behaviours
-                .player_destroy_block(&mut w.level, &mut w.ticks, pos, false)
+                .player_destroy_block(&mut w.level, &mut w.ticks, pos, false, true)
         );
         let is_fire = name != "white_wool";
         assert_eq!(
@@ -1282,4 +1747,218 @@ fn player_breaks_fire_with_extinguish_not_generic_break_event() {
         );
         assert_eq!(w.get(pos), w.b().air());
     }
+}
+
+#[test]
+fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
+    let mut w = world!();
+    w.floor(0, 2, "clay");
+    let pos = BlockPos::new(0, 1, 0);
+    let leaf = w.id("big_dripleaf", &[("facing", "north")]);
+    w.put(pos, leaf);
+    let stand = |w: &mut World, on_ground: bool, feet: f64| {
+        w.f.behaviours
+            .entity_on_big_dripleaf(&mut w.level, &mut w.ticks, pos, on_ground, feet);
+    };
+    // canEntityTilt: in the air, or with its feet at or under 0.6875, nothing.
+    stand(&mut w, false, 1.9375);
+    stand(&mut w, true, 1.6875);
+    assert_eq!(w.prop(pos, "tilt"), "none");
+    // Standing on the leaf's top (15/16): UNSTABLE, then PARTIAL and FULL
+    // 10 ticks apart, and back to NONE 100 ticks later.
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "unstable");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "partial");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "full");
+    // A tilted leaf doesn't restart under the entity.
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "full");
+    for _ in 0..100 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "none");
+    // A powered leaf doesn't tilt.
+    let power = w.id("redstone_block", &[]);
+    w.put(BlockPos::new(1, 1, 0), power);
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "none");
+}
+
+#[test]
+fn using_storage_and_interactable_blocks_succeeds() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        ("chest", &[("facing", "north"), ("type", "single")]),
+        ("trapped_chest", &[("facing", "north"), ("type", "single")]),
+        ("barrel", &[("facing", "up")]),
+        ("ender_chest", &[("facing", "north")]),
+        ("shulker_box", &[("facing", "up")]),
+        ("dispenser", &[("facing", "north")]),
+        ("dropper", &[("facing", "north")]),
+        ("hopper", &[("facing", "down")]),
+        ("crafter", &[("orientation", "north_up")]),
+        ("furnace", &[("facing", "north")]),
+        ("blast_furnace", &[("facing", "north")]),
+        ("smoker", &[("facing", "north")]),
+        ("brewing_stand", &[]),
+        ("beacon", &[]),
+        ("decorated_pot", &[]),
+        ("jukebox", &[("has_record", "true")]),
+    ];
+    for &(name, props) in cases {
+        w.put(pos, w.id(name, props));
+        assert_eq!(
+            w.use_block(pos),
+            InteractionResult::Success,
+            "{name} should succeed (client swing)"
+        );
+    }
+    w.put(pos, w.id("jukebox", &[("has_record", "false")]));
+    assert_eq!(
+        w.use_block(pos),
+        InteractionResult::Pass,
+        "an empty jukebox passes"
+    );
+}
+
+#[test]
+fn creative_breaking_piston_head_does_not_drop_piston() {
+    for (piston_name, head_type) in [("piston", "normal"), ("sticky_piston", "sticky")] {
+        let mut w = world!();
+        let base_pos = BlockPos::new(0, 1, 0);
+        let head_pos = BlockPos::new(1, 1, 0);
+        let base = w.id(piston_name, &[("extended", "true"), ("facing", "east")]);
+        let head = w.id(
+            "piston_head",
+            &[("type", head_type), ("facing", "east"), ("short", "false")],
+        );
+        w.put(base_pos, base);
+        w.put(head_pos, head);
+        w.level.events.clear();
+
+        // Breaking the head in creative mode. Destroying the base first makes the
+        // head's shape update remove it, so its own removeBlock finds air.
+        w.f.behaviours
+            .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, true, true);
+
+        // Both head and base must be removed:
+        assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
+        assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
+
+        // Must NOT drop the base: the head's own removal (its shape update) drops
+        // its empty loot, as vanilla's updateOrDestroy does.
+        assert!(
+            !w.level
+                .events
+                .iter()
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "creative mode breaking {head_type} piston head must not drop the base piston"
+        );
+    }
+}
+
+#[test]
+fn survival_breaking_piston_head_drops_piston() {
+    for (piston_name, head_type) in [("piston", "normal"), ("sticky_piston", "sticky")] {
+        let mut w = world!();
+        let base_pos = BlockPos::new(0, 1, 0);
+        let head_pos = BlockPos::new(1, 1, 0);
+        let base = w.id(piston_name, &[("extended", "true"), ("facing", "east")]);
+        let head = w.id(
+            "piston_head",
+            &[("type", head_type), ("facing", "east"), ("short", "false")],
+        );
+        w.put(base_pos, base);
+        w.put(head_pos, head);
+        w.level.events.clear();
+
+        // Breaking the head in survival mode:
+        assert!(
+            w.f.behaviours
+                .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, false, true),
+            "head should be destroyed"
+        );
+
+        // Both head and base must be removed:
+        assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
+        assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
+
+        // Must drop the base piston at base_pos:
+        assert!(
+            w.level
+                .events
+                .iter()
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "survival mode breaking {head_type} piston head must drop base piston"
+        );
+    }
+}
+
+/// A lever on the back of a piston stays through extend and retract.
+#[test]
+fn lever_on_piston_back_survives_extend_and_retract() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    for kind in ["piston", "sticky_piston"] {
+        let piston = w.id(kind, &[("facing", "east")]);
+        let lever = w.id("lever", &[("face", "wall"), ("facing", "west")]);
+        w.set(BlockPos::new(0, 1, 0), piston);
+        w.set(BlockPos::new(-1, 1, 0), lever);
+        let on = w.b().table.set_bool(lever, w.b().props.powered, true);
+        w.set(BlockPos::new(-1, 1, 0), on);
+        for _ in 0..4 {
+            w.full_tick();
+        }
+        assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "true", "{kind}");
+        assert_eq!(
+            w.name(BlockPos::new(-1, 1, 0)),
+            "lever[face=wall,facing=west,powered=true]",
+            "{kind}"
+        );
+        w.set(BlockPos::new(-1, 1, 0), lever);
+        for _ in 0..4 {
+            w.full_tick();
+        }
+        assert_eq!(
+            w.prop(BlockPos::new(0, 1, 0), "extended"),
+            "false",
+            "{kind}"
+        );
+        assert_eq!(
+            w.name(BlockPos::new(-1, 1, 0)),
+            "lever[face=wall,facing=west,powered=false]",
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn a_candle_on_an_uneaten_cake_makes_a_candle_cake() {
+    // CakeBlock.useItemOn: any candle on a cake with no bites turns it into the
+    // matching unlit candle cake; a bitten cake or another item does not.
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let cake = w.id("cake", &[("bites", "0")]);
+    for (item, block) in [
+        ("minecraft:candle", "candle_cake"),
+        ("minecraft:red_candle", "red_candle_cake"),
+    ] {
+        w.put(pos, cake);
+        assert_eq!(w.use_item(pos, item), InteractionResult::Success);
+        assert_eq!(w.get(pos), w.id(block, &[("lit", "false")]));
+    }
+    let bitten = w.id("cake", &[("bites", "1")]);
+    w.put(pos, bitten);
+    w.use_item(pos, "minecraft:candle");
+    assert_ne!(w.get(pos), w.id("candle_cake", &[("lit", "false")]));
+    w.put(pos, cake);
+    w.use_item(pos, "minecraft:stone");
+    assert_eq!(w.get(pos), cake);
 }

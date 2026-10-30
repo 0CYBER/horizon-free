@@ -7,18 +7,19 @@
 //! into its `IntegratedServer`.
 //!
 //! On by default. `--in-frame` (or `--no-server-thread`, or
-//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead, the
-//! escape hatch. LAN guests and dedicated servers use the same code either
-//! way.
+//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead. That path
+//! is DEPRECATED: never use it, it gets no fixes and will be removed soon.
+//! LAN guests and dedicated servers use the same code either way.
 use super::{
-    Game, Options, PackResources, Resources, UiResources,
+    Game, Options, PackResources, Resources, UiResources, WorldIcon,
+    execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
+    world_loading::WorldRequest,
 };
 use horizon_client::{
     Result,
     audio::Audio,
-    hud::HudAtlas,
-    lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
+    lan::{Lan, MAX_PLAYERS, NetConfig, OwnerProfile, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
 };
@@ -26,7 +27,6 @@ use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
 use std::{
     net::TcpListener,
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
@@ -51,6 +51,11 @@ struct Flags {
     /// server follows while it runs (IntegratedServer.tickServer).
     render_distance: AtomicI32,
     simulation_distance: AtomicI32,
+    /// `options.entityDistanceScaling` (an `f32`'s bits), which
+    /// `IntegratedServer.getScaledTrackingDistance` reads on every call.
+    entity_distance: AtomicU32,
+    /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
+    saving: AtomicBool,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -68,16 +73,24 @@ impl Integrated {
     pub fn smoothed_tick_ms(&self) -> f32 {
         f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
     }
+    /// `MinecraftServer.isCurrentlySaving`.
+    pub fn is_saving(&self) -> bool {
+        self.flags.saving.load(Ordering::Relaxed)
+    }
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
     }
-    /// The window's render and simulation distances, for the server to follow.
-    pub fn set_distances(&self, render: i32, simulation: i32) {
+    /// The window's render and simulation distances and its Entity Distance
+    /// option, for the server to follow.
+    pub fn set_distances(&self, render: i32, simulation: i32, entity: f32) {
         self.flags.render_distance.store(render, Ordering::Relaxed);
         self.flags
             .simulation_distance
             .store(simulation, Ordering::Relaxed);
+        self.flags
+            .entity_distance
+            .store(entity.to_bits(), Ordering::Relaxed);
     }
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
@@ -142,10 +155,16 @@ pub(super) struct Serving {
     flags: Arc<Flags>,
     tasks: Receiver<Task>,
     /// The window's profile.
-    owner: u128,
+    pub(super) owner: u128,
     /// Open to LAN or closed from inside a player's command, while the hub
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
+}
+impl Serving {
+    /// The window reads this as `MinecraftServer.isCurrentlySaving`.
+    pub(super) fn set_saving(&self, saving: bool) {
+        self.flags.saving.store(saving, Ordering::Relaxed);
+    }
 }
 enum Publish {
     Open(TcpListener, LanSettings),
@@ -155,6 +174,18 @@ enum Publish {
 /// What the server thread hands the window once the world is open: its end
 /// of the connection and the world's name, or why it failed.
 type Ready = std::result::Result<(Pipe, String), String>;
+
+/// An integrated server loading its world: the window keeps drawing its
+/// loading screen and joins once the server is ready, as vanilla's client
+/// does while its server prepares (`Minecraft.doWorldLoad`), instead of
+/// waiting for it frozen for the whole load.
+pub(super) struct Starting {
+    handle: Integrated,
+    ready: Receiver<Ready>,
+    player: String,
+    /// The save's folder in `saves/`, for the world icon once joined.
+    folder: String,
+}
 
 /// The world to open and the player who owns it.
 struct Launch {
@@ -168,11 +199,8 @@ struct Launch {
     owner: u128,
     /// Its name, for the LAN's MOTD.
     player: String,
-}
-
-/// Whether this world opens on a server thread: asked for.
-pub(super) fn wanted(options: &Options, _world: &Path) -> bool {
-    options.server_thread && options.dedicated.is_none()
+    /// The signed-in account's profile, fetched while the world loads.
+    owner_profile: Option<Arc<OwnerProfile>>,
 }
 
 impl Game<'_> {
@@ -189,8 +217,8 @@ impl Game<'_> {
                 .as_ref()
                 .is_some_and(|s| s.published().is_some())
     }
-    /// `Minecraft.doWorldLoad`: start the server thread on the world, wait
-    /// until it can be joined, then join it through memory.
+    /// `Minecraft.doWorldLoad`: start the server thread on the world; the
+    /// window joins it through memory once it is ready (`poll_integrated_start`).
     pub(super) fn open_integrated(
         &mut self,
         folder: &str,
@@ -212,12 +240,28 @@ impl Game<'_> {
             // An offline-mode server names its players by their offline profile.
             owner: offline_uuid(&player),
             player: player.clone(),
+            owner_profile: auth.as_ref().map(|a| {
+                let id = a.uuid;
+                Arc::new(OwnerProfile::new(move || {
+                    horizon_client::skins::fetch_own_properties(id)
+                        .into_iter()
+                        .map(|(name, value, signature)| {
+                            horizon_protocol::packets::login::Property {
+                                name,
+                                value,
+                                signature,
+                            }
+                        })
+                        .collect()
+                }))
+            }),
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
+        // Compatibility for gameplay checks outside startup/world loading.
         options.dedicated = Some(Vec::new());
         options.server_thread = false;
-        options.integrated = true;
+        options.execution_role = ExecutionRole::IntegratedServer;
         options.control = None;
         options.benchmark = None;
         options.frames = None;
@@ -225,7 +269,6 @@ impl Game<'_> {
         options.report = None;
         options.server = None;
         options.world = None;
-        options.dev_mods.clear();
         self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
@@ -235,6 +278,9 @@ impl Game<'_> {
         flags
             .simulation_distance
             .store(settings.simulation_distance, Ordering::Relaxed);
+        flags
+            .entity_distance
+            .store(settings.entity_distance.to_bits(), Ordering::Relaxed);
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
@@ -259,21 +305,68 @@ impl Game<'_> {
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
-        let mut handle = Integrated {
+        let handle = Integrated {
             flags,
             thread: Some(thread),
             tasks,
             world_name: String::new(),
         };
-        let pipe = match ready.recv() {
-            Ok(Ok((pipe, world_name))) => {
-                handle.world_name = world_name;
-                pipe
+        self.integrated_starting = Some(Starting {
+            handle,
+            ready,
+            player,
+            folder: folder.to_owned(),
+        });
+        // Harnesses, control scripts and runs without a window go on with the world open.
+        if self.window.is_none() || super::synchronous_startup(&self.options) {
+            while self.integrated_starting.is_some() {
+                self.poll_integrated_start()?;
+                if self.integrated_starting.is_some() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
-            Ok(Err(e)) => return Err(e.into()),
-            Err(_) => return Err("the integrated server stopped".into()),
+        }
+        Ok(())
+    }
+
+    /// The starting server's answer, polled each frame: joined once it is ready.
+    pub(super) fn poll_integrated_start(&mut self) -> Result<()> {
+        let Some(starting) = &self.integrated_starting else {
+            return Ok(());
         };
+        let (pipe, world_name) = match starting.ready.try_recv() {
+            Ok(Ok(ready)) => ready,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+            Ok(Err(e)) => {
+                self.integrated_starting = None;
+                return Err(e.into());
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.integrated_starting = None;
+                return Err("the integrated server stopped".into());
+            }
+        };
+        let Some(Starting {
+            mut handle,
+            player,
+            folder,
+            ..
+        }) = self.integrated_starting.take()
+        else {
+            return Ok(());
+        };
+        handle.world_name = world_name;
+        self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
+        // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
+        // the Select World list shows, and needs the save folder for it.
+        self.world_icon = Some(WorldIcon {
+            path: std::env::current_dir()?
+                .join("saves")
+                .join(&folder)
+                .join("icon.png"),
+            last_attempt: None,
+        });
         self.integrated = Some(handle);
         Ok(())
     }
@@ -287,18 +380,105 @@ impl Game<'_> {
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
     ) -> Result<()> {
-        self.open_world(
+        let result = self.run_integrated_inner(launch, flags, tasks, ready);
+        if let Err(error) = &result {
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_integrated_inner(
+        &mut self,
+        launch: Launch,
+        flags: Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        // The open segment runs as one unit (`integrated_open`) so its
+        // failures fire `WorldOpenFailed` with the engine's own error text.
+        if let Err(e) = self.integrated_open(&launch, &flags, tasks, ready) {
+            self.native_lifecycle_world_failed(&e.to_string());
+            return Err(e);
+        }
+        // The server thread's `WorldOpenReady` site, before the tick loop.
+        self.native_lifecycle_world_ready();
+        if let (Some(script), Some(output)) = (
+            std::env::var_os("HORIZON_COMMAND_SCRIPT"),
+            std::env::var_os("HORIZON_COMMAND_OUTPUT"),
+        ) {
+            // The script owns the clock: connection setup and terrain loading
+            // cannot add wall-clock-dependent world ticks to oracle output.
+            let result = self.run_command_harness(script.as_ref(), output.as_ref());
+            let stopped = self.stop_integrated();
+            return result.and(stopped);
+        }
+        let mut next = Instant::now();
+        let mut was_paused = false;
+        while !flags.stop.load(Ordering::Relaxed) {
+            self.run_tasks();
+            if self.agent.hold_server {
+                // Keep servicing control requests so the fixture can release the barrier.
+                // Unlike /tick freeze, no player's queued packets are applied here.
+                self.wait_for_next_server_tick(&mut next, true);
+                continue;
+            }
+            let paused = flags.paused.load(Ordering::Relaxed);
+            if paused && !was_paused {
+                // IntegratedServer.tickServer: the tick the game pauses saves
+                // everything (saveEverything, without flushing), as an
+                // autosave does.
+                log::info!("Saving and pausing game...");
+                self.save_game_with(false)?;
+            }
+            was_paused = paused;
+            if paused {
+                // Only the connections run.
+                self.tick_server_timed(true)?;
+            } else {
+                self.follow_distances(&flags);
+                let started = Instant::now();
+                self.tick_server_timed(false)?;
+                // MinecraftServer.tickServer's tick times, for /tick query.
+                self.clock.record(started.elapsed());
+                self.debug_charts.log_tick(started, started.elapsed());
+                flags.smoothed_tick_ms.store(
+                    self.debug_charts.smoothed_tick_ms.to_bits(),
+                    Ordering::Relaxed,
+                );
+            }
+            self.apply_publish();
+            self.wait_for_next_server_tick(&mut next, paused);
+        }
+        self.stop_integrated()
+    }
+
+    /// The integrated server's world open: `run_integrated`'s segment
+    /// from `load_world` through `settle_spawn`, whole so its failures are
+    /// one open failure (`WorldOpenFailed`, the engine's own error text).
+    fn integrated_open(
+        &mut self,
+        launch: &Launch,
+        flags: &Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        self.native_lifecycle_open_started();
+        self.load_world(WorldRequest::new(
             &launch.folder,
             launch.name.as_deref(),
             launch.seed,
             launch.creative,
             launch.create.as_ref(),
-        )?;
+        )?)?;
         let saved = Box::new(self.level.clone());
+        // IntegratedServer runs the server mods; the window the client mods.
+        self.mods.dev = self.options.dev_mods.clone();
+        self.start_mods();
         // Math.max(2, options.renderDistance): past vanilla's 32 when the
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             // Only the owner until it is opened to the LAN.
             guest_commands: false,
@@ -307,6 +487,7 @@ impl Game<'_> {
             view_distance,
             simulation_distance: self.settings.simulation_distance.max(2),
             dimension: self.dim.id().to_owned(),
+            levels: self.level_shapes,
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
             // No player of its own: the hub runs without a host.
@@ -319,10 +500,13 @@ impl Game<'_> {
             // No network until it is opened to the LAN; the memory connection
             // is not compressed (`Connection.isMemoryConnection`).
             listen: false,
+            online: horizon_client::lan::OnlineMode::lan(),
             gate: Some(Arc::new(move |_, uuid, _| {
                 (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
+            levels: self.level_shapes,
+            owner_profile: launch.owner_profile.clone(),
             // IntegratedServer.initServer: the MOTD names the owner and the world.
             ..NetConfig::lan(
                 0,
@@ -359,40 +543,21 @@ impl Game<'_> {
             pending: None,
         });
         let _ = ready.send(Ok((pipe, self.level.name.clone())));
-        self.settle_spawn()?;
-        let mut next = Instant::now();
-        while !flags.stop.load(Ordering::Relaxed) {
-            self.run_tasks();
-            let paused = flags.paused.load(Ordering::Relaxed);
-            if paused {
-                // Only the connections run.
-                self.tick_server_timed(true)?;
-            } else {
-                self.follow_distances(&flags);
-                let started = Instant::now();
-                self.tick_server_timed(false)?;
-                // MinecraftServer.tickServer's tick times, for /tick query.
-                self.clock.record(started.elapsed());
-                self.debug_charts.log_tick(started, started.elapsed());
-                flags.smoothed_tick_ms.store(
-                    self.debug_charts.smoothed_tick_ms.to_bits(),
-                    Ordering::Relaxed,
-                );
-            }
-            self.apply_publish();
-            self.wait_for_next_server_tick(&mut next, paused);
-        }
-        self.stop_integrated()
+        self.settle_spawn()
     }
 
     /// `MinecraftServer.stopServer`: the players are saved and sent away,
     /// then the world is saved.
     fn stop_integrated(&mut self) -> Result<()> {
+        // The close request: lifecycle observation stops.
+        self.native_lifecycle.begin_close();
         // IntegratedServer.stopServer: teardownPublishedState.
         if let Some(s) = self.serving.take() {
             s.flags.published.store(0, Ordering::Relaxed);
         }
         if let Some(mut host) = self.lan.take() {
+            // PlayerList.removeAll: the owner and every guest leave the game.
+            host.award_leave_game_to_all();
             for g in &host.hub.guests {
                 self.save_guest(&host, g);
             }
@@ -406,9 +571,13 @@ impl Game<'_> {
             self.lan = Some(host);
         }
         std::thread::sleep(Duration::from_millis(100));
+        // ServerPlayer.disconnect: nobody is left in a bed.
+        self.free_player_beds()?;
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;
+        // `WorldCloseFinal` follows a successful final save.
+        self.native_lifecycle_world_closed();
         self.session_lock = None;
         Ok(())
     }
@@ -564,6 +733,9 @@ impl Game<'_> {
     /// IntegratedServer.tickServer: the server follows the window's render
     /// and simulation distances when they change.
     fn follow_distances(&mut self, flags: &Flags) {
+        // IntegratedServer.getScaledTrackingDistance reads the option each time.
+        self.settings.entity_distance =
+            f32::from_bits(flags.entity_distance.load(Ordering::Relaxed));
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -695,18 +867,51 @@ fn serve(
     tasks: Receiver<Task>,
     ready: &Sender<Ready>,
 ) -> Result<()> {
-    // It draws nothing: only the font, which books and chat measure with.
-    let atlas = HudAtlas::fonts(&options.resources)?;
-    let gui = UiResources {
-        atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-            size: 1,
-            pixels: [0u8; 4].repeat(6),
-        }),
-    };
-    let audio = Audio::silent(&options.resources);
-    let mut server = Game::new(res, pack, gui, options, settings, audio, None)?;
+    let mut server = server_game(res, pack, options, settings)?;
     server.run_integrated(launch, flags, tasks, ready)
+}
+
+/// Component oracles supply their own synthetic levels and entity phases.
+/// They still execute on a server Game, never the client's world.
+pub(super) enum ComponentHarness {
+    Dispenser(String),
+    Sculk(String),
+}
+
+impl Game<'_> {
+    pub(super) fn run_component_harness(&self, fixture: ComponentHarness) -> Result<()> {
+        let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
+        let mut options = self.options.clone();
+        options.execution_role = ExecutionRole::IntegratedServer;
+        options.dedicated = Some(Vec::new());
+        options.server_thread = false;
+        let result = std::thread::Builder::new()
+            .name("Server thread".into())
+            .spawn(move || {
+                let run = || -> Result<()> {
+                    let mut server = server_game(&res, pack, options, settings)?;
+                    match fixture {
+                        ComponentHarness::Dispenser(spec) => server.dispense_fixture(&spec),
+                        ComponentHarness::Sculk(spec) => server.sculk_fixture(&spec),
+                    }
+                };
+                run().map_err(|e| e.to_string())
+            })?
+            .join()
+            .map_err(|_| "the component harness server panicked")?;
+        result.map_err(Into::into)
+    }
+}
+
+fn server_game(
+    res: &Arc<Resources>,
+    pack: PackResources,
+    options: Options,
+    settings: Settings,
+) -> Result<Game<'_>> {
+    let gui = UiResources::server(&options.resources)?;
+    let audio = Audio::silent(&options.resources);
+    Game::new(res, pack, gui, options, settings, audio, None)
 }
 
 #[cfg(test)]

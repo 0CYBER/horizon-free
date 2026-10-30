@@ -289,6 +289,29 @@ fn the_modrinth_app_atlauncher_and_gdlauncher_are_found() {
     }
 }
 
+/// A Modrinth App that only ever played a Fabric profile of 26.3 keeps the vanilla client jar
+/// under the loader's name (#1783); a profile of another version beside it is not taken.
+#[test]
+fn a_modrinth_loader_profile_has_the_client_jar() {
+    let s = Scratch::new("modrinth-fabric");
+    s.write(
+        "ModrinthApp/meta/versions/26.3.1-0.18.1/26.3.1-0.18.1.jar",
+        b"other",
+    );
+    let jar = "versions/26.3-0.18.1/26.3-0.18.1.jar";
+    let dir = s.launcher("ModrinthApp", "meta", jar);
+    s.write(
+        "ModrinthApp/meta/versions/26.3-0.18.1/26.3-0.18.1.json",
+        br#"{"id":"26.3-0.18.1","inheritsFrom":"26.3"}"#,
+    );
+    let profile = dir.join("profiles/Fabric 26.3");
+    fs::create_dir_all(&profile).unwrap();
+    let linked = s.0.join("linked");
+    let got = resolve_with(&profile, &[], &linked, &Mojang::new(MANIFEST)).unwrap();
+    assert_eq!(got, linked);
+    assert_linked(&linked, &dir.join("meta"), jar);
+}
+
 #[test]
 fn an_instance_folder_may_be_chosen() {
     let s = Scratch::new("instance");

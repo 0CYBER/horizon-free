@@ -23,6 +23,7 @@ use horizon_core::{
 pub use library::MaterialRuleLibrary;
 pub use noise::MaterialNoiseSources;
 use rule::CompiledRule;
+pub use rule::SurfaceVariants;
 pub use rule::{MaterialRule, MaterialRuleError};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -51,6 +52,16 @@ pub trait MaterialSurfaceQueries {
     }
     fn biome(&mut self, _position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         Err(MaterialRuleError::MissingBiomeProvider)
+    }
+    /// `biome` as the index `biome_index` gives its name, for queries that
+    /// number their biomes: biome conditions then compare numbers.
+    fn biome_id(&mut self, _position: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+        Err(MaterialRuleError::MissingBiomeProvider)
+    }
+    /// `Some` when `biome_id` answers: the index of the biome `name` (`None`
+    /// inside when no biome has that name).
+    fn biome_index(&self, _name: &str) -> Option<Option<u32>> {
+        None
     }
     fn melts_frozen_ocean(
         &mut self,
@@ -96,6 +107,12 @@ impl<T: MaterialSurfaceQueries + ?Sized> MaterialSurfaceQueries for &mut T {
     }
     fn biome(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         (**self).biome(position)
+    }
+    fn biome_id(&mut self, position: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+        (**self).biome_id(position)
+    }
+    fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+        (**self).biome_index(name)
     }
     fn cold_enough_to_snow(
         &mut self,
@@ -197,6 +214,7 @@ struct Context<S> {
     noise_indices: BTreeMap<(String, bool), usize>,
     possible_biomes: Option<BTreeSet<String>>,
     biome: Option<Arc<str>>,
+    biome_id: Option<u32>,
 }
 struct CachedNoise {
     sampler: Arc<dyn Noise>,
@@ -225,6 +243,12 @@ impl<S: MaterialSurfaceQueries> Context<S> {
             self.biome = self.surface.biome(self.position)?;
         }
         Ok(self.biome.clone())
+    }
+    fn biome_id(&mut self) -> Result<Option<u32>, MaterialRuleError> {
+        if self.biome_id.is_none() {
+            self.biome_id = self.surface.biome_id(self.position)?;
+        }
+        Ok(self.biome_id)
     }
     fn bind_noise(&mut self, name: &str, is_3d: bool) -> Result<usize, DecodeError> {
         let key = (name.to_owned(), is_3d);
@@ -286,6 +310,8 @@ struct Compiled<R: RandomSource> {
 enum Kind<R: RandomSource> {
     Simple(MaterialCondition),
     Biome(BTreeSet<String>),
+    /// `Biome` for queries that number their biomes: a bit per index.
+    BiomeIds(Vec<u64>),
     Constant(bool),
     Noise {
         sampler: usize,
@@ -299,7 +325,82 @@ enum Kind<R: RandomSource> {
     },
     Not(Box<Compiled<R>>),
 }
+/// What a specialised rule may assume about every position it is applied to
+/// (`CompiledRule::specialize`): its y lies in `low..=high`, and whether it is
+/// at or above the column's preliminary surface level, when known.
+#[derive(Clone, Copy, Debug)]
+pub struct Facts {
+    pub low: i32,
+    pub high: i32,
+    pub above_surface: Option<bool>,
+}
+impl<R: RandomSource> Clone for Kind<R>
+where
+    R::Positional: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Simple(condition) => Self::Simple(condition.clone()),
+            Self::Biome(names) => Self::Biome(names.clone()),
+            Self::BiomeIds(bits) => Self::BiomeIds(bits.clone()),
+            Self::Constant(value) => Self::Constant(*value),
+            Self::Noise { sampler, min, max } => Self::Noise {
+                sampler: *sampler,
+                min: *min,
+                max: *max,
+            },
+            Self::Gradient { low, high, random } => Self::Gradient {
+                low: *low,
+                high: *high,
+                random: random.clone(),
+            },
+            Self::Not(child) => Self::Not(child.clone()),
+        }
+    }
+}
+impl<R: RandomSource> Clone for Compiled<R>
+where
+    R::Positional: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            kind: self.kind.clone(),
+            revision: self.revision,
+            result: self.result,
+        }
+    }
+}
 impl<R: RandomSource> Compiled<R> {
+    /// The value `facts` decide for this condition at every position they
+    /// cover. Conditions read the position and the world, never change them,
+    /// so one decided in advance gives what testing it would.
+    fn decided(&self, facts: Facts) -> Option<bool> {
+        match &self.kind {
+            Kind::Constant(value) => Some(*value),
+            Kind::Simple(MaterialCondition::AbovePreliminarySurface) => facts.above_surface,
+            Kind::Gradient { low, high, .. } => {
+                if facts.high <= *low {
+                    Some(true)
+                } else if facts.low >= *high {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            Kind::Not(child) => child.decided(facts).map(|value| !value),
+            _ => None,
+        }
+    }
+    /// The vertical gradients' bounds, and whether the preliminary surface
+    /// is asked for.
+    fn inputs(&self, gradients: &mut Vec<(i32, i32)>, surface: &mut bool) {
+        match &self.kind {
+            Kind::Gradient { low, high, .. } => gradients.push((*low, *high)),
+            Kind::Simple(MaterialCondition::AbovePreliminarySurface) => *surface = true,
+            Kind::Not(child) => child.inputs(gradients, surface),
+            _ => {}
+        }
+    }
     fn constant_result(&self) -> Option<bool> {
         match &self.kind {
             Kind::Constant(value) => Some(*value),
@@ -341,7 +442,28 @@ impl<R: RandomSource> Compiled<R> {
                 match &context.possible_biomes {
                     Some(possible) if names.is_disjoint(possible) => Kind::Constant(false),
                     Some(possible) if possible.is_subset(&names) => Kind::Constant(true),
-                    _ => Kind::Biome(names),
+                    // An empty list would not ask whether the surface numbers
+                    // its biomes.
+                    _ if names.is_empty() => Kind::Biome(names),
+                    _ => match names
+                        .iter()
+                        .map(|name| context.surface.biome_index(name))
+                        .collect::<Option<Vec<_>>>()
+                    {
+                        // Names no biome has never match the block's biome.
+                        Some(ids) => {
+                            let mut bits = Vec::new();
+                            for id in ids.into_iter().flatten() {
+                                let word = id as usize / 64;
+                                if bits.len() <= word {
+                                    bits.resize(word + 1, 0);
+                                }
+                                bits[word] |= 1 << (id % 64);
+                            }
+                            Kind::BiomeIds(bits)
+                        }
+                        None => Kind::Biome(names),
+                    },
                 }
             }
             MaterialCondition::NoiseThreshold {
@@ -435,6 +557,11 @@ impl<R: RandomSource> Compiled<R> {
                     .ok_or(MaterialRuleError::MissingBiome)?
                     .as_ref(),
             ),
+            Kind::BiomeIds(bits) => {
+                let id = context.biome_id()?.ok_or(MaterialRuleError::MissingBiome)?;
+                bits.get(id as usize / 64)
+                    .is_some_and(|word| word >> (id % 64) & 1 == 1)
+            }
             Kind::Simple(MaterialCondition::Hole) => context.depth <= 0,
             Kind::Simple(MaterialCondition::Steep) => {
                 context.gradient[0] <= -4 || context.gradient[1] >= 4
@@ -552,6 +679,7 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
                 noise_indices: BTreeMap::new(),
                 possible_biomes,
                 biome: None,
+                biome_id: None,
             },
             conditions: Vec::new(),
             rules: Vec::new(),
@@ -579,6 +707,7 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
     pub fn update_y(&mut self, stone_above: i32, stone_below: i32, water_height: i32, y: i32) {
         self.context.block_revision = self.context.block_revision.wrapping_add(1);
         self.context.biome = None;
+        self.context.biome_id = None;
         self.context.position.y = y;
         self.context.stone_above = stone_above;
         self.context.stone_below = stone_below;

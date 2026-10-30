@@ -6,6 +6,7 @@
 //! finds the ammo for bows and crossbows.
 use super::{Game, shield::OFFHAND_SLOT, view_vector};
 use horizon_client::{
+    enchant::EffectContext,
     items::ItemStack,
     mobs::Who,
     projectiles::{Projectile, ProjectileKind},
@@ -17,7 +18,10 @@ const FIREWORK_ROCKET: &str = "minecraft:firework_rocket";
 
 /// `ProjectileWeaponItem.ARROW_ONLY`, for the arrows Horizon shoots.
 fn is_arrow(stack: &ItemStack) -> bool {
-    &*stack.item == "minecraft:arrow"
+    matches!(
+        &*stack.item,
+        "minecraft:arrow" | "minecraft:spectral_arrow" | "minecraft:tipped_arrow"
+    )
 }
 
 /// `Player.getProjectile`: what `weapon` supports in the off hand, then in
@@ -152,6 +156,20 @@ impl Game<'_> {
         };
         let charged = std::mem::take(&mut bow.data_mut().charged);
         bow.tidy();
+        let weapon = bow.clone();
+        // AbstractArrow's constructor: `getPiercingCount` of the weapon.
+        let pierce = self
+            .res
+            .stations()
+            .enchantments
+            .modify_value(
+                Some(&weapon),
+                "minecraft:projectile_piercing",
+                &EffectContext::default(),
+                &mut self.world.random,
+                0.0,
+            )
+            .clamp(0.0, 127.0) as u8;
         let count = charged.len();
         // getShootingPower: a rocket among them slows every shot.
         let power = if charged.iter().any(|s| &*s.item == FIREWORK_ROCKET) {
@@ -188,13 +206,17 @@ impl Game<'_> {
                     power,
                     1.0,
                 );
-                self.launch_angled_rocket(at, shot.velocity, ammo);
+                self.launch_angled_rocket(at, shot.velocity, ammo, Some(Who::Player));
             }
             if !rocket {
+                let effect = super::dispenser::tipped_effect(ammo).or_else(|| {
+                    (&*ammo.item == "minecraft:spectral_arrow")
+                        .then_some(("minecraft:glowing", 200))
+                });
                 let kind = ProjectileKind::Arrow {
                     base_damage: 2.0,
                     critical: true,
-                    effect: None,
+                    effect,
                 };
                 let mut arrow = Projectile::new(
                     kind,
@@ -204,9 +226,11 @@ impl Game<'_> {
                 if let Some(a) = arrow.arrow.as_mut() {
                     a.set_item(ammo);
                     a.set_owner(Some(Who::Player));
+                    a.fired_from_weapon = Some(weapon.clone());
+                    a.pierce = pierce;
                 }
                 arrow.shoot(&mut self.world.random, dir.to_array(), power, 1.0);
-                self.creatures.projectiles.push(arrow);
+                self.add_projectile(arrow);
             }
             self.player_projectile_shot();
             let pitch = if index == 0 {
@@ -218,6 +242,11 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:item.crossbow.shoot", Some(eye), 1.0, pitch);
             self.damage_held(if rocket { 3 } else { 1 });
+        }
+        // CrossbowItem.performShooting: SHOT_CROSSBOW with the crossbow, which
+        // is an empty stack (no match) when the shots broke it.
+        if let Some(stack) = self.held().cloned() {
+            self.trigger_item("minecraft:shot_crossbow", &stack);
         }
     }
 }
@@ -255,5 +284,17 @@ mod tests {
         // The main hand's rocket, with the crossbow in the off hand.
         let hands = [(OFFHAND_SLOT, crossbow.as_ref()), (3, rocket.as_ref())];
         assert_eq!(projectile_slot(CROSSBOW, hands, &inventory), Some(3));
+
+        // Spectral and tipped arrows in off hand or inventory are recognized.
+        let spectral = stack("minecraft:spectral_arrow");
+        let tipped = stack("minecraft:tipped_arrow");
+        inventory[7] = spectral.clone();
+        assert_eq!(slot("minecraft:bow", &None, &inventory), Some(7));
+        assert_eq!(
+            slot("minecraft:bow", &tipped, &inventory),
+            Some(OFFHAND_SLOT)
+        );
+        inventory[7] = None;
+        assert_eq!(slot("minecraft:bow", &None, &inventory), None);
     }
 }

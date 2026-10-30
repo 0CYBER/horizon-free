@@ -18,6 +18,7 @@ fn version(id: &str, games: &[&str], loaders: &[&str]) -> Version {
             name: format!("{id}.zip"),
             size: 3,
             sha512: Some("ab".into()),
+            sha256: None,
             sha1: None,
             primary: true,
         }],
@@ -69,6 +70,51 @@ fn picks_the_newest_version_that_runs() {
     let mut empty = version("empty", &[GAME], &["minecraft"]);
     empty.files.clear();
     assert!(pick(Kind::ResourcePack, &[blocked, empty], true).is_none());
+}
+
+#[test]
+fn data_packs_are_their_own_kind() {
+    // Most data packs on Modrinth also ship a mod build; only the data pack files are picked.
+    let versions = [
+        version("fabric", &[GAME], &["fabric", "neoforge"]),
+        version("pack", &[GAME], &["datapack"]),
+        version("old", &["1.21.4"], &["datapack"]),
+    ];
+    assert_eq!(pick(Kind::DataPack, &versions, false).unwrap().id, "pack");
+    assert!(pick(Kind::DataPack, &versions[2..], false).is_none());
+    assert_eq!(
+        pick(Kind::DataPack, &versions[2..], true).unwrap().id,
+        "old"
+    );
+    assert!(pick(Kind::DataPack, &versions[..1], true).is_none());
+
+    let now = support(Kind::DataPack, &v(&[GAME]), &v(&["datapack"]));
+    assert_eq!(now.reason(), Some(DATAPACK_SUPPORT));
+    let old = support(Kind::DataPack, &v(&["1.21.4"]), &v(&["datapack"]));
+    assert!(
+        old.reason().unwrap().starts_with("Made for 1.21.4"),
+        "{old:?}"
+    );
+    assert!(old.installable());
+
+    assert_eq!(
+        modrinth::facets(&Query::new("", Kind::DataPack)),
+        r#"[["project_type:datapack"],["versions:26.3"]]"#
+    );
+    // A data pack's hit says `mod`: the search for data packs marks it.
+    let hit = serde_json::json!({
+        "project_id": "bVrj3hwG", "project_type": "mod", "slug": "terralith",
+        "title": "Terralith", "categories": ["datapack", "fabric", "worldgen"],
+        "versions": [GAME],
+    });
+    let p = modrinth::parse_hit(&hit).unwrap();
+    assert_eq!(p.kind, Kind::Mod);
+    let p = p.as_datapack();
+    assert_eq!(
+        (p.kind, p.page.as_str()),
+        (Kind::DataPack, "https://modrinth.com/datapack/terralith")
+    );
+    assert_eq!(Kind::DataPack.folder(), None);
 }
 
 #[test]
@@ -305,6 +351,7 @@ fn file_for(body: &[u8], sha512: bool) -> FileRef {
         name: "pack.zip".into(),
         size: body.len() as u64,
         sha512: sha512.then(|| hex(&sha2::Sha512::digest(body))),
+        sha256: None,
         sha1: (!sha512).then(|| hex(&sha1::Sha1::digest(body))),
         primary: true,
     }
@@ -339,6 +386,22 @@ fn downloads_refused_before_any_byte() {
     let mut file = file_for(body, true);
     file.url = "https://example.com/pack.zip".into();
     assert!(download::refuse(&file).unwrap().contains("file servers"));
+    // A mod's own repository's release asset, which the registry's index lists with its SHA-256.
+    let mut file = file_for(body, true);
+    file.url = "https://github.com/acme/zoom/releases/download/v1.0.0/zoom-1.0.0.hnmod".into();
+    assert_eq!(download::refuse(&file), None);
+    for bad in [
+        "http://github.com/acme/zoom/releases/download/v1/z.hnmod",
+        "https://github.com/acme/zoom/archive/main.zip",
+        "https://github.com/acme/zoom/releases/download/v1/../z.hnmod",
+        "https://github.com/acme/zoom/releases/download/v1/z.hnmod?x=1",
+        "https://github.com.evil.example/a/b/releases/download/v1/z.hnmod",
+        "https://github.com/acme/zoom/releases/download/v1/a/z.hnmod",
+    ] {
+        let mut file = file_for(body, true);
+        file.url = bad.into();
+        assert!(download::refuse(&file).is_some(), "{bad}");
+    }
     let mut file = file_for(body, true);
     file.url = "http://cdn.modrinth.com/data/a/pack.zip".into();
     assert!(download::refuse(&file).is_some());
@@ -383,6 +446,6 @@ fn live_modrinth_search_pick_and_download() {
 #[test]
 fn curseforge_is_coming_soon_and_never_searched() {
     let ids: Vec<SourceId> = sources().iter().map(|s| s.id()).collect();
-    assert_eq!(ids, [SourceId::Modrinth]);
+    assert_eq!(ids, [SourceId::Modrinth, SourceId::Horizon]);
     assert!(source(SourceId::CurseForge).is_none());
 }

@@ -33,7 +33,7 @@ fn recipe_matches(condition: &Value, id: &str) -> bool {
 
 impl Game<'_> {
     /// `Level.setBlock` of one boolean property of the block at `pos`.
-    fn set_bool_prop(&mut self, pos: Pos, key: &str, value: bool, flags: i32) {
+    pub(crate) fn set_bool_prop(&mut self, pos: Pos, key: &str, value: bool, flags: i32) {
         let registry = self.pack.assets.registry;
         let old = self.world.block(pos.0, pos.1, pos.2);
         let Some(mut state) = registry.state(old).cloned() else {
@@ -121,7 +121,7 @@ impl Game<'_> {
             horizon_world::level::flags::UPDATE_CLIENTS,
         );
         // The remainders come from the grid as it was before anything moved.
-        let remainders = self.res.recipes().remainders(&recipe, &grid, 3);
+        let remainders = self.recipes().remainders(&recipe, &grid, 3);
         self.crafter_eject(key, facing, result, &recipe);
         for rest in remainders.into_iter().flatten() {
             self.crafter_eject(key, facing, rest, &recipe);
@@ -203,7 +203,7 @@ impl Game<'_> {
     pub(in crate::game) fn crafter_result(&self) -> Option<ItemStack> {
         let key = self.container?;
         let c = self.crafter_at(key)?;
-        self.res.recipes().craft(&c.items, 3)
+        self.recipes().craft(&c.items, 3)
     }
     fn crafter_open(&self) -> bool {
         matches!(self.container_kind(), Some(BlockEntity::Crafter(_)))
@@ -246,9 +246,15 @@ impl Game<'_> {
         self.paint_screen(batch, ox, oy, background, true);
         let atlas = &self.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
-        let title = self.container_title(self.translate("container.crafter", "Crafter"));
-        let tw = HudBatch::text_width(atlas, &title);
-        batch.text(
+        // A server's crafter menu has the title it was given.
+        let title = self.remote_menu_title().unwrap_or_else(|| {
+            horizon_client::text::Text::literal(
+                self.container_title(self.translate("container.crafter", "Crafter")),
+            )
+            .resolve_legacy()
+        });
+        let tw = atlas.font.width_text(&title);
+        batch.text_styled(
             atlas,
             &title,
             ox + ((176.0 - tw) / 2.0).trunc(),
@@ -256,7 +262,8 @@ impl Game<'_> {
             grey,
             false,
         );
-        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+        let inventory = self.translate("container.inventory", "Inventory");
+        batch.text(atlas, &inventory, ox + 8.0, oy + 72.0, grey, false);
         self.paint_screen(batch, ox, oy, rest, true);
     }
     /// `gui.togglable_slot` over an empty, enabled grid slot.

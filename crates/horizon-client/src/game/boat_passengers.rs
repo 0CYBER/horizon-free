@@ -13,7 +13,7 @@ use horizon_client::{
 use horizon_core::geometry::{Aabb, Vec3};
 
 /// `Entity.boardingCooldown` once a mob leaves its boat.
-const BOARDING_COOLDOWN: i32 = 60;
+pub(super) const BOARDING_COOLDOWN: i32 = 60;
 /// `Player.DEFAULT_VEHICLE_ATTACHMENT`: how far below the seat a player's
 /// feet are.
 const PLAYER_RIDING_OFFSET: f64 = 0.6;

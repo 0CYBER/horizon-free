@@ -5,11 +5,15 @@ use super::Game;
 use horizon_client::{
     mobs::{
         Species,
+        drops::{self, SLOTS},
+        finalize::equip_stack,
         gear::{self, ARMOR, MAIN},
+        spawner::equipment_table,
     },
     raid::{self, RaiderType},
 };
 use horizon_core::random::RandomSource;
+use horizon_world::{loot::EntityLootParams, nbt::Tag};
 
 /// `EnchantmentsByCostWithDifficulty` of `mob_spawn_equipment`.
 const MIN_COST: i32 = 5;
@@ -47,6 +51,60 @@ fn slot_item(m: &horizon_client::mobs::Mob, slot: usize) -> Option<std::sync::Ar
 }
 
 impl Game<'_> {
+    /// `Mob.equip(EquipmentTable)` for a spawner's `equipment`: the loot table
+    /// (the mob as `this`, its random sequence) is rolled and each stack goes
+    /// in the slot `EquipmentUser.resolveSlot` picks, with the table's drop
+    /// chance for that slot.
+    pub(super) fn equip_from_table(&mut self, id: u32, table: &Tag) {
+        let Some((name, chances)) = equipment_table(table) else {
+            return;
+        };
+        let Some(loot) = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        ) else {
+            return;
+        };
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if !loot.has_table(&name) {
+            return;
+        }
+        let params = EntityLootParams {
+            this: drops::loot_entity(m, None),
+            ..EntityLootParams::default()
+        };
+        let seed = self.level.seed;
+        let stacks = match loot.random_sequence(&name) {
+            Some(sequence) => {
+                let random = self.rand_sequences.get(sequence, seed);
+                loot.roll_entity(&name, random, &params)
+            }
+            None => loot.roll_entity(&name, &mut self.world.random, &params),
+        };
+        let mut inserted: Vec<usize> = Vec::new();
+        for stack in stacks.iter().filter(|s| !s.is_empty()) {
+            // `resolveSlot`: an `equippable` item goes in its own slot, any
+            // other in the main hand, each slot once.
+            let slot = match self
+                .res
+                .items()
+                .get(&stack.item)
+                .and_then(|i| i.equip_slot.as_deref())
+            {
+                Some(name) => SLOTS.iter().position(|s| *s == name),
+                None => Some(0),
+            };
+            let Some(slot) = slot.filter(|s| !inserted.contains(s)) else {
+                continue;
+            };
+            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                equip_stack(m, slot, stack, chances[slot]);
+            }
+            inserted.push(slot);
+        }
+    }
     /// `Mob.populateDefaultEquipmentEnchantments`: the weapon one time in
     /// four and each piece of armour one time in two, scaled by the local
     /// difficulty, enchanted as if at an enchanting table of cost 5 to 22.
@@ -91,9 +149,9 @@ impl Game<'_> {
         let cost = random
             .next_int_between_inclusive(MIN_COST, top)
             .unwrap_or(MIN_COST);
-        let e = &self.res.stations().enchantments;
+        let e = &world_stations!(self).enchantments;
         let pool = e.tag("minecraft:on_mob_spawn_equipment");
-        let picked = e.select(self.res.items(), random, item, cost, pool);
+        let picked = e.select(world_items!(self), random, item, cost, pool);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             for (enchantment, level) in picked {
                 gear::upgrade(m, slot, &enchantment, level);
@@ -126,13 +184,13 @@ impl Game<'_> {
                     0
                 };
                 if level > 0 {
-                    m.extra.main_hand = Some("minecraft:crossbow".into());
+                    m.extra.set_main_hand(Some("minecraft:crossbow".into()));
                     gear::set(m, MAIN, Vec::new());
                     gear::upgrade(m, MAIN, "minecraft:quick_charge", level);
                 }
             }
             RaiderType::Vindicator => {
-                m.extra.main_hand = Some("minecraft:iron_axe".into());
+                m.extra.set_main_hand(Some("minecraft:iron_axe".into()));
                 gear::set(m, MAIN, Vec::new());
                 if enchant {
                     let level = if wave > raid::num_groups(2) { 2 } else { 1 };

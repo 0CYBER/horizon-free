@@ -55,7 +55,7 @@ pub(super) struct Boat {
 /// `ChestBoat.CONTAINER_SIZE`.
 pub(super) const CHEST_SLOTS: usize = 27;
 pub(super) const WIDTH: f64 = 1.375;
-const HEIGHT: f64 = 0.5625;
+pub(super) const HEIGHT: f64 = 0.5625;
 impl Boat {
     pub fn new(id: u32, wood: Arc<str>, position: Vec3, yaw: f32) -> Self {
         Self {
@@ -587,6 +587,9 @@ impl Game<'_> {
     }
     /// The player's tick while riding: steer, tick the boat, sit in it.
     pub(super) fn tick_riding(&mut self, keys: Keys) -> horizon_client::Result<()> {
+        if self.tick_cushion_riding(keys) {
+            return Ok(());
+        }
         let Some(i) = self.boats.iter().position(|b| Some(b.id) == self.riding) else {
             if self.tick_cart_riding(keys) || self.tick_mount_riding(keys) {
                 return Ok(());
@@ -598,9 +601,10 @@ impl Game<'_> {
             self.dismount(i);
             return Ok(());
         }
-        let mut b = self.boats[i].clone();
+        // The boat steers with the input `LocalPlayer.rideTick` latched on the
+        // previous tick; this tick's keys are latched after it ticked.
+        let mut b = self.tick_boat(self.boats[i].clone(), true);
         b.input = [keys.left, keys.right, keys.forward, keys.backward];
-        let b = self.tick_boat(b, true);
         // positionRider: the seat, turned with the boat; clampRotation to 105 degrees.
         self.yaw += b.delta_rotation;
         let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
@@ -655,16 +659,30 @@ impl Game<'_> {
     }
     /// `BoatItem.use`: aim at a block or the water surface.
     pub(super) fn place_boat(&mut self, stack: &ItemStack) -> bool {
-        let Some((wood, chest)) = any_boat_wood(&stack.item) else {
+        let Some(boat) = self.boat_to_place(stack) else {
             return false;
         };
-        if !self.boat_models.has(wood, chest) {
-            return false;
+        self.next_entity += 1;
+        let key = (
+            boat.position.x.floor() as i32 >> 4,
+            boat.position.z.floor() as i32 >> 4,
+        );
+        self.world.modified.insert(key);
+        self.boats.push(boat);
+        if !self.creative {
+            self.consume_held();
         }
-        let Some(eye) = self.eye_position() else {
-            return false;
-        };
-        let dir = view_vector(self.yaw, self.pitch);
+        self.swing_arm();
+        true
+    }
+    /// The boat `BoatItem.use` would place for `stack` (its SUCCESS), or
+    /// None when it aims at nothing (PASS) or the spot is taken (FAIL).
+    pub(super) fn boat_to_place(&self, stack: &ItemStack) -> Option<Boat> {
+        let (wood, chest) = any_boat_wood(&stack.item)?;
+        if !self.boat_models.has(wood, chest) {
+            return None;
+        }
+        let (eye, dir) = self.aim()?;
         let reach = self.reach();
         // ClipContext.Fluid.ANY: the first fluid surface (water or lava) or
         // block along the ray.
@@ -704,7 +722,7 @@ impl Game<'_> {
             }
             (Some(b), None) => b.0,
             (None, Some(w)) => w.0,
-            (None, None) => return false,
+            (None, None) => return None,
         };
         let mut boat = Boat::new(
             self.next_entity + 1,
@@ -728,21 +746,12 @@ impl Game<'_> {
             subject: None,
         };
         if !scene.unobstructed(inner).unwrap_or(false) || self.boat_entity_collision(bb) {
-            return false;
+            return None;
         }
-        self.next_entity += 1;
-        let key = (hit[0].floor() as i32 >> 4, hit[2].floor() as i32 >> 4);
-        self.world.modified.insert(key);
-        self.boats.push(boat);
-        if !self.creative {
-            self.consume_held();
-        }
-        self.swing_arm();
-        true
+        Some(boat)
     }
     pub(super) fn boat_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, b) in self.boats.iter().enumerate() {
@@ -793,6 +802,7 @@ impl Game<'_> {
             self.screen = super::Screen::Inventory;
             self.capture(false);
             self.right = false;
+            self.swing_arm();
             return true;
         }
         if sneaking
@@ -805,18 +815,24 @@ impl Game<'_> {
         }
         self.riding = Some(self.boats[i].id);
         self.yaw = self.boats[i].yaw;
+        // ServerPlayer.startRiding.
+        self.trigger_player("minecraft:started_riding");
         true
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_boat(&mut self, damage: f32) -> bool {
+    pub(super) fn attack_boat(&mut self) -> bool {
         let Some((i, d)) = self.boat_hit() else {
             return false;
         };
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        self.vehicle_attack_sounds();
+        let area = self.boats[i].bounds();
+        // Player.attack's full damage against the boat's entity type.
+        let (kind, id) = (self.boats[i].entity_type(), self.boats[i].id as i32);
+        let (damage, _, _, magic) = self.melee_damage(&kind, false);
         self.hurt_boat(i, damage, self.creative);
+        self.vehicle_attack_sounds(area, magic.then_some(id));
         self.swing_arm();
         true
     }
@@ -859,7 +875,7 @@ impl Game<'_> {
         let a = alpha as f32;
         let range = super::entity_culling::default_range(
             glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
-            self.settings.entity_distance,
+            self.view_scale(),
         );
         for b in &self.boats {
             let entity_start = out.len();

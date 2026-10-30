@@ -27,6 +27,22 @@ impl Game<'_> {
             m.alt_key() || held([KeyCode::AltLeft, KeyCode::AltRight]),
         )
     }
+    /// Whether the held keys let a key's text through to the focused field
+    /// (`clipboard::types_text`): not with the edit modifier, unless it is
+    /// part of AltGr.
+    pub(super) fn types_text(&self) -> bool {
+        let held = |keys: [KeyCode; 2]| keys.iter().any(|k| self.physical_keys.contains(k));
+        let edit = if cfg!(target_os = "macos") {
+            held([KeyCode::SuperLeft, KeyCode::SuperRight])
+        } else {
+            held([KeyCode::ControlLeft, KeyCode::ControlRight])
+        };
+        clipboard::types_text(
+            edit,
+            held([KeyCode::AltLeft, KeyCode::AltRight]),
+            clipboard::ALTGR_IS_CTRL_ALT,
+        )
+    }
     /// A shortcut in an append-only field limited to `max_chars` characters
     /// (an `EditBox` with `setMaxLength`). True when the value changed.
     pub(super) fn append_shortcut(
@@ -63,8 +79,8 @@ impl Game<'_> {
             }
         }
     }
-    /// Typing or a backspace in a field of the title screens: in the server
-    /// screens' append-only fields Select All's selection is replaced first.
+    /// Typing or a backspace in a title-screen field. A field that still only
+    /// appends replaces a Select All selection before the edit.
     pub(super) fn title_edit(&mut self, typed: Option<&str>, backspace: bool) {
         let Some(title) = self.title.as_mut() else {
             return;
@@ -86,32 +102,31 @@ impl Game<'_> {
     }
     /// Shortcuts in the creative inventory's search box (an `EditBox` of 50).
     pub(super) fn creative_search_shortcut(&mut self, shortcut: EditShortcut) {
-        if Self::append_shortcut(
-            &mut self.text_selection,
-            &mut self.clipboard,
-            CREATIVE_SEARCH,
-            &mut self.creative_screen.search,
-            shortcut,
-            CREATIVE_SEARCH_CHARS,
-        ) {
+        if self
+            .creative_screen
+            .search
+            .shortcut(shortcut, &mut self.clipboard)
+        {
             self.creative_screen.scroll = 0.0;
         }
     }
-    /// Typing or a backspace in the creative search box.
-    pub(super) fn creative_search_edit(&mut self, typed: Option<&str>, backspace: bool) {
-        let search = &mut self.creative_screen.search;
-        let cleared = self.text_selection.take(CREATIVE_SEARCH, search);
-        if backspace {
-            if !cleared {
-                search.pop();
-            }
-        } else if let Some(text) = typed {
-            clipboard::append_limited(search, text, CREATIVE_SEARCH_CHARS);
-        }
+    /// A backspace in the creative search box: with Ctrl, the whole word
+    /// before the caret (`EditBox.deleteWords(-1)`), otherwise one character.
+    /// A selection is what it deletes, as in `EditBox.keyPressed`.
+    pub(super) fn creative_search_backspace(&mut self, ctrl: bool) {
+        self.creative_screen
+            .search
+            .key(KeyCode::Backspace, ctrl, false);
         self.creative_screen.scroll = 0.0;
+    }
+    /// Typing in the creative search box.
+    pub(super) fn creative_search_edit(&mut self, typed: Option<&str>) {
+        if let Some(text) = typed {
+            self.creative_screen.search.insert_text(text);
+            self.creative_screen.scroll = 0.0;
+        }
     }
 }
 
 /// `CreativeModeInventoryScreen`'s search box: `setMaxLength(50)`.
 pub(super) const CREATIVE_SEARCH_CHARS: usize = 50;
-pub(super) const CREATIVE_SEARCH: horizon_client::clipboard::FieldId = ("creative.search", 0);

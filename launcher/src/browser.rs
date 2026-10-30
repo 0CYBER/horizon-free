@@ -3,14 +3,17 @@
 //! matches (docs/mod-browser.md).
 //!
 //! Offered: Java mods (Fabric, NeoForge, Forge), whose content Horizon ports and whose jar is
-//! checked before install ([`java`]), modpacks (imported and ported) and resource packs
-//! (`resourcepacks/`). Java code itself doesn't run in Horizon (docs/mods.md).
+//! checked before install ([`java`]), modpacks (imported and ported), resource packs
+//! (`resourcepacks/`) and data packs (into a world, [`installed::install_datapack`]). Java code
+//! itself doesn't run in Horizon (docs/mods.md).
 pub mod curseforge;
 pub mod details;
 pub mod download;
+pub mod horizon;
 pub mod images;
 pub mod installed;
 pub mod java;
+pub mod java_instance;
 pub mod modrinth;
 
 use serde::{Deserialize, Serialize};
@@ -27,25 +30,39 @@ pub enum Kind {
     Modpack,
     /// A Java mod: its content is ported ([`java`]).
     Mod,
+    /// One of Horizon's own shader packs (`.hshader`, docs/shaders.md), from Horizon's registry
+    /// only.
+    Shader,
+    /// A data pack: it goes into one world's `datapacks/` (`crate::datapacks`).
+    DataPack,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack];
+    pub const ALL: [Kind; 5] = [
+        Kind::Mod,
+        Kind::Modpack,
+        Kind::ResourcePack,
+        Kind::Shader,
+        Kind::DataPack,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Kind::Mod => "Mods",
             Kind::ResourcePack => "Resource packs",
             Kind::Modpack => "Modpacks",
+            Kind::Shader => "Shader packs",
+            Kind::DataPack => "Data packs",
         }
     }
 
-    /// The folder beside `options.txt` the file goes in; a modpack is imported and a mod
-    /// ported instead.
+    /// The folder beside `options.txt` the file goes in; a modpack is imported, a mod ported
+    /// and a data pack put in a world instead.
     pub fn folder(self) -> Option<&'static str> {
         match self {
             Kind::ResourcePack => Some("resourcepacks"),
-            Kind::Modpack | Kind::Mod => None,
+            Kind::Shader => Some("shaderpacks"),
+            Kind::Modpack | Kind::Mod | Kind::DataPack => None,
         }
     }
 }
@@ -56,6 +73,8 @@ impl Kind {
 pub enum SourceId {
     Modrinth,
     CurseForge,
+    /// Horizon's own registry of reviewed mods, modpacks and resource packs ([`horizon`]).
+    Horizon,
 }
 
 impl SourceId {
@@ -63,6 +82,7 @@ impl SourceId {
         match self {
             SourceId::Modrinth => "Modrinth",
             SourceId::CurseForge => "CurseForge",
+            SourceId::Horizon => "Horizon",
         }
     }
 }
@@ -123,6 +143,19 @@ impl Project {
     pub fn support(&self) -> Support {
         support(self.kind, &self.game_versions, &self.loaders)
     }
+
+    /// The project as a data pack, for a search of data packs or an install into a world;
+    /// its page is Modrinth's data pack page.
+    pub fn as_datapack(self) -> Project {
+        Project {
+            page: match self.source {
+                SourceId::Modrinth => format!("https://modrinth.com/datapack/{}", self.slug),
+                _ => self.page,
+            },
+            kind: Kind::DataPack,
+            ..self
+        }
+    }
 }
 
 /// One downloadable file of a version, with the checksums its source publishes.
@@ -132,6 +165,8 @@ pub struct FileRef {
     pub name: String,
     pub size: u64,
     pub sha512: Option<String>,
+    /// What Horizon's registry lists.
+    pub sha256: Option<String>,
     pub sha1: Option<String>,
     pub primary: bool,
 }
@@ -139,11 +174,13 @@ pub struct FileRef {
 impl FileRef {
     /// The strongest checksum the source gives: what the download is checked against.
     pub fn checksum(&self) -> Option<(&'static str, &str)> {
-        match (&self.sha512, &self.sha1) {
-            (Some(h), _) => Some(("SHA-512", h)),
-            (None, Some(h)) => Some(("SHA-1", h)),
-            (None, None) => None,
-        }
+        [
+            ("SHA-512", &self.sha512),
+            ("SHA-256", &self.sha256),
+            ("SHA-1", &self.sha1),
+        ]
+        .into_iter()
+        .find_map(|(algo, h)| Some((algo, h.as_deref()?)))
     }
 }
 
@@ -229,11 +266,15 @@ pub trait Source: Send + Sync {
 
 /// What the launcher says wherever CurseForge would be.
 pub const CURSEFORGE_SOON: &str = "CurseForge support is coming soon.";
+/// What another source answers for shader packs: Horizon's own are on its registry only.
+pub const SHADERS_ON_HORIZON: &str =
+    "Horizon's shader packs are on Horizon's registry: pick Horizon.";
 
-/// The sources this launcher uses: Modrinth. CurseForge support is coming soon: its API needs a
-/// paid key, so no search or install goes to it; `curseforge` is kept for then.
+/// The sources this launcher uses: Modrinth and Horizon's registry. CurseForge support is coming
+/// soon: its API needs a paid key, so no search or install goes to it; `curseforge` is kept for
+/// then.
 pub fn sources() -> Vec<Box<dyn Source>> {
-    vec![Box::new(modrinth::Modrinth)]
+    vec![Box::new(modrinth::Modrinth), Box::new(horizon::Registry)]
 }
 
 /// The source of that id, when this launcher can use it.
@@ -243,6 +284,15 @@ pub fn source(id: SourceId) -> Option<Box<dyn Source>> {
 
 /// How well a project of `kind` made for `game_versions` and `loaders` runs in Horizon.
 pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Support {
+    if loaders.iter().any(|l| l == horizon::LOADER) {
+        // Made for Horizon and reviewed: it runs when it is for the version Horizon plays.
+        return match newest_release(game_versions)
+            .filter(|_| !game_versions.iter().any(|v| v == GAME))
+        {
+            Some(other) => Support::No(format!("Made for Horizon on {other}.")),
+            None => Support::Works,
+        };
+    }
     match kind {
         Kind::ResourcePack => {
             if game_versions.iter().any(|v| v == GAME) {
@@ -258,6 +308,15 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
         }
         Kind::Modpack => {
             Support::Partial("Horizon runs the mods it can port, from your own downloads.".into())
+        }
+        Kind::Shader => Support::No("Not one of Horizon's own shader packs.".into()),
+        Kind::DataPack => {
+            let made_for = match newest_release(game_versions) {
+                _ if game_versions.iter().any(|v| v == GAME) => String::new(),
+                Some(newest) => format!("Made for {newest}: the game may refuse it. "),
+                None => "Lists no Minecraft version. ".into(),
+            };
+            Support::Partial(format!("{made_for}{DATAPACK_SUPPORT}"))
         }
         Kind::Mod => {
             if !loaders.iter().any(|l| java::LOADERS.contains(&l.as_str())) {
@@ -275,6 +334,12 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
         }
     }
 }
+
+/// What a data pack does in Horizon today, said before install; the install says it for the
+/// pack's own files (`crate::datapacks::coverage`).
+pub const DATAPACK_SUPPORT: &str = "Horizon runs a data pack's functions, function tags, \
+     predicates and item modifiers; not yet its recipes, loot tables, advancements, other tags \
+     or worldgen.";
 
 /// A Minecraft version whose mods port-pack carries over: 1.21 and later (the data folders
 /// took their current names in 1.21).
@@ -309,6 +374,12 @@ pub fn pick(kind: Kind, versions: &[Version], everything: bool) -> Option<&Versi
     let mut usable = versions
         .iter()
         .filter(|v| v.blocked.is_none() && v.file().is_some());
+    if versions
+        .iter()
+        .any(|v| v.loaders.iter().any(|l| l == horizon::LOADER))
+    {
+        return usable.find(|v| v.game_versions.iter().any(|g| g == GAME));
+    }
     if kind == Kind::Mod {
         let java = |v: &&Version| {
             v.loaders
@@ -322,6 +393,15 @@ pub fn pick(kind: Kind, versions: &[Version], everything: bool) -> Option<&Versi
             .filter(java)
             .find(made_for)
             .or_else(|| usable.filter(java).find(|v| everything && ported(v)));
+    }
+    if kind == Kind::DataPack {
+        // Most data packs on Modrinth ship a mod build too: only the data pack files.
+        let mut packs = usable.filter(|v| v.loaders.iter().any(|l| l == "datapack"));
+        let made_for = |v: &&Version| v.game_versions.iter().any(|g| g == GAME);
+        return packs
+            .clone()
+            .find(made_for)
+            .or_else(|| packs.find(|_| everything));
     }
     let runs = |v: &&Version| match support(kind, &v.game_versions, &v.loaders) {
         Support::Works => true,

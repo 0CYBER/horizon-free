@@ -1,0 +1,18 @@
+schema = 1
+id = "{{id}}"
+name = "{{name}}"
+version = "0.1.0"
+api = "0.1"
+description = "How block surfaces are lit."
+
+[material]
+file = "material.wgsl"
+
+[[options]]
+id = "contrast"
+name = "Light contrast"
+type = "float"
+default = 1.2
+min = 0.5
+max = 2.0
+step = 0.05

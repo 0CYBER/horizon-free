@@ -29,6 +29,11 @@ pub struct Ticks {
     /// Moving-piston block entities in ticker order (render and collide
     /// moving blocks from these; see `piston_shape`).
     pub moving_pistons: Vec<(BlockPos, super::pistons::MovingPiston)>,
+    /// The pushes this tick's moving-piston block entities asked for: each
+    /// piston with the progress it is about to reach, in the order they ticked
+    /// (`PistonMovingBlockEntity.tick`'s `moveCollidedEntities` call). The
+    /// caller moves entities by these; `Ticks` has no entities of its own.
+    pub piston_pushes: Vec<(BlockPos, super::pistons::MovingPiston, f32)>,
     pub(crate) next_block_entity_id: u64,
     /// `ServerLevel.blockEvents`, run by `Behaviours::run_block_events`.
     pub block_events: Vec<super::pistons::BlockEventData>,
@@ -65,6 +70,7 @@ impl Ticks {
             comparator_outputs: Default::default(),
             torch_toggles: Vec::new(),
             moving_pistons: Vec::new(),
+            piston_pushes: Vec::new(),
             next_block_entity_id: 0,
             block_events: Vec::new(),
             handling_tick: false,
@@ -80,6 +86,13 @@ impl Ticks {
     ) -> Result<(), TickError> {
         self.blocks.add_chunk(pos, blocks)?;
         self.fluids.add_chunk(pos, fluids)
+    }
+    /// A moving-piston block entity loaded with its chunk, as a new ticker.
+    pub fn load_moving_piston(&mut self, pos: BlockPos, mut piston: super::pistons::MovingPiston) {
+        self.moving_pistons.retain(|(p, _)| *p != pos);
+        self.next_block_entity_id += 1;
+        piston.id = self.next_block_entity_id;
+        self.moving_pistons.push((pos, piston));
     }
     /// Register a chunk without saved ticks.
     pub fn add_empty_chunk(&mut self, pos: ChunkPos) -> Result<(), TickError> {
