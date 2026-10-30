@@ -13406,13 +13406,13 @@ impl Game<'_> {
             .count();
         horizon_client::level_loading::progress(ready)
     }
-    /// `LevelLoadingScreen.extractBackground` and `extractRenderState`.
-    fn draw_level_loading(
+    /// `LevelLoadingScreen.extractBackground`.
+    pub(super) fn draw_level_loading_background(
         &self,
         batch: &mut HudBatch,
         reason: horizon_client::level_loading::Reason,
     ) {
-        use horizon_client::level_loading::{self, Reason, STATUS_RADIUS};
+        use horizon_client::level_loading::Reason;
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         match reason {
@@ -13426,6 +13426,16 @@ impl Game<'_> {
             }
             Reason::EndPortal => batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255)),
         }
+    }
+    /// `LevelLoadingScreen.extractBackground` and `extractRenderState`.
+    fn draw_level_loading(
+        &self,
+        batch: &mut HudBatch,
+        reason: horizon_client::level_loading::Reason,
+    ) {
+        use horizon_client::level_loading::{self, STATUS_RADIUS};
+        self.draw_level_loading_background(batch, reason);
+        let atlas = &self.gui.atlas;
         let (cx, cz) = self.streaming.center;
         let status = |x: i32, z: i32| {
             self.streaming.latest_status(
