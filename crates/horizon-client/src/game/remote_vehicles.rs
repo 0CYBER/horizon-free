@@ -9,7 +9,7 @@
 //! server (`LocalPlayer.tick`: `ServerboundMoveVehiclePacket`,
 //! `AbstractBoat.tick`: `ServerboundPaddleBoatPacket`). A minecart moves on
 //! the server with the rider's input, and the rider sits in it.
-use super::{Game, Keys, ray_box, view_vector};
+use super::{Game, Keys, ray_box};
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
@@ -26,8 +26,7 @@ impl Game<'_> {
     /// The nearest boat, minecart, item frame, armor stand or painting the
     /// view hits within reach; also End crystals when attacking.
     pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let at = |d: f64| {
             [
                 eye[0] + dir[0] * d,
@@ -117,6 +116,13 @@ impl Game<'_> {
                 m.extra.passenger = true;
             }
         }
+        for (id, display) in &mut self.text_displays {
+            if passengers.contains(id) {
+                display.vehicle = Some(vehicle_id);
+            } else if display.vehicle == Some(vehicle_id) {
+                display.vehicle = None;
+            }
+        }
         if passengers.contains(&me) {
             if self.riding != Some(vehicle_id) {
                 self.riding = Some(vehicle_id);
@@ -161,9 +167,11 @@ impl Game<'_> {
             Some(c.seat())
         } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             // AbstractBoat.tick on the controlling client: steer and move.
-            let mut b = self.boats[i].clone();
+            // It steers with the input `LocalPlayer.rideTick` latched on the
+            // previous tick, so the paddle packet describes the motion the
+            // server is sent; this tick's keys are latched after it ticked.
+            let mut b = self.tick_boat(self.boats[i].clone(), true);
             b.input = [keys.left, keys.right, keys.forward, keys.backward];
-            let b = self.tick_boat(b, true);
             // positionRider: the seat turns with the boat; clampRotation.
             self.yaw += b.delta_rotation;
             let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;

@@ -109,16 +109,6 @@ fn offset(p: Pos, d: Direction) -> Pos {
     let s = step(d);
     (p.0 + s[0], p.1 + s[1], p.2 + s[2])
 }
-fn clockwise(d: Direction) -> Direction {
-    match d {
-        Direction::North => Direction::East,
-        Direction::East => Direction::South,
-        Direction::South => Direction::West,
-        Direction::West => Direction::North,
-        other => other,
-    }
-}
-
 /// State-level container queries shared by the game and comparator signals.
 struct Containers<'a> {
     world: &'a World,
@@ -161,10 +151,14 @@ impl Containers<'_> {
             });
         }
         let entity = self.world.block_entities.get(&pos)?;
-        // A beehive keeps bees, not items, and a campfire cooks its own: neither
-        // is a `Container` (HopperBlockEntity.getContainerAt), so a dropper drops
-        // in front of them and a hopper leaves them alone.
-        if matches!(entity, BlockEntity::Beehive(_) | BlockEntity::Campfire(_)) {
+        // A beehive keeps bees, not items, a campfire cooks its own and
+        // suspicious sand or gravel hides its loot: none is a `Container`
+        // (HopperBlockEntity.getContainerAt), so a dropper drops in front of
+        // them and a hopper leaves them alone.
+        if matches!(
+            entity,
+            BlockEntity::Beehive(_) | BlockEntity::Campfire(_) | BlockEntity::Brushable(_)
+        ) {
             return None;
         }
         let kind = match (entity, name) {
@@ -176,7 +170,7 @@ impl Containers<'_> {
             _ => Kind::Generic,
         };
         let size = entity.slots().len();
-        if matches!(name, "minecraft:chest" | "minecraft:trapped_chest") {
+        if horizon_client::containers::is_chest_block(name) {
             let is_blocked = |p: Pos| {
                 let above = self.world.block(p.0, p.1 + 1, p.2);
                 self.behaviours.facts(above).flags
@@ -186,22 +180,19 @@ impl Containers<'_> {
             if blocked_chests && is_blocked(pos) {
                 return None;
             }
-            let kind_prop = self.prop(state, "type").unwrap_or("single");
-            if kind_prop != "single"
-                && let Some(facing) = self.prop(state, "facing").and_then(dir_from_name)
+            let half = |s: BlockStateId| {
+                Some(horizon_client::containers::ChestHalf {
+                    block: self.name(s),
+                    kind: self.prop(s, "type")?,
+                    facing: self.prop(s, "facing")?,
+                })
+            };
+            if let Some(own) = half(state)
+                && let Some((dx, dz)) = own.connected_step()
             {
-                // ChestBlock.getConnectedDirection
-                let connected = if kind_prop == "left" {
-                    clockwise(facing)
-                } else {
-                    clockwise(clockwise(clockwise(facing)))
-                };
-                let other = offset(pos, connected);
+                let other = (pos.0 + dx, pos.1, pos.2 + dz);
                 let other_state = self.world.block(other.0, other.1, other.2);
-                let paired = self.name(other_state) == name
-                    && self
-                        .prop(other_state, "type")
-                        .is_some_and(|t| t != "single" && t != kind_prop)
+                let paired = half(other_state).is_some_and(|o| own.pairs_with(&o))
                     && self
                         .world
                         .block_entities
@@ -211,7 +202,7 @@ impl Containers<'_> {
                     if blocked_chests && is_blocked(other) {
                         return None;
                     }
-                    let parts = if kind_prop == "right" {
+                    let parts = if own.kind == "right" {
                         vec![(pos, size), (other, 27)]
                     } else {
                         vec![(other, 27), (pos, size)]
@@ -435,15 +426,17 @@ pub(super) fn shelf_signal(
             _ => 0,
         });
     }
-    let tag = super::spill::saved_entity(world, [pos.x, pos.y, pos.z]);
     // Only read from the back: a bit for each of the three slots in use.
     let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
     if facing.map(Direction::opposite) != Some(direction) {
         return Some(0);
     }
-    let items = horizon_client::save::decode_items(tag.as_ref().and_then(|t| t.get("Items")), 3);
+    let Some(BlockEntity::Shelf(shelf)) = world.block_entities.get(&(pos.x, pos.y, pos.z)) else {
+        return Some(0);
+    };
     Some(
-        items
+        shelf
+            .items
             .iter()
             .enumerate()
             .map(|(slot, item)| i32::from(item.is_some()) << slot)
@@ -456,9 +449,9 @@ impl Game<'_> {
         Containers {
             world: &self.world,
             behaviours: self.res.behaviours(),
-            items: self.res.items(),
+            items: self.items(),
             registry: self.pack.assets.registry,
-            brewing: Some(&self.res.stations().brewing),
+            brewing: Some(&self.stations().brewing),
             bone_meal: bone_meal(),
         }
     }
@@ -486,6 +479,12 @@ impl Game<'_> {
             return;
         }
         self.chiseled_bookshelf_synced(pos);
+        if matches!(
+            self.world.block_entities.get(&pos),
+            Some(BlockEntity::Shelf(_))
+        ) {
+            self.mark_block_entity_updated(pos);
+        }
         // A double chest's other half changes with it.
         let halves: Vec<Pos> = std::iter::once(pos)
             .chain(self.chest_other_half(pos))
