@@ -45,7 +45,8 @@ SCRIPT = [
     # more than one player in the same command.
     ('console-alice-end', [f'console execute in {END} run tp Alice 0.5 100 0.5']),
     ('console-bob-to-alice', ['console tp Bob Alice']),
-    ('console-both-back', [f'console execute in {OVERWORLD} run tp @a 2.5 100 0.5']),
+    ('console-alice-back', [f'console execute in {OVERWORLD} run tp Alice 0.5 100 0.5']),
+    ('console-bob-back2', [f'console execute in {OVERWORLD} run tp Bob 2.5 100 0.5']),
     # Through an End portal (Entity.handlePortal), and back by command.
     ('bob-portal', ['cmd Bob setblock 2 101 3 minecraft:end_portal', 'cmd Bob tp @s 2.5 101 3.5']),
     ('bob-portal-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
