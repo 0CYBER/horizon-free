@@ -776,7 +776,7 @@ impl Game<'_> {
     /// `EquipmentDispenseItemBehavior.dispenseEquipment`: the first living
     /// entity in front that `canEquipWithDispenser` gets one of the item.
     fn dispense_equipment(&mut self, pos: Pos, facing: Direction, stack: &mut ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item) else {
+        let Some(info) = self.items().get(&stack.item) else {
             return false;
         };
         let (Some(slot), true) = (
@@ -1683,10 +1683,10 @@ impl Game<'_> {
         table: &str,
         held: Option<&ItemStack>,
     ) -> Vec<ItemStack> {
-        match self.res.items().loot_sequence(parent) {
+        match world_items!(self).loot_sequence(parent) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items().loot_table_from(table, false, held, random)
+                world_items!(self).loot_table_from(table, false, held, random)
             }
             None => self
                 .res

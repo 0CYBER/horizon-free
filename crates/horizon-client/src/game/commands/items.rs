@@ -600,7 +600,7 @@ impl Game<'_> {
         if let Some(Tag::Int(n)) = s.data().and_then(|d| d.other("minecraft:max_stack_size")) {
             return (*n).clamp(1, 99) as u32;
         }
-        self.res.items().get(&s.item).map_or(64, |i| i.max_stack)
+        self.items().get(&s.item).map_or(64, |i| i.max_stack)
     }
     /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
     /// a registered one.

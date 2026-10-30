@@ -427,18 +427,30 @@ impl Game<'_> {
         if !alive || self.riding.is_some() || self.sleeping.is_some() {
             return;
         }
+        // The client's LocalPlayer has the same cooldown (the Respawn
+        // packet's spawn info): standing in the arrival portal, its overlay
+        // fades instead of building up again.
+        let cooling = self.portals.player.cooldown > 0;
         self.portals.player.set_inside(pos, PLAYER_DELAY);
-        self.portals.client_inside = true;
+        if !cooling {
+            self.portals.client_inside = true;
+        }
     }
     /// The same on a server's client: `Entity.canUsePortal` (alive, not a
     /// passenger), then only the client's `setAsInsidePortal`, which drives
-    /// the confusion effect (`client_portal_effect`).
+    /// the confusion effect (`client_portal_effect`). On a server's client
+    /// `portals.player` holds only the LocalPlayer's `portalCooldown`.
     pub(super) fn client_inside_nether_portal(&mut self) {
         let alive = self
             .player
             .as_ref()
             .is_some_and(|p| !p.health.dead_or_dying());
-        if alive && self.riding.is_none() {
+        if !alive || self.riding.is_some() {
+            return;
+        }
+        if self.portals.player.cooldown > 0 {
+            self.portals.player.cooldown = PLAYER_DELAY;
+        } else {
             self.portals.client_inside = true;
         }
     }

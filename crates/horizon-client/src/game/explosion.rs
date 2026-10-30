@@ -329,7 +329,13 @@ impl Game<'_> {
         }
     }
 
-    fn explosion_hurt_entities(&mut self, center: [f64; 3], radius: f32, damage_type: &str) {
+    fn explosion_hurt_entities(
+        &mut self,
+        center: [f64; 3],
+        radius: f32,
+        damage_type: &str,
+        interaction: BlockInteraction,
+    ) {
         if radius < 1.0e-5 {
             return;
         }
@@ -440,6 +446,7 @@ impl Game<'_> {
             );
         }
         self.mobs = mobs;
+        self.explosion_breaks_frames(center, diameter, interaction);
         // Dropped items: 5 health, destroyed by the explosion damage (nether stars resist).
         let mut items = std::mem::take(&mut self.dropped);
         items.retain_mut(|item| {
@@ -579,7 +586,7 @@ impl Game<'_> {
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.exploded_positions(center, radius, resists);
-        self.explosion_hurt_entities(center, radius, damage_type);
+        self.explosion_hurt_entities(center, radius, damage_type, interaction);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)
             for i in (2..=targets.len()).rev() {
@@ -681,7 +688,7 @@ impl Game<'_> {
             // tables' survives_explosion and explosion_decay draw from their
             // random sequence.
             let decay = (interaction == BlockInteraction::DestroyWithDecay).then_some(radius);
-            let drops = self.res.items().block_drops_exploded(
+            let drops = world_items!(self).block_drops_exploded(
                 self.pack.assets.registry,
                 state,
                 None,

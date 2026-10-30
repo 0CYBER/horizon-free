@@ -720,7 +720,7 @@ impl Game<'_> {
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
         let Some(asset) = chest
-            .and_then(|item| self.res.items().get(item))
+            .and_then(|item| self.items().get(item))
             .and_then(|i| i.equip_asset.as_ref())
         else {
             return;
