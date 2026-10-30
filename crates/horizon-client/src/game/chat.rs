@@ -474,6 +474,7 @@ impl Game<'_> {
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;
         }
+        self.ui.registries.custom_completions = self.remote_custom_completions();
     }
     /// `ChatComponent.createScreen`: T or / opens the chat with the draft kept
     /// last time, when this method can restore it (a command draft only for
@@ -1204,7 +1205,7 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
-        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let below_world = p.position.y < f64::from(self.world.bottom_y() - 64);
         let name = self.player_display_text();
         let message = match cause {
             Some(key) => Text::translate(&key, &[name]),
