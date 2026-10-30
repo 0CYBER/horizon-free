@@ -18,7 +18,7 @@ impl Game<'_> {
         let Some(name) = self
             .held()
             .filter(|h| &*h.item == "minecraft:name_tag")
-            .and_then(|h| h.custom_name().map(str::to_owned))
+            .and_then(|h| h.custom_name())
         else {
             return false;
         };
@@ -77,7 +77,7 @@ impl Game<'_> {
             || self.camera_type.first_person()
             || self.sleeping.is_some()
             || self.spectator()
-            || self.potions.effects.get("invisibility").is_some()
+            || self.own_invisible()
         {
             return None;
         }

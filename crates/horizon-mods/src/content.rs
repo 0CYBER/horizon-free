@@ -90,6 +90,8 @@ struct BlockFile {
     #[serde(default)]
     properties: BlockProperties,
     shapes: Option<BlockShapes>,
+    #[serde(default)]
+    default_state: BTreeMap<String, String>,
     #[serde(default = "yes")]
     item: bool,
 }
@@ -107,6 +109,8 @@ pub struct Block {
     pub template: String,
     pub properties: BlockProperties,
     pub shapes: Option<BlockShapes>,
+    /// State properties overlaid on the template default.
+    pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
 }
@@ -344,6 +348,7 @@ impl Content {
                 template: file.template,
                 properties: file.properties,
                 shapes: file.shapes,
+                default_state: file.default_state,
                 item: file.item,
             });
         }
@@ -525,6 +530,7 @@ capabilities = ["registries"]
                 id: "ruby:ruby_block".into(),
                 template: "minecraft:iron_block".into(),
                 shapes: None,
+                default_state: BTreeMap::new(),
                 properties: BlockProperties {
                     hardness: Some(4.0),
                     light: Some(3),

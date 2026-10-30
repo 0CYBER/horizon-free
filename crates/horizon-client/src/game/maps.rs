@@ -1074,7 +1074,7 @@ impl Game<'_> {
                         for dz in 0..scale {
                             let (x, z) = (min_x + dx, min_z + dz);
                             let mut y = self.world_surface(x, z);
-                            let min_y = super::MIN_Y;
+                            let min_y = self.world.bottom_y();
                             let mut color;
                             if y <= min_y {
                                 color = 11;

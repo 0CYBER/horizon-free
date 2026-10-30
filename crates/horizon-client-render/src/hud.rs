@@ -59,6 +59,8 @@ pub struct HudAtlas {
     pub width: u32,
     pub height: u32,
     pub sprites: HashMap<String, Rect>,
+    /// Resolved player-profile names and UUIDs for inline head components.
+    pub object_skins: HashMap<String, String>,
     /// Sprites with a 0 < alpha < 255 texel (`SpriteContents.transparency().hasTranslucent`),
     /// which puts their particles on vanilla's translucent layer.
     pub translucent: HashSet<String>,
@@ -90,9 +92,9 @@ pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
-/// Vanilla registers a texture per skin. Here a skin evicted from its slot
-/// is not stored again, and its player falls back to the default skin, so
-/// the slots must cover a busy server's player list.
+/// Vanilla registers a texture per skin. Here the slots are shared
+/// (`skins::SkinSlots`): skins drawn in the last frame keep theirs, and a
+/// skin past them shows the default skin until a slot frees up.
 pub const SKIN_SLOTS: usize = 128;
 /// Reused by the visible rows of the classic world selector.
 pub const WORLD_ICON_SLOTS: usize = 32;
@@ -166,6 +168,31 @@ fn strip_frame(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Ve
     }
     out
 }
+/// The `animation` section of a texture's `.mcmeta`.
+fn animation_of(mcmeta: Option<&str>) -> Option<AnimationMetadata> {
+    let meta: serde_json::Value = serde_json::from_str(mcmeta?).ok()?;
+    AnimationMetadata::from_json(&meta.get("animation")?.to_string()).ok()
+}
+/// An animated strip's first frame: the region the mcmeta's frame size picks
+/// (`AnimationMetadataSection.frameSize`), which is the top-left square unless
+/// it names other dimensions or the frames run along a row.
+fn first_frame(
+    (w, h, pixels): (u32, u32, Vec<u8>),
+    animation: Option<&AnimationMetadata>,
+) -> (u32, u32, Vec<u8>) {
+    let [fw, fh] = animation.map_or([w.min(h) as i32; 2], |meta| {
+        meta.frame_size(w as i32, h as i32)
+    });
+    match (u32::try_from(fw), u32::try_from(fh)) {
+        (Ok(fw), Ok(fh))
+            if fw > 0 && fh > 0 && w % fw == 0 && h % fh == 0 && (fw, fh) != (w, h) =>
+        {
+            let side = fw.max(fh);
+            (side, side, strip_frame(&pixels, w, 0, 0, fw, fh))
+        }
+        _ => (w, h, pixels),
+    }
+}
 /// `image` inside a one-texel border copied from its opposite edges, the
 /// texels repeat addressing reads past each edge.
 fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
@@ -182,8 +209,9 @@ fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
 }
 /// Sprites the atlas definitions (`atlases/*.json`) add beyond the texture
 /// files already packed: generated ones (`paletted_permutations` such as the
-/// armour trim sprites, `unstitch` regions) and files listed under another id.
-fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
+/// armour trim sprites, `unstitch` regions) and files listed under another id,
+/// such as other namespaces' item textures; and the animated ones' names.
+fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> (Vec<PackedImage>, Vec<String>) {
     use crate::atlas_sources::{self, SpriteOrigin};
     let have: std::collections::HashSet<&str> = packed.iter().map(|i| i.0.as_str()).collect();
     let textures = atlas_sources::list_textures(root);
@@ -227,31 +255,65 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
     };
     let first = |(name, origins): &(String, Vec<(usize, SpriteOrigin)>)| {
         origins.iter().find_map(|(order, origin)| {
+            let mut animated = false;
             let image = match origin {
                 SpriteOrigin::File(texture) => {
-                    let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    load(texture, "textures").map(|(w, h, p)| {
-                        // Animated strips keep their first frame, like the packed files.
-                        if h > w && (path.starts_with("block/") || path.starts_with("item/")) {
-                            (w, w, p[..(w * w * 4) as usize].to_vec())
+                    // Its path under `textures/` in any namespace (a server
+                    // pack's `lobby:item/...` as well as vanilla's).
+                    let path = texture.split_once(':').map_or(texture.as_str(), |(_, p)| p);
+                    let file = atlas_sources::texture_path(root, texture, "textures");
+                    decode(&file).ok().map(|image| {
+                        // Animated strips keep their first frame and animate,
+                        // like the packed files.
+                        if path.starts_with("block/") || path.starts_with("item/") {
+                            let mcmeta = fs::read_to_string(file.with_extension("png.mcmeta")).ok();
+                            let animation = animation_of(mcmeta.as_deref());
+                            animated = animation.is_some();
+                            first_frame(image, animation.as_ref())
                         } else {
-                            (w, h, p)
+                            image
                         }
                     })
                 }
                 generated => atlas_sources::generate(generated, &load),
             };
-            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels)))
+            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels), animated))
         })
     };
     let mut out: Vec<_> = crate::par::par_map(&names, first)
         .into_iter()
         .flatten()
         .collect();
-    out.sort_unstable_by_key(|(order, _)| *order);
-    out.into_iter().map(|(_, image)| image).collect()
+    out.sort_unstable_by_key(|(order, ..)| *order);
+    let animated = out
+        .iter()
+        .filter(|(.., animated)| *animated)
+        .map(|(_, image, _)| image.0.clone())
+        .collect();
+    (
+        out.into_iter().map(|(_, image, _)| image).collect(),
+        animated,
+    )
 }
 impl HudAtlas {
+    /// Keep a ready profile skin when another source only has its default.
+    pub fn set_object_skin(&mut self, key: String, skin: String) {
+        use std::collections::hash_map::Entry;
+        if self.object_skins.len() >= 1024 && !self.object_skins.contains_key(&key) {
+            self.object_skins.clear();
+        }
+        match self.object_skins.entry(key) {
+            Entry::Occupied(entry)
+                if skin.starts_with("entity/player/") && self.sprites.contains_key(entry.get()) => {
+            }
+            Entry::Occupied(mut entry) => {
+                entry.insert(skin);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(skin);
+            }
+        }
+    }
     /// A font glyph's atlas cell (8x8 GUI pixels) and advance.
     pub fn glyph(&self, ch: char) -> Option<(Rect, f32)> {
         let g = self.font.glyph(ch);
@@ -405,37 +467,15 @@ impl HudAtlas {
                 .with_extension("")
                 .to_string_lossy()
                 .replace('\\', "/");
-            let (mut w, mut h, pixels) = decode(path).ok()?;
+            let image = decode(path).ok()?;
             let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
-            let animation = mcmeta
-                .as_deref()
-                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                .and_then(|meta| {
-                    meta.get("animation")
-                        .and_then(|section| AnimationMetadata::from_json(&section.to_string()).ok())
-                });
-            // An animated strip keeps its first frame: the region the mcmeta's
-            // frame size picks (`AnimationMetadataSection.frameSize`), which is
-            // the top-left square unless it names other dimensions or the
-            // frames run along a row.
+            let animation = animation_of(mcmeta.as_deref());
+            // An animated strip keeps its first frame.
             let frames = name.starts_with("block/") || name.starts_with("item/");
-            let pixels = if frames {
-                let stride = w;
-                let [fw, fh] = animation.as_ref().map_or([w.min(h) as i32; 2], |meta| {
-                    meta.frame_size(w as i32, h as i32)
-                });
-                match (u32::try_from(fw), u32::try_from(fh)) {
-                    (Ok(fw), Ok(fh))
-                        if fw > 0 && fh > 0 && w % fw == 0 && h % fh == 0 && (fw, fh) != (w, h) =>
-                    {
-                        let side = fw.max(fh);
-                        (w, h) = (side, side);
-                        strip_frame(&pixels, stride, 0, 0, fw, fh)
-                    }
-                    _ => pixels,
-                }
+            let (w, h, pixels) = if frames {
+                first_frame(image, animation.as_ref())
             } else {
-                pixels
+                image
             };
             // The default texture's size, when a pack's differs from it.
             let gui_size = default_textures
@@ -487,7 +527,9 @@ impl HudAtlas {
             images.push(image);
         }
         if full {
-            images.extend(atlas_sprites(root, &images));
+            let (more, more_animated) = atlas_sprites(root, &images);
+            images.extend(more);
+            animated.extend(more_animated);
         }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
         if let Some(edition) = images
@@ -559,7 +601,15 @@ impl HudAtlas {
             let Some(rect) = sprites.get(&name).copied() else {
                 continue;
             };
-            let layer = loaded.insert(root, &format!("minecraft:{name}"))?;
+            // Another namespace's sprite is named with it (`lobby:item/...`).
+            let id = if name.contains(':') {
+                name.clone()
+            } else {
+                format!("minecraft:{name}")
+            };
+            let Ok(layer) = loaded.insert(root, &id) else {
+                continue;
+            };
             let Some(animation) = loaded.animations.iter().find(|a| a.layer == layer).cloned()
             else {
                 continue;
@@ -592,6 +642,7 @@ impl HudAtlas {
             width,
             height,
             sprites,
+            object_skins: HashMap::new(),
             translucent,
             flags,
             sprite_animations,
@@ -641,6 +692,8 @@ pub struct HudBatch {
     pub glint_alpha: f32,
     /// Screen's first vertex: the preceding HUD is part of its blurred background.
     pub blur_at: u32,
+    /// Player object profiles encountered while painting text this frame.
+    pub inline_profiles: Vec<serde_json::Value>,
 }
 /// How a run of HUD vertices blends and tests depth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -692,6 +745,7 @@ impl HudBatch {
             end_portal: EndPortalFill::default(),
             glint_alpha: 0.75,
             blur_at: 0,
+            inline_profiles: Vec::new(),
         }
     }
     /// Draw the vertices added since `start` with the inverting blend.
@@ -1042,40 +1096,67 @@ impl HudBatch {
         let mut cursor = x;
         let mut previous = None;
         for (i, (ch, style)) in text.chars().enumerate() {
+            let object = (ch == '\u{fffc}')
+                .then_some(style.inline_object.as_ref())
+                .flatten();
+            if let Some(crate::text::InlineObject::Player { profile, .. }) = object
+                && self.inline_profiles.len() < 256
+                && !self.inline_profiles.contains(profile)
+            {
+                self.inline_profiles.push(profile.clone());
+            }
             // Font.PreparedTextBuilder.accept: lines start 1 left of a
             // sequence's first character. Language.getVisualOrder makes a
             // sequence of each run of one style, which world text has.
             let first = i == 0 || world && previous != Some(style);
             previous = Some(style);
             // The style's font (`Style.getFont`), the default one unless set.
-            let mut g = font.glyph_styled(ch, style);
+            let mut g = if object.is_some() {
+                crate::font::Glyph {
+                    rect: None,
+                    left: 0.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 8.0,
+                    advance: 8.0,
+                    offset: 0.0,
+                }
+            } else {
+                font.glyph_styled(ch, style)
+            };
             // Font.StringRenderOutput.accept: obfuscated characters draw a
             // random glyph of the same width each frame.
-            if style.obfuscated == Some(true) && ch != ' ' {
+            if object.is_none() && style.obfuscated == Some(true) && ch != ' ' {
                 g = font.random_glyph(style, g.advance);
             }
             let c = style.color.map_or(color, |rgb| {
                 rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
             });
-            let bold = style.is_bold();
+            let bold = object.is_none() && style.is_bold();
             let advance = g.advance + if bold { g.offset } else { 0.0 };
             glyphs.push((
                 cursor,
                 g,
                 c,
+                style.shadow_color,
                 bold,
                 style.is_italic(),
                 style.underlined == Some(true),
                 style.strikethrough == Some(true),
                 first,
                 advance,
+                object.cloned(),
             ));
             cursor += advance;
         }
         self.patches.extend(font.take_patches());
         let white = font.white();
-        let passes: &[bool] = if shadow { &[true, false] } else { &[false] };
-        // ARGB.scaleRGB(color, 0.25): the shadow's colour.
+        let has_shadow = shadow
+            || glyphs
+                .iter()
+                .any(|glyph| glyph.3.is_some_and(|color| color != 0));
+        let passes: &[bool] = if has_shadow { &[true, false] } else { &[false] };
+        // ARGB.scaleRGB(color, 0.25): the default shadow colour.
         let shade = |c: u32| {
             let b = c.to_le_bytes();
             rgba(
@@ -1086,20 +1167,48 @@ impl HudBatch {
             )
         };
         for &is_shadow in passes {
-            for &(gx, g, c, bold, italic, underline, strike, first, advance) in &glyphs {
-                // In the world a glyph whose shadow is 0 has none (hasShadow).
-                let has_shadow = shadow && !(world && shade(c) == 0);
+            for (
+                gx,
+                g,
+                c,
+                custom_shadow,
+                bold,
+                italic,
+                underline,
+                strike,
+                first,
+                advance,
+                object,
+            ) in &glyphs
+            {
+                if let Some(object) = object {
+                    if !is_shadow {
+                        self.draw_inline_object(atlas, object, *gx, y, alpha);
+                    }
+                    continue;
+                }
+                let shadow_color = if let Some(argb) = custom_shadow {
+                    let text_alpha = (c >> 24) as u8 as u16;
+                    let shadow_alpha = (argb >> 24) as u8 as u16;
+                    let alpha = (shadow_alpha * text_alpha / 255) as u8;
+                    rgba((argb >> 16) as u8, (argb >> 8) as u8, *argb as u8, alpha)
+                } else {
+                    shade(*c)
+                };
+                let has_shadow = (custom_shadow.is_some_and(|argb| argb != 0)
+                    || custom_shadow.is_none() && shadow)
+                    && !(world && shadow_color == 0);
                 if is_shadow && !has_shadow {
                     continue;
                 }
                 let (dx, col) = if is_shadow {
-                    (g.offset, shade(c))
+                    (g.offset, shadow_color)
                 } else {
-                    (0.0, c)
+                    (0.0, *c)
                 };
-                let (px, py) = (gx + dx, y + dx);
-                let shear = |v: f32| if italic { 1.0 - 0.25 * v } else { 0.0 };
-                let thick = if bold { 0.1 } else { 0.0 };
+                let (px, py) = (*gx + dx, y + dx);
+                let shear = |v: f32| if *italic { 1.0 - 0.25 * v } else { 0.0 };
+                let thick = if *bold { 0.1 } else { 0.0 };
                 let draw = |batch: &mut Self, ox: f32| match g.rect {
                     Some(r) => {
                         let (x0, x1, y0, y1) = (
@@ -1144,24 +1253,86 @@ impl HudBatch {
                 let start = self.vertices.len();
                 draw(self, 0.0);
                 lift(self, start, base);
-                if bold {
+                if *bold {
                     let start = self.vertices.len();
                     draw(self, g.offset);
                     lift(self, start, base + 0.001);
                 }
-                let x0 = if first { px - 1.0 } else { px };
+                let x0 = if *first { px - 1.0 } else { px };
                 let start = self.vertices.len();
-                if strike {
-                    self.rect_uv(x0, py + 3.5, px + advance - x0, 1.0, white, col);
+                if *strike {
+                    self.rect_uv(x0, py + 3.5, px + *advance - x0, 1.0, white, col);
                 }
-                if underline {
-                    self.rect_uv(x0, py + 8.0, px + advance - x0, 1.0, white, col);
+                if *underline {
+                    self.rect_uv(x0, py + 8.0, px + *advance - x0, 1.0, white, col);
                 }
                 lift(self, start, base + 0.01);
             }
         }
         cursor - x
     }
+
+    fn draw_inline_object(
+        &mut self,
+        atlas: &HudAtlas,
+        object: &crate::text::InlineObject,
+        x: f32,
+        y: f32,
+        alpha: u8,
+    ) {
+        use crate::text::InlineObject;
+        let tint = rgba(255, 255, 255, alpha);
+        match object {
+            InlineObject::Player { profile, hat, .. } => {
+                let id = crate::skins::parse_profile(profile).id;
+                let name = inline_profile_name(profile);
+                let by_id = atlas.object_skins.get(&format!("id:{id:032x}"));
+                let by_name = name.and_then(|name| {
+                    atlas
+                        .object_skins
+                        .get(&format!("name:{}", name.to_ascii_lowercase()))
+                });
+                let resolved = if profile.get("id").is_some() {
+                    by_id.or(by_name)
+                } else {
+                    by_name.or(by_id)
+                };
+                let default = crate::tab_list::default_skin(id);
+                let skin = resolved
+                    .filter(|path| atlas.sprites.contains_key(*path))
+                    .map_or(default, String::as_str);
+                let Some(rect) = atlas.sprites.get(skin).copied() else {
+                    return;
+                };
+                for u in [8.0, 40.0].into_iter().take(if *hat { 2 } else { 1 }) {
+                    let du = (rect.u1 - rect.u0) / 64.0;
+                    let dv = (rect.v1 - rect.v0) / 64.0;
+                    self.rect_uv(
+                        x,
+                        y,
+                        8.0,
+                        8.0,
+                        Rect {
+                            u0: rect.u0 + du * u,
+                            v0: rect.v0 + dv * 8.0,
+                            u1: rect.u0 + du * (u + 8.0),
+                            v1: rect.v0 + dv * 16.0,
+                            w: 8,
+                            h: 8,
+                        },
+                        tint,
+                    );
+                }
+            }
+            InlineObject::Atlas { sprite, .. } => {
+                let key = sprite.strip_prefix("minecraft:").unwrap_or(sprite);
+                if let Some(rect) = atlas.sprites.get(key).copied() {
+                    self.rect_uv(x, y, 8.0, 8.0, rect, tint);
+                }
+            }
+        }
+    }
+
     /// SubmitNodeCollection.submitNameTag's text in its own space (x right,
     /// y down, in GUI pixels): centred at `-Font.width / 2`, drawn as
     /// Font.prepareText draws any text (styles, fonts and glyph boxes; no
@@ -1190,6 +1361,13 @@ impl HudBatch {
         behind
     }
 }
+
+fn inline_profile_name(profile: &serde_json::Value) -> Option<&str> {
+    profile
+        .as_str()
+        .or_else(|| profile.get("name").and_then(serde_json::Value::as_str))
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HudUniform {
@@ -1742,6 +1920,39 @@ mod tests {
         assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
         assert_eq!(texel_at(&atlas, rect, 0, 0), [0, 255, 0, 255]);
     }
+    #[test]
+    fn another_namespaces_animated_item_texture_packs_its_first_frame_and_animates() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-atlas-ns-anim-{}", std::process::id()));
+        let atlases = root.join("assets/minecraft/atlases");
+        let item = root.join("assets/lobby/textures/item/npc");
+        fs::create_dir_all(&atlases).unwrap();
+        fs::create_dir_all(&item).unwrap();
+        fs::write(
+            atlases.join("items.json"),
+            r#"{"sources": [{"type": "directory", "source": "item", "prefix": "item/"}]}"#,
+        )
+        .unwrap();
+        // A server pack's NPC skin: two 16x16 frames, green then red.
+        write_strip(
+            &item.join("skin.png"),
+            16,
+            32,
+            &[[0, 255, 0, 255], [255, 0, 0, 255]],
+            Some(r#"{"animation": {"frametime": 3}}"#),
+        );
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["lobby:item/npc/skin"];
+        // One frame, not the whole strip, which a model's UVs would span.
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, rect, 0, 15), [0, 255, 0, 255]);
+        let (_, animation) = atlas
+            .sprite_animations
+            .iter()
+            .find(|(r, _)| r.u0 == rect.u0 && r.v0 == rect.v0)
+            .expect("the namespaced sprite animates");
+        assert_eq!(animation.frame_count(), 2);
+    }
     /// `count` images of `w x h`; layout reads only their sizes.
     fn sized(count: usize, w: u32, h: u32) -> Vec<PackedImage> {
         (0..count)
@@ -1902,6 +2113,102 @@ mod tests {
         // No glyph that wide: FontSet's missing glyph.
         let missing = fonts.font.random_glyph(&Default::default(), 30.0);
         assert!(missing.rect.is_none() && missing.right == 5.0);
+    }
+
+    #[test]
+    fn component_shadow_color_overrides_text_call_shadow() {
+        let root = two_glyph_font("component-shadow");
+        let atlas = HudAtlas::build(&root).unwrap();
+        let mut batch = HudBatch::new([320, 240]);
+        let text = crate::text::Text::styled(
+            "a",
+            crate::text::Style {
+                shadow_color: Some(0x8040_2010),
+                ..Default::default()
+            },
+        );
+        batch.text_styled(&atlas, &text, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(batch.vertices.len(), 12);
+        assert_eq!(batch.vertices[0].color, rgba(0x40, 0x20, 0x10, 0x80));
+        batch.vertices.clear();
+        batch.text_styled_world(&atlas, &text, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(batch.vertices.len(), 12);
+        assert_eq!(batch.vertices[0].depth, 0.0);
+        assert_eq!(batch.vertices[6].depth, 0.03);
+        batch.vertices.clear();
+        let no_shadow = crate::text::Text::styled(
+            "a",
+            crate::text::Style {
+                shadow_color: Some(0),
+                ..Default::default()
+            },
+        );
+        batch.text_styled(&atlas, &no_shadow, 10.0, 10.0, u32::MAX, true);
+        assert_eq!(batch.vertices.len(), 6);
+        batch.vertices.clear();
+        let gradient = crate::component::to_text(
+            &serde_json::json!({
+                "text": "",
+                "extra": [
+                    {"text": "a", "color": "#ff0000"},
+                    {"text": "b", "color": "#0000ff"}
+                ]
+            }),
+            &mut |_| crate::text::Text::empty(),
+        );
+        batch.text_styled(&atlas, &gradient, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(batch.vertices[0].color, rgba(255, 0, 0, 255));
+        assert_eq!(batch.vertices[6].color, rgba(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn player_object_draws_an_inline_head() {
+        let root = two_glyph_font("inline-head");
+        write_png(&root, "entity/player/slim/alex", 64, 64);
+        write_png(&root, "entity/player/wide/steve", 64, 64);
+        let mut atlas = HudAtlas::build(&root).unwrap();
+        let text = crate::component::to_text(
+            &serde_json::json!({"object":"player","player":{"id":"00000000-0000-0000-0000-000000000000"}}),
+            &mut |_| crate::text::Text::empty(),
+        );
+        let mut batch = HudBatch::new([320, 240]);
+        assert_eq!(
+            batch.text_styled(&atlas, &text, 10.0, 10.0, u32::MAX, false),
+            8.0
+        );
+        assert_eq!(batch.vertices.len(), 12); // face and hat, six vertices each
+        assert_eq!(batch.inline_profiles.len(), 1);
+        atlas.set_object_skin("name:elyapluggin".into(), "entity/player/wide/steve".into());
+        let named = crate::component::to_text(
+            &serde_json::json!({"object":"player","player":{"name":"elyapluggin"}}),
+            &mut |_| crate::text::Text::empty(),
+        );
+        batch.vertices.clear();
+        batch.text_styled(&atlas, &named, 10.0, 10.0, u32::MAX, false);
+        let skin = atlas.sprites["entity/player/wide/steve"];
+        assert_eq!(batch.vertices[0].uv[0], skin.u0 + (skin.u1 - skin.u0) / 8.0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn atlas_object_draws_an_item_sprite_inline() {
+        let root = two_glyph_font("inline-item");
+        write_png(&root, "item/porkchop", 16, 16);
+        let atlas = HudAtlas::build(&root).unwrap();
+        let text = crate::component::to_text(
+            &serde_json::json!({
+                "text": "a",
+                "extra": [{"object": "atlas", "sprite": "minecraft:item/porkchop"}]
+            }),
+            &mut |_| crate::text::Text::empty(),
+        );
+        let mut batch = HudBatch::new([320, 240]);
+        let width = batch.text_styled(&atlas, &text, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(width, atlas.font.glyph('a').advance + 8.0);
+        assert_eq!(batch.vertices.len(), 12); // glyph and one sprite
+        let sprite = atlas.sprites["item/porkchop"];
+        assert_eq!(batch.vertices[6].uv, [sprite.u0, sprite.v0]);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2149,6 +2456,7 @@ mod tests {
                 end_portal: EndPortalFill::default(),
                 glint_alpha: 0.75,
                 blur_at: 0,
+                inline_profiles: Vec::new(),
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
                 assert_eq!(
