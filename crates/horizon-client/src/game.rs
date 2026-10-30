@@ -6469,6 +6469,17 @@ impl Game<'_> {
             ) || self.book.is_some()
                 || self.win_screen_pauses())
     }
+    /// A screen open over gameplay while `screen` stays `Playing`: a book or
+    /// lectern, a sign, a server dialog, the code of conduct, a link or
+    /// server pack prompt (vanilla's `Minecraft.screen` is set for each).
+    fn screen_over_playing(&self) -> bool {
+        self.book.is_some()
+            || self.sign_edit.is_some()
+            || self.dialog_open()
+            || self.code_of_conduct.is_some()
+            || self.link_prompt.is_some()
+            || self.server_packs.prompt.is_some()
+    }
     /// `Minecraft.pauseIfInactive`: a window without focus for more than 500 ms
     /// pauses the game. An open screen (books, signs, the pack prompt, a server
     /// dialog) stays instead of pausing (`Gui.setPauseScreen`).
@@ -14071,7 +14082,11 @@ impl ApplicationHandler for Game<'_> {
                         let batch = HudBatch::new([size.width, size.height]);
                         title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
                     }
+                    // MouseHandler.onScroll: the hotbar (or the spectator
+                    // menu) takes the wheel only when no screen is open; a
+                    // book, lectern, sign or prompt drawn over gameplay is one.
                     if self.screen == Screen::Playing
+                        && !self.screen_over_playing()
                         && self.sleeping.is_none()
                         && self.player.is_some()
                         && !self.native_wheel_event(d)
