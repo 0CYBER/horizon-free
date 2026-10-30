@@ -2248,7 +2248,7 @@ impl Game<'_> {
     }
     /// The tooltip's text's top-left corner and the box's size: beside the
     /// cursor, kept on screen, `extra` pixels taller than the text.
-    fn tooltip_geometry(
+    pub(super) fn tooltip_geometry(
         atlas: &horizon_client::hud::HudAtlas,
         lines: &[(horizon_client::text::Text, u32)],
         (x, y): (f32, f32),
@@ -2278,7 +2278,7 @@ impl Game<'_> {
         (x, y, w, h)
     }
     /// The box and its frame sprites.
-    fn tooltip_box(
+    pub(super) fn tooltip_box(
         batch: &mut HudBatch,
         atlas: &horizon_client::hud::HudAtlas,
         x: f32,
@@ -2322,7 +2322,7 @@ impl Game<'_> {
             rgba(60, 0, 190, 80),
         );
     }
-    fn tooltip_text(
+    pub(super) fn tooltip_text(
         batch: &mut HudBatch,
         atlas: &horizon_client::hud::HudAtlas,
         lines: &[(horizon_client::text::Text, u32)],
