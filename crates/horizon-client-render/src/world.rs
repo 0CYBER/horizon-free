@@ -1,7 +1,10 @@
 //! Resident client world: streamed chunk columns plus the bookkeeping the game
 //! loop needs to relight and remesh after edits.
-use crate::chunk::{Chunk, MIN_Y, SECTIONS};
-use crate::fast_hash::{FxHashMap, FxHashSet};
+use crate::{
+    chunk::{Chunk, MIN_Y, SECTIONS},
+    fast_hash::{FxHashMap, FxHashSet},
+    section_mask::SectionMask,
+};
 use horizon_core::random::LegacyRandom;
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
@@ -11,28 +14,30 @@ use std::sync::Arc;
 /// rather than at every section of it.
 #[derive(Clone, Debug, Default)]
 pub struct DirtySections {
-    columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
+    columns: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
 }
-const _: () = assert!(SECTIONS <= 32);
 impl DirtySections {
     pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
         debug_assert!((0..SECTIONS as i32).contains(&sy));
-        *self.columns.entry((x, z)).or_default() |= 1 << sy;
+        self.columns.entry((x, z)).or_default().insert(sy as usize);
     }
     pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
         (0..SECTIONS as i32).contains(&sy)
-            && self.columns.get(&(x, z)).is_some_and(|m| m & 1 << sy != 0)
+            && self
+                .columns
+                .get(&(x, z))
+                .is_some_and(|m| m.contains(sy as usize))
     }
-    /// The dirty section indexes of column (x, z), as bits, removed.
-    pub fn take_column(&mut self, x: i32, z: i32) -> u32 {
-        self.columns.remove(&(x, z)).unwrap_or(0)
+    /// The dirty section indexes of column (x, z), removed.
+    pub fn take_column(&mut self, x: i32, z: i32) -> SectionMask {
+        self.columns.remove(&(x, z)).unwrap_or_default()
     }
     /// Keep the columns `keep` accepts.
     pub fn retain_columns(&mut self, mut keep: impl FnMut(i32, i32) -> bool) {
         self.columns.retain(|&(x, z), _| keep(x, z));
     }
-    /// The columns holding dirty sections, with their section bits.
-    pub fn columns(&self) -> impl Iterator<Item = ((i32, i32), u32)> + '_ {
+    /// The columns holding dirty sections, with their section indexes.
+    pub fn columns(&self) -> impl Iterator<Item = ((i32, i32), SectionMask)> + '_ {
         self.columns.iter().map(|(&c, &m)| (c, m))
     }
     pub fn clear(&mut self) {
@@ -43,7 +48,7 @@ impl DirtySections {
     }
     /// How many sections are dirty.
     pub fn len(&self) -> usize {
-        self.columns.values().map(|m| m.count_ones() as usize).sum()
+        self.columns.values().map(SectionMask::len).sum()
     }
 }
 pub struct World {
@@ -88,7 +93,7 @@ pub struct World {
     /// The sections whose light changed since the log was last drained, as
     /// a bit per section of each column, kept while `block_log` is
     /// (`ChunkHolder.sectionLightChanged`).
-    pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), u32>>,
+    pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), SectionMask>>,
     /// The villager POIs of each section (`PoiManager`'s sections).
     pub pois: crate::poi_sections::PoiSections<crate::poi_sections::Poi>,
     /// Moving-piston states removed during the last tick; retained until the
@@ -465,8 +470,8 @@ mod tests {
             }
             let mut got: Vec<_> = world.dirty_sections.columns().collect();
             let mut want: Vec<_> = expected.columns().collect();
-            got.sort_unstable();
-            want.sort_unstable();
+            got.sort_unstable_by_key(|&(column, _)| column);
+            want.sort_unstable_by_key(|&(column, _)| column);
             assert_eq!(got, want, "write at {x} {y} {z}");
             if (x & 15, z & 15) == (3, 3) {
                 assert_eq!(world.dirty_sections.len(), 1);
