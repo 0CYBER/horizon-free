@@ -3,6 +3,7 @@
 //! hands immutable `Arc` snapshots to workers; results carry a sequence number
 //! so stale work is dropped.
 use crate::fast_hash::{FxHashMap, FxHashSet};
+use crate::section_mask::SectionMask;
 use crate::{
     chunk::Chunk,
     light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
@@ -79,6 +80,12 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// A decorated proto chunk's blocks as a column, to light a finished
     /// neighbour against (vanilla lights with neighbours at FEATURES).
     fn light_view(&self, _proto: &Proto) -> Option<Chunk> {
+        None
+    }
+    /// A decorated proto chunk's column sections (`Chunk::sections`
+    /// indexes) holding a block other than air: what its neighbours' light
+    /// layers count once it is at INITIALIZE_LIGHT.
+    fn non_air_sections(&self, _proto: &Proto) -> Option<SectionMask> {
         None
     }
     fn saved_proto(&self, _proto: &Proto) -> Option<crate::chunk::SavedProto> {
@@ -275,6 +282,7 @@ impl Mailbox {
 pub struct Streaming {
     shared: Arc<Shared>,
     light_view: Arc<dyn Fn(&Proto) -> Option<Chunk> + Send + Sync>,
+    non_air_sections: Arc<dyn Fn(&Proto) -> Option<SectionMask> + Send + Sync>,
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
     /// Ticks since the columns and protos that fell out of range were swept.
@@ -653,9 +661,14 @@ impl Streaming {
             let generator = generator.clone();
             Arc::new(move |p: &Proto| generator.light_view(p))
         };
+        let non_air_sections = {
+            let generator = generator.clone();
+            Arc::new(move |p: &Proto| generator.non_air_sections(p))
+        };
         Self {
             shared,
             light_view,
+            non_air_sections,
             threads,
             order: 0,
             scan_age: 0,
@@ -955,6 +968,15 @@ impl Streaming {
     }
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
+    }
+    /// The non-air sections of a column that is a decorated proto chunk
+    /// here (vanilla's INITIALIZE_LIGHT and on), if it is one: a level
+    /// chunk's light layers count them (#4294).
+    pub fn proto_sections(&self, x: i32, z: i32) -> Option<SectionMask> {
+        if !self.decorated.contains(&(x, z)) {
+            return None;
+        }
+        (self.non_air_sections)(self.protos.get(&(x, z))?.as_ref()?)
     }
     /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
     /// furthest step this column has reached, `None` before it is asked for.
