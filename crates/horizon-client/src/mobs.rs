@@ -70,6 +70,7 @@ pub mod spawn_rules;
 pub mod spawn_selection;
 pub mod spawner;
 pub mod spawning;
+pub mod spear_use;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
@@ -844,6 +845,10 @@ pub struct Extra {
     pub armor: [Option<crate::items::ItemStack>; 4],
     pub using_item: i32,
     pub using_off_hand: bool,
+    /// `LivingEntity.recentKineticEnemies`: when the entities this mob's
+    /// spear stabbed in the current use were stabbed (game time). It exists
+    /// only while a kinetic weapon is in use.
+    pub stabbed: Option<Vec<(Who, i64)>>,
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
@@ -1292,6 +1297,11 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `LivingEntity.stabAttack`'s `target.stopRiding()`: a spear knocks the
+    /// target off its mount.
+    StabDismount {
+        target: Who,
+    },
     /// `LivingEntity.knockback(power, x, z)`: pushed away from the direction.
     Knockback {
         target: Who,
@@ -1643,6 +1653,8 @@ pub struct Seen {
     pub bed: Option<[i32; 3]>,
     pub yaw: f32,
     pub velocity: Vec3,
+    /// `Entity.getKnownSpeed`: what it moved in its last tick.
+    pub known_speed: Vec3,
     /// Who holds this mob's lead.
     pub leash: Option<leash::Holder>,
     /// A llama's caravan head (its id plus one, 0 when not in a caravan).
@@ -1780,6 +1792,7 @@ impl Mob {
             bed: villager.then_some(m.extra.bed).flatten(),
             yaw: m.yaw,
             velocity: m.velocity,
+            known_speed: m.position.subtract(m.previous),
             leash: m.extra.leash,
             caravan: caravan::head_of(m),
             school: (m.extra.leader, m.extra.followers),

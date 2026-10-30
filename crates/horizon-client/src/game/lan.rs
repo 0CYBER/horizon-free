@@ -1927,6 +1927,10 @@ impl Game<'_> {
         if event == 21 && self.options.execution_role.is_client() {
             self.start_guardian_sound(id as u32);
         }
+        // Event 2: a mob's spear hit felt; the same window hears its own mob's hit.
+        if event == 2 && self.options.execution_role.is_client() {
+            self.remote_kinetic_hit(id);
+        }
     }
     /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
     /// emitter, and an animation for the attacker's client and observers once

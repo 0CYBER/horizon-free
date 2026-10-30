@@ -1413,7 +1413,9 @@ impl Game<'_> {
                             .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
                     }
                 }
-                MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
+                MobEvent::Tamed { .. } | MobEvent::Buck { .. } | MobEvent::StabDismount { .. } => {
+                    self.mount_event(&e)
+                }
                 MobEvent::Launch { target, up } => match target {
                     Who::Player => {
                         if let Some(p) = self.player.as_mut() {
