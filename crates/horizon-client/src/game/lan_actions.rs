@@ -22,7 +22,10 @@ use horizon_client::{
     motion::{MotionEvent, MotionWorld, PlayerMotion},
     pose::Dimensions,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    random::RandomSource,
+};
 use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::literal,
@@ -2344,6 +2347,7 @@ impl Game<'_> {
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
+            self.guest_arrows(host, gi);
             self.guest_orbs(host, gi);
             self.guest_die(host, gi, conn);
         }
@@ -3143,6 +3147,75 @@ impl Game<'_> {
         // (handleTakeItemEntity).
         for (item, count) in taken {
             host.hub.take_item(item as i32, id, count as i32, position);
+        }
+    }
+
+    /// `Player.aiStep` touching arrows in the guest's box grown by (1, 0.5, 1):
+    /// `AbstractArrow.playerTouch` for a guest, as `touch_arrows` does for the
+    /// host's player. The guest's own client plays the pickup sound
+    /// (`handleTakeItemEntity`).
+    fn guest_arrows(&mut self, host: &mut LanHost, gi: usize) {
+        use horizon_client::arrows::Touch;
+        let (conn, id, at, creative, unable, dims) = {
+            let g = &host.hub.guests[gi];
+            (
+                g.conn,
+                g.entity_id,
+                g.position,
+                g.creative(),
+                g.spectator() || g.dead || g.health <= 0.0,
+                g.dimensions(),
+            )
+        };
+        if unable || self.creatures.projectiles.is_empty() {
+            return;
+        }
+        let w = f64::from(dims.width) / 2.0;
+        let reach = Aabb::new(
+            Vec3::new(at[0] - w, at[1], at[2] - w),
+            Vec3::new(at[0] + w, at[1] + f64::from(dims.height), at[2] + w),
+        )
+        .inflate(Vec3::new(1.0, 0.5, 1.0));
+        let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        let mut picked = Vec::new();
+        projectiles.retain(|shot| {
+            let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
+                return true;
+            };
+            let p = shot.position;
+            let bounds = Aabb::new(
+                Vec3::new(p.x - 0.25, p.y, p.z - 0.25),
+                Vec3::new(p.x + 0.25, p.y + 0.5, p.z + 0.25),
+            );
+            if !bounds.intersects(reach) {
+                return true;
+            }
+            let taken = match a.player_touch(creative) {
+                Touch::Ignore => false,
+                Touch::Take => true,
+                // Inventory.add: a creative player takes what does not fit.
+                Touch::Give(stack) => {
+                    self.as_guest(host, conn, |g| g.give(stack))
+                        .flatten()
+                        .is_none()
+                        || creative
+                }
+            };
+            if taken {
+                picked.push(shot.clone());
+            }
+            !taken
+        });
+        self.creatures.projectiles = projectiles;
+        for shot in picked {
+            host.hub.take_item(shot.id as i32, id, 1, at);
+            if let Some(target) = super::pickups::guest_target(host, id as u32) {
+                self.add_pickup_toward(
+                    super::pickups::Taken::Arrow(Box::new(shot)),
+                    super::pickups::Collector::Guest(id as u32),
+                    target,
+                );
+            }
         }
     }
 
