@@ -9525,10 +9525,9 @@ impl Game<'_> {
         self.score = Default::default();
         self.fns = Default::default();
         self.world_tables = self.build_world_tables();
-        horizon_client::structure_blocks::forget_loot_data();
         // Warm the loot data with this world's packs before chunks decode
         // (`save::roll_loaded_loot` reads the cached copy).
-        let _ = horizon_client::structure_blocks::loot_data(
+        let _ = horizon_client::structure_blocks::world_loot_data(
             &self.options.resources,
             &pack_files(&self.world_tables),
         );
