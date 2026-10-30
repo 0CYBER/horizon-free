@@ -980,6 +980,7 @@ mod experience_tests {
 #[cfg(test)]
 mod fire_environment_tests {
     use super::*;
+    use horizon_world::loot::PackOverlay;
     #[test]
     fn ordinary_items_burn_but_native_netherite_resists_lava() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -991,7 +992,8 @@ mod fire_environment_tests {
         let assets = crate::assets::Assets::load(&root).unwrap();
         let render = assets.reload(&root).unwrap();
         let facts = BlockFacts::load(&root, assets.registry).unwrap();
-        let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
+        let items =
+            crate::items::Items::load(&root, assets.registry, &facts, &PackOverlay::NONE).unwrap();
         let mut world = World::test_scene(&assets, &render, 3).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         world

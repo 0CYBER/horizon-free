@@ -531,7 +531,17 @@ const BROADCAST: &[&str] = &[
 
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
+    // The epoch starts at world open; failures before that send no lifecycle event.
     pub(super) fn run_dedicated(&mut self) -> Result<()> {
+        let result = self.run_dedicated_inner();
+        if let Err(error) = &result {
+            self.native_lifecycle_world_failed(&error.to_string());
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_dedicated_inner(&mut self) -> Result<()> {
         // This thread ticks the server (MinecraftServer.spin's priority).
         horizon_threads::favour_current();
         self.join_world_rest()?;
@@ -609,13 +619,9 @@ impl Game<'_> {
         // MinecraftServer.initializeKeyPair (only online mode uses it).
         log("INFO", "Generating keypair");
         let online = if props.online_mode {
-            let key = horizon_protocol::rsa::RsaPrivateKey::generate(1024)
-                .map_err(|e| format!("Failed to generate key pair: {e}"))?;
-            Some(Arc::new(OnlineMode {
-                public_der: key.public_der(),
-                key,
-                prevent_proxy: props.prevent_proxy_connections,
-            }))
+            Some(Arc::new(OnlineMode::generate(
+                props.prevent_proxy_connections,
+            )?))
         } else {
             None
         };
@@ -651,6 +657,7 @@ impl Game<'_> {
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
+        self.native_lifecycle_open_started();
         self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),
@@ -676,7 +683,8 @@ impl Game<'_> {
         }
         self.settings.render_distance = props.view_distance.clamp(2, 32);
         self.settings.simulation_distance = props.simulation_distance.clamp(2, 32);
-        self.streaming.radius = self.settings.render_distance;
+        // Nothing is kept around the spawn while nobody is on.
+        self.streaming.radius = -1;
         self.settle_spawn()?;
         let gate_lists = lists.clone();
         let gate: LoginGate = Arc::new(move |address, uuid, name| {
@@ -767,6 +775,8 @@ impl Game<'_> {
         self.sync_ops(&lists);
         if let Some(host) = self.lan.as_mut() {
             host.hub.spawn_protection = props.spawn_protection;
+            host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
+            host.hub.command_spam_threshold = props.command_spam_threshold_seconds.wrapping_mul(20);
         }
         log(
             "INFO",
@@ -781,6 +791,8 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut() {
             host.hub.entity_range_percent = props.entity_broadcast_range_percentage;
         }
+        // The dedicated server's open is complete before its first tick.
+        self.native_lifecycle_world_ready();
         let mut state = ServerState {
             lists,
             console,
@@ -848,10 +860,39 @@ impl Game<'_> {
         self.stop_dedicated()
     }
 
+    /// A dedicated server of its own, not single player's server thread
+    /// (which runs with `options.dedicated` too).
+    pub(super) fn standalone_server(&self) -> bool {
+        self.options.dedicated.is_some() && self.serving.is_none()
+    }
     /// Load the spawn area and find the world spawn as single player does,
-    /// without keeping a player there.
+    /// without keeping a player there. A dedicated server only finds the world
+    /// spawn (MinecraftServer.setInitialSpawn): a player's spawn is found as
+    /// one joins.
     pub(super) fn settle_spawn(&mut self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(600);
+        if self.standalone_server() {
+            if self.level.spawn.is_none() {
+                let [x, y, z] = loop {
+                    self.update_world();
+                    if let Some(pos) = self.find_world_spawn()? {
+                        break pos;
+                    }
+                    if Instant::now() > deadline {
+                        return Err("the spawn area did not load".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                };
+                self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+                self.level.world_spawn.get_or_insert([x, y, z]);
+                self.streaming.extra.clear();
+            }
+            self.spawn = self
+                .level
+                .spawn
+                .map(|s| horizon_core::geometry::Vec3::new(s[0] + 0.5, s[1], s[2] + 0.5));
+            return Ok(());
+        }
         while self.player.is_none() {
             self.update_world();
             self.spawn_player()?;
@@ -864,24 +905,28 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// The chunks to keep loaded: the players' (lan_update_streaming), or
-    /// the spawn chunk while nobody is online.
+    /// The chunks to keep loaded: the players' (lan_update_streaming). While
+    /// nobody is online a dedicated server keeps none (vanilla has no spawn
+    /// ticket), an integrated one the spawn chunk's.
     pub(super) fn update_dedicated_streaming(&mut self) {
-        let center = self
-            .lan
-            .as_ref()
-            .and_then(|h| {
-                h.hub
-                    .guests
-                    .iter()
-                    .find(|g| h.hub.here(g))
-                    .map(|g| g.chunk())
-            })
-            .or_else(|| {
-                self.spawn
-                    .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4))
-            });
-        if let Some(c) = center {
+        let guest = self.lan.as_ref().and_then(|h| {
+            h.hub
+                .guests
+                .iter()
+                .find(|g| h.hub.here(g))
+                .map(|g| g.chunk())
+        });
+        if self.standalone_server() {
+            self.streaming.radius = if guest.is_some() {
+                self.settings.render_distance
+            } else {
+                -1
+            };
+        }
+        let spawn = self
+            .spawn
+            .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4));
+        if let Some(c) = guest.or(spawn) {
             self.streaming.center = c;
         }
     }
@@ -1452,6 +1497,8 @@ impl Game<'_> {
     }
 
     fn stop_dedicated(&mut self) -> Result<()> {
+        // The close request starts before player and world saves.
+        self.native_lifecycle.begin_close();
         log("INFO", "Stopping server");
         log("INFO", "Saving players");
         if let Some(h) = self.lan.as_mut() {
@@ -1479,6 +1526,8 @@ impl Game<'_> {
         self.free_player_beds()?;
         self.save_game()?;
         self.log_saved_levels();
+        // Only a successful final save closes the epoch; storage is still held.
+        self.native_lifecycle_world_closed();
         self.lan_close(false);
         Ok(())
     }

@@ -137,16 +137,16 @@ impl ArmorStandAssets {
     }
 }
 impl Game<'_> {
-    /// `HumanoidArmorLayer` for the player: (model, texture rect, colour) of
-    /// each worn piece, head to feet.
-    pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32)> {
+    /// `HumanoidArmorLayer` for the player: (model, texture rect, colour,
+    /// overlay) of each worn piece, head to feet.
+    pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32, u32)> {
         self.stack_armor_layers(&self.armor)
     }
     /// `HumanoidArmorLayer` for worn stacks (head to feet), trims included.
     pub(super) fn stack_armor_layers(
         &self,
         armor: &[Option<ItemStack>; 4],
-    ) -> Vec<(&Part, [f32; 4], u32)> {
+    ) -> Vec<(&Part, [f32; 4], u32, u32)> {
         self.armor_layers(
             armor
                 .each_ref()
@@ -155,7 +155,7 @@ impl Game<'_> {
     }
     /// `HumanoidArmorLayer` for another player's model: the armour it wears
     /// (`extra.head` .. `extra.feet`).
-    pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
+    pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32, u32)> {
         let e = &m.extra;
         self.armor_layers(
             [
@@ -172,7 +172,7 @@ impl Game<'_> {
     fn armor_layers(
         &self,
         worn: [Option<(&str, Option<&ItemStack>)>; 4],
-    ) -> Vec<(&Part, [f32; 4], u32)> {
+    ) -> Vec<(&Part, [f32; 4], u32, u32)> {
         let assets = &self.armor_stand_assets;
         let mut out = Vec::new();
         for (item, layer) in worn
@@ -206,13 +206,27 @@ impl Game<'_> {
                 continue;
             };
             let color = layer_color(*undyed, stack);
-            out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
+            // EquipmentLayerRenderer.renderLayers: NO_OVERLAY, the armour
+            // glint on the layer and its trim when `stack.hasFoil()`.
+            let item_glint = self
+                .res
+                .items()
+                .enchantments
+                .props
+                .get(item)
+                .is_some_and(|p| p.glint);
+            let overlay = if stack.is_some_and(|s| s.has_foil(item_glint)) {
+                horizon_client::mobs::render::ARMOR_GLINT
+            } else {
+                0
+            };
+            out.push((part, [r.u0, r.v0, r.u1, r.v1], color, overlay));
             // EquipmentLayerRenderer: the trim layer over the armour.
             if let Some(r) = stack
                 .and_then(|s| assets.trim_texture(&asset, kind, s))
                 .and_then(|t| self.gui.atlas.sprites.get(&t.sprite()))
             {
-                out.push((part, [r.u0, r.v0, r.u1, r.v1], 0xFFFF_FFFF));
+                out.push((part, [r.u0, r.v0, r.u1, r.v1], 0xFFFF_FFFF, overlay));
             }
         }
         out
@@ -224,7 +238,7 @@ impl Game<'_> {
     pub(super) fn prepare_trims(&mut self) {
         use horizon_client::hud::TRIM_SLOTS;
         let assets = &self.armor_stand_assets;
-        let items = self.res.items();
+        let items = self.items();
         let mut wanted: Vec<TrimTexture> = Vec::new();
         let guests = self.lan.iter().flat_map(|host| host.hub.guests.iter());
         let stacks = self
@@ -320,9 +334,12 @@ impl Game<'_> {
         }
     }
     /// `ArmorStandItem.useOn`.
-    pub(super) fn place_armor_stand(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
-        if &*stack.item != "minecraft:armor_stand" || hit.face == [0, -1, 0] {
-            return false;
+    /// `ArmorStandItem.useOn` up to its `FAIL`s, which a client checks too:
+    /// not on a bottom face, and nothing in the new stand's box. The block it
+    /// stands in and the stand.
+    pub(super) fn armor_stand_spawn(&self, hit: &super::Hit) -> Option<([i32; 3], ArmorStand)> {
+        if hit.face == [0, -1, 0] {
+            return None;
         }
         // BlockPlaceContext: a replaceable clicked block is replaced.
         let clicked = self
@@ -361,8 +378,18 @@ impl Game<'_> {
                 .iter()
                 .any(|o| overlaps(o.bounds(), bounds))
         {
+            return None;
+        }
+        Some((pos, stand))
+    }
+    pub(super) fn place_armor_stand(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:armor_stand" {
             return false;
         }
+        let Some((pos, stand)) = self.armor_stand_spawn(hit) else {
+            return false;
+        };
+        let foot = stand.position;
         self.next_entity += 1;
         self.audio.play(
             "minecraft:entity.armor_stand.place",
@@ -375,6 +402,8 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        // ArmorStandItem.useOn returns SUCCESS: the hand swings.
+        self.swing_arm();
         true
     }
     /// The armor stand under the crosshair, its distance and the hit point.
@@ -530,6 +559,37 @@ impl Game<'_> {
         }
         hurt
     }
+    /// `ArmorStand.showBreakingParticles`: ten oak plank crumbs from the box,
+    /// spread by a quarter of its width and height, sent like `sendParticles`.
+    fn show_breaking_particles(&mut self, at: [f64; 3], width: f64, height: f64) {
+        let Some(state) = self
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:oak_planks")
+        else {
+            return;
+        };
+        let block = [
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        ];
+        let Some((sprite, tint)) = self.particle_sprite(state, block) else {
+            return;
+        };
+        let options = horizon_client::particles::ParticleOptions::block(
+            horizon_client::particles::ParticleType::Block,
+            sprite,
+            tint,
+        );
+        // Entity.getY(2/3): the box's height is scaled by 2/3 from the feet.
+        let centre = [at[0], at[1] + height * (2.0 / 3.0), at[2]];
+        let spread = [width / 4.0, height / 4.0, width / 4.0];
+        self.particles
+            .send_particles(&options, centre, spread, 0.05, 10);
+        self.lan_level_particles(&options, centre, spread, 0.05, 10, Some(state));
+    }
     /// `ArmorStand.hurtServer` for a player's attack (also a sweep's): a
     /// creative player breaks it, otherwise the first hit wobbles it and a
     /// second within five ticks breaks it.
@@ -538,9 +598,11 @@ impl Game<'_> {
         let at = self.armor_stands[i].position;
         let at = [at.x, at.y, at.z];
         if self.creative {
+            let (width, height) = stand_box(&self.armor_stands[i]);
             self.armor_stands.remove(i);
             self.audio
                 .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+            self.show_breaking_particles(at, f64::from(width), f64::from(height));
             return true;
         }
         if time - self.armor_stands[i].last_hit > 5 {
@@ -552,8 +614,10 @@ impl Game<'_> {
         }
         // brokenByPlayer: the stand item, then brokenByAnything: the equipment.
         let a = self.armor_stands.remove(i);
+        let (width, height) = stand_box(&a);
         self.audio
             .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+        self.show_breaking_particles(at, f64::from(width), f64::from(height));
         let center = [at[0], at[1] + if a.small { 0.4875 } else { 0.9875 }, at[2]];
         let stand = ItemStack {
             item: Arc::from("minecraft:armor_stand"),
@@ -606,16 +670,22 @@ impl Game<'_> {
             }
         }
         for i in dead.into_iter().rev() {
-            let a = self.armor_stands.remove(i);
-            let at = [a.position.x, a.position.y, a.position.z];
-            let (pos, drops) = burnt_armor_stand_equipment(a);
-            for stack in drops {
-                self.pop_resource(pos, stack);
-            }
-            self.audio
-                .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
-            self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+            self.break_armor_stand_by_anything(i);
         }
+    }
+    /// `ArmorStand.brokenByAnything`, then `kill`, as burning out or a blast
+    /// breaks a stand: its equipment pops above its block, the stand item does
+    /// not drop.
+    pub(super) fn break_armor_stand_by_anything(&mut self, i: usize) {
+        let a = self.armor_stands.remove(i);
+        let at = [a.position.x, a.position.y, a.position.z];
+        let (pos, drops) = broken_armor_stand_equipment(a);
+        for stack in drops {
+            self.pop_resource(pos, stack);
+        }
+        self.audio
+            .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+        self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
     }
     /// ArmorStandRenderer: the stand with its default pose, then armor layers.
     pub(super) fn armor_stand_geometry(
@@ -805,6 +875,7 @@ impl Game<'_> {
                 horizon_client::mobs::ElytraAnimation::RESTING,
                 false,
                 packed,
+                self.wings_overlay(a.equipment[4].as_ref()),
                 out,
             );
             self.cull_entity_vertices(out, entity_start);
@@ -851,7 +922,7 @@ impl Game<'_> {
     /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
     /// its slot (the worn piece comes back to the hand).
     pub(super) fn equip_from_hand(&mut self, stack: &ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item) else {
+        let Some(info) = self.items().get(&stack.item) else {
             return false;
         };
         let (index, slot) = match info.equip_slot.as_deref() {
@@ -1011,6 +1082,14 @@ impl Game<'_> {
         }
     }
 }
+/// `ArmorStand.getBbWidth` and `getBbHeight`: a marker has no box, a small stand is half size.
+fn stand_box(a: &ArmorStand) -> (f32, f32) {
+    match (a.marker, a.small) {
+        (true, _) => (0.0, 0.0),
+        (false, true) => (0.25, 0.9875),
+        (false, false) => (0.5, 1.975),
+    }
+}
 /// `AbstractSkullBlock.getType` of a skull item.
 pub(super) fn skull_kind(item: &str) -> Option<&'static str> {
     Some(match item {
@@ -1025,7 +1104,15 @@ pub(super) fn skull_kind(item: &str) -> Option<&'static str> {
     })
 }
 
-fn burnt_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
+/// `ArmorStand.ignoreExplosion` (an invisible stand), and `hurtServer`
+/// refusing an invisible or marker stand: such a stand outlasts any blast.
+pub(super) fn spared_by_blast(a: &ArmorStand) -> bool {
+    a.invisible || a.marker
+}
+
+/// `ArmorStand.brokenByAnything`: the equipment, less what curse of vanishing
+/// keeps (`PREVENT_EQUIPMENT_DROP`), popped at `blockPosition().above()`.
+fn broken_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
     let pos = [
         a.position.x.floor() as i32,
         a.position.y.floor() as i32 + 1,
@@ -1043,6 +1130,16 @@ fn burnt_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
 mod burn_drop_tests {
     use super::*;
     #[test]
+    fn only_visible_non_marker_stands_are_broken_by_blasts() {
+        let mut stand = ArmorStand::new(1, Vec3::new(0.5, 64.0, 0.5), 0.0);
+        assert!(!spared_by_blast(&stand));
+        stand.invisible = true;
+        assert!(spared_by_blast(&stand));
+        stand.invisible = false;
+        stand.marker = true;
+        assert!(spared_by_blast(&stand));
+    }
+    #[test]
     fn burnt_equipment_drops_above_the_block_and_vanishing_items_do_not_drop() {
         let mut stand = ArmorStand::new(1, Vec3::new(-0.1, 4.8, 0.0), 0.0);
         let kept = ItemStack::new("minecraft:diamond_boots", 1);
@@ -1053,7 +1150,7 @@ mod burn_drop_tests {
             .push(("minecraft:vanishing_curse".into(), 1));
         stand.equipment[0] = Some(kept.clone());
         stand.equipment[1] = Some(vanished);
-        let (pos, drops) = burnt_armor_stand_equipment(stand);
+        let (pos, drops) = broken_armor_stand_equipment(stand);
         assert_eq!(pos, [-1, 5, 0]);
         assert_eq!(drops, vec![kept]);
     }

@@ -77,11 +77,20 @@ impl TimeMarker {
         }
     }
 }
+/// `ChatComponent.Draft`: the text the chat box kept, and whether it was a command.
+pub struct ChatDraft {
+    pub text: String,
+    pub command: bool,
+}
 /// UI and command state that lives beside the game.
 #[derive(Default)]
 pub struct UiState {
     pub chat: Chat,
     pub chat_screen: Option<ChatScreen>,
+    /// `ChatComponent.latestDraft`.
+    pub chat_draft: Option<ChatDraft>,
+    /// `ChatScreen.isDraft`: the box opened with the draft and is unchanged since.
+    pub chat_draft_shown: bool,
     /// When the chat screen opened (its input took the focus: the cursor blink).
     pub chat_opened: Option<std::time::Instant>,
     /// The chat screen is `InBedChatScreen`: the sleeper's, with a Leave Bed button.
@@ -465,11 +474,27 @@ impl Game<'_> {
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;
         }
+        self.ui.registries.custom_completions = self.remote_custom_completions();
+    }
+    /// `ChatComponent.createScreen`: T or / opens the chat with the draft kept
+    /// last time, when this method can restore it (a command draft only for
+    /// /), else with its prefix.
+    pub(super) fn open_chat_method(&mut self, prefix: &str) {
+        let command = prefix == "/";
+        let draft = self
+            .ui
+            .chat_draft
+            .as_ref()
+            .filter(|d| !command || d.command)
+            .map(|d| d.text.clone());
+        self.open_chat(draft.as_deref().unwrap_or(prefix));
+        self.ui.chat_draft_shown = draft.is_some() && self.ui.chat_screen.is_some();
     }
     pub(super) fn open_chat(&mut self, initial: &str) {
         if self.player.is_none() {
             return;
         }
+        self.ui.chat_draft_shown = false;
         self.refresh_dynamic_registries();
         let size = self
             .renderer
@@ -506,11 +531,33 @@ impl Game<'_> {
             self.wake_up();
             return;
         }
+        let text = self
+            .ui
+            .chat_screen
+            .as_ref()
+            .map_or_else(String::new, |s| s.value().to_owned());
+        self.keep_chat_draft(&text);
+        self.ui.chat_draft_shown = false;
         self.ui.chat_screen = None;
         self.ui.chat.reset_scroll();
         if self.screen == Screen::Chat {
             self.screen = Screen::Playing;
             self.capture(true);
+        }
+    }
+    /// `ChatScreen.removed`: the text left in the box becomes the draft when
+    /// Save Chat Drafts is on, else (and when blank) the draft is discarded. A
+    /// draft still shown unchanged stays as it is.
+    fn keep_chat_draft(&mut self, text: &str) {
+        let unchanged =
+            self.ui.chat_draft_shown && self.ui.chat_draft.as_ref().is_some_and(|d| d.text == text);
+        if !self.settings.file.bool("saveChatDrafts") || text.trim().is_empty() {
+            self.ui.chat_draft = None;
+        } else if !unchanged {
+            self.ui.chat_draft = Some(ChatDraft {
+                text: text.to_owned(),
+                command: text.starts_with('/'),
+            });
         }
     }
     /// `Gui.tick`: a sleeper gets `InBedChatScreen`; when the player has
@@ -648,7 +695,11 @@ impl Game<'_> {
             registries: &self.ui.registries,
         };
         match screen.key(&m, &c, &self.ui.chat.recent, key, shift, ctrl) {
-            ChatAction::Close => self.close_chat(),
+            ChatAction::Close => {
+                // Escape: the box still holds its text, which close_chat keeps as the draft.
+                self.ui.chat_screen = Some(screen);
+                self.close_chat();
+            }
             ChatAction::Submit(message) => {
                 // InBedChatScreen sends without closing (`closeOnSubmit` is
                 // false): the box empties and the screen stays.
@@ -657,6 +708,8 @@ impl Game<'_> {
                     self.ui.chat.reset_scroll();
                     self.ui.chat_screen = Some(screen);
                 } else {
+                    // The screen is taken here, so close_chat sees no text: a sent
+                    // message discards the draft (DONE).
                     self.close_chat();
                 }
                 if !message.is_empty() {
@@ -926,6 +979,41 @@ impl Game<'_> {
             .chat
             .draw(batch, &self.gui.atlas, self.ticks, focused);
     }
+    /// `HoverEvent.EntityTooltipInfo.getTooltipLines`: the name when the
+    /// event has one, the entity type and the UUID.
+    fn entity_tooltip_lines(entity: &serde_json::Value) -> Vec<(Text, u32)> {
+        let mut lines = Vec::new();
+        if let Some(name) = entity.get("name") {
+            let name = horizon_client::component::to_text(name, &mut |s| Text::literal(s));
+            lines.push((name, u32::MAX));
+        }
+        let id = entity
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let kind = Text::translate(&format!("entity.{}", id.replace(':', ".")), &[]);
+        lines.push((
+            Text::translate("gui.entity_tooltip.type", &[kind]),
+            u32::MAX,
+        ));
+        if let Some(uuid) = entity.get("uuid").and_then(Self::entity_uuid) {
+            lines.push((Text::literal(uuid), u32::MAX));
+        }
+        lines
+    }
+    /// The UUID of a ShowEntity event: its string, or the int array
+    /// `UUIDUtil.CODEC` writes (most significant word first).
+    fn entity_uuid(v: &serde_json::Value) -> Option<String> {
+        if let Some(s) = v.as_str() {
+            return Some(s.to_owned());
+        }
+        let words = v.as_array().filter(|w| w.len() == 4)?;
+        let mut bits = 0u128;
+        for w in words {
+            bits = (bits << 32) | u128::from(w.as_i64()? as u32);
+        }
+        Some(horizon_protocol::crypto::uuid_string(bits))
+    }
     pub(super) fn draw_chat_screen(&mut self, batch: &mut HudBatch) {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
@@ -976,6 +1064,13 @@ impl Game<'_> {
         let (cx, cy) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
         let wrap = (batch.width as i32 / 2).max(200);
         if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
+            // DrawingFocusedGraphicsAccess.handleMessage: the pointing hand over
+            // insertion text, which ChatScreen only asks for while Shift is held.
+            if style.insertion.is_some() && self.has_shift_down() {
+                horizon_client::widgets::request_cursor(
+                    horizon_client::widgets::Cursor::PointingHand,
+                );
+            }
             if let Some(hover) = style.hover {
                 let lines = self.wrapped_rows(&hover, wrap);
                 self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
@@ -983,9 +1078,17 @@ impl Game<'_> {
                 .hover_item
                 .as_deref()
                 .and_then(horizon_client::item_data::stack_from_hover)
-                .filter(|s| self.res.items().get(&s.item).is_some())
+                .filter(|s| self.items().get(&s.item).is_some())
             {
                 self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            } else if let Some(entity) = style
+                .hover_entity
+                .as_deref()
+                .filter(|_| self.settings.file.bool("advancedItemTooltips"))
+            {
+                // ChatScreen: a ShowEntity tooltip only with advanced tooltips on.
+                let lines = Self::entity_tooltip_lines(entity);
+                self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
             }
         } else if self.ui.chat.indicator_at(height, cx, cy) {
             // GuiMessageTag.systemSinglePlayer's text, split at 210.
@@ -1152,7 +1255,7 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
-        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let below_world = p.position.y < f64::from(self.world.bottom_y() - 64);
         let name = self.player_display_text();
         let message = match cause {
             Some(key) => Text::translate(&key, &[name]),

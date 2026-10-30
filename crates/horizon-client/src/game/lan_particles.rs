@@ -83,7 +83,8 @@ impl Game<'_> {
     }
 
     /// `ServerLevel.sendParticles` of a mob's particles: a packet to each
-    /// player within 32 blocks. The window draws its own copy.
+    /// player within 32 blocks. The window draws its own copy. `state` is the
+    /// block of a block particle.
     pub(super) fn lan_level_particles(
         &self,
         options: &ParticleOptions,
@@ -91,8 +92,10 @@ impl Game<'_> {
         spread: [f64; 3],
         speed: f64,
         count: u32,
+        state: Option<BlockStateId>,
     ) {
-        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, None)) else {
+        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, state))
+        else {
             return;
         };
         let packet = C::LevelParticles(play::LevelParticles {
@@ -217,6 +220,11 @@ impl Game<'_> {
             )),
             T::DragonBreath | T::SculkCharge => Some(ParticleData::Scalar(options.scale)),
             T::Shriek => Some(ParticleData::Delay(options.scale as i32)),
+            T::Geyser | T::GeyserPlume => Some(ParticleData::Geyser(options.geyser?.0)),
+            T::GeyserBase | T::GeyserPoof => {
+                let (water_blocks, burst_impulse_base) = options.geyser?;
+                Some(ParticleData::GeyserBase(water_blocks, burst_impulse_base))
+            }
             T::Item | T::Trail | T::Vibration => return None,
             _ => None,
         };
@@ -266,6 +274,10 @@ impl Game<'_> {
                 ..ParticleOptions::simple(ty)
             },
             Some(ParticleData::Delay(d)) => ParticleOptions::shriek(*d),
+            Some(ParticleData::Geyser(water_blocks)) => ParticleOptions::geyser(ty, *water_blocks),
+            Some(ParticleData::GeyserBase(water_blocks, burst_impulse_base)) => {
+                ParticleOptions::geyser_base(ty, *water_blocks, *burst_impulse_base)
+            }
             Some(ParticleData::Trail(target, color, duration)) => {
                 ParticleOptions::trail(*target, *color as u32 & 0xFF_FFFF, *duration)
             }

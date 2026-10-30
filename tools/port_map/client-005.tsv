@@ -27,7 +27,7 @@ CarriedBlockLayer.submit	port	crates/horizon-client/src/game/mob_blocks.rs::Game
 CatCollarLayer.submit	port	crates/horizon-client/src/mobs/render.rs::layers	dyed collar
 CrossedArmsItemLayer.submit	missing		player: a villager or wandering trader never shows an item in its folded arms (Horizon villagers carry nothing and the villager model has no right_arm for the hand lookup)
 CrossedArmsItemLayer.applyTranslation	missing		player: no crossed-arms item placement (see CrossedArmsItemLayer.submit)
-CustomHeadLayer.submit	missing		player: a skull or head in the head slot (player, zombie, creeper, dragon heads) is not drawn on players or mobs; only the snow golem pumpkin and mooshroom mushrooms are placed
+CustomHeadLayer.submit	port	crates/horizon-client/src/game/mob_blocks.rs::Game::head_item_geometry	non-armour head items (carved pumpkins, mob heads, skulls) on players and mobs
 CustomHeadLayer.resolveSkullRenderType	missing		player: player-head skins on worn heads are never resolved (no worn heads are drawn, see CustomHeadLayer.submit)
 Deadmau5EarsLayer.submit	missing		minor: only a player named deadmau5 gets ears; the name tag lift for them is missing too
 DolphinCarryingItemLayer.submit	missing		player: a dolphin carrying an item shows nothing (the dolphin model has no arm bones for the hand lookup)

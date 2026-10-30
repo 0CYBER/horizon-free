@@ -1,5 +1,8 @@
 //! FlatLevelSource: superflat worlds (`minecraft:flat` generator).
-use crate::{chunk::Chunk, streaming::ChunkGenerator};
+use crate::{
+    chunk::{Chunk, LevelShape},
+    streaming::ChunkGenerator,
+};
 use horizon_world::{
     nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
@@ -8,6 +11,9 @@ use horizon_world::{
 
 /// The layers of a flat generator, bottom up from the world's minimum Y.
 pub struct FlatTerrain {
+    /// The Overworld's shape: the layers start at its minimum Y and stop at
+    /// its top.
+    shape: LevelShape,
     layers: Vec<u32>,
     biome: u16,
     surface: Option<crate::lod::Surface>,
@@ -68,6 +74,7 @@ impl FlatTerrain {
         settings: &Tag,
         registry: &BlockRegistry,
         biomes: &crate::biome::Biomes,
+        shape: LevelShape,
     ) -> Option<Self> {
         let generator = settings
             .get("dimensions")?
@@ -113,12 +120,7 @@ impl FlatTerrain {
         };
         let mut water = None;
         let mut surface = None;
-        for (i, &id) in layers
-            .iter()
-            .take(crate::chunk::HEIGHT as usize)
-            .enumerate()
-            .rev()
-        {
+        for (i, &id) in layers.iter().take(shape.height as usize).enumerate().rev() {
             let state = horizon_world::registry::BlockStateId(id);
             let name = registry.state(state)?.name.as_str();
             if matches!(
@@ -127,7 +129,7 @@ impl FlatTerrain {
             ) {
                 continue;
             }
-            let height = crate::chunk::MIN_Y + i as i32 + 1;
+            let height = shape.min_y + i as i32 + 1;
             if matches!(name, "minecraft:water" | "minecraft:lava") {
                 water.get_or_insert((height, state));
             } else {
@@ -141,6 +143,7 @@ impl FlatTerrain {
             }
         }
         Some(Self {
+            shape,
             layers,
             biome,
             surface,
@@ -149,7 +152,7 @@ impl FlatTerrain {
     }
     /// FlatLevelSource.getSpawnHeight: the top of the layers.
     pub fn spawn_height(&self) -> i32 {
-        crate::chunk::MIN_Y + self.layers.len().min(crate::chunk::HEIGHT as usize) as i32
+        self.shape.min_y + self.layers.len().min(self.shape.height as usize) as i32
     }
 }
 /// DimensionType.Y_SIZE: the most layers FlatLevelGeneratorSettings takes.
@@ -266,20 +269,21 @@ impl ChunkGenerator for FlatTerrain {
         self.surface
     }
     fn proto(&self, _: &mut (), cx: i32, cz: i32) -> crate::streaming::Proto {
-        let mut chunk = Chunk::empty(cx, cz);
+        let mut chunk = Chunk::with_layout(cx, cz, self.shape.column());
         for s in &mut chunk.sections {
             std::sync::Arc::make_mut(s).biomes = horizon_core::paletted::PalettedContainer::new(
                 crate::chunk::BIOME_STRATEGY,
                 u32::from(self.biome),
             );
         }
-        for (i, &block) in self.layers.iter().enumerate().take(384) {
+        let height = self.shape.height as usize;
+        for (i, &block) in self.layers.iter().enumerate().take(height) {
             if block == 0 {
                 continue;
             }
             for z in 0..16 {
                 for x in 0..16 {
-                    chunk.set(x, -64 + i as i32, z, block);
+                    chunk.set(x, self.shape.min_y + i as i32, z, block);
                 }
             }
         }
@@ -287,7 +291,7 @@ impl ChunkGenerator for FlatTerrain {
         // VoidStartPlatformFeature writes only inside its own chunk and draws
         // no random numbers, so placing it here gives the FEATURES result.
         if let Some(blocks) = self.void_platform {
-            let origin = [cx * 16, crate::chunk::MIN_Y, cz * 16];
+            let origin = [cx * 16, self.shape.min_y, cz * 16];
             let mut random = horizon_core::random::LegacyRandom::new(0);
             if let Err(e) = BasicFeature::VoidStartPlatform.place(
                 &mut ChunkWorld(&mut chunk),
@@ -366,8 +370,13 @@ mod tests {
         let registry = assets.registry;
         let biomes = crate::biome::Biomes::load(&root).unwrap();
         let terrain = |biome, features, layers: &[(&str, i32)]| {
-            FlatTerrain::from_settings(&flat_world(biome, features, layers), registry, &biomes)
-                .unwrap()
+            FlatTerrain::from_settings(
+                &flat_world(biome, features, layers),
+                registry,
+                &biomes,
+                LevelShape::OVERWORLD,
+            )
+            .unwrap()
         };
         let block = |terrain: &FlatTerrain, [x, y, z]: [i32; 3]| {
             let chunk = terrain.finish(terrain.proto(&mut (), x >> 4, z >> 4));

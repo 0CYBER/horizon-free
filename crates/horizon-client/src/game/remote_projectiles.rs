@@ -121,7 +121,7 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     if p.stuck {
         return;
     }
-    let water = w.in_water(p.position);
+    let water = w.in_water(p.bounds());
     if water {
         p.velocity = p.velocity.scale(0.6);
     }
@@ -285,7 +285,7 @@ impl Game<'_> {
                     .add_remote_eye(id, position, [velocity.x, velocity.y, velocity.z])
             }
             // FishingHook.recreateFromPacket: the owner's id is the data.
-            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, data),
+            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, velocity, data),
             "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
                 id,
                 position: at,
@@ -599,7 +599,7 @@ impl Game<'_> {
             c.position = step(c.id, c.position);
         }
         self.step_remote_thrown();
-        self.step_remote_hooks(&mut step);
+        self.tick_remote_hooks();
         self.end.step_remote_eyes();
         self.tick_remote_clouds();
         // The dragon's fireballs fly on between the tracker's updates, with
@@ -714,7 +714,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(Who, Aabb)] {

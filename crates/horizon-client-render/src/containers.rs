@@ -3,7 +3,7 @@
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
 pub use crate::chunk::block_entity::{
     Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
-    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, Shelf, Skull, SkullSkin,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, PotentSulfur, Shelf, Skull, SkullSkin,
 };
 use crate::items::ItemStack;
 use std::collections::HashMap;
@@ -306,6 +306,9 @@ impl BlockEntity {
         if name == "minecraft:chiseled_bookshelf" {
             return Some(Self::ChiseledBookshelf(Box::default()));
         }
+        if name == "minecraft:potent_sulfur" {
+            return Some(Self::PotentSulfur(PotentSulfur::default()));
+        }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             n if n.ends_with("copper_chest") => 27,
@@ -349,6 +352,7 @@ impl BlockEntity {
             Self::Campfire(_) => "minecraft:campfire",
             Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
             Self::Shelf(_) => "minecraft:shelf",
+            Self::PotentSulfur(_) => "minecraft:potent_sulfur",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -367,6 +371,7 @@ impl BlockEntity {
             | Self::CommandBlock(_)
             | Self::EndGateway(_)
             | Self::Skull(_)
+            | Self::PotentSulfur(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
@@ -391,6 +396,7 @@ impl BlockEntity {
             | Self::Banner(_)
             | Self::EndGateway(_)
             | Self::Skull(_)
+            | Self::PotentSulfur(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &[],
             Self::Crafter(c) => &c.items,
@@ -419,6 +425,7 @@ impl BlockEntity {
             | Self::Banner(_)
             | Self::EndGateway(_)
             | Self::Skull(_)
+            | Self::PotentSulfur(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &mut [],
             Self::Crafter(c) => &mut c.items,

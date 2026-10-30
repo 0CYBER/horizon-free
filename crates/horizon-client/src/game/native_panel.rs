@@ -179,7 +179,7 @@ impl Game<'_> {
         };
         let of = (shown.owner.clone(), shown.version);
         if self.panel.of.as_ref() != Some(&of) {
-            let items = self.res.items();
+            let items = world_items!(self);
             let stacks = shown
                 .items
                 .iter()

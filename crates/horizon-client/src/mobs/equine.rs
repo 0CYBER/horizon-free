@@ -47,6 +47,9 @@ pub struct Rider {
     pub sprint: bool,
     /// Holding the jump key (a happy ghast rises).
     pub jumping: bool,
+    /// A server's player whose own client moves the mount
+    /// (`Entity.isClientAuthoritative`): here it only turns (`tickRidden`).
+    pub client: bool,
 }
 
 pub fn is_equine(s: Species) -> bool {
@@ -210,8 +213,22 @@ pub fn controlled(m: &Mob) -> bool {
         Species::Pig | Species::Strider => m.extra.saddled && r.steer,
         Species::HappyGhast => super::happy_ghast::controlled(m),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::controlled(m),
-        _ => m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame,
+        // AbstractHorse.getControllingPassenger: saddled with a player on it. A
+        // tamed skeleton horse (SkeletonTrapGoal only tames it) needs the saddle too.
+        _ => m.extra.saddled,
     }
+}
+/// `AbstractHorse`s (camels too, not llamas, which no player steers): the
+/// player controlling one moves it on its own client
+/// (`Entity.isLocalInstanceAuthoritative`, `LivingEntity.travelRidden`) and
+/// sends the moves (`ServerboundMoveVehiclePacket`).
+pub fn moved_by_rider(s: Species) -> bool {
+    is_equine(s) && !super::llama::is_llama(s)
+}
+/// A server's mount that its rider's client moves: `travelRidden` without
+/// `canSimulateMovement` turns it (`tickRidden`) and stops it there.
+pub fn moved_by_client(m: &Mob) -> bool {
+    moved_by_rider(m.species()) && m.rider.is_some_and(|r| r.client) && controlled(m)
 }
 /// `ItemBasedSteering.boost`: 140 to 980 ticks of extra speed.
 pub fn boost(m: &mut Mob) -> bool {
@@ -537,10 +554,15 @@ pub fn ridden_step(m: &mut Mob) {
     if m.species() == Species::HappyGhast {
         return super::happy_ghast::ridden(m);
     }
-    m.yaw = r.yaw;
-    m.head_pitch = r.pitch * 0.5;
-    m.body_yaw = r.yaw;
-    m.head_yaw = r.yaw;
+    // AbstractHorse.tickRidden: setRot(getRiddenRotation), then the body and
+    // head turn with it. A camel that refuses to move keeps its rotation
+    // (Camel.getRiddenRotation).
+    if !(super::camel::is_camel(m.species()) && super::camel::refuse_to_move(m)) {
+        m.yaw = r.yaw;
+        m.head_pitch = r.pitch * 0.5;
+    }
+    m.body_yaw = m.yaw;
+    m.head_yaw = m.yaw;
     m.ai.nav.stop();
 
     if matches!(m.species(), Species::Pig | Species::Strider) {
