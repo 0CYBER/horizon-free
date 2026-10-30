@@ -390,6 +390,31 @@ impl Game<'_> {
     /// entity, and for the one ticking now, which is out of the world. As
     /// its `setChanged` would, its chunk is saved next time and comparators
     /// read it again. API 3.
+    /// Sets property `key` of the block at `pos` to `value`, as a furnace's
+    /// tick sets its `lit` (`Level.setBlock`); false when the block has no
+    /// such property or value. The block entity stays. API 3.
+    pub(super) fn native_set_block_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+    ) -> bool {
+        let registry = self.pack.assets.registry;
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(mut s) = registry.state(state).cloned() else {
+            return false;
+        };
+        match s.properties.get(key) {
+            Some(v) if v == value => return true,
+            Some(_) => {}
+            None => return false,
+        }
+        s.properties.insert(key.into(), value.into());
+        let Ok(id) = registry.resolve(&s) else {
+            return false;
+        };
+        self.world.set(pos[0], pos[1], pos[2], id).is_ok()
+    }
     pub(super) fn native_mod_block_entity_at(
         &mut self,
         pos: [i32; 3],
