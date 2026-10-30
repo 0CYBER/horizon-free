@@ -49,6 +49,8 @@ pub(super) struct Tile {
     shown: Option<Instant>,
     /// When its replacements began to fade in; it goes once they have.
     dying: Option<Instant>,
+    /// Dying with nothing to replace it (out of range): it fades out.
+    alone: bool,
     /// Its mesh before near chunks took some of its columns, drawn in its
     /// place until they have faded in (from the job's end, the instant), so
     /// no hole shows through them.
@@ -56,24 +58,30 @@ pub(super) struct Tile {
 }
 
 /// How long a tile takes to fade in over the ones it replaces.
-const FADE: Duration = Duration::from_millis(600);
+pub(super) const FADE: Duration = Duration::from_millis(600);
 
-/// A tile or section fading in: 0 drawn whole, else 1 + `level` * 65 +
-/// `shown`, `shown` 1 to 63 sixty-fourths of `FADE`. Chunk by chunk (columns
-/// of its own grid, wider for coarse tiles: 2^`level` blocks), each starting
-/// in turn over the first half and fading over the second, as a fine ordered
-/// pattern fixed to the terrain (terrain.wgsl's `faded`). It is drawn a hair
-/// toward the camera, the newest most, over the solid tiles it replaces,
-/// which stay until it is whole (`upload_lods`): no pixel fought over, no
-/// hole. None: nothing to draw yet.
+/// A tile or section fading in: 0 drawn whole, else 1 + `level` * 129 +
+/// `shown`, `shown` 1 to 63 sixty-fourths of `FADE` (`fade_out_code`: 65 to
+/// 128, fading out). Chunk by chunk (columns of its own grid, wider for
+/// coarse tiles: 2^`level` blocks), each starting in turn over the first half
+/// and fading over the second, as a fine ordered pattern fixed to the terrain
+/// (terrain.wgsl's `faded`). It is drawn a hair toward the camera, the newest
+/// most, over the solid tiles it replaces, which stay until it is whole
+/// (`upload_lods`): no pixel fought over, no hole. None: nothing to draw yet.
 pub(super) fn fade_code(shown: Option<Instant>, level: u8, now: Instant) -> Option<u32> {
     let faded = now.saturating_duration_since(shown?).as_secs_f32() / FADE.as_secs_f32();
     let shown = (faded * 64.0) as u32 + 1;
     Some(if shown >= 64 {
         0
     } else {
-        1 + u32::from(level) * 65 + shown
+        1 + u32::from(level) * 129 + shown
     })
+}
+/// `fade_code` for one leaving since `since`, chunk by chunk as it came, over
+/// what stays behind it; once `FADE` has passed it draws nothing.
+pub(super) fn fade_out_code(since: Instant, level: u8, now: Instant) -> u32 {
+    let faded = now.saturating_duration_since(since).as_secs_f32() / FADE.as_secs_f32();
+    1 + u32::from(level) * 129 + 64 + ((faded * 64.0) as u32 + 1).min(64)
 }
 
 #[derive(Clone, Copy)]
@@ -161,7 +169,10 @@ impl Tile {
         frustum: &Frustum,
         now: Instant,
     ) -> Option<Visible> {
-        let fade = fade_code(self.shown, key.level, now)?;
+        let fade = match self.dying {
+            Some(since) if self.alone => fade_out_code(since, key.level, now),
+            _ => fade_code(self.shown, key.level, now)?,
+        };
         let origin = DVec3::from(key.origin().map(f64::from)) - camera;
         Some(Visible {
             key,
@@ -206,6 +217,7 @@ impl Renderer {
                         bounds,
                         shown,
                         dying: None,
+                        alone: false,
                         previous,
                     },
                 );
@@ -233,6 +245,16 @@ impl Renderer {
 
     pub fn clear_lods(&mut self) {
         self.lod_pending = None;
+        // No far terrain left to fade out over.
+        for (key, since) in std::mem::take(&mut self.lod_leaving) {
+            if self
+                .sections
+                .find(key)
+                .is_some_and(|s| s.leaving == Some(since))
+            {
+                self.release_section(key);
+            }
+        }
         for (_, tile) in std::mem::take(&mut self.lods) {
             self.release_tile(tile);
         }
@@ -260,6 +282,7 @@ impl Renderer {
     /// once all are in, fades them in over the tiles they replace.
     pub fn upload_lods(&mut self, budget: Duration) {
         let start = Instant::now();
+        self.release_left(start);
         let faded: Vec<_> = self
             .lods
             .iter()
@@ -336,6 +359,37 @@ impl Renderer {
                             replaced.contains(&ancestor)
                         })
                 };
+                // A removed tile no new tile overlaps, and no near chunk takes
+                // a column of, leaves the plan (out of range): it fades out.
+                // Over near chunks fading in it stays whole: two patterns
+                // fading at once left holes between them.
+                // Two tiles overlap when one is the other or its ancestor:
+                // `kept` holds the new tiles and the near chunks' columns
+                // (level 0), `above` their ancestors.
+                let mut kept: FxHashSet<TileKey> = self
+                    .lods
+                    .iter()
+                    .filter(|(_, tile)| tile.shown.is_none())
+                    .map(|(&key, _)| key)
+                    .collect();
+                let cut = pending.cutout.as_ref().unwrap_or(&self.lod_cutout);
+                kept.extend(cut.iter().map(|&(x, z)| TileKey { x, z, level: 0 }));
+                let mut above = FxHashSet::default();
+                for &key in &kept {
+                    let mut key = key;
+                    while key.level < MAX_LEVEL && above.insert(key.parent()) {
+                        key = key.parent();
+                    }
+                }
+                let alone = |key: TileKey| {
+                    let mut ancestor = key;
+                    !kept.contains(&key)
+                        && !above.contains(&key)
+                        && !(key.level..MAX_LEVEL).any(|_| {
+                            ancestor = ancestor.parent();
+                            kept.contains(&ancestor)
+                        })
+                };
                 let whole = start.checked_sub(FADE).unwrap_or(start);
                 for (&key, tile) in &mut self.lods {
                     if tile.shown.is_none() {
@@ -346,8 +400,12 @@ impl Renderer {
                     }
                 }
                 for key in pending.removed {
-                    if let Some(tile) = self.lods.get_mut(&key) {
-                        tile.dying.get_or_insert(start);
+                    let alone = alone(key);
+                    if let Some(tile) = self.lods.get_mut(&key)
+                        && tile.dying.is_none()
+                    {
+                        tile.dying = Some(start);
+                        tile.alone = alone;
                     }
                 }
                 if let Some(cutout) = pending.cutout {
@@ -381,7 +439,7 @@ impl Renderer {
             .collect();
         for key in released {
             self.lod_retiring.remove(&key);
-            self.release_section(key);
+            self.leave_section(key);
         }
     }
 }
@@ -396,7 +454,7 @@ mod tests {
         let start = Instant::now();
         let at = |ms| start + Duration::from_millis(ms);
         // terrain.wgsl's `faded` reads the level and sixty-fourths back.
-        let decode = |code: u32| ((code - 1) / 65, (code - 1) % 65);
+        let decode = |code: u32| ((code - 1) / 129, (code - 1) % 129);
         assert_eq!(fade_code(None, 0, at(0)), None, "waits for its job");
         assert_eq!(fade_code(Some(start), 3, at(0)).map(decode), Some((3, 1)));
         let mut last = 0;
@@ -407,6 +465,18 @@ mod tests {
             last = shown;
         }
         assert_eq!(fade_code(Some(start), 10, at(600)), Some(0), "whole");
+        // Fading out: 65 to 128, then nothing drawn (128) until released.
+        let mut last = 64;
+        for ms in [0, 100, 300, 500, 590] {
+            let (level, out) = decode(fade_out_code(start, 3, at(ms)));
+            assert_eq!(level, 3);
+            assert!(out > last && out < 128, "{out} at {ms} ms");
+            last = out;
+        }
+        assert_eq!(decode(fade_out_code(start, 3, at(700))), (3, 128));
+        // A section's largest code keeps its UV step exact (terrain_uv).
+        let w = 129.0f32 + 1.0 / 32768.0;
+        assert_eq!(w.fract(), 1.0 / 32768.0);
     }
 
     #[test]

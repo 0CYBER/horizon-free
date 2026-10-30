@@ -221,13 +221,20 @@ struct SectionGpu {
     /// stays whole behind it until then: a section new where far tiles are
     /// drawn. Meshed again, it stays as it was.
     fading: Option<std::time::Instant>,
+    /// When it began to fade out, its column gone over far terrain that
+    /// stays behind it (`Renderer::leave_section`); released once it has.
+    leaving: Option<std::time::Instant>,
 }
 impl SectionGpu {
     /// Its fade code this frame (`lod::fade_code`), 0 once whole.
     fn fade(&self, now: std::time::Instant) -> u32 {
-        self.fading
-            .and_then(|since| lod::fade_code(Some(since), 0, now))
-            .unwrap_or(0)
+        match self.leaving {
+            Some(since) => lod::fade_out_code(since, 0, now),
+            None => self
+                .fading
+                .and_then(|since| lod::fade_code(Some(since), 0, now))
+                .unwrap_or(0),
+        }
     }
 }
 /// Line segments the hit outline can hold.
@@ -534,6 +541,8 @@ pub struct Renderer {
     lod_cutout: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Removed sections of `lod_cutout` columns, released once tiles cover them.
     lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
+    /// Removed sections fading out over far terrain (`leave_section`).
+    lod_leaving: Vec<(SectionKey, std::time::Instant)>,
     /// Finished tile meshes `upload_lods` has yet to upload.
     lod_pending: Option<lod::Pending>,
     detail_columns: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
@@ -2816,6 +2825,7 @@ impl Renderer {
             lods: HashMap::new(),
             lod_cutout: Default::default(),
             lod_retiring: Default::default(),
+            lod_leaving: Vec::new(),
             lod_pending: None,
             detail_columns: Default::default(),
             detail_revision: 0,
@@ -3218,6 +3228,7 @@ impl Renderer {
             sorted_indices,
             flat_id,
             fading: None,
+            leaving: None,
         })
     }
     /// The section copies recorded since the last submission, closed.
@@ -3294,6 +3305,7 @@ impl Renderer {
         self.lods.clear();
         self.lod_cutout.clear();
         self.lod_retiring.clear();
+        self.lod_leaving.clear();
         self.lod_pending = None;
         self.detail_columns.clear();
         self.detail_revision += 1;
@@ -3352,6 +3364,40 @@ impl Renderer {
     /// Every section of these columns goes: one lookup per column where the
     /// tables are by column, and the meshes' ranges freed in one batch. A
     /// teleport removes a few thousand columns in one frame.
+    /// A section whose column far terrain now draws fades out over it, chunk by
+    /// chunk as it came, and is released once it has (`release_left`): taken
+    /// away at once, the column's detail dropped to the far terrain's in one
+    /// frame.
+    fn leave_section(&mut self, key: SectionKey) {
+        let now = std::time::Instant::now();
+        if let Some(section) = self.sections.find_mut(key)
+            && section.leaving.is_none()
+        {
+            section.leaving = Some(now);
+            self.lod_leaving.push((key, now));
+        }
+    }
+    /// Releases the sections that have faded out (`leave_section`).
+    fn release_left(&mut self, now: std::time::Instant) {
+        let mut done = Vec::new();
+        self.lod_leaving.retain(|&(key, since)| {
+            let left = now.saturating_duration_since(since) >= lod::FADE;
+            if left {
+                done.push((key, since));
+            }
+            !left
+        });
+        for (key, since) in done {
+            // Meshed again since (the player came back): it stays.
+            if self
+                .sections
+                .find(key)
+                .is_some_and(|s| s.leaving == Some(since))
+            {
+                self.release_section(key);
+            }
+        }
+    }
     pub fn remove_columns(&mut self, columns: impl IntoIterator<Item = (i32, i32)>) {
         let mut released = Vec::new();
         let mut block_entities = false;
@@ -3367,6 +3413,9 @@ impl Renderer {
                 if retiring {
                     // Distant tiles still leave its column out: drawn until they don't.
                     self.lod_retiring.insert(key);
+                } else if !self.lods.is_empty() && self.sections.contains(key) {
+                    // Far terrain draws the column: it fades out over it.
+                    self.leave_section(key);
                 } else if let Some(section) = self.sections.remove(key) {
                     released.push(section);
                 }

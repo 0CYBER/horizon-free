@@ -79,21 +79,26 @@ struct TerrainOut {
     @location(7) local: vec3<f32>,
 }
 // Whether a fading tile or section leaves this pixel out (gfx/lod.rs's
-// `fade_code`). It fades chunk by chunk: each column of its own grid (`local`,
-// the tile-relative position: 16 blocks, 2^level for coarse tiles) starts in
-// turn over the first half of the fade and fades over the second, as a 4x4
-// ordered pattern in the face's plane, its unit the power of two of a block
-// nearest 1.5 pixels, so it stays on the terrain as the camera moves. `dx`
-// and `dy`: `local`'s screen derivatives.
+// `fade_code`, `fade_out_code`). It fades in, or out, chunk by chunk: each
+// column of its own grid (`local`, the tile-relative position: 16 blocks,
+// 2^level for coarse tiles) starts in turn over the first half of the fade
+// and fades over the second, as a 4x4 ordered pattern in the face's plane,
+// its unit the power of two of a block nearest 1.5 pixels, so it stays on
+// the terrain as the camera moves. `dx` and `dy`: `local`'s screen
+// derivatives.
 fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
     if code == 0u { return false; }
-    let progress = f32((code - 1u) % 65u) / 64.0;
-    let size = exp2(f32(max((code - 1u) / 65u, 4u)));
+    // Sixty-fourths of the fade: 1 to 63 fading in, 65 to 128 fading out.
+    let step = (code - 1u) % 129u;
+    let out = step >= 64u;
+    let progress = f32(select(step, step - 64u, out)) / 64.0;
+    let size = exp2(f32(max((code - 1u) / 129u, 4u)));
     let cell = bitcast<vec2<u32>>(vec2<i32>(floor(local.xz / size)));
     var h = cell.x * 73856093u ^ cell.y * 19349663u;
     h = (h ^ (h >> 13u)) * 0x5bd1e995u;
     let start = f32((h ^ (h >> 15u)) & 1023u) / 2048.0;
-    let shown = clamp((progress - start) * 2.0, 0.0, 1.0);
+    let ramp = clamp((progress - start) * 2.0, 0.0, 1.0);
+    let shown = select(ramp, 1.0 - ramp, out);
     let n = abs(cross(dx, dy));
     var plane = local.xy;
     if n.x >= n.y && n.x >= n.z {
@@ -118,8 +123,8 @@ fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
 fn fade_depth(clip: vec4<f32>, w: f32) -> vec4<f32> {
     let code = fade_code(w);
     var scale = select(1.0, 1.0 - 2e-3, fract(abs(w)) > 0.001);
-    if code != 0u {
-        scale *= 1.0 + 5e-6 * f32(64u - (code - 1u) % 65u);
+    if code != 0u && (code - 1u) % 129u < 64u {
+        scale *= 1.0 + 5e-6 * f32(64u - (code - 1u) % 129u);
     }
     return vec4(clip.xy, clip.z * scale, clip.w);
 }
