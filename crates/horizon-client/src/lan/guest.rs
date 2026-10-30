@@ -129,6 +129,10 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// Through a portal, until `LanHub::land` gives the client its position:
+    /// the moves it sent from the old level are ignored, as they would be
+    /// while it had a teleport to accept.
+    pub landing: bool,
     pub teleport_counter: i32,
     /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
     pub teleport_tick: u64,
@@ -309,6 +313,7 @@ impl Guest {
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            landing: false,
             teleport_counter: 0,
             teleport_tick: 0,
             first_good: position,
@@ -660,6 +665,18 @@ fn network_stack(
             stack.added.push((
                 horizon_protocol::item::component::BANNER_PATTERNS,
                 horizon_protocol::item::Component::BannerPatterns(layers),
+            ));
+        }
+        // `painting/variant`: a reference into the synced registry.
+        if let Some(id) = crate::save::text(d.other("minecraft:painting/variant")).and_then(|v| {
+            synced_id(
+                "minecraft:painting_variant",
+                &horizon_world::datafix::dynamic::namespaced(&v),
+            )
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::PAINTING_VARIANT,
+                horizon_protocol::item::Component::PaintingVariant(id),
             ));
         }
         // A shield's `base_color`.
