@@ -3,6 +3,7 @@
 //! for the condition, entry and modifier types used by block drops).
 use crate::{Result, blocks::BlockFacts};
 use horizon_core::random::RandomSource;
+use horizon_world::loot::PackOverlay;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
 use std::{
@@ -107,6 +108,11 @@ pub struct ItemInfo {
     pub weapon_damage: Option<u32>,
     /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
     pub use_speed: f32,
+    /// `use_effects.can_sprint` (default false): sprinting may start while the
+    /// item is in use.
+    pub can_sprint: bool,
+    /// `use_effects.interact_vibrations` (default true).
+    pub interact_vibrations: bool,
     /// `glider` (elytra).
     pub glider: bool,
     /// `equippable.swappable` and `equip_sound`.
@@ -310,14 +316,23 @@ fn load_songs(root: &Path) -> HashMap<String, Song> {
     }
     songs
 }
-pub fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
-    Ok(load_tag_lists(root, kind)?
+pub fn load_tags(
+    root: &Path,
+    kind: &str,
+    overlay: &PackOverlay,
+) -> Result<HashMap<String, HashSet<String>>> {
+    Ok(load_tag_lists(root, kind, overlay)?
         .into_iter()
         .map(|(k, v)| (k, v.into_iter().collect()))
         .collect())
 }
 /// Every tag's contents in `TagLoader.tryBuildTag` order (a `LinkedHashSet`).
-pub(crate) fn load_tag_lists(root: &Path, kind: &str) -> Result<HashMap<String, Vec<String>>> {
+/// `overlay` adds a world's data packs over the game's own tag files.
+pub(crate) fn load_tag_lists(
+    root: &Path,
+    kind: &str,
+    overlay: &PackOverlay,
+) -> Result<HashMap<String, Vec<String>>> {
     let mut raw: HashMap<String, Vec<String>> = HashMap::new();
     fn walk(
         dir: &Path,
@@ -354,6 +369,27 @@ pub(crate) fn load_tag_lists(root: &Path, kind: &str) -> Result<HashMap<String, 
         let dir = root.join(format!("data/{namespace}/tags/{kind}"));
         if dir.exists() {
             walk(&dir, &dir, &namespace, &mut raw)?;
+        }
+    }
+    // The packs' entries join the game's own, in pack order; a `replace`
+    // file drops what the lower sources put in (`TagLoader.load` walks the
+    // resource stack the same way).
+    for (id, files) in overlay.kind(&format!("tags/{kind}")) {
+        let slot = raw.entry(id.to_owned()).or_default();
+        for bytes in files {
+            let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
+                continue;
+            };
+            if v["replace"].as_bool() == Some(true) {
+                slot.clear();
+            }
+            slot.extend(
+                v["values"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| e.as_str().or_else(|| e["id"].as_str()).map(str::to_owned)),
+            );
         }
     }
     fn resolve(name: &str, raw: &HashMap<String, Vec<String>>, out: &mut Vec<String>, depth: u32) {
@@ -435,7 +471,12 @@ impl Items {
         }
     }
 
-    pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
+    pub fn load(
+        root: &Path,
+        registry: &BlockRegistry,
+        facts: &BlockFacts,
+        overlay: &PackOverlay,
+    ) -> Result<Self> {
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
             let default = registry.default_state(&s.name);
@@ -445,17 +486,21 @@ impl Items {
                     .or_insert(BlockStateId(i as u32));
             }
         }
-        Self::load_with(root, &block_for_item)
+        Self::load_with(root, &block_for_item, overlay)
     }
     /// Every item's default components and the tags, without the block <->
     /// item mapping (for headless tools that never place blocks).
-    pub fn catalog(root: &Path) -> Result<Self> {
-        Self::load_with(root, &HashMap::new())
+    pub fn catalog(root: &Path, overlay: &PackOverlay) -> Result<Self> {
+        Self::load_with(root, &HashMap::new(), overlay)
     }
-    fn load_with(root: &Path, block_for_item: &HashMap<&str, BlockStateId>) -> Result<Self> {
+    fn load_with(
+        root: &Path,
+        block_for_item: &HashMap<&str, BlockStateId>,
+        overlay: &PackOverlay,
+    ) -> Result<Self> {
         let raw: BTreeMap<String, Value> =
             serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
-        let entity_tags = load_tags(root, "entity_type")?;
+        let entity_tags = load_tags(root, "entity_type", overlay)?;
         let mut items = HashMap::new();
         let mut order = Vec::new();
         for (name, c) in &raw {
@@ -663,6 +708,12 @@ impl Items {
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,
+                    can_sprint: c["minecraft:use_effects"]["can_sprint"]
+                        .as_bool()
+                        .unwrap_or(false),
+                    interact_vibrations: c["minecraft:use_effects"]["interact_vibrations"]
+                        .as_bool()
+                        .unwrap_or(true),
                     blocks_attacks: BlocksAttacks::parse(&c["minecraft:blocks_attacks"]),
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
@@ -746,14 +797,23 @@ impl Items {
                 walk_loot(&dir, &dir, &namespace, &mut loot)?;
             }
         }
+        // The packs' tables over the game's own: the top pack's file for
+        // each id (`SimpleJsonResourceReloadListener` sees one resource per
+        // id, the resource stack's top).
+        for (id, files) in overlay.kind("loot_table") {
+            let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
+                continue;
+            };
+            loot.insert(id.to_owned(), v);
+        }
         let registry_order = registry_order(root, &order);
         Ok(Self {
             items,
             order,
             registry_order,
-            block_tags: load_tags(root, "block")?,
-            item_tags: load_tags(root, "item")?,
-            item_tag_order: load_tag_lists(root, "item")?,
+            block_tags: load_tags(root, "block", overlay)?,
+            item_tags: load_tags(root, "item", overlay)?,
+            item_tag_order: load_tag_lists(root, "item", overlay)?,
             loot,
             songs: load_songs(root),
             enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
@@ -765,14 +825,14 @@ impl Items {
     /// Only the block and item tags (and the enchantment registry, which the
     /// station rules and loot functions are built from), for tools that need
     /// tag membership.
-    pub fn tags_only(root: &Path) -> Result<Self> {
+    pub fn tags_only(root: &Path, overlay: &PackOverlay) -> Result<Self> {
         Ok(Self {
             items: HashMap::new(),
             order: Vec::new(),
             registry_order: Vec::new(),
-            block_tags: load_tags(root, "block")?,
-            item_tags: load_tags(root, "item")?,
-            item_tag_order: load_tag_lists(root, "item")?,
+            block_tags: load_tags(root, "block", overlay)?,
+            item_tags: load_tags(root, "item", overlay)?,
+            item_tag_order: load_tag_lists(root, "item", overlay)?,
             loot: HashMap::new(),
             songs: HashMap::new(),
             enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
@@ -1227,9 +1287,10 @@ impl LootContext<'_> {
                     let p = Self::number(o.get("p").unwrap_or(&Value::Null), random);
                     (0..n).filter(|_| random.next_float() < p).count() as f32
                 }
-                _ => 1.0,
+                // An unknown type gives 0, as in loot.rs `int` and `float`.
+                _ => 0.0,
             },
-            _ => 1.0,
+            _ => 0.0,
         }
     }
     fn int_number<R: RandomSource>(v: &Value, random: &mut R) -> i32 {
@@ -1251,9 +1312,11 @@ impl LootContext<'_> {
     }
     fn condition<R: RandomSource>(&self, c: &Value, random: &mut R) -> bool {
         let (kind, c) = match c {
+            Value::Null => return true,
+            Value::Array(list) => return list.iter().all(|c| self.condition(c, random)),
             Value::String(s) => (s.as_str(), &Value::Null),
             Value::Object(o) => (o.get("type").and_then(Value::as_str).unwrap_or(""), c),
-            _ => return true,
+            _ => return false,
         };
         match kind {
             // ExplosionCondition: 1 / radius under a decaying explosion.
@@ -1367,7 +1430,11 @@ impl LootContext<'_> {
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
             "minecraft:entity_properties" | "minecraft:damage_source_properties" => false,
-            _ => true,
+            // LocationCheck reads the world at its offset, which this engine
+            // does not have: held true (a double plant's other half is taken
+            // as there). Unknown types fail, as in loot.rs.
+            "minecraft:location_check" => true,
+            _ => false,
         }
     }
     fn conditions<R: RandomSource>(&self, o: &Value, random: &mut R) -> bool {
@@ -1767,7 +1834,7 @@ pub(crate) fn prepared_items() -> Option<Items> {
         BlockRegistry::from_facts_json_with_flags(fs::File::open(root.join("facts.json")).ok()?)
             .ok()?;
     let facts = BlockFacts::load(&root, &registry).ok()?;
-    Items::load(&root, &registry, &facts).ok()
+    Items::load(&root, &registry, &facts, &PackOverlay::NONE).ok()
 }
 
 #[cfg(test)]

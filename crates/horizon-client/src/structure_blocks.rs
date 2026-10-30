@@ -72,6 +72,9 @@ pub fn loot_item_with_components(s: &horizon_world::loot::LootStack) -> ItemStac
     for (id, text) in &s.names {
         item.data_mut().set_loot_name(id, text);
     }
+    for (id, value) in &s.components {
+        item.data_mut().set_loot_component(id, value);
+    }
     item
 }
 
@@ -120,10 +123,11 @@ pub fn has_pending_map(item: &ItemStack) -> bool {
 /// None until `loot_data` runs; `Some(None)` when the tables failed to load.
 static LOOT: Mutex<Option<Option<Arc<LootData>>>> = Mutex::new(None);
 
-/// Loot data of the resource root, loaded once per process.
-pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
+/// Loot data of the resource root with the world's packs over it, loaded
+/// once per process (a world open or `/reload` forgets it).
+pub fn loot_data(root: &Path, overlay: &horizon_world::loot::PackOverlay) -> Option<Arc<LootData>> {
     let mut loot = LOOT.lock().unwrap_or_else(|e| e.into_inner());
-    loot.get_or_insert_with(|| match LootData::load(root) {
+    loot.get_or_insert_with(|| match LootData::load(root, overlay) {
         Ok(data) => Some(Arc::new(data)),
         Err(e) => {
             log::warn!("Horizon: loot tables unavailable, structure containers stay empty: {e}");
@@ -291,6 +295,7 @@ mod tests {
                 ominous_amplifier: None,
                 stew_effects: Vec::new(),
                 names: Vec::new(),
+                components: Vec::new(),
             };
         // An End city chest's enchant_with_levels roll.
         let boots = loot_item_with_components(&stack(
@@ -354,6 +359,7 @@ mod tests {
             ominous_amplifier: None,
             stew_effects: Vec::new(),
             names: Vec::new(),
+            components: Vec::new(),
         };
         let mut item = loot_item(&stack);
         assert!(has_pending_map(&item));
