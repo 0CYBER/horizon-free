@@ -447,17 +447,21 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         );
     }
     match id {
-        // Fox.addAdditionalSaveData; Horizon models only the type.
+        // Fox.addAdditionalSaveData; Horizon models only the type, the
+        // flags and no trusted players yet.
         "minecraft:fox" => {
             let kind = if m.extra.variant == 1 { "snow" } else { "red" };
             map.insert("Type".into(), string(kind));
-            for (key, value) in [
-                ("Trusted", Tag::List(Vec::new())),
-                ("Sleeping", Tag::Byte(0)),
-                ("Sitting", Tag::Byte(0)),
-                ("Crouching", Tag::Byte(0)),
+            map.entry("Trusted".into()).or_insert(Tag::List(Vec::new()));
+            for (key, bit) in [
+                ("Sleeping", crate::mobs::fox::SLEEPING),
+                ("Sitting", crate::mobs::fox::SITTING),
+                ("Crouching", crate::mobs::fox::CROUCHING),
             ] {
-                map.entry(key.into()).or_insert(value);
+                map.insert(
+                    key.into(),
+                    Tag::Byte(i8::from(crate::mobs::fox::flag(m, bit))),
+                );
             }
         }
         // MushroomCow.addAdditionalSaveData: the Variant codec's name (stew
@@ -715,25 +719,48 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 ]));
             }
             map.insert("Inventory".into(), Tag::List(inv));
+            if let Some(st) = &m.extra.allay {
+                map.insert("listener".into(), st.vibration.to_nbt());
+            }
             map.insert(
                 "DuplicationCooldown".into(),
                 Tag::Long(i64::from(m.extra.egg_time)),
             );
+            let mut memories: Vec<(&str, Tag)> = Vec::new();
             if m.extra.tame {
-                map.insert(
-                    "Brain".into(),
+                memories.push((
+                    "minecraft:liked_player",
                     Tag::compound([(
-                        "memories",
-                        Tag::compound([(
-                            "minecraft:liked_player",
-                            Tag::compound([(
-                                "value",
-                                Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
-                            )]),
-                        )]),
+                        "value",
+                        Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
                     )]),
-                );
+                ));
             }
+            // GlobalPos.CODEC, and the cooldown while it runs.
+            if let Some(liked) = m.extra.allay.as_ref().and_then(|st| st.noteblock) {
+                memories.push((
+                    "minecraft:liked_noteblock",
+                    Tag::compound([(
+                        "value",
+                        Tag::compound([
+                            ("dimension", string(liked.dimension)),
+                            ("pos", Tag::IntArray(liked.pos.to_vec())),
+                        ]),
+                    )]),
+                ));
+            }
+            if m.extra.ints[2] > 0 {
+                memories.push((
+                    "minecraft:liked_noteblock_cooldown_ticks",
+                    Tag::compound([("value", Tag::Int(m.extra.ints[2]))]),
+                ));
+            }
+            // Always written, so a forgotten note block does not come back
+            // from the compound the allay was loaded with.
+            map.insert(
+                "Brain".into(),
+                Tag::compound([("memories", Tag::compound(memories))]),
+            );
         }
         "minecraft:camel" | "minecraft:camel_husk" => {
             // LastPoseTick: the pose change time, negative while sitting. The
@@ -1388,6 +1415,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     match m.species() {
         crate::mobs::Species::Fox => {
             m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("snow"));
+            // Fox.readAdditionalSaveData: the sleeping, sitting and crouching flags.
+            for (key, bit) in [
+                ("Sleeping", crate::mobs::fox::SLEEPING),
+                ("Sitting", crate::mobs::fox::SITTING),
+                ("Crouching", crate::mobs::fox::CROUCHING),
+            ] {
+                if flag(tag, key) {
+                    m.extra.ints[0] |= bit;
+                }
+            }
         }
         // MushroomCow.readAdditionalSaveData: a missing or unknown name is
         // Variant.DEFAULT, red.
@@ -1468,6 +1505,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.ints[1] = number(first.get("count")).unwrap_or(1) as i32;
         }
         m.extra.egg_time = number(tag.get("DuplicationCooldown")).unwrap_or(0) as i32;
+        if let (Some(st), Some(listener)) = (m.extra.allay.as_mut(), tag.get("listener")) {
+            st.vibration = crate::sculk::Data::from_nbt(listener);
+        }
         let liked = tag
             .get("Brain")
             .and_then(|b| b.get("memories"))
@@ -1476,6 +1516,26 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.owner = liked
             .and_then(|l| l.get("value"))
             .and_then(|v| crate::save::uuid_from_tag(Some(v)));
+        let memory = |key: &str| {
+            tag.get("Brain")
+                .and_then(|b| b.get("memories"))
+                .and_then(|b| b.get(key))
+                .and_then(|l| l.get("value"))
+        };
+        m.extra.ints[2] =
+            number(memory("minecraft:liked_noteblock_cooldown_ticks")).unwrap_or(0) as i32;
+        if let Some(st) = m.extra.allay.as_mut()
+            && let Some(noteblock) = memory("minecraft:liked_noteblock")
+            && let Some(Tag::IntArray(p)) = noteblock.get("pos")
+            && p.len() == 3
+        {
+            st.noteblock = Some(crate::mobs::allay::GlobalPos {
+                dimension: crate::mobs::allay::dimension_id(
+                    &text(noteblock.get("dimension")).unwrap_or_default(),
+                ),
+                pos: [p[0], p[1], p[2]],
+            });
+        }
     }
     if crate::mobs::camel::is_camel(m.species()) {
         // The tick is a game time: `camel::finish_load` puts it on the mob's

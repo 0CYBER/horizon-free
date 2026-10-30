@@ -157,6 +157,7 @@ mod moving_pistons;
 mod music;
 mod names;
 mod native_hooks;
+mod native_lifecycle;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
@@ -295,8 +296,9 @@ use horizon_world::{
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     entity_obstruction::{EntityIdentity, EntityObstructionWorld, ObstructionEntity},
     level::{
-        Behaviours, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess, LevelEvent,
-        PlaceContext, PlaceOutcome, PlayerContext, PlayerEffect, Ticks, flags as level_flags,
+        Behaviours, BucketContent, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess,
+        LevelEvent, PlaceContext, PlaceOutcome, PlayerContext, PlayerEffect, Ticks,
+        flags as level_flags,
     },
     registry::BlockStateId,
 };
@@ -1968,6 +1970,8 @@ struct Game<'a> {
     panel: native_panel::Panel,
     /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
     native_shaders: native_shaders::NativeShaders,
+    /// The native lifecycle bookkeeping.
+    native_lifecycle: native_lifecycle::NativeLifecycle,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -2081,6 +2085,10 @@ struct Game<'a> {
     /// The acting guest's own entity events (`ServerPlayer.connection.send`),
     /// sent with their entity id, which the guest's turn does not hold.
     guest_entity_events: Vec<i8>,
+    /// `Player.playSound` of the acting guest (event, position, volume,
+    /// pitch): `level.playSound(player, ...)` leaves the guest out, whose
+    /// own client plays it.
+    guest_player_sounds: Vec<(String, [f64; 3], f32, f32)>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -9511,10 +9519,9 @@ impl Game<'_> {
         self.score = Default::default();
         self.fns = Default::default();
         self.world_tables = self.build_world_tables();
-        horizon_client::structure_blocks::forget_loot_data();
         // Warm the loot data with this world's packs before chunks decode
         // (`save::roll_loaded_loot` reads the cached copy).
-        let _ = horizon_client::structure_blocks::loot_data(
+        let _ = horizon_client::structure_blocks::world_loot_data(
             &self.options.resources,
             &pack_files(&self.world_tables),
         );
@@ -10067,6 +10074,7 @@ impl Game<'_> {
             .damage
             .in_tag(source, "minecraft:is_fire");
         let mut broke = false;
+        let mut broken_items = Vec::new();
         let losses: Vec<u32> = (0..4)
             .map(|i| match self.armor[i].clone() {
                 Some(s)
@@ -10089,6 +10097,7 @@ impl Game<'_> {
             {
                 stack.damage += amount;
                 if stack.damage >= info.max_damage {
+                    broken_items.push(stack.clone());
                     *slot = None;
                     broke = true;
                 }
@@ -10102,6 +10111,10 @@ impl Game<'_> {
                     0.8,
                     0.8 + self.world.random.next_float() * 0.4,
                 );
+            }
+            // LivingEntity.breakItem for each armour piece that broke.
+            for stack in &broken_items {
+                self.eat_particles(stack, 5);
             }
             self.apply_equipment();
         }
@@ -10162,6 +10175,44 @@ impl Game<'_> {
             t += 0.05;
         }
         None
+    }
+    /// `getPlayerPOVHitResult(level, player, SOURCE_ONLY)` for an empty
+    /// bucket: the block outline or a source fluid, whichever is nearer. A
+    /// waterlogged block is a block hit (its outline is the block's, its
+    /// fluid a source); flowing fluid has no shape to pick.
+    pub(super) fn bucket_hit(&self) -> Option<Hit> {
+        let origin = self.aim().map_or([0.0; 3], |(origin, _)| origin);
+        let distance = |p: [f64; 3]| {
+            (p[0] - origin[0]).powi(2) + (p[1] - origin[1]).powi(2) + (p[2] - origin[2]).powi(2)
+        };
+        match (self.pick(), self.pick_fluid()) {
+            (Some(block), Some(fluid)) => Some(if distance(block.point) <= distance(fluid.point) {
+                block
+            } else {
+                fluid
+            }),
+            (block, fluid) => block.or(fluid),
+        }
+    }
+    /// `BucketItem.use`'s place position: a water bucket fills the clicked
+    /// block itself when that block is a liquid container (a waterloggable
+    /// stair, slab, fence, ...); every other bucket empties into the block the
+    /// clicked face leads to. `SolidBucketItem` places like a block item, into
+    /// a replaceable clicked block.
+    pub(super) fn bucket_target(&self, content: BucketContent, hit: &Hit) -> [i32; 3] {
+        let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+        if content == BucketContent::Powder {
+            if self.res.facts().get(clicked).replaceable {
+                return hit.pos;
+            }
+        } else if content.is_water() && self.res.behaviours().is_liquid_container(clicked) {
+            return hit.pos;
+        }
+        [
+            hit.pos[0] + hit.face[0],
+            hit.pos[1] + hit.face[1],
+            hit.pos[2] + hit.face[2],
+        ]
     }
     /// `CauldronInteractions` for the held item aimed at a cauldron.
     fn use_on_cauldron(&mut self, pos: [i32; 3]) -> Result<bool> {
@@ -10422,6 +10473,7 @@ impl Game<'_> {
             stack.damage += amount;
             if stack.damage >= max {
                 let broken = stack.item.clone();
+                let gone = stack.clone();
                 *cell = None;
                 self.stats.add("broken", &broken, 1);
                 if let Some(eye) = self.eye_position() {
@@ -10432,6 +10484,8 @@ impl Game<'_> {
                         0.8 + self.world.random.next_float() * 0.4,
                     );
                 }
+                // LivingEntity.breakItem: the broken item's five crumbs.
+                self.eat_particles(&gone, 5);
             }
         }
     }
@@ -10489,61 +10543,45 @@ impl Game<'_> {
             return Ok(UseResult::Pass);
         }
         if item == "bucket" {
-            // getPlayerPOVHitResult(SOURCE_ONLY): powder snow's outline before
-            // a fluid source behind it.
-            if let Some(hit) = self.pick()
-                && self.is_powder_snow(hit.pos)
-            {
-                let eye = self.eye_position().unwrap_or(hit.point);
-                let d = |p: [f64; 3]| {
-                    (p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)
-                };
-                if self
-                    .pick_fluid()
-                    .is_none_or(|fluid| d(fluid.point) >= d(hit.point))
-                {
-                    self.pick_up_powder_snow(hit.pos)?;
-                    return Ok(UseResult::Success { swing: true });
-                }
-            }
-            let Some(hit) = self.pick_fluid() else {
+            let Some(hit) = self.bucket_hit() else {
                 return Ok(UseResult::Pass);
             };
-            let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            let f = self.res.facts().get(state).clone();
-            if f.fluid == Fluid::None || f.fluid_level != 8 || f.fluid_falling {
-                return Ok(UseResult::Pass);
+            // `BucketItem.use`: `level.mayInteract` and `mayUseItemAt`.
+            if !self.may_build() {
+                return Ok(UseResult::Fail);
             }
-            let sound = match f.fluid {
-                Fluid::Water => "minecraft:item.bucket.fill",
-                _ => "minecraft:item.bucket.fill_lava",
-            };
+            if self.is_powder_snow(hit.pos) {
+                self.pick_up_powder_snow(hit.pos)?;
+                return Ok(UseResult::Success { swing: true });
+            }
+            // `BucketPickup.pickupBlock`: a fluid source, a waterlogged block
+            // or powder snow. A block that gives nothing fails the click.
             let pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
+            let creative = self.creative;
             let Some(filled) =
-                self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, pos))
+                self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, pos, creative))
             else {
-                return Ok(UseResult::Pass);
+                return Ok(UseResult::Fail);
             };
             self.process_level_events()?;
+            // `player.awardStat(Stats.ITEM_USED.get(this))`,
+            // `getPickupSound` and `level.gameEvent(player, FLUID_PICKUP)`.
+            self.stats.add("used", "minecraft:bucket", 1);
+            let sound = if filled == "minecraft:lava_bucket" {
+                "minecraft:item.bucket.fill_lava"
+            } else {
+                "minecraft:item.bucket.fill"
+            };
             self.audio.play(sound, Some(at(hit.pos)), 1.0, 1.0);
-            self.trigger_item("minecraft:filled_bucket", &ItemStack::new(filled, 1));
-            if !self.creative {
-                self.consume_held();
-                let filled = ItemStack {
-                    item: Arc::from(filled),
-                    count: 1,
-                    damage: 0,
-                    extra: None,
-                };
-                if self.held().is_none() {
-                    *self.held_mut() = Some(filled);
-                } else if let Some(rest) = self.give(filled)
-                    && let Some(eye) = self.eye_position()
-                {
-                    // ItemUtils.createFilledResult: `player.drop(stack, false)`.
-                    self.throw_from_eyes(rest, eye, false);
-                }
-            }
+            self.post_block_game_event(
+                "minecraft:fluid_pickup",
+                hit.pos,
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
+            let filled = ItemStack::new(filled, 1);
+            self.filled_result(filled.clone());
+            self.trigger_item("minecraft:filled_bucket", &filled);
             return Ok(UseResult::Success { swing: true });
         }
         // BucketItem.use has its own ray, even when the crosshair hits an entity.
@@ -10558,18 +10596,14 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
-            let target = if self.res.facts().get(clicked).replaceable {
-                hit.pos
-            } else {
-                [
-                    hit.pos[0] + hit.face[0],
-                    hit.pos[1] + hit.face[1],
-                    hit.pos[2] + hit.face[2],
-                ]
-            };
+            let target = self.bucket_target(content, &hit);
             let pos = BlockPos::new(target[0], target[1], target[2]);
-            let emptied = self
-                .with_level(|b, level, ticks| b.bucket_empty(level, ticks, pos, content, sound));
+            // `Player.isShiftKeyDown`: only air takes a fluid under Shift.
+            let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+            let creative = self.creative;
+            let emptied = self.with_level(|b, level, ticks| {
+                b.bucket_empty(level, ticks, pos, content, sound, sneaking, creative)
+            });
             self.process_level_events()?;
             if !emptied {
                 return Ok(UseResult::Fail);
@@ -12471,7 +12505,7 @@ impl Game<'_> {
         let bolts = if title {
             Vec::new()
         } else {
-            self.bolt_instances()
+            self.bolt_instances(camera)
         };
         let mut additive = Vec::new();
         if !title && self.dim == Dim::End {
@@ -14735,6 +14769,7 @@ impl<'a> Game<'a> {
             recipe_tables: Default::default(),
             panel: Default::default(),
             native_shaders: Default::default(),
+            native_lifecycle: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,
@@ -14777,6 +14812,7 @@ impl<'a> Game<'a> {
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
             guest_entity_events: Vec::new(),
+            guest_player_sounds: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             lan_acting_permission: None,

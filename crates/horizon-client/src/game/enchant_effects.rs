@@ -760,6 +760,8 @@ impl Game<'_> {
                     0.8 + self.world.random.next_float() * 0.4,
                 );
             }
+            // LivingEntity.breakItem: the broken boots' five crumbs.
+            self.eat_particles(&stack, 5);
             self.apply_equipment();
         }
     }

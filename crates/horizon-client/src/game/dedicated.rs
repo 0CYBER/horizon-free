@@ -531,7 +531,17 @@ const BROADCAST: &[&str] = &[
 
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
+    // The epoch starts at world open; failures before that send no lifecycle event.
     pub(super) fn run_dedicated(&mut self) -> Result<()> {
+        let result = self.run_dedicated_inner();
+        if let Err(error) = &result {
+            self.native_lifecycle_world_failed(&error.to_string());
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_dedicated_inner(&mut self) -> Result<()> {
         // This thread ticks the server (MinecraftServer.spin's priority).
         horizon_threads::favour_current();
         self.join_world_rest()?;
@@ -647,6 +657,7 @@ impl Game<'_> {
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
+        self.native_lifecycle_open_started();
         self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),
@@ -780,6 +791,8 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut() {
             host.hub.entity_range_percent = props.entity_broadcast_range_percentage;
         }
+        // The dedicated server's open is complete before its first tick.
+        self.native_lifecycle_world_ready();
         let mut state = ServerState {
             lists,
             console,
@@ -1484,6 +1497,8 @@ impl Game<'_> {
     }
 
     fn stop_dedicated(&mut self) -> Result<()> {
+        // The close request starts before player and world saves.
+        self.native_lifecycle.begin_close();
         log("INFO", "Stopping server");
         log("INFO", "Saving players");
         if let Some(h) = self.lan.as_mut() {
@@ -1511,6 +1526,8 @@ impl Game<'_> {
         self.free_player_beds()?;
         self.save_game()?;
         self.log_saved_levels();
+        // Only a successful final save closes the epoch; storage is still held.
+        self.native_lifecycle_world_closed();
         self.lan_close(false);
         Ok(())
     }
