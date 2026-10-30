@@ -225,6 +225,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "MoveThroughVillage" => "MoveThroughVillageGoal",
         "RestrictSun" => "RestrictSunGoal",
         "FleeSun" => "FleeSunGoal",
+        // `Cat.CatAvoidEntityGoal`, `Fox.FoxAvoidEntityGoal`... name their subclass.
+        "AvoidEntity" if m.species() == Species::Cat => "CatAvoidEntityGoal",
         "AvoidEntity" => "AvoidEntityGoal",
         "BowAttack" => "RangedBowAttackGoal",
         "Swell" => "SwellGoal",

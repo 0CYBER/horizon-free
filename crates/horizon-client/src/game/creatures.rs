@@ -536,9 +536,9 @@ impl Game<'_> {
         };
         spawning::LocalDifficulty::new(base, self.world.day_time, inhabited, moon)
     }
-    /// Advance every mob one tick, then apply their events.
-    pub(super) fn tick_creatures(&mut self) -> Result<()> {
-        self.attack_ticks = self.attack_ticks.saturating_add(1);
+    /// Generation's animals for the chunks generated since, once lit: chunk
+    /// generation places them whether the level ticks or not.
+    pub(super) fn spawn_fresh_chunks(&mut self) {
         let fresh: Vec<(i32, i32)> = self
             .world
             .chunks
@@ -552,6 +552,10 @@ impl Game<'_> {
             }
             self.spawn_generation_creatures(key.0, key.1);
         }
+    }
+    /// Advance every mob one tick, then apply their events.
+    pub(super) fn tick_creatures(&mut self) -> Result<()> {
+        self.attack_ticks = self.attack_ticks.saturating_add(1);
         self.tick_leads();
         self.spawn_natural();
         // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
@@ -5073,6 +5077,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::FallingStalactite => "minecraft:falling_stalactite",
         K::OnFire => "minecraft:on_fire",
         K::InFire => "minecraft:in_fire",
+        K::Campfire => "minecraft:campfire",
         K::Lava => "minecraft:lava",
         K::Drown => "minecraft:drown",
         K::DryOut => "minecraft:dry_out",

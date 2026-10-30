@@ -525,6 +525,8 @@ pub enum DamageKind {
     FallingStalactite,
     OnFire,
     InFire,
+    /// `campfire`: standing in a lit campfire (`CampfireBlock.entityInside`).
+    Campfire,
     Lava,
     Drown,
     /// `dry_out`: an axolotl out of water for too long.
@@ -657,6 +659,7 @@ impl Damage {
                 | DamageKind::Spit
                 | DamageKind::Stalagmite
                 | DamageKind::Starve
+                | DamageKind::Campfire
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -686,6 +689,7 @@ impl Damage {
             self.kind,
             DamageKind::OnFire
                 | DamageKind::InFire
+                | DamageKind::Campfire
                 | DamageKind::Lava
                 | DamageKind::Fireball
                 | DamageKind::SulfurCubeHot
@@ -699,6 +703,7 @@ impl Damage {
                 | DamageKind::Fall
                 | DamageKind::OnFire
                 | DamageKind::InFire
+                | DamageKind::Campfire
                 | DamageKind::Lava
                 | DamageKind::Drown
                 | DamageKind::DryOut

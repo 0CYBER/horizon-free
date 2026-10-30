@@ -327,6 +327,11 @@ def scenarios():
     # Constructor path maluses: an Animal avoids fire (FIRE -1, FIRE_IN_NEIGHBOR 16).
     add('pig_tempt_fire', 100, ['player 9.5 -60 0.5 hand=minecraft:carrot', 'fill 3 -61 -3 3 -61 3 minecraft:netherrack',
                                 'fill 3 -60 -3 3 -60 3 minecraft:fire', 'mob minecraft:pig 0.5 -60 0.5 0 221 persistent'])
+    # A baby villager grows up: Villager.ageBoundaryReached rebuilds its brain, so the adult schedule
+    # (work, meet) replaces the baby's (play) at once.
+    for seed in (201, 202):
+        add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
+                                               f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
     # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
     # avoidSun: the path stops at the first node the sky sees).
     add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
@@ -339,6 +344,9 @@ def scenarios():
             + [f'hurt {t} 0' for t in range(5, 60, 30)])
     add('chicken_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:chicken 0.5 -60 0.5 0 195 persistent', 'hurt 5 0'])
     add('pig_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:pig 0.5 -60 0.5 0 196 persistent', 'hurt 5 0'])
+    # A wild cat avoids the player it sees (Cat.reassessTameGoals adds that goal last) and sprints while
+    # it dashes at 1.33 (Cat.customServerAiStep).
+    add('cat_player', 120, ['player 6.5 -60 0.5', 'mob minecraft:cat 0.5 -60 0.5 0 261 persistent'])
     # Axolotls (#64): idle swimming, hunting a cod, and playing dead after hits, in a pool sunk into
     # the ground so no water flows out of it (the probe doesn't tick fluids).
     POOL = 'fill -5 -63 -5 5 -61 5 minecraft:water'
