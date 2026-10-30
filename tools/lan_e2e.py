@@ -324,7 +324,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is deprecated.
 SERVER_THREAD = True
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'menu-transfer', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'wheel', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
@@ -538,6 +538,60 @@ def check_chest(host, guest, out):
     assert opened['guest'] > 0.9 and opened['host'] > 0.9, f'lid while open: {opened}'
     assert closed['guest'] < 0.1 and closed['host'] < 0.1, f'lid after closing: {closed}'
     return {'open': opened, 'closed': closed}
+
+
+def check_menu_transfer(host, guest, out):
+    """A container the guest has open does not outlive the server replacing its player (a dimension
+    change, a death and respawn): the screen is closed and the inventory opens as its own menu again."""
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:diamond 3')
+    home = pos_of(guest)
+    x, y, z = (int(v // 1) for v in home)
+    chest = (x, y, z + 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
+    guest.wait(10)
+    results = {}
+
+    def open_chest():
+        guest.raw('interact', *chest)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        guest.wait(10)
+
+    def settled(label):
+        """The menu is gone after the transfer; `e` opens the player's own 2x2 inventory with its items."""
+        screen = guest('state').get('screen')
+        guest.raw('key', 'e', 'tap')
+        guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
+        inventory = guest('screen')
+        stale = [s for s in inventory.get('slots', []) if s.get('slot', 0) >= 300]
+        diamonds = guest('inventory')['counts'].get('minecraft:diamond', 0)
+        guest.shot(out, f'menu-transfer-{label}')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(5)
+        results[label] = {'screen': screen, 'craft_size': inventory.get('craft_size'), 'stale': len(stale),
+                          'diamonds': diamonds}
+        assert screen in (None, 'playing'), f'{label}: the screen after the transfer was {screen}'
+        assert inventory.get('craft_size') == 2 and not stale, f'{label}: the inventory menu was {inventory}'
+        assert diamonds == 3, f'{label}: {diamonds} diamonds after the transfer'
+
+    try:
+        open_chest()
+        into_level(guest, NETHER, x, 100, z)
+        settled('dimension')
+        guest('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
+        wait_dimension(guest, OVERWORLD, 400)
+        guest.wait(20)
+        open_chest()
+        guest('command', command='kill @s')
+        guest.wait(20)
+        guest.raw('respawn')
+        wait_dimension(guest, OVERWORLD, 400)
+        guest.wait(40)
+        settled('respawn')
+    finally:
+        back_to_game(guest)
+        guest('command', command=f'execute in {OVERWORLD} run setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
+    return results
 
 
 def check_crafting(host, guest, out):
@@ -5695,7 +5749,7 @@ def check_worn(host, guest, out):
 
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
-             'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
+             'nametags': check_nametags, 'chest': check_chest, 'menu-transfer': check_menu_transfer, 'crafting': check_crafting,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'flow-push': check_flow_push,
