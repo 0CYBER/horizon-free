@@ -1499,6 +1499,7 @@ pub enum MobEvent {
         pos: [i32; 3],
         name: &'static str,
         effect: bool,
+        flags: i32,
     },
     /// A cat hisses (phantoms flee).
     Hiss {

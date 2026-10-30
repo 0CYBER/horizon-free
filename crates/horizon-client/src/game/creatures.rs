@@ -1722,7 +1722,12 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::LevelEvent { id, pos, data } => self.level_event_at(id, pos, data),
-                MobEvent::SetBlockName { pos, name, effect } => {
+                MobEvent::SetBlockName {
+                    pos,
+                    name,
+                    effect,
+                    flags,
+                } => {
                     if effect {
                         let old = self.world.block(pos[0], pos[1], pos[2]);
                         self.destroy_particles(pos, old);
@@ -1739,7 +1744,7 @@ impl Game<'_> {
                         );
                     }
                     if let Some(state) = self.pack.assets.registry.default_state(name) {
-                        self.world.set(pos[0], pos[1], pos[2], state)?;
+                        self.level_set_with_flags(pos, state, flags)?;
                     }
                 }
                 MobEvent::Infest {
@@ -1757,7 +1762,7 @@ impl Game<'_> {
                         };
                         state.name = state.name.replacen(from, to, 1);
                         if let Ok(id) = registry.resolve(&state) {
-                            self.world.set(pos[0], pos[1], pos[2], id)?;
+                            self.level_set(pos, id)?;
                         }
                     }
                     if let Some(mob) = poof {

@@ -2547,7 +2547,11 @@ impl Game<'_> {
                             .insert(format!("has_bottle_{i}"), has.to_string());
                     }
                     if let Ok(id) = self.pack.assets.registry.resolve(&s) {
-                        self.world.set(x, y, z, id)?;
+                        self.level_set_with_flags(
+                            [x, y, z],
+                            id,
+                            horizon_world::level::flags::UPDATE_CLIENTS,
+                        )?;
                     }
                 }
             }
