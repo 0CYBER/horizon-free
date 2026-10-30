@@ -223,5 +223,16 @@
   "Multiplayer": "Mehrspieler",
   "Packs": "Pakete",
   "Screenshots": "Screenshots",
-  "Console": "Konsole"
+  "Console": "Konsole",
+  "Update all ({count})": "Alle aktualisieren ({count})",
+  "Add mods": "Mods hinzufügen",
+  "{loader} mods": "{loader}-Mods",
+  "Horizon mods": "Horizon-Mods",
+  "Filter installed": "Installierte filtern",
+  "Reading the mods…": "Mods werden gelesen…",
+  "No mods yet: Add mods finds some for this instance.": "Noch keine Mods: „Mods hinzufügen“ findet welche für diese Instanz.",
+  "No mod matches.": "Kein Mod passt.",
+  "{source} · needed by another mod": "{source} · von einem anderen Mod benötigt",
+  "Local file · {file}": "Lokale Datei · {file}",
+  "Update {version}": "Update {version}"
 }

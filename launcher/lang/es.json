@@ -223,5 +223,16 @@
   "Multiplayer": "Multijugador",
   "Packs": "Paquetes",
   "Screenshots": "Capturas",
-  "Console": "Consola"
+  "Console": "Consola",
+  "Update all ({count})": "Actualizar todo ({count})",
+  "Add mods": "Añadir mods",
+  "{loader} mods": "Mods de {loader}",
+  "Horizon mods": "Mods de Horizon",
+  "Filter installed": "Filtrar instalados",
+  "Reading the mods…": "Leyendo los mods…",
+  "No mods yet: Add mods finds some for this instance.": "Aún no hay mods: Añadir mods encuentra algunos para esta instancia.",
+  "No mod matches.": "Ningún mod coincide.",
+  "{source} · needed by another mod": "{source} · lo necesita otro mod",
+  "Local file · {file}": "Archivo local · {file}",
+  "Update {version}": "Actualizar a {version}"
 }
