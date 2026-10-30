@@ -102,6 +102,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
              handling), the guest puts a stack into a chest and a furnace, drags planks across
              its crafting grid and gathers a stack with a double click; the server has each.
+- wheel:     with the Mouse Tweaks extra on, real wheel events and a right-drag in a furnace, a
+             crafting table, a hopper and a dropper: fuel and smeltables go to their slots, nothing
+             into a result slot, and down over a result takes it. The server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
 - bed-occupied: the bed the host sleeps in is occupied and the guest cannot lie down in it; it is
@@ -323,7 +326,7 @@ SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
-          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
+          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'wheel', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
@@ -2171,6 +2174,159 @@ def check_clicks(host, guest, out):
         f'the drag left the grid as {grid}'
     assert counts.get('minecraft:stick') == 4 and 'minecraft:cobblestone' not in counts, f'inventory after: {counts}'
     return {'chest': in_chest, 'furnace': in_furnace, 'grid': grid, 'inventory': counts}
+
+
+def wheel(game, slot, steps):
+    """Real wheel events over slot `slot` of the open screen (positive scrolls up)."""
+    x, y = slot_point(game, slot)
+    game.raw('scroll-at', f'{x:.1f}', f'{y:.1f}', steps)
+    game.wait(4)
+
+
+def set_mouse_tweaks(game, on):
+    """The Extras page's switch, as a player flips it."""
+    game('options', page='extras')
+    switch = next(w for w in game.raw('ui')['widgets'] if w.get('label', '').startswith('Mouse Tweaks controls'))
+    if switch['label'].endswith('On') != on:
+        game('click', id=switch['id'])
+    game('close')
+    game.wait(5)
+
+
+def check_wheel(host, guest, out):
+    set_mouse_tweaks(guest, True)
+    # On the host's cleared floor, with the host behind: nothing stands in the way of the look at the
+    # one spot each block takes in turn.
+    hx, hy, hz = pos_of(host)
+    guest('command', command=f'tp @s {hx:.1f} {hy:.1f} {hz + 4:.1f}')
+    guest.wait(10)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    spot = (x, y, z + 2)
+    guest('command', command='gamemode survival')
+
+    def place(block):
+        guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:{block}')
+        guest.wait(5)
+
+    def held(*stacks):
+        guest('command', command='clear @s')
+        for item, count in stacks:
+            guest('command', command=f'give @s minecraft:{item} {count}')
+        guest.wait(10)
+
+    def opened(screen='container'):
+        guest.raw('interact', *spot)
+        guest.raw('wait-for', 'screen', screen, '--timeout', 10)
+        guest.wait(10)
+
+    def slots():
+        return {s['slot']: (s['item'].removeprefix('minecraft:'), s['count'])
+                for s in guest('screen').get('slots', []) if s.get('item')}
+
+    def shut():
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+
+    def server_view():
+        """Closing and opening again resends the whole menu: what the server has."""
+        shut()
+        opened()
+        return slots()
+
+    def where(view, item):
+        return sorted(s for s, (i, _) in view.items() if i == item)
+
+    try:
+        # A chest always worked: the extra is on, and the wheel reaches the screen.
+        held(('cobblestone', 3))
+        place('chest')
+        opened()
+        wheel(guest, hotbar_slot(guest, 'minecraft:cobblestone'), -1)
+        view = server_view()
+        assert view.get(300) == ('cobblestone', 1), f'chest: {view}'
+        shut()
+        # The furnace: each item goes to the slot vanilla's quick move picks, never the output.
+        # Raw copper can't join the ingots in the output, so the furnace stays out and burns nothing.
+        held(('coal', 3), ('raw_copper', 3), ('dirt', 3))
+        place('furnace{Items:[{Slot:2b,id:"minecraft:iron_ingot",count:5}]}')
+        opened()
+        wheel(guest, hotbar_slot(guest, 'minecraft:coal'), -1)
+        wheel(guest, hotbar_slot(guest, 'minecraft:raw_copper'), -1)
+        wheel(guest, hotbar_slot(guest, 'minecraft:dirt'), -1)
+        view = server_view()
+        guest.shot(out, 'wheel-furnace')
+        assert view.get(300) == ('raw_copper', 1), f'smeltable, input: {view}'
+        assert view.get(301) == ('coal', 1), f'fuel, fuel slot: {view}'
+        assert view.get(302) == ('iron_ingot', 5), f'the output changed: {view}'
+        assert sum(c for i, c in view.values() if i == 'dirt') == 3, f'dirt went astray: {view}'
+        # Up over the fuel slot: one more coal. Down: one back.
+        wheel(guest, 301, 1)
+        pulled = server_view()
+        assert pulled.get(301) == ('coal', 2), f'pulled: {pulled}'
+        wheel(guest, 301, -1)
+        pushed = server_view()
+        assert pushed.get(301) == ('coal', 1), f'pushed: {pushed}'
+        # Out of the input again, or taking the output would light the furnace.
+        wheel(guest, 300, -1)
+        # Up over the output brings nothing in; down takes it, whole, to the inventory.
+        wheel(guest, 302, 1)
+        kept = server_view()
+        assert kept.get(302) == ('iron_ingot', 5), f'wheel up over the output: {kept}'
+        wheel(guest, 302, -1)
+        taken = server_view()
+        assert 302 not in taken and [taken[s] for s in where(taken, 'iron_ingot')] == [('iron_ingot', 5)], \
+            f'wheel down over the output: {taken}'
+        # An ingot from the inventory has no way back into the output.
+        wheel(guest, where(taken, 'iron_ingot')[0], -1)
+        back = server_view()
+        assert 302 not in back, f'an item went into the output: {back}'
+        # The right-drag: neither an empty fuel slot (dirt isn't fuel) nor the output takes it.
+        wheel(guest, 301, -1)
+        dirt = where(back, 'dirt')[0]
+        mouse(guest, dirt)
+        mouse(guest, 301, 302, right=True)
+        mouse(guest, dirt)
+        dragged = server_view()
+        guest.shot(out, 'wheel-furnace-drag')
+        assert 301 not in dragged and 302 not in dragged, f'right-drag: {dragged}'
+        assert sum(c for i, c in dragged.values() if i == 'dirt') == 3, f'right-drag lost items: {dragged}'
+        shut()
+
+        # The crafting table: into the grid; down over the result crafts once, into the inventory.
+        held(('oak_log', 2))
+        place('crafting_table')
+        opened('inventory')
+        wheel(guest, hotbar_slot(guest, 'minecraft:oak_log'), -1)
+        grid = slots()
+        assert grid.get(100) == ('oak_log', 1) and grid.get(200) == ('oak_planks', 4), f'grid: {grid}'
+        wheel(guest, 200, 1)
+        assert slots().get(100) == ('oak_log', 1), f'wheel up over the result: {slots()}'
+        wheel(guest, 200, -1)
+        crafted = slots()
+        guest.shot(out, 'wheel-crafting')
+        assert 100 not in crafted and 200 not in crafted, f'after the result: {crafted}'
+        assert [crafted[s] for s in where(crafted, 'oak_planks')] == [('oak_planks', 4)], f'after the result: {crafted}'
+        shut()
+        counts = guest('inventory')['counts']
+        assert counts.get('minecraft:oak_planks') == 4 and counts.get('minecraft:oak_log') == 1, f'the server has {counts}'
+
+        # Hopper, dropper: plain slots, both ways.
+        held(('cobblestone', 3))
+        for name in ('hopper', 'dropper'):
+            place(name)
+            opened()
+            wheel(guest, hotbar_slot(guest, 'minecraft:cobblestone'), -1)
+            view = server_view()
+            assert view.get(300) == ('cobblestone', 1), f'{name}: {view}'
+            wheel(guest, 300, -1)
+            view = server_view()
+            assert 300 not in view, f'{name}, pushed back: {view}'
+            shut()
+    finally:
+        back_to_game(guest)
+        set_mouse_tweaks(guest, False)
+        place('air')
+    return {'furnace': dragged, 'crafting': crafted}
 
 
 def check_feedback(host, guest, out):
@@ -5383,7 +5539,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
-             'clicks': check_clicks, 'sleep': check_sleep, 'sleep-villager': check_sleep_villager,
+             'clicks': check_clicks, 'wheel': check_wheel, 'sleep': check_sleep, 'sleep-villager': check_sleep_villager,
              'bed-occupied': check_bed_occupied, 'sleep-reload': check_sleep_reload,
              'push': check_push, 'piston-push': check_piston_push,
              'piston-slime': check_piston_slime,
