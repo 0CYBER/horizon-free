@@ -183,7 +183,7 @@ dev = """One item for all modding work (#3911), led by levzzz5154 with vladislav
 parts is theirs. Native mods on stable hook points (game/native_hooks.rs, #3345, #3346, #3434, #3435) built by the \
 launcher (#3388, #3855); server-side hooks (#3878, #3706); mod-owned screens, input and drawing; tools for mod makers \
 (templates, `native.py check`); the registry (#1634, #1642, #1659); machines with inventories and menus (#1189); mods \
-that read and change the world through the server. The WebAssembly runtime is being removed (#3351, #3353). \
+that read and change the world through the server. The WebAssembly runtime is removed (#3350, #3351, #3353). \
 docs/native-mods.md."""
 links = ["#3855", "#3351", "#3353", "#3360", "#3706", "#3878", "#3345", "#3346", "#3388", "#3434", "#3435", "#1634", "#1642", "#1659", "#1596", "#1635", "docs/native-mods.md"]
 
@@ -428,7 +428,7 @@ title = "Scripts for mods"
 status = "later"
 area = "mods"
 plain = """Small mods written as scripts, in the style of KubeJS, with no compiler."""
-dev = """Waits for native mods to settle: the earlier plan ran Lua inside the WebAssembly sandbox, which is being removed. A script layer over the native hook points is to be designed."""
+dev = """Waits for native mods to settle: the earlier plan ran Lua inside the WebAssembly sandbox, which is removed. A script layer over the native hook points is to be designed."""
 links = ["docs/native-mods.md"]
 
 [[item]]
@@ -581,8 +581,7 @@ area = "modpacks"
 plain = """Run Java mods that nobody has rewritten for Horizon yet, through a bridge or a converter. Hard and not \
 started: the Convert button and native rewrites come first."""
 dev = """Earlier research (#527, closed) found that Java mods can't simply run, because they call Minecraft's own \
-classes. Options to look at again: a jar-to-WebAssembly backend, or a bridge for simple Fabric mods. \
-Whatever is chosen has to run inside the same sandbox and capability checks as native mods."""
+classes. Option to look at again: a bridge for simple Fabric mods."""
 links = ["#527"]
 
 [[item]]
@@ -622,11 +621,10 @@ id = "orbital-laser"
 title = "Orbital Laser on the normal game"
 status = "later"
 area = "mods"
-plain = """The community mod Orbital Laser, made for a fork of Horizon, running on the normal game and listed in the \
-registry as the showcase of the mod API."""
-dev = """A pull request on https://github.com/Stink-O/orbital-laser (MIT) once the input, ui, render and world \
-capabilities exist (see 'Screens, input and drawing for mods'): today the mod needs them through its \
-author's fork. Tested in the game, and listed in the registry."""
+plain = """The community mod Orbital Laser, made for a fork of Horizon, running on the normal game as a native mod and \
+listed in the registry."""
+dev = """A native port (a horizon-mixins bundle, docs/native-mods.md) of https://github.com/Stink-O/orbital-laser \
+(MIT), which today runs through its author's fork. Tested in the game, and listed in the registry."""
 links = ["https://github.com/Stink-O/orbital-laser"]
 
 [[item]]
@@ -645,8 +643,7 @@ status = "later"
 area = "mods"
 plain = """Contraptions and physics like the Create and Aeronautics mods, as a mod for Horizon rather than part of the \
 base game."""
-dev = """Issue #805 (porting QOL mods) closed with this answer: it would come as a native Horizon mod on the mod API. \
-It needs server mods, entities and rendering first."""
+dev = """Issue #805 (porting QOL mods) closed with this answer: it would come as a native Horizon mod."""
 links = ["#805"]
 
 [[item]]
@@ -655,9 +652,9 @@ title = "Proximity voice chat as a native mod"
 status = "later"
 area = "mods"
 plain = """Hear nearby players talk, as with the voice chat mods of other Minecraft versions, as a Horizon mod."""
-dev = """Needs server mods, mod networking and an audio interface in the mod API before anything can be built \
-(docs/api/mods.md)."""
-links = ["docs/api/mods.md"]
+dev = """A native mod (docs/native-mods.md). It needs a way to carry voice between players and an audio path in the \
+game before anything can be built."""
+links = ["docs/native-mods.md"]
 
 [[item]]
 id = "light-default-pack"
@@ -865,8 +862,8 @@ area = "modpacks"
 plain = """When a mod, shader pack or modpack hasn't been rewritten for Horizon, one button converts what can be \
 converted, so you don't have to wait for the rewrite."""
 dev = """Generalise the mod browser's Port step (`horizon-port-pack`: the data, assets, worldgen and block and item \
-definitions of Java mods, .mrpack and CurseForge zips) to every kind of content: code mods where the API \
-allows it (see 'Mods with code') and shader packs, converting an Iris/OptiFine pack into Horizon's format. \
+definitions of Java mods, .mrpack and CurseForge zips) to every kind of content: code mods as native \
+mods (see 'Mods with code') and shader packs, converting an Iris/OptiFine pack into Horizon's format. \
 The browser says what works before the install. Java code itself does not run (docs/modpacks.md, \
 docs/mod-browser.md)."""
 links = ["docs/modpacks.md", "docs/mod-browser.md"]
@@ -878,11 +875,11 @@ status = "later"
 area = "modpacks"
 plain = """Making mods that add machines, magic and mobs work in Horizon, in steps, starting with machines. They are \
 most of what a big modpack is made of."""
-dev = """333 of the 496 mods in a big pack (ATM10) contain code. Issue #1854 ranks the API gaps (ticking block \
+dev = """333 of the 496 mods in a big pack (ATM10) contain code. Issue #1854 ranks the gaps (ticking block \
 entities, networking, rendering, menus, inventories) that unlock them in tiers, with machines first as the \
-recommended path and a furnace ported tick for tick as proof. The first API step is a draft (#1189, see \
-'Machines and blocks with inventories'). The path isn't started yet (docs/modpacks.md)."""
-links = ["#1854", "docs/modpacks.md"]
+recommended path. Code mods are native mods now (docs/native-mods.md): each port is a horizon-mixins bundle. \
+The path isn't started yet (docs/modpacks.md)."""
+links = ["#1854", "docs/modpacks.md", "docs/native-mods.md"]
 
 [[item]]
 id = "datapack-browser"

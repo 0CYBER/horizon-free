@@ -198,6 +198,15 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "Float" => "FloatGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
         "RandomStroll" => "RandomStrollGoal",
+        // AbstractFish's private subclass of RandomSwimmingGoal.
+        "RandomSwimming"
+            if matches!(
+                m.species(),
+                Species::Cod | Species::Salmon | Species::TropicalFish | Species::Pufferfish
+            ) =>
+        {
+            "FishSwimGoal"
+        }
         "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",
         "RandomLookAround" => "RandomLookAroundGoal",

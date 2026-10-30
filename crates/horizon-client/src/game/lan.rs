@@ -521,6 +521,11 @@ fn mob_meta(
             defaults.push((collar, serializer::INT, Value::Int(red)));
             // Wolf.DATA_ANGER_END_TIME: the game time the anger ends, -1 when calm.
             if kind == "minecraft:wolf" {
+                // Wolf.DATA_INTERESTED_ID: BegGoal's flag, the head tilt.
+                if e.flag {
+                    meta.push((20, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                defaults.push((20, serializer::BOOLEAN, Value::Bool(false)));
                 if e.anger > 0 {
                     let end = game_time + i64::from(e.anger);
                     meta.push((22, serializer::LONG, Value::Long(end)));
@@ -1117,7 +1122,10 @@ impl Game<'_> {
             dedicated: false,
             integrated: false,
         };
-        let net = NetConfig::lan(settings.port, motd, MAX_PLAYERS);
+        let net = NetConfig {
+            online: horizon_client::lan::OnlineMode::lan(),
+            ..NetConfig::lan(settings.port, motd, MAX_PLAYERS)
+        };
         self.lan_host(settings, net, config, Some(host_uuid))
     }
     /// Start the network side and the play-state hub: for the LAN (with the
@@ -2167,6 +2175,7 @@ impl Game<'_> {
                 .armor
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
+            m.extra.armor = g.armor.clone();
             m.extra.crouching = g.sneaking;
             m.extra.avatar_pose = g.pose();
             m.extra.sprinting = g.sprinting;
