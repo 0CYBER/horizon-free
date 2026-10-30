@@ -104,6 +104,9 @@ API 21 adds left-clicking a block, on the server for every player: `native_left_
 creative. A mod that cancels it keeps the block: it isn't attacked, dug or broken, and the player's client gets it back.
 Bundles that use it need `"hooks": 21`.
 
+API 22 adds a player's server tick: `native_player_tick` runs once a tick for every living player in the world, at the
+end of their `ServerPlayer.tick`, with the helpers reading that player. Bundles that use it need `"hooks": 22`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
