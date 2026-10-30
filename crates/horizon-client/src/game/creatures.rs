@@ -974,7 +974,8 @@ impl Game<'_> {
         self.raider_died(m, slain_by_player);
         self.villager_murdered(m, slain_by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
-        self.drop_death_loot(&mut dying, by_player, consumed, pos);
+        let killer_entity = self.killer_loot_entity(killer.flatten());
+        self.drop_death_loot(&mut dying, by_player, killer_entity, consumed, pos);
         self.create_wither_rose(m);
         if m.species() == Species::CopperGolem {
             // CopperGolem.dropEquipment: the preserved equipment too.
@@ -1056,7 +1057,47 @@ impl Game<'_> {
     /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
     /// world's random sequence, equipment by drop chance, species extras and
     /// the experience orbs, spawned in order.
-    fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
+    /// The killing player as a loot entity: their worn and held items, read
+    /// from the guest who struck the last blow when a server's player did
+    /// (on the server thread that is every player, the window's too), so
+    /// Looting on their weapon counts.
+    fn killer_loot_entity(&mut self, guest: Option<u32>) -> horizon_world::loot::LootEntity {
+        let own = |g: &Self| {
+            let mut e = horizon_world::loot::LootEntity::new("minecraft:player");
+            let slots = [
+                ("mainhand", g.stack_in(g.selected)),
+                ("offhand", g.stack_in(super::shield::OFFHAND_SLOT)),
+                ("head", g.armor[0].as_ref()),
+                ("chest", g.armor[1].as_ref()),
+                ("legs", g.armor[2].as_ref()),
+                ("feet", g.armor[3].as_ref()),
+            ];
+            for (slot, stack) in slots {
+                if let Some(stack) = stack {
+                    e.equipment.push((slot.into(), to_loot(stack)));
+                }
+            }
+            e
+        };
+        if let Some(conn) = guest.filter(|_| self.lan_acting.is_none())
+            && let Some(mut host) = self.lan.take()
+        {
+            let entity = self.as_guest(&mut host, conn, |g| own(g));
+            self.lan = Some(host);
+            if let Some(entity) = entity {
+                return entity;
+            }
+        }
+        own(self)
+    }
+    fn drop_death_loot(
+        &mut self,
+        m: &mut Mob,
+        by_player: bool,
+        killer: horizon_world::loot::LootEntity,
+        consumed: bool,
+        pos: [f64; 3],
+    ) {
         use horizon_client::mobs::{DamageKind, Who, drops};
         use horizon_world::loot::{LootDamage, LootEntity};
         let Some(loot) = horizon_client::structure_blocks::loot_data(
@@ -1065,13 +1106,7 @@ impl Game<'_> {
         ) else {
             return;
         };
-        let player = || {
-            let mut e = LootEntity::new("minecraft:player");
-            if let Some(held) = self.held() {
-                e.equipment.push(("mainhand".into(), to_loot(held)));
-            }
-            e
-        };
+        let player = || killer.clone();
         let damage = m.last_damage.map(|(d, _)| {
             let source = match d.attacker {
                 Some(Who::Player) => Some(player()),
