@@ -6,9 +6,14 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 21 adds item behaviour: a held item's hit on a mob
+//! API 22 adds item behaviour: a held item's hit on a mob
 //! (`native_hurt_enemy`), a carried stack's tick (`native_inventory_tick`) and
 //! an equipment slot taking a different item (`native_on_equip`).
+//!
+//! API 21 adds right clicking a block (`native_right_click_block`), and in
+//! `native_server.rs` the acting player (`native_acting_player`), a player's
+//! health, the action bar (`native_action_bar`) and commands run as the
+//! server (`native_run_command`).
 //!
 //! API 20 adds buttons, tooltips and item icons on mod screens
 //! (`native_screen_click`, `native_screen_tooltip`, `native_menu_button`,
@@ -110,7 +115,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 21;
+pub(crate) const NATIVE_HOOKS_API: u32 = 22;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -705,11 +710,26 @@ impl Game<'_> {
     ) {
         let _ = (stack, pos, state);
     }
+    /// A player right clicks the block at `pos` with `self.hand`, `face` the
+    /// face clicked: where `ServerPlayerGameMode.useItemOn` starts, before
+    /// the block's own use (a chest, a door, a lever) and before
+    /// `native_use_item_on`. Set `canceled` to stop the click: neither the
+    /// block nor the item acts, the hand doesn't swing, and a guest sees the
+    /// block as it is. Server-side, for every player of the world
+    /// (`native_acting_player` says who), once per hand. API 21.
+    pub(super) fn native_right_click_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, face, canceled);
+    }
     /// A player's hit landed on the mob `entity` of type `kind`
     /// (`minecraft:zombie`), holding `stack`: where `Item.hurtEnemy` is called,
     /// before the post-attack enchantments and the weapon's wear. It only
     /// hears. Another player as the target isn't told yet. Server-side, for
-    /// every player of the world (the helpers read the acting one). API 21.
+    /// every player of the world (the helpers read the acting one). API 22.
     pub(super) fn native_hurt_enemy(&mut self, stack: &ItemStack, entity: u32, kind: &str) {
         let _ = (stack, entity, kind);
     }
@@ -720,7 +740,7 @@ impl Game<'_> {
     /// as you like: a count of 0 empties the slot, and the player's client
     /// gets the change. The stack is out of its slot during the call. This
     /// runs often, so check the item first. Server-side, for every living
-    /// player of the world (the helpers read the acting one). API 21.
+    /// player of the world (the helpers read the acting one). API 22.
     pub(super) fn native_inventory_tick(
         &mut self,
         slot: i32,
@@ -734,7 +754,7 @@ impl Game<'_> {
     /// item, `new` (none when it was emptied): `LivingEntity.onEquipItem`,
     /// before the equip sound. It only hears. Never for a spectator.
     /// Server-side, for every player of the world (the helpers read the
-    /// acting one). API 21.
+    /// acting one). API 22.
     pub(super) fn native_on_equip(&mut self, slot: &str, new: Option<&ItemStack>) {
         let _ = (slot, new);
     }

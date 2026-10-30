@@ -171,6 +171,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
     },
     {
+      "name": "right_click_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"
+    },
+    {
       "name": "hurt_enemy",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"
