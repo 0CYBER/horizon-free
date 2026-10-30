@@ -12179,15 +12179,15 @@ impl Game<'_> {
         horizon_client::creative::item_group_key(&tab.id)
             .map_or_else(|| tab.title.clone(), |key| self.translate(key, &tab.title))
     }
-    /// Vanilla tooltip: dark box with a purple gradient border.
+    /// Vanilla tooltip: dark box with a purple gradient border, laid out and
+    /// drawn like an item tooltip (4 px of padding on every side).
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
         let atlas = &self.gui.atlas;
-        let w = HudBatch::text_width(atlas, text);
-        let (x, y) = (x + 12.0, y - 12.0);
-        batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 16.0, rgba(16, 0, 16, 240));
-        batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, 1.0, rgba(80, 0, 255, 80));
-        batch.fill(atlas, x - 3.0, y + 10.0, w + 6.0, 1.0, rgba(40, 0, 127, 80));
-        batch.text(atlas, text, x, y, u32::MAX, true);
+        let lines = vec![(horizon_client::text::Text::literal(text), u32::MAX)];
+        let (x, y, w, h) =
+            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), 0.0);
+        Self::tooltip_box(batch, atlas, x, y, w, h);
+        Self::tooltip_text(batch, atlas, &lines, x, y);
     }
     /// `CreativeModeInventoryScreen.getTooltipFromContainerItem`: the lines
     /// that follow the item's name, none for a category tab's own grid slots
