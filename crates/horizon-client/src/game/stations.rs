@@ -2374,6 +2374,39 @@ impl Game<'_> {
             return;
         };
         self.draw_bundle_tooltip(batch, &layout);
+        self.draw_bundle_selected_name(batch, &layout, x, y + text_h + 2.0, w);
+    }
+    /// `ClientBundleTooltip.extractSelectedItemTooltip`: the selected item's
+    /// name in a box of its own, centred over the grid (less 12) and 15 above
+    /// the component, placed by `DefaultTooltipPositioner` (+12, -12, kept on
+    /// screen). `x`, `y` and `w` are the component's.
+    fn draw_bundle_selected_name(
+        &self,
+        batch: &mut HudBatch,
+        layout: &horizon_client::bundle::TooltipLayout,
+        x: f32,
+        y: f32,
+        w: f32,
+    ) {
+        let Some((_, stack)) = layout.selected.and_then(|i| layout.slots.get(i)) else {
+            return;
+        };
+        let name =
+            horizon_client::item_tooltip::styled_name(stack, || self.stack_hover_name(stack));
+        let lines = Self::resolved(&[(name, self.rarity_color(stack))]);
+        let atlas = &self.gui.atlas;
+        let tw = atlas.font.width_text(&lines[0].0);
+        let center = x + (w / 2.0).floor() - 12.0;
+        let mut px = center - (tw / 2.0).floor() + 12.0;
+        let mut py = y - 15.0 - 12.0;
+        if px + tw > batch.width {
+            px = (px - 24.0 - tw).max(4.0);
+        }
+        if py + 8.0 + 3.0 > batch.height {
+            py = batch.height - 8.0 - 3.0;
+        }
+        Self::tooltip_box(batch, atlas, px, py, tw, 8.0);
+        Self::tooltip_text(batch, atlas, &lines, px, py);
     }
     /// `ClientBundleTooltip.extractImage`: the slots, the count past them and
     /// the progress bar.
