@@ -2053,6 +2053,7 @@ impl Game<'_> {
             C::PlayerLookAt(p) => self.remote_look_at(&p),
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
+            C::ChunksBiomes(p) => self.remote_chunks_biomes(&p),
             C::ForgetLevelChunk(p) => {
                 let [x, z] = p.pos;
                 self.streaming.forget(&mut self.world, x, z);

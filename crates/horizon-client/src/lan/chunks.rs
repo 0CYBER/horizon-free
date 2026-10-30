@@ -13,7 +13,7 @@ use horizon_protocol::{
     chunk::{
         BIOMES, BLOCKS, BlockEntityInfo, ChunkData, Heightmaps, LightData, Paletted, Strategy,
     },
-    packets::play::LevelChunkWithLight,
+    packets::play::{ChunkBiomeData, LevelChunkWithLight},
     registry::{Builtin, ceil_log2},
 };
 use horizon_world::nbt::Tag;
@@ -261,15 +261,6 @@ impl SectionCoder {
                 values.push(v as i32);
             }
         }
-        let biome_values: Vec<i32> = (0..BIOMES)
-            .map(|j| {
-                let internal = section.biomes.get(j) as u16;
-                self.biome_ids
-                    .get(usize::from(internal))
-                    .copied()
-                    .unwrap_or(0)
-            })
-            .collect();
         (
             horizon_protocol::chunk::Section {
                 non_empty,
@@ -286,10 +277,25 @@ impl SectionCoder {
                         crate::chunk::block_strategy().global_bits,
                     ),
                 },
-                biomes: Paletted::from_values(&biome_values, Strategy::Biomes, self.biome_bits),
+                biomes: self.biomes(section),
             },
             entities,
         )
+    }
+
+    /// The section's biome container (`PalettedContainerRO.write`'s), in
+    /// network biome ids.
+    fn biomes(&self, section: &Section) -> Paletted {
+        let values: Vec<i32> = (0..BIOMES)
+            .map(|j| {
+                let internal = section.biomes.get(j) as u16;
+                self.biome_ids
+                    .get(usize::from(internal))
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .collect();
+        Paletted::from_values(&values, Strategy::Biomes, self.biome_bits)
     }
 }
 
@@ -441,6 +447,16 @@ impl ChunkEncoder {
             sections: 0..SECTIONS,
             sky: true,
         }
+    }
+
+    /// `ClientboundChunksBiomesPacket.ChunkBiomeData`: the column's biome
+    /// containers, one per section of the level (`extractChunkData`).
+    pub fn biome_data(&self, chunk: &Chunk) -> ChunkBiomeData {
+        let biomes: Vec<Paletted> = chunk.sections[self.sections.clone()]
+            .iter()
+            .map(|s| self.coder.biomes(s))
+            .collect();
+        ChunkBiomeData::from_biomes([chunk.x, chunk.z], &biomes)
     }
 
     /// The client heightmaps (Heightmap.prime over the column), from the

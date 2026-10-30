@@ -307,6 +307,39 @@ impl Codec<PositionPath> for PositionPath {
 }
 packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPath, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool });
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
+packet!(
+    /// ClientboundChunksBiomesPacket.ChunkBiomeData: a column and its
+    /// sections' biome containers, in order (`extractChunkData`).
+    ChunkBiomeData { pos: [i32; 2] => ChunkPos, buffer: Vec<u8> => BytesN<2097152> }
+);
+impl ChunkBiomeData {
+    /// `LevelChunk.replaceBiomes`' read: `count` sections' biome
+    /// containers, one after another.
+    pub fn biomes(&self, count: usize, biome_bits: u8) -> Result<Vec<crate::chunk::Paletted>> {
+        let mut r = Reader::new(&self.buffer);
+        (0..count)
+            .map(|_| {
+                crate::chunk::Paletted::read(&mut r, crate::chunk::Strategy::Biomes, biome_bits)
+            })
+            .collect()
+    }
+    /// `extractChunkData`: the sections' biome containers, in order.
+    pub fn from_biomes(pos: [i32; 2], biomes: &[crate::chunk::Paletted]) -> Self {
+        let mut w = Writer::new();
+        for b in biomes {
+            b.write(&mut w);
+        }
+        Self {
+            pos,
+            buffer: w.data,
+        }
+    }
+}
+packet!(
+    /// ClientboundChunksBiomesPacket: columns whose biomes changed
+    /// (`/fillbiome`, through `ChunkMap.resendBiomesForChunks`).
+    ChunksBiomes { chunks: Vec<ChunkBiomeData> => List<ChunkBiomeData> }
+);
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
 packet!(
@@ -1845,6 +1878,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
     EntityEvent(EntityEvent) = ENTITY_EVENT,
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
+    ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
@@ -2605,6 +2639,18 @@ mod tests {
                 pitch: 2.0,
                 on_ground: true,
             }),
+            Clientbound::ChunksBiomes(ChunksBiomes {
+                chunks: vec![
+                    ChunkBiomeData {
+                        pos: [-3, 7],
+                        buffer: vec![0, 4, 1, 2],
+                    },
+                    ChunkBiomeData {
+                        pos: [i32::MAX, i32::MIN],
+                        buffer: Vec::new(),
+                    },
+                ],
+            }),
             Clientbound::ForgetLevelChunk(ForgetLevelChunk { pos: [-1, 2] }),
             Clientbound::GameEvent(GameEvent {
                 event: 13,
@@ -3099,6 +3145,66 @@ mod tests {
                 Clientbound::PlayerLookAt(p)
             );
         }
+    }
+
+    /// ClientboundChunksBiomesPacket is read, not passed through as an
+    /// unknown packet: one column (1, -2) with two bytes of biomes.
+    #[test]
+    fn chunks_biomes_is_a_known_packet() {
+        let id = crate::ids::play::clientbound::CHUNKS_BIOMES;
+        let payload = [1, 0xFF, 0xFF, 0xFF, 0xFE, 0, 0, 0, 1, 2, 5, 6];
+        let p = Clientbound::decode(id, &payload).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert_eq!(p.encode()[1..], payload);
+        // Cut short, it is an error rather than a packet.
+        assert!(Clientbound::decode(id, &payload[..10]).is_err());
+    }
+
+    /// ClientboundChunksBiomesPacket.STREAM_CODEC: a list of (ChunkPos as
+    /// one long, x low and z high; `byteArray(2097152)`), the bytes being
+    /// each section's biome container (`ChunkBiomeData.extractChunkData`).
+    #[test]
+    fn chunks_biomes_wire_and_biomes() {
+        let p = Clientbound::ChunksBiomes(ChunksBiomes {
+            chunks: vec![ChunkBiomeData {
+                pos: [1, -2],
+                buffer: vec![5, 6],
+            }],
+        });
+        let bytes = p.encode();
+        assert_eq!(
+            bytes,
+            [
+                crate::ids::play::clientbound::CHUNKS_BIOMES as u8,
+                1,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFE,
+                0,
+                0,
+                0,
+                1,
+                2,
+                5,
+                6
+            ]
+        );
+        assert_eq!(
+            Clientbound::decode(bytes[0].into(), &bytes[1..]).unwrap(),
+            p
+        );
+        use crate::chunk::{Paletted, Strategy};
+        let sections = [
+            Paletted::from_values(&[3; 64], Strategy::Biomes, 6),
+            Paletted::from_values(
+                &(0..64).map(|i| i % 5).collect::<Vec<_>>(),
+                Strategy::Biomes,
+                6,
+            ),
+        ];
+        let data = ChunkBiomeData::from_biomes([4, 4], &sections);
+        assert_eq!(data.biomes(2, 6).unwrap(), sections);
     }
 
     #[test]
