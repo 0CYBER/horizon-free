@@ -75,6 +75,8 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --height H             blocks above spawn the bots fly at (walk, explore, idle); default 24
   --ground               claim the ground in every move (with --height 0 on a flat world: walking
                          on it; higher, or over water: a no-fall or jesus cheat, to test an anticheat)
+  --give SLOT:ID:COUNT,...  creative-slot packets sent once joined (inventory menu slot, item
+                         registry id, count), to test what a server takes
   --timer F              cheat, to test an anticheat: tick F times as fast as vanilla's client (1.5: 30 Hz)
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
@@ -135,6 +137,8 @@ struct Options {
     no_read: bool,
     height: f64,
     ground: bool,
+    /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
+    give: Vec<(i16, i32, i32)>,
     name: String,
     /// The `minecraft:brand` to send, if any.
     brand: Option<String>,
@@ -160,6 +164,7 @@ fn options() -> Result<Options, String> {
         no_read: false,
         height: 24.0,
         ground: false,
+        give: Vec::new(),
         name: "Bot".into(),
         report: None,
         brand: None,
@@ -202,6 +207,17 @@ fn options() -> Result<Options, String> {
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
             "--brand" => o.brand = Some(value),
+            "--give" => {
+                for part in value.split(',') {
+                    let n: Vec<&str> = part.split(':').collect();
+                    let parsed = match n[..] {
+                        [s, i, c] => s.parse().ok().zip(i.parse().ok()).zip(c.parse().ok()),
+                        _ => None,
+                    };
+                    let ((slot, item), count) = parsed.ok_or_else(|| number("SLOT:ID:COUNT"))?;
+                    o.give.push((slot, item, count));
+                }
+            }
             "--height" => o.height = value.parse().map_err(|_| number("blocks"))?,
             "--timer" => {
                 o.timer = value.parse().map_err(|_| number("a speed, like 1.5"))?;
@@ -724,6 +740,15 @@ fn run_bot(
         Behaviour::FloodBook => Some(Stack::new(WRITABLE_BOOK, 1)),
         _ => None,
     };
+    for &(slot, item, count) in &o.give {
+        send(
+            play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+                slot,
+                item: Some(Stack::new(item, count)),
+            })
+            .encode(),
+        );
+    }
     if tool.is_some() {
         send(
             play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
