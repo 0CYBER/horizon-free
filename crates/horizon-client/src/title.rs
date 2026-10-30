@@ -144,8 +144,36 @@ pub struct WorldEntry {
     /// `LevelSummary.CorruptedLevelSummary`: level.dat did not read, so the row
     /// only knows its folder and offers recovery instead of play.
     pub corrupted: bool,
+    /// `LevelSummary.isCompatible` false: the saved game version's name, for a world
+    /// from another series.
+    pub incompatible: Option<String>,
+    /// `LevelSummary.requiresFileFixing`: opening the world upgrades its files first.
+    pub file_fixing: bool,
+    /// `BackupStatus.DOWNGRADE`: a newer version saved the world.
+    pub downgrade: bool,
 }
 impl WorldEntry {
+    /// `LevelSummary.isCompatible`: the saved series is this build's.
+    fn compatible(&self) -> bool {
+        self.incompatible.is_none()
+    }
+    /// `LevelSummary.isDisabled`.
+    fn disabled(&self) -> bool {
+        self.locked || !self.compatible()
+    }
+    /// `LevelSummary.primaryActionActive`: a corrupted world offers recovery.
+    fn can_play(&self) -> bool {
+        self.corrupted || !self.disabled()
+    }
+    /// `LevelSummary.canEdit` and `canRecreate`.
+    fn can_edit(&self) -> bool {
+        !self.corrupted && !self.disabled() && !self.file_fixing
+    }
+    /// `BackupStatus.shouldBackup`: the world needs its files fixed or comes from
+    /// a newer version.
+    fn should_backup(&self) -> bool {
+        self.file_fixing || self.downgrade
+    }
     /// `CorruptedLevelSummary`: named after its folder, nothing else known.
     fn corrupted(folder: String, modified: std::time::SystemTime) -> Self {
         Self {
@@ -158,6 +186,9 @@ impl WorldEntry {
             version: String::new(),
             locked: false,
             corrupted: true,
+            incompatible: None,
+            file_fixing: false,
+            downgrade: false,
         }
     }
 }
@@ -358,6 +389,9 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
                     .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
                 locked: crate::save::SessionLock::is_locked(&path),
                 corrupted: false,
+                incompatible: crate::save::incompatible_version(&path),
+                file_fixing: crate::save::needs_file_fixes(&path),
+                downgrade: crate::save::downgraded_from(&path).is_some(),
             })
         })
         .collect();
@@ -375,6 +409,22 @@ fn world_info(world: &WorldEntry) -> crate::text::Text {
                 "Locked by another running instance of Minecraft.",
             ),
             0xFF5555,
+        );
+    }
+    // LevelSummary.createInfo: a world from another series says so in red.
+    if let Some(version) = &world.incompatible {
+        let version = if version.is_empty() {
+            lang::get_or("selectWorld.versionUnknown", "unknown")
+        } else {
+            version.clone()
+        };
+        return crate::text::Text::colored(
+            translate(
+                "selectWorld.incompatible.info",
+                "Incompatible version: %s",
+                &[&version],
+            ),
+            crate::text::RED,
         );
     }
     // CorruptedLevelSummary.INFO: recover_world.warning in red (-65536).
@@ -400,11 +450,20 @@ fn world_info(world: &WorldEntry) -> crate::text::Text {
     } else {
         String::new()
     };
+    // A world that asks for a backup shows its version in italics, red when downgrading.
+    let version = crate::text::Text::literal(world.version.clone());
+    let version = if !world.should_backup() {
+        version
+    } else if world.downgrade {
+        version.with_color(crate::text::RED)
+    } else {
+        version.italic()
+    };
     mode.append(crate::text::Text::literal(format!(
-        "{commands}, {} {}",
+        "{commands}, {} ",
         lang::get_or("selectWorld.version", "Version:"),
-        world.version
     )))
+    .append(version)
 }
 fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
     // SplashManager checks SpecialDates before the resource list (local date).
@@ -1092,9 +1151,11 @@ impl Title {
                 let world = selected.and_then(|i| worlds.get(i));
                 // SelectWorldScreen.updateButtonStatus: primaryActionMessage, canEdit, canRecreate.
                 let corrupted = world.is_some_and(|w| w.corrupted);
-                let editable = world.is_some() && !corrupted;
+                let editable = world.is_some_and(WorldEntry::can_edit);
                 let play = if corrupted {
                     lang::get_or("recover_world.button", "Attempt to Recover")
+                } else if world.is_some_and(|w| w.file_fixing) {
+                    lang::get_or("selectWorld.upgrade_and_play", "Upgrade and Play")
                 } else {
                     lang::get_or("selectWorld.select", "Play Selected World")
                 };
@@ -1104,7 +1165,7 @@ impl Title {
                         h - 52.0,
                         150.0,
                         &play,
-                        selected.is_some(),
+                        world.is_some_and(WorldEntry::can_play),
                         10,
                     ),
                     b(
@@ -1545,12 +1606,23 @@ impl Title {
                     if let Some((_, (rx, ry))) = hovered.filter(|(r, _)| *r == row) {
                         batch.fill(atlas, x, y, 32.0, 32.0, 0xA0909090);
                         let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
-                        let sprite = if on_icon {
-                            "gui/sprites/world_list/join_highlighted"
+                        // The icon says what a click does.
+                        let names: &[&str] = if world.corrupted {
+                            &["error", "marked_join"]
+                        } else if world.disabled() {
+                            &["error"]
+                        } else if world.downgrade {
+                            &["marked_join", "error"]
+                        } else if world.should_backup() {
+                            &["marked_join"]
                         } else {
-                            "gui/sprites/world_list/join"
+                            &["join"]
                         };
-                        batch.sprite_scaled(atlas, sprite, x, y, 32.0, 32.0, u32::MAX);
+                        let lit = if on_icon { "_highlighted" } else { "" };
+                        for name in names {
+                            let sprite = format!("gui/sprites/world_list/{name}{lit}");
+                            batch.sprite_scaled(atlas, &sprite, x, y, 32.0, 32.0, u32::MAX);
+                        }
                     }
                 }
                 // Clip list quads, including their UVs, to the content area.
@@ -1952,6 +2024,9 @@ impl Title {
         {
             self.create_tooltip(atlas, batch, cursor, name, *creative, options);
         }
+        if let Mode::Select { worlds, selected } = &self.mode {
+            self.select_tooltip(atlas, batch, cursor, (w, h), worlds, *selected);
+        }
         if let Mode::Multiplayer(screen) = &self.mode {
             screen.draw_tooltip(atlas, batch, cursor);
         }
@@ -1968,6 +2043,63 @@ impl Title {
             batch.text(atlas, &title, x + 18.0, 7.0, rgba(255, 255, 0, 255), false);
             batch.text(atlas, &message, x + 18.0, 19.0, u32::MAX, false);
         }
+    }
+    /// The tooltip of a world's icon (drawn with the row, as vanilla does) or, for a
+    /// world that needs its files upgraded first, of the Play, Edit and Re-Create
+    /// buttons (`SelectWorldScreen.updateButtonStatus`).
+    fn select_tooltip(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        cursor: (f32, f32),
+        size: (f32, f32),
+        worlds: &[WorldEntry],
+        selected: Option<usize>,
+    ) {
+        let red = |key: &str| Text::translate(key, &[]).with_color(crate::text::RED);
+        if let Some((row, (rx, ry))) = self.world_row_at(worlds, cursor, size)
+            && (0.0..32.0).contains(&rx)
+            && (0.0..32.0).contains(&ry)
+            && let Some((_, world)) = self.visible_worlds(worlds).nth(row)
+        {
+            let lines = if world.corrupted {
+                Vec::new()
+            } else if world.locked {
+                atlas.font.split(&red("selectWorld.locked"), 175.0)
+            } else if world.incompatible.is_some() {
+                atlas
+                    .font
+                    .split(&red("selectWorld.incompatible.tooltip"), 175.0)
+            } else if world.downgrade {
+                vec![
+                    red("selectWorld.tooltip.fromNewerVersion1"),
+                    red("selectWorld.tooltip.fromNewerVersion2"),
+                ]
+            } else {
+                Vec::new()
+            };
+            crate::ui::tooltip(batch, atlas, &lines, cursor);
+            return;
+        }
+        if !selected
+            .and_then(|i| worlds.get(i))
+            .is_some_and(|w| w.file_fixing)
+        {
+            return;
+        }
+        let (x, y) = cursor;
+        let hovered = self
+            .buttons(size.0, size.1)
+            .into_iter()
+            .find(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + 20.0);
+        let key = match hovered.map(|b| b.id) {
+            Some(10) => "selectWorld.requiresFileFixingTooltip.play",
+            Some(13) => "selectWorld.requiresFileFixingTooltip.edit",
+            Some(15) => "selectWorld.requiresFileFixingTooltip.recreate",
+            _ => return,
+        };
+        let lines = atlas.font.split(&Text::translate(key, &[]), 170.0);
+        crate::ui::tooltip(batch, atlas, &lines, cursor);
     }
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
     /// Navigation buttons can return `Action::None` while still sounding.
@@ -2154,7 +2286,8 @@ impl Title {
                 if let Some((index, world, (rx, ry))) = chosen {
                     // WorldListEntry.mouseClicked: the icon joins at once.
                     let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
-                    if on_icon || *selected == Some(index) {
+                    // WorldListEntry.canInteract: only a world that can be played joins.
+                    if (on_icon || *selected == Some(index)) && world.can_play() {
                         return self.play(world);
                     }
                     if let Mode::Select { selected, .. } = &mut self.mode {
@@ -2457,6 +2590,9 @@ impl Title {
         let Some(world) = selected.and_then(|i| worlds.get(i)).cloned() else {
             return Action::None;
         };
+        if !world.can_play() {
+            return Action::None;
+        }
         self.play(world)
     }
     pub fn tab(&mut self) {
