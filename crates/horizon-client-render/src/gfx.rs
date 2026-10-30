@@ -1173,9 +1173,7 @@ impl Renderer {
                 .map(|renderer| renderer.config.present_mode)
                 .filter(|mode| caps.present_modes.contains(mode))
                 .unwrap_or_else(|| {
-                    if caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
-                        wgpu::PresentMode::Immediate
-                    } else if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                    if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
                         wgpu::PresentMode::Mailbox
                     } else {
                         wgpu::PresentMode::Fifo

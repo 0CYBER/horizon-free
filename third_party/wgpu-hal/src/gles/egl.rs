@@ -1134,6 +1134,8 @@ impl Surface {
                 crate::SurfaceError::Lost
             })?;
 
+        // Setting swap interval per-frame ensures the configured present mode (VSync
+        // on/off) is maintained even if configure-time make_current was contested.
         let _ = self
             .egl
             .instance
@@ -1427,6 +1429,8 @@ impl crate::Surface for Surface {
             }
         };
 
+        // Set swap interval on the newly created surface. If make_current fails here
+        // due to context contention, the per-frame call in present() will self-heal.
         if let Ok(()) = self.egl.instance.make_current(
             self.egl.display,
             Some(surface),
