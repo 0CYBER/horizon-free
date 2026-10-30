@@ -182,6 +182,9 @@ fn landing_splash(m: &mut Mob, events: &mut Vec<MobEvent>) {
 /// `AbstractCubeMob.tick` on a client of a server: the landing splash follows
 /// the on-ground flag the server sends.
 pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::SulfurCube {
+        super::sulfur_cube::client_tick(m);
+    }
     if m.on_ground && !m.extra.flag2 {
         landing_splash(m, events);
     }
