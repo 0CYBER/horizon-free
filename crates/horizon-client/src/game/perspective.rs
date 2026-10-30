@@ -24,7 +24,11 @@ use horizon_world::{
     registry::BlockStateId,
     world_ray::{RayBlockMode, RayFluidMode, RayWorld, clip_world},
 };
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 /// `Level.clip` with `ClipContext.Block.VISUAL` and no fluids:
 /// `BlockBehaviour.getVisualShape` is the collision shape except for the
@@ -137,8 +141,25 @@ fn own_invisible(effects: &horizon_client::effects::PlayerEffects, shared_flag: 
 fn body_visible(invisible: bool, team: Option<&horizon_client::scoreboard::Team>) -> bool {
     !horizon_client::scoreboard::invisible_to(team, team, false, invisible)
 }
-/// The player's model type (`PlayerModel` with the default skin).
+/// The player's model type for each resources root it was asked for.
+static PLAYER_TYPES: Mutex<Vec<(PathBuf, Option<Arc<MobType>>)>> = Mutex::new(Vec::new());
+
+/// The player's model type (`PlayerModel` with the default skin), read once
+/// per resources root: `entity-models.json` doesn't change while the game
+/// runs, and parsing it again held every world join for about 100 ms. The
+/// world resources read it as the game starts (`load_world_rest`), so a join
+/// finds it; a resource pack change's new root is read once.
 pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
+    let mut cache = PLAYER_TYPES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, kind)) = cache.iter().find(|(cached, _)| cached == root) {
+        return kind.clone();
+    }
+    let kind = load_player_type(root);
+    cache.push((root.to_owned(), kind.clone()));
+    kind
+}
+/// `player_type` from the document: the model and its layers from one parse.
+fn load_player_type(root: &Path) -> Option<Arc<MobType>> {
     let models = horizon_client::mobs::EntityModelDocument::load(root).ok()?;
     models.model("minecraft:player#main").map(|model| {
         Arc::new(MobType {

@@ -390,6 +390,7 @@ pub fn slider(
     value: f32,
     hover: bool,
     active: bool,
+    dragging: bool,
 ) {
     let kind = crate::widgets::Kind::Slider {
         value,
@@ -401,17 +402,8 @@ pub fn slider(
         // A controller's D-pad can focus it (Horizon's controller support).
         crate::widgets::target_as([x, y, w, 20.0], kind);
     }
-    let track = if hover && active {
-        "gui/sprites/widget/slider_highlighted"
-    } else {
-        "gui/sprites/widget/slider"
-    };
+    let (track, handle) = slider_sprites(hover, active, dragging);
     nine_slice(batch, atlas, track, x, y, w, 20.0, u32::MAX);
-    let handle = if hover && active {
-        "gui/sprites/widget/slider_handle_highlighted"
-    } else {
-        "gui/sprites/widget/slider_handle"
-    };
     nine_slice(
         batch,
         atlas,
@@ -428,6 +420,21 @@ pub fn slider(
         rgba(160, 160, 160, 255)
     };
     centered_text(batch, atlas, label, x + 2.0, y + 6.0, w - 4.0, color);
+}
+/// Track and handle sprites: the track outline shows only while the slider is
+/// dragged, hovering highlights just the handle.
+fn slider_sprites(hover: bool, active: bool, dragging: bool) -> (&'static str, &'static str) {
+    let track = if dragging {
+        "gui/sprites/widget/slider_highlighted"
+    } else {
+        "gui/sprites/widget/slider"
+    };
+    let handle = if hover && active {
+        "gui/sprites/widget/slider_handle_highlighted"
+    } else {
+        "gui/sprites/widget/slider_handle"
+    };
+    (track, handle)
 }
 /// Slider value for a click at `cx` (AbstractSliderButton.setValueFromMouse).
 pub fn slider_value(x: f32, w: f32, cx: f32) -> f32 {
@@ -1342,6 +1349,18 @@ mod tests {
     }
     fn faithful(json: &str) -> NineSlice {
         parse_nine_slice(&serde_json::from_str(json).unwrap()).unwrap()
+    }
+    #[test]
+    fn slider_track_is_outlined_only_while_dragged() {
+        let (track, handle) = slider_sprites(true, true, false);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        let (track, handle) = slider_sprites(true, true, true);
+        assert_eq!(track, "gui/sprites/widget/slider_highlighted");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        let (track, handle) = slider_sprites(false, true, false);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle");
     }
     #[test]
     fn separator_tiles_sample_both_rows_and_clip_the_last_column() {

@@ -8,7 +8,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{Mob, Species, sulfur_cube},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{position::BlockPos, random::RandomSource};
 
 fn block_transform(base: glam::Mat4, baby: bool) -> glam::Mat4 {
     base * glam::Mat4::from_scale(glam::Vec3::new(1.0, -1.0, -1.0))
@@ -149,6 +149,34 @@ impl Game<'_> {
             return true;
         }
         false
+    }
+    /// `SulfurCube.primeWhenOnPoweredPosition`: an explosive cube standing in
+    /// or next to redstone power lights its fuse (`getBestOwnOrNeighbourSignal`;
+    /// no block has an own signal, so the neighbour signal is all there is).
+    pub(super) fn sulfur_cube_power_priming(&mut self) {
+        if !self.ui.rules.bool("tnt_explodes") {
+            return;
+        }
+        for i in 0..self.mobs.len() {
+            let m = &self.mobs[i];
+            if m.species() != Species::SulfurCube
+                || !sulfur_cube::archetype(m).is_some_and(|a| a.explosion.is_some())
+                || !m.alive()
+                || sulfur_cube::primed(m)
+            {
+                continue;
+            }
+            let at = BlockPos::new(
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            );
+            let signal =
+                self.with_level(|b, level, ticks| b.best_neighbor_signal(level, ticks, at));
+            if signal != 0 {
+                sulfur_cube::prime(&mut self.mobs[i], false);
+            }
+        }
     }
     /// `SulfurCubeSearchForItemsGoal` and `pickUpItem`: an adult with nothing
     /// inside hops to a block it can swallow within 8 and takes it in.
