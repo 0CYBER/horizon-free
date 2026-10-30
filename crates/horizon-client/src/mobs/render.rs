@@ -1349,7 +1349,16 @@ fn render_visible(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let draw_body = |out: &mut Vec<Vertex>| {
-        if body_visible && let Some(uv) = atlas(&texture) {
+        // A player or mannequin whose skin has no atlas sprite (an evicted or
+        // never stored download) draws with its default skin, not invisibly.
+        let uv = atlas(&texture).or_else(|| {
+            if avatar(m) {
+                atlas(&m.kind.texture)
+            } else {
+                None
+            }
+        });
+        if body_visible && let Some(uv) = uv {
             draw(
                 &model,
                 base,
