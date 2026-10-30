@@ -73,6 +73,11 @@ block once the block let it through (`ItemStack.useOn`), and `native_use_item` h
 after `native_use_item_on` let it through (`Item.use`). Each hears a click once. A mod that claims one swings the hand
 instead of the item's use. Bundles that use them need `"hooks": 13`.
 
+API 14 adds the player-health HUD rows through `native_health_hud`: every frame the HUD draws them, the
+hook hears the layout's inputs (`HealthInputs`) and the screen's GUI size, and a mod that answers with
+draws replaces all the rows — armour, hearts, food, air and the heights above the hotbar — for that
+frame. Nothing answered draws Horizon's own. Bundles that use it need `"hooks": 14`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
