@@ -44,6 +44,7 @@ pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
 pub mod illusioner;
+pub mod item_break;
 pub mod keyframes;
 pub mod leash;
 pub mod living;
