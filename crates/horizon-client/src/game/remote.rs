@@ -4959,10 +4959,18 @@ impl Game<'_> {
         let stepped = &mut r.stepped;
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
+        let tab_players = &r.tab_players;
         let mut using = Vec::new();
         let mut mob_fx = Vec::new();
         for (m, rain) in self.mobs.iter_mut().zip(rain) {
             let player = players.contains_key(&(m.id as i32));
+            if player {
+                // AvatarRenderer.extractRenderState: isSpectator, from the player list.
+                m.extra.spectator = players
+                    .get(&(m.id as i32))
+                    .and_then(|uuid| tab_players.get(uuid))
+                    .is_some_and(|t| t.game_mode == SPECTATOR);
+            }
             if (!running && !player) || driven == Some(m.id) {
                 continue;
             }
