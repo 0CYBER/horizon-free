@@ -2291,7 +2291,7 @@ impl Hub {
             }
             g.position_this_tick = true;
         }
-        if !g.loaded && g.ticks == 0 && pos.is_none() {
+        if g.landing || !g.loaded && g.ticks == 0 && pos.is_none() {
             return;
         }
         // updateAwaitingTeleport: moves wait for the client to accept the
@@ -2720,6 +2720,7 @@ impl Hub {
             locked: ctx.difficulty_locked,
         }));
         self.send_permission_level(i);
+        self.guests[i].landing = portal;
         if !portal {
             self.teleport(i, None);
         }
@@ -2758,6 +2759,7 @@ impl Hub {
     /// the position, LEVEL_CHUNKS_LOAD_START (the client's loading screen
     /// closes once its chunk is in) and TeleportTransition.PLAY_PORTAL_SOUND.
     pub fn land(&mut self, i: usize, at: [f64; 3]) {
+        self.guests[i].landing = false;
         self.teleport(i, Some(at));
         let g = &self.guests[i];
         g.send(&C::GameEvent(play::GameEvent {
