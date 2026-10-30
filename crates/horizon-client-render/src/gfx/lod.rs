@@ -77,6 +77,10 @@ pub(super) fn fade_code(shown: Option<Instant>, level: u8, now: Instant) -> Opti
         1 + u32::from(level) * 129 + shown
     })
 }
+/// A section past the render distance that far terrain is coming in under:
+/// whole, a fading-out code at its start (terrain.wgsl's `fade_depth` draws
+/// leaving sections in front of far terrain).
+pub(super) const HELD: u32 = 1 + 64;
 /// `fade_code` for one leaving since `since`, chunk by chunk as it came, over
 /// what stays behind it; once `FADE` has passed it draws nothing.
 pub(super) fn fade_out_code(since: Instant, level: u8, now: Instant) -> u32 {

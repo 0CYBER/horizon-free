@@ -122,9 +122,16 @@ fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
 // section's 1/32768 (`terrain_uv`).
 fn fade_depth(clip: vec4<f32>, w: f32) -> vec4<f32> {
     let code = fade_code(w);
-    var scale = select(1.0, 1.0 - 2e-3, fract(abs(w)) > 0.001);
+    let tile = fract(abs(w)) > 0.001;
+    var scale = select(1.0, 1.0 - 2e-3, tile);
     if code != 0u && (code - 1u) % 129u < 64u {
         scale *= 1.0 + 5e-6 * f32(64u - (code - 1u) % 129u);
+    } else if code != 0u && !tile {
+        // A section leaving (gfx/lod.rs's `HELD`, `fade_out_code`) goes 2% of
+        // its distance toward the camera: far terrain's coarser blocks stand a
+        // little out of the real ones, and the tile coming in under it hid it
+        // at once, before its fade.
+        scale *= 1.02;
     }
     return vec4(clip.xy, clip.z * scale, clip.w);
 }

@@ -226,10 +226,13 @@ struct SectionGpu {
     leaving: Option<std::time::Instant>,
 }
 impl SectionGpu {
-    /// Its fade code this frame (`lod::fade_code`), 0 once whole.
-    fn fade(&self, now: std::time::Instant) -> u32 {
+    /// Its fade code this frame (`lod::fade_code`), 0 once whole. `retiring`:
+    /// its column has left the render distance, far terrain is coming in
+    /// under it (`lod::HELD`).
+    fn fade(&self, now: std::time::Instant, retiring: bool) -> u32 {
         match self.leaving {
             Some(since) => lod::fade_out_code(since, 0, now),
+            None if retiring => lod::HELD,
             None => self
                 .fading
                 .and_then(|since| lod::fade_code(Some(since), 0, now))
@@ -4135,6 +4138,13 @@ impl Renderer {
         }
         let reachable = &self.occlusion;
         let cutout = &self.lod_cutout;
+        // Sections fading out (`leave_section`) are past the render distance:
+        // drawn there until they have, or they popped out at once.
+        let leaving: crate::fast_hash::FxHashSet<(i32, i32)> = self
+            .lod_leaving
+            .iter()
+            .map(|&((x, _, z), _)| (x, z))
+            .collect();
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
         crate::spans::time("visibility", || {
@@ -4143,7 +4153,10 @@ impl Renderer {
                 (frame.detail_distance / 16.0) as i32,
                 &view,
                 |k| !culling || reachable.contains(k),
-                |x, z| !cutout.is_empty() && cutout.contains(&(x, z)),
+                |x, z| {
+                    (!cutout.is_empty() && cutout.contains(&(x, z)))
+                        || (!leaving.is_empty() && leaving.contains(&(x, z)))
+                },
                 &mut visible,
             )
         });
@@ -4209,11 +4222,14 @@ impl Renderer {
             });
         }
         self.origins.clear();
-        let sections = &self.sections;
+        let (sections, retiring) = (&self.sections, &self.lod_retiring);
         self.origins.extend(
             visible
                 .iter()
-                .map(|v| section_instance(v.origin, sections.get(v.slot).fade(now)))
+                .map(|v| {
+                    let code = sections.get(v.slot).fade(now, retiring.contains(&v.key));
+                    section_instance(v.origin, code)
+                })
                 .chain(visible_lods.iter().map(|v| lod::instance(v.origin, v.fade)))
                 .chain(shadow_visible.iter().map(|v| section_instance(v.origin, 0))),
         );
@@ -4800,7 +4816,7 @@ impl Renderer {
                         || pack_terrain
                         || shadow_view.is_some()) =>
             {
-                let sections = &self.sections;
+                let (sections, retiring) = (&self.sections, &self.lod_retiring);
                 let lods = &self.lods;
                 let sorted = &self.sorted_indices;
                 let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
@@ -4820,10 +4836,8 @@ impl Renderer {
                             .chain(&shadow_visible)
                             .filter_map(|v| {
                                 let section = sections.get(v.slot);
-                                Some((
-                                    section.flat_id?,
-                                    section_instance(v.origin, section.fade(now)),
-                                ))
+                                let code = section.fade(now, retiring.contains(&v.key));
+                                Some((section.flat_id?, section_instance(v.origin, code)))
                             })
                             .chain(visible_lods.iter().filter_map(|v| {
                                 let id = lods[&v.key].drawn().flat_id?;
