@@ -11531,7 +11531,7 @@ impl Game<'_> {
                 0.0
             }
         });
-        let inverse_heights = self.heights.interpolated(a).map(|h| 1.0 - h);
+        let heights = self.heights.interpolated(a);
         let view = horizon_client::camera::view_matrix(self.yaw, self.pitch);
         // The hand sway: both hands turn by a tenth of the bobs' lag.
         let [sway_x, sway_y] = self.sway.rotation(a, self.pitch, self.yaw);
@@ -11557,7 +11557,15 @@ impl Game<'_> {
             if !shown[i] {
                 continue;
             }
-            let (attack, inverse_height) = (attacks[i], inverse_heights[i]);
+            let scale = item.as_ref().map_or(1.0, |stack| {
+                self.pack
+                    .item_renderer
+                    .models
+                    .swap_animation_scale(&horizon_client::item_render::stack_view(stack))
+            });
+            let attack = attacks[i];
+            let inverse_height =
+                horizon_client::first_person::equip_displacement(heights[i], scale);
             // The main hand on its arm, the off hand on the other one.
             let left = self.settings.main_hand_left != (hand == Hand::Off);
             let Some(stack) = item else {
