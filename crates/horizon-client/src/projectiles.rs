@@ -204,6 +204,19 @@ impl Projectile {
             }),
         }
     }
+    /// Entity box from the feet (`EntityType.sized` cube of `kind.size()`).
+    pub fn aabb(&self) -> Aabb {
+        let s = self.kind.size();
+        let h = s * 0.5;
+        Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + s,
+                self.position.z + h,
+            ),
+        )
+    }
     /// The arrow's own random from now on (`Entity.random`).
     pub fn with_arrow_random(mut self, random: horizon_core::random::LegacyRandom) -> Self {
         if let Some(a) = self.arrow.as_mut() {
@@ -899,6 +912,35 @@ mod tests {
         p.tick(&Empty(vec![]));
         assert!((p.velocity.x - 0.285).abs() < 1e-9);
         assert!((p.position.x - 0.285).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ender_pearl_hits_a_wind_charge_box() {
+        let mut pearl = Projectile::new(
+            ProjectileKind::EnderPearl,
+            Vec3::new(0.0, 1.0, 0.0),
+            Some(Who::Player),
+        );
+        pearl.left_owner = true;
+        pearl.velocity = Vec3::new(2.0, 0.0, 0.0);
+        let wind = Projectile::new(
+            ProjectileKind::WindCharge,
+            Vec3::new(0.6, 1.0, 0.0),
+            Some(Who::Player),
+        );
+        let w = Empty(vec![(Who::Mob(1), wind.aabb())]);
+        let (keep, hit) = pearl.tick(&w);
+        assert!(!keep, "ThrownEnderpearl.onHit discards the pearl");
+        assert!(
+            matches!(
+                hit,
+                Hit::Entity {
+                    who: Who::Mob(1),
+                    ..
+                }
+            ),
+            "pearl collides with a pickable wind charge"
+        );
     }
 }
 

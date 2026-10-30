@@ -27,16 +27,7 @@ fn zombie_kind(s: Species) -> bool {
 impl Game<'_> {
     /// `Entity.startRiding` for two mobs.
     pub(super) fn mount_mob(&mut self, rider: u32, vehicle: u32) {
-        if rider == vehicle {
-            return;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == rider) {
-            m.extra.mount = Some(vehicle);
-            m.extra.passenger = true;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == vehicle) {
-            m.extra.rider = Some(rider);
-        }
+        riders::link(&mut self.mobs, rider, vehicle);
     }
     /// Riders sit on their vehicles (`Entity.positionRider`), mobs or boats,
     /// and let go when the vehicle dies or is gone.
@@ -114,6 +105,37 @@ impl Game<'_> {
                 // A rider never walks off on its own.
                 m.ai.nav.stop();
             }
+        }
+        // Text displays riding a mob, as NPC plugins put a name over a head:
+        // `LivingEntity.getPassengerRidingPosition`, the vehicle's passenger
+        // attachment (the top of its box in its pose), less the display's own
+        // vehicle attachment, which is 0 (Display's dimensions are 0 by 0).
+        // On the local player, the top of its box in its pose and scale (`Avatar.POSES`).
+        let me = self.remote.as_ref().map(|r| r.entity_id as u32);
+        let own_seat = self.player.as_ref().map(|p| {
+            p.position
+                .add_vector(Vec3::new(0.0, f64::from(p.dimensions.height), 0.0))
+        });
+        for display in self.text_displays.values_mut() {
+            let Some(vehicle) = display.vehicle else {
+                continue;
+            };
+            let at = if Some(vehicle) == me {
+                let Some(at) = own_seat else { continue };
+                at
+            } else {
+                let Some(&j) = index.get(&vehicle) else {
+                    continue;
+                };
+                let vehicle = &self.mobs[j];
+                riders::seat(
+                    riders::passenger_attachment(vehicle),
+                    0.0,
+                    vehicle.position,
+                    vehicle.yaw,
+                )
+            };
+            display.ride(glam::DVec3::new(at.x, at.y, at.z));
         }
     }
 
