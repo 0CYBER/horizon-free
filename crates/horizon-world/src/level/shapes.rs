@@ -32,6 +32,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         neighbour_pos: BlockPos,
         neighbour: BlockStateId,
     ) -> BlockStateId {
+        let mut new = None;
+        self.level.before_update_shape(
+            self.ticks,
+            pos,
+            state,
+            direction,
+            neighbour_pos,
+            neighbour,
+            &mut new,
+        );
+        if let Some(new) = new {
+            debug_assert!((new.0 as usize) < self.b.table.state_count(), "{new:?}");
+            return new;
+        }
         self.update_shape_at(0, state, pos, direction, neighbour_pos, neighbour)
     }
 

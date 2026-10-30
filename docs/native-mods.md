@@ -113,6 +113,23 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds shape updates a mod can answer through `native_update_shape`: on an authoritative server, each time a
+block's state is worked out from a neighbour (`BlockBehaviour.updateShape`): neighbour shape updates after a
+`setBlock`, a block fitted to all its neighbours as a piston lands it or a chunk is post-processed, and the blocks at
+a feature's edge as it is placed in the live world, such as a tree grown from a sapling
+(`StructureTemplate.updateShapeAtEdge`). It gets the dimension, position, state, the neighbour's direction, position
+and state, before the block computes it. `state` may not be in the world yet (a piston landing it), so decide from
+`state`, not from the block at `pos`. Answer only for your own blocks and leave `new` empty otherwise: a state put
+there is the block's new state, applied as vanilla applies the result (air breaks the block, with its drops, on a
+neighbour update; post-processing and a feature's edge write air without drops), and the block's own `updateShape`
+doesn't run, nor the ticks it would schedule. The level is read-only, as vanilla's `LevelReader` is there; the hook
+schedules ticks with its `ticks` through the level's `native_schedule_block_tick(ticks, pos, block, delay)` and
+`native_schedule_fluid_tick(ticks, pos, fluid, delay)` (vanilla's `ScheduledTickAccess.scheduleTick`; false for an
+unknown name or a position that isn't loaded). It runs often, at least six times per `setBlock` that updates shapes
+(more for redstone wire's diagonals and knock-on updates): keep it short. A LAN guest shows vanilla's shape for a
+moment, until the server's update arrives. The deprecated in-frame path and chunk generation fire none. Bundles that
+use it need `"hooks": 23`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
