@@ -49,6 +49,15 @@ pub(super) enum Item {
         label: Text,
         active: bool,
     },
+    /// A multi-line message (`FittingMultiLineTextWidget`), wrapped to `w`
+    /// and cut to what fits `h`.
+    Info {
+        text: Text,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
     /// An `AbstractSliderButton`: `value` is 0..1.
     Slider {
         id: u8,
@@ -86,6 +95,16 @@ pub(super) trait Editor {
         shift: bool,
         alt: bool,
     ) -> Outcome;
+    /// The screen opened: packets it sends first (`init`).
+    fn opened(&mut self, _entity: &BlockEntity, _pos: Pos) -> Vec<S> {
+        Vec::new()
+    }
+    /// The text of box `edit` changed (`EditBox.setResponder`): packets to send.
+    fn edited(&mut self, _edit: usize, _pos: Pos) -> Vec<S> {
+        Vec::new()
+    }
+    /// A status from the server (`ClientboundTestInstanceBlockStatus`).
+    fn status(&mut self, _entity: &BlockEntity, _status: Text, _size: Option<[i32; 3]>) {}
     /// A slider moved to `value` (0..1).
     fn slide(&mut self, _id: u8, _value: f32) {}
     /// Done: the packet that carries the screen's values.
@@ -112,6 +131,8 @@ pub(super) struct BlockEditScreen {
     pub(super) editor: Box<dyn Editor>,
     /// The text box with the focus, and which of them show.
     focus: Option<usize>,
+    /// The text of each box when the screen last looked, to see what changed.
+    values: Vec<String>,
     /// The slider being dragged: its id and the x and width it is drawn at.
     dragging: Option<(u8, f32, f32)>,
 }
@@ -123,6 +144,7 @@ impl BlockEditScreen {
             pos,
             editor,
             focus,
+            values: Vec::new(),
             dragging: None,
         }
     }
@@ -132,9 +154,25 @@ impl Game<'_> {
     /// `LocalPlayer.open*Block`: the edit screen for the block entity at
     /// `pos`.
     pub(super) fn open_block_editor(&mut self, pos: Pos, editor: Box<dyn Editor>) {
-        self.block_editor = Some(BlockEditScreen::new(pos, editor));
+        let mut screen = BlockEditScreen::new(pos, editor);
+        let opening = self
+            .world
+            .block_entities
+            .get(&pos)
+            .map(|entity| screen.editor.opened(entity, pos))
+            .unwrap_or_default();
+        screen.values = screen
+            .editor
+            .edits()
+            .iter()
+            .map(|e| e.value.clone())
+            .collect();
+        self.block_editor = Some(screen);
         self.screen = Screen::BlockEditor;
         self.capture(false);
+        for packet in opening {
+            self.send(packet);
+        }
     }
 
     /// A use of a game master block on a server's client, which opens the
@@ -148,6 +186,7 @@ impl Game<'_> {
             Some(BlockEntity::StructureBlock(_)) => self.open_structure_block(pos),
             Some(BlockEntity::JigsawBlock(_)) => self.open_jigsaw_block(pos),
             Some(BlockEntity::TestBlock(_)) => self.open_test_block(pos),
+            Some(BlockEntity::TestInstanceBlock(_)) => self.open_test_instance_block(pos),
             _ => {}
         }
     }
@@ -262,6 +301,18 @@ impl Game<'_> {
                     }
                 }
                 Item::Button { .. } => {}
+                Item::Info {
+                    text,
+                    x,
+                    y,
+                    w: iw,
+                    h: ih,
+                } => {
+                    let lines = atlas.font.wrap_components(text, *iw as i32);
+                    for (i, line) in lines.iter().take((*ih / 9.0) as usize).enumerate() {
+                        batch.text_styled(atlas, line, *x, *y + i as f32 * 9.0, u32::MAX, true);
+                    }
+                }
                 Item::Slider {
                     id,
                     x,
@@ -454,8 +505,52 @@ impl Game<'_> {
                     }
                 }
                 self.block_editor = Some(screen);
+                self.block_editor_after_input();
             }
         }
+    }
+
+    /// What typing changed: the boxes whose text differs from before tell
+    /// the editor, which may have packets to send.
+    fn block_editor_after_input(&mut self) {
+        let Some(mut screen) = self.block_editor.take() else {
+            return;
+        };
+        let pos = screen.pos;
+        let now: Vec<String> = screen
+            .editor
+            .edits()
+            .iter()
+            .map(|e| e.value.clone())
+            .collect();
+        let mut packets = Vec::new();
+        for (i, value) in now.iter().enumerate() {
+            if screen.values.get(i) != Some(value) {
+                packets.extend(screen.editor.edited(i, pos));
+            }
+        }
+        screen.values = now;
+        self.block_editor = Some(screen);
+        for packet in packets {
+            self.send(packet);
+        }
+    }
+
+    /// A status for the open screen.
+    pub(super) fn block_editor_status(&mut self, status: Text, size: Option<[i32; 3]>) {
+        let Some(mut screen) = self.block_editor.take() else {
+            return;
+        };
+        if let Some(entity) = self.world.block_entities.get(&screen.pos) {
+            screen.editor.status(entity, status, size);
+        }
+        screen.values = screen
+            .editor
+            .edits()
+            .iter()
+            .map(|e| e.value.clone())
+            .collect();
+        self.block_editor = Some(screen);
     }
 
     fn block_editor_type_into(&mut self, screen: &mut BlockEditScreen, focus: usize, c: char) {
@@ -486,6 +581,7 @@ impl Game<'_> {
             }
         }
         self.block_editor = Some(screen);
+        self.block_editor_after_input();
     }
 }
 

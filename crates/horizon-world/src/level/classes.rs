@@ -280,6 +280,7 @@ classes! {
     Structure = "StructureBlock",
     Jigsaw = "JigsawBlock",
     TestBlock = "TestBlock",
+    TestInstanceBlock = "TestInstanceBlock",
     SmithingTable = "SmithingTableBlock",
     CartographyTable = "CartographyTableBlock",
     Netherrack = "NetherrackBlock",

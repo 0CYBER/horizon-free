@@ -76,6 +76,15 @@ impl Rotation {
         let index = order.iter().position(|d| *d == direction).unwrap();
         order[(index + self as usize) % 4]
     }
+    /// `Rotation.getSerializedName`: the value of `Rotation.CODEC`.
+    pub fn serialized_name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Clockwise90 => "clockwise_90",
+            Self::Clockwise180 => "180",
+            Self::Counterclockwise90 => "counterclockwise_90",
+        }
+    }
     pub fn get_rotated(self, other: Self) -> Self {
         Self::ALL[(self as usize + other as usize) % 4]
     }

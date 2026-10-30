@@ -243,6 +243,8 @@ mod subtitle_hud;
 mod sulfur_cubes;
 mod test_block_edit;
 mod test_blocks;
+mod test_instance_edit;
+mod test_instances;
 mod text_displays;
 mod titles;
 mod tnt;
@@ -2195,6 +2197,8 @@ struct Game<'a> {
     /// `StructureTemplateManager.structureRepository`: the templates in memory
     /// by id, a miss included (game/structure_blocks.rs).
     structure_templates: HashMap<String, Option<structure_blocks::TemplateEntry>>,
+    /// The game tests read so far, by id (the test instance registry).
+    test_defs: std::cell::RefCell<HashMap<String, Option<test_instances::TestDef>>>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
@@ -4293,7 +4297,10 @@ impl Game<'_> {
         // (`BlockEntity.usedBy`); the server has nothing to open.
         if matches!(
             &*name,
-            "minecraft:structure_block" | "minecraft:jigsaw" | "minecraft:test_block"
+            "minecraft:structure_block"
+                | "minecraft:jigsaw"
+                | "minecraft:test_block"
+                | "minecraft:test_instance_block"
         ) {
             return;
         }
@@ -7245,7 +7252,8 @@ impl Game<'_> {
                 | BlockEntity::PotentSulfur(_)
                 | BlockEntity::StructureBlock(_)
                 | BlockEntity::JigsawBlock(_)
-                | BlockEntity::TestBlock(_),
+                | BlockEntity::TestBlock(_)
+                | BlockEntity::TestInstanceBlock(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -7542,7 +7550,8 @@ impl Game<'_> {
                     | BlockEntity::PotentSulfur(_)
                     | BlockEntity::StructureBlock(_)
                     | BlockEntity::JigsawBlock(_)
-                    | BlockEntity::TestBlock(_),
+                    | BlockEntity::TestBlock(_)
+                    | BlockEntity::TestInstanceBlock(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -15485,6 +15494,7 @@ impl<'a> Game<'a> {
             command_block_screen: None,
             block_editor: None,
             structure_templates: HashMap::new(),
+            test_defs: std::cell::RefCell::new(HashMap::new()),
             friends: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
