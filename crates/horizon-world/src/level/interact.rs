@@ -397,9 +397,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::BrewingStand
                 | Class::CartographyTable
                 | Class::Chest
+                | Class::CopperChest
                 | Class::Crafter
                 | Class::CraftingTable
                 | Class::Dispenser
+                | Class::Dropper
                 | Class::EnchantingTable
                 | Class::EnderChest
                 | Class::Grindstone
@@ -409,10 +411,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::Sign
                 | Class::SmithingTable
                 | Class::Stonecutter
+                | Class::TrappedChest
                 | Class::Lectern => {
                     self.player_effect(pos, state, PlayerEffect::OpenMenu);
                     Success
                 }
+                // DecoratedPotBlock.useWithoutItem: the wobble always succeeds.
+                Class::DecoratedPot => Success,
+                // JukeboxBlock.useWithoutItem: ejecting a disc is SUCCESS (the
+                // insert is useItemOn). An empty jukebox passes.
+                Class::Jukebox if table.bool(state, p.has_record) => Success,
                 Class::Command | Class::Structure | Class::Jigsaw => {
                     if player.game_master {
                         self.player_effect(pos, state, PlayerEffect::OpenMenu);
@@ -672,6 +680,36 @@ impl Behaviours {
         );
         true
     }
+    /// `AbstractCandleBlock.isLit` (a lit block of `#candles` or `#candle_cakes`) then
+    /// `AbstractCandleBlock.extinguish(null, ...)`:
+    /// a lit candle or candle cake at `pos` goes out (`setBlock` with flags 11), with
+    /// the extinguish sound and the block-change game event, which has no source
+    /// entity. The smoke is drawn by a client's own `addParticle`, never by the
+    /// server. False when the block is not a lit candle.
+    pub fn extinguish_candle<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
+        let state = level.block_state(pos);
+        let data = self.data(state);
+        // `#candles` is every `CandleBlock`, `#candle_cakes` every `CandleCakeBlock`.
+        if !(data.is(Class::Candle) || data.is(Class::CandleCake))
+            || !self.table.bool(state, self.props.lit)
+        {
+            return false;
+        }
+        let mut sim = self.sim(level, ticks);
+        sim.set_block(
+            pos,
+            self.table.set_bool(state, self.props.lit, false),
+            super::flags::UPDATE_ALL_IMMEDIATE,
+        );
+        sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+        sim.game_event(pos, "minecraft:block_change");
+        true
+    }
     /// `BlockState.useItemOn` with `item` in the main hand, then, when the
     /// block asks to try with an empty hand (the default), `useWithoutItem`.
     /// `SweetBerryBushBlock.useItemOn` passes bone meal on a bush that can
@@ -697,6 +735,26 @@ impl Behaviours {
         if self.data(state).chain.contains(&Class::CopperGolemStatue) {
             return self.turn_statue(level, ticks, pos, state, item);
         }
+        // RespawnAnchorBlock.useItemOn: glowstone (`isRespawnFuel`) charges an
+        // anchor below 4 charges (`canBeCharged`) and the click ends there.
+        if item == Some("minecraft:glowstone")
+            && self.data(state).chain.contains(&Class::RespawnAnchor)
+            && self.table.int(state, self.props.charges) < 4
+        {
+            // RespawnAnchorBlock.charge.
+            let charges = self.table.int(state, self.props.charges);
+            let next = self.table.set_int(state, self.props.charges, charges + 1);
+            let mut sim = self.sim(level, ticks);
+            sim.set_block_and_update(pos, next);
+            sim.game_event_state(pos, "minecraft:block_change", next);
+            sim.sound(
+                pos,
+                &"minecraft:block.respawn_anchor.charge".into(),
+                1.0,
+                1.0,
+            );
+            return InteractionResult::Success;
+        }
         // NoteBlock.useItemOn: a mob head on the top face is placed, not tuned
         // (`#minecraft:noteblock_top_instruments`).
         if face == Direction::Up
@@ -715,6 +773,52 @@ impl Behaviours {
             })
         {
             return InteractionResult::Pass;
+        }
+        // WallHangingSignBlock.useItemOn: a hanging sign aimed at the sign's side
+        // (not its editable faces, `isHittingEditableSide`) chains onto it. Sign
+        // text has no click commands here, so `canExecuteClickCommands` is false.
+        if self.data(state).is(Class::WallHangingSign)
+            && item
+                .and_then(|i| self.item_binding(i))
+                .is_some_and(|binding| binding.kind == super::data::ItemKind::HangingSign)
+            && face != self.facing(state)
+            && face != self.facing(state).opposite()
+        {
+            return InteractionResult::Pass;
+        }
+        // CandleCakeBlock.useItemOn: an empty hand on the lit candle (`candleHit`:
+        // above half a block) snuffs it, as `AbstractCandleBlock.extinguish`.
+        if item.is_none()
+            && self.data(state).chain.contains(&Class::CandleCake)
+            && hit.y - f64::from(pos.y) > 0.5
+            && self.table.bool(state, self.props.lit)
+        {
+            let mut sim = self.sim(level, ticks);
+            let next = self.table.set_bool(state, self.props.lit, false);
+            sim.set_block(pos, next, 11);
+            sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+            sim.game_event(pos, "minecraft:block_change");
+            return InteractionResult::Success;
+        }
+        // CandleBlock.useItemOn: an empty hand snuffs a lit candle (`mayBuild`).
+        if item.is_none()
+            && player.may_build
+            && self.data(state).chain.contains(&Class::Candle)
+            && self.table.bool(state, self.props.lit)
+        {
+            // AbstractCandleBlock.extinguish: unlit, the wick smoke, the
+            // extinguish sound, then the block-change game event.
+            let next = self.table.set_bool(state, self.props.lit, false);
+            let mut sim = self.sim(level, ticks);
+            sim.set_block_and_update(pos, next);
+            sim.emit(LevelEvent::BlockEvent {
+                pos,
+                state: next,
+                kind: "candle_smoke",
+            });
+            sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+            sim.game_event_state(pos, "minecraft:block_change", next);
+            return InteractionResult::Success;
         }
         self.use_without_item(level, ticks, pos, face, hit, player)
     }
