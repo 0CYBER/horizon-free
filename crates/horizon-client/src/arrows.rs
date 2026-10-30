@@ -461,6 +461,10 @@ pub enum EntityHit {
     Refused,
     /// The entity turned it first (`Entity.deflection`: breezes).
     Deflected,
+    /// The target teleported away from it (`EnderMan.hurtServer` returns true,
+    /// `onHitEntity` returns before the hit sound and the discard): the arrow
+    /// flies on and falls to the ground.
+    Dodged,
 }
 /// The rest of the tick of an arrow that hit an entity: whether to keep it.
 pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: EntityHit) -> bool {
@@ -483,6 +487,7 @@ pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: Entity
             }
         }
         EntityHit::Refused => ticker.turn_back(),
+        EntityHit::Dodged => {}
         EntityHit::Deflected => {
             // The deflection comes before `onHitEntity` adds the entity to
             // `piercingIgnoreEntityIds`.
