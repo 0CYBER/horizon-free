@@ -1058,7 +1058,7 @@ impl Game<'_> {
                     self.turn_page(true);
                 } else if page > 0 && inside(left + 43.0, 159.0, 23.0, 13.0) {
                     self.turn_page(false);
-                } else if let Some(key) = lectern {
+                } else if let Some(key) = lectern.filter(|_| self.may_build()) {
                     if inside(w / 2.0 - 100.0, 196.0, 98.0, 20.0) {
                         click(self);
                         self.close_book();
@@ -1314,7 +1314,9 @@ impl Game<'_> {
                     }
                 }
                 page_buttons(batch, *page > 0, *page + 1 < pages.len());
-                if lectern.is_some() {
+                // LecternScreen.createMenuControls: Done and Take Book only with
+                // build permission, else BookViewScreen's wide Done.
+                if lectern.is_some() && self.may_build() {
                     button(batch, w / 2.0 - 100.0, 98.0, &tr("gui.done", "Done"), true);
                     button(
                         batch,
