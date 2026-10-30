@@ -5314,6 +5314,7 @@ impl Game<'_> {
                 ticks: 0,
             });
         }
+        let block_break_speed = self.block_break_speed();
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         let facts = self.res.facts().get(state);
         if facts.hardness < 0.0 {
@@ -5328,6 +5329,7 @@ impl Game<'_> {
         let held = self.held();
         let mut speed = self.items().mining_speed(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
+        speed *= block_break_speed;
         let player = self.player.as_ref().ok_or("no player")?;
         if !player.ground.on_ground {
             speed /= 5.0;
