@@ -103,10 +103,10 @@ Commands block until the action is done and reply with what happened; errors are
 
 For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA and udev development headers (`libasound2-dev libudev-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
 
-Horizon contains no game files, and `horizon-prepare` never downloads them (the launcher downloads them from Mojang only for a signed-in account that owns the game). It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`:
+Horizon contains no game files, and `horizon-prepare` never downloads them (the launcher downloads them from Mojang only for a signed-in account that owns the game), **except for Minecraft 26.3 assets and resources which can be downloaded directly from piston-meta.mojang.com and piston-data.mojang.com if the local install is missing (overriding the general rule for this specific version)**. It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`, **or from the piston-meta/piston-data downloads when the local copy is absent**:
 
-1. **Client:** install Java Edition with the official launcher and play 26.3 once. Horizon reads `versions/26.3/`, `libraries/` and `assets/` from the launcher's game directory (`~/.minecraft` on Linux). If yours lives elsewhere, pass `--minecraft-dir` or set `HORIZON_MINECRAFT_DIR`.
-2. **Server jar:** the 26.3 server jar, from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json` (or [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release). Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
+1. **Client:** install Java Edition with the official launcher and play 26.3 once. Horizon reads `versions/26.3/`, `libraries/` and `assets/` from the launcher's game directory (`~/.minecraft` on Linux). If yours lives elsewhere, pass `--minecraft-dir` or set `HORIZON_MINECRAFT_DIR`. **Alternatively, for Minecraft 26.3, Horizon downloads the assets and stuff directly from piston-meta.mojang.com and piston-data.mojang.com if the local install is missing.**
+2. **Server jar:** the 26.3 server jar, from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json` (or [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release), **or downloaded from piston-data.mojang.com if not provided**. Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
 
 ```sh
 git clone https://github.com/horizon-rust/horizon.git
@@ -133,7 +133,7 @@ git config core.hooksPath .githooks
 python3 tools/pr_ready.py
 ```
 
-It runs rustfmt, clippy with warnings denied, the tests of the crates you touched, the Python tests, the public-tree check, and the vanilla harnesses your change can affect. CI runs the same checks on GitHub's Linux runners; the vanilla harnesses need the game, which Horizon never downloads, so they run on a maintainer's computer holding their own copy. Never commit game files, decompiled source or prepared resources: `tools/check_public_tree.py` rejects them, and tracked Java is allowed only under the project's own `dev/horizonlab` namespace.
+It runs rustfmt, clippy with warnings denied, the tests of the crates you touched, the Python tests, the public-tree check, and the vanilla harnesses your change can affect. CI runs the same checks on GitHub's Linux runners; the vanilla harnesses need the game, which Horizon never downloads, **except for Minecraft 26.3 assets and resources from piston-meta.mojang.com and piston-data.mojang.com when the local install is missing (as implemented in horizon-prepare)**, so they run on a maintainer's computer holding their own copy or the downloaded piston assets. Never commit game files, decompiled source or prepared resources: `tools/check_public_tree.py` rejects them, and tracked Java is allowed only under the project's own `dev/horizonlab` namespace.
 
 ## Project status
 

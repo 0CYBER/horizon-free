@@ -11,6 +11,7 @@
 //! run, keyed by the sha256 of their inputs and outputs recorded in the manifest, as before.
 
 pub mod artifacts;
+pub mod download_fallback;
 pub mod exporters;
 mod files;
 mod inventory;
@@ -438,7 +439,22 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
     ));
     let jdk = java::find_runtime(lock.java_major, &homes)?;
     let reused = if options.import {
-        artifacts::reuse_verified(root, log)?
+        match artifacts::reuse_verified(root, log)? {
+            Some(checked) => Some(checked),
+            None => {
+                // Fallback: download Minecraft 26.3 assets/jars from piston-meta/piston-data
+                // if the local install is missing and version is 26.3
+                if lock.version == "26.3" {
+                    download_fallback::download_fallback(root, &lock, log)?;
+                    // After download, verify again
+                    Some(artifacts::reuse_verified(root, log)?)
+                        .flatten()
+                        .ok_or_else(|| "Download fallback failed to produce verified artifacts".to_string())
+                } else {
+                    None
+                }
+            }
+        }
     } else {
         None
     };
@@ -446,17 +462,37 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
         Some(checked) => checked,
         None => {
             if options.import {
-                artifacts::import(
+                // Try standard import first
+                match artifacts::import(
                     root,
                     &lock,
                     options.minecraft_dir.as_deref(),
                     options.server_jar.as_deref(),
                     log,
-                )?;
+                ) {
+                    Ok(_) => {
+                        let found = artifacts::verify(&lock)?;
+                        let libraries = artifacts::client_libraries(&lock, &found.manifest)?;
+                        (found, libraries)
+                    }
+                    Err(e) => {
+                        // If missing and version is 26.3, try download fallback
+                        if lock.version == "26.3" {
+                            (log)(&format!("Local install missing: {e}. Attempting download fallback from piston-meta/piston-data..."));
+                            download_fallback::download_fallback(&lock, log)?;
+                            let found = artifacts::verify(&lock)?;
+                            let libraries = artifacts::client_libraries(&lock, &found.manifest)?;
+                            (found, libraries)
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
+            } else {
+                let found = artifacts::verify(&lock)?;
+                let libraries = artifacts::client_libraries(&lock, &found.manifest)?;
+                (found, libraries)
             }
-            let found = artifacts::verify(&lock)?;
-            let libraries = artifacts::client_libraries(&lock, &found.manifest)?;
-            (found, libraries)
         }
     };
     let local = root.join(".local");

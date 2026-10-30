@@ -11,12 +11,12 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const LAUNCHER_HINT: &str =
-    "Horizon does not download the game: play {version} once in the launcher you play \
+    "Horizon downloads Minecraft 26.3’s assets and stuff from piston-meta.mojang.com and piston-data.mojang.com if not provided, or play {version} once in the launcher you play \
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
 official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
 the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
 them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR.";
-const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
+const SERVER_HINT: &str = "Horizon downloads the {version} server jar from piston-data.mojang.com if not provided, or download the {version} server jar yourself (minecraft.net/download/server \
 while {version} is the current release, otherwise the downloads.server.url in your launcher's \
 versions/{version}/{version}.json), then pass --server-jar PATH or set HORIZON_SERVER_JAR.";
 
