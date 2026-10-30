@@ -278,6 +278,7 @@ impl Game<'_> {
             snowy: has("minecraft:spawns_snow_foxes")
                 || b.name.contains("snow")
                 || b.name.contains("frozen"),
+            snow_fox: has("minecraft:spawns_snow_foxes"),
             swamp: b.name.contains("swamp"),
             ocean: has("minecraft:is_ocean"),
             mushroom: b.name == "minecraft:mushroom_fields",
@@ -1935,6 +1936,34 @@ impl Game<'_> {
             self.spawn_orbs(at, amount);
         }
     }
+    /// `ServerPlayer.tellNeutralMobsThatIDied`: the mobs within 32 blocks
+    /// across and 10 up and down get `NeutralMob.playerDied`, when the
+    /// `forgive_dead_players` rule is on. A mob's `Who::Player` is the guest
+    /// it is bound to in `bindings` (game/lan_mobs.rs), else the host's
+    /// player, so only the mobs whose binding is `conn` (`None` for the
+    /// host's player) hear it.
+    pub(super) fn tell_neutral_mobs_player_died(
+        &mut self,
+        feet: [f64; 3],
+        conn: Option<u32>,
+        bindings: &std::collections::HashMap<u32, u32>,
+    ) {
+        // A client of someone else's world has the server's mobs only to show.
+        if self.remote.is_some() || !self.ui.rules.bool("forgive_dead_players") {
+            return;
+        }
+        let block = feet.map(f64::floor);
+        let area = Aabb::new(
+            Vec3::new(block[0], block[1], block[2]),
+            Vec3::new(block[0] + 1.0, block[1] + 1.0, block[2] + 1.0),
+        )
+        .inflate(Vec3::new(32.0, 10.0, 32.0));
+        for m in self.mobs.iter_mut() {
+            if bindings.get(&m.id).copied() == conn && m.bounds().intersects(area) {
+                horizon_client::mobs::ai::forgive_dead_player(m);
+            }
+        }
+    }
     /// Animal.spawnChildFromBreeding
     fn breed(
         &mut self,
@@ -2007,6 +2036,24 @@ impl Game<'_> {
         }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
+        // Axolotl.getBreedOffspring: useRareVariant (one in 1200) makes it blue,
+        // else either parent's variant. The draws come from the mother's random.
+        let axolotl = if p.species() == Species::Axolotl {
+            let other = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            self.mobs.iter_mut().find(|m| m.id == parent).map(|m| {
+                if m.random.next_int_bound(1200).unwrap_or(1) == 0 {
+                    // Axolotl.Variant.getRareSpawnVariant: the one blue, still a draw.
+                    let _ = m.random.next_int_bound(1);
+                    4
+                } else if m.random.next_boolean() {
+                    p.extra.variant
+                } else {
+                    other
+                }
+            })
+        } else {
+            None
+        };
         // A horse and a donkey have a mule.
         let kind = match (p.species(), q.as_ref().map(|q| q.species())) {
             (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse)) => {
@@ -2021,6 +2068,24 @@ impl Game<'_> {
             // getBreedOffspring creates the baby without finalizeSpawn: it keeps
             // the default (`classic`) sound variant.
             child.extra.sound_variant = None;
+            // Fox.getBreedOffspring runs no finalizeSpawn: nothing in the
+            // baby fox's mouth.
+            if p.species() == Species::Fox {
+                child.extra.main_hand = None;
+            }
+            // Goat.getBreedOffspring: GoatAi.initMemories, then the baby
+            // screams if the parent a coin toss picks does, or on a 2% roll.
+            if p.species() == Species::Goat {
+                child.extra.lost_horns = [false; 2];
+                horizon_client::mobs::finalize::goat_init_memories(child, &mut self.world.random);
+                let pick_parent = self.world.random.next_boolean();
+                let parent_screams = if pick_parent {
+                    p.extra.screaming
+                } else {
+                    q.as_ref().unwrap_or(&p).extra.screaming
+                };
+                child.extra.screaming = parent_screams || self.world.random.next_double() < 0.02;
+            }
             // A llama's baby was drawn in the parent's tick, with the
             // experience.
             if let Some(o) = llama {
@@ -2104,6 +2169,14 @@ impl Game<'_> {
             // Panda.getBreedOffspring: genes from both parents.
             if p.species() == Species::Panda {
                 horizon_client::mobs::panda::inherit(child, &p, q.as_ref().unwrap_or(&p));
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
+            // Axolotl.getBreedOffspring: the drawn variant, and the baby is persistent.
+            if let Some(variant) = axolotl {
+                child.extra.variant = variant;
+                child.persistent = true;
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
@@ -4189,6 +4262,12 @@ impl Game<'_> {
                     Some(sound) => {
                         consume = true;
                         eat = sound;
+                        // Axolotl.usePlayerItem: a tropical fish bucket is
+                        // emptied into a water bucket in its place.
+                        if species == Species::Axolotl && &*item == "minecraft:tropical_fish_bucket"
+                        {
+                            give = Some("minecraft:water_bucket");
+                        }
                         // Animal.setInLove: entity event 18 (a baby that
                         // only grew is not in love).
                         if self.mobs[index].extra.in_love > 0 {
