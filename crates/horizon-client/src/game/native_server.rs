@@ -612,18 +612,14 @@ mod tests {
         let mut off = None;
         assert_eq!(
             room_in(&slots(&mut inv, &mut off), "minecraft:diamond", 64),
-            4 + 64 + 64
+            4 + 64
         );
         assert_eq!(
             add_to(slots(&mut inv, &mut off), 0, "minecraft:diamond", 64, 200),
-            132
+            68
         );
         assert_eq!(inv[3].as_ref().unwrap().count, 64, "onto its stack first");
-        assert_eq!(
-            off.as_ref().unwrap().count,
-            64,
-            "then the off hand, as Inventory.add"
-        );
+        assert!(off.is_none(), "never into an empty off hand (getFreeSlot)");
         assert_eq!(inv[9].as_ref().unwrap().count, 64);
         assert_eq!(
             room_in(&slots(&mut inv, &mut off), "minecraft:diamond", 64),
