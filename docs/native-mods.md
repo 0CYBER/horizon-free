@@ -82,7 +82,8 @@ API 15 adds what a server mod needs to guard land and move players. `native_righ
 click on a block before the block's own use (a chest, a door, a lever) and the item's, and may cancel it: nothing
 happens and the player sees the block as it is. `native_acting_player` says who acts inside a player's hook (UUID,
 name, level, position, game mode, health); `native_run_command` runs a command as the server's console (level 4, no
-output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; and the players
+output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; `native_action_bar`
+tells a player why, even inside their own hook; and the players
 `native_server_players` lists carry their health. Bundles that use them need `"hooks": 15`.
 
 ## What the launcher does
@@ -276,6 +277,8 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   `native_run_command(line)`, a command run as the server's console (level 4, no output), only where no player is
   swapped in (`native_tick`, a menu hook): a teleport to another level (`execute in minecraft:the_nether run tp Alex 0
   70 0`) lands at the next tick's start. `native_server_players()` and the acting player carry `health` (0 once dead).
+  `native_action_bar(uuid, text)`, a line over a player's hotbar, which also reaches the acting player inside their
+  hook (where `native_tell` reaches nobody).
 - **`native_right_click_block(pos, face, canceled)`** (API 15): a player's right click on a block, before the block's
   own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
   without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of

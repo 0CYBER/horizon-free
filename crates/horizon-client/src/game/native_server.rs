@@ -266,6 +266,27 @@ impl Game<'_> {
         host.hub.send_to(g.conn, &system_chat(&line));
         true
     }
+    /// A line over that player's hotbar (the action bar), also inside a
+    /// player's hook for the acting player (`native_tell` reaches nobody
+    /// there); false when they aren't on. API 15.
+    pub(super) fn native_action_bar(&mut self, uuid: u128, line: Text) -> bool {
+        let packet = C::SystemChat(play::SystemChat {
+            content: component_nbt(&line.component()),
+            overlay: true,
+        });
+        if self.lan_acting_uuid == Some(uuid) {
+            self.guest_packets.push(packet);
+            return true;
+        }
+        let Some(host) = &self.lan else {
+            return false;
+        };
+        let Some(g) = host.hub.guests.iter().find(|g| g.placed && g.uuid == uuid) else {
+            return false;
+        };
+        host.hub.send_to(g.conn, &packet);
+        true
+    }
     /// A system line in every player's chat and the server's log.
     pub(super) fn native_broadcast(&self, line: Text) {
         let plain = line.plain();

@@ -8,7 +8,8 @@
 //!
 //! API 15 adds right clicking a block (`native_right_click_block`), and in
 //! `native_server.rs` the acting player (`native_acting_player`), a player's
-//! health and commands run as the server (`native_run_command`).
+//! health, the action bar (`native_action_bar`) and commands run as the
+//! server (`native_run_command`).
 //!
 //! API 14 adds breaking and placing a block (`native_destroy_block`,
 //! `native_place_block`).
