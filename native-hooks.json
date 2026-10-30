@@ -154,6 +154,11 @@
       "name": "place_block",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
+    },
+    {
+      "name": "interact_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"
     }
   ]
 }

@@ -95,6 +95,10 @@ API 19 adds screens a mod draws for its blocks' menus: `native_screen` lays one 
 where the inventory starts; a slot it leaves out is not in the menu, so shift-clicks skip it) and `native_screen_draw` draws it with the mod's
 own GUI textures (`assets/<namespace>/textures/gui`, drawn with `native_sprite`). Bundles that use them need `"hooks": 19`.
 
+API 20 adds right-clicking an entity, on the server for every player: `native_interact_entity` hears a right click on
+an entity (its id and type, and the stack in the hand) where `Player.interactOn` starts, once per hand. A mod that claims
+it swings the hand instead of the entity's and the item's own interaction. Bundles that use it need `"hooks": 20`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

@@ -4780,6 +4780,20 @@ impl Game<'_> {
     /// `Player.interactOn` for the entity under the crosshair with the
     /// acting hand: whether it took the click.
     fn interact_entity(&mut self) -> Result<bool> {
+        // Native mods, where Player.interactOn starts: before the entity's
+        // own interact and the item's interactLivingEntity.
+        if let Some(Some(id)) = self.pick_entity_hit()
+            && let Some(target) = self.level_entity(id)
+        {
+            let kind = self.target_type(target);
+            let stack = self.held().cloned();
+            let mut claimed = false;
+            self.native_interact_entity(id, &kind, stack.as_ref(), &mut claimed);
+            if claimed {
+                self.swing_arm();
+                return Ok(true);
+            }
+        }
         Ok(self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_cushion()
