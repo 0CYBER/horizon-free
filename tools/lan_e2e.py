@@ -940,8 +940,8 @@ def level_respawn_points(host, guest, out):
         results['anchor'] = die_and_respawn(guest)
         results['charges'] = guest.raw('block', x + 2, 100, z).get('state')
     finally:
-        sx, sy, sz = (int(v // 1) for v in pos_of(host))
-        guest('command', command=f'execute in {OVERWORLD} run spawnpoint @s {sx} {sy} {sz}')
+        # Leave no Overworld spawnpoint behind: with the anchor removed below, the guest's next death
+        # falls back to the world spawn and clears its point, which check_world_spawn relies on.
         guest('command', command=f'execute in {NETHER} run setblock {x + 2} 100 {z} minecraft:air')
         guest('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
         wait_dimension(guest, OVERWORLD, 400)
