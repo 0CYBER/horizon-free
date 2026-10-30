@@ -398,6 +398,9 @@ impl Game<'_> {
             steer,
             sprint: keys.sprint || self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
             jumping: keys.jump,
+            // A server's player (a LAN guest, single player's window) drives
+            // a horse from its own client (`handleMoveVehicle`).
+            client: self.lan_acting.is_some(),
         });
         true
     }

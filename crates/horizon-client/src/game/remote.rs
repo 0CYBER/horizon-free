@@ -166,6 +166,9 @@ pub(super) struct Remote {
     /// The happy ghast the player just got off, until the server's teleport
     /// puts the player on top of it (`place_ghast_under`).
     pub(super) ghast_dismount: Option<u32>,
+    /// Whether the player is the first passenger of its vehicle, the one
+    /// `getControllingPassenger` names.
+    pub(super) first_passenger: bool,
     /// Item entities waiting for their item data: where they are and their
     /// motion.
     pending_items: HashMap<i32, ([f64; 3], Vec3)>,
@@ -510,6 +513,7 @@ impl Game<'_> {
             stepped: HashMap::new(),
             head_lerps: HashMap::new(),
             ghast_dismount: None,
+            first_passenger: false,
             pending_items: HashMap::new(),
             health: (20.0, 20, 5.0),
             flash_on_set_health: false,
@@ -1623,6 +1627,7 @@ impl Game<'_> {
         // copy in the mob list draws nothing: given the move, it kept the
         // dragon where it spawned (#2083).
         let dragon = self.dragon.as_ref().is_some_and(|d| d.id as i32 == id);
+        let driven = self.driven_mount().is_some_and(|m| m.id as i32 == id);
         let mob = self
             .mobs
             .iter_mut()
@@ -1645,6 +1650,13 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             if let Some(t) = r.entities.get_mut(&id) {
                 t.position = position;
+            }
+            if driven {
+                // handleMoveEntity, handleEntityPositionSync: the mount this
+                // client moves (isLocalInstanceAuthoritative) keeps its own
+                // position, and no steps pile up for after the ride.
+                r.stepped.remove(&id);
+                return;
             }
             if let Some(m) = mob {
                 // A living entity: LivingEntity.createInterpolationHandler's
@@ -1964,9 +1976,27 @@ impl Game<'_> {
             )
         };
         let (max_health, scale) = (value("minecraft:max_health"), value("minecraft:scale"));
+        let (speed, jump) = (
+            value("minecraft:movement_speed"),
+            value("minecraft:jump_strength"),
+        );
         let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) else {
             return;
         };
+        // A horse its rider's client moves goes at its own speed and jumps
+        // its own height (`getSpeed`, `getCustomJump`).
+        if horizon_client::mobs::equine::moved_by_rider(m.species()) {
+            if let Some(speed) = speed {
+                horizon_client::mobs::finalize::set_base(
+                    m,
+                    horizon_client::mobs::finalize::Attr::MovementSpeed,
+                    speed,
+                );
+            }
+            if let Some(jump) = jump {
+                m.extra.vector[0] = jump;
+            }
+        }
         if let Some(max_health) = max_health {
             horizon_client::mobs::finalize::set_base(
                 m,
@@ -2272,6 +2302,11 @@ impl Game<'_> {
                     p.on_ground,
                     false,
                 );
+                // handleTeleportEntity: the mount this client moves is put
+                // there at once.
+                if self.driven_mount().is_some_and(|m| m.id as i32 == p.id) {
+                    self.remote_move_vehicle(position, p.yaw);
+                }
             }
             C::SetPassengers(p) => self.remote_set_passengers(p.vehicle, &p.passengers),
             // ClientPacketListener.handleEntityLinkPacket: who holds a mob's
@@ -4553,6 +4588,9 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
+        // The mount this client moves ticks in `remote_ride` instead, as its
+        // authoritative side (LivingEntity.tick with travelRidden).
+        let driven = self.driven_mount().map(|m| m.id);
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -4564,7 +4602,7 @@ impl Game<'_> {
         let mut mob_fx = Vec::new();
         for m in &mut self.mobs {
             let player = players.contains_key(&(m.id as i32));
-            if !running && !player {
+            if (!running && !player) || driven == Some(m.id) {
                 continue;
             }
             m.previous = m.position;
