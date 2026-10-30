@@ -192,5 +192,22 @@
   "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version}（Java 版）。首次点击“开始游戏”时，会用你的账户从 Mojang 下载游戏及其所需的 Java。",
   "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "原生模组会编译成一个独立的游戏。安装原生模组会启用“原生模组”：之后你需要在“设置 > 原生模组”中构建包含它的游戏。首次构建会下载 Rust，可能需要 20 到 30 分钟；之后的构建会更快。",
   "Folder": "文件夹",
-  "Version": "版本"
+  "Version": "版本",
+  "Import a modpack…": "导入整合包…",
+  "Vanilla": "原版",
+  "Modded": "模组版",
+  "Minecraft version": "Minecraft 版本",
+  "Search versions": "搜索版本",
+  "Snapshots": "快照",
+  "Old": "旧版",
+  "Asking Mojang for its versions…": "正在向 Mojang 获取版本列表…",
+  "No version matches.": "没有匹配的版本。",
+  "Release": "正式版",
+  "Snapshot": "快照",
+  "Beta": "Beta",
+  "Alpha": "Alpha",
+  "Loader": "加载器",
+  "newest stable version": "最新稳定版",
+  "Play downloads the game from Mojang for your account the first time, with the Java it needs.": "首次游玩时会为你的账户从 Mojang 下载游戏及其所需的 Java。",
+  "Mojang's version list isn't here yet.": "尚未获取到 Mojang 的版本列表。"
 }

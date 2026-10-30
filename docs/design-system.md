@@ -257,6 +257,11 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   played below. Play is the main action (`night::PLAY` tall, cut in one step); the version picker
   is a raised control of the same height; Mods and Folder are quiet buttons. A Horizon instance
   gets a plate on the right: a release's notes in one line (not a Nightly's) and Join a friend.
+- **New instance** (`launcher/src/new_instance.rs`): an opaque plate over the dimmed launcher,
+  tabs for the kind (Horizon, Vanilla, Modded). A Java kind lists Mojang's versions (search,
+  Snapshots, Old; the newest release chosen), Modded adds the loader (Fabric or Quilt, at its newest
+  stable version), and the name follows the choice ("Fabric 1.21.4") until the player types one.
+  Create is the main action.
 
 ## The mark
 

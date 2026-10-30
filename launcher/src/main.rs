@@ -29,6 +29,7 @@ mod modpacks_page;
 mod mods_page;
 mod mods_project;
 mod multiplayer_page;
+mod new_instance;
 mod owner_page;
 mod packs_page;
 mod partner;
@@ -83,7 +84,8 @@ enum Page {
 
 impl Page {
     /// `HORIZON_LAUNCHER_PAGE=mods` (or `modpacks`, `shaders`, `servers`, `versions`, `notes`,
-    /// `settings`) opens on that page, for screenshots; Home otherwise.
+    /// `settings`) opens on that page, for screenshots; Home otherwise (`new-instance`: Home with
+    /// the New instance dialog open on Modded).
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,
@@ -520,6 +522,11 @@ impl Launcher {
         });
         this.fetch_startup_releases();
         this.fetch_links();
+        // `HORIZON_LAUNCHER_PAGE=new-instance`: the dialog open on Modded, for screenshots.
+        if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("new-instance") {
+            this.open_instance_dialog(None);
+            this.pick_kind(new_instance::NewKind::Modded, cx);
+        }
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();
         telemetry::watch_playing(this.tx.clone());

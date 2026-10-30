@@ -192,5 +192,22 @@
   "Move to Trash": "В корзину",
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть.",
   "Folder": "Папка",
-  "Version": "Версия"
+  "Version": "Версия",
+  "Import a modpack…": "Импортировать модпак…",
+  "Vanilla": "Ванильная",
+  "Modded": "С модами",
+  "Minecraft version": "Версия Minecraft",
+  "Search versions": "Поиск версий",
+  "Snapshots": "Снапшоты",
+  "Old": "Старые",
+  "Asking Mojang for its versions…": "Запрос версий у Mojang…",
+  "No version matches.": "Нет подходящих версий.",
+  "Release": "Релиз",
+  "Snapshot": "Снапшот",
+  "Beta": "Бета",
+  "Alpha": "Альфа",
+  "Loader": "Загрузчик",
+  "newest stable version": "последняя стабильная версия",
+  "Play downloads the game from Mojang for your account the first time, with the Java it needs.": "При первом запуске игра скачивается с серверов Mojang для вашей учётной записи вместе с нужной ей Java.",
+  "Mojang's version list isn't here yet.": "Список версий Mojang ещё не получен."
 }

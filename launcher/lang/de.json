@@ -192,5 +192,22 @@
   "Install and turn on native mods": "Installieren und native Mods einschalten",
   "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller.",
   "Folder": "Ordner",
-  "Version": "Version"
+  "Version": "Version",
+  "Import a modpack…": "Modpack importieren…",
+  "Vanilla": "Vanilla",
+  "Modded": "Mit Mods",
+  "Minecraft version": "Minecraft-Version",
+  "Search versions": "Versionen suchen",
+  "Snapshots": "Snapshots",
+  "Old": "Alt",
+  "Asking Mojang for its versions…": "Mojang wird nach den Versionen gefragt…",
+  "No version matches.": "Keine Version passt.",
+  "Release": "Release",
+  "Snapshot": "Snapshot",
+  "Beta": "Beta",
+  "Alpha": "Alpha",
+  "Loader": "Loader",
+  "newest stable version": "neueste stabile Version",
+  "Play downloads the game from Mojang for your account the first time, with the Java it needs.": "Spielen lädt das Spiel beim ersten Mal für dein Konto von Mojang herunter, mit dem Java, das es braucht.",
+  "Mojang's version list isn't here yet.": "Mojangs Versionsliste ist noch nicht da."
 }

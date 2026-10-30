@@ -192,5 +192,22 @@
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Przenieść {name} do kosza razem z jego światami i ustawieniami? Możesz go stamtąd przywrócić.",
   "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Mody natywne kompilują się we własną wersję gry. Zainstalowanie jednego włącza mody natywne: potem budujesz z nim grę w Ustawienia > Mody natywne. Pierwsza kompilacja pobiera Rust i może potrwać od 20 do 30 minut; kolejne są szybsze.",
   "Folder": "Folder",
-  "Version": "Wersja"
+  "Version": "Wersja",
+  "Import a modpack…": "Importuj modpack…",
+  "Vanilla": "Vanilla",
+  "Modded": "Z modami",
+  "Minecraft version": "Wersja Minecrafta",
+  "Search versions": "Szukaj wersji",
+  "Snapshots": "Snapshoty",
+  "Old": "Stare",
+  "Asking Mojang for its versions…": "Pobieranie listy wersji od Mojang…",
+  "No version matches.": "Żadna wersja nie pasuje.",
+  "Release": "Wydanie",
+  "Snapshot": "Snapshot",
+  "Beta": "Beta",
+  "Alpha": "Alfa",
+  "Loader": "Loader",
+  "newest stable version": "najnowsza stabilna wersja",
+  "Play downloads the game from Mojang for your account the first time, with the Java it needs.": "Graj pobiera grę od Mojang dla Twojego konta za pierwszym razem, razem z potrzebną Javą.",
+  "Mojang's version list isn't here yet.": "Lista wersji od Mojang jeszcze nie dotarła."
 }
