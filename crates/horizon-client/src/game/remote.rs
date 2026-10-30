@@ -6094,7 +6094,10 @@ impl Game<'_> {
     /// the client's own. A fill into a waterloggable block changes nothing
     /// here: `SimpleWaterloggedBlock.placeLiquid` tests `isClientSide` and
     /// leaves the block update to the server.
-    fn remote_use_bucket(&mut self, stack: &ItemStack) -> (bool, Option<DryChanges>, Vec<DrySound>) {
+    fn remote_use_bucket(
+        &mut self,
+        stack: &ItemStack,
+    ) -> (bool, Option<DryChanges>, Vec<DrySound>) {
         // `BucketItem.use`: `level.mayInteract` and `mayUseItemAt`.
         if !self.may_build() {
             return (false, None, Vec::new());
@@ -6170,8 +6173,7 @@ impl Game<'_> {
         if &*held.item == "minecraft:bucket"
             || horizon_client::items::bucket_contents(&held.item).is_some()
         {
-            let (succeeded, changes, sounds) =
-                self.with_hand(hand, |g| g.remote_use_bucket(&held));
+            let (succeeded, changes, sounds) = self.with_hand(hand, |g| g.remote_use_bucket(&held));
             if let Some(changes) = changes {
                 self.predict_blocks(&changes, seq);
             }
