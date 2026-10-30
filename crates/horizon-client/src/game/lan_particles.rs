@@ -421,15 +421,18 @@ impl Game<'_> {
         }
     }
 
-    /// `ServerLevel.explode`'s packet to each player within 64 blocks. The
-    /// sound and the push reach them on their own (the level's sounds, the
-    /// motion a hurt player is sent), so the packet carries neither.
+    /// `ServerLevel.explode`'s packet to each player within 64 blocks, with
+    /// the push `pushed` holds for them (`ServerExplosion.hitPlayers`: a
+    /// creative player, whom nothing hurt). The sound reaches them on its own
+    /// (the level's sounds), and so does a hurt player's push (the motion
+    /// they are sent).
     pub(super) fn lan_explode(
         &mut self,
         center: [f64; 3],
         small: bool,
         radius: f32,
         block_count: usize,
+        pushed: Vec<(u32, [f64; 3])>,
     ) {
         // In a guest's turn (their hit on an end crystal or a minecart) the
         // host holds the players (`as_guest`): the packet waits for the turn
@@ -437,7 +440,7 @@ impl Game<'_> {
         if self.lan_acting.is_some() && self.lan.is_none() {
             self.creatures
                 .lan_explosions
-                .push((center, small, radius, block_count));
+                .push((center, small, radius, block_count, pushed));
             return;
         }
         let emitter = if small {
@@ -449,16 +452,16 @@ impl Game<'_> {
         if let Some(packet) =
             self.explosion_packet(center, radius, block_count, emitter, sound, true)
         {
-            self.send_explosion(packet, &[]);
+            self.send_explosion(packet, &pushed);
         }
     }
 
     /// The explosions guests' turns put off.
     pub(super) fn flush_lan_explosions(&mut self) {
-        for (center, small, radius, block_count) in
+        for (center, small, radius, block_count, pushed) in
             std::mem::take(&mut self.creatures.lan_explosions)
         {
-            self.lan_explode(center, small, radius, block_count);
+            self.lan_explode(center, small, radius, block_count, pushed);
         }
     }
 
