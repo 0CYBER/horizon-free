@@ -1375,7 +1375,7 @@ impl Streaming {
             }
             if !self.ranges().in_view(x, z) {
                 world.dirty_sections.take_column(x, z);
-                for sy in section_indexes(sections) {
+                for sy in sections.iter().map(|sy| sy as i32) {
                     self.waiting.insert((x, sy, z));
                 }
                 continue;
@@ -1399,7 +1399,7 @@ impl Streaming {
                 continue;
             };
             world.dirty_sections.take_column(x, z);
-            for sy in section_indexes(sections) {
+            for sy in sections.iter().map(|sy| sy as i32) {
                 let first = self.meshed.insert((x, z));
                 self.sequence += 1;
                 self.meshing.insert((x, sy, z), self.sequence);
@@ -1516,7 +1516,7 @@ impl Streaming {
     fn mark_light_changes(world: &mut World, changed: &LightChanges) {
         if let Some(log) = &mut world.light_log {
             for (x, sy, z) in changed.sections() {
-                *log.entry((x, z)).or_default() |= 1 << sy;
+                log.entry((x, z)).or_default().insert(sy as usize);
             }
         }
         changed.dirty_sections(|section| {
@@ -1984,16 +1984,6 @@ impl Drop for Streaming {
             let _ = t.join();
         }
     }
-}
-/// The section indexes set in a column's bits, lowest first.
-fn section_indexes(mut bits: u32) -> impl Iterator<Item = i32> {
-    std::iter::from_fn(move || {
-        (bits != 0).then(|| {
-            let sy = bits.trailing_zeros() as i32;
-            bits &= bits - 1;
-            sy
-        })
-    })
 }
 /// The queued jobs' priorities computed again from each one's column
 /// `distance` (`Streaming::submit`).

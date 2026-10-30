@@ -7,6 +7,7 @@ use crate::{
     graphics::GraphicsApi,
     hud::{HudBatch, HudRenderer},
     mesher::{SectionMesh, Sides, TerrainVertex, Vertex},
+    section_mask::SectionMask,
     sprites::SpriteAnimation,
 };
 use glam::{DVec3, Mat4, Vec3, Vec4};
@@ -106,7 +107,7 @@ mod wgsl_prefix;
 mod world_post;
 
 /// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
-const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
+const COMPLETE_COLUMN: SectionMask = SectionMask::below(crate::chunk::SECTIONS);
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
@@ -517,7 +518,7 @@ pub struct Renderer {
     lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
     /// Finished tile meshes `upload_lods` has yet to upload.
     lod_pending: Option<lod::Pending>,
-    detail_columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
+    detail_columns: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
     /// Bumped whenever a column becomes or stops being complete.
     detail_revision: u64,
     arena: arena::Arena,
@@ -3210,16 +3211,21 @@ impl Renderer {
     /// Whether the section at `key` has its mesh, for `lod_detail_columns`.
     fn set_detail(&mut self, key: SectionKey, meshed: bool) {
         let column = (key.0, key.2);
-        let mask = self.detail_columns.get(&column).copied().unwrap_or(0);
-        let next = if meshed {
-            mask | 1 << key.1
+        let mask = self
+            .detail_columns
+            .get(&column)
+            .copied()
+            .unwrap_or_default();
+        let mut next = mask;
+        if meshed {
+            next.insert(key.1 as usize);
         } else {
-            mask & !(1 << key.1)
-        };
+            next.remove(key.1 as usize);
+        }
         if (mask == COMPLETE_COLUMN) != (next == COMPLETE_COLUMN) {
             self.detail_revision += 1;
         }
-        if next == 0 {
+        if next.is_empty() {
             self.detail_columns.remove(&column);
         } else {
             self.detail_columns.insert(column, next);
