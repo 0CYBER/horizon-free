@@ -223,5 +223,16 @@
   "Multiplayer": "Сетевая игра",
   "Packs": "Наборы",
   "Screenshots": "Скриншоты",
-  "Console": "Консоль"
+  "Console": "Консоль",
+  "Update all ({count})": "Обновить все ({count})",
+  "Add mods": "Добавить моды",
+  "{loader} mods": "Моды {loader}",
+  "Horizon mods": "Моды Horizon",
+  "Filter installed": "Фильтр установленных",
+  "Reading the mods…": "Чтение модов…",
+  "No mods yet: Add mods finds some for this instance.": "Модов пока нет: «Добавить моды» найдёт их для этой сборки.",
+  "No mod matches.": "Нет подходящих модов.",
+  "{source} · needed by another mod": "{source} · нужен другому моду",
+  "Local file · {file}": "Локальный файл · {file}",
+  "Update {version}": "Обновить до {version}"
 }

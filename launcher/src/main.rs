@@ -19,6 +19,7 @@ mod game_tools;
 mod home;
 mod home_tabs;
 mod import_page;
+mod instance_mods;
 mod instances_page;
 mod internet;
 mod language_page;
@@ -276,6 +277,8 @@ struct Launcher {
     download_seen: Option<(Instant, usize)>,
     /// The tab open under Home's hero (`home_tabs.rs`).
     home_tab: home_tabs::HomeTab,
+    /// The selected instance's mods, for Home's Mods tab (`instance_mods.rs`).
+    instance_mods: instance_mods::InstanceMods,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -480,6 +483,7 @@ impl Launcher {
             prepare_started: None,
             download_seen: None,
             home_tab: home_tabs::HomeTab::from_env(),
+            instance_mods: Default::default(),
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
