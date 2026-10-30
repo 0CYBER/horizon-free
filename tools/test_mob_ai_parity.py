@@ -332,6 +332,8 @@ def scenarios():
     for seed in (201, 202):
         add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
                                                f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
+    # A zombified piglin runs Zombie.registerGoals too (the turtle egg goal draws its start delay).
+    add('zombified_piglin_player', 120, ['player 7.5 -60 0.5', 'mob minecraft:zombified_piglin 0.5 -60 0.5 0 241 persistent'])
     add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])
     # Chickens fleeing a hit (PanicGoal) beside a pool.
     for seed in range(191, 193):

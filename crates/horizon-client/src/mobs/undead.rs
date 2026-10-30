@@ -55,6 +55,8 @@ pub fn register(m: &mut Mob) {
             // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
             let g = &mut m.ai.goals;
             g.add(1, BreakDoor::zombie());
+            // `Zombie.registerGoals`, which `ZombifiedPiglin` extends.
+            g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
             g.add(2, MeleeAttack::new(1.0, false).zombie());
