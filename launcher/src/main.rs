@@ -19,6 +19,7 @@ mod game_tools;
 mod home;
 mod home_tabs;
 mod import_page;
+mod instance_icons;
 mod instance_mods;
 mod instances_page;
 mod internet;
@@ -89,7 +90,7 @@ impl Page {
     /// `settings`) opens on that page, for screenshots; Home otherwise (`getting-ready`: Home
     /// preparing, `home::getting_ready_preview`; `sign-in`: the owner gate's sheet with a
     /// made-up code, `owner_page::sign_in_preview`; `new-instance`: Home with the New instance
-    /// dialog open on Modded; `worlds`, `packs`...: Home on that tab, `HomeTab::from_env`).
+    /// dialog open on Modded; `edit-instance`: the selected one's Edit dialog; `worlds`, `packs`...: Home on that tab, `HomeTab::from_env`).
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,
@@ -546,6 +547,9 @@ impl Launcher {
         if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("new-instance") {
             this.open_instance_dialog(None);
             this.pick_kind(new_instance::NewKind::Modded, cx);
+        }
+        if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("edit-instance") {
+            this.open_instance_dialog(this.selected_instance().cloned());
         }
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();

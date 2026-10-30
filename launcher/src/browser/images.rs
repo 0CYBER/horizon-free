@@ -10,8 +10,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Hosts images may come from.
-const HOSTS: [&str; 5] = [
+const HOSTS: [&str; 7] = [
     "https://cdn.modrinth.com/",
+    // Fabric's and Forge's own icons, for instances that play them (no published logo licence:
+    // drawn from their sites, never shipped).
+    "https://raw.githubusercontent.com/FabricMC/fabric-loader/",
+    "https://files.minecraftforge.net/static/images/",
     "https://media.forgecdn.net/",
     "https://edge.forgecdn.net/",
     // Horizon's registry's icons (its GitHub Pages), and the mirror kept at the address it had
@@ -234,14 +238,19 @@ pub fn jar_icon(jar: &Path, side: u32) -> Option<Vec<u8>> {
     let toml = text(read("META-INF/neoforge.mods.toml", 1 << 20))
         .or_else(|| text(read("META-INF/mods.toml", 1 << 20)));
     let name = jar_icon_name(fabric.as_deref(), quilt.as_deref(), toml.as_deref())?;
-    let bytes = read(&name, MAX_JAR_ICON)?;
+    fit_png(read(&name, MAX_JAR_ICON)?, side, 4096, 64 << 20)
+}
+
+/// `bytes` decoded (at most `max_side` pixels a side and `max_alloc` bytes), scaled down to fit
+/// `side` pixels, as PNG bytes. None when they aren't an image within those limits.
+pub fn fit_png(bytes: Vec<u8>, side: u32, max_side: u32, max_alloc: u64) -> Option<Vec<u8>> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
-    limits.max_alloc = Some(64 << 20);
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
+    limits.max_alloc = Some(max_alloc);
     reader.limits(limits);
     let decoded = reader.decode().ok()?;
     let scaled = if decoded.width() > side || decoded.height() > side {

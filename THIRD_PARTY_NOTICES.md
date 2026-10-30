@@ -19,3 +19,22 @@ by The Pixelify Sans Project Authors, licensed under the SIL Open Font License 1
 [Pixelarticons](https://github.com/halfmage/pixelarticons) by Gerrit Halfmann, under the MIT
 license (`crates/horizon-theme/icons/pixel/LICENSE-pixelarticons.txt`). `star.svg` is Horizon's own, drawn on
 the same grid.
+
+## Mod loader logos
+
+The launcher shows the logo of the mod loader an instance plays with.
+
+- `launcher/assets/logos/quilt.png` is the Quilt mini icon (`brand/128png/quilt_mini_icon_transparent.png`)
+  from [QuiltMC/art](https://github.com/QuiltMC/art), by the Quilt Project, dedicated to the public
+  domain under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+- `launcher/assets/logos/neoforge.png` is NeoForged's icon (`art/neoforged_icon_16x16.png`) from
+  [neoforged/.github](https://github.com/neoforged/.github/tree/main/art), © the NeoForged team,
+  created by Ridanisaurus, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). It is
+  unmodified (the launcher scales it up by whole pixels).
+- Fabric's and Forge's icons are not shipped: neither publishes a license for its logo. The launcher
+  fetches them from their own sites when an instance needs them
+  ([fabric-loader's icon](https://github.com/FabricMC/fabric-loader/blob/master/src/main/resources/assets/fabricloader/icon.png),
+  [files.minecraftforge.net's](https://files.minecraftforge.net/)).
+
+Each logo belongs to its project. Showing it says which loader an instance runs; it does not mean
+the project endorses Horizon.
