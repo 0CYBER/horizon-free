@@ -99,6 +99,7 @@ mod toggle_keys_probe;
 mod tooltip_display_fixture;
 mod trading_fixture;
 mod translucency_fixture;
+mod trident_probe;
 mod weather_fixture;
 mod world_border_render_fixture;
 mod world_options_fixture;
@@ -191,6 +192,7 @@ probes! {
     text_display_fixture,
     text_display_render_fixture,
     trading_fixture,
+    trident_probe,
     translucency_fixture,
     weather_fixture,
     world_border_render_fixture,
