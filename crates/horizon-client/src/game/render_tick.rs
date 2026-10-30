@@ -192,7 +192,8 @@ impl Game<'_> {
             ) != FogType::Water
     }
     /// `ScreenEffectRenderer` + `Hud` camera overlays for this frame.
-    pub(super) fn screen_quads(&self, partial: f32, size: [u32; 2]) -> Vec<ScreenQuad> {
+    /// `scale` is the player's `LivingEntity.getScale`.
+    pub(super) fn screen_quads(&self, partial: f32, size: [u32; 2], scale: f32) -> Vec<ScreenQuad> {
         let Some(p) = self.player.as_ref() else {
             return Vec::new();
         };
@@ -201,7 +202,9 @@ impl Game<'_> {
             p.position.y + f64::from(p.dimensions.eye_height),
             p.position.z,
         ];
-        // LevelExtractor.getViewBlockingState: 8 points around the eye.
+        // LevelExtractor.getViewBlockingState: 8 points around the eye, 0.1
+        // times the scale apart in height (a player of scale 0.01 has its eye
+        // closer to the ground than 0.05).
         // ScreenEffectRenderer: none of it for a spectator (noPhysics).
         let spectator = self.spectator();
         let mut block_overlay = None;
@@ -209,7 +212,7 @@ impl Game<'_> {
         for i in (0..8).filter(|_| !spectator) {
             let t = [
                 p.position.x + (f64::from(i & 1) - 0.5) * w,
-                eye[1] + (f64::from((i >> 1) & 1) - 0.5) * 0.1,
+                eye[1] + (f64::from((i >> 1) & 1) - 0.5) * f64::from(0.1_f32 * scale),
                 p.position.z + (f64::from((i >> 2) & 1) - 0.5) * w,
             ];
             let state = self.world.block(
