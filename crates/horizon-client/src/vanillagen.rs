@@ -610,12 +610,14 @@ impl ChunkGenerator for VanillaTerrain {
         let Some(VanillaProto::Ready(chunk)) = proto.downcast_ref::<VanillaProto>() else {
             return None;
         };
-        // The proto's sections from its own minimum Y; the column's from MIN_Y.
-        let below = (chunk.terrain.min_y() - MIN_Y) >> 4;
+        // The proto's sections from its own minimum Y; the column's from the
+        // layout's.
+        let layout = self.layout();
+        let below = (chunk.terrain.min_y() - layout.min_y()) >> 4;
         let mut mask = crate::section_mask::SectionMask::EMPTY;
         for i in chunk.terrain.filled_sections() {
             if let Ok(i) = usize::try_from(i as i32 + below)
-                && i < SECTIONS
+                && i < layout.sections()
             {
                 mask.insert(i);
             }
