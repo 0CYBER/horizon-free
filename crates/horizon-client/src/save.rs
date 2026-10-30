@@ -184,6 +184,16 @@ impl SessionLock {
 /// the latter as it reads each file; Horizon runs them all on opening, which reads
 /// the same data. Worlds older than the ported fixes (1.17) are refused.
 pub fn upgrade_older_world(world: &Path) -> Result<()> {
+    upgrade_older_world_with(
+        world,
+        &horizon_world::datafix::progress::UpgradeProgress::new(),
+    )
+}
+/// [`upgrade_older_world`] reporting to `progress`, which `FileFixerProgressScreen` reads.
+pub fn upgrade_older_world_with(
+    world: &Path,
+    progress: &horizon_world::datafix::progress::UpgradeProgress,
+) -> Result<()> {
     let Some(root) = read_dat(&world.join("level.dat")) else {
         return Ok(());
     };
@@ -202,7 +212,7 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
         )
         .into());
     }
-    horizon_world::datafix::files::upgrade_world(world)
+    horizon_world::datafix::files::upgrade_world_with(world, progress)
         .map_err(|e| format!("upgrading {}: {e}", world.display()))?;
     Ok(())
 }

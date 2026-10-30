@@ -16,11 +16,13 @@ use std::{
 
 mod create_world;
 mod flat;
+mod onboarding;
 #[cfg(test)]
 mod tests;
 pub mod world_management;
 pub use create_world::{DIFFICULTIES, WorldOptions};
 pub use flat::{FlatLayer, FlatSettings, State as FlatEditor};
+pub use onboarding::Onboarding;
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
 const LIST_TOP: f32 = 49.0;
@@ -85,6 +87,25 @@ fn recover_issues(dir: &Path) -> [Option<crate::save::DatIssue>; 2] {
 /// The SafetyScreen's column (WarningScreen: title, 12 px around the message
 /// box of its lines and 4 px padding, the checkbox, then the buttons, 8 px
 /// apart): the title's top.
+/// `LogoRenderer.extractRenderState`: the logo's top 44 of 64 rows, then the
+/// edition banner's top 14 of 16 rows overlapping its bottom by 7.
+fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
+    batch.sprite_region(
+        atlas,
+        "gui/title/minecraft",
+        [(w / 2.0).floor() - 128.0, 30.0, 256.0, 44.0],
+        256.0,
+        64.0,
+    );
+    batch.sprite_region(
+        atlas,
+        crate::title_edition::SPRITE,
+        [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
+        128.0,
+        16.0,
+    );
+}
+
 fn warning_top(h: f32, lines: usize) -> f32 {
     ((h.ceil() - 102.0 - lines as f32 * 9.0) / 2.0).floor()
 }
@@ -228,6 +249,8 @@ pub enum Mode {
         options: WorldOptions,
         flat: flat::State,
     },
+    /// AccessibilityOnboardingScreen: the first screen of a first launch.
+    Onboarding(Onboarding),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -236,6 +259,8 @@ pub enum Action {
     Options,
     Accessibility,
     Language,
+    /// AccessibilityOnboardingScreen's Music & Sounds button.
+    Sounds,
     /// The title's bottom text (`PlainTextButton`): `CreditsAndAttributionScreen`.
     Credits,
     Play {
@@ -292,6 +317,8 @@ pub struct Title {
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
     /// WorldCreationGameRulesScreen, over Create New World while it is open.
     rules: RefCell<Option<RulesScreen>>,
+    /// The onboarding screen has run out: the owner saves `onboardAccessibility` as false.
+    pub onboarding_finished: bool,
 }
 pub(crate) struct Button {
     x: f32,
@@ -301,6 +328,8 @@ pub(crate) struct Button {
     enabled: bool,
     id: u8,
     icon: Option<(&'static str, f32)>,
+    /// `SpriteIconButton.TextAndIcon`: the icon at the right end, the text centred.
+    trailing: Option<(&'static str, f32)>,
 }
 /// Java String.hashCode for text seeds (WorldOptions.parseSeed).
 pub fn parse_seed(text: &str) -> Option<i64> {
@@ -460,6 +489,7 @@ impl Title {
             ),
             recent: std::cell::RefCell::new(None),
             rules: RefCell::new(None),
+            onboarding_finished: false,
         }
     }
     /// Vanilla bypasses the selector when there are no saves.
@@ -711,6 +741,7 @@ impl Title {
     }
     /// Polling is done once per rendered frame so filesystem work never blocks drawing.
     pub fn poll_backup(&mut self) {
+        self.poll_onboarding(std::time::Instant::now());
         if !self.backup_shown.get() {
             return;
         }
@@ -980,6 +1011,7 @@ impl Title {
             enabled,
             id,
             icon: None,
+            trailing: None,
         };
         match &self.mode {
             Mode::Main => {
@@ -1339,6 +1371,7 @@ impl Title {
                     ),
                 ]
             }
+            Mode::Onboarding(_) => self.onboarding_buttons(w, h),
             Mode::Backup { .. } => Vec::new(),
             Mode::Multiplayer(screen) => screen
                 .buttons(w, h)
@@ -1358,24 +1391,10 @@ impl Title {
         if let Some(rules) = self.rules.borrow_mut().as_mut() {
             return rules.draw(batch, atlas, cursor);
         }
+        let mut fade_from = None;
         match &self.mode {
             Mode::Main => {
-                // LogoRenderer: the logo's top 44 of 64 rows, then the edition
-                // banner's top 14 of 16 rows overlapping its bottom by 7.
-                batch.sprite_region(
-                    atlas,
-                    "gui/title/minecraft",
-                    [(w / 2.0).floor() - 128.0, 30.0, 256.0, 44.0],
-                    256.0,
-                    64.0,
-                );
-                batch.sprite_region(
-                    atlas,
-                    crate::title_edition::SPRITE,
-                    [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
-                    128.0,
-                    16.0,
-                );
+                draw_logo(atlas, batch, w);
                 if !hide_splash && let Some(splash) = self.splash.as_deref() {
                     let tw = HudBatch::text_width(atlas, splash);
                     let start = batch.vertices.len();
@@ -1863,6 +1882,7 @@ impl Title {
                     true,
                 );
             }
+            Mode::Onboarding(_) => fade_from = Some(self.draw_onboarding(atlas, batch, w, h)),
             Mode::Multiplayer(screen) => screen.draw(
                 atlas,
                 batch,
@@ -1922,6 +1942,21 @@ impl Title {
                 color,
                 true,
             );
+            if let Some((icon, size)) = b.trailing {
+                // TextAndIcon: `x + width - spriteWidth - 2`, centred in the height.
+                batch.sprite_scaled(
+                    atlas,
+                    &format!("gui/sprites/{icon}"),
+                    b.x + b.w - size - 2.0,
+                    b.y + 10.0 - (size / 2.0).floor(),
+                    size,
+                    size,
+                    u32::MAX,
+                );
+            }
+        }
+        if let Some(from) = fade_from {
+            self.draw_onboarding_logo(atlas, batch, w, from);
         }
         if let Mode::Create {
             name,
@@ -2035,6 +2070,13 @@ impl Title {
             },
             (Mode::Main, Some(5)) => {
                 self.mode = Mode::Multiplayer(crate::multiplayer::Screen::friend());
+                Action::None
+            }
+            (Mode::Onboarding(_), Some(onboarding::SOUNDS)) => Action::Sounds,
+            (Mode::Onboarding(_), Some(onboarding::ACCESSIBILITY)) => Action::Accessibility,
+            (Mode::Onboarding(_), Some(onboarding::LANGUAGE)) => Action::Language,
+            (Mode::Onboarding(_), Some(onboarding::CONTINUE)) => {
+                self.onboarding_close();
                 Action::None
             }
             (Mode::Main, Some(3)) => Action::Options,
@@ -2545,6 +2587,8 @@ impl Title {
                 }
             }
             Mode::Create { .. } => self.cancel_create(),
+            // Screen.keyPressed: Escape closes the screen, which fades out.
+            Mode::Onboarding(_) => self.onboarding_close(),
             _ => self.mode = Mode::Main,
         }
     }

@@ -97,7 +97,7 @@ impl Game<'_> {
         if !self.creative
             && let Some(stack) = self.inventory[self.selected].clone()
         {
-            self.trigger_item_durability(&stack);
+            self.trigger_item_durability(&stack, stack.damage + wear);
             if let Some(stack) = self.inventory[self.selected].as_mut() {
                 stack.damage += wear;
                 let max = self

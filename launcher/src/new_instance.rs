@@ -271,7 +271,13 @@ impl Launcher {
             .child(filters)
             .child(list);
         if choice.kind == NewKind::Modded {
+            let scale = self.scale;
+            let logos = [Loader::Fabric, Loader::Quilt].map(|l| (l, self.loader_logo(l.id(), 24.)));
             let card = |loader: Loader| {
+                let logo = logos
+                    .iter()
+                    .find(|(l, _)| *l == loader)
+                    .and_then(|(_, i)| i.clone());
                 let on = choice.loader == loader;
                 shell::action(
                     SharedString::from(format!("loader-{}", loader.id())),
@@ -282,6 +288,8 @@ impl Launcher {
                 .w(px(180.))
                 .justify_start()
                 .when(on, |d| d.border_2().border_color(c(n.accent_hi)))
+                .gap(px(10.))
+                .children(logo.map(|logo| instance_icons::centred(logo, 24., scale).relative()))
                 .child(
                     div()
                         .relative()
