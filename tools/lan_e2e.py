@@ -262,6 +262,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
              client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
              sends each target its packet).
+- wind_burst_player: a mace smash with Wind Burst on another player launches the attacker up, for the host and for a guest (#3830).
 - hook_smooth: a cast fishing hook moves every tick of its flight on the client, between the tracker's updates (#3781).
 - merchant-close: the host and the guest each open a trade screen with the payment in its slot; the screen
              closes and the payment returns when they walk out of reach (7 blocks in survival, 9 in
@@ -6668,6 +6669,38 @@ def check_hero_trading(host, guest, out):
         host('command', command=f'kill @e[tag={tag}]')
     return seen
 
+def check_wind_burst_player(host, guest, out):
+    """A mace smash with Wind Burst on another player launches the attacker up (`MaceItem.hurtEnemy`, the
+    enchantment's `post_attack` explosion on the attacker), the host smashing a guest and a guest the host (#3830)."""
+    result = {}
+    spots = apart(host, guest)
+    x, y, z = spots['host']
+    for label, attacker, victim in (('host-hits-guest', host, guest), ('guest-hits-host', guest, host)):
+        attacker('command', command='gamemode survival')
+        victim('command', command='gamemode survival')
+        attacker('command', command='clear @s')
+        attacker('command', command='effect give @s minecraft:resistance 60 4 true')
+        victim('command', command='effect clear @s')
+        victim('command', command='effect give @s minecraft:instant_health 1 10 true')
+        victim('command', command='effect give @s minecraft:absorption 60 19 true')
+        attacker('command', command='give @s minecraft:mace[minecraft:enchantments={"minecraft:wind_burst":1}]')
+        victim('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+        attacker('command', command=f'tp @s {x + 0.5} {y + 9} {z + 0.5} 0 90')
+        attacker.raw('key', '1', 'tap')
+        attacker.wait(1)
+        replies = attacker.script(['mouse left down'] + ['state', 'mouse left click', 'wait 1'] * 50 + ['mouse left up'], every=True)
+        ys = [r['player']['position'][1] for r in replies if r.get('player')]
+        hit = next((i for i in range(1, len(ys)) if ys[i] > ys[i - 1] + 0.05), None)
+        result[label] = {'start': round(ys[0], 1), 'min': round(min(ys), 2), 'max_after_hit': None if hit is None else round(max(ys[hit:]), 2)}
+        assert hit is not None and max(ys[hit:]) > min(ys) + 5, f'{label}: the smash did not launch the attacker: {ys}'
+        attacker.raw('mouse', 'left', 'up')
+        result[label]['victim'] = [victim('state')['player']['health'], victim('state')['player']['absorption']]
+        attacker.wait(40)
+    return result
+
+
+CHECKS += ['wind_burst_player']
+CHECK_FNS['wind_burst_player'] = check_wind_burst_player
 
 def check_hook_smooth(host, guest, out):
     """FishingHook.tick runs on a client between the tracker's updates (every 5 ticks): a cast hook moves
