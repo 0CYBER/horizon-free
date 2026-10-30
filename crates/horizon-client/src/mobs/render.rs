@@ -1696,7 +1696,7 @@ pub fn held_item_transform(
         t *= crate::spear::third_person_attack_item(s.swing, forward);
     }
     let off_hand = left != m.main_arm_left();
-    if m.extra.using_item > 0
+    if super::spear_use::is_using_item(m)
         && m.extra.using_off_hand == off_hand
         && let Some(kinetic) = (if off_hand {
             &m.extra.off_hand

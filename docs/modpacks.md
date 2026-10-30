@@ -760,7 +760,9 @@ python3 tools/mod_port_harness.py --work <work>      # or --jars/--deps to expor
   namespaces and every vanilla block: the class chain, states, per-state hardness, light, tool
   need, map colour, sounds, outline and collision shapes; drops for hand, diamond tools, shears
   and silk touch; placement on a floor and a wall; BlockSetType and WoodType. Then items (class,
-  stack size, rarity, food), recipes (type, result, count, resolved ingredients) and tags. One run
+  stack size, rarity, food; every default data component in 1.21.1's form, the effective attribute
+  modifiers, enchantability and repair items; armour's slot, defense, toughness, knockback resistance,
+  equip sound and texture layers), recipes (type, result, count, resolved ingredients) and tags. One run
   with the seven mods below takes about 30 s.
 - `crates/horizon-client/examples/mod_port_probe.rs` builds the content root from the carried
   mods and dumps what Horizon's loaders make of the same blocks, drops, recipes and tags.

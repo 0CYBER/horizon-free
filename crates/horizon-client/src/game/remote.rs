@@ -2647,6 +2647,10 @@ impl Game<'_> {
                 if p.event == 21 {
                     self.start_guardian_sound(p.id as u32);
                 }
+                // Fox.handleEntityEvent 45: the crumbs of the food in its mouth.
+                if p.event == 45 {
+                    self.fox_eat_particles(p.id as u32);
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
@@ -5920,8 +5924,10 @@ impl Game<'_> {
         let Some(info) = self.items().get(&stack.item).cloned() else {
             return;
         };
-        if info.consumable.as_ref().is_some_and(|c| c.particles) {
-            self.eat_particles(&stack, 16);
+        // Consumable.onConsume's emitParticlesAndSounds(16): the last crumbs
+        // and bite, which the server plays for the others only.
+        if let Some(consumable) = &info.consumable {
+            self.emit_consume(consumable, &stack, 16);
         }
         if let Some((nutrition, saturation)) = info.food
             && let Some(r) = self.remote.as_mut()

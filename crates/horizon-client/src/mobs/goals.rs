@@ -384,6 +384,20 @@ impl Mob {
             f64::from(y_cos * x_cos),
         ]
     }
+    /// `Entity.getLookAngle`: `calculateViewVector(xRot, yRot)`, the facing
+    /// of the body (`getHeadLookAngle` is the one with the head's yaw).
+    pub fn look_angle(&self) -> [f64; 3] {
+        use horizon_core::geometry::trig::Mth;
+        let to_rad = std::f32::consts::PI / 180.0;
+        let x = self.head_pitch * to_rad;
+        let y = -self.yaw * to_rad;
+        let (y_cos, y_sin, x_cos, x_sin) = (y.mcos(), y.msin(), x.mcos(), x.msin());
+        [
+            f64::from(y_sin * x_cos),
+            f64::from(-x_sin),
+            f64::from(y_cos * x_cos),
+        ]
+    }
     /// AirAndWaterRandomPos.getPos: within the radians of a direction, kept
     /// near home, moved up out of solid blocks and free of path maluses.
     pub fn air_and_water_random_pos(
@@ -516,7 +530,11 @@ impl Mob {
         for _ in 0..10 {
             let d = self.random_direction(h, v);
             let p = self.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !self.stable_destination(w, p) {
+            if p[1] < crate::chunk::MIN_Y
+                || p[1] >= 320
+                || self.restricted(f64::from(h), p)
+                || !self.stable_destination(w, p)
+            {
                 continue;
             }
             if let Some(p) = self.land_up_out_of_solid(w, p) {
@@ -535,11 +553,22 @@ impl Mob {
             ]
         })
     }
-    /// LandRandomPos.getPosAway
+    /// `LandRandomPos.getPosAway`: a spot away from `away`, the best of ten tries.
     pub fn land_random_pos_away(
         &mut self,
         w: &MobWorld,
         h: i32,
+        v: i32,
+        away: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        self.land_random_pos_away_between(w, 0.0, f64::from(h), v, away)
+    }
+    /// `LandRandomPos.getPosAway(mob, minHorizontalDist, maxHorizontalDist, verticalDist, avoidPos)`.
+    pub fn land_random_pos_away_between(
+        &mut self,
+        w: &MobWorld,
+        min_h: f64,
+        max_h: f64,
         v: i32,
         away: [f64; 3],
     ) -> Option<[f64; 3]> {
@@ -548,20 +577,45 @@ impl Mob {
             xd = self.random.next_double() - 0.5;
             zd = self.random.next_double() - 0.5;
         }
+        self.land_pos_in_direction(w, min_h, max_h, v, xd, zd)
+    }
+    /// `LandRandomPos.getPosTowards`: a spot within a quarter turn of the
+    /// way to `to`, the best of ten tries.
+    pub fn land_random_pos_towards(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        to: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
+        self.land_pos_in_direction(w, 0.0, f64::from(h), v, xd, zd)
+    }
+    /// `LandRandomPos.getPosInDirection`: ten tries within a quarter turn
+    /// (`(float) (Math.PI / 2)`) of the direction `(xd, zd)`.
+    fn land_pos_in_direction(
+        &mut self,
+        w: &MobWorld,
+        min_h: f64,
+        max_h: f64,
+        v: i32,
+        xd: f64,
+        zd: f64,
+    ) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {
             let d = m.random_direction_within(
-                0.0,
-                f64::from(h),
+                min_h,
+                max_h,
                 v,
                 0,
                 xd,
                 zd,
-                std::f64::consts::FRAC_PI_2,
+                f64::from(std::f32::consts::FRAC_PI_2),
             )?;
-            let p = m.toward(f64::from(h), d);
+            let p = m.toward(max_h, d);
             if p[1] < crate::chunk::MIN_Y
                 || p[1] >= 320
-                || m.restricted(f64::from(h), p)
+                || m.restricted(max_h, p)
                 || !m.stable_destination(w, p)
             {
                 return None;
@@ -800,8 +854,15 @@ pub struct Stroll {
     pub parrot: bool,
     pub force: bool,
     wanted: [f64; 3],
+    /// A subclass's `getPosition` in place of the default pick
+    /// (`GolemRandomStrollInVillageGoal`, `MoveBackToVillageGoal`).
+    position: Option<fn(&mut Mob, &mut Cx) -> Option<[f64; 3]>>,
+    /// A subclass's own `canUse` test, run before the interval's draw.
+    gate: Option<fn(&Mob, &MobWorld) -> bool>,
+    label: Option<&'static str>,
 }
 impl Stroll {
+    /// `RandomStrollGoal.<init>` (interval 120, checks the no-action time).
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
@@ -813,7 +874,25 @@ impl Stroll {
             parrot: false,
             force: false,
             wanted: [0.0; 3],
+            position: None,
+            gate: None,
+            label: None,
         }
+    }
+    /// The stroll's spot comes from `f` (an overridden `getPosition`).
+    pub fn position(mut self, f: fn(&mut Mob, &mut Cx) -> Option<[f64; 3]>) -> Self {
+        self.position = Some(f);
+        self
+    }
+    /// The stroll may only start while `f` holds (an overridden `canUse`).
+    pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
+        self.gate = Some(f);
+        self
+    }
+    /// The goal's class name, for debugging.
+    pub fn named(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
     }
     pub fn avoiding_water(speed: f64) -> Self {
         Self {
@@ -851,7 +930,9 @@ impl Stroll {
 impl Goal for Stroll {
     goal_clone!();
     fn name(&self) -> &'static str {
-        if self.parrot {
+        if let Some(label) = self.label {
+            label
+        } else if self.parrot {
             "ParrotWander"
         } else if self.water_avoiding.is_some() {
             "Stroll"
@@ -865,6 +946,9 @@ impl Goal for Stroll {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.gate.is_some_and(|gate| !gate(m, cx.w)) {
+            return false;
+        }
         if !self.force {
             if self.check_no_action && m.ai.no_action_time >= 100 {
                 return false;
@@ -874,6 +958,7 @@ impl Goal for Stroll {
             }
         }
         let pos = match self.water_avoiding {
+            _ if self.position.is_some() => self.position.and_then(|pick| pick(m, cx)),
             Some(_) if self.parrot => super::parrot::wander_pos(m, cx.w),
             Some(prob) => {
                 if m.fluids.in_water {
@@ -1109,6 +1194,8 @@ pub struct MeleeAttack {
     pub interval: i32,
     /// Ticks between attacks for a baby, when they differ.
     pub baby_interval: Option<i32>,
+    /// The sound played after each strike (a fox's bite).
+    pub bite: Option<&'static str>,
 }
 impl MeleeAttack {
     pub fn new(speed: f64, follow_unseen: bool) -> Self {
@@ -1124,6 +1211,7 @@ impl MeleeAttack {
             raise_arm: 0,
             interval: 20,
             baby_interval: None,
+            bite: None,
         }
     }
     pub fn zombie(mut self) -> Self {
@@ -1142,6 +1230,11 @@ impl MeleeAttack {
     pub fn intervals(mut self, adult: i32, baby: i32) -> Self {
         self.interval = adult;
         self.baby_interval = Some(baby);
+        self
+    }
+    /// `FoxMeleeAttackGoal.checkAndPerformAttack`: the bite after each strike.
+    pub fn bite(mut self, sound: &'static str) -> Self {
+        self.bite = Some(sound);
         self
     }
 }
@@ -1249,6 +1342,10 @@ impl Goal for MeleeAttack {
             self.until_attack = adjusted(true, interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
+            if let Some(sound) = self.bite {
+                let at = [m.position.x, m.position.y, m.position.z];
+                cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            }
         }
         if self.zombie {
             self.raise_arm += 1;
@@ -2263,9 +2360,17 @@ impl Goal for EatBlock {
         cx.w.has_tag("minecraft:edible_for_sheep", &here)
             || cx.w.block_name(x, y - 1, z) == "minecraft:grass_block"
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.tick = reduced(40);
         m.extra.anim_ticks = 40;
+        // EatBlockGoal.start: broadcastEntityEvent 10, so the head goes down
+        // on every client.
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events.push(MobEvent::EntityEvent {
+            mob: m.id,
+            event: 10,
+            at,
+        });
         m.nav_stop();
     }
     fn stop(&mut self, _: &mut Mob, _: &mut Cx) {

@@ -319,6 +319,8 @@ def scenarios():
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # A ghast floating near a player (RandomFloatAroundGoal, GhastMoveControl, GhastLookGoal) and shooting it.
+    add('ghast_player', 120, ['player 7.5 -56 0.5', 'mob minecraft:ghast 0.5 -56 0.5 0 273 persistent'])
     # AbstractHorse.hurtServer (#3432): every hurt draws nextInt(3), and a 0 rears the horse
     # (standIfPossible). A llama makes the draw too but never rears (canPerformRearing). A horse
     # scenario waits for #2720: a rearing horse is immobile (AbstractHorse.isImmobile).

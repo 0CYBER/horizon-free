@@ -157,6 +157,7 @@ mod moving_pistons;
 mod music;
 mod names;
 mod native_hooks;
+mod native_lifecycle;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
@@ -1974,6 +1975,8 @@ struct Game<'a> {
     panel: native_panel::Panel,
     /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
     native_shaders: native_shaders::NativeShaders,
+    /// The native lifecycle bookkeeping.
+    native_lifecycle: native_lifecycle::NativeLifecycle,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -2087,6 +2090,10 @@ struct Game<'a> {
     /// The acting guest's own entity events (`ServerPlayer.connection.send`),
     /// sent with their entity id, which the guest's turn does not hold.
     guest_entity_events: Vec<i8>,
+    /// `Player.playSound` of the acting guest (event, position, volume,
+    /// pitch): `level.playSound(player, ...)` leaves the guest out, whose
+    /// own client plays it.
+    guest_player_sounds: Vec<(String, [f64; 3], f32, f32)>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -10073,6 +10080,7 @@ impl Game<'_> {
             .damage
             .in_tag(source, "minecraft:is_fire");
         let mut broke = false;
+        let mut broken_items = Vec::new();
         let losses: Vec<u32> = (0..4)
             .map(|i| match self.armor[i].clone() {
                 Some(s)
@@ -10095,6 +10103,7 @@ impl Game<'_> {
             {
                 stack.damage += amount;
                 if stack.damage >= info.max_damage {
+                    broken_items.push(stack.clone());
                     *slot = None;
                     broke = true;
                 }
@@ -10108,6 +10117,10 @@ impl Game<'_> {
                     0.8,
                     0.8 + self.world.random.next_float() * 0.4,
                 );
+            }
+            // LivingEntity.breakItem for each armour piece that broke.
+            for stack in &broken_items {
+                self.eat_particles(stack, 5);
             }
             self.apply_equipment();
         }
@@ -10428,6 +10441,7 @@ impl Game<'_> {
             stack.damage += amount;
             if stack.damage >= max {
                 let broken = stack.item.clone();
+                let gone = stack.clone();
                 *cell = None;
                 self.stats.add("broken", &broken, 1);
                 if let Some(eye) = self.eye_position() {
@@ -10438,6 +10452,8 @@ impl Game<'_> {
                         0.8 + self.world.random.next_float() * 0.4,
                     );
                 }
+                // LivingEntity.breakItem: the broken item's five crumbs.
+                self.eat_particles(&gone, 5);
             }
         }
     }
@@ -12477,7 +12493,7 @@ impl Game<'_> {
         let bolts = if title {
             Vec::new()
         } else {
-            self.bolt_instances()
+            self.bolt_instances(camera)
         };
         let mut additive = Vec::new();
         if !title && self.dim == Dim::End {
@@ -14740,6 +14756,7 @@ impl<'a> Game<'a> {
             recipe_tables: Default::default(),
             panel: Default::default(),
             native_shaders: Default::default(),
+            native_lifecycle: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,
@@ -14782,6 +14799,7 @@ impl<'a> Game<'a> {
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
             guest_entity_events: Vec::new(),
+            guest_player_sounds: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             lan_acting_permission: None,
