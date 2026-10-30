@@ -202,6 +202,7 @@ impl Server {
             tick_steps: (0, 0),
             collision: None,
             border: &horizon_client::worldborder::WorldBorder::default(),
+            streaming: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
