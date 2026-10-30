@@ -3945,7 +3945,9 @@ impl Game<'_> {
     /// again and it is drawn from the next frame.
     fn again_skin(&mut self, location: &str) -> bool {
         let mut downloads = self.skin_downloads.borrow_mut();
-        if self.skin_slots.contains(location) {
+        // A slot without its sprite (the atlas was rebuilt, or the upload
+        // never happened) counts as missing, so the skin is stored again.
+        if self.skin_slots.contains(location) && self.gui.atlas.sprites.contains_key(location) {
             downloads.drawn(location);
             true
         } else {
