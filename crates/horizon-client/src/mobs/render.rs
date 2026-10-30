@@ -656,7 +656,9 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         }
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
-        S::Sheep if !m.extra.sheared => {
+        // SheepWoolUndercoatLayer has no isSheared guard: a sheared dyed sheep
+        // keeps it, while only SheepWoolLayer stops.
+        S::Sheep => {
             let color = abgr(sheep_wool_rgb(m.extra.color));
             if !m.is_baby() && m.extra.color != 0 {
                 push(
@@ -667,22 +669,14 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                     false,
                 );
             }
-            if m.is_baby() {
-                push(
-                    &mut v,
-                    "sheep_baby#wool",
-                    "entity/sheep/sheep_wool_baby",
-                    color,
-                    false,
-                );
-            } else {
-                push(
-                    &mut v,
-                    "sheep#wool",
-                    "entity/sheep/sheep_wool",
-                    color,
-                    false,
-                );
+            if !m.extra.sheared {
+                let model = baby_or(m, "sheep#wool", "sheep_baby#wool");
+                let texture = if m.is_baby() {
+                    "entity/sheep/sheep_wool_baby"
+                } else {
+                    "entity/sheep/sheep_wool"
+                };
+                push(&mut v, &model, texture, color, false);
             }
         }
         S::Creaking if super::creaking::eyes_glowing(m) => push(
@@ -2051,6 +2045,64 @@ mod tests {
         assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
         // A layer that is not dyeable is not tinted.
         assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
+    }
+
+    /// `SheepWoolLayer.submit` returns early on a sheared sheep, but
+    /// `SheepWoolUndercoatLayer.submit` has no isSheared guard: a sheared
+    /// dyed sheep keeps its undercoat and loses only its wool.
+    #[test]
+    fn a_sheared_dyed_sheep_keeps_its_wool_undercoat() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:sheep"].clone());
+        let sheep = |color: u8, sheared: bool, baby: bool| {
+            let mut m = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+            m.extra.color = color;
+            m.extra.sheared = sheared;
+            m.extra.age = if baby { -24000 } else { 0 };
+            m
+        };
+        // The sheep's wool layers, model, texture and colour, in submission order.
+        let wool = |m: &Mob| -> Vec<(String, String, u32)> {
+            layers(m)
+                .into_iter()
+                .filter(|l| l.model.contains("#wool"))
+                .map(|l| (l.model, l.texture, l.color))
+                .collect()
+        };
+        let dyed = abgr(sheep_wool_rgb(1));
+        let layer = |model: &str, texture: &str| (model.to_owned(), texture.to_owned(), dyed);
+
+        // The regression: the pre-fix single `!sheared` guard skipped both
+        // layers, so a sheared dyed sheep drew nothing. It must keep the
+        // undercoat alone, in its own colour and texture.
+        assert_eq!(
+            wool(&sheep(1, true, false)),
+            [layer(
+                "sheep#wool_undercoat",
+                "entity/sheep/sheep_wool_undercoat"
+            )]
+        );
+        // Guards, already green before the fix: a sheared white sheep has no
+        // undercoat to keep, a baby has no undercoat at all, and an unsheared
+        // dyed sheep draws both layers as before.
+        assert!(wool(&sheep(0, true, false)).is_empty());
+        assert_eq!(
+            wool(&sheep(1, false, true)),
+            [layer("sheep_baby#wool", "entity/sheep/sheep_wool_baby")]
+        );
+        assert!(wool(&sheep(1, true, true)).is_empty());
+        assert_eq!(
+            wool(&sheep(1, false, false)),
+            [
+                layer("sheep#wool_undercoat", "entity/sheep/sheep_wool_undercoat"),
+                layer("sheep#wool", "entity/sheep/sheep_wool")
+            ]
+        );
     }
 }
 
