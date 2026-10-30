@@ -5920,8 +5920,10 @@ impl Game<'_> {
         let Some(info) = self.items().get(&stack.item).cloned() else {
             return;
         };
-        if info.consumable.as_ref().is_some_and(|c| c.particles) {
-            self.eat_particles(&stack, 16);
+        // Consumable.onConsume's emitParticlesAndSounds(16): the last crumbs
+        // and bite, which the server plays for the others only.
+        if let Some(consumable) = &info.consumable {
+            self.emit_consume(consumable, &stack, 16);
         }
         if let Some((nutrition, saturation)) = info.food
             && let Some(r) = self.remote.as_mut()

@@ -2090,6 +2090,10 @@ struct Game<'a> {
     /// The acting guest's own entity events (`ServerPlayer.connection.send`),
     /// sent with their entity id, which the guest's turn does not hold.
     guest_entity_events: Vec<i8>,
+    /// `Player.playSound` of the acting guest (event, position, volume,
+    /// pitch): `level.playSound(player, ...)` leaves the guest out, whose
+    /// own client plays it.
+    guest_player_sounds: Vec<(String, [f64; 3], f32, f32)>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -14786,6 +14790,7 @@ impl<'a> Game<'a> {
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
             guest_entity_events: Vec::new(),
+            guest_player_sounds: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             lan_acting_permission: None,
