@@ -94,6 +94,8 @@ struct BlockFile {
     default_state: BTreeMap<String, String>,
     #[serde(default = "yes")]
     item: bool,
+    #[serde(default)]
+    components: BTreeMap<String, serde_json::Value>,
 }
 fn yes() -> bool {
     true
@@ -113,6 +115,8 @@ pub struct Block {
     pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
+    /// Its item's component patch, as an [`Item`]'s.
+    pub components: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -350,6 +354,7 @@ impl Content {
                 shapes: file.shapes,
                 default_state: file.default_state,
                 item: file.item,
+                components: file.components,
             });
         }
         for (item, name) in items {
@@ -364,7 +369,8 @@ impl Content {
             if file.max_stack_size.is_some_and(|n| !(1..=99).contains(&n)) {
                 return Err(format!("{name}: max_stack_size is 1 to 99"));
             }
-            check_components(&file.components).map_err(|e| format!("{name}: {e}"))?;
+            check_components(&file.components, &["max_stack_size", "rarity"])
+                .map_err(|e| format!("{name}: {e}"))?;
             if !ids.insert(item.clone()) {
                 return Err(format!("{name}: {item} is also a block's item"));
             }
@@ -380,8 +386,12 @@ impl Content {
     }
 }
 
-/// Vanilla component types only, removals as `{}`, none the item file has its own key for.
-fn check_components(components: &BTreeMap<String, serde_json::Value>) -> Result<(), String> {
+/// Vanilla component types only, removals as `{}`, and none of `fields`,
+/// which the file sets with its own keys.
+fn check_components(
+    components: &BTreeMap<String, serde_json::Value>,
+    fields: &[&str],
+) -> Result<(), String> {
     for (key, value) in components {
         let (removed, kind) = match key.strip_prefix('!') {
             Some(kind) => (true, kind),
@@ -392,7 +402,10 @@ fn check_components(components: &BTreeMap<String, serde_json::Value>) -> Result<
                 "component {key:?} is not a vanilla type (minecraft:...)"
             ));
         }
-        if let Some(own @ ("max_stack_size" | "rarity")) = kind.strip_prefix("minecraft:") {
+        if let Some(own) = kind
+            .strip_prefix("minecraft:")
+            .filter(|k| fields.contains(k))
+        {
             return Err(format!("component {key:?}: set {own} instead"));
         }
         if removed && !value.as_object().is_some_and(|o| o.is_empty()) {
@@ -446,7 +459,10 @@ fn check_block(file: &BlockFile) -> Result<(), String> {
     if p.sounds.as_deref().is_some_and(|s| !vanilla_id(s)) {
         return Err("sounds names a vanilla block (minecraft:...)".into());
     }
-    Ok(())
+    if !file.item && !file.components.is_empty() {
+        return Err("item is false, so the block has no item to take components".into());
+    }
+    check_components(&file.components, &[])
 }
 
 fn open_zip(path: &Path) -> Result<zip::ZipArchive<std::fs::File>, String> {
@@ -538,6 +554,7 @@ capabilities = ["registries"]
                     ..BlockProperties::default()
                 },
                 item: true,
+                components: BTreeMap::new(),
             }]
         );
         assert_eq!(content.items[0].id, "ruby:ruby");
@@ -565,6 +582,20 @@ capabilities = ["registries"]
             ]
         );
         assert_eq!(components["minecraft:max_damage"], 900);
+    }
+
+    #[test]
+    fn block_items_patch_their_components() {
+        let block = br#"{"template": "minecraft:iron_block", "components": {
+            "minecraft:max_stack_size": 16, "!minecraft:lore": {}}}"#;
+        let files: &[(&str, &[u8])] = &[("data/ruby/horizon/block/ruby_block.json", block)];
+        let content = hmod("block-components", MANIFEST_TEXT, files).unwrap();
+        let components = &content.blocks[0].components;
+        assert_eq!(
+            components.keys().collect::<Vec<_>>(),
+            ["!minecraft:lore", "minecraft:max_stack_size"]
+        );
+        assert_eq!(components["minecraft:max_stack_size"], 16);
     }
 
     #[test]
@@ -677,6 +708,30 @@ capabilities = ["registries"]
         ] {
             let item = format!(r#"{{"template": "minecraft:stick", "components": {components}}}"#);
             let e = refused(case, &[("data/ruby/horizon/item/a.json", item.as_bytes())]);
+            assert!(e.contains(why), "{case}: {e}");
+        }
+        for (case, block, why) in [
+            (
+                "block-modded-component",
+                r#"{"template": "minecraft:stone", "components": {"ruby:mana": 3}}"#,
+                "not a vanilla type",
+            ),
+            (
+                "block-removal-value",
+                r#"{"template": "minecraft:stone", "components": {"!minecraft:lore": []}}"#,
+                "a removal's value is {}",
+            ),
+            (
+                "block-without-item",
+                r#"{"template": "minecraft:glass", "item": false,
+                    "components": {"minecraft:max_stack_size": 16}}"#,
+                "item is false",
+            ),
+        ] {
+            let e = refused(
+                case,
+                &[("data/ruby/horizon/block/a.json", block.as_bytes())],
+            );
             assert!(e.contains(why), "{case}: {e}");
         }
     }
