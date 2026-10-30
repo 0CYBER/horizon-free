@@ -25,8 +25,12 @@ mod vegetation;
 use islands::EndIslands;
 use vegetation::Vegetation;
 const CACHE: usize = 1024;
-const REQUESTS: usize = 64;
-const BATCH: i32 = 4;
+/// Chunks waiting for decoration: enough batches to keep every thread busy.
+const REQUESTS: usize = 1024;
+/// Chunks a side a decoration batch emits. Each needs a two-chunk border of
+/// proto chunks, which the batch shares: 4 built four protos per chunk, 8
+/// builds 2.25, and the protos (noise, surface) are most of far decoration.
+const BATCH: i32 = 8;
 fn batch_origin((x, z): (i32, i32)) -> (i32, i32) {
     (x.div_euclid(BATCH) * BATCH, z.div_euclid(BATCH) * BATCH)
 }
@@ -34,7 +38,8 @@ fn batch_origin((x, z): (i32, i32)) -> (i32, i32) {
 struct Requests {
     chunks: FxHashSet<(i32, i32)>,
     center: [i32; 2],
-    current: Option<(i32, i32)>,
+    /// The batches the decoration threads are working on.
+    current: FxHashSet<(i32, i32)>,
     finished: FxHashSet<(i32, i32)>,
 }
 struct Shared {
@@ -50,7 +55,7 @@ fn distance((x, z): (i32, i32), center: [i32; 2]) -> i64 {
 struct Builder {
     shared: Arc<Shared>,
     results: mpsc::Receiver<LodDetail>,
-    thread: Option<thread::JoinHandle<()>>,
+    threads: Vec<thread::JoinHandle<()>>,
 }
 impl Builder {
     fn new(terrain: Arc<VanillaTerrain>) -> Self {
@@ -59,11 +64,30 @@ impl Builder {
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
         });
-        let worker = shared.clone();
         let (tx, results) = mpsc::channel();
-        let thread = thread::Builder::new()
+        // Idle priority: decoration only takes time the near chunks, the
+        // ticks and the frame leave, so more cores can share it.
+        let count = thread::available_parallelism()
+            .map_or(1, |n| n.get() / 3)
+            .clamp(1, 12);
+        let threads = (0..count)
+            .map(|_| Self::spawn(terrain.clone(), shared.clone(), tx.clone()))
+            .collect();
+        Self {
+            shared,
+            results,
+            threads,
+        }
+    }
+    fn spawn(
+        terrain: Arc<VanillaTerrain>,
+        worker: Arc<Shared>,
+        tx: mpsc::Sender<LodDetail>,
+    ) -> thread::JoinHandle<()> {
+        thread::Builder::new()
             .name("Far decoration".into())
             .spawn(move || {
+                horizon_threads::idle_current();
                 // Structure pieces have mutable one-shot placement flags. Sharing
                 // gameplay's seeded pipeline would consume its chests/spawners.
                 let generator = match OverworldGenerator::for_dimension(
@@ -96,7 +120,7 @@ impl Builder {
                             .unwrap();
                         let origin = batch_origin(key);
                         requests.chunks.retain(|&key| batch_origin(key) != origin);
-                        requests.current = Some(origin);
+                        requests.current.insert(origin);
                         origin
                     };
                     let result = decorated_batch(&mut state, key, BATCH, &worker.stop, |chunk| {
@@ -108,7 +132,7 @@ impl Builder {
                             worker.stop.store(true, Ordering::Relaxed);
                         }
                     });
-                    worker.requests.lock().unwrap().current = None;
+                    worker.requests.lock().unwrap().current.remove(&key);
                     match result {
                         Ok(_) => {}
                         Err(error) => {
@@ -123,12 +147,7 @@ impl Builder {
                     }
                 }
             })
-            .expect("far decoration worker");
-        Self {
-            shared,
-            results,
-            thread: Some(thread),
-        }
+            .expect("far decoration worker")
     }
     fn request(&self, chunks: &[(i32, i32)], center: [i32; 2]) {
         if self.shared.stop.load(Ordering::Relaxed) {
@@ -137,7 +156,7 @@ impl Builder {
         let mut requests = self.shared.requests.lock().unwrap();
         requests.center = center;
         for &key in chunks {
-            if requests.current != Some(batch_origin(key)) && !requests.finished.contains(&key) {
+            if !requests.current.contains(&batch_origin(key)) && !requests.finished.contains(&key) {
                 requests.chunks.insert(key);
             }
         }
@@ -146,14 +165,18 @@ impl Builder {
             sorted.sort_unstable_by_key(|&key| (distance(key, center), key));
             requests.chunks = sorted.into_iter().take(REQUESTS).collect();
         }
-        self.shared.wake.notify_one();
+        self.shared.wake.notify_all();
     }
 }
 impl Drop for Builder {
     fn drop(&mut self) {
+        // Under the lock the threads check it with: one between its check and
+        // its wait missed the wake, and closing the world waited forever.
+        let requests = self.shared.requests.lock();
         self.shared.stop.store(true, Ordering::Relaxed);
-        self.shared.wake.notify_one();
-        if let Some(thread) = self.thread.take() {
+        drop(requests);
+        self.shared.wake.notify_all();
+        for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
     }
@@ -718,7 +741,7 @@ mod tests {
                 "emitted before all neighbouring features completed"
             );
         }
-        assert_eq!(batch_origin((-1, -5)), (-4, -8));
+        assert_eq!(batch_origin((-1, -BATCH - 1)), (-BATCH, -2 * BATCH));
         let stop = AtomicBool::new(true);
         assert!(decorated_region(&mut terrain.generator.worker(), key, &stop)?.is_none());
         for (dimension, center) in [

@@ -13819,7 +13819,6 @@ impl Game<'_> {
                 let meshes = horizon_client::spans::time("lod_update", || {
                     lod.update(
                         [player.position.x, player.position.y, player.position.z],
-                        self.yaw,
                         self.streaming.radius,
                         lod_distance,
                         covered,
