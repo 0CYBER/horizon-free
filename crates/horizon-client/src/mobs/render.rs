@@ -1362,6 +1362,41 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `Deadmau5EarsLayer.submit` with `PlayerEarsModel`: the player model's
+/// head carrying two 6x6x1 ears (the model's other cubes are cleared),
+/// drawn with the player's skin as `RenderTypes.entitySolid`. The caller has
+/// checked `showExtraEars`; an invisible avatar draws no ears.
+#[allow(clippy::too_many_arguments)]
+pub fn ears(
+    m: &Mob,
+    alpha: f32,
+    base: glam::Mat4,
+    uv: [f32; 4],
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    if super::trader::is_invisible(m) {
+        return;
+    }
+    let Some(model) = m.kind.layer("player#ears") else {
+        return;
+    };
+    let s = anim::state(m, alpha);
+    let mut poses = Poses::new(model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    // LivingEntityRenderer.getOverlayCoords(state, 0.0F).
+    draw(
+        model,
+        base,
+        &poses,
+        uv,
+        0xFFFF_FFFF,
+        light,
+        body_overlay(m, alpha),
+        out,
+    );
+}
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw

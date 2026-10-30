@@ -99,10 +99,18 @@ API 20 adds buttons, tooltips and item icons on mod screens: `native_screen_clic
 (a button press on the server, on the mod block entity) and the helpers `native_item`, `native_screen_title`, `native_data`, `native_block`,
 `native_block_property`, `native_insert_item` and `native_cursor`. Bundles that use them need `"hooks": 20`.
 
-API 21 adds [mod messages](#mod-messages) between a mod's server and client halves, and hearing players and mobs on the
+API 21 adds what a server mod needs to guard land and move players. `native_right_click_block` hears a player's right
+click on a block before the block's own use (a chest, a door, a lever) and the item's, and may cancel it: nothing
+happens and the player sees the block as it is. `native_acting_player` says who acts inside a player's hook (UUID,
+name, level, position, game mode, health); `native_run_command` runs a command as the server's console (level 4, no
+output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; `native_action_bar`
+tells a player why, even inside their own hook; and the players
+`native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
+
+API 22 adds [mod messages](#mod-messages) between a mod's server and client halves, and hearing players and mobs on the
 server for every player: `native_player_died`, `native_mob_spawned`, `native_mob_killed` (a player's melee blow),
 `native_item_dropped` and `native_item_picked_up` (`canceled` leaves the stack on the ground). They name a player by UUID. Bundles that use them
-need `"hooks": 21`.
+need `"hooks": 22`.
 
 ## What the launcher does
 
@@ -293,10 +301,21 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
   component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
   many it counted, took or gave; the player's screen follows as for any change to their inventory.
+- API 21: `native_acting_player()`, the player whose state is swapped in (inside `native_perform_command`,
+  `native_right_click_block`, `native_use_item_on`, `native_destroy_block`...; None elsewhere);
+  `native_run_command(line)`, a command run as the server's console (level 4, no output), only where no player is
+  swapped in (`native_tick`, a menu hook): a teleport to another level (`execute in minecraft:the_nether run tp Alex 0
+  70 0`) lands at the next tick's start. `native_server_players()` and the acting player carry `health` (0 once dead).
+  `native_action_bar(uuid, text)`, a line over a player's hotbar, which also reaches the acting player inside their
+  hook (where `native_tell` reaches nobody).
+- **`native_right_click_block(pos, face, canceled)`** (API 21): a player's right click on a block, before the block's
+  own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
+  without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of
+  claimed land.
 
 ### Mod messages
 
-API 21, `crates/horizon-client/src/game/native_net.rs`: bytes between a mod's server half and its client half, on the
+API 22, `crates/horizon-client/src/game/native_net.rs`: bytes between a mod's server half and its client half, on the
 one custom payload channel `horizon:mod_net`. A vanilla client never gets them, and a vanilla server isn't sent any.
 
 - `native_net_send_to_player(player, channel, data)` on the server and `native_net_send_to_server(channel, data)` on the

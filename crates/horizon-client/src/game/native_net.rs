@@ -1,5 +1,5 @@
 //! Mod messages for native mods (docs/native-mods.md, "Mod messages", API
-//! 21): a mod's server half and its client half send each other bytes
+//! 22): a mod's server half and its client half send each other bytes
 //! (`horizon_protocol::mod_net`). The hub is out of the game while a guest's
 //! packet or turn runs, so both directions wait here: what a guest sent
 //! reaches `native_net_from_client` once the hub is back, and what a mod sends
@@ -106,7 +106,7 @@ impl Game<'_> {
     /// Sends `data` on `channel` (`mod_id:name`, at most 30 000 bytes, at
     /// most 32 a player a tick) to `player`'s client, at the tick's end, from
     /// any server hook. Ok means accepted: a player who left or isn't on a
-    /// Horizon client doesn't get it. API 21.
+    /// Horizon client doesn't get it. API 22.
     pub(super) fn native_net_send_to_player(
         &mut self,
         player: u128,
@@ -129,7 +129,7 @@ impl Game<'_> {
     /// The client half: sends `data` on `channel` to the server (the same
     /// caps, 32 a tick). An error when the server doesn't carry mod messages
     /// (a vanilla server), and until the player has joined: a server says it
-    /// carries them during configuration, before it can take one. API 21.
+    /// carries them during configuration, before it can take one. API 22.
     pub(super) fn native_net_send_to_server(
         &mut self,
         channel: &str,

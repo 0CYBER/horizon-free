@@ -6,12 +6,17 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 21 adds mod messages between a mod's server and client halves
+//! API 22 adds mod messages between a mod's server and client halves
 //! (`native_net_from_client`, `native_net_from_server`, and
 //! `native_net_send_to_player`, `native_net_send_to_server` in
 //! `native_net.rs`), and hearing players and mobs: `native_player_died`,
 //! `native_mob_spawned`, `native_mob_killed`, `native_item_dropped`,
 //! `native_item_picked_up`.
+//!
+//! API 21 adds right clicking a block (`native_right_click_block`), and in
+//! `native_server.rs` the acting player (`native_acting_player`), a player's
+//! health, the action bar (`native_action_bar`) and commands run as the
+//! server (`native_run_command`).
 //!
 //! API 20 adds buttons, tooltips and item icons on mod screens
 //! (`native_screen_click`, `native_screen_tooltip`, `native_menu_button`,
@@ -113,7 +118,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 21;
+pub(crate) const NATIVE_HOOKS_API: u32 = 22;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -708,15 +713,30 @@ impl Game<'_> {
     ) {
         let _ = (stack, pos, state);
     }
+    /// A player right clicks the block at `pos` with `self.hand`, `face` the
+    /// face clicked: where `ServerPlayerGameMode.useItemOn` starts, before
+    /// the block's own use (a chest, a door, a lever) and before
+    /// `native_use_item_on`. Set `canceled` to stop the click: neither the
+    /// block nor the item acts, the hand doesn't swing, and a guest sees the
+    /// block as it is. Server-side, for every player of the world
+    /// (`native_acting_player` says who), once per hand. API 21.
+    pub(super) fn native_right_click_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, face, canceled);
+    }
     /// A message from `player`'s client on `channel` (`mod_id:name`), within
     /// the caps (`native_net.rs`): check `channel`, and treat `data` as the
     /// player's own bytes, checked by nothing. Runs in the tick after it
-    /// arrives, with no player's state swapped in. Server-side. API 21.
+    /// arrives, with no player's state swapped in. Server-side. API 22.
     pub(super) fn native_net_from_client(&mut self, player: u128, channel: &str, data: &[u8]) {
         let _ = (player, channel, data);
     }
     /// A message from the server on `channel` (`mod_id:name`), whose `data`
-    /// is the sender's own bytes. The window's game only. API 21.
+    /// is the sender's own bytes. The window's game only. API 22.
     pub(super) fn native_net_from_server(&mut self, channel: &str, data: &[u8]) {
         let _ = (channel, data);
     }
@@ -724,7 +744,7 @@ impl Game<'_> {
     /// message's key when the game knows it (`death.attack.lava`; none for a
     /// message it builds from the combat). It only hears. Server-side, for
     /// every player of the world, whether death messages are shown or not.
-    /// API 21.
+    /// API 22.
     pub(super) fn native_player_died(&mut self, player: u128, cause: Option<&str>) {
         let _ = (player, cause);
     }
@@ -732,7 +752,7 @@ impl Game<'_> {
     /// world's spawning made it, false when something else did (a breed, a
     /// raid, a spawner, a conversion, `/summon`). Not told of a mob loaded
     /// with its chunk, leaving a hive or changing level. It only hears; the
-    /// mob is already among the game's mobs. Server-side. API 21.
+    /// mob is already among the game's mobs. Server-side. API 22.
     pub(super) fn native_mob_spawned(
         &mut self,
         dimension: &str,
@@ -744,18 +764,18 @@ impl Game<'_> {
     }
     /// `player`'s melee blow killed the mob `entity` of `kind` (other deaths
     /// aren't told yet). It only hears, after the blow landed. Server-side.
-    /// API 21.
+    /// API 22.
     pub(super) fn native_mob_killed(&mut self, player: u128, entity: u32, kind: &str) {
         let _ = (player, entity, kind);
     }
     /// `player` threw `count` of `item` (`Player.drop`: the drop key, a
-    /// menu's throw...). It only hears. Server-side. API 21.
+    /// menu's throw...). It only hears. Server-side. API 22.
     pub(super) fn native_item_dropped(&mut self, player: u128, item: &str, count: u32) {
         let _ = (player, item, count);
     }
     /// `player` is about to take `count` of `item` from the ground
     /// (`ItemEntity.playerTouch`). Set `canceled` to leave it there: the
-    /// stack isn't offered again for 10 ticks. Server-side. API 21.
+    /// stack isn't offered again for 10 ticks. Server-side. API 22.
     pub(super) fn native_item_picked_up(
         &mut self,
         player: u128,

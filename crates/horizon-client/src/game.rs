@@ -4877,6 +4877,15 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         let mut anchor_passed = false;
+        // Native mods, where ServerPlayerGameMode.useItemOn starts: a
+        // canceled click does nothing (a guest's block is sent back).
+        if let Some(hit) = block_hit {
+            let mut canceled = false;
+            self.native_right_click_block(hit.pos, hit.face, &mut canceled);
+            if canceled {
+                return Ok(true);
+            }
+        }
         // MultiPlayerGameMode.useItemOn: blocks react first.
         if !(sneaking && hands_full)
             && let Some(hit) = block_hit
@@ -6235,11 +6244,14 @@ impl Game<'_> {
             self.score_player_died();
             if let Some(kind) = killer {
                 self.stats.add("killed_by", &kind, 1);
-                let view = horizon_client::advancements::EntityView {
-                    kind,
-                    ..Default::default()
-                };
-                self.trigger_entity("minecraft:entity_killed_player", "entity", &view);
+                let blow = self.combat_killing_blow();
+                let view = blow.as_ref().and_then(|b| b.source.clone()).unwrap_or(
+                    horizon_client::advancements::EntityView {
+                        kind,
+                        ..Default::default()
+                    },
+                );
+                self.trigger_killed_as("minecraft:entity_killed_player", &view, blow.as_ref());
             }
             self.stats.reset("custom", "minecraft:time_since_death");
             self.stats.reset("custom", "minecraft:time_since_rest");

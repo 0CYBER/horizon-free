@@ -617,6 +617,14 @@ impl Game<'_> {
         if !self.own_invisible() {
             self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
         }
+        self.player_ears_geometry(
+            m,
+            &self.own_profile_name(),
+            camera,
+            alpha as f32,
+            packed,
+            out,
+        );
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
@@ -708,6 +716,14 @@ impl Game<'_> {
         if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
+        self.player_ears_geometry(
+            &m,
+            &self.own_profile_name(),
+            camera,
+            1.0,
+            240 | 240 << 8,
+            &mut verts,
+        );
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
@@ -885,6 +901,40 @@ impl Game<'_> {
             m,
             partial,
             base,
+            [rect.u0, rect.v0, rect.u1, rect.v1],
+            light,
+            self.res.mob_data(),
+            out,
+        );
+    }
+    /// `Deadmau5EarsLayer` (`AbstractClientPlayer.showExtraEars`): the ears
+    /// of a player whose profile name is `deadmau5`, in the player's skin.
+    pub(super) fn player_ears_geometry(
+        &self,
+        m: &Mob,
+        name: &str,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        if name != "deadmau5" {
+            return;
+        }
+        let sprites = &self.gui.atlas.sprites;
+        // The body's own fallback: a skin with no sprite draws the default.
+        let Some(rect) = m
+            .skin
+            .as_deref()
+            .and_then(|s| sprites.get(s))
+            .or_else(|| sprites.get(&m.kind.texture))
+        else {
+            return;
+        };
+        horizon_client::mobs::render::ears(
+            m,
+            partial,
+            horizon_client::mobs::render::base_transform(m, partial, camera),
             [rect.u0, rect.v0, rect.u1, rect.v1],
             light,
             self.res.mob_data(),
