@@ -258,6 +258,10 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         for (e, l) in &g.slots[index] {
             stack.enchantments.push((e.to_string(), *l as i32));
         }
+        if let Some((material, pattern)) = &g.trims[index] {
+            let trim = serde_json::json!({ "material": &**material, "pattern": &**pattern });
+            stack.components.push(("minecraft:trim".to_owned(), trim));
+        }
     }
     Some(stack)
 }
@@ -266,7 +270,7 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
     let body = head_is_body(m.species());
     let index = match slot {
         "mainhand" => {
-            m.extra.main_hand = None;
+            m.extra.set_main_hand(None);
             gear::MAIN
         }
         "offhand" => {
@@ -317,6 +321,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         ominous_amplifier: None,
         stew_effects: Vec::new(),
         names: Vec::new(),
+        components: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the
