@@ -3150,12 +3150,27 @@ def check_eating(host, guest, out):
     each hear every bite once (#3129): the eater's own client plays its bites and the server
     sends them to the others only (Player.playSound), and FoodProperties.onConsume's sound
     reaches both. One bite per crumb burst the eater draws (5 crumbs, 16 for the last) plus
-    FoodProperties' sound, for each loaf eaten."""
+    FoodProperties' sound, for each loaf eaten. One loaf each: with a second, the use held on
+    starts it and lets go a few ticks in, where the eater's client and the server can disagree
+    on whether its first bite came (each times the use on its own ticks)."""
     eat = 'minecraft:entity.generic.eat'
 
     def sounds(game):
         status = game('status')
         return status['heard'].get(eat, 0), status['particles'].get('item', 0)
+
+    def settled(eater, watcher):
+        """Both sides' sounds once neither has changed for 20 ticks: the last bite can still be on
+        its way to the watcher when the eater is done."""
+        last, still = None, 0
+        for _ in range(100):
+            now = sounds(eater), sounds(watcher)
+            still = still + 1 if now == last else 0
+            if still >= 10:
+                break
+            last = now
+            eater.wait(2)
+        return now
 
     for g in (host, guest):
         g('command', command='gamemode survival')
@@ -3165,7 +3180,7 @@ def check_eating(host, guest, out):
     host.wait(70)
     for g in (host, guest):
         g('command', command='effect clear @s')
-        g('command', command='give @s minecraft:bread 2')
+        g('command', command='give @s minecraft:bread')
     host.wait(5)
     face_each_other(host, guest)
 
@@ -3187,8 +3202,7 @@ def check_eating(host, guest, out):
             samples.append(using(watcher))
         watcher.shot(out, 'eating-' + name.replace(' ', '-'))
         hold.join()
-        eater.wait(10)
-        (eater_after, crumbs_after), (watcher_after, _) = sounds(eater), sounds(watcher)
+        (eater_after, crumbs_after), (watcher_after, _) = settled(eater, watcher)
         eaten = loaves - eater('inventory')['counts'].get('minecraft:bread', 0)
         seen[name] = {'during': samples, 'after': using(watcher), 'eaten': eaten,
                       'bites': (crumbs_after - crumbs - 16 * eaten) / 5,
