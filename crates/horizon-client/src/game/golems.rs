@@ -20,15 +20,21 @@ impl Game<'_> {
     /// (`BlockPattern.find`), snow golems first: the snow column ("^", "#",
     /// "#") spawns at its bottom, the iron T ("~^~", "###", "~#~") under its
     /// head. The blocks come column by column, top first, as
-    /// `clearPatternBlocks` visits them.
-    fn find_golem(&self, head: [i32; 3]) -> Option<(&'static str, Vec<[i32; 3]>, [i32; 3])> {
+    /// `clearPatternBlocks` visits them. With `base`, the head's cell takes
+    /// any block, as in the base patterns (" ", "#", "#") and ("~ ~", "###",
+    /// "~#~") that `canSpawnGolem` checks before the head is there.
+    fn find_golem(
+        &self,
+        head: [i32; 3],
+        base: bool,
+    ) -> Option<(&'static str, Vec<[i32; 3]>, [i32; 3])> {
         let air = |p: [i32; 3]| self.res.facts().is_air(self.world.block(p[0], p[1], p[2]));
         let snow = |c: char, p: [i32; 3]| match c {
-            '^' => self.is_golem_head(p),
+            '^' => base || self.is_golem_head(p),
             _ => self.golem_block(p) == "minecraft:snow_block",
         };
         let iron = |c: char, p: [i32; 3]| match c {
-            '^' => self.is_golem_head(p),
+            '^' => base || self.is_golem_head(p),
             '#' => self.golem_block(p) == "minecraft:iron_block",
             _ => air(p),
         };
@@ -46,7 +52,7 @@ impl Game<'_> {
     /// `CarvedPumpkinBlock.canSpawnGolem`: a snow or iron golem base, or a
     /// copper block (`#minecraft:copper`) below.
     pub(super) fn can_spawn_golem(&self, head: [i32; 3]) -> bool {
-        self.find_golem(head).is_some() || self.copper_golem_base(head)
+        self.find_golem(head, true).is_some() || self.copper_golem_base(head)
     }
     /// The copper golem pattern ("^", "#"): a block of `#minecraft:copper` under the head.
     fn copper_golem_base(&self, head: [i32; 3]) -> bool {
@@ -63,7 +69,7 @@ impl Game<'_> {
         if !self.is_golem_head(head) {
             return Ok(());
         }
-        let Some((kind, blocks, base)) = self.find_golem(head) else {
+        let Some((kind, blocks, base)) = self.find_golem(head, false) else {
             return self.try_spawn_copper_golem(head);
         };
         // CarvedPumpkinBlock.spawnGolemInWorld
@@ -113,7 +119,7 @@ impl Game<'_> {
     }
     /// Whether placing a golem head at `head` completes a golem.
     pub(super) fn completes_golem(&self, head: [i32; 3]) -> bool {
-        self.find_golem(head).is_some() || self.copper_golem_base(head)
+        self.find_golem(head, true).is_some() || self.copper_golem_base(head)
     }
     /// `Level.setBlock` of the golem head `state` at `head`, then
     /// `CarvedPumpkinBlock.onPlace`. When the head completes a golem, onPlace

@@ -238,7 +238,7 @@ impl Game<'_> {
     pub(super) fn prepare_trims(&mut self) {
         use horizon_client::hud::TRIM_SLOTS;
         let assets = &self.armor_stand_assets;
-        let items = self.res.items();
+        let items = self.items();
         let mut wanted: Vec<TrimTexture> = Vec::new();
         let guests = self.lan.iter().flat_map(|host| host.hub.guests.iter());
         let stacks = self
@@ -881,7 +881,7 @@ impl Game<'_> {
     /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
     /// its slot (the worn piece comes back to the hand).
     pub(super) fn equip_from_hand(&mut self, stack: &ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item) else {
+        let Some(info) = self.items().get(&stack.item) else {
             return false;
         };
         let (index, slot) = match info.equip_slot.as_deref() {

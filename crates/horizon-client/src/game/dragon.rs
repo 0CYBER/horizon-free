@@ -1984,7 +1984,7 @@ impl Game<'_> {
             return;
         };
         let boxes = [d.part_box(0), d.part_box(1), d.part_box(2)];
-        let tags = &self.res.items().block_tags;
+        let tags = &self.items().block_tags;
         let transparent = tags
             .get("minecraft:dragon_transparent")
             .cloned()
