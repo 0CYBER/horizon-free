@@ -635,16 +635,22 @@ impl Game<'_> {
             }
         }
         for i in dead.into_iter().rev() {
-            let a = self.armor_stands.remove(i);
-            let at = [a.position.x, a.position.y, a.position.z];
-            let (pos, drops) = burnt_armor_stand_equipment(a);
-            for stack in drops {
-                self.pop_resource(pos, stack);
-            }
-            self.audio
-                .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
-            self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+            self.break_armor_stand_by_anything(i);
         }
+    }
+    /// `ArmorStand.brokenByAnything`, then `kill`, as burning out or a blast
+    /// breaks a stand: its equipment pops above its block, the stand item does
+    /// not drop.
+    pub(super) fn break_armor_stand_by_anything(&mut self, i: usize) {
+        let a = self.armor_stands.remove(i);
+        let at = [a.position.x, a.position.y, a.position.z];
+        let (pos, drops) = broken_armor_stand_equipment(a);
+        for stack in drops {
+            self.pop_resource(pos, stack);
+        }
+        self.audio
+            .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+        self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
     }
     /// ArmorStandRenderer: the stand with its default pose, then armor layers.
     pub(super) fn armor_stand_geometry(
@@ -1055,7 +1061,15 @@ pub(super) fn skull_kind(item: &str) -> Option<&'static str> {
     })
 }
 
-fn burnt_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
+/// `ArmorStand.ignoreExplosion` (an invisible stand), and `hurtServer`
+/// refusing an invisible or marker stand: such a stand outlasts any blast.
+pub(super) fn spared_by_blast(a: &ArmorStand) -> bool {
+    a.invisible || a.marker
+}
+
+/// `ArmorStand.brokenByAnything`: the equipment, less what curse of vanishing
+/// keeps (`PREVENT_EQUIPMENT_DROP`), popped at `blockPosition().above()`.
+fn broken_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
     let pos = [
         a.position.x.floor() as i32,
         a.position.y.floor() as i32 + 1,
@@ -1073,6 +1087,16 @@ fn burnt_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
 mod burn_drop_tests {
     use super::*;
     #[test]
+    fn only_visible_non_marker_stands_are_broken_by_blasts() {
+        let mut stand = ArmorStand::new(1, Vec3::new(0.5, 64.0, 0.5), 0.0);
+        assert!(!spared_by_blast(&stand));
+        stand.invisible = true;
+        assert!(spared_by_blast(&stand));
+        stand.invisible = false;
+        stand.marker = true;
+        assert!(spared_by_blast(&stand));
+    }
+    #[test]
     fn burnt_equipment_drops_above_the_block_and_vanishing_items_do_not_drop() {
         let mut stand = ArmorStand::new(1, Vec3::new(-0.1, 4.8, 0.0), 0.0);
         let kept = ItemStack::new("minecraft:diamond_boots", 1);
@@ -1083,7 +1107,7 @@ mod burn_drop_tests {
             .push(("minecraft:vanishing_curse".into(), 1));
         stand.equipment[0] = Some(kept.clone());
         stand.equipment[1] = Some(vanished);
-        let (pos, drops) = burnt_armor_stand_equipment(stand);
+        let (pos, drops) = broken_armor_stand_equipment(stand);
         assert_eq!(pos, [-1, 5, 0]);
         assert_eq!(drops, vec![kept]);
     }
