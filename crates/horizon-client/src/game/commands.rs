@@ -1060,6 +1060,11 @@ impl Game<'_> {
         let custom = s.data().and_then(|data| data.custom_name.as_ref());
         let hover = if let Some(c) = custom {
             horizon_client::component::name_text(c)
+        } else if let Some(name) = s.data().and_then(|d| d.other("minecraft:item_name")) {
+            // `ItemStack.getItemName`: the `item_name` component wins over the
+            // item's own name (`Item.getName`), so a datapack's or a server's
+            // renaming shows here as it does on the tooltip's first line.
+            horizon_client::component::name_text(name)
         } else if let Some(title) = s
             .data()
             .and_then(|d| d.written.as_ref())

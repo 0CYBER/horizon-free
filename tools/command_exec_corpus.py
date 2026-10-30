@@ -168,6 +168,7 @@ def player_state():
         cmd('/effect clear @s'),
         cmd('/give @s minecraft:diamond 3'),
         cmd('/give @s minecraft:diamond_sword[minecraft:custom_name="Blade"]'),
+        cmd('/give @s minecraft:diamond[item_name={text:"ItemName",color:"red"}]'),
         cmd('/give @s minecraft:stone 130'),
         cmd('/clear @s minecraft:diamond 0'),
         cmd('/clear @s minecraft:stone 0'),
