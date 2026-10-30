@@ -3753,6 +3753,20 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
+        // An offline name's skin from the launcher, where neither the server
+        // nor an account gives the local player one.
+        if !resolved.iter().any(|(u, _)| *u == local)
+            && let Some((rgba, is_slim)) = horizon_client::skins::offline_skin()
+        {
+            const OFFLINE: &str = "horizon/offline_skin";
+            if !self.skin_slots.contains(OFFLINE) {
+                self.store_skin(OFFLINE.into(), rgba.clone());
+            }
+            if *is_slim {
+                slim.insert(local);
+            }
+            resolved.push((local, OFFLINE.into()));
+        }
         // An offline name's cape from the launcher, where the profile has none.
         if !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
@@ -4785,6 +4799,38 @@ impl Game<'_> {
         // The mount this client moves ticks in `remote_ride` instead, as its
         // authoritative side (LivingEntity.tick with travelRidden).
         let driven = self.driven_mount().map(|m| m.id);
+        // Cat.handleLieDown: the sleeping players (another's, drawn lying in
+        // a bed, and this client's own) a lying cat can lie on top of.
+        let sleepers: Vec<horizon_core::geometry::Aabb> = self
+            .remote
+            .as_ref()
+            .map(|r| {
+                self.mobs
+                    .iter()
+                    .filter(|m| {
+                        r.level_players.contains_key(&(m.id as i32)) && m.extra.ints[1] != 0
+                    })
+                    .map(|m| {
+                        let p = m.position;
+                        horizon_core::geometry::Aabb::new(
+                            horizon_core::geometry::Vec3::new(p.x - 0.1, p.y, p.z - 0.1),
+                            horizon_core::geometry::Vec3::new(p.x + 0.1, p.y + 0.2, p.z + 0.1),
+                        )
+                    })
+                    .chain(self.sleeping.map(|bed| {
+                        let p = horizon_core::geometry::Vec3::new(
+                            f64::from(bed[0]) + 0.5,
+                            f64::from(bed[1]) + 0.6875,
+                            f64::from(bed[2]) + 0.5,
+                        );
+                        horizon_core::geometry::Aabb::new(
+                            horizon_core::geometry::Vec3::new(p.x - 0.1, p.y, p.z - 0.1),
+                            horizon_core::geometry::Vec3::new(p.x + 0.1, p.y + 0.2, p.z + 0.1),
+                        )
+                    }))
+                    .collect()
+            })
+            .unwrap_or_default();
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -4878,6 +4924,7 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Cat {
                 m.anim.vo = m.anim.v;
                 horizon_client::mobs::tame::cat_amounts(m);
+                horizon_client::mobs::tame::cat_lying_on_sleeper(m, &sleepers);
             }
             // Chicken.aiStep: the wings follow the server's on-ground flag.
             if m.species() == horizon_client::mobs::Species::Chicken {

@@ -810,6 +810,8 @@ pub struct Extra {
     pub body_extra: Option<Box<crate::item_data::StackData>>,
     /// `Cat.RELAX_STATE_ONE`: watching a sleeping owner before lying down.
     pub relax_one: bool,
+    /// `Cat.isLyingOnTopOfSleepingPlayer` (the client's own, from `Cat.handleLieDown`).
+    pub on_sleeper: bool,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,

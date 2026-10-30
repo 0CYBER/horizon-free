@@ -181,6 +181,8 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// The anticheat, when `server.toml` turns it on (dedicated servers).
+    pub anticheat: Option<Box<super::anticheat::Anticheat>>,
     /// The `immediate_respawn` game rule, as the players were last told.
     immediate_respawn: bool,
     /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
@@ -375,6 +377,7 @@ impl Hub {
             ticks: 0,
             immediate_respawn: false,
             movement_checks: (true, true),
+            anticheat: None,
             singleplayer_owner: None,
             flat_world: false,
             riding: Default::default(),
@@ -641,7 +644,15 @@ impl Hub {
         play::PlayerInfo {
             uuid,
             name: Some(name.to_owned()),
-            properties: guest.map(|g| g.properties.clone()).unwrap_or_default(),
+            properties: guest
+                .map(|g| {
+                    listed_properties(
+                        &g.properties,
+                        self.singleplayer_owner == Some(g.uuid),
+                        self.lan.shared.config.owner_profile.as_deref(),
+                    )
+                })
+                .unwrap_or_default(),
             chat_session: guest.and_then(|g| g.chain.session()).map(|s| s.data()),
             game_mode: Some(mode),
             listed: Some(true),
@@ -1183,6 +1194,7 @@ impl Hub {
     /// packets queued for its own level's pass.
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
+        self.anticheat_tick(ctx.tick_rate);
         let mut events = Vec::new();
         for event in self.lan.poll() {
             match event {
@@ -2343,6 +2355,7 @@ impl Hub {
                         g.known_movement = [0.0; 3];
                     }
                     g.position_this_tick = false;
+                    self.anticheat_tick_end(i, events);
                 }
                 // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
                 S::RecipeBookChangeSettings(p) => {
@@ -3027,10 +3040,73 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
     shared
 }
 
+/// The profile properties the player list gives a player: those it logged
+/// in with, or for the integrated server's owner (who logs in with none) the
+/// signed-in account's, once fetched (`IntegratedServer.getSingleplayerProfile`).
+fn listed_properties(
+    logged_in: &[horizon_protocol::packets::login::Property],
+    owner: bool,
+    profile: Option<&super::OwnerProfile>,
+) -> Vec<horizon_protocol::packets::login::Property> {
+    match profile {
+        Some(profile) if owner && logged_in.is_empty() => profile.properties().to_vec(),
+        _ => logged_in.to_vec(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fast_hash::FxHashSet;
+
+    fn textures(value: &str) -> horizon_protocol::packets::login::Property {
+        horizon_protocol::packets::login::Property {
+            name: "textures".into(),
+            value: value.into(),
+            signature: Some("c2lnbmVk".into()),
+        }
+    }
+
+    /// The owner is listed with the account's skin once the fetch answered,
+    /// with none before (no wait) or when it failed; other players keep the
+    /// properties they logged in with, and none of the owner's.
+    #[test]
+    fn the_owner_is_listed_with_the_accounts_skin_once_fetched() {
+        let (answer, fetched) = std::sync::mpsc::channel();
+        let profile = super::super::OwnerProfile::new(move || fetched.recv().unwrap_or_default());
+        let start = std::time::Instant::now();
+        assert!(listed_properties(&[], true, Some(&profile)).is_empty());
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        answer.send(vec![textures("owner")]).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while listed_properties(&[], true, Some(&profile)).is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the fetch never landed"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            listed_properties(&[], true, Some(&profile)),
+            vec![textures("owner")]
+        );
+        // A guest: its own properties (online mode), or none (offline mode).
+        assert_eq!(
+            listed_properties(&[textures("guest")], false, Some(&profile)),
+            vec![textures("guest")]
+        );
+        assert!(listed_properties(&[], false, Some(&profile)).is_empty());
+        // No signed-in account (no fetch): as before.
+        assert!(listed_properties(&[], true, None).is_empty());
+        let failed = super::super::OwnerProfile::new(Vec::new);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while failed.properties.get().is_none() {
+            let _ = failed.properties();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(listed_properties(&[], true, Some(&failed)).is_empty());
+    }
 
     /// `requeue` as it was, scanning the queue for each chunk of the view.
     fn requeue_scan(

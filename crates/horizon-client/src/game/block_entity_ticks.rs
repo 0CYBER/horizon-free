@@ -23,6 +23,8 @@ impl Game<'_> {
         if !self.world.block_entities.has_states() {
             let states = self.ticking_states();
             self.world.block_entities.set_states(states);
+            let containers = self.native_containers();
+            self.world.block_entities.set_mod_containers(containers);
         }
         // Only lingering cooldowns are dropped; a hopper that ticks checks
         // its own block. Once a second is soon enough for the rest.
