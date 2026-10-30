@@ -29,6 +29,29 @@ submissions per account and sixty in all per hour; thirty ratings per account an
 rate it, and only projects on the registry's `main` can be rated. Only an entry's `owners` publish its updates; a key change, an icon in the repository or anything else
 is a pull request by hand.
 
+## Owner updates
+
+A reviewer's approval is not needed for an *owner update*: the submitter's login is in the entry's `owners` on the
+registry's `main`, and the only change to the entry is one new version (key, owners, icon, kind, id, name, summary,
+description, authors, licence and source as they were; a signature when the entry has a key). Then, and only when
+`REGISTRY_UPDATE_KEY` is set, the pull request's body ends with a trailer and it gets the label `owner-update`:
+
+```
+<!-- owner-update
+id: coords_hud
+version: 0.1.0
+sha256: <hex>
+file: coords_hud-0.1.0.hmod
+submitter: alice
+hmac: <hex HMAC-SHA256 with REGISTRY_UPDATE_KEY of "owner-update-v1\n<id>\n<version>\n<sha256>\n<file>\n<submitter>">
+-->
+```
+
+Everything else (a new project, a changed page or key, no secret) opens the pull request as before, for a reviewer.
+The trailer is the only thing that marks an update as the form's own: the horizon-mods repository's `owner-update`
+workflow verifies it with the same secret, re-checks the diff, waits for the checks and merges with `REGISTRY_MERGE_TOKEN`
+(its README says how). Without the secret on both sides, nothing is merged by itself.
+
 A refused submission is always `{error}` JSON, sent once the upload is over (a browser still sending when the answer
 comes reports a network error instead): 413 for a file over 64 MiB, 504 when GitHub doesn't answer in time (30 s a
 call, 5 minutes for the file's upload), 502 for GitHub's other failures.
@@ -47,6 +70,7 @@ REGISTRY_PUBLIC_URL=http://localhost:4173 REGISTRY_SESSION_KEY=... GITHUB_CLIENT
 | `REGISTRY_SESSION_KEY` | 32 characters or more, random: signs sessions |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The OAuth app |
 | `GITHUB_BOT_TOKEN` | Fine-grained, the registry repository only: Contents and Pull requests read and write |
+| `REGISTRY_UPDATE_KEY` | Optional, random, 32 characters or more: signs owner updates' trailers (below). Unset: every update waits for a reviewer. The same value is the secret `REGISTRY_UPDATE_KEY` of horizon-mods |
 | `REGISTRY_REPO` | Default `horizon-rust/horizon-mods` |
 | `REGISTRY_DB` | The ratings' SQLite file: default `/data/registry.sqlite3`, the volume |
 | `PORT` | Default 8080 |

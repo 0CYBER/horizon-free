@@ -191,7 +191,7 @@ refreshed every hour) and its rating: players signed in with GitHub on its page 
 account, which they can change. Its owners can't rate it, and nobody sees who rated.
 
 An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
-has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
+has one. When nothing but the version is new (the page's text, key, owners and icon are as they were), the registry merges it by itself once its checks pass; anything else waits for a reviewer. A published file never changes. Without the form, open the pull request by hand (the repository's README
 says how). The formats: [api/mod-index.md](api/mod-index.md).
 
 ### Integrity and signing

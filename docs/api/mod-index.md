@@ -152,7 +152,7 @@ How the repository runs (its workflows are in `.github/workflows/`):
   `cargo-horizon-mod` from Horizon at the commit in the repository variable `HORIZON_REV`. The form's pull requests
   are opened with the token of the account in the variable `REGISTRY_BOT`; for those, the author is the login in the
   body's `<!-- submitted-by: … -->` line.
-- **Merging** needs the `check` run and a CODEOWNER's review. `publish.yml` then makes each new version a release
+- **Merging** needs the `check` run and a CODEOWNER's review, except for an owner update: the form signs it (an HMAC trailer in the pull request's body, label `owner-update`) and horizon-mods' `owner-update` workflow verifies it, waits for the checks and merges it ([the service's README](../../crates/horizon-mod-registry/README.md#owner-updates)). `publish.yml` then makes each new version a release
   `<id>-<version>` and deploys `index.json` and `icons/` to GitHub Pages:
   `https://horizon-rust.github.io/horizon-mods/index.json`, served with `Access-Control-Allow-Origin: *`.
 - **Weekly**, `cleanup.yml` deletes staged copies of published files after 7 days and of files no open pull request
