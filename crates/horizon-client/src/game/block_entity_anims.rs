@@ -33,6 +33,10 @@ impl Game<'_> {
     pub(super) fn block_entity_event(&mut self, pos: [i32; 3], a: i32, b: i32) {
         let state = self.world.block(pos[0], pos[1], pos[2]).0;
         let time = self.world.game_time;
+        // PotentSulfurBlock.triggerEvent.
+        if self.potent_sulfur_eruption_event((pos[0], pos[1], pos[2])) {
+            return;
+        }
         match self.be_anims.ticker(state) {
             Some(Ticker::Lid) => {
                 self.be_anims

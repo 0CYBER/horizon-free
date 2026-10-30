@@ -1106,6 +1106,16 @@ impl Screen {
             }
         }
     }
+    /// `DirectJoinServerScreen.keyPressed`: Enter joins the typed address
+    /// while the Join Server button is active.
+    pub fn confirm(&self) -> Outcome {
+        match self {
+            Self::Direct { address } if servers::parse_address(address).is_some() => {
+                Outcome::Connect(direct_address(address))
+            }
+            _ => Outcome::None,
+        }
+    }
     pub fn click(
         &mut self,
         id: Option<u8>,
