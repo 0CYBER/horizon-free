@@ -9863,10 +9863,13 @@ impl Game<'_> {
         if self.window.is_some() {
             self.perf.world_opening();
             if self.title.is_none() {
-                self.title = Some(Title::new(
-                    std::env::current_dir()?.join("saves"),
-                    &self.options.resources,
-                ));
+                self.title = Some(
+                    Title::new(
+                        std::env::current_dir()?.join("saves"),
+                        &self.options.resources,
+                    )
+                    .with_user(|| self.options.player_name()),
+                );
             }
             self.world_loader = Some(world_loading::WorldLoader::start(
                 request,
@@ -10360,10 +10363,13 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections(self.world.layout());
         }
-        self.title = Some(Title::new(
-            std::env::current_dir()?.join("saves"),
-            &self.options.resources,
-        ));
+        self.title = Some(
+            Title::new(
+                std::env::current_dir()?.join("saves"),
+                &self.options.resources,
+            )
+            .with_user(|| self.options.player_name()),
+        );
         if let Some(title) = &mut self.title {
             title.last_server = self.settings.file.string("lastServer");
             title.skip_multiplayer_warning = self.settings.file.bool("skipMultiplayerWarning");
@@ -15381,10 +15387,13 @@ impl Game<'_> {
         }
         self.perf.world_opening();
         if self.title.is_none() {
-            self.title = Some(Title::new(
-                std::env::current_dir()?.join("saves"),
-                &self.options.resources,
-            ));
+            self.title = Some(
+                Title::new(
+                    std::env::current_dir()?.join("saves"),
+                    &self.options.resources,
+                )
+                .with_user(|| self.options.player_name()),
+            );
         }
         self.pending_entry = Some(entry);
         log::info!("Horizon: world entry waiting for world resources");
@@ -16270,10 +16279,13 @@ fn start_game<'a>(
             } else {
                 // Start after the window is handed over, so --world uses the
                 // same responsive initialization path as the title screen.
-                game.title = Some(Title::new(
-                    std::env::current_dir()?.join("saves"),
-                    &game.options.resources,
-                ));
+                game.title = Some(
+                    Title::new(
+                        std::env::current_dir()?.join("saves"),
+                        &game.options.resources,
+                    )
+                    .with_user(|| game.options.player_name()),
+                );
                 game.pending_entry = Some(PendingWorldEntry::Local {
                     folder,
                     name: None,
@@ -16288,7 +16300,8 @@ fn start_game<'a>(
             let mut title = Title::new(
                 std::env::current_dir()?.join("saves"),
                 &game.options.resources,
-            );
+            )
+            .with_user(|| game.options.player_name());
             title.last_server = game.settings.file.string("lastServer");
             title.skip_multiplayer_warning = game.settings.file.bool("skipMultiplayerWarning");
             game.title = Some(title);

@@ -284,6 +284,8 @@ pub struct Title {
     toast: Option<(crate::toasts::Slide, WorldToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
+    /// `SplashManager.getSplash` rolled the player's own name instead of a list entry.
+    splash_you: bool,
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
     /// WorldCreationGameRulesScreen, over Create New World while it is open.
@@ -418,10 +420,45 @@ fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
         .map(|s| (*s).to_owned())
 }
 
+/// `SplashManager.getSplash`: outside the special dates, a one in `size` roll
+/// (`nextInt(size) == 42`) shows the logged-in player's name instead of a splash.
+fn rolls_user_splash(text: &str, seed: u64, date: (u32, u32)) -> bool {
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    if matches!(date, (12, 24) | (1, 1) | (10, 31)) {
+        return false;
+    }
+    let size = text
+        .lines()
+        .map(str::trim)
+        .filter(|s| horizon_core::random::java_string_hash(s.encode_utf16()) != 125780783)
+        .count();
+    i32::try_from(size)
+        .is_ok_and(|size| size > 0 && LegacyRandom::new(seed as i64).next_int_bound(size) == Ok(42))
+}
+
 impl Title {
+    /// Names the player for the `<NAME> IS YOU` splash; `name` is only asked for when that splash was rolled.
+    pub fn with_user(mut self, name: impl FnOnce() -> String) -> Self {
+        if self.splash_you {
+            self.splash = Some(format!("{} IS YOU", name().to_uppercase()));
+        }
+        self
+    }
     pub fn new(saves: PathBuf, resources: &Path) -> Self {
         use chrono::Datelike;
         let today = chrono::Local::now();
+        let splashes =
+            std::fs::read_to_string(resources.join("assets/minecraft/texts/splashes.txt"))
+                .unwrap_or_default();
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as usize;
+        let splash_you = rolls_user_splash(
+            &splashes,
+            (seed as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((seed as u64) >> 7),
+            (today.month(), today.day()),
+        );
         let mode = Mode::Main;
         let now = std::time::Instant::now();
         Self {
@@ -444,15 +481,8 @@ impl Title {
             open_request: None,
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
-            splash: choose_splash(
-                &std::fs::read_to_string(resources.join("assets/minecraft/texts/splashes.txt"))
-                    .unwrap_or_default(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as usize,
-                (today.month(), today.day()),
-            ),
+            splash: choose_splash(&splashes, seed, (today.month(), today.day())),
+            splash_you,
             recent: std::cell::RefCell::new(None),
             rules: RefCell::new(None),
         }

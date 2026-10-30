@@ -381,10 +381,13 @@ impl Game<'_> {
         if let Err(error) = self.join_server(address, name, None, cookies) {
             log::warn!("Horizon: could not join server: {error}");
             if self.title.is_none() {
-                self.title = Some(horizon_client::title::Title::new(
-                    std::env::current_dir()?.join("saves"),
-                    &self.options.resources,
-                ));
+                self.title = Some(
+                    horizon_client::title::Title::new(
+                        std::env::current_dir()?.join("saves"),
+                        &self.options.resources,
+                    )
+                    .with_user(|| self.options.player_name()),
+                );
             }
             let skip = self.settings.file.bool("skipMultiplayerWarning");
             if let Some(title) = &mut self.title {
@@ -693,7 +696,8 @@ impl Game<'_> {
             r.clear_sections(self.world.layout());
         }
         let saves = std::env::current_dir()?.join("saves");
-        let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources)
+            .with_user(|| self.options.player_name());
         title.last_server = self.settings.file.string("lastServer");
         title.skip_multiplayer_warning = self.settings.file.bool("skipMultiplayerWarning");
         if single_player && reason.is_none() {
