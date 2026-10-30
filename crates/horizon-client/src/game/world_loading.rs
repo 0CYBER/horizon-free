@@ -119,6 +119,7 @@ impl WorldRequest {
             make_streaming(res, pack, options, settings, &save_root, dim, level.seed)?;
         streaming.radius = settings.render_distance;
         let mut world = World::new(res.facts().air, level.seed);
+        world.shape = dim.shape();
         world.fast_lava = dim == Dim::Nether;
         world.game_time = level.time;
         world.day_time = options.time.unwrap_or(level.day_time);
@@ -345,10 +346,10 @@ pub(super) fn make_streaming(
     dim: Dim,
     seed: i64,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
-    let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(
-        world_root,
-        dim.id(),
-    )));
+    let save = Arc::new(SaveDir::new(
+        horizon_client::save::dimension_dir(world_root, dim.id()),
+        dim.shape(),
+    ));
     let mut locator = None;
     let flat = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))
@@ -358,6 +359,7 @@ pub(super) fn make_streaming(
                 &s,
                 pack.assets.registry,
                 res.biomes(),
+                dim.shape(),
             )
         });
     let mut streaming = if let Some(inner) = flat {

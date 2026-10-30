@@ -411,11 +411,10 @@ impl FluidInteractionWorld for TntFluidWorld<'_> {
         Ok(self.world.chunks.contains_key(&(x, z)).then_some((x, z)))
     }
     fn chunk_sections(&mut self, _: Self::Chunk) -> std::io::Result<FluidSections<'_>> {
-        static SECTIONS: [bool; horizon_client::chunk::SECTIONS] =
-            [true; horizon_client::chunk::SECTIONS];
+        let layout = self.world.layout();
         Ok(FluidSections {
-            minimum_section_y: horizon_client::chunk::MIN_Y / 16,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() / 16,
+            has_fluid: horizon_client::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {

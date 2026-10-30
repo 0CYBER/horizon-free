@@ -98,6 +98,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
         air: short("Air", 300),
         fall_distance: level.fall_distance,
     });
+    guest.saved_vehicle = level.root_vehicle;
     guest.recipe_book = level.recipe_book.clone();
     guest.dimension = match level.dimension.as_str() {
         d @ ("minecraft:the_nether" | "minecraft:the_end") => d.to_owned(),
@@ -129,12 +130,12 @@ pub fn apply(guest: &mut Guest, level: &Level) {
 }
 
 /// Save a guest (PlayerDataStorage.save).
-pub fn save(guest: &Guest, world: &Path) {
+pub fn save(guest: &Guest, world: &Path, vehicle: Option<[i32; 4]>) {
     let mut level = Level {
         player_uuid: Some(uuid_ints(guest.uuid)),
         ..Level::default()
     };
-    store(guest, &mut level);
+    store(guest, &mut level, vehicle);
     let file = path(world, guest.uuid);
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -143,7 +144,7 @@ pub fn save(guest: &Guest, world: &Path) {
 }
 
 /// Put a guest's state in `level`'s player fields.
-pub fn store(guest: &Guest, level: &mut Level) {
+pub fn store(guest: &Guest, level: &mut Level, vehicle: Option<[i32; 4]>) {
     level.position = Some(guest.position);
     level.dimension = guest.dimension.clone();
     level.rotation = [guest.yaw, guest.pitch];
@@ -171,6 +172,8 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.seen_credits = guest.seen_credits;
     level.last_death = guest.last_death.clone();
     level.player_extra = guest.saved.clone();
+    // The vehicle the player rides (`ServerPlayer.saveParentVehicle`).
+    level.root_vehicle = vehicle.or(guest.saved_vehicle);
     // The live body's fire, air and fall distance (Entity.saveWithoutId),
     // or what the file had while the player has no body yet.
     let body = guest
@@ -251,7 +254,7 @@ mod tests {
             fall_distance: 9.5,
         });
         let mut level = Level::default();
-        store(&g, &mut level);
+        store(&g, &mut level, None);
         let tag = level.player_tag();
         let mut read = Level::default();
         read.read_player(&tag);
@@ -259,5 +262,66 @@ mod tests {
         let mut back = guest();
         apply(&mut back, &read);
         assert_eq!(back.loaded_body, g.loaded_body);
+    }
+
+    /// The resources the prepared game data holds, for a body to breathe with.
+    fn resources() -> Option<(crate::assets::Assets, crate::motion::MotionResources)> {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            return None;
+        }
+        let assets = crate::assets::Assets::load(&root).ok()?;
+        let resources = crate::motion::MotionResources::load(&root, &assets).ok()?;
+        Some((assets, resources))
+    }
+
+    #[test]
+    fn a_saved_air_comes_back() {
+        // A player saved underwater (#1321): the file keeps the remaining air
+        // (Entity.saveWithoutId's Air), and the body that comes back breathes
+        // on it instead of starting with a full supply.
+        let Some((_assets, resources)) = resources() else {
+            eprintln!("skipped the air round trip: prepared resources unavailable");
+            return;
+        };
+        let mut g = guest();
+        let mut motion =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .expect("a body");
+        motion.air = 99;
+        g.motion = Some(Box::new(motion));
+        let mut level = Level::default();
+        store(&g, &mut level, None);
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.loaded_body.expect("a body").air, 99);
+    }
+
+    #[test]
+    fn a_saved_root_vehicle_comes_back() {
+        // A player saved riding a horse (#1474): the file names the vehicle
+        // (ServerPlayer.saveParentVehicle's RootVehicle), and the next login
+        // finds it and rides it again.
+        let vehicle = [1, 2, 3, 4];
+        let g = guest();
+        let mut level = Level::default();
+        store(&g, &mut level, Some(vehicle));
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.saved_vehicle, Some(vehicle));
     }
 }

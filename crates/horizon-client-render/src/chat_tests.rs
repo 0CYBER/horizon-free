@@ -245,6 +245,58 @@ fn mod_commands_are_coloured_and_complete_like_vanilla_ones() {
 }
 
 #[test]
+fn chat_completes_the_servers_custom_completions_with_the_players() {
+    // CommandSuggestions.updateCommandInfo completes chat from
+    // ClientSuggestionProvider.getCustomTabSuggestions: the online players
+    // and what ClientboundCustomChatCompletionsPacket added.
+    use crate::command::{CustomCompletionAction as Action, modify_custom_completions};
+    let font = font();
+    let m = Measure(&font);
+    let mut registries = Registries {
+        players: vec!["Steve".into()],
+        ..Registries::default()
+    };
+    let entries = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let set = &mut registries.custom_completions;
+    modify_custom_completions(set, Action::from_id(0), &entries(&["Alex", "#trade"]));
+    modify_custom_completions(set, Action::Add, &entries(&["Notch", "Steve"]));
+    modify_custom_completions(set, Action::Remove, &entries(&["Alex"]));
+    // An id past the last action is ADD (OutOfBoundsStrategy.ZERO).
+    modify_custom_completions(set, Action::from_id(7), &entries(&["Zuri"]));
+    assert_eq!(
+        registries
+            .custom_tab_suggestions()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["#trade", "Notch", "Steve", "Zuri"]
+    );
+    let completed = |registries: &Registries, line: &str| {
+        let dispatcher = crate::command::vanilla::game_dispatcher();
+        let c = Commands {
+            dispatcher,
+            registries,
+        };
+        let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, full());
+        screen.type_text(&m, &c, line);
+        // Chat shows no list by itself: Tab shows it, Tab again uses it.
+        for _ in 0..2 {
+            screen.key(&m, &c, &[], winit::keyboard::KeyCode::Tab, false, false);
+        }
+        screen.value().to_owned()
+    };
+    assert_eq!(completed(&registries, "hi no"), "hi Notch");
+    assert_eq!(completed(&registries, "sell #tr"), "sell #trade");
+    assert_eq!(completed(&registries, "hi st"), "hi Steve");
+    assert_eq!(completed(&registries, "hi al"), "hi al");
+    // SET replaces them all; the players stay.
+    let set = &mut registries.custom_completions;
+    modify_custom_completions(set, Action::Set, &entries(&["Alex"]));
+    assert_eq!(completed(&registries, "hi no"), "hi no");
+    assert_eq!(completed(&registries, "hi al"), "hi Alex");
+    assert_eq!(completed(&registries, "hi st"), "hi Steve");
+}
+
+#[test]
 fn ask_server_nodes_wait_for_the_servers_completions() {
     // ClientSuggestionProvider.customSuggestion: an `ask_server` node at the
     // cursor sends the command so far, and the list is done with the reply.
@@ -466,4 +518,63 @@ fn a_guests_line_follows_the_player_message_permission() {
             "{visibility:?}"
         );
     }
+}
+
+/// `ChatComponent.deleteMessageOrDelay`: a deleted message shows for 60
+/// ticks from when it was added, then becomes the grey italic
+/// `chat.deleted_marker` line with the system bar; the other lines stay.
+#[test]
+fn a_deleted_message_shows_60_ticks_then_becomes_the_marker() {
+    let font = font();
+    let mut chat = Chat::default();
+    let secret = [7; 256];
+    chat.add_signed_message(
+        &font,
+        Text::literal("<Steve> secret"),
+        Some(secret),
+        100,
+        false,
+    );
+    chat.add_signed_message(
+        &font,
+        Text::literal("<Alex> hi"),
+        Some([8; 256]),
+        110,
+        false,
+    );
+    let lines =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    let marker = Chat::deleted_marker().plain();
+    chat.delete_message_with(&font, &secret, 130);
+    assert_eq!(
+        lines(&chat),
+        ["<Alex> hi", "<Steve> secret"],
+        "too new: delayed"
+    );
+    chat.process_deletions(&font, 159);
+    assert_eq!(lines(&chat), ["<Alex> hi", "<Steve> secret"]);
+    chat.process_deletions(&font, 160);
+    assert_eq!(lines(&chat), ["<Alex> hi".to_owned(), marker.clone()]);
+    assert!(chat.deletions.is_empty());
+    let line = &chat.lines[1];
+    assert_eq!(line.indicator, Some(SYSTEM_INDICATOR));
+    assert_eq!(line.added, 100, "the marker keeps the message's time");
+    assert!(
+        line.content
+            .spans
+            .iter()
+            .all(|s| s.style.color == Some(text::GRAY) && s.style.is_italic())
+    );
+    assert_eq!(
+        chat.messages[1].content.translation_key(),
+        Some("chat.deleted_marker")
+    );
+    // A message shown 60 ticks already is replaced at once; an unknown or
+    // already deleted signature changes nothing.
+    chat.delete_message_with(&font, &[8; 256], 170);
+    assert_eq!(lines(&chat), [marker.clone(), marker.clone()]);
+    chat.delete_message_with(&font, &secret, 200);
+    chat.delete_message_with(&font, &[9; 256], 200);
+    assert_eq!(lines(&chat), [marker.clone(), marker]);
+    assert!(chat.deletions.is_empty());
 }

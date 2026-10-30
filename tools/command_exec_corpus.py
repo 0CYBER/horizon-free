@@ -168,6 +168,7 @@ def player_state():
         cmd('/effect clear @s'),
         cmd('/give @s minecraft:diamond 3'),
         cmd('/give @s minecraft:diamond_sword[minecraft:custom_name="Blade"]'),
+        cmd('/give @s minecraft:diamond[item_name={text:"ItemName",color:"red"}]'),
         cmd('/give @s minecraft:stone 130'),
         cmd('/clear @s minecraft:diamond 0'),
         cmd('/clear @s minecraft:stone 0'),
@@ -510,6 +511,10 @@ def execute():
         cmd('/execute positioned 4 210 4 if block ~ ~ ~ minecraft:stone'),
         cmd('/execute positioned as @s run tp @s ~ ~ ~'),
         cmd('/execute align xyz run summon minecraft:armor_stand ~ ~-20 ~ {NoGravity:1b,Tags:["ex"],UUID:[I;1,2,3,4]}'),
+        cmd('/summon minecraft:armor_stand 3 210 3 {NoGravity:1b,Tags:["implicit_tp"]}'),
+        cmd('/execute as @e[tag=implicit_tp,limit=1] run tp 4 210 4'),
+        cmd('/data get entity @e[tag=implicit_tp,limit=1] Pos'),
+        cmd('/kill @e[tag=implicit_tp]'),
         cmd('/execute if entity @e[tag=ex]'),
         cmd('/execute as @e[tag=ex] run data get entity @s Pos'),
         cmd('/data get entity @e[tag=ex,limit=1]'),
@@ -1212,6 +1217,39 @@ def ender_dragon():
     ]
 
 
+def tame_wolf_kills():
+    # LivingEntity.resolvePlayerResponsibleForDamage: a tame wolf's hit is its
+    # owner's (the harness player, OfflinePlayer:Player), so the kill drops
+    # experience and ServerPlayer.awardKillScore counts it (mob_kills,
+    # totalKillCount); the killed statistic stays the wolf's
+    # (Player.killedEntity). A wild wolf's kill is nobody's.
+    owner = '[I;-1608632253,-450807400,-1786055591,-2146546415]'
+    return [
+        *setup('/gamerule mob_drops true', '/scoreboard objectives add wolf_kills minecraft.killed:minecraft.zombie',
+               '/scoreboard objectives add wolf_mob_kills minecraft.custom:minecraft.mob_kills',
+               '/scoreboard objectives add wolf_total totalKillCount'),
+        cmd('/summon minecraft:wolf 4.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["wild"]}'),
+        cmd('/summon minecraft:zombie 6.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["prey"]}'),
+        cmd('/damage @e[tag=prey,limit=1] 100 minecraft:mob_attack by @e[tag=wild,limit=1]'),
+        {'op': 'tick', 'n': 25},
+        cmd('/execute if entity @e[type=minecraft:experience_orb,limit=1]'),
+        cmd('/scoreboard players get @s wolf_kills'),
+        cmd('/scoreboard players get @s wolf_mob_kills'),
+        cmd('/scoreboard players get @s wolf_total'),
+        cmd(f'/summon minecraft:wolf 4.5 210 8.5 {{NoAI:1b,NoGravity:1b,Owner:{owner},Tags:["pet"]}}'),
+        cmd('/summon minecraft:zombie 6.5 210 8.5 {NoAI:1b,NoGravity:1b,Tags:["prey"]}'),
+        cmd('/damage @e[tag=prey,limit=1] 100 minecraft:mob_attack by @e[tag=pet,limit=1]'),
+        {'op': 'tick', 'n': 25},
+        cmd('/execute if entity @e[type=minecraft:experience_orb,limit=1]'),
+        cmd('/scoreboard players get @s wolf_kills'),
+        cmd('/scoreboard players get @s wolf_mob_kills'),
+        cmd('/scoreboard players get @s wolf_total'),
+        *setup('/kill @e[type=!player]', '/scoreboard objectives remove wolf_kills',
+               '/scoreboard objectives remove wolf_mob_kills', '/scoreboard objectives remove wolf_total',
+               '/gamerule mob_drops false'),
+    ]
+
+
 def groups():
     return [
         ('setup', group_setup()),
@@ -1238,4 +1276,5 @@ def groups():
         ('test', test_command()),
         ('wither breaks', wither_breaks()),
         ('ender dragon', ender_dragon()),
+        ('tame wolf kills', tame_wolf_kills()),
     ]
