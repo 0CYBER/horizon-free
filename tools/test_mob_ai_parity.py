@@ -319,6 +319,13 @@ def scenarios():
     # avoidSun: the path stops at the first node the sky sees).
     add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
                                    'player 12.5 -60 0.5', 'mob minecraft:skeleton 0.5 -60 0.5 0 211 persistent'], 'time=1000')
+    # Chickens fleeing a hit (PanicGoal) beside a pool.
+    for seed in range(191, 193):
+        add(f'chicken_panic_{seed}', 60, ['fill -3 -61 -6 3 -61 6 minecraft:water',
+                                          'player 12.5 -60 6.5', f'mob minecraft:chicken 0.5 -60 6.5 0 {seed} persistent']
+            + [f'hurt {t} 0' for t in range(5, 60, 30)])
+    add('chicken_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:chicken 0.5 -60 0.5 0 195 persistent', 'hurt 5 0'])
+    add('pig_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:pig 0.5 -60 0.5 0 196 persistent', 'hurt 5 0'])
     # Axolotls (#64): idle swimming, hunting a cod, and playing dead after hits, in a pool sunk into
     # the ground so no water flows out of it (the probe doesn't tick fluids).
     POOL = 'fill -5 -63 -5 5 -61 5 minecraft:water'

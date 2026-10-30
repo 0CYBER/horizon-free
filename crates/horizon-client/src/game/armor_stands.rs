@@ -65,8 +65,13 @@ impl ArmorStandAssets {
                 }
             }
         }
-        if let Some(part) = load("minecraft:elytra#main") {
-            player.insert("elytra", part);
+        for (key, name) in [
+            ("minecraft:elytra#main", "elytra"),
+            ("minecraft:elytra_baby#main", "elytra_baby"),
+        ] {
+            if let Some(part) = load(key) {
+                player.insert(name, part);
+            }
         }
         let mut equipment = HashMap::new();
         let mut trim_overrides = HashMap::new();
@@ -315,9 +320,12 @@ impl Game<'_> {
         }
     }
     /// `ArmorStandItem.useOn`.
-    pub(super) fn place_armor_stand(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
-        if &*stack.item != "minecraft:armor_stand" || hit.face == [0, -1, 0] {
-            return false;
+    /// `ArmorStandItem.useOn` up to its `FAIL`s, which a client checks too:
+    /// not on a bottom face, and nothing in the new stand's box. The block it
+    /// stands in and the stand.
+    pub(super) fn armor_stand_spawn(&self, hit: &super::Hit) -> Option<([i32; 3], ArmorStand)> {
+        if hit.face == [0, -1, 0] {
+            return None;
         }
         // BlockPlaceContext: a replaceable clicked block is replaced.
         let clicked = self
@@ -356,8 +364,18 @@ impl Game<'_> {
                 .iter()
                 .any(|o| overlaps(o.bounds(), bounds))
         {
+            return None;
+        }
+        Some((pos, stand))
+    }
+    pub(super) fn place_armor_stand(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:armor_stand" {
             return false;
         }
+        let Some((pos, stand)) = self.armor_stand_spawn(hit) else {
+            return false;
+        };
+        let foot = stand.position;
         self.next_entity += 1;
         self.audio.play(
             "minecraft:entity.armor_stand.place",
@@ -370,6 +388,8 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        // ArmorStandItem.useOn returns SUCCESS: the hand swings.
+        self.swing_arm();
         true
     }
     /// The armor stand under the crosshair, its distance and the hit point.
@@ -790,6 +810,18 @@ impl Game<'_> {
                     );
                 }
             }
+            // WingsLayer: ArmorStandRenderer adds it after the armour layers. A stand
+            // never crouches or glides, so its wings rest folded.
+            self.wings_geometry(
+                a.equipment[4].as_ref().map(|s| &*s.item),
+                None,
+                a.small,
+                base,
+                horizon_client::mobs::ElytraAnimation::RESTING,
+                false,
+                packed,
+                out,
+            );
             self.cull_entity_vertices(out, entity_start);
         }
     }
