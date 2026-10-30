@@ -89,11 +89,14 @@ pub(super) struct Parked {
 
 /// Which passes of the server tick the level in place runs: the first
 /// reads the network (`Hub::poll`), the last ends the tick for every player
-/// (`Hub::end_tick`). A tick with one level is both.
+/// (`Hub::end_tick`). A tick with one level is both. `running` is the
+/// tick rate manager's answer for this server tick, asked once before the
+/// levels (`MinecraftServer.tickServer`); `None` outside `tick_server`.
 #[derive(Clone, Copy)]
 pub(super) struct Pass {
     pub first: bool,
     pub last: bool,
+    pub running: Option<bool>,
 }
 
 impl Default for Pass {
@@ -101,6 +104,7 @@ impl Default for Pass {
         Self {
             first: true,
             last: true,
+            running: None,
         }
     }
 }
@@ -338,8 +342,19 @@ impl Game<'_> {
     /// and loaded and its world ticked. The first pass reads the network and runs the
     /// tick's shared parts (the clock, the weather, functions, the autosave);
     /// the next ones only their level. While `paused`, only the connections
-    /// run.
+    /// run. The native server tick hook brackets it (`ServerTickStart` before
+    /// the first level, `ServerTickEnd` after the last).
     pub(super) fn tick_server(&mut self, paused: bool) -> Result<()> {
+        // `tickRateManager.tick()` once per server tick, before any level
+        // (each `ServerLevel.tick` only reads `runsNormally`), and the native
+        // `ServerTickStart` before that level work, where NeoForge fires
+        // `ServerTickEvent.Pre`. A paused pass and a held server tick nothing.
+        let running = (!paused && !self.agent.hold_server).then(|| self.clock.world_runs());
+        if let Some(running) = running
+            && (self.serving.is_some() || self.options.dedicated.is_some())
+        {
+            self.native_lifecycle_server_tick_start(running);
+        }
         let dims = self.levels_to_tick();
         let n = dims.len();
         let mut result = Ok(());
@@ -351,6 +366,7 @@ impl Game<'_> {
             self.level_pass = Pass {
                 first: k == 0,
                 last: k + 1 == n,
+                running,
             };
             self.update_dedicated_streaming();
             self.update_world();
@@ -360,7 +376,7 @@ impl Game<'_> {
             } else if k == 0 {
                 self.tick()
             } else {
-                let running = self.clock.world_runs();
+                let running = running.unwrap_or_else(|| self.clock.world_runs());
                 if running {
                     self.tick_weather_effects();
                 }

@@ -326,8 +326,11 @@ impl Game<'_> {
     ) {
         let _ = (context, phase, error_text);
     }
-    /// The authoritative server tick's phases, read-only. A paused pass
-    /// fires nothing; a frozen world carries `world_running` false except
+    /// The authoritative server tick's phases: `ServerTickStart` before any
+    /// level is ticked (NeoForge's `ServerTickEvent.Pre`), `ServerTickEnd`
+    /// after the last (`.Post`). Read blocks with `native_server_block`, by
+    /// dimension: which level `self.world` holds here is not defined. A paused
+    /// pass fires nothing; a frozen world carries `world_running` false except
     /// during a requested step.
     pub(super) fn native_server_tick(
         &mut self,
