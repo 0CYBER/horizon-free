@@ -1,7 +1,7 @@
 //! Model animation: ports of each vanilla `EntityModel.setupAnim` family
 //! (quadrupeds, humanoids, creepers, spiders, chickens...) applied to a map of
 //! part poses before the model is drawn.
-use super::{Mob, Part, keyframes::AnimationState, living::wrap};
+use super::{keyframes::AnimationState, living::wrap, Mob, Part};
 use horizon_core::geometry::trig::Mth;
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_6, PI};
@@ -1050,10 +1050,26 @@ mod flight_pose_tests {
         let left = *poses.get("left_leg");
         assert!((right[3] - (-0.4)).abs() < 1e-5, "right xRot {}", right[3]);
         assert!((left[3] - (-0.4)).abs() < 1e-5, "left xRot {}", left[3]);
-        assert!((right[4] - PI / 10.0).abs() < 1e-5, "right yRot {}", right[4]);
-        assert!((left[4] - (-PI / 10.0)).abs() < 1e-5, "left yRot {}", left[4]);
-        assert!((right[5] - 0.078_539_82).abs() < 1e-5, "right zRot {}", right[5]);
-        assert!((left[5] - (-0.078_539_82)).abs() < 1e-5, "left zRot {}", left[5]);
+        assert!(
+            (right[4] - PI / 10.0).abs() < 1e-5,
+            "right yRot {}",
+            right[4]
+        );
+        assert!(
+            (left[4] - (-PI / 10.0)).abs() < 1e-5,
+            "left yRot {}",
+            left[4]
+        );
+        assert!(
+            (right[5] - 0.078_539_82).abs() < 1e-5,
+            "right zRot {}",
+            right[5]
+        );
+        assert!(
+            (left[5] - (-0.078_539_82)).abs() < 1e-5,
+            "left zRot {}",
+            left[5]
+        );
     }
 
     #[test]
