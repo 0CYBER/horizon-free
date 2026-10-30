@@ -6,7 +6,7 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API next adds server particle emission (`native_send_particles`).
+//! API 11 adds server particle emission (`native_send_particles`).
 //!
 //! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
 //! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
@@ -66,7 +66,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 10;
+pub(crate) const NATIVE_HOOKS_API: u32 = 11;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.

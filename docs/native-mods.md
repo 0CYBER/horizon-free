@@ -39,10 +39,10 @@ the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
 
-API next adds `GameLevel::native_send_particles` on authoritative servers. It sends supported
+API 11 adds `GameLevel::native_send_particles` on authoritative servers. It sends supported
 vanilla particles to nearby players. Block particles require a valid block state. Item, trail and
 vibration particles are not supported by the current dispatch. Count zero sends one directional
-particle. The return value says whether the call was accepted, not whether any player received it.
+particle. The return value says whether the call was accepted, not whether any player received it. Bundles that use it need `"hooks": 11`.
 
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
