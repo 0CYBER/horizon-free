@@ -883,8 +883,12 @@ impl Game<'_> {
             }
         }
         self.score_entity_removed(m.id);
-        self.raider_died(m, by_player);
-        self.villager_murdered(m, by_player, killer.flatten());
+        // Raider.die's hero and Villager.tellWitnessesThatIWasMurdered go to
+        // the causing entity, not the credited player: a tame wolf's kill is
+        // neither its owner's heroism nor a murder by them.
+        let slain_by_player = by_player && !killed_by_mob(m);
+        self.raider_died(m, slain_by_player);
+        self.villager_murdered(m, slain_by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
         self.create_wither_rose(m);
@@ -919,7 +923,12 @@ impl Game<'_> {
     /// The killer's side of a mob's death: `ServerPlayer.awardKillScore`'s
     /// statistics and scores, and the `player_killed_entity` trigger.
     fn credit_kill(&mut self, m: &Mob) {
-        self.stats.add("killed", &m.kind.id, 1);
+        // Player.killedEntity: the killed statistic goes to the causing
+        // entity, so a kill by a mob (a tame wolf credited to its owner)
+        // leaves it out; ServerPlayer.awardKillScore counts the rest.
+        if !killed_by_mob(m) {
+            self.stats.add("killed", &m.kind.id, 1);
+        }
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(m.id));
         let view = self.mob_entity(m);
@@ -1102,6 +1111,9 @@ impl Game<'_> {
                 }
             }
         }
+        if hurt {
+            self.resolve_player_responsible(target, source);
+        }
         if infested {
             self.mob_infested(target);
         }
@@ -1123,6 +1135,49 @@ impl Game<'_> {
             self.zombie_killed(killer, target);
         }
         hurt
+    }
+    /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a
+    /// mob: a tame wolf's hit is its owner's (`setLastHurtByPlayer(uuid, 100)`),
+    /// so the kill drops experience and player-only loot and the owner, when
+    /// in the world, gets the credit (`getKillCredit`); a tame wolf without an
+    /// owner clears it. A player's own hits are recorded where they land.
+    pub(super) fn resolve_player_responsible(&mut self, victim: u32, source: Damage) {
+        let Some(Who::Mob(attacker)) = source.attacker else {
+            return;
+        };
+        let Some(owner) = self
+            .mobs
+            .iter()
+            .find(|m| m.id == attacker && m.species() == Species::Wolf && m.extra.tame)
+            .map(|m| m.extra.owner)
+        else {
+            return;
+        };
+        let player = owner.and_then(|uuid| self.player_with_uuid(uuid));
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == victim) else {
+            return;
+        };
+        m.ai.last_hurt_by_player = if owner.is_some() { 100 } else { 0 };
+        match player {
+            Some(who) => self.last_hurt_by_player.insert(victim, who),
+            None => self.last_hurt_by_player.remove(&victim),
+        };
+    }
+    /// The player in the world with `uuid` (`EntityReference.getPlayer`), as
+    /// `last_hurt_by_player` keeps them: None for the player in place, else the
+    /// guest's connection.
+    fn player_with_uuid(&self, uuid: [i32; 4]) -> Option<Option<u32>> {
+        if self.player.is_some()
+            && horizon_client::mobs::tame::owned_by(Some(uuid), self.acting_uuid())
+        {
+            return Some(self.lan_acting);
+        }
+        let uuid = horizon_client::lan::playerdata::ints_uuid(uuid);
+        self.lan
+            .iter()
+            .flat_map(|h| h.hub.guests.iter())
+            .find(|g| g.placed && g.uuid == uuid)
+            .map(|g| Some(g.conn))
     }
     /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
     pub(super) fn mob_infested(&mut self, mob: u32) {
@@ -5391,6 +5446,13 @@ mod tests {
         let (right, _) = thrown_item_axes(CameraType::ThirdPersonBack, 0.0, 0.0);
         assert!(right.abs_diff_eq(glam::Vec3::NEG_X, 1e-5), "{right}");
     }
+}
+
+/// Whether the killing blow's causing entity (`DamageSource.getEntity`) was a
+/// mob, such as a tame wolf whose owner gets the kill credit.
+fn killed_by_mob(m: &Mob) -> bool {
+    m.last_damage
+        .is_some_and(|(d, _)| matches!(d.attacker, Some(Who::Mob(_))))
 }
 
 /// `Animal.finalizeSpawnChildFromBreeding`'s player: the one who fed the
