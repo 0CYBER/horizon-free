@@ -2494,18 +2494,22 @@ impl Game<'_> {
             // the rope.
             C::SetEntityLink(p) => {
                 let me = self.remote.as_ref().map(|r| r.entity_id);
+                use horizon_client::mobs::leash::Holder;
+                let holder = match p.dest {
+                    0 => None,
+                    d if Some(d) == me => Some(Holder::Player),
+                    d => match self.remote_knots.get(&(d as u32)) {
+                        Some(&block) => Some(Holder::Knot(block)),
+                        // Not a known knot yet: kept by id until the knot
+                        // arrives (game/remote_objects.rs).
+                        None => Some(Holder::Mob(d as u32)),
+                    },
+                };
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.source as u32) {
-                    use horizon_client::mobs::leash::Holder;
-                    m.extra.leash = match p.dest {
-                        0 => None,
-                        d if Some(d) == me => Some(Holder::Player),
-                        d => match self.remote_knots.get(&(d as u32)) {
-                            Some(&block) => Some(Holder::Knot(block)),
-                            // Not a known knot yet: kept by id until the knot
-                            // arrives (game/remote_objects.rs).
-                            None => Some(Holder::Mob(d as u32)),
-                        },
-                    };
+                    m.extra.leash = holder;
+                } else if let Some(b) = self.boats.iter_mut().find(|b| b.id == p.source as u32) {
+                    // A leashed boat or raft (AbstractBoat is Leashable).
+                    b.leash = holder;
                 }
             }
             C::MoveVehicle(p) => self.remote_move_vehicle(p.position, p.yaw),

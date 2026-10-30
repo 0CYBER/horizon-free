@@ -104,9 +104,17 @@ impl Game<'_> {
         hub: &mut Hub,
         out: &mut States,
     ) {
+        let guests: Vec<(u128, i32)> = hub
+            .guests
+            .iter()
+            .filter(|g| hub.here(g))
+            .map(|g| (g.uuid, g.entity_id))
+            .collect();
         for b in &self.boats {
             let p = b.position;
             let mut e = state(b.id, &b.entity_type(), [p.x, p.y, p.z], b.yaw, b.on_ground);
+            // Leashable.setLeashedTo / dropLeash: who holds the boat's lead.
+            e.leash = self.boat_leash_link(b, host_entity, &guests);
             e.velocity = [b.velocity.x, b.velocity.y, b.velocity.z];
             e.meta = vehicle_meta(b.hurt_time, b.hurt_dir, b.damage);
             // AbstractBoat.DATA_ID_PADDLE_LEFT and DATA_ID_PADDLE_RIGHT.
@@ -420,6 +428,10 @@ impl Game<'_> {
                 Some(horizon_client::mobs::leash::Holder::Knot(p)) => Some(p),
                 _ => None,
             })
+            .chain(self.boats.iter().filter_map(|b| match b.leash {
+                Some(horizon_client::mobs::leash::Holder::Knot(p)) => Some(p),
+                _ => None,
+            }))
             .collect();
         self.knot_ids.retain(|p, _| knots.contains(p));
         for p in knots {

@@ -37,6 +37,11 @@ impl Game<'_> {
                     m.extra.leash = Some(Holder::Knot(block));
                 }
             }
+            for b in &mut self.boats {
+                if b.leash == Some(Holder::Mob(id)) {
+                    b.leash = Some(Holder::Knot(block));
+                }
+            }
         } else if let Some(shows) = match kind {
             "minecraft:text_display" => Some(super::text_displays::Shows::Text),
             "minecraft:block_display" => Some(super::text_displays::Shows::Block),

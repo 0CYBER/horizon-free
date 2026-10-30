@@ -8,7 +8,12 @@ use horizon_client::{
     collisions::{EntityCollisions, SceneCollisions},
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Part, anim::Poses, riders},
+    mobs::{
+        Part,
+        anim::Poses,
+        leash::{Holder, Pending},
+        riders,
+    },
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -51,6 +56,16 @@ pub(super) struct Boat {
     /// `ChestBoat`: a chest with 27 slots in the back seat.
     pub chest: bool,
     pub items: Vec<Option<ItemStack>>,
+    /// `AbstractBoat.leashData`: who holds its lead (`boat_leads.rs`).
+    pub leash: Option<Holder>,
+    /// The player a `Holder::Player` lead is tied to (their UUID).
+    pub leash_player: Option<[i32; 4]>,
+    /// A holder read from a save that is not in the world yet.
+    pub leash_pending: Option<Pending>,
+    /// `LeashData.angularMomentum`.
+    pub leash_spin: f64,
+    /// `Entity.tickCount`, for the 100 ticks a saved holder is waited for.
+    pub age: i32,
 }
 /// `ChestBoat.CONTAINER_SIZE`.
 pub(super) const CHEST_SLOTS: usize = 27;
@@ -81,6 +96,11 @@ impl Boat {
             on_ground: false,
             chest: false,
             items: Vec::new(),
+            leash: None,
+            leash_player: None,
+            leash_pending: None,
+            leash_spin: 0.0,
+            age: 0,
         }
     }
     /// A chest boat or chest raft.
@@ -100,6 +120,13 @@ impl Boat {
     /// `isEyeInFluid(WATER)` too.
     pub fn under_water(&self) -> bool {
         matches!(self.status, Status::UnderWater | Status::UnderFlowingWater)
+    }
+    /// `Entity.isInLiquid`, for `Leashable.angularFriction`.
+    pub fn in_liquid(&self) -> bool {
+        matches!(
+            self.status,
+            Status::InWater | Status::UnderWater | Status::UnderFlowingWater
+        )
     }
     /// `getMaxPassengers`: two, one beside a chest.
     pub fn max_passengers(&self) -> usize {
@@ -349,6 +376,11 @@ impl Game<'_> {
     pub(super) fn tick_boat(&mut self, mut b: Boat, controlled: bool) -> Boat {
         b.previous = b.position;
         b.previous_yaw = b.yaw;
+        // Entity.baseTick ends with Leashable.tickLeash, on a server only
+        // (a ridden boat's lead ticks in `tick_boats`).
+        if !controlled && self.remote.is_none() {
+            self.tick_boat_leash(&mut b);
+        }
         b.old_status = b.status;
         b.status = self.boat_status(&mut b);
         b.out_of_control = if matches!(b.status, Status::UnderWater | Status::UnderFlowingWater) {
@@ -513,6 +545,12 @@ impl Game<'_> {
                 || driven.contains(&self.boats[i].id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
+                // Its rider's client moves it, but the lead still ticks.
+                if ticking(p.x.floor() as i32, p.z.floor() as i32) && self.remote.is_none() {
+                    let mut b = self.boats[i].clone();
+                    self.tick_boat_leash(&mut b);
+                    self.boats[i] = b;
+                }
                 continue;
             }
             let b = self.boats[i].clone();
@@ -790,6 +828,11 @@ impl Game<'_> {
         if !self.before_block(d) {
             return false;
         }
+        // AbstractBoat.interact starts with Entity.interact: the lead.
+        if self.interact_boat_leash(i) {
+            self.swing_arm();
+            return true;
+        }
         // ChestBoat.interact: sneaking (or a full seat) opens the chest.
         if self.boats[i].chest && (sneaking || self.riding.is_some() || !self.boat_has_room(i)) {
             let b = &self.boats[i];
@@ -849,6 +892,8 @@ impl Game<'_> {
             self.eject_boat_mobs(i, true);
             let b = self.boats.remove(i);
             let at = [b.position.x, b.position.y, b.position.z];
+            // AbstractBoat.remove: a destroyed boat drops its lead.
+            self.boat_removed(&b);
             if !creative && self.ui.rules.bool("entity_drops") {
                 // ChestBoat.destroy: chestVehicleDestroyed spills the contents.
                 for stack in b.items.iter().flatten() {
