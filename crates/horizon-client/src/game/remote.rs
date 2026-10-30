@@ -3045,9 +3045,7 @@ impl Game<'_> {
                     p.clocks
                         .iter()
                         .find(|c| name(c.clock) == Some(wanted.as_str()))
-                        .or_else(|| {
-                            tracked.and_then(|id| p.clocks.iter().find(|c| c.clock == id))
-                        })
+                        .or_else(|| tracked.and_then(|id| p.clocks.iter().find(|c| c.clock == id)))
                         .cloned()
                 };
                 if let Some(c) = clock {
