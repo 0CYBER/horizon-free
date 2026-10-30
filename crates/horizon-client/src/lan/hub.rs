@@ -2720,8 +2720,13 @@ impl Hub {
             locked: ctx.difficulty_locked,
         }));
         self.send_permission_level(i);
-        self.guests[i].landing = portal;
-        if !portal {
+        if portal {
+            // A teleport still pending from the old level is void: its late
+            // acceptance must not move the player back there.
+            let g = &mut self.guests[i];
+            g.landing = true;
+            g.awaiting_teleport = None;
+        } else {
             self.teleport(i, None);
         }
         let g = &mut self.guests[i];
