@@ -328,7 +328,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
-          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks']
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls']
 
 
 class Game:
@@ -3552,6 +3552,38 @@ def check_fireworks(host, guest, out):
     return {'flashes': flashes, 'red_burst': burst, 'red_trail_fade': trails, 'rockets': rockets}
 
 
+def check_rocket_walls(host, guest, out):
+    """A rocket shot at an angle explodes on a block only with explosions (#4281).
+
+    FireworkRocketEntity.onHitBlock: `hasExplosion()`; a plain one flies on to its lifetime (20-31 ticks). A
+    dispenser shoots at an angle as a crossbow does, 4 ticks after it is powered, at a wall three blocks away.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    y += 3
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 2} {y + 2} {z + 6} minecraft:air')
+    host('command', command=f'fill {x - 2} {y - 1} {z + 5} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    plain = 'minecraft:firework_rocket'
+    star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
+    result = {}
+    for label, item in (('plain', plain), ('star', star)):
+        host('command', command=f'setblock {x} {y} {z + 1} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:dispenser[facing=south]')
+        host('command', command=f'item replace block {x} {y} {z} container.0 with {item}')
+        host.wait(5)
+        host('command', command=f'setblock {x} {y} {z + 1} minecraft:air')
+        host('command', command=f'setblock {x} {y + 1} {z} minecraft:redstone_block')
+        host.wait(18)
+        hit = {g.name: g('status')['rockets'] for g in (host, guest)}
+        host.wait(30)
+        later = {g.name: g('status')['rockets'] for g in (host, guest)}
+        host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
+        result[label] = {'after_wall': hit, 'after_lifetime': later}
+        assert not any(later.values()), f'{label} rocket outlived its lifetime: {later}'
+    assert all(n == 1 for n in result['plain']['after_wall'].values()),         f'plain rocket went off on the wall: {result}'
+    assert not any(result['star']['after_wall'].values()), f'star rocket did not explode on the wall: {result}'
+    return result
+
+
 def check_sparks(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -5407,7 +5439,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'hud': check_hud,
              'sidebar': check_sidebar,
              'border': check_border,
-             'particles': check_particles, 'fireworks': check_fireworks}
+             'particles': check_particles, 'fireworks': check_fireworks,
+             'rocket-walls': check_rocket_walls}
 
 
 def run(ctl, out, resources, checks):
