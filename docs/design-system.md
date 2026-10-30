@@ -257,6 +257,11 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   played below. Play is the main action (`night::PLAY` tall, cut in one step); the version picker
   is a raised control of the same height; Mods and Folder are quiet buttons. A Horizon instance
   gets a plate on the right: a release's notes in one line (not a Nightly's) and Join a friend.
+- **The sign-in sheet** (`launcher/src/owner_page.rs`, the owner gate): an opaque plate over the
+  dimmed launcher, never instead of it. It says why (the account that owns Java Edition, no install
+  needed), the code in mono on a raised box with Copy, and Open link as the main action; the window
+  goes on by itself once Microsoft answers (`HORIZON_LAUNCHER_PAGE=sign-in` shows it with a made-up
+  code for screenshots).
 
 ## The mark
 

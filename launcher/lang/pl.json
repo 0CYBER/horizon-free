@@ -192,5 +192,8 @@
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Przenieść {name} do kosza razem z jego światami i ustawieniami? Możesz go stamtąd przywrócić.",
   "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Mody natywne kompilują się we własną wersję gry. Zainstalowanie jednego włącza mody natywne: potem budujesz z nim grę w Ustawienia > Mody natywne. Pierwsza kompilacja pobiera Rust i może potrwać od 20 do 30 minut; kolejne są szybsze.",
   "Folder": "Folder",
-  "Version": "Wersja"
+  "Version": "Wersja",
+  "Sign in to play": "Zaloguj się, aby grać",
+  "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "Instalacja Minecrafta nie jest potrzebna: Horizon pobierze go od Mojang dla Twojego konta.",
+  "Waiting for Microsoft… the window goes on by itself.": "Czekanie na Microsoft… okno przejdzie dalej samo."
 }

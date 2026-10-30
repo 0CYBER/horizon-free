@@ -83,7 +83,8 @@ enum Page {
 
 impl Page {
     /// `HORIZON_LAUNCHER_PAGE=mods` (or `modpacks`, `shaders`, `servers`, `versions`, `notes`,
-    /// `settings`) opens on that page, for screenshots; Home otherwise.
+    /// `settings`) opens on that page, for screenshots; Home otherwise (`sign-in`: the owner
+    /// gate's sheet with a made-up code, `owner_page::sign_in_preview`).
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,

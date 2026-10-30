@@ -192,5 +192,8 @@
   "Move to Trash": "В корзину",
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть.",
   "Folder": "Папка",
-  "Version": "Версия"
+  "Version": "Версия",
+  "Sign in to play": "Войдите, чтобы играть",
+  "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "Устанавливать Minecraft не нужно: Horizon скачает его с серверов Mojang для вашей учётной записи.",
+  "Waiting for Microsoft… the window goes on by itself.": "Ожидание Microsoft… окно продолжит само."
 }

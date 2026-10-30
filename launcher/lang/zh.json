@@ -192,5 +192,8 @@
   "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version}（Java 版）。首次点击“开始游戏”时，会用你的账户从 Mojang 下载游戏及其所需的 Java。",
   "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "原生模组会编译成一个独立的游戏。安装原生模组会启用“原生模组”：之后你需要在“设置 > 原生模组”中构建包含它的游戏。首次构建会下载 Rust，可能需要 20 到 30 分钟；之后的构建会更快。",
   "Folder": "文件夹",
-  "Version": "版本"
+  "Version": "版本",
+  "Sign in to play": "登录以开始游戏",
+  "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "无需安装 Minecraft：Horizon 会为你的账户从 Mojang 下载。",
+  "Waiting for Microsoft… the window goes on by itself.": "正在等待 Microsoft… 窗口会自动继续。"
 }
