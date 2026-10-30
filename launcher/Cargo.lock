@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-launcher"
-version = "0.2.0"
+version = "0.2.3"
 dependencies = [
  "base64",
  "chrono",
