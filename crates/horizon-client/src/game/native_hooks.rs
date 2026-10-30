@@ -642,6 +642,11 @@ impl Game<'_> {
         if taken.items.len() < slots {
             taken.items.resize(slots, None);
         }
+        // Without a container, an `Items` item list is the mod's own field.
+        if slots == 0 && !taken.items.is_empty() {
+            let items = horizon_client::save::encode_items(&std::mem::take(&mut taken.items));
+            taken.nbt.insert("Items".into(), items);
+        }
         let ModBlockEntity { id, nbt, items } = &mut taken;
         self.native_block_entity_tick([pos.0, pos.1, pos.2], id, nbt, items);
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)

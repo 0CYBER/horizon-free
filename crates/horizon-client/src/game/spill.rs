@@ -423,10 +423,15 @@ impl GameLevel<'_> {
         let name = self.facts.get(old).name.clone();
         let kind = match &entity {
             // BaseContainerBlockEntity.preRemoveSideEffects: Containers.dropContents.
-            Some(BlockEntity::Mod(m)) if !m.items.is_empty() => PreRemove::Contents {
-                slots: m.items.len(),
-                furnace: false,
-            },
+            Some(BlockEntity::Mod(m))
+                if !m.items.is_empty()
+                    && self.world.block_entities.mod_container(old.0).is_some() =>
+            {
+                PreRemove::Contents {
+                    slots: m.items.len(),
+                    furnace: false,
+                }
+            }
             _ => removal::pre_remove(&name),
         };
         let mut neighbour_updates = 0;

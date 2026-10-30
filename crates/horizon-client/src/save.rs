@@ -681,7 +681,8 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
 }
 /// A mod's block entity: its compound without `id` and the position, and
 /// its `Items` as slots (`ContainerHelper.loadAllItems`; the game sizes them
-/// to the block's container when it uses them).
+/// to the block's container when it uses them). `Items` that are not an item
+/// list saved exactly so stay the mod's own.
 fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::ModBlockEntity> {
     let Tag::Compound(map) = tag else {
         return None;
@@ -691,9 +692,14 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
         nbt.remove(&key.into());
     }
     // `Slot` is a byte: 256 slots at most.
-    let mut items = decode_items(nbt.remove(&"Items".into()).as_ref(), 256);
-    while items.last().is_some_and(Option::is_none) {
-        items.pop();
+    let mut items = decode_items(nbt.get(&"Items".into()), 256);
+    if nbt.get(&"Items".into()) == Some(&encode_items(&items)) {
+        nbt.remove(&"Items".into());
+        while items.last().is_some_and(Option::is_none) {
+            items.pop();
+        }
+    } else {
+        items.clear();
     }
     Some(crate::containers::ModBlockEntity { id, nbt, items })
 }
@@ -4985,6 +4991,29 @@ mod tests {
         assert_eq!(m.items.len(), 1);
         assert_eq!(m.items[0].as_ref().map(|s| s.count), Some(3));
         assert_eq!(encode_block_entity(pos, &back, "gtmod:macerator"), saved);
+        // `Items` that are not an item list stay the mod's, as saved.
+        for items in [
+            r#"Items:{energy:5}"#,
+            r#"Items:[1,2,3]"#,
+            r#"Items:[{Slot:0b,id:"minecraft:air",count:1}]"#,
+            r#"Items:[{Slot:0b,id:"minecraft:stone",count:1,note:"mine"}]"#,
+        ] {
+            let saved = horizon_world::nbt::parse_snbt(&format!(
+                r#"{{id:"gtmod:cable",x:0,y:0,z:0,{items}}}"#
+            ))
+            .unwrap()
+            .0;
+            let (pos, back) = decode_block_entity(&saved).expect("mod block entity");
+            let crate::containers::BlockEntity::Mod(m) = &back else {
+                panic!("not a mod's");
+            };
+            assert!(m.items.is_empty(), "{items}");
+            assert_eq!(
+                encode_block_entity(pos, &back, "gtmod:cable"),
+                saved,
+                "{items}"
+            );
+        }
         // Vanilla's types are never a mod's, modelled or not.
         let ender = horizon_world::nbt::parse_snbt(r#"{id:"minecraft:ender_chest",x:0,y:0,z:0}"#)
             .unwrap()
