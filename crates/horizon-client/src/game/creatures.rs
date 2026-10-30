@@ -1790,6 +1790,14 @@ impl Game<'_> {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
                     }
                 }
+                MobEvent::Retreat { mob, from, at } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        horizon_client::mobs::piglin::receive_retreat(m, from, at);
+                    }
+                }
+                MobEvent::StartRiding { rider, vehicle } => {
+                    horizon_client::mobs::riders::start_riding(&mut self.mobs, rider, vehicle);
+                }
                 // Applied after the fish's tick (`apply_brain_events`).
                 MobEvent::StartFollowing { .. } | MobEvent::SchoolSize { .. } => {}
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),

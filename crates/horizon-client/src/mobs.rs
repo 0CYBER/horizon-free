@@ -967,6 +967,9 @@ pub struct Extra {
     pub frog: frog::State,
     /// A panda's flags, counters and amounts.
     pub panda: Option<Box<panda::State>>,
+    /// What a piglin's or hoglin's brain remembers: its avoid target, the
+    /// adults its sensor sees and the activity it is in.
+    pub piglin: piglin::Memories,
 }
 impl Extra {
     pub fn set_main_hand(&mut self, item: Option<Arc<str>>) {
@@ -1307,6 +1310,20 @@ pub enum MobEvent {
         mob: u32,
         target: u32,
         ticks: i32,
+    },
+    /// `HoglinAi.broadcastRetreat` and `PiglinAi.broadcastRetreat` for one
+    /// adult that sees the broadcaster: it retreats from `from`, standing at
+    /// `at`, or from what it already avoids or attacks if that is nearer.
+    Retreat {
+        mob: u32,
+        from: Who,
+        at: [f64; 3],
+    },
+    /// `Entity.startRiding` from a mob's brain (`Mount.create`): `rider` boards
+    /// `vehicle` if `Piglin.startRiding` and `canRide` allow it.
+    StartRiding {
+        rider: u32,
+        vehicle: u32,
     },
     Projectile(crate::projectiles::Projectile),
     /// Spawn a new mob (breeding, slime splitting, chicken eggs...).
@@ -1678,6 +1695,8 @@ pub struct Seen {
     pub effects: Vec<&'static str>,
     /// A piglin's `HUNTED_RECENTLY` memory.
     pub hunted_recently: bool,
+    /// A piglin's `HURT_BY` memory.
+    pub hurt_recently: bool,
 }
 impl Seen {
     /// `LivingEntity.hasEffect`, by id without namespace.
@@ -1799,6 +1818,7 @@ impl Mob {
                 .map(|e| e.0.trim_start_matches("minecraft:"))
                 .collect(),
             hunted_recently: m.species() == Species::Piglin && m.extra.ints[0] > 0,
+            hurt_recently: m.species() == Species::Piglin && m.extra.piglin.hurt,
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1900,6 +1920,16 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
                     animal_brain::lock_gaze(m, partner);
                     villager_brain::lock_gaze_half(m, Who::Mob(partner));
                 }
+                events.remove(i);
+            }
+            MobEvent::Retreat { mob, from, at } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    piglin::receive_retreat(m, from, at);
+                }
+                events.remove(i);
+            }
+            MobEvent::StartRiding { rider, vehicle } => {
+                riders::start_riding(mobs, rider, vehicle);
                 events.remove(i);
             }
             MobEvent::StartFollowing { fish, leader } => {
