@@ -1597,6 +1597,11 @@ pub enum MobEvent {
         drop: bool,
         sound: bool,
     },
+    /// `Leashable.whenLeashedTo`: the holder is told a quad-leashed mob hangs
+    /// on it (`HappyGhast.notifyLeashHolder`).
+    NotifyLeashHolder {
+        holder: u32,
+    },
     /// A zombie villager's cure is complete: the game turns it back into a villager.
     CureZombieVillager {
         mob: u32,
