@@ -19,6 +19,11 @@ kick = 20
 decay = 0.02
 ```
 
+It lives in the server for now, in its own crate (`horizon-anticheat`) plus one file of the hub
+(`lan/anticheat.rs`), because the native mod API ([native-mods.md](native-mods.md)) has no hooks yet for a
+player's moves (the position, the on-ground claim, cancelling a move) or for packet timing. It moves into a
+native mod once those hooks exist.
+
 horizon-server checks the section before every start; the game reads it from `server.toml` when it
 starts (`horizon-client --dedicated` run by hand reads the same file from its folder, if there is one).
 
