@@ -83,7 +83,8 @@ enum Page {
 
 impl Page {
     /// `HORIZON_LAUNCHER_PAGE=mods` (or `modpacks`, `shaders`, `servers`, `versions`, `notes`,
-    /// `settings`) opens on that page, for screenshots; Home otherwise.
+    /// `settings`) opens on that page, for screenshots; Home otherwise (`getting-ready`: Home
+    /// preparing, `home::getting_ready_preview`).
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,
@@ -267,6 +268,8 @@ struct Launcher {
     perf: perf::Perf,
     install_started: Option<Instant>,
     prepare_started: Option<Instant>,
+    /// The download under way as first seen (when, files done), for the time left.
+    download_seen: Option<(Instant, usize)>,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -469,6 +472,7 @@ impl Launcher {
             perf: perf::Perf::new("session"),
             install_started: None,
             prepare_started: None,
+            download_seen: None,
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
@@ -520,6 +524,10 @@ impl Launcher {
         });
         this.fetch_startup_releases();
         this.fetch_links();
+        if home::getting_ready_preview() {
+            this.preparing = true;
+            this.play_when_prepared = this.selected().cloned();
+        }
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();
         telemetry::watch_playing(this.tx.clone());
@@ -1141,7 +1149,11 @@ impl Launcher {
             };
             let result = backend::preparer(&tag, &minecraft, from, &log)
                 .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
-                .and_then(|(p, _)| match p {
+                .map(|(p, _)| {
+                    backend::set_prepare_step(backend::PrepareStep::Prepare);
+                    p
+                })
+                .and_then(|p| match p {
                     backend::Preparer::Process(cmd) => {
                         backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
                     }
@@ -1162,6 +1174,7 @@ impl Launcher {
         });
         self.preparing = true;
         self.prepare_started = Some(Instant::now());
+        self.download_seen = None;
     }
 
     fn play(&mut self) {
@@ -2392,6 +2405,8 @@ impl Launcher {
             None => self.hero(&tag, &version, prepared, cx),
         };
         let actions = self.home_actions(prepared || java.is_some(), java.is_some(), cx);
+        let left = self.download_left();
+        let steps = self.preparing.then(|| self.steps(&version, left));
 
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
         // owner there is nothing to play, so signing in comes first.
@@ -2638,56 +2653,15 @@ impl Launcher {
                             .flex_col()
                             .gap(px(28.))
                             .child(hero)
-                            .child(actions),
+                            .child(actions)
+                            // The preparation's steps right under Play, where the player looks
+                            // after pressing it, not below the fold (#666).
+                            .children(steps),
                     )
                     // Notes and friends are Horizon's.
                     .children(java.is_none().then(|| self.home_card(&tag, cx))),
             );
         let mut page = div().flex().flex_col().gap(px(28.)).child(banner);
-        // The preparation's progress and error right under the buttons, where the player
-        // looks after pressing Prepare, not below the fold (#666).
-        if self.preparing {
-            let last = self.prepare_log.back().cloned().unwrap_or_default();
-            // A download from Mojang shows how far it is, and can stop (it goes on from there
-            // next time).
-            let download = horizon_launcher::mojang::progress();
-            let cancel = download.map(|_| {
-                button("download-cancel", "Cancel", Kind::Ghost, &t).on_click(|_, _, _| {
-                    horizon_launcher::mojang::CANCEL.store(true, Ordering::Relaxed)
-                })
-            });
-            page = page.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(12.))
-                            .child(progress_bar(
-                                download.map(|(done, total)| {
-                                    let f = done as f32 / total as f32;
-                                    (f, f)
-                                }),
-                                &t,
-                            ))
-                            .children(cancel),
-                    )
-                    .child(
-                        text(theme::MICRO)
-                            .text_color(t.muted)
-                            .truncate()
-                            .child(last),
-                    )
-                    .child(
-                        text(theme::CAPTION)
-                            .text_color(t.muted)
-                            .child(tr("The first preparation takes a few minutes.")),
-                    ),
-            );
-        }
         if let Some(e) = self.prepare_error.clone() {
             page = page.child(notice(e, &t));
         }
@@ -3878,22 +3852,20 @@ impl Launcher {
 }
 
 /// A thin bar. A known fraction eases from its previous value; an unknown one shuttles slowly.
-/// Progress: a sunk track filling with the accent; work of unknown length shuttles a block.
+/// Progress: a plate-coloured track filling with the accent; work of unknown length shuttles.
 fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
+    // Night: a thin accent line on a plate's colour, square like the art.
+    let n = t.night;
     let bar = div()
         .absolute()
         .top_0()
         .bottom_0()
-        .bg(t.accent)
-        .border_b_2()
-        .border_color(t.face_lip);
+        .bg(plate::alpha(n.accent, 1.));
     let track = div()
         .relative()
         .flex_1()
-        .h(px(12.))
-        .border_2()
-        .border_color(t.outline)
-        .bg(t.well)
+        .h(px(6.))
+        .bg(plate::alpha(n.card_hi, n.card_hi_alpha))
         .overflow_hidden();
     match fraction {
         Some((from, to)) => {
