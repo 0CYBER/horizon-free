@@ -999,6 +999,36 @@ impl LevelAccess for GameLevel<'_> {
             self.native_neighbor_changed(self.dimension, pos, state, changed, moved);
         }
     }
+    fn allow_spread(
+        &self,
+        kind: horizon_world::level::Spread,
+        from: BlockPos,
+        to: BlockPos,
+    ) -> bool {
+        let mut canceled = false;
+        if self.native_authoritative {
+            let kind = match kind {
+                horizon_world::level::Spread::Fluid => "fluid",
+                horizon_world::level::Spread::Fire => "fire",
+            };
+            self.native_block_spread(self.dimension, kind, from, to, &mut canceled);
+        }
+        !canceled
+    }
+    fn allow_piston_move(
+        &self,
+        piston: BlockPos,
+        direction: horizon_core::geometry::Direction,
+        push: &[BlockPos],
+        destroy: &[BlockPos],
+    ) -> bool {
+        let mut canceled = false;
+        if self.native_authoritative {
+            let step = direction.normal();
+            self.native_piston_move(self.dimension, piston, step, push, destroy, &mut canceled);
+        }
+        !canceled
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
@@ -11156,6 +11186,11 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
+            let mut canceled = false;
+            self.native_fill_bucket(stack, hit.pos, &mut canceled);
+            if canceled {
+                return Ok(UseResult::Fail);
+            }
             if self.is_powder_snow(hit.pos) {
                 self.pick_up_powder_snow(hit.pos)?;
                 return Ok(UseResult::Success { swing: true });
@@ -11203,6 +11238,11 @@ impl Game<'_> {
                 return Ok(UseResult::Fail);
             }
             let target = self.bucket_target(content, &hit);
+            let mut canceled = false;
+            self.native_fill_bucket(stack, target, &mut canceled);
+            if canceled {
+                return Ok(UseResult::Fail);
+            }
             let pos = BlockPos::new(target[0], target[1], target[2]);
             // `Player.isShiftKeyDown`: only air takes a fluid under Shift.
             let sneaking = self.keys.contains(&KeyCode::ShiftLeft);

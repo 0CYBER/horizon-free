@@ -174,6 +174,31 @@
       "name": "right_click_block",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"
+    },
+    {
+      "name": "block_spread",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_spread"
+    },
+    {
+      "name": "piston_move",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_piston_move"
+    },
+    {
+      "name": "explosion_detonate",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_explosion_detonate"
+    },
+    {
+      "name": "fill_bucket",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_fill_bucket"
+    },
+    {
+      "name": "attack_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
     }
   ]
 }
