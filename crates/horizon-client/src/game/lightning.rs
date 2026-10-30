@@ -21,6 +21,9 @@ pub(super) struct Bolt {
     converted: Vec<u32>,
     /// The mobs it has struck (`hitEntities`).
     hit: Vec<u32>,
+    /// Items a cushion dropped under it, spared for 20 ticks
+    /// (`Cushion.dropItem`: `setInvulnerableTime(20)`).
+    spared: Vec<u32>,
     /// Blocks it set on fire (`blocksSetOnFire`).
     fires: i32,
     /// The player who channelled it (`LightningBolt.cause`): `Some(None)` for
@@ -119,7 +122,7 @@ impl Game<'_> {
                     if !section.blocks.maybe_has(&mut rod) {
                         continue;
                     }
-                    let base_y = horizon_client::chunk::MIN_Y + 16 * i as i32;
+                    let base_y = self.world.bottom_y() + 16 * i as i32;
                     for j in 0..4096 {
                         if !rod(section.get(j)) {
                             continue;
@@ -219,6 +222,7 @@ impl Game<'_> {
             visual_only,
             converted: Vec::new(),
             hit: Vec::new(),
+            spared: Vec::new(),
             fires: 0,
             cause: None,
         });
@@ -240,6 +244,7 @@ impl Game<'_> {
             visual_only: true,
             converted: Vec::new(),
             hit: Vec::new(),
+            spared: Vec::new(),
             fires: 0,
             cause: None,
         });
@@ -505,6 +510,17 @@ impl Game<'_> {
         if !events.is_empty() {
             let _ = self.handle_mob_events(events);
         }
+        // Cushion.thunderHit: a cushion in the box breaks and drops its item
+        // (the bolt is no player, so no creative spare). Last first, since
+        // break_cushion removes the entry.
+        for i in (0..self.cushions.len()).rev() {
+            let p = self.cushions[i].position;
+            if inside([p.x, p.y, p.z]) {
+                let before = self.dropped.len();
+                self.break_cushion(i, false);
+                b.spared.extend(self.dropped[before..].iter().map(|e| e.id));
+            }
+        }
         // Every player in the box, the server's players too.
         let strike = move |g: &mut Self| {
             if let Some(p) = g.player.as_ref().map(|p| p.position)
@@ -527,6 +543,7 @@ impl Game<'_> {
         self.dropped.retain(|e| {
             !inside([e.position.x, e.position.y, e.position.z])
                 || e.stack.item.contains("netherite")
+                || (e.age < 20 && b.spared.contains(&e.id))
         });
         struck.into_iter().map(|(_, view)| view).collect()
     }

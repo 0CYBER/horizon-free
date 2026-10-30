@@ -1,7 +1,6 @@
 //! `/forceload`, `/fillbiome`, `/worldborder` and `/loot`.
 use super::{Arg, Context, Game, R, Target, err, items::Owner};
 use horizon_client::{
-    chunk::{HEIGHT, MIN_Y},
     command::CommandError,
     items::ItemStack,
     scoreboard_cmd::{Holder, Tracker},
@@ -213,7 +212,8 @@ impl Game<'_> {
                     if usize::from(current) == target {
                         continue;
                     }
-                    let qy = ((y - MIN_Y) >> 2).clamp(0, HEIGHT / 4 - 1);
+                    let qy = ((y - self.world.bottom_y()) >> 2)
+                        .clamp(0, self.world.layout().height() / 4 - 1);
                     if let Some(chunk) = self.world.chunks.get_mut(&key) {
                         let chunk = std::sync::Arc::make_mut(chunk);
                         chunk.set_biome_cell((x & 15) >> 2, qy, (z & 15) >> 2, target as u16);
@@ -228,9 +228,19 @@ impl Game<'_> {
         }
         for key in &touched {
             self.world.modified.insert(*key);
-            for sy in 0..horizon_client::chunk::SECTIONS as i32 {
+            for sy in 0..self.world.layout().sections() as i32 {
                 self.world.dirty_sections.insert((key.0, sy, key.1));
             }
+        }
+        // ChunkMap.resendBiomesForChunks: the players who see the changed
+        // columns are sent their new biomes, in the order the columns were
+        // gathered (z, then x).
+        if let Some(host) = self.lan.as_ref() {
+            let columns: Vec<(i32, i32)> = ((lo[2] >> 4)..=(hi[2] >> 4))
+                .flat_map(|cz| ((lo[0] >> 4)..=(hi[0] >> 4)).map(move |cx| (cx, cz)))
+                .filter(|key| touched.contains(key))
+                .collect();
+            host.hub.resend_biomes(&self.world, &columns);
         }
         self.feedback(Text::translate(
             "commands.fillbiome.success.count",

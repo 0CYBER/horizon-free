@@ -25,6 +25,12 @@ enum MendSlot {
     Armor(usize),
 }
 
+/// `Player.getDestroySpeed` multiplies by `BLOCK_BREAK_SPEED`; a player
+/// without the attribute keeps the vanilla default of 1.0.
+fn block_break_speed_factor(value: Option<f64>) -> f32 {
+    value.map_or(1.0, |value| value as f32)
+}
+
 impl Game<'_> {
     /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
     /// and mining fatigue.
@@ -38,6 +44,15 @@ impl Game<'_> {
                 .attribute_add(held, "minecraft:mining_efficiency") as f32;
         }
         speed * self.potions.effects.mining_speed_factor()
+    }
+    /// `Player.getDestroySpeed`'s final `Attributes.BLOCK_BREAK_SPEED` factor:
+    /// 1.0 by default, so a missing player or attribute changes nothing.
+    pub(super) fn block_break_speed(&mut self) -> f32 {
+        block_break_speed_factor(
+            self.player
+                .as_mut()
+                .and_then(|p| p.attribute("minecraft:block_break_speed").ok()),
+        )
     }
     /// `Attributes.SUBMERGED_MINING_SPEED` (0.2, raised by aqua affinity).
     pub(super) fn submerged_mining_speed(&self) -> f32 {
@@ -1010,5 +1025,21 @@ fn location_requirements(req: &Value, on_ground: bool, riding: bool) -> bool {
                 && (p["minecraft:vehicle"].is_null() || riding)
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::block_break_speed_factor;
+
+    /// #4094: `BLOCK_BREAK_SPEED` is a multiplier on the destroy speed.
+    #[test]
+    fn block_break_speed_is_a_destroy_speed_multiplier() {
+        assert_eq!(block_break_speed_factor(None), 1.0);
+        assert_eq!(block_break_speed_factor(Some(1.0)), 1.0);
+        assert_eq!(block_break_speed_factor(Some(0.5)), 0.5);
+        assert_eq!(block_break_speed_factor(Some(2.0)), 2.0);
+        assert_eq!(8.0 * block_break_speed_factor(Some(0.5)), 4.0);
+        assert_eq!(8.0 * block_break_speed_factor(Some(2.0)), 16.0);
     }
 }

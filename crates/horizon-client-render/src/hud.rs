@@ -151,20 +151,6 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
-/// A texture's sprite name: its path under vanilla's textures
-/// (`gui/container/furnace`), or a content mod's GUI texture under its
-/// namespace (`mymod:gui/container/machine`).
-fn sprite_name(textures: &Path, assets: &Path, path: &Path) -> Option<String> {
-    let plain = |p: &Path| p.with_extension("").to_string_lossy().replace('\\', "/");
-    if let Ok(rel) = path.strip_prefix(textures) {
-        return Some(plain(rel));
-    }
-    let rel = path.strip_prefix(assets).ok()?;
-    let mut parts = rel.components();
-    let ns = parts.next()?.as_os_str().to_str()?.to_owned();
-    let rest = parts.as_path().strip_prefix("textures").ok()?;
-    Some(format!("{ns}:{}", plain(rest)))
-}
 /// A packed atlas image: sprite name, size and RGBA pixels.
 type PackedImage = (String, u32, u32, Vec<u8>);
 /// A frame of an animated strip at `x, y`, nearest-resampled to the longer
@@ -182,6 +168,31 @@ fn strip_frame(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Ve
     }
     out
 }
+/// The `animation` section of a texture's `.mcmeta`.
+fn animation_of(mcmeta: Option<&str>) -> Option<AnimationMetadata> {
+    let meta: serde_json::Value = serde_json::from_str(mcmeta?).ok()?;
+    AnimationMetadata::from_json(&meta.get("animation")?.to_string()).ok()
+}
+/// An animated strip's first frame: the region the mcmeta's frame size picks
+/// (`AnimationMetadataSection.frameSize`), which is the top-left square unless
+/// it names other dimensions or the frames run along a row.
+fn first_frame(
+    (w, h, pixels): (u32, u32, Vec<u8>),
+    animation: Option<&AnimationMetadata>,
+) -> (u32, u32, Vec<u8>) {
+    let [fw, fh] = animation.map_or([w.min(h) as i32; 2], |meta| {
+        meta.frame_size(w as i32, h as i32)
+    });
+    match (u32::try_from(fw), u32::try_from(fh)) {
+        (Ok(fw), Ok(fh))
+            if fw > 0 && fh > 0 && w % fw == 0 && h % fh == 0 && (fw, fh) != (w, h) =>
+        {
+            let side = fw.max(fh);
+            (side, side, strip_frame(&pixels, w, 0, 0, fw, fh))
+        }
+        _ => (w, h, pixels),
+    }
+}
 /// `image` inside a one-texel border copied from its opposite edges, the
 /// texels repeat addressing reads past each edge.
 fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
@@ -198,8 +209,9 @@ fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
 }
 /// Sprites the atlas definitions (`atlases/*.json`) add beyond the texture
 /// files already packed: generated ones (`paletted_permutations` such as the
-/// armour trim sprites, `unstitch` regions) and files listed under another id.
-fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
+/// armour trim sprites, `unstitch` regions) and files listed under another id,
+/// such as other namespaces' item textures; and the animated ones' names.
+fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> (Vec<PackedImage>, Vec<String>) {
     use crate::atlas_sources::{self, SpriteOrigin};
     let have: std::collections::HashSet<&str> = packed.iter().map(|i| i.0.as_str()).collect();
     let textures = atlas_sources::list_textures(root);
@@ -243,29 +255,45 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
     };
     let first = |(name, origins): &(String, Vec<(usize, SpriteOrigin)>)| {
         origins.iter().find_map(|(order, origin)| {
+            let mut animated = false;
             let image = match origin {
                 SpriteOrigin::File(texture) => {
-                    let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    load(texture, "textures").map(|(w, h, p)| {
-                        // Animated strips keep their first frame, like the packed files.
-                        if h > w && (path.starts_with("block/") || path.starts_with("item/")) {
-                            (w, w, p[..(w * w * 4) as usize].to_vec())
+                    // Its path under `textures/` in any namespace (a server
+                    // pack's `lobby:item/...` as well as vanilla's).
+                    let path = texture.split_once(':').map_or(texture.as_str(), |(_, p)| p);
+                    let file = atlas_sources::texture_path(root, texture, "textures");
+                    decode(&file).ok().map(|image| {
+                        // Animated strips keep their first frame and animate,
+                        // like the packed files.
+                        if path.starts_with("block/") || path.starts_with("item/") {
+                            let mcmeta = fs::read_to_string(file.with_extension("png.mcmeta")).ok();
+                            let animation = animation_of(mcmeta.as_deref());
+                            animated = animation.is_some();
+                            first_frame(image, animation.as_ref())
                         } else {
-                            (w, h, p)
+                            image
                         }
                     })
                 }
                 generated => atlas_sources::generate(generated, &load),
             };
-            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels)))
+            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels), animated))
         })
     };
     let mut out: Vec<_> = crate::par::par_map(&names, first)
         .into_iter()
         .flatten()
         .collect();
-    out.sort_unstable_by_key(|(order, _)| *order);
-    out.into_iter().map(|(_, image)| image).collect()
+    out.sort_unstable_by_key(|(order, ..)| *order);
+    let animated = out
+        .iter()
+        .filter(|(.., animated)| *animated)
+        .map(|(_, image, _)| image.0.clone())
+        .collect();
+    (
+        out.into_iter().map(|(_, image, _)| image).collect(),
+        animated,
+    )
 }
 impl HudAtlas {
     /// Keep a ready profile skin when another source only has its default.
@@ -427,8 +455,17 @@ impl HudAtlas {
         for folder in folders {
             walk(&textures.join(folder), &mut files);
         }
-        // Content mods' GUI textures, for their screens: `<namespace>:gui/...`.
+        // Content mods' equipment textures, which their equipment assets name as `<ns>:<path>`.
+        if folders.contains(&"entity") {
+            for namespace in horizon_items::content_namespaces::namespaces(root) {
+                walk(
+                    &root.join(format!("assets/{namespace}/textures/entity/equipment")),
+                    &mut files,
+                );
+            }
+        }
         let assets = root.join("assets");
+        // Content mods' GUI textures, for their screens: `<namespace>:gui/...`.
         if full && let Ok(namespaces) = fs::read_dir(&assets) {
             for ns in namespaces.flatten() {
                 if ns.file_name() != "minecraft" {
@@ -442,38 +479,24 @@ impl HudAtlas {
         });
         type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>, bool);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
-            let name = sprite_name(&textures, &assets, path)?;
-            let (mut w, mut h, pixels) = decode(path).ok()?;
-            let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
-            let animation = mcmeta
-                .as_deref()
-                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                .and_then(|meta| {
-                    meta.get("animation")
-                        .and_then(|section| AnimationMetadata::from_json(&section.to_string()).ok())
-                });
-            // An animated strip keeps its first frame: the region the mcmeta's
-            // frame size picks (`AnimationMetadataSection.frameSize`), which is
-            // the top-left square unless it names other dimensions or the
-            // frames run along a row.
-            let frames = name.starts_with("block/") || name.starts_with("item/");
-            let pixels = if frames {
-                let stride = w;
-                let [fw, fh] = animation.as_ref().map_or([w.min(h) as i32; 2], |meta| {
-                    meta.frame_size(w as i32, h as i32)
-                });
-                match (u32::try_from(fw), u32::try_from(fh)) {
-                    (Ok(fw), Ok(fh))
-                        if fw > 0 && fh > 0 && w % fw == 0 && h % fh == 0 && (fw, fh) != (w, h) =>
-                    {
-                        let side = fw.max(fh);
-                        (w, h) = (side, side);
-                        strip_frame(&pixels, stride, 0, 0, fw, fh)
-                    }
-                    _ => pixels,
+            let name = match path.strip_prefix(&textures) {
+                Ok(rel) => rel.with_extension("").to_string_lossy().replace('\\', "/"),
+                Err(_) => {
+                    let rel = path.strip_prefix(&assets).ok()?.with_extension("");
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    let (namespace, rest) = rel.split_once("/textures/")?;
+                    format!("{namespace}:{rest}")
                 }
+            };
+            let image = decode(path).ok()?;
+            let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
+            let animation = animation_of(mcmeta.as_deref());
+            // An animated strip keeps its first frame.
+            let frames = name.starts_with("block/") || name.starts_with("item/");
+            let (w, h, pixels) = if frames {
+                first_frame(image, animation.as_ref())
             } else {
-                pixels
+                image
             };
             // The default texture's size, when a pack's differs from it.
             let gui_size = default_textures
@@ -525,7 +548,9 @@ impl HudAtlas {
             images.push(image);
         }
         if full {
-            images.extend(atlas_sprites(root, &images));
+            let (more, more_animated) = atlas_sprites(root, &images);
+            images.extend(more);
+            animated.extend(more_animated);
         }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
         if let Some(edition) = images
@@ -597,7 +622,15 @@ impl HudAtlas {
             let Some(rect) = sprites.get(&name).copied() else {
                 continue;
             };
-            let layer = loaded.insert(root, &format!("minecraft:{name}"))?;
+            // Another namespace's sprite is named with it (`lobby:item/...`).
+            let id = if name.contains(':') {
+                name.clone()
+            } else {
+                format!("minecraft:{name}")
+            };
+            let Ok(layer) = loaded.insert(root, &id) else {
+                continue;
+            };
             let Some(animation) = loaded.animations.iter().find(|a| a.layer == layer).cloned()
             else {
                 continue;
@@ -1876,6 +1909,34 @@ mod tests {
         atlas.pixels[at..at + 4].try_into().unwrap()
     }
     #[test]
+    fn content_mod_equipment_textures_pack_under_their_namespace() {
+        let root = std::env::temp_dir().join(format!("horizon-atlas-equip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let equipment = root.join("assets/gems/textures/entity/equipment/humanoid");
+        fs::create_dir_all(&equipment).unwrap();
+        write_strip(
+            &equipment.join("ruby.png"),
+            64,
+            32,
+            &[[200, 0, 0, 255]],
+            None,
+        );
+        let other = root.join("assets/gems/textures/item");
+        fs::create_dir_all(&other).unwrap();
+        write_strip(&other.join("ruby.png"), 16, 16, &[[0, 200, 0, 255]], None);
+        fs::write(
+            root.join(horizon_items::content_namespaces::MARKER),
+            br#"["gems"]"#,
+        )
+        .unwrap();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["gems:entity/equipment/humanoid/ruby"];
+        assert_eq!(texel_at(&atlas, rect, 0, 0), [200, 0, 0, 255]);
+        // Only equipment: the mods' other textures reach the atlas through atlas definitions.
+        assert!(!atlas.sprites.contains_key("gems:item/ruby"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
     fn animated_block_sprites_register_and_pack_their_first_mcmeta_frame() {
         let root = animated_root();
         let atlas = HudAtlas::build(&root).unwrap();
@@ -1907,6 +1968,39 @@ mod tests {
         // The first frame is the left 16x16, not the whole row.
         assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
         assert_eq!(texel_at(&atlas, rect, 0, 0), [0, 255, 0, 255]);
+    }
+    #[test]
+    fn another_namespaces_animated_item_texture_packs_its_first_frame_and_animates() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-atlas-ns-anim-{}", std::process::id()));
+        let atlases = root.join("assets/minecraft/atlases");
+        let item = root.join("assets/lobby/textures/item/npc");
+        fs::create_dir_all(&atlases).unwrap();
+        fs::create_dir_all(&item).unwrap();
+        fs::write(
+            atlases.join("items.json"),
+            r#"{"sources": [{"type": "directory", "source": "item", "prefix": "item/"}]}"#,
+        )
+        .unwrap();
+        // A server pack's NPC skin: two 16x16 frames, green then red.
+        write_strip(
+            &item.join("skin.png"),
+            16,
+            32,
+            &[[0, 255, 0, 255], [255, 0, 0, 255]],
+            Some(r#"{"animation": {"frametime": 3}}"#),
+        );
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["lobby:item/npc/skin"];
+        // One frame, not the whole strip, which a model's UVs would span.
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, rect, 0, 15), [0, 255, 0, 255]);
+        let (_, animation) = atlas
+            .sprite_animations
+            .iter()
+            .find(|(r, _)| r.u0 == rect.u0 && r.v0 == rect.v0)
+            .expect("the namespaced sprite animates");
+        assert_eq!(animation.frame_count(), 2);
     }
     /// `count` images of `w x h`; layout reads only their sizes.
     fn sized(count: usize, w: u32, h: u32) -> Vec<PackedImage> {

@@ -36,6 +36,27 @@ pub struct Menu {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The data slots the client was last sent (ContainerSetData), a furnace's progress.
     pub sent_data: Vec<i16>,
+    /// Container slots the menu does not have: a mod's screen hides them, so
+    /// no click or quick move reaches them (`Slot` positions are the screen's).
+    pub hidden: Vec<usize>,
+}
+
+/// What a guest did with a native mod's menu (`Slots::Native`), for the game
+/// to tell the mod once the hub is back in its hands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeMenuEvent {
+    /// A click (`ServerboundContainerClickPacket`): the menu's slot (its own
+    /// first, then the player's 36; -999 outside), the button and the mode.
+    Click {
+        uuid: u128,
+        window: i32,
+        slot: i32,
+        button: i32,
+        mode: i32,
+    },
+    /// The menu closed: by the player, by the server, another opened, or
+    /// the player left.
+    Closed { uuid: u128, window: i32 },
 }
 
 /// The y of the key a chest minecart's or chest boat's items are kept under
@@ -52,6 +73,9 @@ pub enum Slots {
     Double((i32, i32, i32), (i32, i32, i32)),
     /// The player's own ender chest inventory (`PlayerEnderChestContainer`).
     Ender,
+    /// A native mod's menu (`Guest::native_menu`): items to look at, which no
+    /// click moves; the clicks go to the mod.
+    Native,
 }
 
 impl Slots {
@@ -59,7 +83,7 @@ impl Slots {
         match self {
             Slots::Block(k) => vec![k],
             Slots::Double(a, b) => vec![a, b],
-            Slots::Ender => Vec::new(),
+            Slots::Ender | Slots::Native => Vec::new(),
         }
     }
     /// Whether the block entities behind the slots are still there
@@ -75,6 +99,7 @@ impl Slots {
     pub fn still_valid(self, world: &World, guest: &Guest, at: Option<(i32, i32, i32)>) -> bool {
         let blocks = match self {
             Slots::Ender => at.into_iter().collect(),
+            Slots::Native => Vec::new(),
             _ => self.halves(),
         };
         // A vehicle's container is kept under a key, not a block: the game
@@ -88,6 +113,9 @@ impl Slots {
     pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {
         if self == Slots::Ender {
             return guest.ender_items.get(n).cloned().flatten();
+        }
+        if self == Slots::Native {
+            return guest.native_menu.get(n).cloned().flatten();
         }
         for k in self.halves() {
             let slots = shown(world, k)?;
@@ -103,6 +131,9 @@ impl Slots {
         if self == Slots::Ender {
             return Some(guest.ender_items.clone());
         }
+        if self == Slots::Native {
+            return Some(guest.native_menu.clone());
+        }
         let mut items = Vec::new();
         for k in self.halves() {
             items.extend_from_slice(shown(world, k)?);
@@ -113,6 +144,10 @@ impl Slots {
     pub fn write(self, world: &mut World, guest: &mut Guest, items: Vec<Option<ItemStack>>) {
         if self == Slots::Ender {
             guest.ender_items = items;
+            return;
+        }
+        if self == Slots::Native {
+            // Only the mod changes what it shows.
             return;
         }
         let mut rest = items.into_iter();
@@ -150,6 +185,8 @@ pub struct View<'a> {
     pub container: Option<&'a mut [Option<ItemStack>]>,
     /// The container is a shulker box (`ShulkerBoxSlot`).
     pub shulker: bool,
+    /// Container slots that do not exist in this menu (see [`Menu::hidden`]).
+    pub hidden: &'a [usize],
 }
 
 impl View<'_> {
@@ -186,7 +223,7 @@ impl View<'_> {
     }
     /// Whether the slot takes part in clicks at all.
     fn enabled(&self, i: usize) -> bool {
-        self.container.is_some() || i >= 5
+        (self.container.is_some() || i >= 5) && !self.hidden.contains(&i)
     }
     fn may_place(&self, i: usize, stack: &ItemStack, rules: &dyn Rules) -> bool {
         if self.container.is_none() && (5..=8).contains(&i) {
@@ -763,6 +800,7 @@ mod tests {
             guest: &mut g,
             container: Some(&mut chest),
             shulker: false,
+            hidden: &[],
         };
         view.guest.carried = Some(ItemStack::new("minecraft:bundle", 1));
         // Left click with the bundle: the stone goes in.
@@ -835,6 +873,7 @@ mod tests {
                 guest: &mut g,
                 container: Some(&mut read),
                 shulker: false,
+                hidden: &[],
             };
             click(&mut view, &mut drag, 5 + 27, 0, input::QUICK_MOVE, &rules);
             assert_eq!(view.get(0).map(|s| s.item), Some("minecraft:dirt".into()));
@@ -854,6 +893,34 @@ mod tests {
         assert_eq!(m.items[7].as_ref().map(|s| s.count), Some(2));
     }
 
+    /// A slot a mod's screen hides is not in the menu: a shift-click from the
+    /// inventory skips it, and a shift-click on it moves nothing.
+    #[test]
+    fn a_hidden_slot_takes_no_quick_move() {
+        let Some(rules) = rules() else {
+            return;
+        };
+        let mut g = guest();
+        let mut container = vec![None; 3];
+        container[2] = Some(ItemStack::new("minecraft:stone", 1));
+        g.inventory[0] = Some(ItemStack::new("minecraft:dirt", 1));
+        let hidden = [0, 2];
+        let mut drag = None;
+        let mut view = View {
+            guest: &mut g,
+            container: Some(&mut container),
+            shulker: false,
+            hidden: &hidden,
+        };
+        // The hotbar's first slot (menu slot 3 + 27) lands in the one slot shown.
+        click(&mut view, &mut drag, 3 + 27, 0, input::QUICK_MOVE, &rules);
+        assert!(view.get(0).is_none());
+        assert_eq!(view.get(1).map(|s| s.item), Some("minecraft:dirt".into()));
+        // Nothing leaves a hidden slot either.
+        click(&mut view, &mut drag, 2, 0, input::QUICK_MOVE, &rules);
+        assert_eq!(view.get(2).map(|s| s.item), Some("minecraft:stone".into()));
+    }
+
     #[test]
     fn guest_shulker_box_menu_refuses_shulker_boxes() {
         let Some(rules) = rules() else {
@@ -867,6 +934,7 @@ mod tests {
                 guest: &mut g,
                 container: Some(&mut container),
                 shulker,
+                hidden: &[],
             };
             // Carried onto an empty slot, shift-clicked from the hotbar
             // (menu slot 27 + 27) and swapped in with the number key 1.
