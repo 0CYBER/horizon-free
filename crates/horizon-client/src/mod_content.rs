@@ -329,6 +329,7 @@ struct NewItem {
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
     components: Vec<(String, J)>,
+    crafting_remainder: Option<String>,
 }
 
 struct Plan<'a> {
@@ -571,6 +572,7 @@ impl<'a> Plan<'a> {
                     max_stack_size: None,
                     rarity: None,
                     components: Vec::new(),
+                    crafting_remainder: None,
                 });
             }
         }
@@ -586,6 +588,7 @@ impl<'a> Plan<'a> {
                         .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
                         .collect::<std::result::Result<_, serde_json::Error>>()
                         .map_err(|e| format!("{}: {e}", i.id))?,
+                    crafting_remainder: i.crafting_remainder.clone(),
                 });
             }
         }
@@ -745,6 +748,19 @@ impl<'a> Plan<'a> {
                     .map_err(|e| format!("{}: {e}", i.rename.to))?;
             }
             map.set(&i.rename.to, v);
+        }
+        if components {
+            for i in &self.items {
+                if let Some(rest) = &i.crafting_remainder
+                    && map.get(rest).is_none()
+                {
+                    return Err(format!(
+                        "{}: crafting_remainder {rest:?} is not an item",
+                        i.rename.to
+                    )
+                    .into());
+                }
+            }
         }
         Ok(())
     }
@@ -1575,6 +1591,17 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
         .collect();
     namespaces.sort();
     overlay.write(MARKER, &serde_json::to_vec(&namespaces)?)?;
+    let remainders: BTreeMap<&str, &str> = plan
+        .items
+        .iter()
+        .filter_map(|i| Some((i.rename.to.as_str(), i.crafting_remainder.as_deref()?)))
+        .collect();
+    if !remainders.is_empty() {
+        overlay.write(
+            horizon_items::items::MOD_CRAFT_REMAINDERS,
+            &serde_json::to_vec(&remainders)?,
+        )?;
+    }
     if mods.iter().any(|m| !m.content.blocks.is_empty()) {
         overlay.write(crate::content_identity::MARKER, b"1")?;
     }

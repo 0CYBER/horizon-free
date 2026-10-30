@@ -149,6 +149,9 @@ pub const CRAFT_REMAINDERS: [(&str, &str); 5] = [
     ("minecraft:dragon_breath", "minecraft:glass_bottle"),
     ("minecraft:honey_bottle", "minecraft:glass_bottle"),
 ];
+/// In a root built by `mod_content::build`: the content mods' items' crafting
+/// remainders, by item. Other roots have none.
+pub const MOD_CRAFT_REMAINDERS: &str = "horizon-mod-craft-remainders.json";
 /// A reduction of `blocks_attacks.damage_reductions`.
 #[derive(Clone, Debug)]
 pub struct BlockReduction {
@@ -573,6 +576,14 @@ impl Items {
         let raw: BTreeMap<String, Value> =
             serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
         let entity_tags = load_tags(root, "entity_type", overlay)?;
+        let path = root.join(MOD_CRAFT_REMAINDERS);
+        let mod_remainders: HashMap<String, String> = match fs::read(&path) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => return Err(format!("{}: {e}", path.display()).into()),
+        };
         let mut items = HashMap::new();
         let mut order = Vec::new();
         for (name, c) in &raw {
@@ -776,7 +787,8 @@ impl Items {
                     crafting_remainder: CRAFT_REMAINDERS
                         .iter()
                         .find(|(item, _)| *item == name)
-                        .map(|(_, rest)| (*rest).to_owned()),
+                        .map(|(_, rest)| (*rest).to_owned())
+                        .or_else(|| mod_remainders.get(name).cloned()),
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,
@@ -2113,6 +2125,37 @@ mod tests {
         );
         // 46 is vanilla's count for this seed; an extra level draw gives 28.
         assert_eq!(drops[0].count, 46);
+    }
+
+    /// A content root's remainders reach the mods' items; vanilla's stay its own.
+    #[test]
+    fn mod_items_take_their_crafting_remainders() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-craft-remainders-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
+        let items = r#"{"minecraft:bowl": {}, "minecraft:milk_bucket": {}, "ruby:stew": {}}"#;
+        fs::write(root.join("items.json"), items).unwrap();
+        let catalog = |root: &Path| Items::catalog(root, &PackOverlay::NONE).unwrap();
+        let remainder = |items: &Items, id: &str| items.items[id].crafting_remainder.clone();
+        let vanilla = catalog(&root);
+        assert_eq!(remainder(&vanilla, "ruby:stew"), None);
+        fs::write(
+            root.join(MOD_CRAFT_REMAINDERS),
+            r#"{"ruby:stew": "minecraft:bowl"}"#,
+        )
+        .unwrap();
+        let modded = catalog(&root);
+        assert_eq!(
+            remainder(&modded, "ruby:stew").as_deref(),
+            Some("minecraft:bowl")
+        );
+        assert_eq!(
+            remainder(&modded, "minecraft:milk_bucket").as_deref(),
+            Some("minecraft:bucket")
+        );
+        assert_eq!(remainder(&modded, "minecraft:bowl"), None);
+        fs::remove_dir_all(&root).unwrap();
     }
 }
 

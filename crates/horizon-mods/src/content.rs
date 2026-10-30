@@ -132,6 +132,7 @@ struct ItemFile {
     rarity: Option<Rarity>,
     #[serde(default)]
     components: BTreeMap<String, serde_json::Value>,
+    crafting_remainder: Option<String>,
 }
 
 /// An item the mod adds: a vanilla template item's components under a new
@@ -145,6 +146,9 @@ pub struct Item {
     pub rarity: Option<Rarity>,
     /// A 26.3 data component patch over the template's: `!minecraft:<type>` removes one.
     pub components: BTreeMap<String, serde_json::Value>,
+    /// What it leaves in the crafting grid (`Item.Properties.craftRemainder`):
+    /// a vanilla item or one of the mod's own.
+    pub crafting_remainder: Option<String>,
 }
 
 #[derive(Debug)]
@@ -352,6 +356,7 @@ impl Content {
                 item: file.item,
             });
         }
+        let mut remainders = Vec::new();
         for (item, name) in items {
             let file: ItemFile =
                 serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
@@ -368,13 +373,30 @@ impl Content {
             if !ids.insert(item.clone()) {
                 return Err(format!("{name}: {item} is also a block's item"));
             }
+            if let Some(rest) = &file.crafting_remainder {
+                remainders.push((name, rest.clone()));
+            }
             self.items.push(Item {
                 id: item,
                 template: file.template,
                 max_stack_size: file.max_stack_size,
                 rarity: file.rarity,
                 components: file.components,
+                crafting_remainder: file.crafting_remainder,
             });
+        }
+        // After every item, so a remainder may be declared in a later file.
+        for (name, rest) in remainders {
+            if rest == "minecraft:air" {
+                return Err(format!(
+                    "{name}: crafting_remainder {rest:?} is no remainder (leave it out)"
+                ));
+            }
+            if !vanilla_id(&rest) && !ids.contains(&rest) {
+                return Err(format!(
+                    "{name}: crafting_remainder {rest:?} is not a vanilla item (minecraft:...) or one of this mod's"
+                ));
+            }
         }
         Ok(())
     }
@@ -543,6 +565,29 @@ capabilities = ["registries"]
         assert_eq!(content.items[0].id, "ruby:ruby");
         assert_eq!(content.items[0].rarity, Some(Rarity::Uncommon));
         assert!(content.items[0].components.is_empty());
+        assert_eq!(content.items[0].crafting_remainder, None);
+    }
+
+    #[test]
+    fn items_name_their_crafting_remainder() {
+        let files: &[(&str, &[u8])] = &[
+            (
+                "data/ruby/horizon/item/a_stew.json",
+                br#"{"template": "minecraft:mushroom_stew", "crafting_remainder": "minecraft:bowl"}"#,
+            ),
+            (
+                "data/ruby/horizon/item/b_flask.json",
+                br#"{"template": "minecraft:potion", "crafting_remainder": "ruby:c_flask"}"#,
+            ),
+            ("data/ruby/horizon/item/c_flask.json", ITEM),
+        ];
+        let content = hmod("remainder", MANIFEST_TEXT, files).unwrap();
+        let rests: Vec<_> = content
+            .items
+            .iter()
+            .map(|i| i.crafting_remainder.as_deref())
+            .collect();
+        assert_eq!(rests, [Some("minecraft:bowl"), Some("ruby:c_flask"), None]);
     }
 
     #[test]
@@ -678,6 +723,23 @@ capabilities = ["registries"]
             let item = format!(r#"{{"template": "minecraft:stick", "components": {components}}}"#);
             let e = refused(case, &[("data/ruby/horizon/item/a.json", item.as_bytes())]);
             assert!(e.contains(why), "{case}: {e}");
+        }
+        let glass = br#"{"template": "minecraft:glass", "item": false}"#;
+        for (case, rest) in [
+            ("bare-remainder", "bowl"),
+            ("missing-remainder", "ruby:bowl"),
+            ("other-mod-remainder", "jade:bowl"),
+            ("itemless-remainder", "ruby:glass"),
+            ("air-remainder", "minecraft:air"),
+        ] {
+            let item =
+                format!(r#"{{"template": "minecraft:stick", "crafting_remainder": "{rest}"}}"#);
+            let files: &[(&str, &[u8])] = &[
+                ("data/ruby/horizon/item/a.json", item.as_bytes()),
+                ("data/ruby/horizon/block/glass.json", glass),
+            ];
+            let e = refused(case, files);
+            assert!(e.contains("crafting_remainder"), "{case}: {e}");
         }
     }
 

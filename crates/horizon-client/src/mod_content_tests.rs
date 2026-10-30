@@ -226,9 +226,9 @@ fn prepared() -> Option<PathBuf> {
 }
 
 /// A content mod folder: a full block, a door and an item-less glass from
-/// templates, an item, a vanilla tag addition and a language file.
+/// templates, items, a recipe, a vanilla tag addition and a language file.
 fn ruby_mod(dir: &Path) -> ContentMod {
-    let files: [(&str, &str); 9] = [
+    let files: [(&str, &str); 11] = [
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
@@ -257,6 +257,15 @@ fn ruby_mod(dir: &Path) -> ContentMod {
                     "id": "minecraft:base_attack_damage", "amount": 7.0,
                     "operation": "add_value", "slot": "mainhand"}],
                 "!minecraft:repairable": {}}}"#,
+        ),
+        (
+            "data/ruby/horizon/item/ruby_stew.json",
+            r#"{"template": "minecraft:mushroom_stew", "crafting_remainder": "minecraft:bowl"}"#,
+        ),
+        (
+            "data/ruby/recipe/ruby_from_stew.json",
+            r#"{"type": "minecraft:crafting_shapeless", "category": "misc",
+                "ingredients": ["ruby:ruby_stew"], "result": {"id": "ruby:ruby"}}"#,
         ),
         // Carried-over tags name blocks left out and other mods' ids too.
         (
@@ -433,6 +442,24 @@ fn content_root_loads_with_every_table() {
     assert_eq!(sword.modifiers.len(), 1);
     assert_eq!(sword.modifiers[0].2, 7.0);
     assert_eq!(sword.tool.len(), iron_sword.tool.len());
+    // The stew leaves its bowl in the grid; vanilla's stew leaves none.
+    let stew = &items.items["ruby:ruby_stew"];
+    assert_eq!(stew.crafting_remainder.as_deref(), Some("minecraft:bowl"));
+    assert_eq!(
+        items.items["minecraft:mushroom_stew"].crafting_remainder,
+        None
+    );
+    let recipes = crate::crafting::Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+    let grid = [
+        Some(crate::items::ItemStack::new("ruby:ruby_stew", 1)),
+        None,
+        None,
+        None,
+    ];
+    let (id, result) = recipes.find(&grid, 2).unwrap();
+    assert_eq!(&*result.item, "ruby:ruby");
+    let rest = recipes.remainders(id, &grid, 2);
+    assert_eq!(rest[0].as_ref().map(|s| &*s.item), Some("minecraft:bowl"));
     assert!(!items.items.contains_key("ruby:ruby_glass"));
     let pickaxe = &items.block_tags["minecraft:mineable/pickaxe"];
     assert!(pickaxe.contains("ruby:ruby_block"));
@@ -473,6 +500,19 @@ fn refuses_unknown_templates_and_vanilla_ids() {
     m.content.blocks[0].template = "minecraft:not_a_block".into();
     let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
     assert!(e.to_string().contains("is not a block"), "{e}");
+    m.content.blocks[0].template = "minecraft:iron_block".into();
+    let stew = m
+        .content
+        .items
+        .iter_mut()
+        .find(|i| i.id == "ruby:ruby_stew");
+    stew.unwrap().crafting_remainder = Some("minecraft:bowll".into());
+    let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains(r#"crafting_remainder "minecraft:bowll" is not an item"#),
+        "{e}"
+    );
     fs::remove_dir_all(&scratch).unwrap();
 }
 

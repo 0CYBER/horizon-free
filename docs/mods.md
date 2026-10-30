@@ -100,6 +100,18 @@ the load instead of doing nothing. Behaviour the game ties to a vanilla
 item's id doesn't come along yet: a copy of the trident doesn't throw
 ([#3305](https://github.com/horizon-rust/horizon/issues/3305)).
 
+`crafting_remainder` names what the item leaves in the crafting grid when a
+recipe uses it, as a milk bucket leaves a bucket (vanilla's
+`Item.Properties.craftRemainder`, not a data component): a vanilla item or
+one of the mod's own, refused at load otherwise. It holds on the crafting
+table, the inventory grid and the crafter, not yet as furnace fuel or in a
+brewing stand. What the item leaves once eaten
+or drunk is the `minecraft:use_remainder` component instead:
+
+```json
+{ "template": "minecraft:mushroom_stew", "crafting_remainder": "minecraft:bowl" }
+```
+
 The fence: files go in the mod's own namespaces (`assets/<id>/`,
 `data/<id>/`, and those its manifest lists), plus additions to vanilla tags
 (`data/minecraft/tags/`) and to the convention tags NeoForge and Fabric mods
