@@ -63,6 +63,10 @@ class NightlyTests(unittest.TestCase):
         self.assertNotIn("### Not merged yet", text)
         self.assertIn("Nothing new for players on main", notes())
 
+    def test_notes_open_with_the_way_to_the_launcher(self):
+        # A raw HTML line that launchers skip, as on a game release.
+        self.assertTrue(notes().startswith(nightly.train.PLAYERS + "\n\nNightly 2026-10-28 · bbbbbbb: "))
+
     def test_notes_name_the_commit_and_its_permanent_source_tag(self):
         sha = "0c0206714abc" + "0" * 28
         text = notes(chosen=nightly.Ref("main", sha, None))

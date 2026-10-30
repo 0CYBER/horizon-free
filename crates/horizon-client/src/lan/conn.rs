@@ -910,7 +910,7 @@ fn login_and_configure(
             return Ok(None);
         }
     }
-    for packet in sync.registry_packets(known_pack) {
+    for packet in sync.registry_packets(known_pack, &shared.config.levels) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
@@ -1177,7 +1177,7 @@ fn read_loop(
             // The client closed the connection: Connection.channelInactive
             // without details, multiplayer.disconnect.generic.
             Err(e)
-                if e.0 == "Connection closed by the server"
+                if e.is_end_of_stream()
                     || e.0.contains("reset by peer")
                     || e.0.contains("aborted") =>
             {

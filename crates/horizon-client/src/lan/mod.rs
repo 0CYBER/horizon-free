@@ -173,6 +173,9 @@ pub struct NetConfig {
     /// sent in configuration when non-empty
     /// (ServerConfigurationPacketListenerImpl.startConfiguration).
     pub server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
+    /// The shapes of the world's levels: their dimension types go to
+    /// clients when the world's data packs changed them.
+    pub levels: crate::chunk::LevelShapes,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -201,6 +204,7 @@ impl NetConfig {
             log: None,
             resource_pack: None,
             server_links: Vec::new(),
+            levels: crate::chunk::LevelShapes::VANILLA,
         }
     }
 }

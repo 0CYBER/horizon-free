@@ -13,7 +13,7 @@ use horizon_protocol::{
     chunk::{
         BIOMES, BLOCKS, BlockEntityInfo, ChunkData, Heightmaps, LightData, Paletted, Strategy,
     },
-    packets::play::LevelChunkWithLight,
+    packets::play::{ChunkBiomeData, LevelChunkWithLight},
     registry::{Builtin, ceil_log2},
 };
 use horizon_world::nbt::Tag;
@@ -263,15 +263,6 @@ impl SectionCoder {
                 values.push(v as i32);
             }
         }
-        let biome_values: Vec<i32> = (0..BIOMES)
-            .map(|j| {
-                let internal = section.biomes.get(j) as u16;
-                self.biome_ids
-                    .get(usize::from(internal))
-                    .copied()
-                    .unwrap_or(0)
-            })
-            .collect();
         (
             horizon_protocol::chunk::Section {
                 non_empty,
@@ -288,10 +279,25 @@ impl SectionCoder {
                         crate::chunk::block_strategy().global_bits,
                     ),
                 },
-                biomes: Paletted::from_values(&biome_values, Strategy::Biomes, self.biome_bits),
+                biomes: self.biomes(section),
             },
             entities,
         )
+    }
+
+    /// The section's biome container (`PalettedContainerRO.write`'s), in
+    /// network biome ids.
+    fn biomes(&self, section: &Section) -> Paletted {
+        let values: Vec<i32> = (0..BIOMES)
+            .map(|j| {
+                let internal = section.biomes.get(j) as u16;
+                self.biome_ids
+                    .get(usize::from(internal))
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .collect();
+        Paletted::from_values(&values, Strategy::Biomes, self.biome_bits)
     }
 }
 
@@ -453,6 +459,16 @@ impl ChunkEncoder {
         }
     }
 
+    /// `ClientboundChunksBiomesPacket.ChunkBiomeData`: the column's biome
+    /// containers, one per section of the level (`extractChunkData`).
+    pub fn biome_data(&self, chunk: &Chunk) -> ChunkBiomeData {
+        let biomes: Vec<Paletted> = chunk.sections[self.sections.clone()]
+            .iter()
+            .map(|s| self.coder.biomes(s))
+            .collect();
+        ChunkBiomeData::from_biomes([chunk.x, chunk.z], &biomes)
+    }
+
     /// The client heightmaps (Heightmap.prime over the column), from the
     /// cache while the column's sections are unchanged.
     fn heightmaps(&self, chunk: &Chunk, tables: &crate::save::SaveTables) -> ColumnHeightmaps {
@@ -570,13 +586,28 @@ impl ChunkEncoder {
         bits
     }
 
-    /// The non-air sections of the column and its neighbours, as bits.
-    fn around(&self, chunk: &Chunk, world: &crate::world::World) -> SectionMask {
+    /// The non-air sections of the column and its neighbours, as bits. A
+    /// neighbour still a proto chunk counts too, as vanilla's light storage
+    /// counts a neighbour at INITIALIZE_LIGHT (#4294).
+    fn around(
+        &self,
+        chunk: &Chunk,
+        world: &crate::world::World,
+        protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
+    ) -> SectionMask {
         let mut around = SectionMask::EMPTY;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                if let Some(c) = world.chunks.get(&(chunk.x + dx, chunk.z + dz)) {
+                let (x, z) = (chunk.x + dx, chunk.z + dz);
+                if let Some(c) = world.chunks.get(&(x, z)) {
                     around |= self.occupied(c);
+                } else if let Some(sections) = protos(x, z) {
+                    // Column sections: this level's range from 0.
+                    for i in sections.iter() {
+                        if self.sections.contains(&i) {
+                            around.insert(i - self.sections.start);
+                        }
+                    }
                 }
             }
         }
@@ -590,7 +621,21 @@ impl ChunkEncoder {
     /// sections and light layers go straight to it, with no packet built and
     /// copied again first.
     pub fn body_in(&self, chunk: &Chunk, world: &crate::world::World) -> Vec<u8> {
-        self.body(chunk, &world.block_entities, self.around(chunk, world))
+        self.body_with(chunk, world, &|_, _| None)
+    }
+    /// [`Self::body_in`], with `protos` giving the non-air sections of a
+    /// neighbour that is still a proto chunk.
+    pub fn body_with(
+        &self,
+        chunk: &Chunk,
+        world: &crate::world::World,
+        protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
+    ) -> Vec<u8> {
+        self.body(
+            chunk,
+            &world.block_entities,
+            self.around(chunk, world, protos),
+        )
     }
 
     /// Make what these columns need and is not cached yet (their heightmaps
@@ -994,9 +1039,6 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             .next_spawn_data
             .as_ref()
             .map(|d| Tag::compound([("spawn_data", d.encode())])),
-        // CommandBlockEntity.getUpdateTag: saveWithoutMetadata, the command
-        // and its output settings (the edit screen reads them).
-        BlockEntity::CommandBlock(c) => Some(Tag::compound(c.save())),
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();
@@ -1326,6 +1368,36 @@ mod tests {
         let second = encoder.encode(&chunk, &HashMap::new()).light;
         assert_ne!(first, second);
         assert_eq!(second, light_data(&chunk.sections, SectionMask::ALL));
+    }
+
+    /// A neighbour still a proto chunk counts for the light layers as it
+    /// will once loaded (#4294: vanilla counts a neighbour at
+    /// INITIALIZE_LIGHT).
+    #[test]
+    fn a_proto_neighbour_counts_for_the_light_layers() {
+        let encoder = encoder();
+        let mut world = crate::world::World::new(horizon_world::registry::BlockStateId(0), 0);
+        for x in -1..=1 {
+            for z in -1..=1 {
+                let mut chunk = Chunk::empty(x, z);
+                chunk.set(0, MIN_Y, 0, 1);
+                world.chunks.insert((x, z), Arc::new(chunk));
+            }
+        }
+        // The neighbour east has a block ten sections up.
+        let mut tall = Chunk::empty(1, 0);
+        tall.set(0, MIN_Y, 0, 1);
+        tall.set(0, MIN_Y + 16 * 10, 0, 1);
+        world.chunks.insert((1, 0), Arc::new(tall));
+        let centre = world.chunks[&(0, 0)].clone();
+        let loaded = encoder.body_in(&centre, &world);
+        world.chunks.remove(&(1, 0));
+        assert_ne!(encoder.body_in(&centre, &world), loaded);
+        let mut sections = SectionMask::EMPTY;
+        sections.insert(0);
+        sections.insert(10);
+        let proto = |x, z| ((x, z) == (1, 0)).then_some(sections);
+        assert_eq!(encoder.body_with(&centre, &world, &proto), loaded);
     }
 
     #[test]
