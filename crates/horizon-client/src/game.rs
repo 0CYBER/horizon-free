@@ -6225,11 +6225,14 @@ impl Game<'_> {
             self.score_player_died();
             if let Some(kind) = killer {
                 self.stats.add("killed_by", &kind, 1);
-                let view = horizon_client::advancements::EntityView {
-                    kind,
-                    ..Default::default()
-                };
-                self.trigger_entity("minecraft:entity_killed_player", "entity", &view);
+                let blow = self.combat_killing_blow();
+                let view = blow.as_ref().and_then(|b| b.source.clone()).unwrap_or(
+                    horizon_client::advancements::EntityView {
+                        kind,
+                        ..Default::default()
+                    },
+                );
+                self.trigger_killed_as("minecraft:entity_killed_player", &view, blow.as_ref());
             }
             self.stats.reset("custom", "minecraft:time_since_death");
             self.stats.reset("custom", "minecraft:time_since_rest");
