@@ -405,7 +405,7 @@ mod tests {
             .unwrap();
         let load = source.find("self.load_world(WorldRequest::new(").unwrap();
         let ready = source.find("self.native_lifecycle_world_ready();").unwrap();
-        let tick = source.find("self.tick_server_timed(paused)?;").unwrap();
+        let tick = source.find("self.tick_server_timed(paused)?").unwrap();
         assert!(open < load && load < ready && ready < tick);
 
         let stop = source.split("fn stop_dedicated").nth(1).unwrap();
