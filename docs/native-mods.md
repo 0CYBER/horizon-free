@@ -46,6 +46,11 @@ API 4 adds item tooltips through `native_tooltip`: the hovered stack, with its c
 lines, which a mod can add to, change or take out of, wherever the game shows an item's tooltip. Bundles that use it
 need `"hooks": 4`.
 
+API 5 adds using an item, on the server for every player: `native_use_item_on` hears a right click with an item on a
+block once the block let it through (`ItemStack.useOn`), and `native_use_item` hears the item's own use, in the air or
+after `native_use_item_on` let it through (`Item.use`). Each hears a click once. A mod that claims one swings the hand
+instead of the item's use. Bundles that use them need `"hooks": 5`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
