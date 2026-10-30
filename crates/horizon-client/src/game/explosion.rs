@@ -89,6 +89,29 @@ pub(super) enum BlockInteraction {
     DestroyWithDecay,
 }
 
+/// `ServerExplosion.hurtEntities`: an entity is hurt when its position is
+/// within the blast's diameter of the centre.
+pub(super) fn blast_reaches(center: [f64; 3], diameter: f64, at: [f64; 3]) -> bool {
+    let d =
+        ((at[0] - center[0]).powi(2) + (at[1] - center[1]).powi(2) + (at[2] - center[2]).powi(2))
+            .sqrt();
+    d / diameter <= 1.0
+}
+
+/// Whether a blast leaves item frames, paintings, cushions and armour stands
+/// alone. Without `mobGriefing`, a blast that keeps blocks is ignored
+/// (`ServerExplosion.shouldAffectBlocklikeEntities` through their
+/// `ignoreExplosion`; no wind charge goes through `server_explode`), and one a
+/// mob causes does no harm (`BlockAttachedEntity.hurtServer` and
+/// `ArmorStand.hurtServer`: `source.getEntity() instanceof Mob`).
+pub(super) fn blast_spares_decorations(
+    mob_griefing: bool,
+    interaction: BlockInteraction,
+    by_mob: bool,
+) -> bool {
+    !mob_griefing && (interaction == BlockInteraction::Keep || by_mob)
+}
+
 thread_local! {
     /// Client-side randomness (explosion sound pitch), separate from the level random.
     static CLIENT_RANDOM: std::cell::RefCell<LegacyRandom> = std::cell::RefCell::new(LegacyRandom::new(0x5eed));
@@ -446,7 +469,6 @@ impl Game<'_> {
             );
         }
         self.mobs = mobs;
-        self.explosion_breaks_frames(center, diameter, interaction);
         // Dropped items: 5 health, destroyed by the explosion damage (nether stars resist).
         let mut items = std::mem::take(&mut self.dropped);
         items.retain_mut(|item| {
@@ -524,6 +546,73 @@ impl Game<'_> {
                 c.velocity.y + dir[1] * power,
                 c.velocity.z + dir[2] * power,
             );
+        }
+        // Frames, paintings, cushions and armour stands last: vanilla lists
+        // the entities in reach before hurting any, so the items they drop
+        // here are neither destroyed nor pushed by the same blast.
+        self.explosion_breaks_frames(center, diameter, interaction);
+        self.explosion_breaks_decorations(center, diameter, interaction);
+    }
+    /// `blast_spares_decorations` for the blast going off now: the mob that
+    /// owns its projectile or explodes itself is the source's entity.
+    pub(super) fn blast_spares_decorations(&self, interaction: BlockInteraction) -> bool {
+        let by_mob = self
+            .combat
+            .explosion_owner
+            .or(self.combat.explosion_source)
+            .is_some();
+        blast_spares_decorations(self.ui.rules.bool("mob_griefing"), interaction, by_mob)
+    }
+    /// `ServerExplosion.hurtEntities` for paintings, cushions and armour
+    /// stands (item frames: `explosion_breaks_frames`). A painting or cushion
+    /// in reach is killed and dropped (`BlockAttachedEntity.hurtServer`,
+    /// `Painting.dropItem`, `Cushion.dropItem`). An armour stand that is
+    /// neither invisible nor a marker breaks (`ArmorStand.hurtServer` with
+    /// `IS_EXPLOSION`: `brokenByAnything`, then `kill`): its equipment drops,
+    /// the stand itself does not.
+    /// Not ported: `BlockAttachedEntity.ignoreExplosion` also spares paintings
+    /// and cushions when the exploding entity is in water.
+    fn explosion_breaks_decorations(
+        &mut self,
+        center: [f64; 3],
+        diameter: f64,
+        interaction: BlockInteraction,
+    ) {
+        if self.blast_spares_decorations(interaction) {
+            return;
+        }
+        let mut i = 0;
+        while i < self.paintings.len() {
+            // HangingEntity.recalculateBoundingBox: a painting stands at the
+            // centre of its box.
+            let (lo, hi) = self.paintings[i].bounds();
+            let at = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
+            if blast_reaches(center, diameter, at) {
+                self.break_painting(i, false);
+            } else {
+                i += 1;
+            }
+        }
+        let mut i = 0;
+        while i < self.cushions.len() {
+            let p = self.cushions[i].position;
+            if blast_reaches(center, diameter, [p.x, p.y, p.z]) {
+                self.break_cushion(i, false);
+            } else {
+                i += 1;
+            }
+        }
+        let mut i = 0;
+        while i < self.armor_stands.len() {
+            let a = &self.armor_stands[i];
+            let p = a.position;
+            if !super::armor_stands::spared_by_blast(a)
+                && blast_reaches(center, diameter, [p.x, p.y, p.z])
+            {
+                self.break_armor_stand_by_anything(i);
+            } else {
+                i += 1;
+            }
         }
     }
     /// `ServerLevel.getDestroyType`: a drop decay rule picks between decaying
@@ -757,6 +846,29 @@ fn add_or_append_stack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blasts_reach_entities_within_their_diameter() {
+        // A TNT blast: radius 4, so the entity pass reaches 8 blocks out.
+        let center = [0.5, 64.0, 0.5];
+        assert!(blast_reaches(center, 8.0, [8.5, 64.0, 0.5]));
+        assert!(blast_reaches(center, 8.0, [-3.5, 68.0, 4.5]));
+        assert!(!blast_reaches(center, 8.0, [8.6, 64.0, 0.5]));
+    }
+
+    #[test]
+    fn mob_griefing_off_spares_decorations_from_kept_and_mob_blasts() {
+        use BlockInteraction::{Destroy, DestroyWithDecay, Keep};
+        // mobGriefing on: every blast breaks them, a creeper's included.
+        assert!(!blast_spares_decorations(true, DestroyWithDecay, true));
+        assert!(!blast_spares_decorations(true, Keep, true));
+        // Off: TNT still breaks them (ExplosionInteraction.TNT destroys blocks).
+        assert!(!blast_spares_decorations(false, Destroy, false));
+        assert!(!blast_spares_decorations(false, DestroyWithDecay, false));
+        // Off: a blast that keeps blocks, or one a mob causes, does not.
+        assert!(blast_spares_decorations(false, Keep, false));
+        assert!(blast_spares_decorations(false, Destroy, true));
+    }
 
     #[test]
     fn block_pos_hash_matches_vec3i() {

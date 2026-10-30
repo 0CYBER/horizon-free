@@ -63,7 +63,6 @@ ShootTongue.addUnreachableTargetToMemory	inline	crates/horizon-client/src/mobs/f
 Tadpole.customServerAiStep	inline	crates/horizon-client/src/mobs/aquatic.rs::register	gap: player: panic and swim-around goals stand in for the brain; tadpoles do not follow a player holding a slimeball and do not look at players
 Tadpole.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	Age and AgeLocked
 Tadpole.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	Age and AgeLocked
-Tadpole.setAgeLockedData	missing		player: a golden dandelion on a tadpole does nothing (no age lock use anywhere in the game)
 Tadpole.saveToBucketTag	port	crates/horizon-client/src/entity_nbt.rs::bucket_data	Age and AgeLocked for axolotls and tadpoles
 Tadpole.loadFromBucketTag	port	crates/horizon-client/src/entity_nbt.rs::load_bucket_data	Age and AgeLocked
 Tadpole.ageUp	inline	crates/horizon-client/src/mobs/aquatic.rs::ai_step	gap: player: at 24000 the frog is spawned fresh with yaw and persistence only (SpawnSetup), so a named, silenced or glowing tadpole turns into a plain frog; the grow-up sound is 1.0 loud, not 0.15
