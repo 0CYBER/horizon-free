@@ -590,6 +590,10 @@ pub struct Renderer {
     readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
+    /// Consecutive frames whose surface acquisition failed validation. The
+    /// first gets the swapchain a fresh configuration; later ones reattach
+    /// the window, as a lost surface does.
+    acquire_validation_failures: u32,
     pub drawn_sections: usize,
     /// Last frame's section draws (face ranges and translucent sections),
     /// and the draw calls the backend issued for them.
@@ -2773,6 +2777,7 @@ impl Renderer {
             readback: readback::Readback::default(),
             info,
             suspended: !drawable_size(size.width, size.height, max_side),
+            acquire_validation_failures: 0,
             drawn_sections: 0,
             section_draws: 0,
             section_draw_calls: 0,
@@ -3774,9 +3779,32 @@ impl Renderer {
                 return Ok(false);
             }
             Some(wgpu::CurrentSurfaceTexture::Validation) => {
-                return Err("surface acquisition failed validation".into());
+                // Acquire caught a validation error: the swapchain cannot be
+                // used as configured (wgpu reports a configuration raced with
+                // a submission this way). Give it a fresh configuration like
+                // an Outdated one, and once that has not helped, reattach the
+                // window like a Lost one — a fullscreen loading screen then
+                // skips frames instead of failing every one of them.
+                if self.acquire_validation_failures == 0 {
+                    if let Some(surface) = &self.surface {
+                        Self::configure(
+                            &self.device,
+                            surface,
+                            &self.surface_config(),
+                            self.hdr.as_ref(),
+                        );
+                    }
+                } else {
+                    self.recreate_surface()?;
+                }
+                self.acquire_validation_failures =
+                    self.acquire_validation_failures.saturating_add(1);
+                return Ok(false);
             }
         };
+        if surface_frame.is_some() {
+            self.acquire_validation_failures = 0;
+        }
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
             (Some(_), Some(hdr)) => hdr.frame(&self.device, size),
