@@ -41,9 +41,13 @@ impl Game<'_> {
     /// the point an interact packet's location is measured from (the
     /// client's `remote_object_hit` uses the same points).
     pub(super) fn object_target(&self, id: i32) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
-        let id = u32::try_from(id).ok()?;
         let at = |v: Vec3| [v.x, v.y, v.z];
         let centre = |p: [i32; 3]| p.map(|v| f64::from(v) + 0.5);
+        if let Some(i) = self.interactions.get(&id) {
+            let (lo, hi) = corners(i.bounds());
+            return Some((lo, hi, at(i.position)));
+        }
+        let id = u32::try_from(id).ok()?;
         if let Some(b) = self.boats.iter().find(|b| b.id == id) {
             let (lo, hi) = corners(b.bounds());
             return Some((lo, hi, at(b.position)));

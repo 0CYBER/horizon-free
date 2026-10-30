@@ -117,6 +117,7 @@ mod growth;
 mod hand;
 mod initial_spawn;
 mod integrated;
+mod interactions;
 mod item_draw;
 mod item_particles;
 mod jukebox;
@@ -1901,6 +1902,7 @@ struct Game<'a> {
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
     text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    interactions: std::collections::HashMap<i32, interactions::RemoteInteraction>,
     /// The fence knots a server tracks to this client, by entity id, at their
     /// block (`LeashFenceKnotEntity`).
     remote_knots: HashMap<u32, [i32; 3]>,
@@ -14693,6 +14695,7 @@ impl<'a> Game<'a> {
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
             text_displays: Default::default(),
+            interactions: Default::default(),
             remote_knots: Default::default(),
             knot_ids: Default::default(),
             text_display_vertices: 0,
