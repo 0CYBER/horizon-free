@@ -6487,6 +6487,31 @@ impl Game<'_> {
             self.screen = Screen::Paused;
         }
     }
+    /// `KeyMapping.setAll`: every key physically held is held again, as the
+    /// mapping it is bound to, so a key pressed or kept down behind a screen
+    /// counts once the game has the keyboard back. A sneak or sprint that
+    /// toggles keeps its toggle state (`shouldSetOnIngameFocus`).
+    fn restore_held_keys(&mut self) {
+        let held: Vec<KeyCode> = self.physical_keys.iter().copied().collect();
+        let toggles = [self.settings.toggle_crouch, self.settings.toggle_sprint];
+        for key in held {
+            for mapped in self.settings.keys.translate_all(key) {
+                match mapped {
+                    Ok(slot_key @ (KeyCode::ShiftLeft | KeyCode::ControlLeft)) => {
+                        let slot = usize::from(slot_key == KeyCode::ControlLeft);
+                        if !toggles[slot] {
+                            self.toggles.0[slot].set_down(true, false);
+                            self.sync_toggle(slot);
+                        }
+                    }
+                    Ok(other) => {
+                        self.keys.insert(other);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
     /// `MouseHandler.grabMouse` / `releaseMouse`. Both put the pointer at
     /// the window's centre, so a screen opened from gameplay (inventory,
     /// chest, pause, chat, sign, book, death) starts with the cursor in the
@@ -6538,6 +6563,11 @@ impl Game<'_> {
         let scale = HudBatch::new(size).scale;
         let was_grabbed = self.captured;
         if capture {
+            // MouseHandler.grabMouse: KeyMapping.setAll unless
+            // InputQuirks.RESTORE_KEY_STATE_AFTER_MOUSE_GRAB is off (macOS).
+            if !was_grabbed && !cfg!(target_os = "macos") {
+                self.restore_held_keys();
+            }
             self.mouse.set_ignore_first_move();
             // macOS warps by re-associating the mouse with the pointer,
             // which undoes a Locked grab and leaves the pointer free: warp
