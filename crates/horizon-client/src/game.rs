@@ -189,6 +189,7 @@ mod pumpkin;
 mod raids;
 mod recipe_book;
 mod remote;
+mod remote_camera;
 mod remote_chunks;
 mod remote_mob_data;
 mod remote_mob_particles;
@@ -2244,6 +2245,14 @@ impl Game<'_> {
     /// crosshair target (blocks, fluids, entities, mod raycasts) is found
     /// along this ray, so a tracked controller can stand in for it.
     fn aim(&self) -> Option<([f64; 3], [f64; 3])> {
+        // Minecraft.pick: from the camera entity's eyes along its view
+        // (LivingEntity.getViewYRot: the head's yaw).
+        if let Some(m) = self.camera_mob() {
+            return Some((
+                [m.position.x, m.eye_y(), m.position.z],
+                view_vector(m.head_yaw, m.head_pitch),
+            ));
+        }
         Some((self.eye_position()?, view_vector(self.yaw, self.pitch)))
     }
     fn reach(&self) -> f64 {
@@ -8901,8 +8910,9 @@ impl Game<'_> {
         let mut best: Option<(usize, f64)> = None;
         for (i, m) in self.mobs.iter().enumerate() {
             // ProjectileUtil.getEntityHitResult: the mob the player rides
-            // shares its root vehicle and is never the hit.
-            if !m.alive() || Some(m.id) == self.riding {
+            // shares its root vehicle and is never the hit, nor is the
+            // camera entity the pick starts from.
+            if !m.alive() || Some(m.id) == self.riding || Some(m.id) == self.remote_camera_id() {
                 continue;
             }
             if let Some(t) = ray_box(eye, dir, reach, m.bounds())

@@ -797,6 +797,11 @@ packet!(SetEquipment { id: i32 => VarInt, slots: Vec<(u8, Option<Stack>)> => Equ
 packet!(SetExperience { progress: f32 => Float, level: i32 => VarInt, total: i32 => VarInt });
 packet!(SetHealth { health: f32 => Float, food: i32 => VarInt, saturation: f32 => Float });
 packet!(SetHeldSlot { slot: i32 => VarInt });
+packet!(
+    /// ClientboundSetCameraPacket: the entity the view is attached to (the
+    /// player's own id puts it back on the player).
+    SetCamera { camera_id: i32 => VarInt }
+);
 packet!(SetPlayerInventory { slot: i32 => VarInt, item: Option<Stack> => Slot });
 packet!(
     /// ClockNetworkState for one world clock (registry id).
@@ -1891,6 +1896,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetBorderWarningDelay(SetBorderWarningDelay) = SET_BORDER_WARNING_DELAY,
     SetBorderWarningDistance(SetBorderWarningDistance) = SET_BORDER_WARNING_DISTANCE,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
+    SetCamera(SetCamera) = SET_CAMERA,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
     SetCursorItem(SetCursorItem) = SET_CURSOR_ITEM,
     SetDefaultSpawnPosition(SetDefaultSpawnPosition) = SET_DEFAULT_SPAWN_POSITION,
@@ -2063,6 +2069,11 @@ impl Codec<TrackedWaypoint> for TrackedWaypoint {
 packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float });
 packet!(Attack { id: i32 => VarInt });
 packet!(TeleportToEntity { uuid: u128 => Uuid });
+packet!(
+    /// ServerboundSpectatorActionPacket: the entity a spectator clicked, or
+    /// none for a click on nothing.
+    SpectatorAction { target: Option<i32> => OptVarInt }
+);
 packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
@@ -2311,6 +2322,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
     TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
+    SpectatorAction(SpectatorAction) = SPECTATOR_ACTION,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -3098,6 +3110,30 @@ mod tests {
                     .unwrap(),
                 Clientbound::PlayerLookAt(p)
             );
+        }
+    }
+
+    /// ClientboundSetCameraPacket: one VarInt, the camera entity's id.
+    #[test]
+    fn set_camera_is_the_camera_entity_id() {
+        // 300 as a VarInt: 0xAC 0x02.
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::SET_CAMERA, &[0xAC, 0x02]).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert!(format!("{p:?}").contains("camera_id: 300"), "{p:?}");
+        assert_eq!(p.encode()[1..], [0xAC, 0x02]);
+    }
+
+    /// ServerboundSpectatorActionPacket: `OPTIONAL_VAR_INT`, the clicked
+    /// entity's id plus one, or 0 for a click on nothing.
+    #[test]
+    fn spectator_action_is_an_optional_entity_id() {
+        let id = crate::ids::play::serverbound::SPECTATOR_ACTION;
+        for (bytes, shown) in [([8u8], "Some(7)"), ([0u8], "None")] {
+            let p = Serverbound::decode(id, &bytes).unwrap();
+            assert!(!matches!(p, Serverbound::Unknown(..)), "{p:?}");
+            assert!(format!("{p:?}").contains(shown), "{p:?}");
+            assert_eq!(p.encode()[1..], bytes);
         }
     }
 

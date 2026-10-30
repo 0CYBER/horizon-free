@@ -122,6 +122,9 @@ pub(super) struct Remote {
     pub(super) logged_in: bool,
     status: String,
     pub(super) entity_id: i32,
+    /// `Minecraft.cameraEntity` when the server put the view on another
+    /// entity (ClientboundSetCameraPacket); None while it is the player.
+    pub(super) camera: Option<i32>,
     /// The item the player's use began with (`LivingEntity.useItem`).
     pub(super) use_item: Option<Arc<str>>,
     pub(super) dimension: DimensionType,
@@ -482,6 +485,7 @@ impl Game<'_> {
             logged_in: false,
             status: "Connecting to the server...".into(),
             entity_id: 0,
+            camera: None,
             use_item: None,
             dimension: DimensionType::vanilla("minecraft:overworld"),
             chunk_format: Arc::new(ChunkFormat::new(
@@ -1996,6 +2000,8 @@ impl Game<'_> {
                     r.carried = Some(0);
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
+                    // handleLogin: the new LocalPlayer is the camera.
+                    r.camera = None;
                     r.logged_in = true;
                     r.view_distance = p.chunk_radius;
                     r.show_death_screen = p.show_death_screen;
@@ -2032,6 +2038,8 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = None;
                     r.health = (20.0, 20, 5.0);
+                    // handleRespawn: the new LocalPlayer is the camera.
+                    r.camera = None;
                 }
                 self.capture(true);
             }
@@ -2051,6 +2059,7 @@ impl Game<'_> {
                 self.snap_player_model_pitch();
             }
             C::PlayerLookAt(p) => self.remote_look_at(&p),
+            C::SetCamera(p) => self.remote_set_camera(p.camera_id),
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
             C::ForgetLevelChunk(p) => {
@@ -4163,6 +4172,14 @@ impl Game<'_> {
             | u8::from(keys.jump) << 4
             | u8::from(keys.shift) << 5
             | u8::from(keys.sprint) << 6;
+        // LocalPlayer.applyInput and aiStep: watching through another
+        // entity, the player does not move itself; its keys still reach the
+        // server, whose sneak check lets go of the camera.
+        let keys = if self.controls_camera() {
+            keys
+        } else {
+            Keys::default()
+        };
         // A passenger moves with its vehicle (Entity.rideTick), not by itself.
         let riding = self.screen != Screen::Dead && self.remote_ride(keys);
         // The server sends no passenger's position: they sit where their
@@ -4858,6 +4875,7 @@ impl Game<'_> {
         );
         let (yaw, pitch, selected) = (self.yaw, self.pitch, self.selected);
         let riding = self.riding.is_some();
+        let controls_camera = self.controls_camera();
         let vehicle = self.remote_vehicle_packets();
         let Some(r) = self.remote.as_mut() else {
             return;
@@ -4890,9 +4908,12 @@ impl Game<'_> {
                 flags: u8::from(on_ground) | u8::from(collision) << 1,
             }));
             out.extend(vehicle);
-        } else if let Some(packet) =
-            r.position_sender
-                .update(pos, (yaw, pitch), on_ground, collision)
+        } else if controls_camera
+            // LocalPlayer.sendPosition: no move while the view is another
+            // entity's (the server keeps the player on it).
+            && let Some(packet) =
+                r.position_sender
+                    .update(pos, (yaw, pitch), on_ground, collision)
         {
             out.push(packet);
         }
@@ -6045,6 +6066,11 @@ impl Game<'_> {
             return false;
         }
         if self.spectator() {
+            // Minecraft.startAttack: a spectator's click on an entity asks
+            // to watch through it (MultiPlayerGameMode.spectate); a click on
+            // nothing still tells the server (spectatorNoAction).
+            let target = self.spectator_click_target();
+            self.send(S::SpectatorAction(play::SpectatorAction { target }));
             return true;
         }
         // A spear jabs (`MultiPlayerGameMode.piercingAttack`): the server

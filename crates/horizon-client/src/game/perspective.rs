@@ -213,6 +213,60 @@ impl Game<'_> {
     /// front of) it, pulled in where visual shapes are in the way. Returns the
     /// position, yaw and pitch to render from.
     pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
+        // Minecraft.cameraEntity: a server's spectator camera on a mob or
+        // another player.
+        let (entity, descending) = match self.camera_mob() {
+            Some(m) => (super::remote_camera::mob_camera_entity(m), false),
+            None => (
+                self.player_camera_entity()?,
+                self.player.as_ref()?.shift_key_down,
+            ),
+        };
+        let mut view = self.view;
+        let kind = match self.camera_type {
+            CameraType::FirstPerson => horizon_client::camera::CameraType::FirstPerson,
+            CameraType::ThirdPersonBack => horizon_client::camera::CameraType::ThirdPersonBack,
+            CameraType::ThirdPersonFront => horizon_client::camera::CameraType::ThirdPersonFront,
+        };
+        let context = CollisionContext::for_entity(
+            CollisionEntity {
+                identity: EntityIdentity(0),
+                y: entity.position[1],
+                descending,
+                main_hand: Some(CollisionItem::EMPTY),
+            },
+            false,
+        );
+        let mut rays = VisualRays {
+            scene: SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            },
+            facts: self.res.facts(),
+            context,
+        };
+        view.align_with_entity(&entity, partial, kind, |from, to| {
+            let hit = clip_world(
+                &mut rays,
+                Vec3::new(from[0], from[1], from[2]),
+                Vec3::new(to[0], to[1], to[2]),
+                RayBlockMode::Visual,
+                RayFluidMode::None,
+                4096,
+            )
+            .ok()?;
+            (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
+        });
+        self.view = view;
+        Some((
+            glam::DVec3::from_array(view.position),
+            view.y_rot,
+            view.x_rot,
+        ))
+    }
+    /// The player as `Camera.alignWithEntity` sees it.
+    fn player_camera_entity(&mut self) -> Option<CameraEntity> {
         let (scale, distance) = {
             let p = self.player.as_mut()?;
             (
@@ -282,48 +336,7 @@ impl Game<'_> {
             }),
             mount,
         };
-        let mut view = self.view;
-        let kind = match self.camera_type {
-            CameraType::FirstPerson => horizon_client::camera::CameraType::FirstPerson,
-            CameraType::ThirdPersonBack => horizon_client::camera::CameraType::ThirdPersonBack,
-            CameraType::ThirdPersonFront => horizon_client::camera::CameraType::ThirdPersonFront,
-        };
-        let context = CollisionContext::for_entity(
-            CollisionEntity {
-                identity: EntityIdentity(0),
-                y: p.position.y,
-                descending: p.shift_key_down,
-                main_hand: Some(CollisionItem::EMPTY),
-            },
-            false,
-        );
-        let mut rays = VisualRays {
-            scene: SceneCollisions {
-                world: &self.world,
-                binding: self.collision,
-                subject: None,
-            },
-            facts: self.res.facts(),
-            context,
-        };
-        view.align_with_entity(&entity, partial, kind, |from, to| {
-            let hit = clip_world(
-                &mut rays,
-                Vec3::new(from[0], from[1], from[2]),
-                Vec3::new(to[0], to[1], to[2]),
-                RayBlockMode::Visual,
-                RayFluidMode::None,
-                4096,
-            )
-            .ok()?;
-            (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
-        });
-        self.view = view;
-        Some((
-            glam::DVec3::from_array(view.position),
-            view.y_rot,
-            view.x_rot,
-        ))
+        Some(entity)
     }
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).
