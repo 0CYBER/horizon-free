@@ -8,7 +8,7 @@ use horizon_client::{
     containers::BlockEntity,
     effects::{EffectInstance, PlayerEffects},
     fast_hash::{FxHashMap, FxHashSet},
-    mobs::{Mob, Species, Who, warden},
+    mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
@@ -411,13 +411,12 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
-            let y0 = MIN_Y + s as i32 * 16;
+            let y0 = self.world.bottom_y() + s as i32 * 16;
             // Without a sculk state in its palette, no block of the section
             // is one: most sections are passed over without reading a block.
             if !section.blocks.maybe_has(|v| self.kind_of_state(v) != 0) {
@@ -543,6 +542,9 @@ impl Game<'_> {
         for i in 0..self.mobs.len() {
             if self.mobs[i].species() == Species::Warden && self.mobs[i].alive() {
                 self.warden_listen(i, event, pos, &ctx);
+            }
+            if self.mobs[i].species() == Species::Allay && self.mobs[i].alive() {
+                self.allay_listen(i, event, pos, &ctx);
             }
         }
     }
@@ -723,6 +725,28 @@ impl Game<'_> {
         if avoided {
             self.trigger_player("minecraft:avoid_vibration");
         }
+    }
+
+    /// `VibrationSystem.Listener.handleGameEvent` for the allay at `index`
+    /// (`Allay.VibrationUser`).
+    fn allay_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
+        let now = self.world.game_time;
+        let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
+        let dimension = self.dim.id();
+        allay::listen(
+            &mut self.mobs[index],
+            now,
+            event,
+            pos,
+            ctx,
+            dimension,
+            |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let state = world.block(p.x, p.y, p.z);
+                    occludes.get(state.0 as usize).copied().unwrap_or(false)
+                })
+            },
+        );
     }
 
     // ---- ticking ----
@@ -1614,7 +1638,16 @@ impl Game<'_> {
     }
 
     fn tick_mob_sculk_events(&mut self) {
-        let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>, Option<u32>)> = self
+        let snapshot: Vec<(
+            u32,
+            [f64; 3],
+            bool,
+            bool,
+            Species,
+            Option<i64>,
+            Option<u32>,
+            u32,
+        )> = self
             .mobs
             .iter()
             .filter(|m| m.alive())
@@ -1627,10 +1660,11 @@ impl Game<'_> {
                     m.species(),
                     m.last_damage.map(|(_, t)| t),
                     m.extra.mount,
+                    m.age,
                 )
             })
             .collect();
-        for (id, at, on_ground, in_water, species, damaged, vehicle) in snapshot {
+        for (id, at, on_ground, in_water, species, damaged, vehicle, age) in snapshot {
             if on_ground {
                 self.step_on_redstone_ore(at, false);
             }
@@ -1640,6 +1674,19 @@ impl Game<'_> {
             let emits = !matches!(species, Species::Shulker);
             if emits {
                 self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);
+                // Entity.processFlappingMovement with Bee.isFlapping: a bee off
+                // the ground over air flaps on every other tick (the mob's own
+                // `MobEvent::GameEvent` is not read here).
+                if species == Species::Bee && !on_ground && age.is_multiple_of(2) {
+                    let below = self.world.block(
+                        at[0].floor() as i32,
+                        (at[1] - 1.0e-5).floor() as i32,
+                        at[2].floor() as i32,
+                    );
+                    if self.res.facts().is_air(below) {
+                        self.post_entity_event("minecraft:flap", Who::Mob(id));
+                    }
+                }
             }
             if let Some(t) = damaged {
                 let seen = self.sculk.damaged.insert(id, t);

@@ -776,7 +776,7 @@ impl Game<'_> {
     /// `EquipmentDispenseItemBehavior.dispenseEquipment`: the first living
     /// entity in front that `canEquipWithDispenser` gets one of the item.
     fn dispense_equipment(&mut self, pos: Pos, facing: Direction, stack: &mut ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item) else {
+        let Some(info) = self.items().get(&stack.item) else {
             return false;
         };
         let (Some(slot), true) = (
@@ -1176,8 +1176,9 @@ impl Game<'_> {
         let (content, sound, mob) =
             horizon_client::items::bucket_contents(&item).expect("filled bucket dispatcher");
         let target_pos = Self::pos_of(target);
-        let emptied = self
-            .with_level(|b, level, ticks| b.bucket_empty(level, ticks, target_pos, content, sound));
+        let emptied = self.with_level(|b, level, ticks| {
+            b.bucket_empty(level, ticks, target_pos, content, sound, false, false)
+        });
         self.process_level_events()?;
         if !emptied {
             return Ok((self.dispense_default(pos, facing, stack), CLICK));
@@ -1235,7 +1236,8 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = Self::pos_of(offset(pos, facing));
-        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target));
+        let picked =
+            self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target, false));
         self.process_level_events()?;
         match picked {
             Some(filled) => {
@@ -1412,7 +1414,7 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
         let free = self.res.facts().is_air(self.block_at(target))
-            && target.1 >= horizon_client::chunk::MIN_Y + 2
+            && target.1 >= self.world.bottom_y() + 2
             && self.ui.difficulty != 0
             && self.can_build_wither(target);
         if free {
@@ -1683,10 +1685,10 @@ impl Game<'_> {
         table: &str,
         held: Option<&ItemStack>,
     ) -> Vec<ItemStack> {
-        match self.res.items().loot_sequence(parent) {
+        match world_items!(self).loot_sequence(parent) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items().loot_table_from(table, false, held, random)
+                world_items!(self).loot_table_from(table, false, held, random)
             }
             None => self
                 .res

@@ -79,6 +79,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.ai.aggressive = flags & 4 != 0;
             }
             (i, Value::Bool(b)) if Some(i) == baby => m.extra.age = if *b { -1 } else { 0 },
+            // AgeableMob.AGE_LOCKED, the entry after DATA_BABY_ID (not
+            // Zombie's or Piglin's).
+            (17, Value::Bool(locked)) if baby == Some(16) && finalize::ageable(species) => {
+                m.extra.age_locked = *locked
+            }
             _ => {}
         }
         match (species, *index, value) {
@@ -119,8 +124,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
             (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
-            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
-            (Species::Mooshroom, 17, Value::Int(variant)) => {
+            // Tadpole.AGE_LOCKED (after AbstractFish's FROM_BUCKET).
+            (Species::Tadpole, 17, Value::Bool(locked)) => m.extra.age_locked = *locked,
+            // MushroomCow.DATA_TYPE (after AgeableMob's DATA_BABY_ID and
+            // AGE_LOCKED): 0 red, 1 brown.
+            (Species::Mooshroom, 18, Value::Int(variant)) => {
                 m.extra.variant = (*variant == 1) as u8
             }
             // Piglin.DATA_IS_DANCING: the dance pose.
@@ -180,6 +188,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // Vex.DATA_FLAGS_ID: charging in bit 0.
             (Species::Vex, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // GlowSquid.DATA_DARK_TICKS_REMAINING (after AgeableMob's two).
+            (Species::GlowSquid, 18, Value::Int(ticks)) => {
+                horizon_client::mobs::aquatic::set_dark_ticks(m, *ticks);
+            }
             // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
             (Species::Creaking, 16, Value::Bool(can_move)) => m.extra.flag2 = !*can_move,
             (Species::Creaking, 17, Value::Bool(active)) => m.extra.flag = *active,
@@ -450,6 +462,10 @@ pub(super) fn client_defaults(m: &mut Mob) {
         // Bat's constructor sets resting only on the server; the data default is 0.
         bat::set_resting(m, false);
     }
+    // A horse's jump strength until the server syncs its own: the type's.
+    if equine::moved_by_rider(m.species()) {
+        m.extra.vector[0] = m.kind.jump_strength;
+    }
 }
 
 #[cfg(test)]
@@ -480,6 +496,23 @@ mod tests {
         let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
         client_defaults(&mut m);
         Some(m)
+    }
+
+    /// #2920: a server's horse is moved by its rider's client, which jumps
+    /// it by the type's jump strength (`createBaseHorseAttributes`,
+    /// `createBaseChestedHorseAttributes`) until the server syncs its own.
+    #[test]
+    fn a_servers_horse_jumps_its_types_strength() {
+        for (kind, strength) in [("horse", 0.7), ("donkey", 0.5), ("mule", 0.5)] {
+            let Some(m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert!(
+                (m.extra.vector[0] - strength).abs() < 1e-6,
+                "{kind}: {}",
+                m.extra.vector[0]
+            );
+        }
     }
 
     #[test]
@@ -523,6 +556,21 @@ mod tests {
             assert_eq!(m.extra.counter2, 0);
             assert!(beam(&m, 0.0).is_none());
         }
+    }
+
+    #[test]
+    fn a_mooshroom_takes_its_type_after_the_age_lock() {
+        let Some(mut m) = mob("minecraft:mooshroom") else {
+            return;
+        };
+        // AgeableMob.AGE_LOCKED (17) is not the colour.
+        apply(&mut m, &[(17, s::BOOLEAN, Value::Bool(true))]);
+        assert_eq!(m.extra.variant, 0);
+        // MushroomCow.DATA_TYPE (18): what MushroomCow.thunderHit changes.
+        apply(&mut m, &[(18, s::INT, Value::Int(1))]);
+        assert_eq!(m.extra.variant, 1);
+        apply(&mut m, &[(18, s::INT, Value::Int(0))]);
+        assert_eq!(m.extra.variant, 0);
     }
 
     #[test]

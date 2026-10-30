@@ -227,6 +227,8 @@ impl Game<'_> {
             self.dismount(i);
         } else if let Some(i) = self.carts.iter().position(|c| c.id == id) {
             self.dismount_cart(i);
+        } else if let Some(c) = self.cushions.iter().find(|c| c.id == id).cloned() {
+            self.get_up_from_cushion(&c);
         } else {
             self.dismount_mount();
         }
@@ -255,10 +257,19 @@ impl EmissionWorld for Emitter<'_, '_> {
     fn consume_sound(&mut self, _: ItemStack) -> Result<String, Infallible> {
         unreachable!("players play the consumable's own sound")
     }
-    /// `Entity.playSound`: at the player's position.
+    /// `Player.playSound`: at the player's position, for everyone but the
+    /// player, whose own client plays it (`level.playSound(player, ...)`):
+    /// a guest's server turn leaves the guest out.
     fn play_sound(&mut self, sound: String, volume: f32, pitch: f32) -> Result<(), Infallible> {
         let at = self.0.feet();
-        self.0.audio.play(&sound, at, volume, pitch);
+        if self.0.lan_acting.is_some() {
+            self.0.audio.play_unshared(&sound, at, volume, pitch);
+            if let Some(at) = at {
+                self.0.guest_player_sounds.push((sound, at, volume, pitch));
+            }
+        } else {
+            self.0.audio.play(&sound, at, volume, pitch);
+        }
         Ok(())
     }
 }

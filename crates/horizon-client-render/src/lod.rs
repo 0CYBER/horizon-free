@@ -161,6 +161,31 @@ impl Column {
             self.spans.push(span);
         }
     }
+    /// Open water and its floor lit as open sky, as the seed's far columns
+    /// are: a chunk's own light fades a level per block of water, so the
+    /// chunks a player passed drew a darker band through the seed's sea.
+    /// The water is one span again.
+    fn light_open_water(&mut self, kinds: &[u8]) {
+        // Water; lava glows.
+        let water = |span: &Span| {
+            let kind = kinds.get(span.state.0 as usize).copied().unwrap_or(0);
+            kind & FLUID != 0 && kind >> 4 == 0
+        };
+        if !self.spans.last().is_some_and(water) {
+            return;
+        }
+        let floor = self
+            .spans
+            .iter()
+            .rposition(|span| !water(span))
+            .unwrap_or(0);
+        for (i, mut span) in std::mem::take(&mut self.spans).into_iter().enumerate() {
+            if i >= floor {
+                span.light |= 0xf0;
+            }
+            self.push(span);
+        }
+    }
     /// `kinds`: `state_kinds`, per block state.
     fn from_chunk(chunk: &Chunk, kinds: &[u8], x: i32, z: i32) -> Self {
         let kind = |state: BlockStateId| kinds.get(state.0 as usize).copied().unwrap_or(0);
@@ -187,7 +212,7 @@ impl Column {
         };
         let mut column = Self::default();
         for (sy, section) in chunk.sections.iter().enumerate() {
-            let min = MIN_Y + sy as i32 * 16;
+            let min = chunk.min_y() + sy as i32 * 16;
             let uniform = section.blocks.bits() == 0
                 && section.biomes.bits() == 0
                 && matches!(section.light, crate::chunk::Light::Uniform(_));
@@ -212,6 +237,7 @@ impl Column {
                 });
             }
         }
+        column.light_open_water(kinds);
         let mut water = None;
         for span in column.spans.iter().rev() {
             if kind(span.state) & FLUID != 0 {
@@ -230,7 +256,7 @@ impl Column {
             && let Some((height, state)) = water
         {
             column.surface = Some(Surface {
-                height: MIN_Y,
+                height: chunk.min_y(),
                 state: BlockStateId(
                     kinds.iter().position(|&kind| kind & AIR != 0).unwrap_or(0) as u32
                 ),
@@ -1059,6 +1085,16 @@ impl Lod {
             })
             .copied()
             .collect();
+        // Retiring fine columns are empty stand-ins, excluded from `active`
+        // while their normal meshes still cover the gap. Request their detail
+        // explicitly: neither the active-tile requests nor sampling an already
+        // ready stand-in can fill it, so its GPU sections would never retire.
+        keys.extend(retiring_detail(
+            &self.plan,
+            &self.retiring,
+            &self.saved,
+            &self.detail_masks,
+        ));
         keys.sort_unstable_by_key(|key| (key.distance(camera), *key));
         let mut chunks = FxHashSet::default();
         for key in keys {
@@ -1563,10 +1599,83 @@ impl Drop for Lod {
         }
     }
 }
+/// Fine retiring stand-ins need actual column detail before `Plan::replaces`
+/// can release their normal meshes. The caller keeps the usual 32-column
+/// request budget and waits for the replacement mesh before changing cutout.
+fn retiring_detail<'a>(
+    plan: &'a Plan,
+    retiring: &'a FxHashSet<(i32, i32)>,
+    saved: &'a Saved,
+    masks: &'a FxHashMap<TileKey, [u64; 4]>,
+) -> impl Iterator<Item = TileKey> + 'a {
+    retiring.iter().filter_map(move |&(x, z)| {
+        let key = TileKey { x, z, level: 0 };
+        (plan.nodes.contains(&key)
+            && !saved.contains_key(&(x, z))
+            && masks.get(&key) != Some(&[u64::MAX; 4]))
+        .then_some(key)
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
+    #[test]
+    fn retiring_fine_stand_ins_request_detail_before_their_gpu_meshes_can_retire() {
+        let column = (12, 0);
+        let fine = TileKey {
+            x: 12,
+            z: 0,
+            level: 0,
+        };
+        let mut plan = Plan::default();
+        plan.nodes.insert(fine);
+        let ready: FxHashMap<TileKey, ()> = [(fine, ())].into_iter().collect();
+        let retiring = [column].into_iter().collect();
+        let saved = Saved::default();
+        let mut masks = FxHashMap::default();
+        // A covered stand-in is ready, but empty: ordinary sampling skips it,
+        // and selection leaves it out of `active`. It cannot yet replace the
+        // old full-detail column, even though the near world has unloaded it.
+        assert!(!plan.replaces(column, &ready, |key| masks.get(&key)
+            == Some(&[u64::MAX; 4])));
+        assert_eq!(
+            retiring_detail(&plan, &retiring, &saved, &masks).collect::<Vec<_>>(),
+            [fine]
+        );
+        // The existing RequestDetail -> apply_fine path marks complete detail;
+        // only then may selection retire it and publish the new mesh cutout.
+        masks.insert(fine, [u64::MAX; 4]);
+        assert!(
+            retiring_detail(&plan, &retiring, &saved, &masks)
+                .next()
+                .is_none()
+        );
+        assert!(plan.replaces(column, &ready, |key| masks.get(&key)
+            == Some(&[u64::MAX; 4])));
+    }
+    #[test]
+    fn retiring_detail_requests_only_planned_columns_still_missing_detail() {
+        let fine = |x| TileKey { x, z: 0, level: 0 };
+        let mut plan = Plan::default();
+        plan.nodes.extend((0..4).map(fine));
+        plan.nodes.insert(fine(5));
+        let retiring = (0..5).map(|x| (x, 0)).collect();
+        let saved = [((1, 0), Arc::new(std::array::from_fn(|_| Column::default())))]
+            .into_iter()
+            .collect();
+        let masks = [
+            (fine(2), [u64::MAX; 4]),
+            (fine(3), [u64::MAX, u64::MAX, u64::MAX, u64::MAX - 1]),
+        ]
+        .into_iter()
+        .collect();
+        let mut requested: Vec<_> = retiring_detail(&plan, &retiring, &saved, &masks).collect();
+        requested.sort_unstable();
+        // Saved or complete detail needs no request; an unplanned retiree and
+        // a planned column that is not retiring must not consume the budget.
+        assert_eq!(requested, [fine(0), fine(3)]);
+    }
     #[test]
     fn reduced_far_detail_only_merges_tiles_away_from_the_near_terrain() {
         let leaves = |plan: &Plan| {
@@ -1770,6 +1879,48 @@ mod tests {
             7 << 12,
             "block light does not invent skylight"
         );
+    }
+    #[test]
+    fn open_water_and_its_floor_are_lit_as_the_seed_lights_them() {
+        let span = |min, max, state, light| Span {
+            min,
+            max,
+            state: BlockStateId(state),
+            biome: 0,
+            light,
+        };
+        // 0 air, 1 stone, 2 water, 3 lava.
+        let kinds = [AIR, KEPT, KEPT | FLUID, KEPT | FLUID | 15 << 4];
+        // A chunk's own light: a cave, the floor, water fading a level a block.
+        let mut sea = Column {
+            surface: None,
+            spans: vec![
+                span(30, 40, 1, 0),
+                span(40, 48, 1, 0x10 | 2 << 12),
+                span(48, 61, 2, 0x20),
+                span(61, 62, 2, 0xe0),
+                span(62, 63, 2, 0xf0),
+            ],
+        };
+        sea.light_open_water(&kinds);
+        assert_eq!(
+            sea.spans,
+            [
+                span(30, 40, 1, 0),
+                span(40, 48, 1, 0xf0 | 2 << 12),
+                span(48, 63, 2, 0xf0)
+            ]
+        );
+        // Land, and lava, keep their light.
+        for top in [1, 3] {
+            let mut column = Column {
+                surface: None,
+                spans: vec![span(40, 50, 2, 0x20), span(50, 63, top, 0x80)],
+            };
+            let before = column.spans.clone();
+            column.light_open_water(&kinds);
+            assert_eq!(column.spans, before);
+        }
     }
     #[test]
     fn coarse_voxels_reduce_the_area_instead_of_inflating_one_leaf() {
