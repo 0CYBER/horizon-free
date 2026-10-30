@@ -4,9 +4,12 @@
 //!
 //! Horizon holds a component as the wire form (registry ids, no names), so the
 //! codec form is rebuilt from it with a registry lookup for the ids that the
-//! codec writes as identifiers. A component Horizon only keeps as bytes
-//! ([`Component::Raw`]), or whose codec form needs data it dropped, has no hash:
-//! it is left out of the added map and a vanilla server resyncs that slot.
+//! codec writes as identifiers. [`raw`] decodes the stream bytes of the components
+//! Horizon keeps as bytes ([`Component::Raw`]). A component with no codec form
+//! Horizon can build (vanilla has none, an id has no name, or a codec is not
+//! ported yet) has no hash: it is left out of the added map and a vanilla server
+//! resyncs that slot.
+mod raw;
 use super::{Component, FireworkExplosion, Hashed, Stack, WirePatch, component as kind};
 use crate::hash_ops::{HashCode, HashOps, RecordHash};
 
@@ -211,16 +214,24 @@ impl Component {
                 potion,
                 color,
                 rest,
-            } if rest.is_empty() => RecordHash::new()
-                .optional(
-                    "potion",
-                    match potion {
-                        Some(p) => Some(entry(names, "minecraft:potion", *p)?),
-                        None => None,
-                    },
-                )
-                .optional("custom_color", color.map(HashOps::create_int))
-                .build(),
+            } => {
+                let rec = RecordHash::new()
+                    .optional(
+                        "potion",
+                        match potion {
+                            Some(p) => Some(entry(names, "minecraft:potion", *p)?),
+                            None => None,
+                        },
+                    )
+                    .optional("custom_color", color.map(HashOps::create_int));
+                // An empty tail is no custom effects and no name.
+                if rest.is_empty() {
+                    rec
+                } else {
+                    raw::potion_tail(rec, rest, names)?
+                }
+                .build()
+            }
             Self::CustomModelData {
                 floats,
                 flags,
@@ -394,8 +405,8 @@ impl Component {
                 HashOps::create_list(out)
             }
             Self::PaintingVariant(i) => entry(names, "minecraft:painting_variant", *i)?,
-            // Profiles, and anything Horizon reads past: no codec form to hash.
-            Self::Potion { .. } | Self::Profile(_) | Self::Raw(_) => return None,
+            Self::Profile(p) => raw::profile(p),
+            Self::Raw(bytes) => raw::code(id, bytes, names)?,
         })
     }
 
@@ -768,9 +779,11 @@ mod tests {
             C::Enchantments(vec![(9, 1)]).hash(k::ENCHANTMENTS, &Table),
             None
         );
-        assert_eq!(C::Raw(vec![1]).hash(k::CONTAINER, &Table), None);
+        // additional_trade_cost has no persistent codec either.
+        assert_eq!(C::Raw(vec![1]).hash(42, &Table), None);
         assert_eq!(C::Unit.hash(k::CREATIVE_SLOT_LOCK, &Table), None);
         assert_eq!(C::Int(0).hash(k::MAP_POST_PROCESSING, &Table), None);
+        // Custom effects cut short.
         let custom_effects = C::Potion {
             potion: None,
             color: None,
@@ -783,7 +796,7 @@ mod tests {
     fn a_hashed_stack_carries_each_hashable_component_and_the_removed_ones() {
         let mut stack = Stack::new(1, 2);
         stack.added.push((k::DAMAGE, C::Int(5)));
-        stack.added.push((k::CONTAINER, C::Raw(vec![0])));
+        stack.added.push((42, C::Raw(vec![0])));
         stack.removed.push(k::RARITY);
         assert_eq!(
             Hashed::create(&stack, &Table),
