@@ -3685,6 +3685,69 @@ impl Game<'_> {
             self.particles.add(&options, at, v);
         }
     }
+    /// `AgeableMob.mobInteract`: whether a click with `item` on `m` gets to
+    /// the golden dandelion check (`canUseGoldenDandelion`, which a tadpole
+    /// calls with `isBaby` true). A panda that is scared or on its back and an
+    /// armadillo in its shell answer in their own `mobInteract` first.
+    pub(super) fn age_lock_takes(&self, m: &Mob, item: &str) -> bool {
+        let species = m.species();
+        let baby = if species == Species::Tadpole {
+            true
+        } else if horizon_client::mobs::finalize::ageable(species) {
+            m.is_baby()
+                && !(species == Species::Panda
+                    && (horizon_client::mobs::panda::scared(m)
+                        || horizon_client::mobs::panda::is_on_back(m)))
+                && !(species == Species::Armadillo && horizon_client::mobs::armadillo::scared(m))
+        } else {
+            false
+        };
+        let cannot = self
+            .res
+            .mob_data()
+            .entity_has("minecraft:cannot_be_age_locked", &m.kind.id);
+        horizon_client::mobs::ai::can_use_golden_dandelion(
+            item,
+            baby,
+            m.extra.age_lock_particle_timer,
+            cannot,
+        )
+    }
+    /// `AgeableMob.setAgeLocked`: a golden dandelion on mob `index` flips its
+    /// age lock (a tadpole's or an ageable mob's own `setAgeLockedData`) and is
+    /// used up; a locked mob stays (`setPersistenceRequired`), and the lock's
+    /// use or unuse sound plays at its block for everyone near.
+    pub(super) fn set_age_locked(&mut self, index: usize) {
+        let m = &mut self.mobs[index];
+        if m.species() == Species::Tadpole {
+            horizon_client::mobs::aquatic::set_age_locked_data(m);
+        } else {
+            horizon_client::mobs::ai::set_age_locked_data(m);
+        }
+        self.consume_held();
+        let m = &mut self.mobs[index];
+        let locked = m.extra.age_locked;
+        if locked {
+            m.persistent = true;
+        }
+        // Level.playSound(null, blockPosition, ..): the middle of the block.
+        let at = [
+            m.position.x.floor() + 0.5,
+            m.position.y.floor() + 0.5,
+            m.position.z.floor() + 0.5,
+        ];
+        let chunk = (
+            m.position.x.floor() as i32 >> 4,
+            m.position.z.floor() as i32 >> 4,
+        );
+        self.world.modified.insert(chunk);
+        let sound = if locked {
+            "minecraft:item.golden_dandelion.use"
+        } else {
+            "minecraft:item.golden_dandelion.unuse"
+        };
+        self.audio.play(sound, Some(at), 1.0, 1.0);
+    }
     /// Right click on a mob (Mob.interact / mobInteract). Returns true when consumed.
     pub(super) fn interact_mob(&mut self) -> Result<bool> {
         let Some((index, distance)) = self.mob_hit() else {
@@ -3752,6 +3815,17 @@ impl Game<'_> {
                 }
             } else {
                 *self.held_mut() = Some(filled);
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
+        // AgeableMob.mobInteract: a golden dandelion on a baby freezes its
+        // growth, or lets it grow again.
+        if self.mobs[index].alive() && self.age_lock_takes(&self.mobs[index], &item) {
+            self.set_age_locked(index);
+            if let Some(stack) = &held {
+                let target = self.mob_entity(&self.mobs[index]);
+                self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
             }
             self.swing_arm();
             return Ok(true);
@@ -4230,7 +4304,7 @@ impl Game<'_> {
             // adult remember it (`gotFish`), to swim to a treasure.
             Species::Dolphin if fish => {
                 eat = Some(("entity.dolphin.eat", 1.0, 1.0));
-                if m.extra.age < 0 {
+                if horizon_client::mobs::ai::can_age_up(m) {
                     let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
                     horizon_client::mobs::ai::age_up(m, secs, true);
                 } else {
