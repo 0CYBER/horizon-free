@@ -6,7 +6,7 @@ use super::Game;
 use horizon_client::{
     hud::HudBatch,
     items::ItemStack,
-    mobs::{MobEvent, Species, equine},
+    mobs::{MobEvent, Species, Who, equine},
     sprint::Keys,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -540,6 +540,11 @@ impl Game<'_> {
                 // RunAroundLikeCrazyGoal.tick: entity event 6, smoke.
                 self.mob_event_particles(mob, 6);
             }
+            // `LivingEntity.stabAttack`: `target.stopRiding()`.
+            MobEvent::StabDismount { target } => match target {
+                Who::Player => self.stop_riding(),
+                Who::Mob(id) => self.dismount_mob(id),
+            },
             _ => {}
         }
     }

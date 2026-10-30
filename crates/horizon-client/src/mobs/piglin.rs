@@ -93,6 +93,8 @@ pub struct Memories {
     /// Retreats other mobs' `broadcastRetreat` asked of this one, which its
     /// next tick starts with: who to retreat from and where it stands.
     pub retreats: Vec<(Who, Vec3)>,
+    /// The spear behaviours' memories (`SPEAR_STATUS`...).
+    pub spear: super::spear_use::Memories,
 }
 /// `Sensor.isEntityTargetable`: `TargetingConditions.forNonCombat()` within
 /// the follow range and in sight, which a `NearestVisibleLivingEntities`
@@ -1049,7 +1051,12 @@ pub fn register_piglin(m: &mut Mob) {
     if crossbow {
         g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     }
-    g.add(3, MeleeAttack::new(1.0, true));
+    // `PiglinAi.initFightActivity`: the spear behaviours come before the melee one.
+    g.add(3, super::spear_use::PiglinSpear::new());
+    g.add(
+        3,
+        super::spear_use::NoMeleeWithSpear(MeleeAttack::new(1.0, true)),
+    );
     g.add(4, NotRiding(PiglinAvoidRepellent));
     g.add(4, GoToWantedItem);
     g.add(4, Celebrate);
@@ -1361,7 +1368,7 @@ impl Goal for Admire {
         MOVE | LOOK
     }
     fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.extra.using_item > 0
+        m.extra.using_item > 0 && m.extra.off_hand.is_some()
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         m.nav_stop();
@@ -1530,7 +1537,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.egg_time > 0 {
         m.extra.egg_time -= 1;
     }
-    if m.extra.using_item > 0 {
+    // The admired item is in the off hand; a spear in use counts up instead.
+    if m.extra.using_item > 0 && m.extra.off_hand.is_some() {
         m.extra.using_item -= 1;
         if m.extra.using_item == 0 {
             events.push(MobEvent::FinishAdmiring { mob: m.id });
@@ -1685,28 +1693,46 @@ pub fn ears(p: &mut Poses, s: &State) {
 /// Piglins' and brutes' ears flap (`AbstractPiglinModel`), arms follow the
 /// arm pose (`PiglinModel`).
 pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
+    // HumanoidMobRenderer.getArmPose: the main arm holding a spear (at rest
+    // too), which charges while a spear is in use (an admired item is not).
+    let spear = m
+        .extra
+        .main_hand
+        .as_deref()
+        .and_then(crate::spear::Kinetic::of)
+        .map(|kinetic| {
+            let using = m.extra.using_item > 0 && m.extra.off_hand.is_none();
+            (
+                kinetic,
+                if using {
+                    m.extra.using_item as f32 + s.partial
+                } else {
+                    0.0
+                },
+            )
+        });
     // Piglin.getArmPose: dancing comes first.
     let pose = if m.extra.scratch[0] > 0 {
         PiglinPose::Dancing
-    } else if m.extra.using_item > 0 {
+    } else if m.extra.using_item > 0 && m.extra.off_hand.is_some() {
         PiglinPose::AdmiringItem
     } else if m.extra.flag {
         PiglinPose::CrossbowCharge
     } else if m.extra.main_hand.as_deref() == Some("minecraft:crossbow") && m.ai.aggressive {
         PiglinPose::CrossbowHold
-    } else if m.ai.aggressive && m.extra.main_hand.is_some() {
+    } else if m.ai.aggressive && m.extra.main_hand.is_some() && spear.is_none() {
         PiglinPose::MeleeWeapon
     } else {
         PiglinPose::Default
     };
-    piglin_pose(
+    piglin_pose_holding(
         p,
         s,
         pose,
-        25.0,
-        m.extra.using_item as f32,
+        (25.0, m.extra.using_item as f32),
         m.main_arm_left(),
         m.extra.passenger,
+        spear,
     );
 }
 /// `PiglinArmPose`.
@@ -1730,8 +1756,31 @@ pub fn piglin_pose(
     left: bool,
     passenger: bool,
 ) {
+    piglin_pose_holding(p, s, pose, (max_charge, ticks), left, passenger, None);
+}
+/// `piglin_pose` for a piglin whose main arm holds a spear (`spear`: the
+/// spear and the ticks the arm has used it, 0 at rest).
+pub fn piglin_pose_holding(
+    p: &mut Poses,
+    s: &State,
+    pose: PiglinPose,
+    (max_charge, ticks): (f32, f32),
+    left: bool,
+    passenger: bool,
+    spear: Option<(crate::spear::Kinetic, f32)>,
+) {
     use super::anim::{ArmPose, Hum, crossbow_charge, crossbow_hold, humanoid};
     let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+    if let Some((kinetic, ticks_using)) = spear {
+        let side = usize::from(left);
+        if left {
+            h.left = ArmPose::Spear;
+        } else {
+            h.right = ArmPose::Spear;
+        }
+        h.spear[side] = Some(kinetic);
+        h.spear_ticks[side] = ticks_using;
+    }
     h.weapon_swing = pose == PiglinPose::MeleeWeapon;
     h.left_main = left;
     h.passenger = passenger;

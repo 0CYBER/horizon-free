@@ -1941,6 +1941,10 @@ impl Game<'_> {
         if event == 21 && self.options.execution_role.is_client() {
             self.start_guardian_sound(id as u32);
         }
+        // Event 2: a mob's spear hit felt; the same window hears its own mob's hit.
+        if event == 2 && self.options.execution_role.is_client() {
+            self.remote_kinetic_hit(id);
+        }
         // Fox.handleEntityEvent 45: the same window draws the eating crumbs.
         if event == 45 && self.options.execution_role.is_client() {
             self.fox_eat_particles(id as u32);
