@@ -36,6 +36,7 @@ mod plate;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
+mod shell;
 mod shortcut_page;
 mod skin_page;
 mod sky;
@@ -1332,13 +1333,26 @@ fn track_hover(el: Stateful<Div>, id: SharedString) -> Stateful<Div> {
 /// A layer under an element's content that fades `color` in while it is hovered. `bleed` lets
 /// it reach past the element on the left and right, as the hover plate of a list row does.
 fn hover_layer(id: &SharedString, color: Hsla, radius: f32, bleed: f32) -> AnyElement {
-    let layer = div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(-bleed))
-        .right(px(-bleed))
-        .rounded(px(radius));
+    let layer = || {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(-bleed))
+            .right(px(-bleed))
+            .rounded(px(radius))
+    };
+    hover_fade(id, layer, move |d, a| d.bg(color.opacity(color.a * a)))
+}
+
+/// The `layer` made while the element `id` (see [`track_hover`]) is hovered, eased in and out:
+/// `paint` draws it at a strength from 0 (not shown) to 1. An element not hovered draws nothing,
+/// so a long list costs no layers.
+fn hover_fade(
+    id: &SharedString,
+    layer: impl FnOnce() -> Div,
+    paint: impl Fn(Div, f32) -> Div + 'static,
+) -> AnyElement {
     let state = HOVER.lock().unwrap();
     // Each transition gets its own animation id, from when it started, so it plays once.
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -1348,10 +1362,8 @@ fn hover_layer(id: &SharedString, color: Hsla, radius: f32, bleed: f32) -> AnyEl
     };
     let ease = || Animation::new(theme::QUICK).with_easing(ease_out_quint());
     if let Some((_, at)) = state.on.as_ref().filter(|(h, _)| h == id) {
-        return layer
-            .with_animation(key("in", *at), ease(), move |d, t| {
-                d.bg(color.opacity(color.a * t))
-            })
+        return layer()
+            .with_animation(key("in", *at), ease(), paint)
             .into_any_element();
     }
     if let Some((_, at)) = state
@@ -1359,13 +1371,12 @@ fn hover_layer(id: &SharedString, color: Hsla, radius: f32, bleed: f32) -> AnyEl
         .as_ref()
         .filter(|(h, at)| h == id && at.elapsed() < theme::QUICK)
     {
-        return layer
-            .with_animation(key("out", *at), ease(), move |d, t| {
-                d.bg(color.opacity(color.a * (1. - t)))
-            })
+        return layer()
+            .with_animation(key("out", *at), ease(), move |d, t| paint(d, 1. - t))
             .into_any_element();
     }
-    layer.into_any_element()
+    // Not hovered: nothing to draw (out of the flow, so it takes no gap either).
+    div().absolute().into_any_element()
 }
 
 /// Text set in one step of the type scale: headings (heading, title, display) in the pixel face.
@@ -1881,91 +1892,60 @@ fn megabytes(bytes: u64) -> String {
 impl Launcher {
     /// The top bar: the mark and name over the sidebar (in the title bar on Windows and Linux
     /// client-side decorations), the pages with their icons, then the account and Settings.
-    fn topbar(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+    /// The top bar over the pages: their tabs, then the account chip and Settings. No plate: the
+    /// sky shows through, under a 1 px rule.
+    fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let mut nav = div().flex().flex_none().h_full().gap(px(2.));
-        for (page, label, icon) in Page::ALL {
+        let n = t.night;
+        let mut nav = div().flex().flex_none().items_center().gap(px(4.));
+        for (page, label, _) in Page::ALL {
             if page == Page::Settings {
                 continue;
             }
-            let active = self.page == page;
-            let id = SharedString::from(format!("nav-{label}"));
-            let item = div()
-                .id(id.clone())
-                .relative()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .px(px(14.))
-                .cursor_pointer()
-                .when(active, |d| {
-                    d.bg(t.raised).child(
-                        div()
-                            .absolute()
-                            .left(px(8.))
-                            .right(px(8.))
-                            .bottom_0()
-                            .h(px(4.))
-                            .bg(t.accent),
-                    )
-                })
-                .when(!active, |d| d.child(hover_layer(&id, t.raised, 0., 0.)))
-                .child(div().relative().child(blocks::icon(
-                    icon,
-                    18.,
-                    if active { t.accent } else { t.muted },
-                )))
-                .child(
-                    blocks::pixel(16., FontWeight::MEDIUM)
-                        .relative()
-                        .text_color(if active { t.ink } else { t.muted })
-                        .child(tr(label)),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.go(page);
-                    cx.notify();
-                }));
-            nav = nav.child(keyboard(track_hover(item, id), &t));
+            nav = nav.child(
+                shell::tab(format!("nav-{label}"), tr(label), self.page == page, &t).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.go(page);
+                        cx.notify();
+                    }),
+                ),
+            );
         }
         // Only a signed-in account says "Microsoft account"; otherwise an offline name, or the
-        // one the game made up.
+        // one the game made up. A signed-in one shows its face (its UUID's default skin).
         let (name, how) = self.who_plays();
-        let account = keyboard(div().id("account"), &t)
-            .relative()
-            .flex()
-            .min_w_0()
-            .max_w(px(180.))
-            .items_center()
-            .gap(px(10.))
-            .h(px(40.))
-            .pl(px(4.))
-            .pr(px(12.))
-            .bg(t.panel)
-            .border_2()
-            .border_color(t.outline)
-            .cursor_pointer()
-            .hover(move |s| s.bg(t.raised))
+        let face = match self.accounts.player() {
+            account::Player::Microsoft(_) => self.accounts.selected().map(|a| a.uuid.clone()),
+            _ => None,
+        };
+        let picture = match face {
+            Some(uuid) => self.head(&uuid, 28.).into_any_element(),
+            None => div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(28.))
+                .bg(plate::alpha(n.card_hi, n.card_hi_alpha))
+                .child(blocks::icon("user", 16., shell::c(n.muted)))
+                .into_any_element(),
+        };
+        let account = shell::chip("account", &t)
+            .max_w(px(200.))
+            .child(div().relative().child(picture))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(30.))
-                    .bg(t.well)
-                    .child(blocks::icon("user", 18., t.muted)),
-            )
-            .child(
-                div()
+                    .relative()
                     .flex()
                     .flex_col()
                     .min_w_0()
                     .child(
-                        blocks::pixel(14., FontWeight::MEDIUM)
+                        shell::text(theme::night::UI, shell::c(n.ink))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .line_height(px(16.))
                             .truncate()
-                            .text_color(t.ink)
                             .child(name),
                     )
-                    .child(text(theme::CAPTION).text_color(t.muted).child(how)),
+                    .child(shell::text(theme::night::CAPTION, shell::c(n.muted)).child(how)),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.account_menu = !this.account_menu;
@@ -1979,65 +1959,26 @@ impl Launcher {
             .relative()
             .child(account)
             .children(self.account_menu(cx));
-        let settings_open = self.page == Page::Settings;
-        let settings = keyboard(div().id("nav-Settings"), &t)
-            .relative()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(40.))
-            .bg(if settings_open { t.raised } else { t.panel })
-            .border_2()
-            .border_color(t.outline)
-            .cursor_pointer()
-            .hover(move |s| s.bg(t.raised))
-            .when(settings_open, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .h(px(4.))
-                        .bg(t.accent),
-                )
-            })
-            .child(blocks::icon(
-                "sliders",
-                20.,
-                if settings_open { t.accent } else { t.ink_soft },
-            ))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.go(Page::Settings);
-                cx.notify();
-            }));
+        let settings = shell::icon_button(
+            "nav-Settings",
+            "sliders",
+            40.,
+            self.page == Page::Settings,
+            &t,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.go(Page::Settings);
+            cx.notify();
+        }));
         div()
             .flex()
             .flex_none()
             .items_center()
             .h(px(theme::TOPBAR))
-            .pl(px(18.))
+            .pl(px(theme::PAGE_GUTTER - 14.))
             .pr(px(12.))
-            .bg(t.side)
-            .border_b_2()
-            .border_color(t.outline)
-            // Custom title bars carry the mark and name above the sidebar.
-            .when(!titlebar::draws_brand(window), |bar| {
-                bar.child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(px(10.))
-                        .w(px(theme::SIDEBAR - 18.))
-                        .child(mark(24., &t))
-                        .child(
-                            blocks::pixel(20., FontWeight::SEMIBOLD)
-                                .text_color(t.ink)
-                                .child("HORIZON"),
-                        ),
-                )
-            })
+            .border_b_1()
+            .border_color(plate::alpha(n.stroke, n.rule_alpha))
             .child(nav)
             .child(
                 div()
@@ -2051,63 +1992,25 @@ impl Launcher {
             )
     }
 
-    /// The sidebar: Horizon and the imported modpacks, the player's servers, then the
-    /// launcher's own update, the community links and its version.
+    /// The sidebar, from the top of the window: the wordmark, Horizon and the imported modpacks,
+    /// the player's servers, then the launcher's own update, the community links and its version.
     fn sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
+        let n = t.night;
         self.load_packs();
-        let heading = |label: String| {
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px(px(6.))
-                .pt(px(10.))
-                .pb(px(6.))
-                .child(
-                    blocks::pixel(13., FontWeight::MEDIUM)
-                        .text_color(t.muted)
-                        .child(label),
-                )
-        };
-        let sub = |s: String| text(theme::CAPTION).text_color(t.muted).truncate().child(s);
-        let title = |s: String| {
-            blocks::pixel(15., FontWeight::MEDIUM)
-                .text_color(t.ink)
-                .truncate()
-                .child(s)
-        };
-        let dot = |c: Hsla| {
-            div()
-                .absolute()
-                .left(px(42.))
-                .top(px(42.))
-                .size(px(10.))
-                .bg(c)
-                .border_2()
-                .border_color(t.side)
-        };
-        let add = keyboard(div().id("add-instance"), &t)
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(24.))
-            .bg(t.panel)
-            .border_2()
-            .border_color(t.outline)
-            .cursor_pointer()
-            .hover(move |s| s.bg(t.raised))
-            .child(blocks::icon("plus", 14., t.ink_soft))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+        let heading = |label: String| shell::heading(label, &t);
+        let add = shell::icon_button("add-instance", "plus", 24., false, &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
                 this.open_instance_dialog(None);
                 cx.notify();
-            }));
+            },
+        ));
         let items = self.instance_items(heading, cx);
         let mut rows = items.len();
         let list = div()
             .flex()
             .flex_col()
-            .gap(px(4.))
+            .gap(px(2.))
             .child(heading(tr("INSTANCES").into()).child(add))
             .children(items);
         let servers: Vec<_> = self
@@ -2126,27 +2029,24 @@ impl Launcher {
             let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
             let dir = e.dir.clone();
             list = list.child(
-                blocks::side_item(format!("side-server-{}", e.dir.display()).into(), open, &t)
+                shell::row(format!("side-server-{}", e.dir.display()), open, &t)
                     .child(
                         div()
+                            .relative()
                             .flex()
+                            .flex_none()
                             .items_center()
                             .justify_center()
-                            .size(px(44.))
-                            .bg(t.well)
-                            .border_2()
-                            .border_color(t.outline)
-                            .child(blocks::icon("server", 22., t.ink_soft)),
+                            .size(px(36.))
+                            .bg(plate::alpha(n.card_hi, n.card_hi_alpha))
+                            .child(blocks::icon("server", 18., shell::c(n.ink_soft))),
                     )
-                    .child(dot(if up { t.success } else { t.muted }))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .child(title(e.name.clone()))
-                            .child(sub(tr(if up { "Running" } else { "Stopped" }).into())),
-                    )
+                    .child(shell::row_text(
+                        e.name.clone(),
+                        tr(if up { "Running" } else { "Stopped" }).into(),
+                        Some(shell::c(if up { n.success } else { n.muted })),
+                        &t,
+                    ))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.open_server(dir.clone());
                         this.go(Page::Servers);
@@ -2155,70 +2055,80 @@ impl Launcher {
             );
         }
         let link = |id: &'static str, label: &'static str, icon: &'static str, url: String| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .px(px(8.))
-                .py(px(6.))
-                .text_color(t.muted)
-                .cursor_pointer()
-                .hover(move |s| s.text_color(t.ink).bg(t.raised.opacity(0.6)))
-                .child(blocks::icon(icon, 18., t.muted))
-                .child(blocks::pixel(14., FontWeight::MEDIUM).child(label))
-                .on_click(move |_, _, cx| cx.open_url(&url))
+            let id = SharedString::from(id);
+            track_hover(
+                div()
+                    .id(id.clone())
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .h(px(32.))
+                    .px(px(8.))
+                    .cursor_pointer()
+                    .child(hover_layer(&id, shell::c(n.card_hi).opacity(0.5), 0., 0.))
+                    .child(
+                        div()
+                            .relative()
+                            .child(blocks::icon(icon, 16., shell::c(n.muted))),
+                    )
+                    .child(
+                        shell::text(theme::night::UI, shell::c(n.ink_soft))
+                            .relative()
+                            .child(label),
+                    )
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                id,
+            )
         };
         let mut foot = div().mt_auto().flex().flex_col().gap(px(2.)).pt(px(12.));
+        let update = |line: String| {
+            plate::plate(&n)
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .p(px(12.))
+                .mb(px(6.))
+                .child(
+                    shell::text(theme::night::UI, shell::c(n.ink))
+                        .relative()
+                        .child(line),
+                )
+        };
         match &self.self_update {
             SelfUpdate::Downloading(version, f) => {
                 foot = foot.child(
-                    blocks::panel(&t)
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        .p(px(10.))
-                        .mb(px(6.))
-                        .child(
-                            blocks::pixel(13., FontWeight::MEDIUM)
-                                .text_color(t.ink)
-                                .child(format!("Launcher {version}  {:.0}%", f * 100.)),
-                        )
-                        .child(div().flex().child(progress_bar(Some((*f, *f)), &t))),
+                    update(format!("Launcher {version}  {:.0}%", f * 100.)).child(
+                        div()
+                            .relative()
+                            .flex()
+                            .child(progress_bar(Some((*f, *f)), &t)),
+                    ),
                 )
             }
             SelfUpdate::Ready(version) => {
-                foot = foot.child(
-                    blocks::panel(&t)
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        .p(px(10.))
-                        .mb(px(6.))
-                        .child(
-                            blocks::pixel(13., FontWeight::MEDIUM)
-                                .text_color(t.ink)
-                                .child(format!("Launcher updated to {version}")),
-                        )
-                        .child(button("restart", "Restart", Kind::Primary, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                foot = foot.child(update(format!("Launcher updated to {version}")).child(
+                    div().relative().flex().child(
+                        button("restart", "Restart", Kind::Primary, &t).on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
                                 this.self_update = SelfUpdate::Failed(backend::restart());
                                 cx.notify();
-                            }),
+                            },
                         )),
-                )
+                    ),
+                ))
             }
             _ => {}
         }
         // Sculk's card above the links: seen without scrolling, on every page but Servers, which shows
-        // its wide banner. Tall where the sidebar has the height for it besides its rows (about 60
-        // high each, under headings of about 40) and the links, compact otherwise. After a while on
+        // its wide banner. Tall where the sidebar has the height for it besides the wordmark, its rows
+        // (52 high each, under headings of 40) and the links, compact otherwise. After a while on
         // screen a "Hide" beside its label puts it away for good.
         if self.page != Page::Servers && !self.settings.partner_hidden {
             let free = f32::from(window.viewport_size().height)
                 - theme::TOPBAR
                 - 40. * headings as f32
-                - 60. * rows as f32
+                - 52. * rows as f32
                 - 110.;
             let mut side = div().relative().mb(px(8.)).child(partner::card(
                 "partner-side",
@@ -2273,17 +2183,33 @@ impl Launcher {
             ));
         }
         foot = foot.child(
-            caps(format!("Launcher {}", backend::VERSION))
+            shell::text(theme::night::CAPTION, shell::c(n.muted))
                 .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .text_color(t.muted)
+                .child(format!("Launcher {}", backend::VERSION))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.version_clicked();
                     cx.notify();
                 })),
         );
-        div()
+        // Custom title bars carry the mark and name already.
+        let brand = (!titlebar::draws_brand(window)).then(|| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(10.))
+                .h(px(theme::TOPBAR))
+                .px(px(8.))
+                .child(mark(24., &t))
+                .child(
+                    shell::text(theme::night::TITLE, shell::c(n.ink))
+                        .font_family(theme::DISPLAY_FONT)
+                        .child("Horizon"),
+                )
+        });
+        shell::sidebar_plate(&t)
             .id("sidebar")
             .flex()
             .flex_col()
@@ -2292,10 +2218,8 @@ impl Launcher {
             .h_full()
             .px(px(10.))
             .pb(px(12.))
-            .bg(t.side)
-            .border_r_2()
-            .border_color(t.outline)
             .overflow_y_scroll()
+            .children(brand)
             .child(list)
             .child(foot)
     }
@@ -4319,7 +4243,7 @@ impl Render for Launcher {
         if let Some(next) = next {
             self.wake_sky(next, cx);
         }
-        let topbar = self.topbar(window, cx);
+        let topbar = self.topbar(cx);
         let sidebar = self.sidebar(window, cx);
         let mut root = div()
             .id("root")
@@ -4357,40 +4281,45 @@ impl Render for Launcher {
                 div()
                     .relative()
                     .flex()
-                    .flex_col()
                     .size_full()
                     .opacity(ui)
                     .top(px(theme::RISE * (1. - ui)))
-                    .child(topbar)
+                    .child(sidebar)
                     .child(
-                        div().flex().flex_1().min_h_0().child(sidebar).child(
-                            self.content_scroll
-                                .wrap(
-                                    div()
-                                        .id("content")
-                                        .relative()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .w_full()
-                                                .min_w_0()
-                                                .px(px(theme::PAGE_GUTTER))
-                                                .pt(px(if self.page == Page::Play {
-                                                    0.
-                                                } else {
-                                                    28.
-                                                }))
-                                                .pb(px(48.))
-                                                .child(content),
-                                        ),
-                                    &t,
-                                )
-                                .flex_1()
-                                .min_w_0(),
-                        ),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .child(topbar)
+                            .child(
+                                self.content_scroll
+                                    .wrap(
+                                        div()
+                                            .id("content")
+                                            .relative()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_y_scroll()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .w_full()
+                                                    .min_w_0()
+                                                    .px(px(theme::PAGE_GUTTER))
+                                                    .pt(px(if self.page == Page::Play {
+                                                        0.
+                                                    } else {
+                                                        28.
+                                                    }))
+                                                    .pb(px(48.))
+                                                    .child(content),
+                                            ),
+                                        &t,
+                                    )
+                                    .flex_1()
+                                    .min_h_0(),
+                            ),
                     ),
             );
         if self.page == Page::Servers {
