@@ -88,12 +88,32 @@ pub struct NativeScreen {
 }
 
 /// The mod screen open on this client: the block it is for, the key its
-/// slots are under, and the menu's data slots as the server sent them.
+/// slots are under, the window id of its menu, and the menu's data slots as
+/// the server sent them.
 pub(super) struct OpenNativeScreen {
     key: Pos,
+    window: i32,
     block: String,
     screen: NativeScreen,
     data: Vec<i32>,
+}
+
+impl OpenNativeScreen {
+    /// Data slot `id` of window `window`'s menu: false for another window's
+    /// (an old or replaced one), which this screen leaves alone.
+    fn set_data(&mut self, window: i32, id: i16, value: i16) -> bool {
+        if window != self.window {
+            return false;
+        }
+        // A menu's data slot ids are small; a bad one is dropped.
+        if let Ok(i @ 0..256) = usize::try_from(id) {
+            if self.data.len() <= i {
+                self.data.resize(i + 1, 0);
+            }
+            self.data[i] = i32::from(value);
+        }
+        true
+    }
 }
 
 /// The player as a native mod reads it.
@@ -777,7 +797,7 @@ impl Game<'_> {
     }
     /// A menu opened on this client with its slots under `key`, on block
     /// `target`: a mod block's is laid out by its mod (`native_screen`).
-    pub(super) fn open_native_screen(&mut self, key: Pos, target: Option<Pos>) {
+    pub(super) fn open_native_screen(&mut self, key: Pos, target: Option<Pos>, window: i32) {
         self.mod_screen = None;
         let Some(t) = target else {
             return;
@@ -796,6 +816,7 @@ impl Game<'_> {
         if let Some(screen) = screen {
             self.mod_screen = Some(OpenNativeScreen {
                 key,
+                window,
                 block,
                 screen,
                 data: Vec::new(),
@@ -808,23 +829,15 @@ impl Game<'_> {
             .as_ref()
             .filter(|s| self.screen == Screen::Inventory && self.container == Some(s.key))
     }
-    /// A data slot of the open mod screen's menu (`ContainerSetData`); false
-    /// when none is showing.
-    pub(super) fn native_screen_data(&mut self, id: i16, value: i16) -> bool {
+    /// A data slot of window `window`'s menu (`ContainerSetData`); false
+    /// when no mod screen is showing for that window.
+    pub(super) fn native_screen_data(&mut self, window: i32, id: i16, value: i16) -> bool {
         if self.shown_native_screen().is_none() {
             return false;
         }
-        let Some(s) = self.mod_screen.as_mut() else {
-            return false;
-        };
-        // A menu's data slot ids are small; a bad one is dropped.
-        if let Ok(i @ 0..256) = usize::try_from(id) {
-            if s.data.len() <= i {
-                s.data.resize(i + 1, 0);
-            }
-            s.data[i] = i32::from(value);
-        }
-        true
+        self.mod_screen
+            .as_mut()
+            .is_some_and(|s| s.set_data(window, id, value))
     }
     /// The open mod screen's height.
     pub(super) fn native_screen_height(&self) -> Option<f32> {
@@ -1081,6 +1094,21 @@ mod tests {
     /// horizon-mixins refuses targets whose body has a `cfg` or a macro:
     /// the hook points and helpers must stay free of both. The launcher
     /// reads the API line as it is.
+    /// A data packet for an old window leaves the open mod screen alone.
+    #[test]
+    fn mod_screen_data_is_its_windows_only() {
+        let mut s = super::OpenNativeScreen {
+            key: (0, 0, 0),
+            window: 4,
+            block: "gtmod:machine".into(),
+            screen: super::NativeScreen::default(),
+            data: Vec::new(),
+        };
+        assert!(s.set_data(4, 1, 7));
+        assert!(!s.set_data(3, 1, 99));
+        assert_eq!(s.data, [0, 7]);
+    }
+
     #[test]
     fn hook_points_stay_hookable() {
         let source = include_str!("native_hooks.rs");
