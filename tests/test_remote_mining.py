@@ -69,7 +69,7 @@ fn face_direction(face: u8) -> u8 { face }
 struct Game {
     remote: Option<Remote>, mining: Option<Mining>, creative: bool,
     world: World, res: Resources, player: Option<Player>, audio: Audio,
-    hit: Hit, sequence: i32, packets: Vec<play::PlayerAction>,
+    hit: Hit, sequence: i32, packets: Vec<play::PlayerAction>, restricted: bool,
 }
 impl Game {
     fn main_hand_key(&self) -> String { String::new() }
@@ -83,10 +83,13 @@ impl Game {
             player: Some(Player { ground: Ground { on_ground: true } }),
             audio: Audio { played: Vec::new() },
             hit: Hit { pos: [0, 64, 0], face: 1 }, sequence: 0, packets: vec![],
+            restricted: false,
         }
     }
     fn pick(&self) -> Option<Hit> { Some(self.hit) }
     fn held(&self) -> Option<&()> { None }
+    // Player.blockActionRestricted: adventure without a can_break item.
+    fn remote_break_restricted(&self) -> bool { self.restricted }
     // Game::destroy_progress (hand.rs) for a harvestable block on the ground.
     fn destroy_progress(&self, _: [i32; 3]) -> f32 {
         self.res.speed / self.res.facts.hardness / 30.0
@@ -102,6 +105,8 @@ impl Game {
             self.audio.play("hit", None, 1.0, 1.0);
         }
     }
+    // Tutorial.onDestroyBlock (tutorial.rs): the hints play no part in mining.
+    fn tutorial_destroy<T>(&mut self, _: T, _: f32) {}
 METHOD
 }
 fn main() {
@@ -174,6 +179,21 @@ fn main() {
     assert!(game.remote.as_ref().unwrap().destroying.is_none());
     assert!(game.mining.is_none());
     assert!(game.world.broken.is_empty());
+    // An adventure player without can_break (#3027): startDestroyBlock
+    // refuses before predicting, so nothing breaks, cracks or is sent.
+    for (hardness, speed) in [(0.0, 1.0), (1.0, 15.0)] {
+        let mut game = Game::new(hardness, speed, false);
+        game.restricted = true;
+        game.remote_mining(true);
+        for _ in 0..40 {
+            game.remote_mining(false);
+        }
+        assert!(game.world.broken.is_empty());
+        assert!(game.packets.is_empty());
+        assert!(game.audio.played.is_empty());
+        assert!(game.mining.is_none());
+        assert!(game.remote.as_ref().unwrap().destroying.is_none());
+    }
 }
 '''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn"))
         with tempfile.TemporaryDirectory(prefix="remote-mining-") as directory:

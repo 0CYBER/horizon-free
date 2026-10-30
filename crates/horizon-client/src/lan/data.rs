@@ -58,6 +58,7 @@ struct Entries {
 }
 
 pub struct SyncData {
+    pub content_identity: Option<[u8; 32]>,
     pub builtin: Builtin,
     /// Entry names per synchronized registry (for id lookups).
     pub dynamic: Dynamic,
@@ -145,7 +146,13 @@ impl SyncData {
             registries.push(((*key).to_owned(), Entries { names, json }));
         }
         let tags = Self::load_tags(&root, &builtin, &dynamic);
+        let content_identity = if resources.join(crate::content_identity::MARKER).exists() {
+            Some(crate::content_identity::identity(resources)?)
+        } else {
+            None
+        };
         let mut sync = Self {
+            content_identity,
             builtin,
             dynamic,
             registries,

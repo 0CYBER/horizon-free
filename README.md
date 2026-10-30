@@ -46,7 +46,7 @@ The [documentation](https://playhorizon.dev/docs/) covers each of these.
 
 - **The game:** singleplayer with vanilla's world generation, mobs, villagers, raids, redstone, every command, the HUD and the recipe book, on saves in vanilla's format. Worlds from 1.8 to 26.2 are upgraded as vanilla does. [Status table](#project-status).
 - **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
-- **Resource packs and data packs:** resource packs work, and data packs load functions, predicates and item modifiers.
+- **Resource packs and data packs:** resource packs work, and data packs load functions, predicates, item modifiers and world generation (vanilla's heights and biomes for now).
 - **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining servers, online-mode ones with the Microsoft account the launcher signs in with. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
 - **Mods:** Horizon has its own mods, installed from the launcher. The official ones (Zoom, FPS Counter, Keystrokes and Minimap) are native Rust that the launcher builds into your game, with no Rust to install; older WebAssembly mods still run while they move. Java mod jars do not run in Horizon. See [Mods and data packs](https://playhorizon.dev/docs/mods).
 

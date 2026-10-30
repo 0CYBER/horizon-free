@@ -1527,6 +1527,9 @@ name = "horizon-hdr"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "wgpu",
 ]
 

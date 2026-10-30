@@ -504,6 +504,72 @@ impl<'r> BlockSection<'r> {
         }
         Ok(old)
     }
+    /// Write `len` consecutive values at (`x`, `y_start..y_start+len`, `z`) with
+    /// `state`, all inside this section. Resolves the palette id once, then writes
+    /// the rest directly; returns how many previous blocks were `air` so the
+    /// caller can update its non-air count. The final palette and counts match
+    /// `len` calls to `set` in the same top-down order.
+    pub fn fill_run(
+        &mut self,
+        x: i32,
+        y_start: i32,
+        z: i32,
+        len: i32,
+        state: BlockStateId,
+        air: BlockStateId,
+    ) -> io::Result<u16> {
+        if !(0..16).contains(&x)
+            || !(0..16).contains(&z)
+            || len <= 0
+            || y_start < 0
+            || y_start + len > 16
+        {
+            return Err(invalid("section fill outside its bounds"));
+        }
+        let index = |y: i32| ((y as usize) << 8) | ((z as usize) << 4) | x as usize;
+        let top = y_start + len - 1;
+        let mut added = 0u16;
+        // The first write takes the general path: it may add the state to the
+        // palette, allocate storage, or find the section already uniform.
+        let old = self.set(index(top), state)?;
+        if old == air {
+            added += 1;
+        }
+        let Some(id) = id_in(&self.palette, &self.counts, &mut self.last, state) else {
+            return Ok(added);
+        };
+        let Some(storage) = self.storage.as_mut() else {
+            return Ok(added);
+        };
+        for y in (y_start..top).rev() {
+            let i = index(y);
+            let old_id = storage.read(i);
+            let old_state = self.palette[old_id as usize];
+            if old_state == state {
+                continue;
+            }
+            storage.write(i, id);
+            self.counts[old_id as usize] -= 1;
+            self.counts[id as usize] += 1;
+            if old_state == air {
+                added += 1;
+            }
+            if self.counts[old_id as usize] == 0 {
+                self.free.push(old_id);
+                if self.last == Some((old_state, old_id)) {
+                    self.last = None;
+                }
+            }
+        }
+        if self.counts[id as usize] == 4096 {
+            self.palette = vec![state];
+            self.last = Some((state, 0));
+            self.counts = vec![4096];
+            self.free.clear();
+            self.storage = None;
+        }
+        Ok(added)
+    }
     pub fn compact(&mut self) -> io::Result<()> {
         let values: Vec<_> = (0..4096).map(|i| self.get(i).unwrap()).collect();
         self.palette.clear();

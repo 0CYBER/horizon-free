@@ -1031,9 +1031,9 @@ impl Game<'_> {
     pub(super) fn stack_display_name(&self, s: &ItemStack) -> Text {
         let item = &*s.item;
         let empty = item == "minecraft:air" || s.count == 0;
-        let custom = s.custom_name();
+        let custom = s.data().and_then(|data| data.custom_name.as_ref());
         let hover = if let Some(c) = custom {
-            Text::literal(c)
+            horizon_client::component::name_text(c)
         } else if let Some(title) = s
             .data()
             .and_then(|d| d.written.as_ref())
@@ -2069,6 +2069,7 @@ impl Game<'_> {
             return false;
         }
         self.world.block_entities.insert(key, new);
+        self.update_spawner_display(key);
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         true
     }
