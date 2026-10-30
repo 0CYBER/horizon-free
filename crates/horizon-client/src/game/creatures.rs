@@ -107,12 +107,10 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             hit.direction.normal(),
         ))
     }
-    fn in_water(&self, at: Vec3) -> bool {
-        self.w.fluid(
-            at.x.floor() as i32,
-            at.y.floor() as i32,
-            at.z.floor() as i32,
-        ) == Fluid::Water
+    /// Entity.updateFluidInteraction over the projectile's box, not the
+    /// block at its feet (#3072).
+    fn in_water(&self, bounds: Aabb) -> bool {
+        self.w.fluids(bounds, bounds.max_position().y).in_water
     }
     fn targets(&self) -> &[(Who, Aabb)] {
         &self.targets
@@ -130,21 +128,35 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
 
 /// `AbstractWindCharge` is pickable, so a thrown pearl's
 /// `ProjectileUtil.getEntityHitResult` can strike it (`ThrownEnderpearl.onHit`).
-const WIND_CHARGE_HIT: u32 = super::dragon::SPECIAL - 1;
+/// `WIND_CHARGE_IDS + j` is `projectiles[j]` during `tick_projectiles`, below
+/// the dragon's reserved ids.
+const WIND_CHARGE_IDS: u32 = super::dragon::SPECIAL - 0x10000;
 
-fn wind_charge_hitboxes(projectiles: &[Projectile], skip: usize) -> Vec<(Who, Aabb)> {
+/// The index of the wind charge a `wind_charge_hitboxes` id stands for.
+fn wind_charge_hit(id: u32) -> Option<usize> {
+    (WIND_CHARGE_IDS..super::dragon::SPECIAL)
+        .contains(&id)
+        .then(|| (id - WIND_CHARGE_IDS) as usize)
+}
+
+fn wind_charge_hitboxes(
+    projectiles: &[Projectile],
+    alive: &[bool],
+    skip: usize,
+) -> Vec<(Who, Aabb)> {
     projectiles
         .iter()
         .enumerate()
         .filter(|(j, q)| {
             *j != skip
+                && alive[*j]
                 && !q.stuck
                 && matches!(
                     q.kind,
                     ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
                 )
         })
-        .map(|(_, q)| (Who::Mob(WIND_CHARGE_HIT), q.aabb()))
+        .map(|(j, q)| (Who::Mob(WIND_CHARGE_IDS + j as u32), q.aabb()))
         .collect()
 }
 
@@ -454,13 +466,13 @@ impl Game<'_> {
     /// Highest motion-blocking (no leaves) block + 1 (Heightmap MOTION_BLOCKING_NO_LEAVES).
     pub(super) fn motion_top(&self, x: i32, z: i32) -> i32 {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
-        for y in (horizon_client::chunk::MIN_Y..=top).rev() {
+        for y in (self.world.bottom_y()..=top).rev() {
             let f = self.res.facts().get(self.world.block(x, y, z));
             if (f.full_collision || f.fluid != Fluid::None) && !f.name.ends_with("leaves") {
                 return y + 1;
             }
         }
-        horizon_client::chunk::MIN_Y
+        self.world.bottom_y()
     }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
@@ -883,8 +895,12 @@ impl Game<'_> {
             }
         }
         self.score_entity_removed(m.id);
-        self.raider_died(m, by_player);
-        self.villager_murdered(m, by_player, killer.flatten());
+        // Raider.die's hero and Villager.tellWitnessesThatIWasMurdered go to
+        // the causing entity, not the credited player: a tame wolf's kill is
+        // neither its owner's heroism nor a murder by them.
+        let slain_by_player = by_player && !killed_by_mob(m);
+        self.raider_died(m, slain_by_player);
+        self.villager_murdered(m, slain_by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
         self.create_wither_rose(m);
@@ -919,7 +935,12 @@ impl Game<'_> {
     /// The killer's side of a mob's death: `ServerPlayer.awardKillScore`'s
     /// statistics and scores, and the `player_killed_entity` trigger.
     fn credit_kill(&mut self, m: &Mob) {
-        self.stats.add("killed", &m.kind.id, 1);
+        // Player.killedEntity: the killed statistic goes to the causing
+        // entity, so a kill by a mob (a tame wolf credited to its owner)
+        // leaves it out; ServerPlayer.awardKillScore counts the rest.
+        if !killed_by_mob(m) {
+            self.stats.add("killed", &m.kind.id, 1);
+        }
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(m.id));
         let view = self.mob_entity(m);
@@ -1056,6 +1077,20 @@ impl Game<'_> {
                     // the orbs' merge ids and block ticks read next).
                     self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
                 }
+                drops::Drop::CarriedBlock(state) => {
+                    // Enderman.dropCustomDeathLoot: spawnAtLocation for each
+                    // of the carried block's silk-touch drops.
+                    let stacks = horizon_client::mobs::enderman::carried_block_drops(
+                        world_items!(self),
+                        self.pack.assets.registry,
+                        state,
+                        &mut self.world.random,
+                        Some((&mut self.rand_sequences, self.level.seed)),
+                    );
+                    for item in stacks {
+                        self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
+                    }
+                }
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
                 drops::Drop::Orb(_) => {}
             }
@@ -1088,6 +1123,9 @@ impl Game<'_> {
                 }
             }
         }
+        if hurt {
+            self.resolve_player_responsible(target, source);
+        }
         if infested {
             self.mob_infested(target);
         }
@@ -1109,6 +1147,49 @@ impl Game<'_> {
             self.zombie_killed(killer, target);
         }
         hurt
+    }
+    /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a
+    /// mob: a tame wolf's hit is its owner's (`setLastHurtByPlayer(uuid, 100)`),
+    /// so the kill drops experience and player-only loot and the owner, when
+    /// in the world, gets the credit (`getKillCredit`); a tame wolf without an
+    /// owner clears it. A player's own hits are recorded where they land.
+    pub(super) fn resolve_player_responsible(&mut self, victim: u32, source: Damage) {
+        let Some(Who::Mob(attacker)) = source.attacker else {
+            return;
+        };
+        let Some(owner) = self
+            .mobs
+            .iter()
+            .find(|m| m.id == attacker && m.species() == Species::Wolf && m.extra.tame)
+            .map(|m| m.extra.owner)
+        else {
+            return;
+        };
+        let player = owner.and_then(|uuid| self.player_with_uuid(uuid));
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == victim) else {
+            return;
+        };
+        m.ai.last_hurt_by_player = if owner.is_some() { 100 } else { 0 };
+        match player {
+            Some(who) => self.last_hurt_by_player.insert(victim, who),
+            None => self.last_hurt_by_player.remove(&victim),
+        };
+    }
+    /// The player in the world with `uuid` (`EntityReference.getPlayer`), as
+    /// `last_hurt_by_player` keeps them: None for the player in place, else the
+    /// guest's connection.
+    fn player_with_uuid(&self, uuid: [i32; 4]) -> Option<Option<u32>> {
+        if self.player.is_some()
+            && horizon_client::mobs::tame::owned_by(Some(uuid), self.acting_uuid())
+        {
+            return Some(self.lan_acting);
+        }
+        let uuid = horizon_client::lan::playerdata::ints_uuid(uuid);
+        self.lan
+            .iter()
+            .flat_map(|h| h.hub.guests.iter())
+            .find(|g| g.placed && g.uuid == uuid)
+            .map(|g| Some(g.conn))
     }
     /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
     pub(super) fn mob_infested(&mut self, mob: u32) {
@@ -1361,6 +1442,31 @@ impl Game<'_> {
                 } => {
                     self.mob_hits_mob(target, amount, source);
                 }
+                MobEvent::CubeHurtMob {
+                    cube,
+                    target,
+                    amount,
+                    source,
+                } => {
+                    // AbstractCubeMob.dealDamage: the attack sound (and its
+                    // two pitch draws, made even for a silent cube, whose
+                    // Entity.playSound is then skipped) only follows a hit
+                    // that landed.
+                    if self.mob_hits_mob(target, amount, source)
+                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == cube)
+                    {
+                        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+                        let at = m.center();
+                        if !m.silent {
+                            self.handle_mob_events(vec![MobEvent::Sound(
+                                "entity.slime.attack",
+                                at,
+                                1.0,
+                                pitch,
+                            )])?;
+                        }
+                    }
+                }
                 MobEvent::SonicBoom {
                     target,
                     attacker,
@@ -1413,7 +1519,9 @@ impl Game<'_> {
                             .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
                     }
                 }
-                MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
+                MobEvent::Tamed { .. } | MobEvent::Buck { .. } | MobEvent::StabDismount { .. } => {
+                    self.mount_event(&e)
+                }
                 MobEvent::Launch { target, up } => match target {
                     Who::Player => {
                         if let Some(p) = self.player.as_mut() {
@@ -1790,6 +1898,14 @@ impl Game<'_> {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
                     }
                 }
+                MobEvent::Retreat { mob, from, at } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        horizon_client::mobs::piglin::receive_retreat(m, from, at);
+                    }
+                }
+                MobEvent::StartRiding { rider, vehicle } => {
+                    horizon_client::mobs::riders::start_riding(&mut self.mobs, rider, vehicle);
+                }
                 // Applied after the fish's tick (`apply_brain_events`).
                 MobEvent::StartFollowing { .. } | MobEvent::SchoolSize { .. } => {}
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
@@ -1945,6 +2061,36 @@ impl Game<'_> {
             self.spawn_orbs(at, amount);
         }
     }
+    /// `DyeColor.getMixedColor`: the colour of the crafting recipe that mixes
+    /// the two dyes, else one of the two picked at random.
+    fn dye_mix(&mut self, a: u8, b: u8) -> u8 {
+        if let Some(mixed) = self.dye_color_mix_in_recipes(a, b) {
+            return mixed;
+        }
+        if self.world.random.next_boolean() {
+            a
+        } else {
+            b
+        }
+    }
+    /// `DyeColor.findColorMixInRecipes`: the dye colour a two-dye crafting
+    /// recipe makes, when its result is a dye.
+    fn dye_color_mix_in_recipes(&self, a: u8, b: u8) -> Option<u8> {
+        let dye = |c: u8| {
+            let name = horizon_client::mobs::render::DYE_NAMES[usize::from(c) & 15];
+            Some(ItemStack::new(&format!("minecraft:{name}_dye"), 1))
+        };
+        let grid = [dye(a), dye(b), None, None];
+        let (_, result) = self.res.recipes().find(&grid, 2)?;
+        let name = result
+            .item
+            .strip_prefix("minecraft:")?
+            .strip_suffix("_dye")?;
+        let index = horizon_client::mobs::render::DYE_NAMES
+            .iter()
+            .position(|n| *n == name)?;
+        u8::try_from(index).ok()
+    }
     /// `ServerPlayer.tellNeutralMobsThatIDied`: the mobs within 32 blocks
     /// across and 10 up and down get `NeutralMob.playerDied`, when the
     /// `forgive_dead_players` rule is on. A mob's `Who::Player` is the guest
@@ -2044,7 +2190,6 @@ impl Game<'_> {
             return;
         }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
-        let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         // Axolotl.getBreedOffspring: useRareVariant (one in 1200) makes it blue,
         // else either parent's variant. The draws come from the mother's random.
         let axolotl = if p.species() == Species::Axolotl {
@@ -2074,6 +2219,8 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            // No Mob.finalizeSpawn either: no follow range bonus, right-handed.
+            spawning::bred_offspring(child);
             // getBreedOffspring creates the baby without finalizeSpawn: it keeps
             // the default (`classic`) sound variant.
             child.extra.sound_variant = None;
@@ -2143,11 +2290,12 @@ impl Game<'_> {
                 if p.extra.tame {
                     child.extra.tame = true;
                     child.extra.owner = p.extra.owner;
-                    child.extra.color = if coin2 {
-                        p.extra.color
-                    } else {
-                        other.extra.color
-                    };
+                    // The mix needs all of `self`, so it waits until `child`'s
+                    // borrow of the mob list is over.
+                    let mixed = self.dye_mix(p.extra.color, other.extra.color);
+                    if let Some(c) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        c.extra.color = mixed;
+                    }
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
@@ -2155,7 +2303,7 @@ impl Game<'_> {
             }
             if p.species() == Species::Wolf {
                 // Wolf.getBreedOffspring: a parent's variant; tame parents
-                // give a tame baby with one of their collar colours.
+                // give a tame baby with their collar colours mixed.
                 let other = q.as_ref().unwrap_or(&p);
                 child.extra.variant = if coin {
                     p.extra.variant
@@ -2165,11 +2313,12 @@ impl Game<'_> {
                 if p.extra.tame {
                     horizon_client::mobs::tame::set_tame(child, true);
                     child.extra.owner = p.extra.owner;
-                    child.extra.color = if coin2 {
-                        p.extra.color
-                    } else {
-                        other.extra.color
-                    };
+                    // The mix needs all of `self`, so it waits until `child`'s
+                    // borrow of the mob list is over.
+                    let mixed = self.dye_mix(p.extra.color, other.extra.color);
+                    if let Some(c) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        c.extra.color = mixed;
+                    }
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
@@ -2206,8 +2355,13 @@ impl Game<'_> {
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
             }
+            // Sheep.getBreedOffspring: the lamb's wool mixes both parents' dyes.
             if p.species() == Species::Sheep {
-                child.extra.color = p.extra.color;
+                let other = q.as_ref().unwrap_or(&p);
+                let mixed = self.dye_mix(p.extra.color, other.extra.color);
+                if let Some(c) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    c.extra.color = mixed;
+                }
             }
         }
         let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
@@ -2599,7 +2753,7 @@ impl Game<'_> {
             let mut keep_flags = vec![true; projectiles.len()];
             for i in 0..projectiles.len() {
                 let winds = if matches!(projectiles[i].kind, ProjectileKind::EnderPearl) {
-                    wind_charge_hitboxes(&projectiles, i)
+                    wind_charge_hitboxes(&projectiles, &keep_flags, i)
                 } else {
                     Vec::new()
                 };
@@ -2708,6 +2862,16 @@ impl Game<'_> {
                     hits.push((p.clone(), hit));
                 }
                 keep_flags[i] = keep;
+                // Projectile.onHit: the wind charge it hit turns before its own tick.
+                if let Hit::Entity {
+                    who: Who::Mob(id), ..
+                } = hit
+                    && let Some(j) = wind_charge_hit(id)
+                {
+                    let (owner, guest) = (p.owner, p.guest);
+                    let look = self.owner_look(owner, guest);
+                    super::deflect::aim_deflect(&mut projectiles[j], look, owner, guest);
+                }
             }
             let mut idx = 0;
             projectiles.retain(|_| {
@@ -3677,6 +3841,69 @@ impl Game<'_> {
             self.particles.add(&options, at, v);
         }
     }
+    /// `AgeableMob.mobInteract`: whether a click with `item` on `m` gets to
+    /// the golden dandelion check (`canUseGoldenDandelion`, which a tadpole
+    /// calls with `isBaby` true). A panda that is scared or on its back and an
+    /// armadillo in its shell answer in their own `mobInteract` first.
+    pub(super) fn age_lock_takes(&self, m: &Mob, item: &str) -> bool {
+        let species = m.species();
+        let baby = if species == Species::Tadpole {
+            true
+        } else if horizon_client::mobs::finalize::ageable(species) {
+            m.is_baby()
+                && !(species == Species::Panda
+                    && (horizon_client::mobs::panda::scared(m)
+                        || horizon_client::mobs::panda::is_on_back(m)))
+                && !(species == Species::Armadillo && horizon_client::mobs::armadillo::scared(m))
+        } else {
+            false
+        };
+        let cannot = self
+            .res
+            .mob_data()
+            .entity_has("minecraft:cannot_be_age_locked", &m.kind.id);
+        horizon_client::mobs::ai::can_use_golden_dandelion(
+            item,
+            baby,
+            m.extra.age_lock_particle_timer,
+            cannot,
+        )
+    }
+    /// `AgeableMob.setAgeLocked`: a golden dandelion on mob `index` flips its
+    /// age lock (a tadpole's or an ageable mob's own `setAgeLockedData`) and is
+    /// used up; a locked mob stays (`setPersistenceRequired`), and the lock's
+    /// use or unuse sound plays at its block for everyone near.
+    pub(super) fn set_age_locked(&mut self, index: usize) {
+        let m = &mut self.mobs[index];
+        if m.species() == Species::Tadpole {
+            horizon_client::mobs::aquatic::set_age_locked_data(m);
+        } else {
+            horizon_client::mobs::ai::set_age_locked_data(m);
+        }
+        self.consume_held();
+        let m = &mut self.mobs[index];
+        let locked = m.extra.age_locked;
+        if locked {
+            m.persistent = true;
+        }
+        // Level.playSound(null, blockPosition, ..): the middle of the block.
+        let at = [
+            m.position.x.floor() + 0.5,
+            m.position.y.floor() + 0.5,
+            m.position.z.floor() + 0.5,
+        ];
+        let chunk = (
+            m.position.x.floor() as i32 >> 4,
+            m.position.z.floor() as i32 >> 4,
+        );
+        self.world.modified.insert(chunk);
+        let sound = if locked {
+            "minecraft:item.golden_dandelion.use"
+        } else {
+            "minecraft:item.golden_dandelion.unuse"
+        };
+        self.audio.play(sound, Some(at), 1.0, 1.0);
+    }
     /// Right click on a mob (Mob.interact / mobInteract). Returns true when consumed.
     pub(super) fn interact_mob(&mut self) -> Result<bool> {
         let Some((index, distance)) = self.mob_hit() else {
@@ -3744,6 +3971,17 @@ impl Game<'_> {
                 }
             } else {
                 *self.held_mut() = Some(filled);
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
+        // AgeableMob.mobInteract: a golden dandelion on a baby freezes its
+        // growth, or lets it grow again.
+        if self.mobs[index].alive() && self.age_lock_takes(&self.mobs[index], &item) {
+            self.set_age_locked(index);
+            if let Some(stack) = &held {
+                let target = self.mob_entity(&self.mobs[index]);
+                self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
             }
             self.swing_arm();
             return Ok(true);
@@ -4222,7 +4460,7 @@ impl Game<'_> {
             // adult remember it (`gotFish`), to swim to a treasure.
             Species::Dolphin if fish => {
                 eat = Some(("entity.dolphin.eat", 1.0, 1.0));
-                if m.extra.age < 0 {
+                if horizon_client::mobs::ai::can_age_up(m) {
                     let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
                     horizon_client::mobs::ai::age_up(m, secs, true);
                 } else {
@@ -4679,6 +4917,11 @@ impl Game<'_> {
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws (and
             // the outline of a glowing mob, LivingEntityRenderer.getRenderType).
             if mob.invisible && outline.is_none() {
+                continue;
+            }
+            // LevelRenderer: the entity the view looks out of is not drawn
+            // in first person.
+            if self.hides_as_camera(mob.id) {
                 continue;
             }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
@@ -5229,6 +5472,13 @@ mod tests {
     }
 }
 
+/// Whether the killing blow's causing entity (`DamageSource.getEntity`) was a
+/// mob, such as a tame wolf whose owner gets the kill credit.
+fn killed_by_mob(m: &Mob) -> bool {
+    m.last_damage
+        .is_some_and(|(d, _)| matches!(d.attacker, Some(Who::Mob(_))))
+}
+
 /// `Animal.finalizeSpawnChildFromBreeding`'s player: the one who fed the
 /// parent, or else the one who fed the partner (`getLoveCause`). `Some(None)`
 /// is the host, `Some(Some(conn))` a guest. Both animals are spent.
@@ -5257,5 +5507,124 @@ mod breeding_tests {
         assert_eq!(breeding_credit(&mut love, 1, 2), Some(None));
         // Neither was fed by a player (a bred pair loaded from a save).
         assert_eq!(breeding_credit(&mut love, 1, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pearl's water test is `Entity.isInWater`: `wasTouchingWater` from the
+    /// last `updateFluidInteraction`, water whose surface reaches its 0.25
+    /// box (#3072), not the block at its feet.
+    #[test]
+    fn a_pearl_feels_the_water_its_box_touches() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists()
+            || !root.join("movement-properties.nbt").exists()
+        {
+            return;
+        }
+        let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let registry = assets.registry;
+        let facts = horizon_client::blocks::BlockFacts::load(&root, registry).unwrap();
+        let motion = horizon_client::motion::MotionResources::load(&root, &assets).unwrap();
+        let data = horizon_client::mobs::MobData::load(&root, &facts);
+        let biomes = horizon_client::biome::Biomes::load(&root).unwrap();
+        let items = horizon_client::items::Items::load(&root, registry, &facts).unwrap();
+        let collision = horizon_client::collisions::load(&root, registry).unwrap();
+        let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
+        // A pool of still water one block deep at y = 4, from x = 20 on (clear of the
+        // scene's pyramid): its
+        // surface is at 4 + 8/9.
+        let water = registry.default_state("minecraft:water").unwrap();
+        for x in 20..=40 {
+            for z in 0..=2 {
+                world.set(x, 4, z, water).unwrap();
+            }
+        }
+        let lid_openers = std::collections::HashMap::new();
+        let w = MobWorld {
+            teams: Default::default(),
+            world: &world,
+            registry,
+            facts: &facts,
+            fluid_tables: &motion.fluids,
+            movement: &motion.blocks,
+            collision: &collision,
+            data: &data,
+            player: None,
+            nearest_player: None,
+            others: &[],
+            others_grid: None,
+            others_index: None,
+            daylight: true,
+            monsters_burn: false,
+            game_time: 1000,
+            day_time: 1000,
+            raining: false,
+            thundering: false,
+            nether: false,
+            block_tags: &items.block_tags,
+            biomes: &biomes,
+            mob_griefing: true,
+            mob_drops: true,
+            max_entity_cramming: 24,
+            difficulty: spawning::LocalDifficulty::new(2, 1000, 0, 0.0),
+            end: false,
+            world_seed: 0,
+            sea_level: 63,
+            items: Some(&items),
+            lid_openers: &lid_openers,
+        };
+        let pw = ProjWorld {
+            w: &w,
+            targets: Vec::new(),
+        };
+        let pearl = |x: f64, y: f64, velocity: Vec3| {
+            let mut p = Projectile::new(ProjectileKind::EnderPearl, Vec3::new(x, y, 1.5), None);
+            p.velocity = velocity;
+            p
+        };
+        // Skimming the pool: its feet are in the water block, its box above
+        // the surface. ThrowableProjectile.applyInertia keeps the air drag.
+        let mut p = pearl(25.5, 4.95, Vec3::new(0.3, 0.0, 0.0));
+        p.tick(&pw);
+        assert!(p.position.y > 4.9, "the pearl dipped: {p:?}");
+        p.tick(&pw);
+        assert!(
+            (p.velocity.x - 0.3 * 0.99 * 0.99).abs() < 1e-9,
+            "a pearl above the surface slowed as in water: {p:?}"
+        );
+        // At the pool's edge: its feet over the dry block at x = 19, a side
+        // of its box in the water at x = 20. The water drag after the first
+        // tick, which still reads `wasTouchingWater` as false.
+        let mut p = pearl(19.95, 4.3, Vec3::ZERO);
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9,
+            "the first tick has the air drag: {p:?}"
+        );
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99 - 0.03) * 0.8).abs() < 1e-9,
+            "a pearl whose box is in the water kept the air drag: {p:?}"
+        );
+        // Thrown under water, a pearl moves with the air drag on its first
+        // tick and the water drag after it.
+        let mut p = pearl(30.5, 4.2, Vec3::ZERO);
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9,
+            "the first tick under water has the air drag: {p:?}"
+        );
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99 - 0.03) * 0.8).abs() < 1e-9,
+            "the second tick under water has the water drag: {p:?}"
+        );
     }
 }

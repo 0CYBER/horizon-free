@@ -8,7 +8,7 @@ use horizon_client::{
     containers::BlockEntity,
     effects::{EffectInstance, PlayerEffects},
     fast_hash::{FxHashMap, FxHashSet},
-    mobs::{Mob, Species, Who, warden},
+    mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
@@ -411,13 +411,12 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
-            let y0 = MIN_Y + s as i32 * 16;
+            let y0 = self.world.bottom_y() + s as i32 * 16;
             // Without a sculk state in its palette, no block of the section
             // is one: most sections are passed over without reading a block.
             if !section.blocks.maybe_has(|v| self.kind_of_state(v) != 0) {
@@ -543,6 +542,9 @@ impl Game<'_> {
         for i in 0..self.mobs.len() {
             if self.mobs[i].species() == Species::Warden && self.mobs[i].alive() {
                 self.warden_listen(i, event, pos, &ctx);
+            }
+            if self.mobs[i].species() == Species::Allay && self.mobs[i].alive() {
+                self.allay_listen(i, event, pos, &ctx);
             }
         }
     }
@@ -723,6 +725,28 @@ impl Game<'_> {
         if avoided {
             self.trigger_player("minecraft:avoid_vibration");
         }
+    }
+
+    /// `VibrationSystem.Listener.handleGameEvent` for the allay at `index`
+    /// (`Allay.VibrationUser`).
+    fn allay_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
+        let now = self.world.game_time;
+        let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
+        let dimension = self.dim.id();
+        allay::listen(
+            &mut self.mobs[index],
+            now,
+            event,
+            pos,
+            ctx,
+            dimension,
+            |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let state = world.block(p.x, p.y, p.z);
+                    occludes.get(state.0 as usize).copied().unwrap_or(false)
+                })
+            },
+        );
     }
 
     // ---- ticking ----

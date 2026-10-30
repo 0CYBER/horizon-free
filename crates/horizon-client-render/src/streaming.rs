@@ -4,7 +4,7 @@
 //! so stale work is dropped.
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
-    chunk::{Chunk, SECTIONS},
+    chunk::Chunk,
     light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
@@ -719,7 +719,7 @@ impl Streaming {
         self.meshing.clear();
         for &(x, z) in world.chunks.keys() {
             if self.lit.contains(&(x, z)) {
-                for sy in 0..SECTIONS as i32 {
+                for sy in 0..world.layout().sections() as i32 {
                     world.dirty_sections.insert((x, sy, z));
                 }
             }
@@ -737,7 +737,7 @@ impl Streaming {
         self.generated_total += 1;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                for sy in 0..SECTIONS as i32 {
+                for sy in 0..world.layout().sections() as i32 {
                     world.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
                 }
             }
@@ -752,7 +752,7 @@ impl Streaming {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let s = sy as i32 + dy;
-                        if (0..SECTIONS as i32).contains(&s) {
+                        if (0..world.layout().sections() as i32).contains(&s) {
                             world.dirty_sections.insert((x + dx, s, z + dz));
                         }
                     }
@@ -778,7 +778,7 @@ impl Streaming {
         self.lighting.remove(&(x, z));
         // By key, not by a pass over every pending section: a moved or
         // shrunk storage forgets thousands of columns in one frame.
-        for sy in 0..SECTIONS as i32 {
+        for sy in 0..world.layout().sections() as i32 {
             self.meshing.remove(&(x, sy, z));
             self.waiting.remove(&(x, sy, z));
         }
@@ -896,7 +896,7 @@ impl Streaming {
         world.chunks.insert(key, Arc::new(chunk));
         if loaded {
             self.lit.insert(key);
-            for sy in 0..SECTIONS as i32 {
+            for sy in 0..world.layout().sections() as i32 {
                 world.dirty_sections.insert((key.0, sy, key.1));
             }
         }
@@ -1079,7 +1079,7 @@ impl Streaming {
                         if first {
                             for dz in -1..=1 {
                                 for dx in -1..=1 {
-                                    for sy in 0..SECTIONS as i32 {
+                                    for sy in 0..world.layout().sections() as i32 {
                                         world.dirty_sections.insert((x + dx, sy, z + dz));
                                     }
                                 }
@@ -1375,7 +1375,7 @@ impl Streaming {
             }
             if !self.ranges().in_view(x, z) {
                 world.dirty_sections.take_column(x, z);
-                for sy in section_indexes(sections) {
+                for sy in sections.iter().map(|sy| sy as i32) {
                     self.waiting.insert((x, sy, z));
                 }
                 continue;
@@ -1399,7 +1399,7 @@ impl Streaming {
                 continue;
             };
             world.dirty_sections.take_column(x, z);
-            for sy in section_indexes(sections) {
+            for sy in sections.iter().map(|sy| sy as i32) {
                 let first = self.meshed.insert((x, z));
                 self.sequence += 1;
                 self.meshing.insert((x, sy, z), self.sequence);
@@ -1475,6 +1475,7 @@ impl Streaming {
             &mut changed,
         );
         Self::mark_light_changes(world, &changed);
+        Self::relight_beside_unlit(world, &changed);
         if !self.light_snapshots.is_empty() {
             for p in positions {
                 self.light_edit_sequence += 1;
@@ -1504,6 +1505,7 @@ impl Streaming {
                 &mut changed,
             );
             Self::mark_light_changes(world, &changed);
+            Self::relight_beside_unlit(world, &changed);
         }
         let oldest = self.light_snapshots.values().copied().min();
         match oldest {
@@ -1511,12 +1513,20 @@ impl Streaming {
             None => self.light_log.clear(),
         }
     }
+    /// A column whose light an edit changed beside a column not lit yet gets
+    /// a full light job ([`crate::light::beside_unlit`]).
+    fn relight_beside_unlit(world: &mut World, changed: &LightChanges) {
+        let columns = crate::light::beside_unlit(changed, |x, z| {
+            world.chunks.get(&(x, z)).is_some_and(|c| !c.lit)
+        });
+        world.dirty_light.extend(columns);
+    }
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).
     fn mark_light_changes(world: &mut World, changed: &LightChanges) {
         if let Some(log) = &mut world.light_log {
             for (x, sy, z) in changed.sections() {
-                *log.entry((x, z)).or_default() |= 1 << sy;
+                log.entry((x, z)).or_default().insert(sy as usize);
             }
         }
         changed.dirty_sections(|section| {
@@ -1984,16 +1994,6 @@ impl Drop for Streaming {
             let _ = t.join();
         }
     }
-}
-/// The section indexes set in a column's bits, lowest first.
-fn section_indexes(mut bits: u32) -> impl Iterator<Item = i32> {
-    std::iter::from_fn(move || {
-        (bits != 0).then(|| {
-            let sy = bits.trailing_zeros() as i32;
-            bits &= bits - 1;
-            sy
-        })
-    })
 }
 /// The queued jobs' priorities computed again from each one's column
 /// `distance` (`Streaming::submit`).

@@ -51,7 +51,8 @@ pub const MAX_PLAYERS: usize = 8;
 pub enum NetEvent {
     /// A client finished configuration and enters the play state.
     Joined(Box<Joined>),
-    Packet(u32, Box<play::Serverbound>),
+    /// A packet and the bytes of its body on the wire.
+    Packet(u32, Box<play::Serverbound>, usize),
     /// The connection ended (reason for the log).
     Left(u32, String),
     /// PlayerList.disconnectAllPlayersWithProfile: a new login of this
