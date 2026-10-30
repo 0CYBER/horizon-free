@@ -313,6 +313,11 @@ def scenarios():
     # NeutralMob.updatePersistentAnger in Wolf.aiStep restarts the 20-39 s timer, one random draw,
     # every tick it has one, not once when hurt.
     add('wolf_hurt', 200, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 181 persistent', 'hurt 20 0'])
+    # A tamed wolf its owner hits (#4119): TamableAnimal.canAttack never lets it target its owner,
+    # so HurtByTargetGoal doesn't start and the wolf stays calm; a second wolf of the same owner
+    # isn't called either.
+    add('wolf_owner_hurt', 120, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 185 persistent owned',
+                                 'mob minecraft:wolf 0.5 -60 3.5 0 186 persistent owned', 'hurt 20 0'])
     # Mobs dropped into deep water (#542): FloatGoal users float at the surface (their navigation
     # can float, so Mob.jumpInLiquid adds 0.04 a tick), zombies sink.
     for species, seed in [('pig', 171), ('cow', 172), ('wolf', 173), ('cat', 174), ('horse', 175),
