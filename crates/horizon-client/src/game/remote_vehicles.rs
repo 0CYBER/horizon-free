@@ -116,6 +116,13 @@ impl Game<'_> {
                 m.extra.passenger = true;
             }
         }
+        for (id, display) in &mut self.text_displays {
+            if passengers.contains(id) {
+                display.vehicle = Some(vehicle_id);
+            } else if display.vehicle == Some(vehicle_id) {
+                display.vehicle = None;
+            }
+        }
         if passengers.contains(&me) {
             if self.riding != Some(vehicle_id) {
                 self.riding = Some(vehicle_id);

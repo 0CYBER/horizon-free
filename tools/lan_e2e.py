@@ -264,6 +264,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              sends each target its packet).
 - boat_input_latch: a boat on land paddled from rest moves one tick after W goes down, not in that tick:
              it steers with the input latched on the previous tick, as the paddle packet it sends says (#3789).
+- merchant-close: the host and the guest each open a trade screen with the payment in its slot; the screen
+             closes and the payment returns when they walk out of reach (7 blocks in survival, 9 in
+             creative) or the villager dies, and stays open in range.
+- riptide_rain: the host and the guest each launch with a Riptide trident in rain, with an elytra worn or not (#3458).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
 - cure-discount: the host and the guest each cure a zombie villager with a golden apple and pay 14
@@ -6709,6 +6713,109 @@ def check_boat_input_latch(host, guest, out):
 CHECKS += ['boat_input_latch']
 CHECK_FNS['boat_input_latch'] = check_boat_input_latch
 
+
+def check_merchant_close(host, guest, out):
+    """AbstractVillager.stillValid: a trade screen closes when its villager is out of reach or dead, and
+    the payment slots go back to the player as on a normal close; in range it stays open."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'close_trade'
+    seen = {}
+    # (label, mode, tp x offset from the player's start, dies?, screen still open?)
+    cases = [('survival-near', 'survival', 0, False, True), ('survival-8', 'survival', -6.0, False, False),
+             ('creative-8', 'creative', -6.0, False, True), ('creative-far', 'creative', -15.0, False, False),
+             ('killed', 'survival', 0, True, False)]
+    try:
+        host('command', command=f'fill {x - 20} {y - 1} {z - 2} {x + 8} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'fill {x - 20} {y} {z - 2} {x + 8} {y + 3} {z + 2} minecraft:air')
+        for game, other in ((host, guest), (guest, host)):
+            back_to_game(game)
+            back_to_game(other)
+            other('command', command=f'tp @s {x + 6.5} {y} {z + 1.5}')
+            for label, mode, dx, dies, stays in cases:
+                game('command', command=f'gamemode {mode}')
+                game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+                game('command', command='clear @s')
+                game('command', command='give @s minecraft:wheat 20')
+                host('command', command=f'summon minecraft:villager {x + 2.5} {y} {z + 0.5} {{Tags:["{tag}"],'
+                     'NoAI:1b,PersistenceRequired:1b,Xp:1,VillagerData:{type:"minecraft:plains",'
+                     'profession:"minecraft:farmer",level:1},Offers:{Recipes:[{buy:{id:"minecraft:wheat",count:20},'
+                     'sell:{id:"minecraft:emerald",count:1},maxUses:16,uses:0,xp:0,priceMultiplier:0f,demand:0}]}}')
+                game.wait(20)
+                villager = next(e['id'] for e in game.raw('entities', 8, 'minecraft:villager')['entities']
+                                if math.dist(e['pos'], [x + 2.5, y, z + 0.5]) < 0.5)
+                game.raw('interact-entity', villager)
+                game.raw('wait-for', 'screen', 'station', '--timeout', 10)
+                assert game('screen')['station'] == 'Merchant', f'{game.name}-{label}: no merchant screen'
+                # Selecting the offer moves the wheat into the payment slot.
+                game.raw('click-gui', -1, 28)
+                game.wait(10)
+                paid = station_slots(game).get(600)
+                assert paid == ('minecraft:wheat', 20), f'{game.name}-{label}: payment slot {paid}'
+                if dies:
+                    host('command', command=f'kill @e[tag={tag}]')
+                else:
+                    game('command', command=f'tp @s {x + 0.5 + dx} {y} {z + 0.5}')
+                game.wait(20)
+                screen = game('state').get('screen')
+                open_now = screen not in (None, 'playing')
+                case = {'open': open_now}
+                if not stays:
+                    game.wait(10)
+                    case['wheat'] = server_count(game, 'wheat')
+                seen[f'{game.name}-{label}'] = case
+                want = {'open': stays} if stays else {'open': False, 'wheat': 20}
+                assert case == want, f'{game.name}-{label}: expected {want}, got {case} (screen {screen})'
+                back_to_game(game)
+                host('command', command=f'kill @e[tag={tag}]')
+                game.wait(5)
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+        host('command', command=f'kill @e[tag={tag}]')
+    return seen
+
+
+CHECKS += ['merchant-close']
+CHECK_FNS.update({'merchant-close': check_merchant_close})
+
+
+def check_riptide_rain(host, guest, out):
+    """TridentItem.use/releaseUsing: a Riptide trident launches its user in rain, for the host and for a guest
+    (a server's client answers `isInRain` from its own chunks and weather), with an elytra worn or not (#3458)."""
+    result = {}
+    spots = apart(host, guest)
+    x, y, z = spots['host']
+    host('command', command=f'fill {x} {y + 4} {z} {x} {y + 120} {z} minecraft:air')
+    host('command', command='weather rain')
+    for label, player in (('host', host), ('guest', guest)):
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        player('command', command='give @s minecraft:trident[minecraft:enchantments={"minecraft:riptide":3}]')
+        try:
+            for case, elytra in (('plain', False), ('elytra', True)):
+                player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+                player('command', command='item replace entity @s armor.chest with '
+                       + ('minecraft:elytra' if elytra else 'minecraft:air'))
+                player.raw('key', '1', 'tap')
+                player.wait(25)
+                start = pos_of(player)
+                replies = player.script(['mouse right down', 'wait 25', 'mouse right up', 'wait 12', 'state'], every=True)
+                moved = round(math.dist(start, replies[-1]['player']['position']), 2)
+                result[f'{label}-{case}'] = moved
+                assert moved > 4, f'{label}-{case}: the Riptide trident in rain moved the player {moved} blocks: {result}'
+        finally:
+            player('command', command='clear @s')
+            player('command', command='item replace entity @s armor.chest with minecraft:air')
+            player.raw('key', 'w', 'up')
+    host('command', command='weather clear')
+    return result
+
+
+CHECKS += ['riptide_rain']
+CHECK_FNS['riptide_rain'] = check_riptide_rain
+
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})
 
@@ -8256,34 +8363,56 @@ CHECK_FNS['creative_tools'] = check_creative_tools
 
 
 def check_cushions(host, guest, out):
-    """#1935: place a colored cushion, consume it, track it, sit, dismount and break it."""
+    """#1935: place a colored cushion, consume it, track it, sit, dismount and break it.
+    #3117: placing swings the arm, and a seated player sits on another cushion at once."""
     seen = {}
     for label, player, color in (('host', host, 'red'), ('guest', guest, 'blue')):
         x, y, z = (int(v // 1) for v in pos_of(player))
         at = (x + 0.5, y, z + 2.5)
+        other = (x + 1.5, y, z + 2.5)
         host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
         host('command', command=f'setblock {x} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'setblock {x + 1} {y - 1} {z + 2} minecraft:stone')
         player('command', command='gamemode survival')
         player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{color}_cushion')
         player.wait(10)
         player.raw('look-at', *at)
+        swings = player('state')['swings']
         player.raw('mouse', 'right', 'click')
         player.wait(15)
-        def cushions(game):
+        def cushions(game, at=at):
             return [o for o in game('status')['objects'] if o['kind'] == 'minecraft:cushion'
                     and abs(o['position'][0] - at[0]) < .1 and abs(o['position'][2] - at[2]) < .1]
         server, client = cushions(host), cushions(player)
         seen[label] = {'server': server, 'client': client,
-                       'remaining': player('inventory')['counts'].get(f'minecraft:{color}_cushion', 0)}
+                       'remaining': player('inventory')['counts'].get(f'minecraft:{color}_cushion', 0),
+                       'place_swings': player('state')['swings'] - swings}
         assert len(server) == len(client) == 1, seen
         assert server[0]['color'] == client[0]['color'] == color, seen
         assert seen[label]['remaining'] == 0, seen
+        # CushionItem.useOn returns SUCCESS: the hand swings.
+        assert seen[label]['place_swings'] == 1, seen
         player.shot(out, 'cushion-placed')
+        player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{color}_cushion')
+        player.wait(10)
+        player.raw('look-at', *other)
+        player.raw('mouse', 'right', 'click')
+        player.wait(15)
+        second = cushions(host, other)
+        assert len(second) == 1, (seen, second)
         player.raw('look-at', at[0], at[1] + .125, at[2])
         player.raw('mouse', 'right', 'click')
         player.wait(10)
         seen[label]['riding'] = player('status').get('riding')
         assert seen[label]['riding'] == server[0]['id'], seen
+        # Entity.startRiding: a passenger first gets off its vehicle, so it moves to the other cushion.
+        player.raw('look-at', other[0], other[1] + .125, other[2])
+        player.raw('mouse', 'right', 'click')
+        player.wait(10)
+        # A client rides what the server's SetPassengers says.
+        seen[label]['switched'] = player('status').get('riding')
+        player.shot(out, 'cushion-switched')
+        assert seen[label]['switched'] == second[0]['id'], seen
         player.raw('key', 'shift', 'down')
         player.wait(5)
         player.raw('key', 'shift', 'up')
@@ -8300,6 +8429,10 @@ def check_cushions(host, guest, out):
             for g in (host, guest)
         }
         assert all(n == 10 for n in seen[label]['break_particles'].values()), seen
+        player.raw('look-at', other[0], other[1] + .125, other[2])
+        player.raw('mouse', 'left', 'click')
+        player.wait(10)
+        assert not cushions(host, other) and not cushions(player, other), seen
     return seen
 
 

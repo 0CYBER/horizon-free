@@ -131,6 +131,14 @@ pub fn register(m: &mut Mob) {
             g.add(6, LookAtPlayer::new(8.0));
             g.add(6, RandomLookAround::default());
             let t = &mut m.ai.targets;
+            // `WitherSkeleton.registerGoals` adds its piglin goal before
+            // calling super, so it comes first among the priority 3 goals.
+            if species == S::WitherSkeleton {
+                t.add(
+                    3,
+                    NearestTarget::species(&[S::Piglin, S::PiglinBrute], true),
+                );
+            }
             t.add(1, HurtByTarget::new());
             t.add(2, NearestTarget::player(true));
             t.add(3, NearestTarget::species(&[S::IronGolem], true));
@@ -142,12 +150,6 @@ pub fn register(m: &mut Mob) {
                 )
                 .interval(10),
             );
-            if species == S::WitherSkeleton {
-                t.add(
-                    3,
-                    NearestTarget::species(&[S::Piglin, S::PiglinBrute], true),
-                );
-            }
             // The AbstractSkeleton constructor's reassessWeaponGoal, after
             // registerGoals; the weapon itself comes with finalizeSpawn.
             // getHardAttackInterval / getAttackInterval.
