@@ -114,7 +114,7 @@ impl Game<'_> {
     /// lone block at `seed`: each face from the cell it looks at. Not from
     /// the moving piston's own cell, which is dark once the block it placed
     /// stands there (#3002).
-    fn moving_block_vertices(
+    pub(super) fn moving_block_vertices(
         &self,
         state: BlockStateId,
         seed: horizon_core::position::BlockPos,
