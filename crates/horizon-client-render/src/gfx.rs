@@ -2530,10 +2530,19 @@ impl Renderer {
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &TERRAIN_ATTRIBUTES,
             })];
+            let info = adapter.get_info();
+            let min_sections = if flat::is_broken_intel_vulkan(&info)
+                || std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1")
+            {
+                0
+            } else {
+                flat::MIN_SECTIONS
+            };
             flat::Flat::new(
                 &device,
                 &bindings,
                 arena.page_vertices(),
+                min_sections,
                 |layout, label, fragment, blend| {
                     pipeline_in(
                         layout,
