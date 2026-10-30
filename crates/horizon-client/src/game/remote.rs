@@ -2702,21 +2702,28 @@ impl Game<'_> {
             }
             C::TakeItemEntity(p) => {
                 // ClientPacketListener.handleTakeItemEntity: the pickup sound at
-                // the item, whoever collects it (the server sends none). An
-                // orb's sound comes from the server, at the orb; an arrow this
-                // client does not track as an item sounds at this player.
+                // the item or arrow, whoever collects it (the server sends none).
+                // An orb's sound comes from the server, at the orb; an entity
+                // this client doesn't track sounds at this player.
                 let orb = self.orbs.iter().any(|o| o.id == p.item as u32);
                 let item = self.dropped.iter().find(|d| d.id == p.item as u32);
-                let at = match item {
-                    Some(d) => Some([d.position.x, d.position.y, d.position.z]),
-                    None if self
-                        .remote
-                        .as_ref()
-                        .is_some_and(|r| r.entity_id == p.player) =>
+                let shot = self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .find(|s| s.id == p.item as u32);
+                let at = match (item, shot) {
+                    (Some(d), _) => Some([d.position.x, d.position.y, d.position.z]),
+                    (None, Some(s)) => Some([s.position.x, s.position.y, s.position.z]),
+                    (None, None)
+                        if self
+                            .remote
+                            .as_ref()
+                            .is_some_and(|r| r.entity_id == p.player) =>
                     {
                         self.eye_position()
                     }
-                    None => None,
+                    (None, None) => None,
                 };
                 if !orb && let Some(at) = at {
                     let pitch = ((self.world.random.next_float() - self.world.random.next_float())
@@ -2741,6 +2748,15 @@ impl Game<'_> {
                 } else if let Some(orb) = self.orbs.iter().find(|o| o.id == p.item as u32).cloned()
                 {
                     self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
+                } else if let Some(shot) = self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .find(|s| s.id == p.item as u32)
+                    .cloned()
+                {
+                    // An arrow or trident flies to its collector too, then goes.
+                    self.add_pickup(super::pickups::Taken::Arrow(Box::new(shot)), collector);
                 }
                 // An orb stays: the server may still hold merged ones in it.
                 if !orb {
