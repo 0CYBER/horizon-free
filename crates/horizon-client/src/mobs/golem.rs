@@ -529,6 +529,7 @@ pub fn snow_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 pos: [xx, y, zz],
                 name: "minecraft:snow",
                 effect: false,
+                flags: horizon_world::level::flags::UPDATE_ALL,
             });
         }
     }

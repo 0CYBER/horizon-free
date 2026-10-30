@@ -27,7 +27,7 @@ pub(crate) struct NativeServerPlayer {
     pub(crate) position: [f64; 3],
     /// 0 survival, 1 creative, 2 adventure, 3 spectator.
     pub(crate) game_mode: i32,
-    /// Health points, 20 at full; 0 once dead. API 18.
+    /// Health points, 20 at full; 0 once dead. API 21.
     pub(crate) health: f32,
 }
 
@@ -268,7 +268,7 @@ impl Game<'_> {
     }
     /// A line over that player's hotbar (the action bar), also inside a
     /// player's hook for the acting player (`native_tell` reaches nobody
-    /// there); false when they aren't on. API 18.
+    /// there); false when they aren't on. API 21.
     pub(super) fn native_action_bar(&mut self, uuid: u128, line: Text) -> bool {
         let packet = C::SystemChat(play::SystemChat {
             content: component_nbt(&line.component()),
@@ -315,7 +315,7 @@ impl Game<'_> {
     /// The player whose action or command a hook hears, as their state is
     /// swapped in (`native_perform_command`, `native_right_click_block`,
     /// `native_use_item_on`, `native_destroy_block`...): None outside such a
-    /// hook. API 18.
+    /// hook. API 21.
     pub(super) fn native_acting_player(&self) -> Option<NativeServerPlayer> {
         let p = self.player.as_ref()?;
         Some(NativeServerPlayer {
@@ -334,7 +334,7 @@ impl Game<'_> {
     /// happens at the next tick's start, as the console's. Whether it ran
     /// without failing. Only where no player's state is swapped in
     /// (`native_tick`, `native_menu_clicked`): false inside a player's hook,
-    /// where the other players are out of reach. API 18.
+    /// where the other players are out of reach. API 21.
     pub(super) fn native_run_command(&mut self, line: &str) -> bool {
         if self.lan_acting.is_some() || self.lan.is_none() {
             return false;

@@ -32,45 +32,14 @@ pub const TEXTURE_URIS: [&str; 2] = [
 
 /// `java.util.Base64.getDecoder().decode`.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(text.len() / 4 * 3);
-    let (mut bits, mut shift) = (0u32, 18i32);
-    let bytes: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        i += 1;
-        let b = match c {
-            'A'..='Z' => c as u32 - 'A' as u32,
-            'a'..='z' => c as u32 - 'a' as u32 + 26,
-            '0'..='9' => c as u32 - '0' as u32 + 52,
-            '+' => 62,
-            '/' => 63,
-            '=' => {
-                if shift == 6 && (i == bytes.len() || bytes[i] != '=') || shift == 18 {
-                    return None;
-                }
-                if shift == 6 {
-                    i += 1;
-                }
-                break;
-            }
-            _ => return None,
-        };
-        bits |= b << shift;
-        shift -= 6;
-        if shift < 0 {
-            out.extend([(bits >> 16) as u8, (bits >> 8) as u8, bits as u8]);
-            shift = 18;
-            bits = 0;
-        }
-    }
-    match shift {
-        6 => out.push((bits >> 16) as u8),
-        0 => out.extend([(bits >> 16) as u8, (bits >> 8) as u8]),
-        12 => return None,
-        _ => {}
-    }
-    (i >= bytes.len()).then_some(out)
+    use base64::{
+        Engine,
+        engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+    };
+    STANDARD
+        .decode(text)
+        .or_else(|_| STANDARD_NO_PAD.decode(text))
+        .ok()
 }
 
 /// `unpackTextures(property)`: the textures of a `textures` property's
@@ -935,56 +904,8 @@ fn http_get(url: &str) -> Option<Vec<u8>> {
 
 /// SHA-1 (FIPS 180-4).
 pub fn sha1(data: &[u8]) -> [u8; 20] {
-    let mut h: [u32; 5] = [
-        0x6745_2301,
-        0xEFCD_AB89,
-        0x98BA_DCFE,
-        0x1032_5476,
-        0xC3D2_E1F0,
-    ];
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
-    }
-    msg.extend((data.len() as u64 * 8).to_be_bytes());
-    for block in msg.as_chunks::<64>().0 {
-        let mut w = [0u32; 80];
-        for (i, word) in block.as_chunks::<4>().0.iter().enumerate() {
-            w[i] = u32::from_be_bytes(*word);
-        }
-        for i in 16..80 {
-            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e] = h;
-        for (i, wi) in w.iter().enumerate() {
-            let (f, k) = match i {
-                0..=19 => ((b & c) | (!b & d), 0x5A82_7999),
-                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
-                _ => (b ^ c ^ d, 0xCA62_C1D6),
-            };
-            let t = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(*wi);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = t;
-        }
-        for (x, y) in h.iter_mut().zip([a, b, c, d, e]) {
-            *x = x.wrapping_add(y);
-        }
-    }
-    let mut out = [0u8; 20];
-    for (i, x) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&x.to_be_bytes());
-    }
-    out
+    use sha1::{Digest, Sha1};
+    Sha1::digest(data).into()
 }
 
 #[cfg(test)]

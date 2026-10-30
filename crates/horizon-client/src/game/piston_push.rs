@@ -442,7 +442,12 @@ impl Game<'_> {
                 m.position = m.position.add_vector(movement);
             }
             Target::Item(i) => {
-                self.dropped[i].position = self.dropped[i].position.add_vector(movement)
+                let item = &mut self.dropped[i];
+                item.position = item.position.add_vector(movement);
+                // Entity.move(MoverType.PISTON): onGround only if the push was down.
+                if movement.y != 0.0 {
+                    item.on_ground = movement.y < 0.0;
+                }
             }
             Target::Boat(i) => self.boats[i].position = self.boats[i].position.add_vector(movement),
             Target::Cart(i) => self.carts[i].position = self.carts[i].position.add_vector(movement),
@@ -472,10 +477,7 @@ impl Game<'_> {
                     motion.velocity = piston_push::bounce_velocity(movement, motion.velocity);
                 }
             }
-            Target::Item(i) => {
-                self.dropped[i].velocity =
-                    piston_push::bounce_velocity(movement, self.dropped[i].velocity)
-            }
+            Target::Item(i) => self.dropped[i].piston_slime_bounce(movement),
             Target::Boat(i) => {
                 self.boats[i].velocity =
                     piston_push::bounce_velocity(movement, self.boats[i].velocity)

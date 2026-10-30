@@ -250,6 +250,7 @@ fn server_with(resources: &Path, net: NetConfig) -> Server {
         sync,
         encoder,
         HubConfig {
+            allow_flight: true,
             default_game_mode: 1,
             guest_commands: true,
             force_game_mode: false,

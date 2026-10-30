@@ -815,6 +815,8 @@ impl Game<'_> {
         }
         self.riding = Some(self.boats[i].id);
         self.yaw = self.boats[i].yaw;
+        // ServerPlayer.startRiding.
+        self.trigger_player("minecraft:started_riding");
         true
     }
     /// `VehicleEntity.hurtServer` from the player's attack.

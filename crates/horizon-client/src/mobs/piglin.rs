@@ -1042,8 +1042,12 @@ fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     }
 }
 pub fn register_piglin(m: &mut Mob) {
+    // `AbstractPiglin.<init>`: a piglin's navigation opens doors.
+    m.ai.nav.can_open_doors = true;
     let g = &mut m.ai.goals;
     g.add(0, Float);
+    // `PiglinAi.initCoreActivity`: `InteractWithDoor.create()`.
+    g.add(0, super::doors::InteractWithDoor::default());
     g.add(1, Admire);
     // `PiglinAi.initRetreatActivity`: `SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.0, 12, true)`.
     g.add(2, WalkAway::retreat(1.0, 12.0, true));

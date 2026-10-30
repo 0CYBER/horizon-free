@@ -233,6 +233,12 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         ],
         elastic as i32 - 1,
     ));
+    // Leashable.whenLeashedTo: `leashHolder.notifyLeashHolder(this)`.
+    if let Holder::Mob(id) = holder
+        && supports_quad_leash(m.species())
+    {
+        events.push(MobEvent::NotifyLeashHolder { holder: id });
+    }
     let b = m.bounds();
     let (lo, hi) = (b.min_position(), b.max_position());
     let center = Vec3::new(
@@ -354,10 +360,111 @@ pub fn leash_offset(m: &Mob) -> [f64; 3] {
         [0.0, m.eye_height(), f64::from(m.width() * 0.4)]
     }
 }
+/// `Leashable.createQuadLeashOffsets`: four attachment points around an
+/// entity of this size, front-left first, turning clockwise from above.
+pub fn create_quad_leash_offsets(
+    width: f32,
+    height: f32,
+    front_offset: f64,
+    front_back: f64,
+    left_right: f64,
+    up: f64,
+) -> [[f64; 3]; 4] {
+    let front = front_offset * f64::from(width);
+    let front_back = front_back * f64::from(width);
+    let left_right = left_right * f64::from(width);
+    let y = up * f64::from(height);
+    [
+        [-left_right, y, front_back + front],
+        [-left_right, y, -front_back + front],
+        [left_right, y, -front_back + front],
+        [left_right, y, front_back + front],
+    ]
+}
+/// `Leashable.supportQuadLeash`: `AbstractHorse` (horses, donkeys, mules, the
+/// undead horses, camels), `Sniffer` and `AbstractBoat` say yes; `Llama`
+/// overrides `AbstractHorse` back to no. Boats are not mobs here.
+pub fn supports_quad_leash(s: Species) -> bool {
+    use Species as S;
+    matches!(
+        s,
+        S::Horse
+            | S::Donkey
+            | S::Mule
+            | S::SkeletonHorse
+            | S::ZombieHorse
+            | S::Camel
+            | S::CamelHusk
+            | S::Sniffer
+    )
+}
+/// `Leashable.getQuadLeashOffsets` of a mob for which `supports_quad_leash`:
+/// `AbstractHorse`'s, with the overrides of `AbstractChestedHorse` and
+/// `ZombieHorse`, `Camel` and `Sniffer`.
+pub fn quad_leash_offsets(m: &Mob) -> [[f64; 3]; 4] {
+    use Species as S;
+    let (front, front_back, left_right, up) = match m.species() {
+        S::Donkey | S::Mule | S::ZombieHorse => (0.04, 0.41, 0.18, 0.73),
+        S::Camel | S::CamelHusk => (0.02, 0.48, 0.25, 0.82),
+        S::Sniffer => (-0.01, 0.63, 0.38, 1.15),
+        S::Horse | S::SkeletonHorse => (0.04, 0.52, 0.23, 0.87),
+        _ => (0.0, 0.5, 0.5, 0.5),
+    };
+    create_quad_leash_offsets(m.width(), m.height(), front, front_back, left_right, up)
+}
+/// `Entity.supportQuadLeashAsHolder` and `getQuadLeashHolderOffsets`: the
+/// `Ghast` family holds a quad lead, the happy ghast at its own points.
+pub fn quad_holder_offsets(m: &Mob) -> Option<[[f64; 3]; 4]> {
+    match m.species() {
+        Species::HappyGhast => Some(create_quad_leash_offsets(
+            m.width(),
+            m.height(),
+            -0.03125,
+            0.4375,
+            0.46875,
+            0.03125,
+        )),
+        Species::Ghast => Some(create_quad_leash_offsets(
+            m.width(),
+            m.height(),
+            0.0,
+            0.5,
+            0.5,
+            0.0,
+        )),
+        _ => None,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn quad_leash_points_are_vanillas() {
+        // Leashable.createQuadLeashOffsets for a horse (1.3964844 x 1.6).
+        let p = create_quad_leash_offsets(1.5, 1.6, 0.04, 0.52, 0.23, 0.87);
+        let (y, fb, lr, f) = (
+            0.87 * f64::from(1.6_f32),
+            0.52 * 1.5,
+            0.23 * 1.5,
+            0.04 * 1.5,
+        );
+        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+        assert!(near(p[0], [-lr, y, fb + f]));
+        assert!(near(p[1], [-lr, y, -fb + f]));
+        assert!(near(p[2], [lr, y, -fb + f]));
+        assert!(near(p[3], [lr, y, fb + f]));
+    }
+    #[test]
+    fn only_horses_camels_and_sniffers_support_a_quad_lead() {
+        assert!(supports_quad_leash(Species::Horse));
+        assert!(supports_quad_leash(Species::Camel));
+        assert!(supports_quad_leash(Species::Sniffer));
+        // Llama.supportQuadLeash is false.
+        assert!(!supports_quad_leash(Species::Llama));
+        assert!(!supports_quad_leash(Species::TraderLlama));
+        assert!(!supports_quad_leash(Species::Cow));
+    }
     #[test]
     fn rotating_about_y_matches_vanilla() {
         let v = rot_y([0.0, 1.0, 1.0], std::f64::consts::FRAC_PI_2);
