@@ -4154,9 +4154,9 @@ impl Renderer {
             visible.clear();
         } else {
             visible_lods.extend(
-                self.lods.iter().filter_map(|(&key, tile)| {
-                    tile.visible(key, camera, frame.distance, &view, now)
-                }),
+                self.lods
+                    .iter()
+                    .filter_map(|(&key, tile)| tile.visible(key, camera, &view, now)),
             );
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }

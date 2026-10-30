@@ -109,13 +109,13 @@ impl Bounds {
         Some(bounds)
     }
 
-    fn visible(self, origin: DVec3, distance: f32, frustum: &Frustum) -> Option<u64> {
+    /// In view: the plan alone decides which tiles are in range (a circle),
+    /// so a tile leaving it fades out (`upload_lods`). Cut here at the range,
+    /// tiles popped out as the player moved, before the plan dropped them.
+    fn visible(self, origin: DVec3, frustum: &Frustum) -> Option<u64> {
         let min = origin + self.min.as_dvec3();
         let max = origin + self.max.as_dvec3();
-        let nearest = DVec3::ZERO.clamp(min, max);
-        if nearest.x * nearest.x + nearest.z * nearest.z > f64::from(distance).powi(2)
-            || !frustum.intersects(min.as_vec3(), max.as_vec3())
-        {
+        if !frustum.intersects(min.as_vec3(), max.as_vec3()) {
             return None;
         }
         Some(((min + max) * 0.5).length_squared().to_bits())
@@ -165,7 +165,6 @@ impl Tile {
         &self,
         key: TileKey,
         camera: DVec3,
-        distance: f32,
         frustum: &Frustum,
         now: Instant,
     ) -> Option<Visible> {
@@ -176,7 +175,7 @@ impl Tile {
         let origin = DVec3::from(key.origin().map(f64::from)) - camera;
         Some(Visible {
             key,
-            distance: self.bounds.visible(origin, distance, frustum)?,
+            distance: self.bounds.visible(origin, frustum)?,
             origin: origin.as_vec3().to_array(),
             fade,
             old: self.dying.is_some() || self.previous.is_some(),
@@ -519,16 +518,17 @@ mod tests {
                     * crate::camera::view_matrix(0.0, 0.0),
             ),
         };
-        // The tile origin is farther than the range, but its far edge reaches
-        // the camera. Negative world origins therefore remain visible.
+        // The tile origin is far behind, but its far edge reaches the camera.
+        // Negative world origins therefore remain visible.
         assert!(
             bounds
-                .visible(DVec3::new(-1000.0, -80.0, -512.0), 256.0, &view)
+                .visible(DVec3::new(-1000.0, -80.0, -512.0), &view)
                 .is_some()
         );
+        // Wholly behind the camera: out of view.
         assert!(
             bounds
-                .visible(DVec3::new(-2000.0, -80.0, -512.0), 256.0, &view)
+                .visible(DVec3::new(-512.0, -80.0, -2000.0), &view)
                 .is_none()
         );
         assert!(Bounds::mesh(&SectionMesh::default()).is_none());
