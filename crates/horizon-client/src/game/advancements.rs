@@ -115,9 +115,17 @@ pub(super) struct AdvState {
     pub(super) announced: Vec<Text>,
     /// The tree being read on another thread since the world opened
     /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
-    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
+    pub(super) pending_tree: Option<std::thread::JoinHandle<Arc<Tree>>>,
     /// `inventory_changed`'s criteria by item, built for `tree`.
     inventory_index: Option<(Arc<Tree>, Arc<adv::InventoryIndex>)>,
+}
+impl AdvState {
+    /// Drop the prefetched tree and the index built for the old one (a
+    /// `/reload` rebuilt the tree).
+    pub(super) fn reset_tree(&mut self) {
+        self.pending_tree = None;
+        self.inventory_index = None;
+    }
 }
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
@@ -261,9 +269,12 @@ impl Game<'_> {
         if self.adv.tree.list.is_empty() {
             let tree = match self.adv.pending_tree.take().map(|h| h.join()) {
                 Some(Ok(tree)) => tree,
-                _ => Tree::load(&self.options.resources.join("data")),
+                _ => {
+                    let overlay = self.pack_files();
+                    Tree::shared(&self.options.resources.join("data"), &overlay)
+                }
             };
-            self.adv.tree = Arc::new(tree);
+            self.adv.tree = tree;
             // With the tree, while the world loads: built on the first
             // inventory change it cost that tick ~10 ms.
             self.inventory_index();
@@ -278,7 +289,7 @@ impl Game<'_> {
         {
             return index.clone();
         }
-        let items = self.res.items();
+        let items = self.items();
         let index = Arc::new(adv::InventoryIndex::build(&tree, |tag| {
             items
                 .item_tags
@@ -297,9 +308,15 @@ impl Game<'_> {
             return;
         }
         let data = self.options.resources.join("data");
+        // The world's packs' advancements go over the game's own.
+        let files = super::functions::content_overlay(
+            &self.world_root,
+            &self.options.resources,
+            self.cmds.vanilla_disabled,
+        );
         self.adv.pending_tree = std::thread::Builder::new()
             .name("horizon-advancements".into())
-            .spawn(move || Tree::load(&data))
+            .spawn(move || Tree::shared(&data, &horizon_world::loot::PackOverlay { files: &files }))
             .ok();
     }
     pub(super) fn load_advancements(&mut self) {
@@ -537,13 +554,13 @@ impl Game<'_> {
             .rewards
             .recipes
             .iter()
-            .filter(|r| self.res.stations().recipe_index.contains(r))
+            .filter(|r| world_stations!(self).recipe_index.contains(r))
             .cloned()
             .collect();
         let (_, unlocked) = self
             .level
             .recipe_book
-            .add_recipes(&self.res.stations().recipe_index, &rewards);
+            .add_recipes(&world_stations!(self).recipe_index, &rewards);
         for table in &a.rewards.loot {
             let items = self
                 .res

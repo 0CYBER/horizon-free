@@ -2,7 +2,11 @@
 //! throwing their load to the player or note block, dancing to jukeboxes,
 //! and the hand-over interaction (`Allay.mobInteract`).
 use super::Game;
-use horizon_client::{containers::BlockEntity, items::ItemStack, mobs::Species};
+use horizon_client::{
+    containers::BlockEntity,
+    items::ItemStack,
+    mobs::{Species, allay},
+};
 use horizon_core::random::RandomSource;
 
 impl Game<'_> {
@@ -43,14 +47,34 @@ impl Game<'_> {
                 .items()
                 .get(&held)
                 .map_or(64, |i| i.max_stack as i32);
-            // GoToWantedItem / wantsToPickUp: the same item within 32.
+            // GoToWantedItem / wantsToPickUp: the same item within 32 that the
+            // allay sees (NearestItemSensor's hasLineOfSight, eye to eye).
             let wanted = if griefing && carried < max && self.mobs[i].extra.ints[3] <= 0 {
+                let w = self.mob_world_base(&[]);
+                let eye = horizon_core::geometry::Vec3::new(pos.x, self.mobs[i].eye_y(), pos.z);
+                // The sensor looks in the allay's box grown by (32, 16, 32).
+                let b = self.mobs[i].bounds();
+                let (low, high) = (b.min_position().y - 16.0, b.max_position().y + 16.0);
                 self.dropped
                     .iter()
                     .enumerate()
                     .filter(|(_, e)| e.stack.item == held && e.pickup_delay == 0)
                     .map(|(j, e)| (j, e.position.distance_squared(pos)))
-                    .filter(|(_, d)| *d <= 32.0 * 32.0)
+                    .filter(|(_, d)| *d < 32.0 * 32.0)
+                    .filter(|(j, _)| {
+                        let y = self.dropped[*j].position.y;
+                        y <= high && y + 0.25 >= low
+                    })
+                    .filter(|(j, _)| {
+                        // ItemEntity's eye height is 0.2125.
+                        let e = &self.dropped[*j];
+                        let at = horizon_core::geometry::Vec3::new(
+                            e.position.x,
+                            e.position.y + 0.2125,
+                            e.position.z,
+                        );
+                        w.line_of_sight(eye, at)
+                    })
                     .min_by(|a, b| a.1.total_cmp(&b.1))
             } else {
                 None
@@ -131,14 +155,20 @@ impl Game<'_> {
         if m.extra.ints[1] <= 0 {
             return;
         }
+        // AllayAi.getItemDepositPosition: the liked note block, else the player.
+        let dimension = self.dim.id();
+        let noteblock = allay::noteblock_deposit(&mut self.mobs[i], dimension, |p| {
+            &*self
+                .res
+                .facts()
+                .get(self.world.block(p[0], p[1], p[2]))
+                .name
+                == "minecraft:note_block"
+        });
         let player = self.allay_liked_player(i);
         let m = &self.mobs[i];
-        let target = match m.extra.home.filter(|_| m.extra.ints[2] > 0) {
-            Some(h) => horizon_core::geometry::Vec3::new(
-                f64::from(h[0]) + 0.5,
-                f64::from(h[1]) + 1.0,
-                f64::from(h[2]) + 0.5,
-            ),
+        let target = match noteblock {
+            Some(p) => horizon_core::geometry::Vec3::new(p[0], p[1], p[2]),
             None => match player.filter(|_| m.extra.tame) {
                 Some(p) => p,
                 None => return,

@@ -129,6 +129,10 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// Through a portal, until `LanHub::land` gives the client its position:
+    /// the moves it sent from the old level are ignored, as they would be
+    /// while it had a teleport to accept.
+    pub landing: bool,
     pub teleport_counter: i32,
     /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
     pub teleport_tick: u64,
@@ -165,6 +169,9 @@ pub struct Guest {
     /// What the player's file says of the body (`Entity.load`: the fire
     /// and air ticks and the fall distance), for the first body it gets.
     pub loaded_body: Option<SavedBody>,
+    /// The vehicle the player's file names (`ServerPlayer.saveParentVehicle`'s
+    /// "RootVehicle"), for the ride to come back on the next login.
+    pub saved_vehicle: Option<[i32; 4]>,
     /// The hurt and attack logs of the body it had before it respawned,
     /// until the new body takes them over (the control socket's `hurtlog`
     /// reads across a death).
@@ -184,6 +191,8 @@ pub struct Guest {
     pub craft_result: Option<ItemStack>,
     /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
     pub ender_items: Vec<Option<ItemStack>>,
+    /// What a native mod's menu shows (`Slots::Native`), while one is open.
+    pub native_menu: Vec<Option<ItemStack>>,
     pub health: f32,
     /// The saved `AbsorptionAmount`, until the player's first body on the
     /// server takes it (the body holds the live amount).
@@ -219,7 +228,9 @@ pub struct Guest {
     /// The last action sequence to acknowledge at the next tick (-1: none).
     pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
-    pub inbox: VecDeque<play::Serverbound>,
+    /// Packets waiting for the player's next turn, and their bytes on the wire.
+    pub inbox: VecDeque<(play::Serverbound, usize)>,
+    pub inbox_bytes: usize,
     pub joined_tick: u64,
     pub ticks: u64,
     /// The moves accepted since the game last looked (movement, on ground),
@@ -309,6 +320,7 @@ impl Guest {
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            landing: false,
             teleport_counter: 0,
             teleport_tick: 0,
             first_good: position,
@@ -327,6 +339,7 @@ impl Guest {
             tracker: Tracker::default(),
             motion: None,
             loaded_body: None,
+            saved_vehicle: None,
             logs_kept: None,
             inventory: vec![None; 36],
             armor: [None, None, None, None],
@@ -336,6 +349,7 @@ impl Guest {
             craft_grid: Default::default(),
             craft_result: None,
             ender_items: vec![None; 27],
+            native_menu: Vec::new(),
             health: 20.0,
             saved_absorption: None,
             food: 20,
@@ -356,6 +370,7 @@ impl Guest {
             ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
+            inbox_bytes: 0,
             joined_tick: 0,
             ticks: 0,
             moves: Vec::new(),
@@ -482,13 +497,19 @@ impl Guest {
     /// `Player.isWithinBlockInteractionRange(pos, 1.0)`, which the server
     /// checks a block action against (ServerPlayerGameMode.handleBlockBreakAction,
     /// ServerGamePacketListenerImpl.handleUseItemOn): from the eyes of the
-    /// guest's body in its pose (crouching, swimming, gliding).
-    pub fn may_reach_block(&self, pos: [i32; 3]) -> bool {
+    /// guest's body in its pose (crouching, swimming, gliding), with its
+    /// `block_interaction_range` (4.5, 5 in creative, more with `/attribute`).
+    pub fn may_reach_block(&mut self, pos: [i32; 3]) -> bool {
         let eye = self
             .motion
             .as_ref()
             .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let range = if self.creative() { 5.0 } else { 4.5 };
+        let otherwise = if self.creative() { 5.0 } else { 4.5 };
+        let range = self
+            .motion
+            .as_mut()
+            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
+            .unwrap_or(otherwise);
         within_block_range(
             [self.position[0], self.position[1] + eye, self.position[2]],
             range + 1.0,
@@ -507,6 +528,14 @@ impl Guest {
             36..=44 => self.inventory.get(slot - 36).cloned().flatten(),
             45 => self.offhand.clone(),
             _ => None,
+        }
+    }
+    /// The open menu's packets told the client every inventory slot: the
+    /// inventory menu's own sync has nothing to add. Sent again, it could land
+    /// on clicks the client has predicted since.
+    pub fn inventory_told(&mut self) {
+        for slot in 9..45 {
+            self.menu_sent[slot] = self.menu_slot(slot);
         }
     }
     pub fn set_menu_slot(&mut self, slot: usize, item: Option<ItemStack>) {
@@ -780,6 +809,41 @@ fn network_stack(
                 horizon_protocol::item::Component::Stacks(charged),
             ));
         }
+        // `ItemContainerContents`: a shulker box's items, for its tooltip
+        // (ClientContainerTooltip). The wire form is the slot count, then one
+        // optional template per slot, so the guest's stack lists the same items
+        // the host's holds.
+        if !d.container.is_empty() {
+            let slots: Vec<(i32, Stack)> = d
+                .container
+                .iter()
+                .filter_map(|(slot, s)| {
+                    Some((
+                        i32::from(*slot),
+                        network_stack(item_id, synced_id, &Some(s.clone()))?,
+                    ))
+                })
+                .collect();
+            // The saved list names only the filled slots; the codec counts them
+            // all, from the first to the last that holds one.
+            let size = slots.iter().map(|(slot, _)| slot + 1).max().unwrap_or(0);
+            let mut w = horizon_protocol::buf::Writer::new();
+            w.varint(size);
+            for slot in 0..size {
+                let stack = slots.iter().find(|(at, _)| *at == slot).map(|(_, s)| s);
+                w.bool(stack.is_some());
+                if let Some(stack) = stack {
+                    <horizon_protocol::item::Template as horizon_protocol::buf::Codec<Stack>>::write(
+                        stack,
+                        &mut w,
+                    );
+                }
+            }
+            stack.added.push((
+                horizon_protocol::item::component::CONTAINER,
+                horizon_protocol::item::Component::Raw(w.data),
+            ));
+        }
         // What a bundle holds, for its tooltip (ClientBundleTooltip).
         if !d.bundle_contents.is_empty() {
             let contents = d
@@ -993,5 +1057,42 @@ mod tests {
         assert!(g.may_reach_block([0, 71, 0]));
         g.sneaking = true;
         assert!(!g.may_reach_block([0, 71, 0]));
+    }
+
+    /// A shulker box's `minecraft:container` crosses to a guest, so its
+    /// tooltip can list the items it holds (#2979).
+    #[test]
+    fn shulker_contents_survive_inventory_sync() {
+        let name = Tag::compound([("text", Tag::String("Gold bit".into()))]);
+        let mut inner = ItemStack::new("minecraft:diamond", 2);
+        inner.data_mut().custom_name = Some(name);
+        let mut boxed = ItemStack::new("minecraft:shulker_box", 1);
+        boxed.data_mut().container = vec![(0, inner)];
+        let id = |name: &str| if name.ends_with(":diamond") { 22 } else { 7 };
+
+        let sent = stack_to_network(id, |_, _| None, &Some(boxed));
+        let mut writer = Writer::new();
+        horizon_protocol::item::Slot::write(&sent, &mut writer);
+        let mut reader = Reader::new(&writer.data);
+        let received = horizon_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reader.remaining(), 0);
+
+        let Some(Component::Raw(bytes)) = received.component(component::CONTAINER) else {
+            panic!("the stack carried no container component");
+        };
+        // ItemContainerContents.STREAM_CODEC: the slot count, then one
+        // optional template per slot.
+        let mut r = Reader::new(bytes);
+        assert_eq!(r.count(256).unwrap(), 1);
+        assert!(r.bool().unwrap());
+        let template = horizon_protocol::item::Template::read(&mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        assert_eq!((template.item, template.count), (22, 2));
+        assert!(matches!(
+            template.component(component::CUSTOM_NAME),
+            Some(Component::Text(_))
+        ));
     }
 }

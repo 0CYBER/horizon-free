@@ -389,6 +389,10 @@ pub struct Ctx<'a, L: FinalizeLevel + ?Sized, R: RandomSource> {
     /// Jockeys and mounts made along the way, finalized, with their riding
     /// links set (`Extra::mount` / `Extra::rider`).
     pub created: Vec<Mob>,
+    /// The rider as it was when its new chicken was added to the level, before
+    /// its equipment and attributes: what a generated chunk keeps of it
+    /// (`ProtoChunk.addEntity` saves the chicken with its passenger then).
+    pub jockey_rider: Option<Mob>,
 }
 
 // ---- attributes -----------------------------------------------------------
@@ -624,6 +628,29 @@ pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op)
     }
     refresh(m, a);
 }
+/// `AttributeInstance.removeModifier`.
+pub fn remove_modifier(m: &mut Mob, a: Attr, id: &str) {
+    if let Some(s) = m.extra.attributes.as_mut() {
+        s.modifiers.retain(|x| x.attr != a || x.id != id);
+    }
+    refresh(m, a);
+}
+/// `Mob.finalizeSpawn`, which every mob's own `finalizeSpawn` reaches
+/// through `super`: the `random_spawn_bonus` follow range modifier (once)
+/// and `setLeftHanded(nextFloat() < 0.05F)`.
+pub fn mob_spawn(m: &mut Mob, random: &mut impl RandomSource) {
+    if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
+        let bonus = random.triangle(0.0, 0.114_850_000_000_000_01);
+        add_modifier(
+            m,
+            Attr::FollowRange,
+            "minecraft:random_spawn_bonus",
+            bonus,
+            Op::AddMultipliedBase,
+        );
+    }
+    m.extra.left_handed = random.next_float() < 0.05;
+}
 /// `Zombie.handleAttributes`, from the zombie's own random.
 pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
     let r = &mut m.random;
@@ -799,8 +826,8 @@ pub fn allowed_in_peaceful(kind: &str) -> bool {
             | "zombified_piglin"
     )
 }
-/// `getBabyStartAge`.
-fn baby_start_age(s: Species) -> i32 {
+/// `AgeableMob.getBabyStartAge` (a sniffer's is -48000).
+pub fn baby_start_age(s: Species) -> i32 {
     if s == Species::Sniffer {
         super::sniffer::BABY_START_AGE
     } else {
@@ -835,12 +862,12 @@ pub fn goat_spawn(m: &mut Mob) {
         .random
         .next_int_between_inclusive(600, 1200)
         .unwrap_or(600);
-    set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
     let ram = m
         .random
         .next_int_between_inclusive(600, 6000)
         .unwrap_or(600);
-    set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
     m.extra.screaming = m.random.next_double() < 0.02;
     age_boundary_reached(m);
     if !m.is_baby() && m.random.next_float() < 0.1 {
@@ -862,6 +889,10 @@ pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color
     child.extra.variant = variant;
     if species == Species::Sheep {
         child.extra.color = color;
+    }
+    // `SulfurCube.getBreedOffspring`: `setSize(1, true)`.
+    if species == Species::SulfurCube {
+        sulfur_size(child, 1);
     }
 }
 /// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
@@ -1016,17 +1047,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
 
     /// `Mob.finalizeSpawn`: the follow range spawn bonus and left-handedness.
     fn mob(&mut self, m: &mut Mob, g: Option<Group>) -> Option<Group> {
-        if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
-            let bonus = self.random.triangle(0.0, 0.114_850_000_000_000_01);
-            add_modifier(
-                m,
-                Attr::FollowRange,
-                "minecraft:random_spawn_bonus",
-                bonus,
-                Op::AddMultipliedBase,
-            );
-        }
-        m.extra.left_handed = self.float() < 0.05;
+        mob_spawn(m, self.random);
         g
     }
     /// `AgeableMob.finalizeSpawn`.
@@ -1290,6 +1311,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                         self.finalize(&mut chicken, Reason::Jockey, None);
                         chicken.extra.jockey = true;
                         self.ride(m, &mut chicken);
+                        self.jockey_rider = Some(m.clone());
                         self.created.push(chicken);
                     }
                 }
@@ -1641,7 +1663,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Frog => {
                 self.variant(m, |r| &r.frog);
                 let jump = self.uniform(100, 140);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 self.ageable(m, g)
             }
             S::ZombieNautilus => {
@@ -2024,9 +2046,9 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 /// cooldown (600 to 6000), drawn from `random`.
 pub fn goat_init_memories(m: &mut Mob, random: &mut impl RandomSource) {
     let jump = random.next_int_between_inclusive(600, 1200).unwrap_or(600);
-    set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
     let ram = random.next_int_between_inclusive(600, 6000).unwrap_or(600);
-    set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
