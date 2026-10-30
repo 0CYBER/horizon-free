@@ -181,11 +181,23 @@ impl Game<'_> {
             .options
             .shortcut(&self.gui.atlas, shortcut, &mut self.clipboard)
     }
-    pub(super) fn options_scroll(&mut self, amount: f32) {
+    pub(super) fn options_scroll(&mut self, amount: f32) -> Result<()> {
+        let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
+            [r.config.width as i32, r.config.height as i32]
+        });
+        if self.ui.options.page() == Page::Video && self.has_control_down() {
+            // VideoSettingsScreen.mouseScrolled: Ctrl with the wheel steps the GUI scale.
+            let mut ui = std::mem::take(&mut self.ui.options);
+            let events = ui.video_wheel_gui_scale(&mut self.settings, framebuffer, amount);
+            self.ui.options = ui;
+            return self.handle_option_events(events);
+        }
         let size = self.gui_size();
-        self.ui
-            .options
-            .scroll_at(&self.settings, size, self.cursor, amount);
+        let events =
+            self.ui
+                .options
+                .wheel(&mut self.settings, size, self.cursor, framebuffer, amount);
+        self.handle_option_events(events)
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {

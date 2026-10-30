@@ -36,14 +36,21 @@ const SCAN_RATE: i32 = 20;
 /// `FrogAi.TIME_BETWEEN_LONG_JUMPS` and the brain memory
 /// `LONG_JUMP_COOLDOWN_TICKS` (saved with the others, as `finalize` sets it).
 const TIME_BETWEEN_LONG_JUMPS: (i32, i32) = (100, 140);
-const LONG_JUMP_COOLDOWN: &str = "long_jump_cooldown";
+/// `GoatAi.TIME_BETWEEN_LONG_JUMPS`.
+const GOAT_TIME_BETWEEN_LONG_JUMPS: (i32, i32) = (600, 1200);
+const LONG_JUMP_COOLDOWN: &str = "long_jump_cooling_down";
 /// `FrogAi`'s `LongJumpToPreferredBlock`: `MAX_LONG_JUMP_WIDTH`,
 /// `MAX_LONG_JUMP_HEIGHT`, `MAX_JUMP_VELOCITY_MULTIPLIER` and the chance to
 /// look for a lily pad or big dripleaf first.
 const JUMP_WIDTH: i32 = 4;
 const JUMP_HEIGHT: i32 = 2;
+/// The goat's `MAX_JUMP_VELOCITY_MULTIPLIER` is the same number.
 const JUMP_VELOCITY_MULTIPLIER: f32 = 3.571_428_8;
 const PREFERRED_BLOCKS_CHANCE: f32 = 0.5;
+/// `GoatAi`'s `LongJumpToRandomPos`: `MAX_LONG_JUMP_WIDTH` and
+/// `MAX_LONG_JUMP_HEIGHT`.
+const GOAT_JUMP_WIDTH: i32 = 5;
+const GOAT_JUMP_HEIGHT: i32 = 5;
 /// `LongJumpToRandomPos.ALLOWED_ANGLES`, `FIND_JUMP_TRIES` and
 /// `PREPARE_JUMP_DURATION`.
 const ALLOWED_ANGLES: [i32; 4] = [65, 70, 75, 80];
@@ -144,13 +151,7 @@ fn can_eat(species: Species, size: i32) -> bool {
 
 /// `FrogAttackablesSensor` (every 20 ticks) and the memory timers.
 pub fn server_ai_step(m: &mut Mob, w: &MobWorld) {
-    // `CountDownCooldownTicks(LONG_JUMP_COOLDOWN_TICKS)`: one less each tick,
-    // erased the tick after it reaches 0.
-    match jump_cooldown(m) {
-        Some(t) if t > 0 => set_jump_cooldown(m, Some(t - 1)),
-        Some(_) => set_jump_cooldown(m, None),
-        None => {}
-    }
+    count_down_cooldown(m);
     let f = &mut m.extra.frog;
     f.unreachable.retain_mut(|(_, ttl)| {
         *ttl -= 1;
@@ -343,6 +344,16 @@ impl Goal for ShootTongue {
     }
 }
 
+/// `CountDownCooldownTicks.tick` of `LONG_JUMP_COOLDOWN_TICKS`: one less each
+/// tick, erased the tick after it reaches 0 (the core activity of a frog and
+/// a goat).
+pub(super) fn count_down_cooldown(m: &mut Mob) {
+    match jump_cooldown(m) {
+        Some(t) if t > 0 => set_jump_cooldown(m, Some(t - 1)),
+        Some(_) => set_jump_cooldown(m, None),
+        None => {}
+    }
+}
 /// `LONG_JUMP_COOLDOWN_TICKS`.
 fn jump_cooldown(m: &Mob) -> Option<i64> {
     m.extra
@@ -366,9 +377,41 @@ fn set_jump_cooldown(m: &mut Mob, ticks: Option<i64>) {
 /// `TIME_BETWEEN_LONG_JUMPS.sample` from the level's random, divided as the
 /// caller asks.
 fn sample_cooldown(m: &mut Mob, lr: &mut LegacyRandom, div: i32) {
-    let (lo, hi) = TIME_BETWEEN_LONG_JUMPS;
+    let (lo, hi) = if m.species() == Species::Goat {
+        GOAT_TIME_BETWEEN_LONG_JUMPS
+    } else {
+        TIME_BETWEEN_LONG_JUMPS
+    };
     let t = lr.next_int_between_inclusive(lo, hi).unwrap_or(lo) / div;
     set_jump_cooldown(m, Some(i64::from(t)));
+}
+
+/// The jump sound each activity hands to `LongJumpToRandomPos`: the frog's, or
+/// the goat's, which has a screaming one.
+fn jump_sound(m: &Mob) -> &'static str {
+    match (m.species(), m.extra.screaming) {
+        (Species::Goat, true) => "entity.goat.screaming.long_jump",
+        (Species::Goat, false) => "entity.goat.long_jump",
+        _ => "entity.frog.long_jump",
+    }
+}
+
+/// `LivingEntity.setDiscardFriction`: the flag lives in the frog's or the
+/// goat's state.
+fn set_discard_friction(m: &mut Mob, on: bool) {
+    if m.species() == Species::Goat {
+        m.extra.goat.discard_friction = on;
+    } else {
+        m.extra.frog.discard_friction = on;
+    }
+}
+/// `Entity.setPose` to or from a long jump: a goat's box changes with it.
+fn set_jump_pose(m: &mut Mob, w: &MobWorld, id: u8) {
+    if m.species() == Species::Goat {
+        super::goat::set_pose(m, w, id);
+    } else {
+        set_pose(m, id);
+    }
 }
 
 /// `FrogAi.isAcceptableLandingSpot`: no fluid in the target, below or above
@@ -391,7 +434,13 @@ fn acceptable_landing(m: &Mob, w: &MobWorld, [x, y, z]: [i32; 3]) -> bool {
     {
         return true;
     }
-    w.facts.get(w.world.block(x, y - 1, z)).solid_render && m.malus(here) == 0.0
+    default_acceptable_landing(m, w, [x, y, z])
+}
+/// `LongJumpToRandomPos.defaultAcceptableLandingSpot`: a solid block below and
+/// a path type the mob walks without a malus.
+fn default_acceptable_landing(m: &Mob, w: &MobWorld, [x, y, z]: [i32; 3]) -> bool {
+    w.facts.get(w.world.block(x, y - 1, z)).solid_render
+        && m.malus(w.path_type_static(x, y, z)) == 0.0
 }
 
 /// `LongJumpToRandomPos.PossibleJump`: a block and its weight.
@@ -402,7 +451,7 @@ type Candidate = ([i32; 3], i32);
 /// holds the pose until it lands. One goal here, like the brain activity
 /// that keeps the idle croak and stroll from starting meanwhile.
 #[derive(Clone, Debug, Default)]
-struct LongJump {
+pub(super) struct LongJump {
     candidates: Vec<Candidate>,
     not_preferred: Vec<Candidate>,
     wanting_preferred: bool,
@@ -457,7 +506,14 @@ impl LongJump {
                 continue;
             };
             let here = [m.position.x.floor() as i32, m.position.z.floor() as i32];
-            if here == [target[0], target[2]] || !acceptable_landing(m, w, target) {
+            // GoatAi's landing spot is LongJumpToRandomPos's default; the
+            // frog's is FrogAi.isAcceptableLandingSpot.
+            let acceptable = if m.species() == Species::Goat {
+                default_acceptable_landing(m, w, target)
+            } else {
+                acceptable_landing(m, w, target)
+            };
+            if here == [target[0], target[2]] || !acceptable {
                 continue;
             }
             let centre = Vec3::new(
@@ -479,29 +535,36 @@ impl LongJump {
             }
         }
     }
-    /// `LongJumpMidJump.stop`, or the end of a search.
+    /// `LongJumpMidJump.stop` (a goat lands with `entity.goat.step`, a frog
+    /// with `entity.frog.step`), or the end of a search.
     fn end(&mut self, m: &mut Mob, cx: &mut Cx) {
         if self.mid_jump {
             if m.on_ground {
-                m.velocity = m.velocity.multiply(Vec3::new(0.1, 1.0, 0.1));
+                // multiply(0.1F, 1.0, 0.1F): the float widened.
+                let slow = f64::from(0.1_f32);
+                m.velocity = m.velocity.multiply(Vec3::new(slow, 1.0, slow));
                 let at = [m.position.x, m.position.y, m.position.z];
-                cx.events
-                    .push(MobEvent::Sound("entity.frog.step", at, 2.0, 1.0));
+                let landing = if m.species() == Species::Goat {
+                    "entity.goat.step"
+                } else {
+                    "entity.frog.step"
+                };
+                cx.events.push(MobEvent::Sound(landing, at, 2.0, 1.0));
             }
-            set_pose(m, sync::STANDING);
+            set_jump_pose(m, cx.w, sync::STANDING);
             sample_cooldown(m, cx.lr, 1);
         }
-        m.extra.frog.discard_friction = false;
+        set_discard_friction(m, false);
         *self = Self::default();
     }
 }
 /// `LongJumpToRandomPos.start`'s candidates: every block of the box but the
-/// frog's own, weighted by the squared distance, in `betweenClosed` order.
-fn candidates([x, y, z]: [i32; 3]) -> Vec<Candidate> {
+/// mob's own, weighted by the squared distance, in `betweenClosed` order.
+fn candidates([x, y, z]: [i32; 3], width: i32, height: i32) -> Vec<Candidate> {
     let mut out = Vec::new();
-    for dz in -JUMP_WIDTH..=JUMP_WIDTH {
-        for dy in -JUMP_HEIGHT..=JUMP_HEIGHT {
-            for dx in -JUMP_WIDTH..=JUMP_WIDTH {
+    for dz in -width..=width {
+        for dy in -height..=height {
+            for dx in -width..=width {
                 if (dx, dy, dz) != (0, 0, 0) {
                     out.push(([x + dx, y + dy, z + dz], dx * dx + dy * dy + dz * dz));
                 }
@@ -537,22 +600,32 @@ impl Goal for LongJump {
         true
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        // The activity: no cooldown and out of water. FrogAi.initJumpActivity
-        // also wants TEMPTING_PLAYER and BREED_TARGET absent, and the
-        // LAY_SPAWN activity (IS_PREGNANT) goes before LONG_JUMP.
+        // The activity: no cooldown, and for a frog out of water (a frog in
+        // water is in its swim activity; a goat has none, so its check below
+        // sets the cooldown instead). FrogAi.initJumpActivity also wants
+        // TEMPTING_PLAYER and BREED_TARGET absent, and the LAY_SPAWN activity
+        // (IS_PREGNANT) goes before LONG_JUMP.
         // TODO: gate on them once frogs follow frog_food, breed and lay
         // frogspawn here; none of the three exists for frogs yet.
-        if jump_cooldown(m).is_some() || m.fluids.in_water {
+        if jump_cooldown(m).is_some() || m.species() != Species::Goat && m.fluids.in_water {
             return false;
         }
-        // checkExtraStartConditions: on the ground, not in lava or on honey.
+        // GoatAi.initLongJumpActivity's other memories, and the activity
+        // order of GoatAi.updateActivity.
+        if m.species() == Species::Goat && !super::goat::long_jump_activity(m, cx.w) {
+            return false;
+        }
+        // checkExtraStartConditions: on the ground, not in water or lava or
+        // on honey.
         let (x, y, z) = (
             m.position.x.floor() as i32,
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         );
-        let can =
-            m.on_ground && !m.fluids.in_lava && cx.w.block_name(x, y, z) != "minecraft:honey_block";
+        let can = m.on_ground
+            && !m.fluids.in_water
+            && !m.fluids.in_lava
+            && cx.w.block_name(x, y, z) != "minecraft:honey_block";
         if !can {
             sample_cooldown(m, cx.lr, 2);
         }
@@ -565,30 +638,39 @@ impl Goal for LongJump {
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         );
+        let (width, height) = if m.species() == Species::Goat {
+            (GOAT_JUMP_WIDTH, GOAT_JUMP_HEIGHT)
+        } else {
+            (JUMP_WIDTH, JUMP_HEIGHT)
+        };
         *self = Self {
-            candidates: candidates([x, y, z]),
+            candidates: candidates([x, y, z], width, height),
             tries: FIND_JUMP_TRIES,
             initial: Some(m.position),
             ..Self::default()
         };
-        // LongJumpToPreferredBlock.start.
-        self.wanting_preferred = m.random.next_float() < PREFERRED_BLOCKS_CHANCE;
+        // LongJumpToPreferredBlock.start: the frog's; a goat's activity is a
+        // plain LongJumpToRandomPos, which draws nothing from the mob's random.
+        if m.species() != Species::Goat {
+            self.wanting_preferred = m.random.next_float() < PREFERRED_BLOCKS_CHANCE;
+        }
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.mid_jump {
             // LongJumpMidJump starts the tick after the leap and runs until
-            // the frog is on the ground again, for 100 ticks at most; water
-            // switches the brain to the swim activity, which stops it too.
+            // the mob is on the ground again, for 100 ticks at most; water
+            // switches a frog's brain to the swim activity, which stops it
+            // too (a goat has none).
             match self.in_air {
                 None => {
                     self.in_air = Some(0);
-                    m.extra.frog.discard_friction = true;
-                    set_pose(m, sync::LONG_JUMPING);
+                    set_discard_friction(m, true);
+                    set_jump_pose(m, cx.w, sync::LONG_JUMPING);
                 }
                 Some(t) => self.in_air = Some(t + 1),
             }
             return !m.on_ground
-                && !m.fluids.in_water
+                && (m.species() == Species::Goat || !m.fluids.in_water)
                 && self.in_air.is_some_and(|t| t <= MID_JUMP_DURATION);
         }
         let valid = self.initial == Some(m.position)
@@ -620,7 +702,7 @@ impl Goal for LongJump {
         // The leap: the body's facing, no friction, the arc's velocity
         // lengthened by jump boost.
         m.yaw = m.body_yaw;
-        m.extra.frog.discard_friction = true;
+        set_discard_friction(m, true);
         let len = jump.length();
         let boost = m
             .extra
@@ -631,8 +713,7 @@ impl Goal for LongJump {
         m.velocity = jump.scale((len + boost) / len);
         self.mid_jump = true;
         let at = [m.position.x, m.position.y, m.position.z];
-        cx.events
-            .push(MobEvent::Sound("entity.frog.long_jump", at, 1.0, 1.0));
+        cx.events.push(MobEvent::Sound(jump_sound(m), at, 1.0, 1.0));
     }
 }
 
@@ -653,7 +734,7 @@ mod tests {
     /// block, x fastest, then y, then z, each weighted by its squared distance.
     #[test]
     fn the_candidates_cover_the_jump_box_in_vanilla_order() {
-        let c = candidates([10, 64, -3]);
+        let c = candidates([10, 64, -3], JUMP_WIDTH, JUMP_HEIGHT);
         assert_eq!(c.len(), 9 * 5 * 9 - 1);
         assert_eq!(c[0], ([6, 62, -7], 16 + 4 + 16));
         assert_eq!(c[1], ([7, 62, -7], 9 + 4 + 16));

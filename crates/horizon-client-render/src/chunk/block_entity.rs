@@ -83,6 +83,8 @@ pub enum BlockEntity {
     /// A block entity of a mod (`native_block_entity`), kept as its saved
     /// compound for the mod to read and change.
     Mod(Box<ModBlockEntity>),
+    /// `PotentSulfurBlockEntity` (`game/potent_sulfur.rs`).
+    PotentSulfur(PotentSulfur),
 }
 /// A mod's block entity: its type id (`mymod:machine`), its saved
 /// compound without `id`, `x`, `y`, `z` and `Items`, and its item slots
@@ -104,6 +106,22 @@ pub struct ModContainer {
     pub faces: [Vec<usize>; 6],
     pub inputs: Vec<usize>,
     pub outputs: Vec<usize>,
+}
+/// `PotentSulfurBlockEntity`: the seconds left to the geyser's next change of
+/// state (`waitingCountdown`, saved as `countdown`) and the game time of its
+/// last eruption block event, which the client's plume counts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PotentSulfur {
+    pub waiting_countdown: i32,
+    pub eruption_tick: i64,
+}
+impl Default for PotentSulfur {
+    fn default() -> Self {
+        Self {
+            waiting_countdown: -1,
+            eruption_tick: -1,
+        }
+    }
 }
 /// `BrushableBlockEntity`: the loot table is resolved on the first brush.
 #[derive(Clone, Debug, Default)]
@@ -252,6 +270,8 @@ pub struct SignText {
     /// `DyeColor` id.
     pub color: u8,
     pub glowing: bool,
+    /// The `click_event` in each line's component style, as saved.
+    pub click: [Option<Tag>; 4],
 }
 /// `SignBlockEntity` / `HangingSignBlockEntity` data.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -260,6 +280,8 @@ pub struct SignData {
     pub front: SignText,
     pub back: SignText,
     pub waxed: bool,
+    /// `allow_op_features`: the sign's click events may run commands.
+    pub allow_op_features: bool,
 }
 /// `VibrationInfo`.
 #[derive(Clone, Copy, Debug, PartialEq)]
