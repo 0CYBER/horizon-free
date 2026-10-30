@@ -78,7 +78,7 @@ impl<T> Resident<T> {
         self.column_index.clear();
     }
     /// Adds or replaces `key`'s value with default 16x16x16 bounds.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn insert(&mut self, key: SectionKey, value: T) {
         self.insert_with_bounds(key, value, None);
     }
@@ -178,16 +178,37 @@ fn camera_column(camera: DVec3) -> (i32, i32) {
     )
 }
 
+/// The world AABB (min, max) of a section from its origin and optional tight bounds.
+#[inline]
+fn section_box(min: Vec3, bounds: Option<[Vec3; 2]>) -> (Vec3, Vec3) {
+    match bounds {
+        Some([bmin, bmax]) => (min + bmin, min + bmax),
+        None => (min, min + Vec3::splat(16.0)),
+    }
+}
+
 /// Whether the section at `key` is drawn: its column within the render
 /// distance of the camera's (`SectionOcclusionGraph.isInViewDistance`), and
 /// partly inside the frustum. `None` when it is not, else its squared centre
 /// distance and origin. `Resident::visible` walks columns instead.
 #[cfg(test)]
 fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Option<(f64, Vec3)> {
+    in_view_with_bounds(key, camera, radius, frustum, None)
+}
+
+/// `in_view` with optional tight bounds.
+#[cfg(test)]
+fn in_view_with_bounds(
+    key: SectionKey,
+    camera: DVec3,
+    radius: i32,
+    frustum: &Frustum,
+    bounds: Option<[Vec3; 2]>,
+) -> Option<(f64, Vec3)> {
     if !in_view_distance(camera_column(camera), radius, key.0, key.2) {
         return None;
     }
-    in_frustum(key, crate::chunk::MIN_Y, camera, frustum, false, None)
+    in_frustum(key, crate::chunk::MIN_Y, camera, frustum, false, bounds)
 }
 
 /// `in_view` without the distance test; `inside`: the section's column is
@@ -204,10 +225,7 @@ fn in_frustum(
     let origin = origin(key, min_y, camera);
     let min = origin.as_vec3();
     if !inside {
-        let (bmin, bmax) = match bounds {
-            Some([bmin, bmax]) => (min + bmin, min + bmax),
-            None => (min, min + Vec3::splat(16.0)),
-        };
+        let (bmin, bmax) = section_box(min, bounds);
         if !frustum.intersects(bmin, bmax) {
             return None;
         }
@@ -283,10 +301,7 @@ impl<T> Resident<T> {
                     }
                     let oy = f64::from(self.min_y + y * 16) - camera.y;
                     let min = Vec3::new(min_x, oy as f32, min_z);
-                    let (bmin, bmax) = match self.bounds[slot as usize] {
-                        Some([bmin, bmax]) => (min + bmin, min + bmax),
-                        None => (min, min + Vec3::splat(16.0)),
-                    };
+                    let (bmin, bmax) = section_box(min, self.bounds[slot as usize]);
                     if !frustum.intersects(bmin, bmax) {
                         continue;
                     }
@@ -318,7 +333,15 @@ mod tests {
                 for y in 0..24 {
                     // Leave holes so columns have uneven bounds.
                     if (x * 7 + y * 3 + z * 5).rem_euclid(4) != 0 {
-                        r.insert((x, y, z), ());
+                        // Mix of sections with fallback None and randomized tight bounds.
+                        let bounds = if (x + y + z).rem_euclid(2) == 0 {
+                            let y_min = ((x + z).rem_euclid(4)) as f32;
+                            let y_max = y_min + 2.0 + ((y.rem_euclid(5)) as f32);
+                            Some([Vec3::new(0.0, y_min, 0.0), Vec3::new(16.0, y_max, 16.0)])
+                        } else {
+                            None
+                        };
+                        r.insert_with_bounds((x, y, z), (), bounds);
                     }
                 }
             }
@@ -344,12 +367,21 @@ mod tests {
                 let mut slow: Vec<(SectionKey, f64, [f32; 3])> = r
                     .items
                     .iter()
-                    .filter_map(|&(k, _)| {
+                    .enumerate()
+                    .filter_map(|(slot, &(k, _))| {
                         let near = in_view_distance(camera_column(camera), radius, k.0, k.2);
                         if near {
-                            in_view(k, camera, radius, &frustum).filter(|_| reachable(k))
+                            in_view_with_bounds(k, camera, radius, &frustum, r.bounds[slot])
+                                .filter(|_| reachable(k))
                         } else if beyond(k.0, k.2) {
-                            in_frustum(k, crate::chunk::MIN_Y, camera, &frustum, false, None)
+                            in_frustum(
+                                k,
+                                crate::chunk::MIN_Y,
+                                camera,
+                                &frustum,
+                                false,
+                                r.bounds[slot],
+                            )
                         } else {
                             None
                         }
