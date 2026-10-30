@@ -662,6 +662,15 @@ impl Padded {
                                 c.get(x & 15, wy, z & 15)
                             };
                         light[i] = c.light(x & 15, wy, z & 15);
+                    } else if let Some(c) = region[1][1] {
+                        // A neighbour not loaded continues this chunk's edge
+                        // column. As lit air, the outermost chunks' water drew
+                        // a wall toward it (fluids show both sides), a light
+                        // sheet in the water where far terrain carries on.
+                        // Vanilla draws no chunk without its neighbours.
+                        let (ex, ez) = (x.clamp(0, 15), z.clamp(0, 15));
+                        blocks[i] = c.get(ex, wy, ez);
+                        light[i] = c.light(ex, wy, ez);
                     } else {
                         light[i] = 0xF0;
                     }
