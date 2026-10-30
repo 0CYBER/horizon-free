@@ -514,4 +514,118 @@ mod tests {
             "full 16x16x16 bounds intersect frustum and are accepted"
         );
     }
+
+    #[test]
+    #[ignore = "benchmark"]
+    fn tight_bounds_benchmark() {
+        use std::time::Instant;
+
+        let mut r_fallback = Resident::default();
+        let mut r_tight = Resident::default();
+
+        let radius = 16;
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                // Section 0..4: underground rock
+                for y in 0..4 {
+                    r_fallback.insert((x, y, z), ());
+                    r_tight.insert_with_bounds((x, y, z), (), None);
+                }
+                // Section 4: surface terrain with grass / hills (e.g. Y in [0, 4] or [0, 6])
+                let height = 2.0 + (((x * 3 + z * 5).rem_euclid(5)) as f32) * 1.5;
+                let surface_bounds =
+                    Some([Vec3::new(0.0, 0.0, 0.0), Vec3::new(16.0, height, 16.0)]);
+                r_fallback.insert((x, 4, z), ());
+                r_tight.insert_with_bounds((x, 4, z), (), surface_bounds);
+            }
+        }
+
+        println!("\n=== Tight Bounds Culling Benchmark ===");
+        println!("Total Resident Sections: {}", r_tight.len());
+
+        let test_views = [
+            ("Looking level across terrain (pitch 0°)", 0.0, 0.0),
+            ("Looking slightly up (pitch -15°)", 45.0, -15.0),
+            ("Looking up towards sky (pitch -35°)", 90.0, -35.0),
+            ("Looking down at ground (pitch 25°)", 180.0, 25.0),
+            ("Diagonal view (yaw 135°, pitch -10°)", 135.0, -10.0),
+        ];
+
+        let camera = DVec3::new(8.0, f64::from(crate::chunk::MIN_Y + 4 * 16 + 10), 8.0);
+        let projection = super::super::world_projection(70.0, 16.0 / 9.0, 512.0);
+
+        for (desc, yaw, pitch) in test_views {
+            let view = crate::camera::view_matrix(yaw, pitch);
+            let frustum = Frustum {
+                planes: super::super::frustum(projection * view),
+            };
+
+            let mut out_fallback = Vec::new();
+            let mut out_tight = Vec::new();
+
+            r_fallback.visible(
+                camera,
+                radius,
+                &frustum,
+                |_| true,
+                |_, _| false,
+                &mut out_fallback,
+            );
+            r_tight.visible(
+                camera,
+                radius,
+                &frustum,
+                |_| true,
+                |_, _| false,
+                &mut out_tight,
+            );
+
+            let culled_extra = out_fallback.len().saturating_sub(out_tight.len());
+            let pct_saved = if !out_fallback.is_empty() {
+                (culled_extra as f64 / out_fallback.len() as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            // Timing over 1,000 passes
+            let iters = 1_000;
+            let t0 = Instant::now();
+            for _ in 0..iters {
+                out_fallback.clear();
+                r_fallback.visible(
+                    camera,
+                    radius,
+                    &frustum,
+                    |_| true,
+                    |_, _| false,
+                    &mut out_fallback,
+                );
+            }
+            let dur_fallback = t0.elapsed();
+
+            let t1 = Instant::now();
+            for _ in 0..iters {
+                out_tight.clear();
+                r_tight.visible(
+                    camera,
+                    radius,
+                    &frustum,
+                    |_| true,
+                    |_, _| false,
+                    &mut out_tight,
+                );
+            }
+            let dur_tight = t1.elapsed();
+
+            println!(
+                "{desc}\n  Fallback 16x16: {} sections | {:?}\n  Tight Bounds:   {} sections | {:?}\n  Reduction:      -{} sections ({:.1}% culled)\n",
+                out_fallback.len(),
+                dur_fallback / iters,
+                out_tight.len(),
+                dur_tight / iters,
+                culled_extra,
+                pct_saved
+            );
+        }
+    }
 }
