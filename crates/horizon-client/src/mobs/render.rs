@@ -970,6 +970,16 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
             * glam::Mat4::from_rotation_z(PI);
     }
+    // IronGolemRenderer.setupRotations, after LivingEntityRenderer's: the body
+    // tilts side to side while it walks.
+    if m.species() == Species::IronGolem {
+        let s = anim::state(m, alpha);
+        if s.speed >= 0.01 {
+            let wp = s.pos + 6.0;
+            let triangle_wave = ((wp % 13.0 - 6.5).abs() - 3.25) / 3.25;
+            base *= glam::Mat4::from_rotation_z((6.5 * triangle_wave).to_radians());
+        }
+    }
     // AvatarRenderer.setupRotations, after LivingEntityRenderer's.
     if m.extra.fall_flying {
         let ticks = m.extra.fall_fly_ticks as f32 + alpha;
@@ -1634,6 +1644,39 @@ pub fn part_transform(
     anim::setup(m, &s, &mut poses, &data.animations);
     part_matrix(&model, base, &poses, part, 0.0)
 }
+/// `PlayerItemInHandLayer.renderItemHeldToEye` up to the item: the root and
+/// the head with its pitch clamped to -30 to 90 degrees, `translateToHead`
+/// (`CustomHeadLayer.translateToHead`), then the hand's side of the eye.
+pub fn held_to_eye_matrix(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    left: bool,
+) -> Option<glam::Mat4> {
+    use glam::{Mat4, Vec3};
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let pitch =
+        poses.get("head")[3].clamp(-std::f32::consts::FRAC_PI_6, std::f32::consts::FRAC_PI_2);
+    poses.xrot("head", pitch);
+    let head = part_matrix(&model, base, &poses, "head", 0.0)?;
+    let side = if left { -2.5 / 16.0 } else { 2.5 / 16.0 };
+    Some(
+        head * Mat4::from_translation(Vec3::new(0.0, -0.25, 0.0))
+            * Mat4::from_rotation_y(std::f32::consts::PI)
+            * Mat4::from_scale(Vec3::new(0.625, -0.625, -0.625))
+            * Mat4::from_translation(Vec3::new(side, -0.0625, 0.0)),
+    )
+}
 /// `FoxHeldItemLayer`: the item sits at the head's position under the render
 /// state's head roll, yaw and pitch (not the posed head's, which differ while
 /// it sleeps), pushed out to the mouth.
@@ -1704,6 +1747,32 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
+    // WitchItemLayer.applyTranslation: a potion is held at the nose, any other
+    // item as CrossedArmsItemLayer holds it; only the main hand's item is drawn.
+    if m.species() == Species::Witch {
+        let item = m.extra.main_hand.as_deref()?;
+        if left != m.main_arm_left() {
+            return None;
+        }
+        if super::witch::holds_potion(item) {
+            let nose = part_matrix(&model, base, &poses, "nose", 0.0)?;
+            return Some(
+                nose * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.25, 0.0))
+                    * glam::Mat4::from_rotation_z(180.0f32.to_radians())
+                    * glam::Mat4::from_rotation_x(140.0f32.to_radians())
+                    * glam::Mat4::from_rotation_z(10.0f32.to_radians())
+                    * glam::Mat4::from_rotation_x(180.0f32.to_radians()),
+            );
+        }
+        // CrossedArmsItemLayer.applyTranslation: translateToArms, then this.
+        let arms = part_matrix(&model, base, &poses, "arms", 0.0)?;
+        return Some(
+            arms * glam::Mat4::from_rotation_x(0.75)
+                * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
+                * glam::Mat4::from_rotation_x(std::f32::consts::PI),
+        );
+    }
     let mut t = hand_base(m, &model, base, &poses, left)?;
     // ItemInHandLayer: a STAB swing of this arm thrusts its item out
     // (SpearAnimations.thirdPersonAttackItem, the main hand's forward

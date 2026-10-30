@@ -11464,6 +11464,11 @@ impl Game<'_> {
                     }
                 }
                 "minecraft:trident" if using => ItemPose::Trident { ticks_used },
+                // ItemUseAnimation.BRUSH: applyBrushTransform.
+                "minecraft:brush" if using => ItemPose::Brush {
+                    remaining: owner.use_item_remaining_ticks as f32,
+                    partial: a,
+                },
                 _ if using => {
                     let components = self
                         .pack

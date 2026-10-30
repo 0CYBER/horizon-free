@@ -489,6 +489,20 @@ impl Game<'_> {
                 },
             );
         }
+        // SpellParticle.isCloseToScopingPlayer: the eye of a local player looking
+        // through a spyglass in first person.
+        let scope_eye = self
+            .player
+            .as_ref()
+            .filter(|_| self.camera_type.first_person() && self.scoping())
+            .map(|p| {
+                [
+                    p.position.x,
+                    p.position.y + f64::from(p.dimensions.eye_height),
+                    p.position.z,
+                ]
+            });
+        self.particles.set_scope_eye(scope_eye);
         let level = ParticleLevel {
             world,
             facts,
