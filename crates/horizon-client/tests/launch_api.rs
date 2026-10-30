@@ -7,10 +7,8 @@ use std::process::{Command, Output, Stdio};
 
 /// A scratch folder of its own, with a space in its name as launchers' instance folders have.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "horizon-launch-api {name}-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("horizon-launch-api {name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
