@@ -2261,6 +2261,24 @@ packet!(
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
 packet!(
+    /// ServerboundSetJigsawBlockPacket: the jigsaw block's edit screen. The
+    /// joint is `JointType.getSerializedName`; an unknown one reads as aligned.
+    SetJigsawBlock {
+        pos: [i32; 3] => Pos,
+        name: String => Ident,
+        target: String => Ident,
+        pool: String => Ident,
+        final_state: String => Str,
+        joint: String => Str,
+        selection_priority: i32 => VarInt,
+        placement_priority: i32 => VarInt
+    }
+);
+packet!(
+    /// ServerboundJigsawGeneratePacket: the jigsaw block's Generate button.
+    JigsawGenerate { pos: [i32; 3] => Pos, levels: i32 => VarInt, keep_jigsaws: bool => Bool }
+);
+packet!(
     /// ServerboundSetCommandBlockPacket: the command block's command, its
     /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
     /// conditional (2) and automatic (4) flags.
@@ -2533,6 +2551,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     RenameItem(RenameItem) = RENAME_ITEM,
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
+    JigsawGenerate(JigsawGenerate) = JIGSAW_GENERATE,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
@@ -2540,6 +2559,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SetJigsawBlock(SetJigsawBlock) = SET_JIGSAW_BLOCK,
     SetStructureBlock(SetStructureBlock) = SET_STRUCTURE_BLOCK,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
@@ -3690,5 +3710,32 @@ mod tests {
         assert_eq!(read.offset, [-48, 48, 0]);
         assert_eq!(read.size, [0, 48, 7]);
         assert_eq!(read.integrity, 1.0);
+    }
+
+    #[test]
+    fn jigsaw_packets_round_trip() {
+        round_trip(
+            Serverbound::SetJigsawBlock(SetJigsawBlock {
+                pos: [4, -60, 9],
+                name: "minecraft:bottom".into(),
+                target: "minecraft:top".into(),
+                pool: "minecraft:village/plains/houses".into(),
+                final_state: "minecraft:oak_planks".into(),
+                joint: "aligned".into(),
+                selection_priority: 3,
+                placement_priority: -2,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        round_trip(
+            Serverbound::JigsawGenerate(JigsawGenerate {
+                pos: [0, 64, 0],
+                levels: 20,
+                keep_jigsaws: true,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
     }
 }
