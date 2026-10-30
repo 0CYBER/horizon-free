@@ -3,6 +3,7 @@
 //! repository root) and are skipped when those are absent.
 use super::*;
 use crate::chunk::BlockState;
+use horizon_core::random::RandomSource;
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -1115,6 +1116,141 @@ fn pistons_push_and_sticky_pistons_pull() {
         "the sticky piston pulled the block back"
     );
     assert_eq!(w.get(BlockPos::new(2, 1, 0)), air);
+}
+
+/// TntBlock.prime returns false on a client: neither the entity, the removal,
+/// nor its random push may be predicted while replaying a piston update.
+#[test]
+fn tnt_duper_3856_client_neighbor_does_not_prime_or_remove_tnt() {
+    let mut w = world!();
+    let f = w.f;
+    w.level.client_side = true;
+    let pos = BlockPos::new(0, 1, 0);
+    let tnt = w.id("tnt", &[]);
+    let power = w.id("redstone_block", &[]);
+    w.put(pos, tnt);
+    w.put(pos.offset(1, 0, 0), power);
+    let mut random = w.level.random.clone();
+    f.behaviours.handle_neighbor_changed(
+        &mut w.level,
+        &mut w.ticks,
+        pos,
+        f.behaviours.block(power),
+    );
+    assert_eq!(w.get(pos), tnt, "client must wait for server block changes");
+    assert!(
+        w.level.events.is_empty(),
+        "client must not emit TNT effects"
+    );
+    assert_eq!(w.level.random.next_long(), random.next_long());
+}
+
+#[test]
+fn tnt_duper_3856_client_placement_does_not_prime_tnt() {
+    let mut w = world!();
+    w.level.client_side = true;
+    let pos = BlockPos::new(0, 1, 0);
+    let tnt = w.id("tnt", &[]);
+    let power = w.id("redstone_block", &[]);
+    w.put(pos.offset(1, 0, 0), power);
+    w.set(pos, tnt);
+    assert_eq!(w.get(pos), tnt);
+    assert!(w.level.events.is_empty());
+}
+
+#[test]
+fn tnt_duper_3856_server_still_primes_each_powered_tnt() {
+    let mut w = world!();
+    let tnt = w.id("tnt", &[]);
+    let power = w.id("redstone_block", &[]);
+    for pos in [BlockPos::new(0, 1, 0), BlockPos::new(0, 1, 3)] {
+        w.put(pos.offset(1, 0, 0), power);
+        w.set(pos, tnt);
+        assert_eq!(w.get(pos), w.b().air());
+        assert_eq!(
+            w.level
+                .events
+                .iter()
+                .filter(|e| matches!(e, LevelEvent::PrimeTnt { pos: p, .. } if *p == pos))
+                .count(),
+            1,
+        );
+    }
+}
+
+/// Breaking a wall torch next to a BUD-powered TNT updates the old block while
+/// the piston already holds its saved state. This vanilla duplication must
+/// continue to work on the server, without a second TNT from the client.
+#[test]
+fn tnt_duper_3856_piston_keeps_original_and_primes_one_tnt() {
+    let Some(f) = fixture() else {
+        return;
+    };
+    for client in [false, true] {
+        let mut w = World::new(f);
+        w.level.client_side = client;
+        let base = BlockPos::new(0, 2, 0);
+        let piston = w.id("sticky_piston", &[("facing", "east")]);
+        let slime = w.id("slime_block", &[]);
+        let tnt = w.id("tnt", &[]);
+        let torch = w.id("wall_torch", &[("facing", "north")]);
+        let power = w.id("redstone_block", &[]);
+        w.put(base, piston);
+        w.put(base.offset(1, 0, 0), slime);
+        w.put(base.offset(2, 0, 0), slime);
+        w.put(base.offset(2, -1, 0), slime);
+        w.put(base.offset(2, -1, -1), tnt);
+        w.put(base.offset(2, 0, -1), torch);
+        // Raw writes model a powered TNT that has not received an update yet.
+        w.put(base.offset(2, -1, -2), power);
+        w.put(base.offset(-1, 0, 0), power);
+        if client {
+            assert!(f.behaviours.client_block_event(
+                &mut w.level,
+                &mut w.ticks,
+                base,
+                0,
+                Direction::East as i32
+            ));
+        } else {
+            f.behaviours.handle_neighbor_changed(
+                &mut w.level,
+                &mut w.ticks,
+                base,
+                f.behaviours.block(power),
+            );
+            f.behaviours.run_block_events(&mut w.level, &mut w.ticks);
+        }
+        let primed = w
+            .level
+            .events
+            .iter()
+            .filter(|e| matches!(e, LevelEvent::PrimeTnt { .. }))
+            .count();
+        assert_eq!(primed, usize::from(!client), "client={client}");
+        for _ in 0..10 {
+            w.level.time += 1;
+            if client {
+                f.behaviours
+                    .client_tick_block_entities(&mut w.level, &mut w.ticks);
+            } else {
+                f.behaviours.tick_block_entities(&mut w.level, &mut w.ticks);
+            }
+        }
+        assert_eq!(
+            w.get(base.offset(3, -1, -1)),
+            tnt,
+            "original must survive, client={client}"
+        );
+        assert_eq!(
+            w.level
+                .events
+                .iter()
+                .filter(|e| matches!(e, LevelEvent::PrimeTnt { .. }))
+                .count(),
+            usize::from(!client)
+        );
+    }
 }
 
 /// `ServerLevel.runBlockEvents` reports a handled event for the clients
