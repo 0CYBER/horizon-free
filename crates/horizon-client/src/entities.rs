@@ -1430,7 +1430,10 @@ mod honey_slide_tests {
         // We only assert the gate that decides whether move runs.
         let vertical = idle.velocity.y.abs() > 1.0e-5;
         assert!(
-            !idle.on_ground || horizontal > 1.0e-5 || vertical || (idle.age + idle.id).is_multiple_of(4)
+            !idle.on_ground
+                || horizontal > 1.0e-5
+                || vertical
+                || (idle.age + idle.id).is_multiple_of(4)
         );
         let before = idle.position.y;
         // Empty collision: resolve returns the wanted delta.
