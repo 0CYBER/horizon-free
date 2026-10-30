@@ -264,6 +264,126 @@ pub fn downgraded_from(world: &Path) -> Option<String> {
     }
     Some(saved_version_name(version))
 }
+/// `LevelStorageAccess.checkForLowDiskSpace`: under 64 MiB usable.
+pub const LOW_DISK_SPACE: u64 = 67_108_864;
+/// `LevelStorageAccess.estimateDiskSpace`: the usable bytes of the disk holding `dir`
+/// (`FileStore.getUsableSpace`), `u64::MAX` when it cannot be asked.
+pub fn estimate_disk_space(dir: &Path) -> u64 {
+    #[cfg(unix)]
+    {
+        match rustix::fs::statvfs(dir) {
+            Ok(stat) => stat.f_bavail.saturating_mul(stat.f_frsize),
+            Err(_) => u64::MAX,
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        unsafe extern "system" {
+            fn GetDiskFreeSpaceExW(
+                directory: *const u16,
+                available: *mut u64,
+                total: *mut u64,
+                free: *mut u64,
+            ) -> i32;
+        }
+        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut available = 0u64;
+        // SAFETY: `wide` is NUL-terminated and the out pointers are valid or null.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut available,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 { u64::MAX } else { available }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = dir;
+        u64::MAX
+    }
+}
+/// `LevelStorageAccess.checkForLowDiskSpace`.
+pub fn low_disk_space(dir: &Path) -> bool {
+    estimate_disk_space(dir) < LOW_DISK_SPACE
+}
+/// `WorldOptions.isOldCustomizedWorld`: the generator settings keep `legacy_custom_options`.
+pub fn is_old_customized_world(world: &Path) -> bool {
+    world_gen_settings(world).is_some_and(|s| text(s.get("legacy_custom_options")).is_some())
+}
+/// A dimension's `LevelStem` field read as a resource location (an inline definition is not one).
+fn stem_id(tag: Option<&Tag>) -> Option<String> {
+    let id = text(tag)?;
+    Some(if id.contains(':') {
+        id
+    } else {
+        format!("minecraft:{id}")
+    })
+}
+/// `WorldDimensions.isVanillaLike`: whether a saved dimension is the stable Overworld, Nether or
+/// End (`isStableOverworld`, `isStableNether`, `isStableEnd`); any other key never is.
+fn dimension_is_vanilla_like(key: &str, dimension: &Tag) -> bool {
+    let kind = stem_id(dimension.get("type"));
+    let generator = dimension.get("generator");
+    let source = generator.and_then(|g| g.get("biome_source"));
+    let source_kind = source.and_then(|s| stem_id(s.get("type")));
+    // MultiNoiseBiomeSource.stable(preset): a reference to the preset, not its parameters.
+    let multi_noise_preset = |preset: &str| {
+        source_kind.as_deref() == Some("minecraft:multi_noise")
+            && stem_id(source.and_then(|s| s.get("preset"))).as_deref() == Some(preset)
+    };
+    // NoiseBasedChunkGenerator.stable(settings): the generator uses the settings by key.
+    let noise_settings = |settings: &str| {
+        generator.is_some_and(|g| stem_id(g.get("type")).as_deref() == Some("minecraft:noise"))
+            && stem_id(generator.and_then(|g| g.get("settings"))).as_deref() == Some(settings)
+    };
+    match key {
+        "minecraft:overworld" => {
+            matches!(
+                kind.as_deref(),
+                Some("minecraft:overworld" | "minecraft:overworld_caves")
+            ) && (source_kind.as_deref() != Some("minecraft:multi_noise")
+                || multi_noise_preset("minecraft:overworld"))
+        }
+        "minecraft:the_nether" => {
+            kind.as_deref() == Some("minecraft:the_nether")
+                && noise_settings("minecraft:nether")
+                && multi_noise_preset("minecraft:nether")
+        }
+        "minecraft:the_end" => {
+            kind.as_deref() == Some("minecraft:the_end")
+                && noise_settings("minecraft:end")
+                && source_kind.as_deref() == Some("minecraft:the_end")
+        }
+        _ => false,
+    }
+}
+/// `data.worldGenSettingsLifecycle() != Lifecycle.stable()` (`WorldDimensions.bake`): the world
+/// lacks one of the three builtin dimensions, or has one that is not the vanilla one. Data
+/// packs' own dimensions are not read.
+pub fn world_gen_unstable(world: &Path) -> bool {
+    let Some(Tag::Compound(dimensions)) = world_gen_settings(world)
+        .as_ref()
+        .and_then(|s| s.get("dimensions"))
+        .cloned()
+    else {
+        return false;
+    };
+    let builtin = [
+        "minecraft:overworld",
+        "minecraft:the_nether",
+        "minecraft:the_end",
+    ];
+    builtin
+        .iter()
+        .any(|key| !dimensions.contains_key(&(*key).into()))
+        || dimensions
+            .iter()
+            .any(|(key, dimension)| !dimension_is_vanilla_like(&key.to_string_lossy(), dimension))
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
@@ -2560,6 +2680,15 @@ pub fn level_dat_issue(dir: &Path, old: bool) -> Option<DatIssue> {
         Ok(root) if matches!(root.get("Data"), Some(Tag::Compound(_))) => None,
         Ok(_) => Some(DatIssue::Unreadable("Invalid root tag".into())),
         Err(issue) => Some(issue),
+    }
+}
+/// `WorldOpenFlows.openWorldLoadLevelData`: what keeps `world`'s level data from reading, which
+/// opens RecoverWorldDataScreen instead of the world. A folder with neither level.dat nor
+/// level.dat_old is a world not made yet, not a broken one.
+pub fn level_data_needs_recovery(world: &Path) -> Option<DatIssue> {
+    match level_dat_issue(world, false)? {
+        DatIssue::Missing if !world.join("level.dat_old").exists() => None,
+        issue => Some(issue),
     }
 }
 /// `LevelStorageAccess.restoreLevelDataFromOld` (`Util.safeReplaceOrMoveFile`):
@@ -6047,6 +6176,123 @@ mod tests {
             back.recipes_used
                 .get("minecraft:iron_ingot_from_smelting_iron_ore"),
             Some(&5)
+        );
+    }
+
+    fn gen_world(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("horizon-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `WorldOpenFlows.openWorldCheckWorldStemCompatibility`: every world a preset makes is
+    /// stable, and a world with a changed dimension, a custom one or a customized generator
+    /// is asked about.
+    #[test]
+    fn world_stem_compatibility_flags_unstable_and_customized_worlds() {
+        for preset in [
+            WorldPreset::Normal,
+            WorldPreset::Flat,
+            WorldPreset::LargeBiomes,
+            WorldPreset::Amplified,
+            WorldPreset::SingleBiomeSurface,
+        ] {
+            let dir = gen_world("stem-stable");
+            write_world_gen_settings(
+                &dir,
+                7,
+                WorldGen {
+                    preset,
+                    structures: true,
+                    bonus_chest: false,
+                },
+            )
+            .unwrap();
+            assert!(!world_gen_unstable(&dir), "{preset:?}");
+            assert!(!is_old_customized_world(&dir));
+            let _ = fs::remove_dir_all(dir);
+        }
+        // Without world_gen_settings there is nothing to ask about.
+        let dir = gen_world("stem-none");
+        assert!(!world_gen_unstable(&dir) && !is_old_customized_world(&dir));
+        let _ = fs::remove_dir_all(dir);
+
+        let dir = gen_world("stem-edit");
+        write_world_gen_settings(&dir, 7, WorldGen::default()).unwrap();
+        let settings = world_gen_settings(&dir).unwrap();
+        let edit = |change: &dyn Fn(&mut Tag)| {
+            let mut tag = settings.clone();
+            change(&mut tag);
+            write_saved_data(&dir, "world_gen_settings", tag).unwrap();
+        };
+        fn dimension<'a>(tag: &'a mut Tag, key: &str) -> &'a mut Tag {
+            tag.get_mut("dimensions").unwrap().get_mut(key).unwrap()
+        }
+        // A custom biome source in the Nether is not the preset.
+        edit(&|tag| {
+            let nether = dimension(tag, "minecraft:the_nether");
+            let generator = nether.get_mut("generator").unwrap();
+            *generator.get_mut("biome_source").unwrap() = Tag::compound([
+                ("type", string("minecraft:fixed")),
+                ("biome", string("minecraft:plains")),
+            ]);
+        });
+        assert!(world_gen_unstable(&dir));
+        // The End on another dimension type.
+        edit(&|tag| {
+            let end = dimension(tag, "minecraft:the_end");
+            *end.get_mut("type").unwrap() = string("minecraft:overworld");
+        });
+        assert!(world_gen_unstable(&dir));
+        // Another noise settings in the Overworld is fine (amplified), in the Nether it is not.
+        edit(&|tag| {
+            let nether = dimension(tag, "minecraft:the_nether");
+            *nether
+                .get_mut("generator")
+                .unwrap()
+                .get_mut("settings")
+                .unwrap() = string("minecraft:overworld");
+        });
+        assert!(world_gen_unstable(&dir));
+        // A fourth dimension, and a missing builtin one.
+        edit(&|tag| {
+            if let Some(Tag::Compound(dimensions)) = tag.get_mut("dimensions") {
+                let end = dimensions.get(&"minecraft:the_end".into()).unwrap().clone();
+                dimensions.insert("mypack:moon".into(), end);
+            }
+        });
+        assert!(world_gen_unstable(&dir));
+        edit(&|tag| {
+            if let Some(Tag::Compound(dimensions)) = tag.get_mut("dimensions") {
+                dimensions.remove(&"minecraft:the_end".into());
+            }
+        });
+        assert!(world_gen_unstable(&dir));
+        // legacy_custom_options marks an old customized world.
+        edit(&|tag| {
+            if let Tag::Compound(map) = tag {
+                map.insert("legacy_custom_options".into(), string("{\"seaLevel\":63}"));
+            }
+        });
+        assert!(is_old_customized_world(&dir));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn low_disk_space_is_under_64_mib_usable() {
+        assert_eq!(LOW_DISK_SPACE, 64 * 1024 * 1024);
+        let dir = std::env::temp_dir();
+        assert!(estimate_disk_space(&dir) > 0);
+        assert_eq!(
+            low_disk_space(&dir),
+            estimate_disk_space(&dir) < LOW_DISK_SPACE
+        );
+        // A path that does not exist cannot be asked: vanilla reads that as plenty.
+        #[cfg(unix)]
+        assert_eq!(
+            estimate_disk_space(&dir.join("horizon-no-such-folder/x")),
+            u64::MAX
         );
     }
 

@@ -66,6 +66,20 @@ impl WorldRequest {
         } = self;
         let name = name.as_deref();
         let create = create.as_ref();
+        // openWorldLoadLevelData: level data that does not read is RecoverWorldDataScreen's to
+        // handle (the title screen shows it); a world opened another way must not become a
+        // new one with a random seed under the same name.
+        if let Some(issue) = horizon_client::save::level_data_needs_recovery(&save_root) {
+            let why = match issue {
+                horizon_client::save::DatIssue::Missing => "level.dat is missing".to_owned(),
+                horizon_client::save::DatIssue::Unreadable(why) => why,
+            };
+            return Err(format!(
+                "Failed to load world \"{folder}\": its level data does not read ({why}). \
+                 Open it from the world list to try restoring level.dat_old."
+            )
+            .into());
+        }
         horizon_client::save::upgrade_older_world_with(&save_root, upgrade)?;
         horizon_client::save::migrate_legacy(&save_root)?;
         let session_lock = horizon_client::save::SessionLock::acquire(&save_root)?;

@@ -150,6 +150,15 @@ impl WorldToast {
     }
 }
 
+/// Why `WorldOpenFlows.askForBackup` asks before a world opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StemIssue {
+    /// `WorldOptions.isOldCustomizedWorld`.
+    Customized,
+    /// A `worldGenSettingsLifecycle` that is not stable.
+    Experimental,
+}
+
 #[derive(Clone, Debug)]
 pub struct WorldEntry {
     pub folder: String,
@@ -209,6 +218,13 @@ pub enum Mode {
     BackupBeforeUpgrade {
         world: WorldEntry,
         downgrade: Option<String>,
+        /// With neither of the above: `WorldOpenFlows.askForBackup` over a customized or
+        /// experimental world (`openWorldCheckWorldStemCompatibility`).
+        stem: Option<StemIssue>,
+    },
+    /// `openWorldCheckDiskSpace`'s ConfirmScreen: little space is left on the device.
+    LowDiskSpace {
+        world: WorldEntry,
     },
     Delete {
         world: WorldEntry,
@@ -305,8 +321,9 @@ pub struct Title {
     credits_button: Cell<[f32; 4]>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
-    /// The backup a `BackupBeforeUpgrade` asked for opens its world when done.
-    backup_then_open: bool,
+    /// The backup a `BackupBeforeUpgrade` asked for opens its world when done; whether it
+    /// was the question about customized or experimental settings, the last one asked.
+    backup_then_open: Option<bool>,
     /// The folder to open next, once that backup has finished.
     open_request: Option<String>,
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
@@ -474,7 +491,7 @@ impl Title {
             credits_button: Cell::new([0.0; 4]),
             backup: None,
             backup_shown: Cell::new(false),
-            backup_then_open: false,
+            backup_then_open: None,
             open_request: None,
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
@@ -755,11 +772,15 @@ impl Title {
         };
         self.backup = None;
         if let Mode::Backup { world } = &self.mode {
+            let world = world.clone();
             let folder = world.folder.clone();
             self.return_to_list(Some(&folder));
-            // EditWorldScreen opens the world after the backup, failed or not.
-            if std::mem::take(&mut self.backup_then_open) {
-                self.open_request = Some(folder.clone());
+            // EditWorldScreen opens the world after the backup, failed or not: through the
+            // checks WorldOpenFlows still has to make.
+            if let Some(stem_asked) = self.backup_then_open.take()
+                && let Action::Play { folder } = self.after_prompt(world.clone(), stem_asked)
+            {
+                self.open_request = Some(folder);
             }
             let toast = match result {
                 Ok(bytes) => WorldToast::Created { folder, bytes },
@@ -790,6 +811,24 @@ impl Title {
     /// The world a finished backup made before its upgrade opens next.
     pub fn take_open_request(&mut self) -> Option<String> {
         self.open_request.take()
+    }
+    /// `WorldOpenFlows.openWorldLoadLevelData` for a world opened without the list (the control
+    /// socket): level data that does not read shows RecoverWorldDataScreen. False when the world
+    /// reads and opens as usual.
+    pub fn open_recover(&mut self, folder: &str) -> bool {
+        let dir = self.saves.join(folder);
+        let Some(issue) = crate::save::level_data_needs_recovery(&dir) else {
+            return false;
+        };
+        let world = list_worlds(&self.saves)
+            .into_iter()
+            .find(|w| w.folder == folder)
+            .unwrap_or_else(|| {
+                WorldEntry::corrupted(folder.to_owned(), std::time::SystemTime::now())
+            });
+        let issues = [Some(issue), crate::save::level_dat_issue(&dir, true)];
+        self.mode = Mode::Recover { world, issues };
+        true
     }
     /// `WorldOpenFlows.openWorld`: a world that can't be locked, as one another
     /// instance has open, stays closed behind `onWorldAccessFailure`
@@ -837,6 +876,7 @@ impl Title {
             self.mode = Mode::BackupBeforeUpgrade {
                 world,
                 downgrade: None,
+                stem: None,
             };
             return Action::None;
         }
@@ -850,7 +890,38 @@ impl Title {
             self.mode = Mode::BackupBeforeUpgrade {
                 world,
                 downgrade: Some(version),
+                stem: None,
             };
+            return Action::None;
+        }
+        self.after_prompt(world, false)
+    }
+    /// What `WorldOpenFlows` does once a world's version questions are answered:
+    /// `openWorldCheckWorldStemCompatibility` (unless `stem_asked`: its backup question was
+    /// the one just answered), then `openWorldCheckDiskSpace`, then the load.
+    fn after_prompt(&mut self, world: WorldEntry, stem_asked: bool) -> Action {
+        let dir = self.saves.join(&world.folder);
+        // A world that still needs its file fixes has no 26.3 generator settings to read:
+        // its questions come after the fixes, which this build runs while it opens.
+        if !stem_asked && !crate::save::needs_file_fixes(&dir) {
+            let issue = if crate::save::is_old_customized_world(&dir) {
+                Some(StemIssue::Customized)
+            } else if crate::save::world_gen_unstable(&dir) {
+                Some(StemIssue::Experimental)
+            } else {
+                None
+            };
+            if let Some(stem) = issue {
+                self.mode = Mode::BackupBeforeUpgrade {
+                    world,
+                    downgrade: None,
+                    stem: Some(stem),
+                };
+                return Action::None;
+            }
+        }
+        if crate::save::low_disk_space(&dir) {
+            self.mode = Mode::LowDiskSpace { world };
             return Action::None;
         }
         Action::Play {
@@ -1234,6 +1305,29 @@ impl Title {
                         &lang::get_or("gui.cancel", "Cancel"),
                         true,
                         38,
+                    ),
+                ]
+            }
+            Mode::LowDiskSpace { .. } => {
+                let y = confirm_top(h, self.message_lines.get())
+                    + 41.0
+                    + self.message_lines.get() as f32 * 9.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 152.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.continue", "Continue"),
+                        true,
+                        94,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 2.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.back", "Back"),
+                        true,
+                        95,
                     ),
                 ]
             }
@@ -1716,11 +1810,35 @@ impl Title {
                     centered(atlas, batch, line, text_top + i as f32 * 9.0, u32::MAX);
                 }
             }
-            Mode::BackupBeforeUpgrade { downgrade, .. } => {
+            Mode::BackupBeforeUpgrade {
+                downgrade, stem, ..
+            } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 // BackupStatus.DOWNGRADE is severe: its question is red (-2142128).
-                let (question, warning, color) = match downgrade {
-                    Some(version) => (
+                let (question, warning, color) = match (downgrade, stem) {
+                    (None, Some(StemIssue::Customized)) => (
+                        lang::get_or(
+                            "selectWorld.backupQuestion.customized",
+                            "Customized worlds are no longer supported",
+                        ),
+                        lang::get_or(
+                            "selectWorld.backupWarning.customized",
+                            "Unfortunately, we do not support customized worlds in this version of Minecraft. We can still load this world and keep everything the way it was, but any newly generated terrain will no longer be customized. We're sorry for the inconvenience!",
+                        ),
+                        u32::MAX,
+                    ),
+                    (None, Some(StemIssue::Experimental)) => (
+                        lang::get_or(
+                            "selectWorld.backupQuestion.experimental",
+                            "Worlds using Experimental Settings are not supported",
+                        ),
+                        lang::get_or(
+                            "selectWorld.backupWarning.experimental",
+                            "This world uses experimental settings that could stop working at any time. We cannot guarantee it will load or work. Here be dragons!",
+                        ),
+                        u32::MAX,
+                    ),
+                    (Some(version), _) => (
                         lang::get_or(
                             "selectWorld.backupQuestion.downgrade",
                             "Downgrading a world is not supported",
@@ -1732,7 +1850,7 @@ impl Title {
                         ),
                         rgba(223, 80, 80, 255),
                     ),
-                    None => (
+                    (None, None) => (
                         lang::get_or(
                             "selectWorld.backupQuestion.file_fixing_required",
                             "Create a backup before upgrading this world?",
@@ -1750,6 +1868,30 @@ impl Title {
                 centered(atlas, batch, &question, 50.0, color);
                 for (i, line) in lines.iter().enumerate() {
                     centered(atlas, batch, line, 70.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
+            Mode::LowDiskSpace { .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let message = lang::get_or(
+                    "selectWorld.warning.lowDiskSpace.description",
+                    "There is not much space left on your device.\nRunning out of disk space while in game can lead to your world being damaged.",
+                );
+                let lines = wrapped(atlas, &message, w - 50.0);
+                self.message_lines.set(lines.len());
+                let top = confirm_top(h, lines.len());
+                // ChatFormatting.RED.
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or(
+                        "selectWorld.warning.lowDiskSpace.title",
+                        "Warning! Low disk space!",
+                    ),
+                    top,
+                    rgba(255, 85, 85, 255),
+                );
+                for (i, line) in lines.iter().enumerate() {
+                    centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
                 }
             }
             Mode::Backup { .. } => {
@@ -2088,15 +2230,24 @@ impl Title {
                     None => Action::None,
                 }
             }
-            (Mode::BackupBeforeUpgrade { world, .. }, Some(40)) => {
+            (Mode::BackupBeforeUpgrade { world, stem, .. }, Some(40)) => {
                 let world = world.clone();
-                self.backup_then_open = true;
+                self.backup_then_open = Some(stem.is_some());
                 self.start_backup(world);
                 Action::None
             }
-            (Mode::BackupBeforeUpgrade { world, .. }, Some(41)) => Action::Play {
+            (Mode::BackupBeforeUpgrade { world, stem, .. }, Some(41)) => {
+                let (world, stem_asked) = (world.clone(), stem.is_some());
+                self.after_prompt(world, stem_asked)
+            }
+            // ConfirmScreen: Continue loads the world, Back (or Escape) leaves it closed.
+            (Mode::LowDiskSpace { world }, Some(94)) => Action::Play {
                 folder: world.folder.clone(),
             },
+            (Mode::LowDiskSpace { .. }, Some(95)) => {
+                self.escape();
+                Action::None
+            }
             (Mode::BackupBeforeUpgrade { world, .. }, Some(42)) => {
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
@@ -2571,6 +2722,7 @@ impl Title {
             | Mode::Delete { world }
             | Mode::Recover { world, .. }
             | Mode::Recovered { world, .. }
+            | Mode::LowDiskSpace { world }
             | Mode::BackupBeforeUpgrade { world, .. } => {
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
