@@ -551,6 +551,9 @@ impl Game<'_> {
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = stack_tip.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if let Some(stack) = stack_tip {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(key) = tooltip {

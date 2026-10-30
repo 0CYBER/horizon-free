@@ -12353,9 +12353,9 @@ impl Game<'_> {
                 // `inventory.binSlot`, not an English literal.
                 let destroy = self.translate("inventory.binSlot", "Destroy Item");
                 self.tooltip(batch, &destroy, self.cursor.0, self.cursor.1);
-            } else if self.carried.is_none()
-                && let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
+            } else if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
                 && let Some(stack) = self.slot_view(slot)
+                && self.tooltip_with_carried(&stack)
             {
                 let tabs = self.creative_tooltip_tabs(&stack, false);
                 self.draw_stack_tooltip_with(
@@ -12367,8 +12367,8 @@ impl Game<'_> {
                     tabs,
                 );
             }
-        } else if self.carried.is_none()
-            && let Some((item, grid)) = hovered
+        } else if let Some((item, grid)) = hovered
+            && self.tooltip_with_carried(&item)
         {
             let tabs = self.creative_tooltip_tabs(&item, grid);
             // A `CustomCreativeSlot`: TooltipFlag.asCreative.

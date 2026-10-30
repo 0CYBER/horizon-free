@@ -845,7 +845,7 @@ impl Game<'_> {
         }
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            if self.carried.is_none() && tooltip.is_none() {
+            if tooltip.is_none() {
                 tooltip = self.slot_mut(slot).clone();
             }
         }
@@ -859,6 +859,9 @@ impl Game<'_> {
             && local.1 < 35.0 + 21.0 + 1.0;
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = tooltip.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if deprecated {
             let text = self
                 .res

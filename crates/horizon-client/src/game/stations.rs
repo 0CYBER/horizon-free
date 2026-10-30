@@ -1718,16 +1718,19 @@ impl Game<'_> {
         }
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            if self.carried.is_none()
-                && tooltip.is_none()
+            if tooltip.is_none()
                 && tooltip_stack.is_none()
                 && let Some(stack) = self.slot_mut(slot).clone()
+                && self.tooltip_with_carried(&stack)
             {
                 tooltip_stack = Some(stack);
             }
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = tooltip_stack.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if let Some(stack) = tooltip_stack {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(lines) = tooltip {
@@ -2512,6 +2515,13 @@ impl Game<'_> {
             );
         }
     }
+    /// `AbstractContainerScreen.showTooltipWithItemInHand`: a hovered stack's
+    /// tooltip shows while a stack is carried only when its image says so, as
+    /// a bundle's contents do (`ClientBundleTooltip`).
+    pub(super) fn tooltip_with_carried(&self, stack: &ItemStack) -> bool {
+        self.carried.is_none()
+            || horizon_client::bundle::Contents::of(self.items(), stack).is_some()
+    }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
         let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
@@ -2522,10 +2532,10 @@ impl Game<'_> {
             self.draw_stack_tooltip(batch, &ghost, self.cursor.0, self.cursor.1);
             return;
         }
-        if self.carried.is_some() {
+        let stack = self.slot_view(slot);
+        if self.carried.is_some() && !stack.as_ref().is_some_and(|s| self.tooltip_with_carried(s)) {
             return;
         }
-        let stack = self.slot_view(slot);
         if let Some(stack) = stack {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(text) = self.crafter_tooltip(slot) {
