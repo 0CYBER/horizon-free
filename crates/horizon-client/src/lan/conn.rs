@@ -1384,6 +1384,36 @@ fn write_loop(
 mod tests {
     use super::*;
 
+    /// Logs in through `c` and answers the `LoginFinished` profile.
+    fn login_profile(mut c: Connection, name: &str) -> login::GameProfile {
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port: 0,
+                intent: handshake::LOGIN,
+            })
+            .encode(),
+        )
+        .unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: name.into(),
+                uuid: offline_uuid(name),
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            match login::Clientbound::decode(id, &payload).unwrap() {
+                login::Clientbound::Compression(p) => c.set_compression(p.threshold),
+                login::Clientbound::LoginFinished(p) => return p.profile,
+                other => panic!("unexpected login packet {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn prompts_become_the_components_vanilla_sends() {
         let tag = |json: &str| {
@@ -1400,6 +1430,34 @@ mod tests {
             tag(r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#),
             r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#
         );
+    }
+
+    /// The owner's login never waits on the profile fetch, even one that
+    /// never answers, and carries no properties.
+    #[test]
+    fn the_owners_login_never_waits_on_the_profile_fetch() {
+        let (_hold, never) = channel::<()>();
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(move || {
+                let _ = never.recv();
+                Vec::new()
+            }))),
+            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let start = Instant::now();
+        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(owner.uuid, offline_uuid("Owner"));
+        assert!(owner.properties.is_empty());
     }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {

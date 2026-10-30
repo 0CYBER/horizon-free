@@ -3753,6 +3753,20 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
+        // An offline name's skin from the launcher, where neither the server
+        // nor an account gives the local player one.
+        if !resolved.iter().any(|(u, _)| *u == local)
+            && let Some((rgba, is_slim)) = horizon_client::skins::offline_skin()
+        {
+            const OFFLINE: &str = "horizon/offline_skin";
+            if !self.skin_slots.contains(OFFLINE) {
+                self.store_skin(OFFLINE.into(), rgba.clone());
+            }
+            if *is_slim {
+                slim.insert(local);
+            }
+            resolved.push((local, OFFLINE.into()));
+        }
         // An offline name's cape from the launcher, where the profile has none.
         if !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
