@@ -183,6 +183,11 @@ impl MotionWorld<'_, '_, '_> {
     /// needs `!isPassenger()`, and `updatePlayerPose` follows. A player who
     /// boards a boat while swimming sits up instead of lying under it (#3308).
     pub fn passenger_pose_tick(&mut self) -> Result<()> {
+        // Player.tick: a passenger is never on the ground (setOnGround(false)
+        // clears the supporting block too), so its look packets say so.
+        self.player.ground.on_ground = false;
+        self.player.ground.on_ground_no_blocks = false;
+        self.player.ground.supporting_block = None;
         self.player.swimming = false;
         self.update_player_pose()
     }
