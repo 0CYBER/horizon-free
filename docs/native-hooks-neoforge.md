@@ -15,10 +15,10 @@ Why NeoForge:
   porting by hand, or by [horizon-port-pack](modpacks.md), straightforward.
 - It targets the same Minecraft version: NeoForge has a `26.3.x` branch and 26.3.0.x builds.
 
-What we take is names, firing points and contracts, read from NeoForge's documentation and from where its
-patches call each event. No NeoForge code is copied (it is LGPL-2.1); the hooks stay Horizon's own Rust.
-Reference: <https://github.com/neoforged/NeoForge/tree/26.3.x>, events under
-`src/main/java/net/neoforged/neoforge/event/` and `.../client/event/`, call sites under `patches/`.
+What we take is event names and their documented contracts, from NeoForge's public user documentation
+(<https://docs.neoforged.net/>) only, as [CONTRIBUTING.md](../CONTRIBUTING.md#only-original-code) allows. Nobody
+reads, copies, translates or paraphrases NeoForge's source, its patches included: where a hook fires is decided
+from vanilla 26.3's own methods, and the hooks stay Horizon's own Rust.
 
 ## Rules
 
@@ -26,8 +26,8 @@ Reference: <https://github.com/neoforged/NeoForge/tree/26.3.x>, events under
    included: `ServerTickEvent.Pre` → `server_tick_pre`, function `native_server_tick_pre`;
    `PlayerInteractEvent.RightClickBlock` → `right_click_block`. A hook with no counterpart (the minimap, the
    mods list, the item panel) keeps a Horizon name.
-2. **Firing point.** It fires where NeoForge's patch calls the event, in Horizon's port of the same vanilla
-   method, in the same order relative to vanilla's own steps. The catalog names the vanilla method, so a
+2. **Firing point.** It fires in Horizon's port of the vanilla method where the documented event happens
+   (the tick starts, a block is broken), at the point vanilla's own steps make that true. The catalog names the vanilla method, so a
    reviewer can check it with `tools/rea_vanilla.py`.
 3. **Side.** NeoForge fires an event on whichever side runs the method. Horizon has one binary with several
    `Game`s (the window, the server thread, a dedicated server), so each hook says its side:
@@ -86,7 +86,7 @@ Kept as they are (rule 6); the catalog gains the counterpart for reference.
 
 | PR | Its hook | NeoForge counterpart | To change before merge |
 |---|---|---|---|
-| #3878 (arismoko) | `server_tick` (Start/End) | `ServerTickEvent.Pre` / `.Post` | fire Start at the top of `tick_server`, before the first level's streaming (NeoForge fires `Pre` first thing in `tickServer`); don't call a `&mut` hook read-only |
+| #3878 (arismoko) | `server_tick` (Start/End) | `ServerTickEvent.Pre` / `.Post` | fire Start at the top of `tick_server`, before the first level's streaming; don't call a `&mut` hook read-only |
 | #3923 (arismoko) | `native_server_block` (a query) | `Level.getBlockState` | a helper, not an event; fine as is |
 | #3941 (arismoko) | `neighbor_changed` | none exact: `BlockEvent.NeighborNotifyEvent` fires on the *notifying* block, cancellable, with the directions | keep it as a Horizon hook (it observes the receiving side); a `neighbor_notify` hook can be added later |
 | #3981 (arismoko) | `block_changed` | none exact (`IBlockExtension.onBlockStateChange` is per block) | say "written", not "committed" |
