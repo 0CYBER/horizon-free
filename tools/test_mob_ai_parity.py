@@ -338,6 +338,12 @@ def scenarios():
     for seed in (201, 202):
         add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
                                                f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
+    # Baby villagers play tag (PlayTagWithOtherKids): one picks a friend to chase, the chased one
+    # runs off to a spot in the village (isFriendChasingMe).
+    add('villager_kids_tag', 400, ['block 0 -60 -6 minecraft:bell', 'player 12.5 -60 0.5',
+                                   'mob minecraft:villager 0.5 -60 0.5 0 231 persistent age=-24000',
+                                   'mob minecraft:villager 2.5 -60 0.5 0 232 persistent age=-24000',
+                                   'mob minecraft:villager 1.5 -60 2.5 0 233 persistent age=-24000'], 'time=2000')
     # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
     # avoidSun: the path stops at the first node the sky sees).
     add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
