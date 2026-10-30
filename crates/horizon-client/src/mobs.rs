@@ -70,6 +70,7 @@ pub mod spawn_rules;
 pub mod spawn_selection;
 pub mod spawner;
 pub mod spawning;
+pub mod spear_use;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
@@ -774,6 +775,10 @@ pub struct Extra {
     pub age: i32,
     /// `AgeLocked` (tadpoles fed a slime ball... and ageable mobs).
     pub age_locked: bool,
+    /// `AgeableMob.ageLockParticleTimer` (a tadpole's too): the ticks of
+    /// growth particles left after a golden dandelion, and the cooldown
+    /// before the next one can be used. Not saved.
+    pub age_lock_particle_timer: i32,
     /// AgeableMob.forcedAge: the age fed food added, restored as the age
     /// when it reaches 0 (`ForcedAge`).
     pub forced_age: i32,
@@ -844,6 +849,10 @@ pub struct Extra {
     pub armor: [Option<crate::items::ItemStack>; 4],
     pub using_item: i32,
     pub using_off_hand: bool,
+    /// `LivingEntity.recentKineticEnemies`: when the entities this mob's
+    /// spear stabbed in the current use were stabbed (game time). It exists
+    /// only while a kinetic weapon is in use.
+    pub stabbed: Option<Vec<(Who, i64)>>,
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
@@ -906,6 +915,8 @@ pub struct Extra {
     pub positions: Vec<[i32; 3]>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
+    /// An allay's vibration listener and liked note block.
+    pub allay: Option<Box<allay::State>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
@@ -1301,6 +1312,11 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `LivingEntity.stabAttack`'s `target.stopRiding()`: a spear knocks the
+    /// target off its mount.
+    StabDismount {
+        target: Who,
+    },
     /// `LivingEntity.knockback(power, x, z)`: pushed away from the direction.
     Knockback {
         target: Who,
@@ -1652,6 +1668,8 @@ pub struct Seen {
     pub bed: Option<[i32; 3]>,
     pub yaw: f32,
     pub velocity: Vec3,
+    /// `Entity.getKnownSpeed`: what it moved in its last tick.
+    pub known_speed: Vec3,
     /// Who holds this mob's lead.
     pub leash: Option<leash::Holder>,
     /// A llama's caravan head (its id plus one, 0 when not in a caravan).
@@ -1789,6 +1807,7 @@ impl Mob {
             bed: villager.then_some(m.extra.bed).flatten(),
             yaw: m.yaw,
             velocity: m.velocity,
+            known_speed: m.position.subtract(m.previous),
             leash: m.extra.leash,
             caravan: caravan::head_of(m),
             school: (m.extra.leader, m.extra.followers),
@@ -2309,6 +2328,8 @@ impl Mob {
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
+        // IronGolem.hurtServer: the crack level before the damage, compared after.
+        let crackiness = (self.species() == Species::IronGolem).then(|| golem::crackiness(self));
         let mut amount = if reflected { 1000.0 } else { amount };
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
@@ -2440,6 +2461,15 @@ impl Mob {
                 }
             }
         }
+        // IronGolem.hurtServer: a new crack level plays the damage sound.
+        if let Some(before) = crackiness
+            && before != golem::crackiness(self)
+            && !self.silent
+        {
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox
+                .push(MobEvent::Sound("entity.iron_golem.damage", at, 1.0, 1.0));
+        }
         if self.has_effect("minecraft:infested") {
             self.outbox.push(MobEvent::Infested { mob: self.id });
         }
@@ -2514,7 +2544,11 @@ impl Mob {
         }
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
+    /// `Creaking.knockback`: a creaking that cannot move is not shoved.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
+        if creaking::is_creaking(self) && !creaking::can_move(self) {
+            return;
+        }
         let power = power * (1.0 - self.attrs.knockback_resistance);
         if power <= 0.0 {
             return;
