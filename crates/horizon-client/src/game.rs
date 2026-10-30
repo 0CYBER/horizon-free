@@ -5537,14 +5537,8 @@ impl Game<'_> {
                     pitch,
                     ..
                 }) => {
-                    let name = match sound {
-                        horizon_client::landing::SceneSound::BigFall => {
-                            "minecraft:entity.player.big_fall"
-                        }
-                        horizon_client::landing::SceneSound::SmallFall => {
-                            "minecraft:entity.player.small_fall"
-                        }
-                        _ => continue,
+                    let Some(name) = sound.player_fall_sound() else {
+                        continue;
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }

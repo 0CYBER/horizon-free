@@ -2778,6 +2778,20 @@ impl Game<'_> {
                     count,
                     speed,
                 }) => self.landing_dust(Some(host), state, position, count, speed),
+                // LivingEntity.causeFallDamage: Player.playSound skips the
+                // guest, whose own client plays it; everyone else hears it.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Sound {
+                    sound,
+                    volume,
+                    pitch,
+                    ..
+                }) => {
+                    if let Some(name) = sound.player_fall_sound() {
+                        let source = horizon_client::settings::sound_source(name) as i32;
+                        self.audio.play_unshared(name, Some(at), volume, pitch);
+                        host.hub.sound(name, at, volume, pitch, source, Some(conn));
+                    }
+                }
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 // LivingEntity.baseTick's entity event 67, to every client
                 // around, the guest's own included; this window draws it too.
