@@ -11,7 +11,7 @@ A comment on an issue, on its first line:
     /unclaim @login    Ludovic and the trusted reviewers (.github/trusted-reviewers.txt) release someone else's claim
 
 An assigned issue is taken, and so is one claimed on Discord (Kira's `in progress` label). Refused with a one-line
-answer: a pull request (claim the issue it fixes), a closed or locked issue, an issue someone else holds, more than 5 open claims at once (Ludovic and the trusted reviewers have no
+answer: a pull request (claim the issue it fixes), a closed or locked issue, an issue someone else holds, more than 8 open claims at once (Ludovic and the trusted reviewers have no
 limit). A success answers with a 👍 on the comment; the assignment shows in the thread.
 A claim made here is released after 5 days unless an open pull request links the issue (`Fixes #N`, a mention, or the
 sidebar's link); assignments made by hand are never released. No code of any pull request is read or run: only the
@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nightly_set as ns  # noqa: E402  (the same trusted reviewers and owner)
 
 PREFIX = "🤖 Claims: "
-MAX_CLAIMS = 5
+MAX_CLAIMS = 8
 STALE = timedelta(days=5)
 LOGIN = re.compile(r"^@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))$")
 USAGE = "Use `/claim` or `/unclaim` (the trusted reviewers: `/unclaim @login`)."
