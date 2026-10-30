@@ -212,7 +212,8 @@ impl Game<'_> {
     /// `BlockDecorationLayer.submit`: the block item in a copper golem's
     /// antenna slot (a flower, or any block item), drawn at the antenna by
     /// `CopperGolemModel.applyBlockOnAntennaTransform` with `NO_OVERLAY`. Only
-    /// the block's default state is drawn, not the item's block state component.
+    /// the block's default state with the item's `block_state` component
+    /// applied (`BlockItemStateProperties.apply`).
     fn antenna_block_geometry(
         &self,
         mob: &Mob,
@@ -229,9 +230,31 @@ impl Game<'_> {
         let Some(stack) = mob.saddle_item() else {
             return;
         };
-        let Some(state) = self.pack.assets.registry.default_state(&stack.item) else {
+        let Some(mut state) = self.pack.assets.registry.default_state(&stack.item) else {
             return;
         };
+        // CopperGolemRenderer.extractRenderState: blockItemState.apply, one
+        // property at a time; a property the block lacks or a value it
+        // cannot take leaves the state as it was.
+        if let Some(horizon_world::nbt::Tag::Compound(saved)) =
+            stack.data().and_then(|d| d.other("minecraft:block_state"))
+        {
+            for (k, v) in saved.iter() {
+                let horizon_world::nbt::Tag::String(v) = v else {
+                    continue;
+                };
+                let (k, v) = (k.to_string_lossy(), v.to_string_lossy());
+                let has = self
+                    .pack
+                    .assets
+                    .registry
+                    .state(state)
+                    .is_some_and(|s| s.properties.contains_key(&*k));
+                if has && let Some(next) = self.with_props(state, &[(&*k, &*v)]) {
+                    state = next;
+                }
+            }
+        }
         let Some(head) =
             render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
         else {
