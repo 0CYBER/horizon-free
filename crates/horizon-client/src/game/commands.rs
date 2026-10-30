@@ -2084,7 +2084,7 @@ impl Game<'_> {
         let landed = self.world.block(pos[0], pos[1], pos[2]);
         if old != new
             && self.res.facts().get(landed).name == new
-            && let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new)
+            && let Some(entity) = self.new_block_entity(&new)
         {
             self.world.block_entities.insert(key, entity);
         }

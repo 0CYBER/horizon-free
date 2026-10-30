@@ -407,6 +407,12 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| Box::new(self.mob_entity(m)))
+                .or_else(|| {
+                    self.boats
+                        .iter()
+                        .find(|b| b.id == id)
+                        .map(|b| Box::new(self.boat_entity(b)))
+                })
         });
         EntityView {
             kind: "minecraft:player".into(),
@@ -426,6 +432,33 @@ impl Game<'_> {
                 .map(|e| (format!("minecraft:{}", e.id), e.amplifier, e.duration))
                 .collect(),
             gamemode: Some(self.mode.name().to_owned()),
+            ..Default::default()
+        }
+    }
+    /// The player as a passenger of the vehicle `id` (`Entity.getPassengers`).
+    fn rider_entity(&self, id: u32) -> Option<EntityView> {
+        let p = self.player.as_ref().filter(|_| self.riding == Some(id))?;
+        Some(EntityView {
+            kind: "minecraft:player".into(),
+            position: [p.position.x, p.position.y, p.position.z],
+            gamemode: Some(self.mode.name().to_owned()),
+            ..Default::default()
+        })
+    }
+    /// A boat as the predicates see it: its type, and its passengers (the
+    /// mobs seated on it, then the player riding it).
+    pub(super) fn boat_entity(&self, b: &super::boats::Boat) -> EntityView {
+        EntityView {
+            kind: b.entity_type(),
+            position: [b.position.x, b.position.y, b.position.z],
+            on_ground: b.on_ground,
+            passengers: self
+                .mobs
+                .iter()
+                .filter(|m| m.extra.mount == Some(b.id))
+                .map(|m| self.mob_entity(m))
+                .chain(self.rider_entity(b.id))
+                .collect(),
             ..Default::default()
         }
     }
@@ -461,6 +494,13 @@ impl Game<'_> {
             components: horizon_client::mobs::finalize::variant_component(m)
                 .map(|(id, value)| (id.to_owned(), value))
                 .into_iter()
+                .collect(),
+            passengers: self
+                .mobs
+                .iter()
+                .filter(|r| r.extra.mount == Some(m.id))
+                .map(|r| self.mob_entity(r))
+                .chain(self.rider_entity(m.id))
                 .collect(),
             ..Default::default()
         }

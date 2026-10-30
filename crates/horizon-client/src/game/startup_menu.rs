@@ -465,6 +465,7 @@ impl Loading {
             Action::Options => self.open_menu_options(Page::Main),
             Action::Accessibility => self.open_menu_options(Page::Accessibility),
             Action::Language => self.open_menu_options(Page::Language),
+            Action::Credits => self.open_menu_options(Page::Credits),
             Action::DataPacks { dir, selected } => {
                 let resources = self.vanilla_root.clone();
                 self.menu.options.open_data_packs(dir, selected, resources);
@@ -497,6 +498,14 @@ impl Loading {
         }
         match event {
             WindowEvent::CloseRequested => {
+                if !self.settings.quit_shortcuts
+                    && horizon_client::input::is_quit_shortcut_down(
+                        self.menu.modifiers,
+                        &self.menu.physical_keys,
+                    )
+                {
+                    return Ok(());
+                }
                 self.save_menu_settings();
                 event_loop.exit();
             }

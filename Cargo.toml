@@ -13,6 +13,7 @@ members = [
     "crates/horizon-command",
     "crates/horizon-items",
     "crates/horizon-server-files",
+    "crates/horizon-anticheat",
     "crates/horizon-server",
     "crates/horizon-bots",
     "crates/horizon-assets",

@@ -236,6 +236,8 @@ pub enum Action {
     Options,
     Accessibility,
     Language,
+    /// The title's bottom text (`PlainTextButton`): `CreditsAndAttributionScreen`.
+    Credits,
     Play {
         folder: String,
     },
@@ -274,6 +276,8 @@ pub struct Title {
     message_lines: Cell<usize>,
     /// The SafetyScreen's checkbox as last drawn: x, y, width, height.
     warning_check: Cell<[f32; 4]>,
+    /// The bottom notice's `PlainTextButton` as last drawn: x, y, width, height.
+    credits_button: Cell<[f32; 4]>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
     /// The backup a `BackupBeforeUpgrade` asked for opens its world when done.
@@ -438,6 +442,7 @@ impl Title {
             create_return_to_main: false,
             message_lines: Cell::new(1),
             warning_check: Cell::new([0.0; 4]),
+            credits_button: Cell::new([0.0; 4]),
             backup: None,
             backup_shown: Cell::new(false),
             backup_then_open: false,
@@ -1406,8 +1411,23 @@ impl Title {
                     batch.text(atlas, &nightly, 2.0, 2.0, u32::MAX, true);
                 }
                 let notice = "Not affiliated with Mojang or Microsoft";
-                let tw = HudBatch::text_width(atlas, notice);
-                batch.text(atlas, notice, w - tw - 2.0, h - 10.0, u32::MAX, true);
+                // TitleScreen.init's `PlainTextButton`: the text's width wide, 10
+                // high at `height - 10`; `extractContents` underlines it while
+                // hovered or focused, and its press opens the credits.
+                let tw = HudBatch::text_width(atlas, notice).ceil();
+                let rect = [w - tw - 2.0, h - 10.0, tw, 10.0];
+                self.credits_button.set(rect);
+                crate::widgets::record(notice, rect, true);
+                let inside = cursor.0 >= rect[0]
+                    && cursor.0 < rect[0] + rect[2]
+                    && cursor.1 >= rect[1]
+                    && cursor.1 < rect[1] + rect[3];
+                crate::widgets::widget_cursor(inside, true);
+                let mut text = Text::literal(notice);
+                if inside {
+                    text = text.underlined();
+                }
+                batch.text_styled(atlas, &text, rect[0], rect[1], u32::MAX, true);
             }
             Mode::Select { worlds, selected } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
@@ -1955,6 +1975,12 @@ impl Title {
             if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
                 *check = !*check;
                 return (Action::None, true);
+            }
+        }
+        if matches!(self.mode, Mode::Main) {
+            let [bx, by, bw, bh] = self.credits_button.get();
+            if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
+                return (Action::Credits, true);
             }
         }
         let hit = self
@@ -2588,6 +2614,24 @@ fn caret_field<'a>(
 #[cfg(test)]
 mod classic_tests {
     use super::*;
+
+    #[test]
+    fn the_bottom_text_button_opens_the_credits() {
+        // TitleScreen.init's PlainTextButton: a press inside its drawn rect.
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        title.credits_button.set([300.0, 230.0, 120.0, 10.0]);
+        assert_eq!(
+            title.click(310.0, 235.0, (427.0, 240.0)),
+            (Action::Credits, true)
+        );
+        assert_eq!(
+            title.click(310.0, 225.0, (427.0, 240.0)),
+            (Action::None, false)
+        );
+    }
 
     #[test]
     fn classic_main_menu_icons_route_language_and_accessibility() {
