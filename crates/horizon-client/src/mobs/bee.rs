@@ -16,6 +16,7 @@ use super::{
     nav::NavKind,
     path::PathType,
 };
+use crate::beehive::BeehiveExt;
 use horizon_core::random::{LegacyRandom, RandomSource};
 use std::collections::HashMap;
 
@@ -207,6 +208,12 @@ pub fn stop_being_angry(m: &mut Mob) {
     let b = st(m);
     b.angry_at = None;
     b.anger_end = -1;
+}
+/// `NeutralMob.playerDied`: the anger at the player who died ends.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if get(m).and_then(|b| b.angry_at) == Some(Who::Player) {
+        stop_being_angry(m);
+    }
 }
 /// `Bee.startPersistentAngerTimer`: 20 to 39 seconds.
 fn start_anger_timer(m: &mut Mob, w: &MobWorld) {

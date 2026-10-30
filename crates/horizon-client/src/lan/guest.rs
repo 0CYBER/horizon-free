@@ -129,6 +129,10 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// Through a portal, until `LanHub::land` gives the client its position:
+    /// the moves it sent from the old level are ignored, as they would be
+    /// while it had a teleport to accept.
+    pub landing: bool,
     pub teleport_counter: i32,
     /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
     pub teleport_tick: u64,
@@ -227,6 +231,9 @@ pub struct Guest {
     pub moves: Vec<([f64; 3], bool)>,
     /// Whether the guest was on the ground before the first of `moves`.
     pub moves_from_ground: bool,
+    /// `ServerPlayer.lastKnownClientMovement`: the last move accepted from
+    /// their client, zero after a client tick without one.
+    pub known_movement: [f64; 3],
     pub dead: bool,
     /// `LivingEntity.deathTime`: ticks since the guest died.
     pub death_time: u32,
@@ -306,6 +313,7 @@ impl Guest {
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            landing: false,
             teleport_counter: 0,
             teleport_tick: 0,
             first_good: position,
@@ -357,6 +365,7 @@ impl Guest {
             ticks: 0,
             moves: Vec::new(),
             moves_from_ground: false,
+            known_movement: [0.0; 3],
             dead: false,
             death_time: 0,
             placed: false,
@@ -377,6 +386,22 @@ impl Guest {
     }
     pub fn send(&self, packet: &play::Clientbound) {
         self.sender.send(packet.encode());
+    }
+    /// `Entity.stopRiding`: out of the vehicle it rode.
+    pub fn stop_riding(&mut self) {
+        (self.vehicle, self.vehicle_good) = (None, None);
+    }
+    /// `LivingEntity.tickDeath` for a dead player: true once its body is
+    /// removed, 20 ticks after it died (`remove(KILLED)`, whose
+    /// `Entity.setRemoved` stops its riding). The body sits in its vehicle
+    /// until then.
+    pub fn tick_death(&mut self) -> bool {
+        self.death_time += 1;
+        let removed = self.death_time >= 20;
+        if removed {
+            self.stop_riding();
+        }
+        removed
     }
     pub fn send_all(&self, packets: &[play::Clientbound]) {
         for p in packets {
@@ -642,6 +667,18 @@ fn network_stack(
                 horizon_protocol::item::Component::BannerPatterns(layers),
             ));
         }
+        // `painting/variant`: a reference into the synced registry.
+        if let Some(id) = crate::save::text(d.other("minecraft:painting/variant")).and_then(|v| {
+            synced_id(
+                "minecraft:painting_variant",
+                &horizon_world::datafix::dynamic::namespaced(&v),
+            )
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::PAINTING_VARIANT,
+                horizon_protocol::item::Component::PaintingVariant(id),
+            ));
+        }
         // A shield's `base_color`.
         if let Some(id) = d.base_color.as_deref().and_then(dye_id) {
             stack.added.push((
@@ -667,7 +704,29 @@ fn network_stack(
                 horizon_protocol::item::Component::Int(i32::from(mode)),
             ));
         }
+        if let Some(amplifier) = d.ominous_amplifier {
+            stack.added.push((
+                horizon_protocol::item::component::OMINOUS_BOTTLE_AMPLIFIER,
+                horizon_protocol::item::Component::Int(i32::from(amplifier)),
+            ));
+        }
         stack.added.extend(firework_components(d));
+        // A goat horn's instrument, by its `minecraft:instrument` id.
+        if let Some(id) = d
+            .other("minecraft:instrument")
+            .and_then(|t| crate::save::text(Some(t)))
+            .and_then(|name| {
+                synced_id(
+                    "minecraft:instrument",
+                    &horizon_world::datafix::dynamic::namespaced(&name),
+                )
+            })
+        {
+            stack.added.push((
+                horizon_protocol::item::component::INSTRUMENT,
+                horizon_protocol::item::Component::Instrument(id),
+            ));
+        }
         // The compass's lodestone target.
         if let Some(t) = d.other("minecraft:lodestone_tracker") {
             let target = t.get("target").and_then(|g| {
@@ -697,6 +756,21 @@ fn network_stack(
                     color: None,
                     rest: Vec::new(),
                 },
+            ));
+        }
+        // SuspiciousStewEffects: each effect by its `minecraft:mob_effect` id.
+        if !d.stew_effects.is_empty() {
+            let effects = d
+                .stew_effects
+                .iter()
+                .filter_map(|(effect, duration)| {
+                    let name = horizon_world::datafix::dynamic::namespaced(effect);
+                    Some((synced_id("minecraft:mob_effect", &name)?, *duration))
+                })
+                .collect();
+            stack.added.push((
+                horizon_protocol::item::component::SUSPICIOUS_STEW_EFFECTS,
+                horizon_protocol::item::Component::StewEffects(effects),
             ));
         }
         // A loaded crossbow's ammunition.
@@ -752,10 +826,11 @@ fn network_stack(
             ));
         }
     }
-    if let Some(name) = s.custom_name() {
+    // Keep the component's styles across integrated-server and LAN inventory sync.
+    if let Some(name) = s.data().and_then(|d| d.other("minecraft:custom_name")) {
         stack.added.push((
             horizon_protocol::item::component::CUSTOM_NAME,
-            horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
+            horizon_protocol::item::Component::Text(name.clone()),
         ));
     }
     // The component as loaded, so a translatable name stays one.
@@ -783,7 +858,32 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_protocol::buf::{Codec, Reader, Writer};
     use horizon_protocol::item::{Component, component};
+    use horizon_world::nbt::Tag;
+
+    #[test]
+    fn styled_custom_name_survives_inventory_sync() {
+        let name = Tag::compound([
+            ("text", Tag::String("Red".into())),
+            ("color", Tag::String("#ff0000".into())),
+            ("italic", Tag::Byte(0)),
+        ]);
+        let mut item = ItemStack::new("minecraft:stick", 1);
+        item.data_mut().custom_name = Some(name.clone());
+        let sent = stack_to_network(|_| 7, |_, _| None, &Some(item));
+        let mut writer = Writer::new();
+        horizon_protocol::item::Slot::write(&sent, &mut writer);
+        let mut reader = Reader::new(&writer.data);
+        let received = horizon_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(
+            received.component(component::CUSTOM_NAME),
+            Some(&Component::Text(name))
+        );
+    }
 
     #[test]
     fn potions_go_as_potion_registry_ids() {
@@ -826,6 +926,24 @@ mod tests {
         assert_eq!(stack.component(component::TRIM), None);
     }
 
+    #[test]
+    fn goat_horns_send_their_instrument_by_registry_id() {
+        let mut horn = ItemStack::new("minecraft:goat_horn", 1);
+        horn.data_mut().other.push((
+            "minecraft:instrument".into(),
+            horizon_world::nbt::Tag::String("minecraft:sing_goat_horn".into()),
+        ));
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:instrument", "minecraft:sing_goat_horn") => Some(1),
+            _ => None,
+        };
+        let stack = stack_to_network(|_| 7, synced_id, &Some(horn)).unwrap();
+        assert_eq!(
+            stack.component(component::INSTRUMENT),
+            Some(&Component::Instrument(1))
+        );
+    }
+
     fn guest_at(position: [f64; 3]) -> Guest {
         let (tx, _rx) = std::sync::mpsc::channel();
         Guest::new(
@@ -844,6 +962,23 @@ mod tests {
             position,
             10,
         )
+    }
+
+    #[test]
+    fn a_dead_player_leaves_its_vehicle_when_its_body_is_removed() {
+        let mut g = guest_at([0.5, -120.0, 0.5]);
+        g.vehicle = Some(7);
+        g.vehicle_good = Some([0.5, -120.0, 0.5]);
+        g.dead = true;
+        // LivingEntity.tickDeath: the body sits in the boat for 19 ticks...
+        for tick in 1..20 {
+            assert!(!g.tick_death(), "tick {tick}");
+            assert_eq!(g.vehicle, Some(7), "tick {tick}");
+        }
+        // ...then remove(KILLED)'s setRemoved stops its riding, so the
+        // respawned player is not put back into the boat.
+        assert!(g.tick_death());
+        assert_eq!((g.vehicle, g.vehicle_good), (None, None));
     }
 
     #[test]

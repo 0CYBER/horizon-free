@@ -112,17 +112,6 @@ pub(super) struct Levels {
 }
 
 impl Levels {
-    /// The chunks of each level not in place (capability `world` lends
-    /// them to server mods for a call).
-    #[cfg_attr(not(feature = "mods"), allow(dead_code))]
-    pub(super) fn parked_chunks(
-        &mut self,
-    ) -> impl Iterator<Item = (Dim, &mut horizon_client::chunk_map::ChunkMap)> {
-        self.parked
-            .iter_mut()
-            .map(|(d, p)| (*d, &mut p.world.chunks))
-    }
-
     /// The level not in place, in `dim`.
     pub(super) fn parked_mut(&mut self, dim: Dim) -> Option<&mut Parked> {
         self.parked.get_mut(&dim)
@@ -361,8 +350,6 @@ impl Game<'_> {
             };
             self.update_dedicated_streaming();
             self.update_world();
-            // What server mods set in this level since its last tick.
-            self.apply_mod_block_writes();
             result = if paused {
                 self.tick_lan(true);
                 Ok(())
@@ -465,6 +452,7 @@ impl Game<'_> {
                         .is_some_and(|p| !p.streaming.forced.is_empty())
                 };
                 guests.iter().any(|g| g.dimension == d.id())
+                    || self.player_bed_levels().any(|b| b == *d)
                     || forced
                     || self.pregen_level() == Some(*d)
                     // A pending portal arrival keeps its destination level

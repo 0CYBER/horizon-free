@@ -100,11 +100,16 @@ fn modifier_line(
     } else {
         return None;
     };
+    // TranslatableContents: `%s` and numbered `%1$s` arguments, `%%` a percent sign.
     Some(
-        text(&format!("attribute.modifier.{kind}.{operation}"))
-            .replacen("%s", &format_amount(shown), 1)
-            .replacen("%s", &text(&format!("attribute.name.{attribute}")), 1)
-            .replace("%%", "%"),
+        crate::text::format_translation(
+            &text(&format!("attribute.modifier.{kind}.{operation}")),
+            &[
+                crate::text::Text::literal(format_amount(shown)),
+                crate::text::Text::literal(text(&format!("attribute.name.{attribute}"))),
+            ],
+        )
+        .plain(),
     )
 }
 
@@ -208,7 +213,10 @@ fn is_potion_item(item: &str) -> bool {
 /// The name line of `stack`, as the item's translation or, for potions and
 /// smithing templates, its name component gives it.
 pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) -> String {
-    let path = stack.item.trim_start_matches("minecraft:");
+    let (namespace, path) = stack
+        .item
+        .split_once(':')
+        .unwrap_or(("minecraft", &stack.item));
     if let Some(name) = stack.custom_name() {
         return name.to_owned();
     }
@@ -228,12 +236,20 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     } else if path.ends_with("_banner_pattern") {
         // The item name component of the pattern items that have one.
         Some(format!("item.minecraft.{path}.new"))
+    } else if &*stack.item == "minecraft:shield"
+        && let Some(color) = stack.data().and_then(|d| d.base_color.as_deref())
+    {
+        // `ShieldItem.getName`: the banner's base colour names the shield.
+        Some(format!("item.minecraft.shield.{color}"))
     } else {
         None
     };
+    // `Item.getDescriptionId`: `Util.makeDescriptionId("item", id)`, or the
+    // block's for a block item, in the item's own namespace.
+    let id = format!("{namespace}.{}", path.replace('/', "."));
     key.and_then(|k| translate(&k))
-        .or_else(|| translate(&format!("item.minecraft.{path}")))
-        .or_else(|| translate(&format!("block.minecraft.{path}")))
+        .or_else(|| translate(&format!("item.{id}")))
+        .or_else(|| translate(&format!("block.{id}")))
         .unwrap_or_else(|| path.replace('_', " "))
 }
 
@@ -424,6 +440,44 @@ pub fn unbreakable_line(
     .then(|| translate("item.unbreakable").unwrap_or_else(|| "item.unbreakable".into()))
 }
 
+/// `OminousBottleAmplifier.addToTooltip`: the effect the bottle gives,
+/// `MobEffectInstance(BAD_OMEN, 120000, amplifier)`, listed as
+/// `PotionContents.addPotionTooltip` lists it, in the colour of Bad Omen's
+/// category (NEUTRAL, blue). An ominous bottle without the component has the
+/// item's default amplifier, 0.
+pub fn ominous_bottle_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, u32)> {
+    const BAD_OMEN_TICKS: i32 = 120_000;
+    let amplifier = stack
+        .data()
+        .and_then(|d| d.ominous_amplifier)
+        .or_else(|| (&*stack.item == "minecraft:ominous_bottle").then_some(0))?;
+    if !display.shows("minecraft:ominous_bottle_amplifier") {
+        return None;
+    }
+    use crate::text::{Text, format_translation};
+    let text = |key: &str, fallback: &str| translate(key).unwrap_or_else(|| fallback.to_owned());
+    // PotionContents.getPotionDescription.
+    let mut line = Text::literal(text(
+        "effect.minecraft.bad_omen",
+        "effect.minecraft.bad_omen",
+    ));
+    if amplifier > 0 {
+        let potency = translate(&format!("potion.potency.{amplifier}"))
+            .unwrap_or_else(|| crate::enchant::level_name(u32::from(amplifier) + 1));
+        line = format_translation(
+            &text("potion.withAmplifier", "%s %s"),
+            &[line, Text::literal(potency)],
+        );
+    }
+    let duration = Text::literal(crate::brewing::format_duration(BAD_OMEN_TICKS));
+    let line = format_translation(&text("potion.withDuration", "%s (%s)"), &[line, duration]);
+    Some((line.plain(), rgba(85, 85, 255, 255)))
+}
+
 /// `PotionContents.addPotionTooltip`'s attribute block: an empty line, "When
 /// Applied:" and the modifiers of the potion's effects (blue for a gain, red
 /// for a loss); nothing for a potion whose effects add none.
@@ -434,14 +488,26 @@ pub fn potion_modifier_lines(
     if !is_potion_item(&stack.item) {
         return Vec::new();
     }
-    let applied: Vec<(String, u32)> = stack
+    let effects = stack
         .potion()
         .and_then(crate::brewing::potion)
         .into_iter()
         .flat_map(|p| p.effects.iter())
-        .filter_map(|(effect, _, amplifier)| {
-            let (attribute, amount, operation) = effect_modifier(effect)?;
-            let amount = amount * (*amplifier + 1) as f64;
+        .map(|(effect, _, amplifier)| (*effect, *amplifier));
+    effect_modifier_lines(effects, translate)
+}
+
+/// `addPotionTooltip`'s attribute block for (effect id, amplifier) entries.
+fn effect_modifier_lines<'a>(
+    effects: impl IntoIterator<Item = (&'a str, i32)>,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, u32)> {
+    let applied: Vec<(String, u32)> = effects
+        .into_iter()
+        .filter_map(|(effect, amplifier)| {
+            let (attribute, amount, operation) =
+                effect_modifier(effect.trim_start_matches("minecraft:"))?;
+            let amount = amount * (amplifier + 1) as f64;
             let line = modifier_line(translate, attribute, amount, operation, false)?;
             let color = if amount > 0.0 {
                 rgba(85, 85, 255, 255)
@@ -462,6 +528,48 @@ pub fn potion_modifier_lines(
         ),
     ];
     lines.extend(applied);
+    lines
+}
+
+/// `SuspiciousStewEffects.addToTooltip`: only with the creative tooltip flag,
+/// the stew's effects as `PotionContents.addPotionTooltip` lists them (each in
+/// its `MobEffectCategory` colour, "No Effects" for none), then their
+/// attribute modifiers.
+pub fn stew_lines(
+    stack: &ItemStack,
+    creative: bool,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, u32)> {
+    let effects = stack.data().map_or(&[][..], |d| &d.stew_effects[..]);
+    // The component is the item's default (empty) on a suspicious stew.
+    if !creative
+        || (effects.is_empty() && &*stack.item != "minecraft:suspicious_stew")
+        || !display.shows("minecraft:suspicious_stew_effects")
+    {
+        return Vec::new();
+    }
+    if effects.is_empty() {
+        let none = translate("effect.none").unwrap_or_else(|| "No Effects".into());
+        return vec![(none, rgba(170, 170, 170, 255))];
+    }
+    // `Entry.createEffectInstance`: amplifier 0.
+    let entries = effects.iter().map(|(id, duration)| (&**id, *duration, 0));
+    let mut lines: Vec<(String, u32)> = crate::brewing::effect_lines(entries, 1.0, translate)
+        .into_iter()
+        .map(|(line, category)| {
+            // MobEffectCategory.getTooltipFormatting: harmful red, else blue.
+            let color = match category {
+                crate::brewing::Category::Harmful => rgba(255, 85, 85, 255),
+                _ => rgba(85, 85, 255, 255),
+            };
+            (line, color)
+        })
+        .collect();
+    lines.extend(effect_modifier_lines(
+        effects.iter().map(|(id, _)| (&**id, 0)),
+        translate,
+    ));
     lines
 }
 
@@ -586,6 +694,7 @@ pub fn detail_lines(
                 .map(|(line, _)| line),
         );
     }
+    lines.extend(ominous_bottle_line(stack, &display, translate).map(|l| l.0));
     lines
 }
 
@@ -751,9 +860,55 @@ pub fn lore_texts(stack: &ItemStack) -> Vec<crate::text::Text> {
         .collect()
 }
 
+/// Preserve child colours and explicit styles in the stored hover name.
+/// A custom name inherits italic from `ItemStack.getStyledHoverName`.
+pub fn styled_name(stack: &ItemStack, fallback: impl FnOnce() -> String) -> crate::text::Text {
+    if let Some(component) = stack.data().and_then(|d| d.custom_name.as_ref()) {
+        return crate::entity_nbt::name_text(component).with_style(&crate::text::Style {
+            italic: Some(true),
+            ..Default::default()
+        });
+    }
+    if let Some(component) = stack.data().and_then(|d| d.other("minecraft:item_name")) {
+        return crate::entity_nbt::name_text(component);
+    }
+    crate::text::Text::legacy(&fallback())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_world::loot::PackOverlay;
+    use std::sync::Arc;
+
+    #[test]
+    fn styled_name_keeps_gradient_spans_and_explicit_italic() {
+        let component = Tag::compound([
+            ("text", Tag::String("".into())),
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::compound([
+                        ("text", Tag::String("A".into())),
+                        ("color", Tag::String("#ff0000".into())),
+                        ("italic", Tag::Byte(0)),
+                    ]),
+                    Tag::compound([
+                        ("text", Tag::String("B".into())),
+                        ("color", Tag::String("#0000ff".into())),
+                    ]),
+                ]),
+            ),
+        ]);
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack.data_mut().custom_name = Some(component);
+        let text = styled_name(&stack, || "unused".into());
+        assert_eq!(text.plain(), "AB");
+        assert_eq!(text.spans[0].style.color, Some(0xff0000));
+        assert_eq!(text.spans[1].style.color, Some(0x0000ff));
+        assert!(!text.spans[0].style.is_italic());
+        assert!(text.spans[1].style.is_italic());
+    }
 
     #[test]
     fn lore_keeps_component_colours_under_dark_purple_italic() {
@@ -821,6 +976,115 @@ mod tests {
     }
 
     #[test]
+    fn stew_effects_show_only_with_the_creative_flag() {
+        let translate = |key: &str| {
+            Some(
+                match key {
+                    "effect.minecraft.fire_resistance" => "Fire Resistance",
+                    "effect.minecraft.weakness" => "Weakness",
+                    "effect.minecraft.saturation" => "Saturation",
+                    "effect.none" => "No Effects",
+                    "potion.whenDrank" => "When Applied:",
+                    "attribute.modifier.take.0" => "-%s %s",
+                    "attribute.name.attack_damage" => "Attack Damage",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let (blue, red) = (rgba(85, 85, 255, 255), rgba(255, 85, 85, 255));
+        let lines = |stack: &ItemStack, creative: bool| {
+            stew_lines(
+                stack,
+                creative,
+                &TooltipDisplay::for_stack(stack),
+                &translate,
+            )
+        };
+        let mut stew = ItemStack::new("minecraft:suspicious_stew", 1);
+        // The item's default, an empty list.
+        assert_eq!(
+            lines(&stew, true),
+            [("No Effects".to_owned(), rgba(170, 170, 170, 255))]
+        );
+        stew.data_mut().stew_effects = vec![
+            (Arc::from("minecraft:fire_resistance"), 60),
+            (Arc::from("minecraft:weakness"), 140),
+            (Arc::from("minecraft:saturation"), 7),
+        ];
+        assert!(lines(&stew, false).is_empty());
+        assert_eq!(
+            lines(&stew, true),
+            [
+                ("Fire Resistance (00:03)".to_owned(), blue),
+                ("Weakness (00:07)".to_owned(), red),
+                // 20 ticks or less: no duration.
+                ("Saturation".to_owned(), blue),
+                (String::new(), u32::MAX),
+                ("When Applied:".to_owned(), rgba(170, 0, 170, 255)),
+                ("-4 Attack Damage".to_owned(), red),
+            ]
+        );
+        assert!(lines(&ItemStack::new("minecraft:bowl", 1), true).is_empty());
+    }
+
+    #[test]
+    fn ominous_bottle_lists_bad_omen_at_its_amplifier_for_100_minutes() {
+        let lang = |key: &str| {
+            Some(
+                match key {
+                    "effect.minecraft.bad_omen" => "Bad Omen",
+                    "potion.withAmplifier" => "%s %s",
+                    "potion.withDuration" => "%s (%s)",
+                    "potion.potency.3" => "IV",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let duration = crate::brewing::format_duration(120_000);
+        let blue = rgba(85, 85, 255, 255);
+        // The item's default amplifier, 0: no potency.
+        let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
+        let line = |s: &ItemStack| ominous_bottle_line(s, &TooltipDisplay::for_stack(s), &lang);
+        assert_eq!(
+            line(&bottle),
+            Some((format!("Bad Omen ({duration})"), blue))
+        );
+        bottle.data_mut().ominous_amplifier = Some(3);
+        assert_eq!(
+            line(&bottle),
+            Some((format!("Bad Omen IV ({duration})"), blue))
+        );
+        assert!(
+            lines(&bottle, None, &lang).contains(&format!("Bad Omen IV ({duration})")),
+            "{:?}",
+            lines(&bottle, None, &lang)
+        );
+        // A numbered template, as some languages write it.
+        let numbered = |key: &str| match key {
+            "potion.withDuration" => Some("%2$s: %1$s".to_owned()),
+            other => lang(other),
+        };
+        assert_eq!(
+            ominous_bottle_line(&bottle, &TooltipDisplay::for_stack(&bottle), &numbered)
+                .map(|l| l.0),
+            Some(format!("{duration}: Bad Omen IV"))
+        );
+        bottle.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([(
+                "hidden_components",
+                Tag::List(vec![Tag::String(
+                    "minecraft:ominous_bottle_amplifier".into(),
+                )]),
+            )])),
+        );
+        assert_eq!(line(&bottle), None);
+        assert_eq!(line(&ItemStack::new("minecraft:glass_bottle", 1)), None);
+    }
+
+    #[test]
     fn ominous_banner_keeps_its_default_hidden_pattern_tooltip() {
         let mut banner = crate::mobs::raider::ominous_banner();
         let display = TooltipDisplay::for_stack(&banner);
@@ -845,7 +1109,7 @@ mod tests {
         assert_eq!(name_line(&banner, &translate), "Ominous Banner");
         assert_eq!(name_line(&banner, &|_| None), "Ominous Banner");
         assert_eq!(rarity(&banner, "common"), "uncommon");
-        banner.data_mut().custom_name = Some("Captain's Standard".into());
+        banner.data_mut().custom_name = Some(Tag::String("Captain's Standard".into()));
         assert_eq!(name_line(&banner, &translate), "Captain's Standard");
         let mut custom_item = ItemStack::new("minecraft:diamond_sword", 1);
         custom_item.data_mut().other.push((
@@ -853,13 +1117,32 @@ mod tests {
             Tag::String("Excalibur".into()),
         ));
         assert_eq!(name_line(&custom_item, &translate), "Excalibur");
-        custom_item.data_mut().custom_name = Some("Custom Blade".into());
+        custom_item.data_mut().custom_name = Some(Tag::String("Custom Blade".into()));
         assert_eq!(name_line(&custom_item, &translate), "Custom Blade");
         banner.enchant("minecraft:unbreaking", 1);
         assert_eq!(rarity(&banner, "common"), "rare");
         let plain = ItemStack::new("minecraft:white_banner", 1);
         assert_eq!(name_line(&plain, &translate), "White Banner");
         assert_eq!(rarity(&plain, "common"), "common");
+    }
+
+    #[test]
+    fn name_line_translates_items_of_any_namespace() {
+        let translate = |key: &str| match key {
+            "item.example.ruby" => Some("Ruby".to_owned()),
+            "block.example.ruby_block" => Some("Block of Ruby".to_owned()),
+            "item.example.tools.chisel" => Some("Chisel".to_owned()),
+            "item.minecraft.diamond" => Some("Diamond".to_owned()),
+            _ => None,
+        };
+        let name = |id: &str| name_line(&ItemStack::new(id, 1), &translate);
+        // `Util.makeDescriptionId`: the item's own namespace, `/` as `.`.
+        assert_eq!(name("example:ruby"), "Ruby");
+        assert_eq!(name("example:ruby_block"), "Block of Ruby");
+        assert_eq!(name("example:tools/chisel"), "Chisel");
+        assert_eq!(name("minecraft:diamond"), "Diamond");
+        // No translation: the path, as the creative names fall back to.
+        assert_eq!(name("example:raw_ruby"), "raw ruby");
     }
 
     #[test]
@@ -1042,7 +1325,7 @@ mod tests {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
-        let items = crate::items::Items::catalog(&root).unwrap();
+        let items = crate::items::Items::catalog(&root, &PackOverlay::NONE).unwrap();
         let enchantments = crate::enchant::Enchantments::load(&root);
         let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
         for (item, expected) in [
@@ -1095,5 +1378,28 @@ mod tests {
             Some("-60% Speed")
         );
         assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2, false), None);
+    }
+
+    #[test]
+    fn modifier_lines_support_positional_format() {
+        let lang = |k: &str| {
+            Some(
+                match k {
+                    "attribute.modifier.equals.0" => "%2$s: %1$s",
+                    "attribute.modifier.plus.2" => "+%1$s%% %2$s",
+                    "attribute.name.attack_damage" => "Damage",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 5.0, 0, true).as_deref(),
+            Some("Damage: 5")
+        );
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 0.2, 2, false).as_deref(),
+            Some("+20% Damage")
+        );
     }
 }
