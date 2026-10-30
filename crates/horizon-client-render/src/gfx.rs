@@ -154,12 +154,19 @@ fn world_pass_after_culling<'e>(
         ..Default::default()
     })
 }
-fn section_instance(origin: [f32; 3]) -> [f32; 4] {
+/// A section's instance: its camera-relative origin and its UV step, negated
+/// past its fade code while it fades in over far terrain (`lod::instance`).
+fn section_instance(origin: [f32; 3], fade: u32) -> [f32; 4] {
+    let step = 1.0 / crate::mesher::UV_STEPS;
     [
         origin[0],
         origin[1],
         origin[2],
-        1.0 / crate::mesher::UV_STEPS,
+        if fade == 0 {
+            step
+        } else {
+            -(fade as f32 + step)
+        },
     ]
 }
 /// A new value for `Renderer::block_entity_revision`.
@@ -210,6 +217,28 @@ struct SectionGpu {
     sorted_indices: Option<(u32, u64)>,
     /// Its id for flat draws (`flat::Flat::add`), when they are on.
     flat_id: Option<u32>,
+    /// When it began to fade in over the far terrain it replaces, which
+    /// stays whole behind it until then: a section new where far tiles are
+    /// drawn. Meshed again, it stays as it was.
+    fading: Option<std::time::Instant>,
+    /// When it began to fade out, its column gone over far terrain that
+    /// stays behind it (`Renderer::leave_section`); released once it has.
+    leaving: Option<std::time::Instant>,
+}
+impl SectionGpu {
+    /// Its fade code this frame (`lod::fade_code`), 0 once whole. `retiring`:
+    /// its column has left the render distance, far terrain is coming in
+    /// under it (`lod::HELD`).
+    fn fade(&self, now: std::time::Instant, retiring: bool) -> u32 {
+        match self.leaving {
+            Some(since) => lod::fade_out_code(since, 0, now),
+            None if retiring => lod::HELD,
+            None => self
+                .fading
+                .and_then(|since| lod::fade_code(Some(since), 0, now))
+                .unwrap_or(0),
+        }
+    }
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
@@ -515,6 +544,8 @@ pub struct Renderer {
     lod_cutout: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Removed sections of `lod_cutout` columns, released once tiles cover them.
     lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
+    /// Removed sections fading out over far terrain (`leave_section`).
+    lod_leaving: Vec<(SectionKey, std::time::Instant)>,
     /// Finished tile meshes `upload_lods` has yet to upload.
     lod_pending: Option<lod::Pending>,
     detail_columns: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
@@ -2797,6 +2828,7 @@ impl Renderer {
             lods: HashMap::new(),
             lod_cutout: Default::default(),
             lod_retiring: Default::default(),
+            lod_leaving: Vec::new(),
             lod_pending: None,
             detail_columns: Default::default(),
             detail_revision: 0,
@@ -3101,8 +3133,14 @@ impl Renderer {
         if !self.lod_retiring.is_empty() {
             self.lod_retiring.remove(&key);
         }
+        let fading = match self.sections.find(key) {
+            Some(old) => old.fading,
+            None => (!self.lods.is_empty()).then(std::time::Instant::now),
+        };
         self.release_section(key);
-        let section = self.upload_mesh(mesh);
+        let section = self
+            .upload_mesh(mesh)
+            .map(|section| SectionGpu { fading, ..section });
         self.set_detail(
             key,
             section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()),
@@ -3192,6 +3230,8 @@ impl Renderer {
             ),
             sorted_indices,
             flat_id,
+            fading: None,
+            leaving: None,
         })
     }
     /// The section copies recorded since the last submission, closed.
@@ -3268,6 +3308,7 @@ impl Renderer {
         self.lods.clear();
         self.lod_cutout.clear();
         self.lod_retiring.clear();
+        self.lod_leaving.clear();
         self.lod_pending = None;
         self.detail_columns.clear();
         self.detail_revision += 1;
@@ -3326,6 +3367,40 @@ impl Renderer {
     /// Every section of these columns goes: one lookup per column where the
     /// tables are by column, and the meshes' ranges freed in one batch. A
     /// teleport removes a few thousand columns in one frame.
+    /// A section whose column far terrain now draws fades out over it, chunk by
+    /// chunk as it came, and is released once it has (`release_left`): taken
+    /// away at once, the column's detail dropped to the far terrain's in one
+    /// frame.
+    fn leave_section(&mut self, key: SectionKey) {
+        let now = std::time::Instant::now();
+        if let Some(section) = self.sections.find_mut(key)
+            && section.leaving.is_none()
+        {
+            section.leaving = Some(now);
+            self.lod_leaving.push((key, now));
+        }
+    }
+    /// Releases the sections that have faded out (`leave_section`).
+    fn release_left(&mut self, now: std::time::Instant) {
+        let mut done = Vec::new();
+        self.lod_leaving.retain(|&(key, since)| {
+            let left = now.saturating_duration_since(since) >= lod::FADE;
+            if left {
+                done.push((key, since));
+            }
+            !left
+        });
+        for (key, since) in done {
+            // Meshed again since (the player came back): it stays.
+            if self
+                .sections
+                .find(key)
+                .is_some_and(|s| s.leaving == Some(since))
+            {
+                self.release_section(key);
+            }
+        }
+    }
     pub fn remove_columns(&mut self, columns: impl IntoIterator<Item = (i32, i32)>) {
         let mut released = Vec::new();
         let mut block_entities = false;
@@ -3341,6 +3416,9 @@ impl Renderer {
                 if retiring {
                     // Distant tiles still leave its column out: drawn until they don't.
                     self.lod_retiring.insert(key);
+                } else if !self.lods.is_empty() && self.sections.contains(key) {
+                    // Far terrain draws the column: it fades out over it.
+                    self.leave_section(key);
                 } else if let Some(section) = self.sections.remove(key) {
                     released.push(section);
                 }
@@ -4060,6 +4138,13 @@ impl Renderer {
         }
         let reachable = &self.occlusion;
         let cutout = &self.lod_cutout;
+        // Sections fading out (`leave_section`) are past the render distance:
+        // drawn there until they have, or they popped out at once.
+        let leaving: crate::fast_hash::FxHashSet<(i32, i32)> = self
+            .lod_leaving
+            .iter()
+            .map(|&((x, _, z), _)| (x, z))
+            .collect();
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
         crate::spans::time("visibility", || {
@@ -4068,10 +4153,14 @@ impl Renderer {
                 (frame.detail_distance / 16.0) as i32,
                 &view,
                 |k| !culling || reachable.contains(k),
-                |x, z| !cutout.is_empty() && cutout.contains(&(x, z)),
+                |x, z| {
+                    (!cutout.is_empty() && cutout.contains(&(x, z)))
+                        || (!leaving.is_empty() && leaving.contains(&(x, z)))
+                },
                 &mut visible,
             )
         });
+        let now = std::time::Instant::now();
         let mut visible_lods = std::mem::take(&mut self.visible_lods);
         visible_lods.clear();
         if frame.title {
@@ -4080,7 +4169,7 @@ impl Renderer {
             visible_lods.extend(
                 self.lods
                     .iter()
-                    .filter_map(|(&key, tile)| tile.visible(key, camera, frame.distance, &view)),
+                    .filter_map(|(&key, tile)| tile.visible(key, camera, &view, now)),
             );
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }
@@ -4133,12 +4222,16 @@ impl Renderer {
             });
         }
         self.origins.clear();
+        let (sections, retiring) = (&self.sections, &self.lod_retiring);
         self.origins.extend(
             visible
                 .iter()
-                .map(|v| section_instance(v.origin))
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin)))
-                .chain(shadow_visible.iter().map(|v| section_instance(v.origin))),
+                .map(|v| {
+                    let code = sections.get(v.slot).fade(now, retiring.contains(&v.key));
+                    section_instance(v.origin, code)
+                })
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin, v.fade)))
+                .chain(shadow_visible.iter().map(|v| section_instance(v.origin, 0))),
         );
         if !self.origins.is_empty() {
             self.uploads.buffer(
@@ -4229,7 +4322,7 @@ impl Renderer {
         let tiles = self.draws.len();
         self.solid_runs.clear();
         for (i, v) in visible_lods.iter().enumerate() {
-            let s = &self.lods[&v.key].mesh;
+            let s = self.lods[&v.key].drawn();
             let start = self.draws.len();
             let instance = (visible.len() + i) as u32;
             facing_runs(&s.sides, eye, v.origin, |first, quads| {
@@ -4298,7 +4391,7 @@ impl Renderer {
         for (i, v) in visible_lods.iter().enumerate() {
             let instance = visible.len() + i;
             let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
-            let s = &mut tile.mesh;
+            let s = tile.drawn_mut();
             if let Some((index_page, index_start)) = s.sorted_indices {
                 let scheduled = (instance + count - self.translucency_cursor) % count < budget;
                 if (!s.sort.is_sorted() || scheduled)
@@ -4332,8 +4425,26 @@ impl Renderer {
         }
         // Near water and distant water share one back-to-front draw order.
         if self.translucent_draws.len() > section_translucent {
+            // Distant water goes after the near chunks', and replaced tiles'
+            // after all: each is a hair behind the one before, so depth leaves
+            // it only where that one has none. Back to front together, a far
+            // tile's water under a near chunk's (one fading in, or brought
+            // into view by a longer render distance) blended twice and looked
+            // opaque. The cost: far water just behind near water shows no
+            // surface of its own there.
+            let tier = |instance: usize| match instance.checked_sub(visible.len()) {
+                None => 0,
+                Some(tile) if visible_lods[tile].old => 2,
+                Some(_) => 1,
+            };
             self.translucent_draws
-                .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+                .sort_unstable_by_key(|&(distance, instance, ..)| {
+                    (
+                        tier(instance),
+                        std::cmp::Reverse(distance),
+                        std::cmp::Reverse(instance),
+                    )
+                });
         }
         for &(_, _, draw, pages) in &self.translucent_draws {
             self.draws.push(draw);
@@ -4705,7 +4816,7 @@ impl Renderer {
                         || pack_terrain
                         || shadow_view.is_some()) =>
             {
-                let sections = &self.sections;
+                let (sections, retiring) = (&self.sections, &self.lod_retiring);
                 let lods = &self.lods;
                 let sorted = &self.sorted_indices;
                 let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
@@ -4724,12 +4835,13 @@ impl Renderer {
                             .iter()
                             .chain(&shadow_visible)
                             .filter_map(|v| {
-                                let id = sections.get(v.slot).flat_id?;
-                                Some((id, section_instance(v.origin)))
+                                let section = sections.get(v.slot);
+                                let code = section.fade(now, retiring.contains(&v.key));
+                                Some((section.flat_id?, section_instance(v.origin, code)))
                             })
                             .chain(visible_lods.iter().filter_map(|v| {
-                                let id = lods[&v.key].mesh.flat_id?;
-                                Some((id, lod::instance(v.origin)))
+                                let id = lods[&v.key].drawn().flat_id?;
+                                Some((id, lod::instance(v.origin, v.fade)))
                             })),
                         |page| sorted.buffer(page).clone(),
                     )

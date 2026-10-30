@@ -366,7 +366,7 @@ impl TileKey {
     pub fn origin(self) -> [i32; 3] {
         [self.x * self.size(), 0, self.z * self.size()]
     }
-    fn parent(self) -> Self {
+    pub(crate) fn parent(self) -> Self {
         Self {
             x: self.x.div_euclid(2),
             z: self.z.div_euclid(2),
@@ -379,6 +379,12 @@ impl TileKey {
             z: self.z * 2 + (i >> 1) as i32,
             level: self.level - 1,
         })
+    }
+    /// The squared horizontal distance from `camera` to the tile's nearest point.
+    fn reach(self, camera: [i32; 2]) -> i64 {
+        let [x, _, z] = self.origin();
+        let gap = |c: i32, lo: i32| i64::from((lo - c).max(c - lo - self.size()).max(0));
+        gap(camera[0], x).pow(2) + gap(camera[1], z).pow(2)
     }
     fn distance(self, camera: [i32; 2]) -> i32 {
         let [x, _, z] = self.origin();
@@ -439,7 +445,9 @@ impl Plan {
         previous: &Self,
         reduced: bool,
     ) {
-        if key.distance(camera) > range {
+        // The range is a circle, as the renderer's: a tile leaves it, and
+        // fades out (gfx/lod.rs), as the player moves.
+        if key.reach(camera) > i64::from(range) * i64::from(range) {
             return;
         }
         self.nodes.insert(key);
@@ -1695,8 +1703,11 @@ mod tests {
                     }
                 }
                 let (full, reduced) = (leaves(&full), leaves(&reduced));
+                // At 64 chunks most tiles are the near area's finest, the
+                // same in both: about half there, well under from 128.
+                let bound = if distance == 64 { full * 21 / 20 } else { full };
                 assert!(
-                    reduced * 2 < full,
+                    reduced * 2 < bound,
                     "{reduced} of {full} tiles at {distance}"
                 );
             }
@@ -1831,8 +1842,9 @@ mod tests {
         let before = Plan::new([0, 0], 2, 256);
         let after = Plan::with_previous([16, 0], 2, 256, &before, 0, false);
         let mut retained = 0;
+        let range = i64::from(256 * 16);
         for key in &before.split {
-            if key.distance([16, 0]) < key.size() * 10 {
+            if key.distance([16, 0]) < key.size() * 10 && key.reach([16, 0]) <= range * range {
                 assert!(after.split.contains(key));
                 retained += 1;
             }
