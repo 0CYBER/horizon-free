@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 22 adds redstone from a mod's block (`native_block_signal`,
+//! `native_is_signal_source`, and the helper `native_update_signal_neighbors`).
+//!
 //! API 21 adds right clicking a block (`native_right_click_block`), and in
 //! `native_server.rs` the acting player (`native_acting_player`), a player's
 //! health, the action bar (`native_action_bar`) and commands run as the
@@ -111,7 +114,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 21;
+pub(crate) const NATIVE_HOOKS_API: u32 = 22;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -139,6 +142,36 @@ impl GameLevel<'_> {
         moved: bool,
     ) {
         let _ = (dimension, pos, state, changed, moved);
+    }
+
+    /// The redstone signal the block `state` at `pos` gives on its `face`, the
+    /// side that touches the block reading it: `BlockState.getDirectSignal`
+    /// when `direct` (what passes through a block it touches, as a lever's
+    /// does), else `getSignal`. `signal` holds vanilla's answer: change it when
+    /// the block is yours (0 to 15; anything else is clamped). Asked very often,
+    /// from inside the level's update, so answer from your own state: check the
+    /// block first, and don't read or change the world here. When the answer
+    /// changes, call `native_update_signal_neighbors`. Authoritative servers
+    /// only. API 22.
+    #[inline(always)]
+    pub(super) fn native_block_signal(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        face: Direction,
+        direct: bool,
+        signal: &mut i32,
+    ) {
+        let _ = (dimension, pos, state, face, direct, signal);
+    }
+
+    /// `BlockState.isSignalSource`: set `source` for a block of yours that
+    /// gives a signal, so redstone wire beside it connects to it. Authoritative
+    /// servers only. API 22.
+    #[inline(always)]
+    pub(super) fn native_is_signal_source(&self, state: BlockStateId, source: &mut bool) {
+        let _ = (state, source);
     }
 }
 
@@ -811,6 +844,27 @@ impl Game<'_> {
         };
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags::UPDATE_ALL))
+    }
+    /// The block at `pos` changed the signal it gives: its neighbours, and
+    /// theirs (a block it powers passes the signal on), read it again, as
+    /// around a lever (`Level.updateNeighborsAt`). API 22.
+    pub(super) fn native_update_signal_neighbors(&mut self, pos: [i32; 3]) {
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| {
+            let block = b.block(state);
+            b.update_neighbors_at(level, ticks, at, block);
+            for [x, y, z] in [
+                [0, -1, 0],
+                [0, 1, 0],
+                [0, 0, -1],
+                [0, 0, 1],
+                [-1, 0, 0],
+                [1, 0, 0],
+            ] {
+                b.update_neighbors_at(level, ticks, at.offset(x, y, z), block);
+            }
+        });
     }
     /// Runs `change` on the mod block entity at `pos` (a generator charging
     /// the machine beside it) and returns what it returns; none for any

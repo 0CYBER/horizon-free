@@ -107,6 +107,11 @@ output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player 
 tells a player why, even inside their own hook; and the players
 `native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
 
+API 22 adds redstone from a mod's block, on authoritative servers. `native_block_signal` may change the signal a block gives on
+a face, weak or direct, and `native_is_signal_source` lets redstone wire connect to it. Both are asked very often, so check the
+block first and answer from the mod's own state. When the output changes, `native_update_signal_neighbors` makes the blocks around
+it read it again. Bundles that use them need `"hooks": 22`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
