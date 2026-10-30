@@ -51,6 +51,7 @@ pub mod mipmap;
 pub mod mod_list;
 pub mod model_library;
 pub mod models;
+pub mod multiline_edit;
 pub mod options_file;
 pub mod options_fixes;
 pub mod options_ui;
