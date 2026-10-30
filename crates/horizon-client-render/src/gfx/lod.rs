@@ -3,7 +3,7 @@
 use super::{Frustum, Renderer, SectionGpu};
 use crate::{
     fast_hash::{FxHashMap, FxHashSet},
-    lod::TileKey,
+    lod::{MAX_LEVEL, TileKey},
     mesher::SectionMesh,
 };
 use glam::{DVec3, Vec3};
@@ -45,6 +45,35 @@ impl Pending {
 pub(super) struct Tile {
     pub mesh: SectionGpu,
     bounds: Bounds,
+    /// When it began to fade in; none while the rest of its job uploads.
+    shown: Option<Instant>,
+    /// When its replacements began to fade in; it goes once they have.
+    dying: Option<Instant>,
+    /// Its mesh before near chunks took some of its columns, drawn in its
+    /// place until they have faded in (from the job's end, the instant), so
+    /// no hole shows through them.
+    previous: Option<(SectionGpu, Option<Instant>)>,
+}
+
+/// How long a tile takes to fade in over the ones it replaces.
+const FADE: Duration = Duration::from_millis(600);
+
+/// A tile or section fading in: 0 drawn whole, else 1 + `level` * 65 +
+/// `shown`, `shown` 1 to 63 sixty-fourths of `FADE`. Chunk by chunk (columns
+/// of its own grid, wider for coarse tiles: 2^`level` blocks), each starting
+/// in turn over the first half and fading over the second, as a fine ordered
+/// pattern fixed to the terrain (terrain.wgsl's `faded`). It is drawn a hair
+/// toward the camera, the newest most, over the solid tiles it replaces,
+/// which stay until it is whole (`upload_lods`): no pixel fought over, no
+/// hole. None: nothing to draw yet.
+pub(super) fn fade_code(shown: Option<Instant>, level: u8, now: Instant) -> Option<u32> {
+    let faded = now.saturating_duration_since(shown?).as_secs_f32() / FADE.as_secs_f32();
+    let shown = (faded * 64.0) as u32 + 1;
+    Some(if shown >= 64 {
+        0
+    } else {
+        1 + u32::from(level) * 65 + shown
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -86,12 +115,19 @@ impl Bounds {
 }
 
 /// A tile's instance: like a section's, with the UV step of merged faces.
-pub(super) fn instance(origin: [f32; 3]) -> [f32; 4] {
+/// A fading tile's step is negated past its `fade_code`, which the shaders
+/// read back as the whole part (they take the step as `fract(abs(w))`).
+pub(super) fn instance(origin: [f32; 3], fade: u32) -> [f32; 4] {
+    let step = 1.0 / crate::mesher::TILED_UV_STEPS;
     [
         origin[0],
         origin[1],
         origin[2],
-        1.0 / crate::mesher::TILED_UV_STEPS,
+        if fade == 0 {
+            step
+        } else {
+            -(fade as f32 + step)
+        },
     ]
 }
 
@@ -99,45 +135,106 @@ pub(super) struct Visible {
     pub key: TileKey,
     pub distance: u64,
     pub origin: [f32; 3],
+    pub fade: u32,
+    /// Replaced, standing until its replacements are whole: its water goes
+    /// after theirs (`Renderer::render`'s water tiers), so depth leaves it only
+    /// where they have none yet.
+    pub old: bool,
 }
 
 impl Tile {
+    /// The mesh drawn this frame: the previous one while it stands in.
+    pub fn drawn(&self) -> &SectionGpu {
+        self.previous.as_ref().map_or(&self.mesh, |(mesh, _)| mesh)
+    }
+    pub fn drawn_mut(&mut self) -> &mut SectionGpu {
+        match &mut self.previous {
+            Some((mesh, _)) => mesh,
+            None => &mut self.mesh,
+        }
+    }
     pub fn visible(
         &self,
         key: TileKey,
         camera: DVec3,
         distance: f32,
         frustum: &Frustum,
+        now: Instant,
     ) -> Option<Visible> {
+        let fade = fade_code(self.shown, key.level, now)?;
         let origin = DVec3::from(key.origin().map(f64::from)) - camera;
         Some(Visible {
             key,
             distance: self.bounds.visible(origin, distance, frustum)?,
             origin: origin.as_vec3().to_array(),
+            fade,
+            old: self.dying.is_some() || self.previous.is_some(),
         })
     }
 }
 
 impl Renderer {
-    pub fn upload_lod(&mut self, key: TileKey, mesh: &SectionMesh) {
-        self.remove_lod(key);
-        if let Some(bounds) = Bounds::mesh(mesh)
-            && let Some(mesh) = self.upload_mesh(mesh)
-        {
-            self.lods.insert(key, Tile { mesh, bounds });
+    /// A tile meshed again (finer detail) takes its place at once, but for
+    /// one meshed around near chunks or finer tiles that are new (`keep`):
+    /// its old mesh stands in while they fade in. A new one waits for the rest of its job
+    /// (`upload_lods`), then fades in.
+    pub fn upload_lod(&mut self, key: TileKey, mesh: &SectionMesh, keep: bool) {
+        let (shown, previous) = match self.lods.remove(&key) {
+            Some(old) if old.dying.is_none() => match old.previous {
+                Some(previous) => {
+                    self.release_mesh(old.mesh);
+                    (old.shown, Some(previous))
+                }
+                None if keep => (old.shown, Some((old.mesh, None))),
+                None => {
+                    self.release_mesh(old.mesh);
+                    (old.shown, None)
+                }
+            },
+            Some(old) => {
+                self.release_tile(old);
+                (None, None)
+            }
+            None => (None, None),
+        };
+        match Bounds::mesh(mesh).zip(self.upload_mesh(mesh)) {
+            Some((bounds, mesh)) => {
+                self.lods.insert(
+                    key,
+                    Tile {
+                        mesh,
+                        bounds,
+                        shown,
+                        dying: None,
+                        previous,
+                    },
+                );
+            }
+            None => {
+                if let Some((previous, _)) = previous {
+                    self.release_mesh(previous);
+                }
+            }
+        }
+    }
+
+    fn release_tile(&mut self, tile: Tile) {
+        self.release_mesh(tile.mesh);
+        if let Some((previous, _)) = tile.previous {
+            self.release_mesh(previous);
         }
     }
 
     pub fn remove_lod(&mut self, key: TileKey) {
         if let Some(tile) = self.lods.remove(&key) {
-            self.release_mesh(tile.mesh);
+            self.release_tile(tile);
         }
     }
 
     pub fn clear_lods(&mut self) {
         self.lod_pending = None;
         for (_, tile) in std::mem::take(&mut self.lods) {
-            self.release_mesh(tile.mesh);
+            self.release_tile(tile);
         }
         self.set_lod_cutout(Default::default());
     }
@@ -160,14 +257,98 @@ impl Renderer {
     }
 
     /// Uploads queued tile meshes for about `budget` (at least one), then,
-    /// once all are in, retires the tiles they replace.
+    /// once all are in, fades them in over the tiles they replace.
     pub fn upload_lods(&mut self, budget: Duration) {
         let start = Instant::now();
+        let faded: Vec<_> = self
+            .lods
+            .iter()
+            .filter(|(_, tile)| tile.dying.is_some_and(|d| start - d >= FADE))
+            .map(|(&key, _)| key)
+            .collect();
+        for key in faded {
+            self.remove_lod(key);
+        }
+        let stood_in: Vec<_> = self
+            .lods
+            .values_mut()
+            .filter_map(|tile| match tile.previous {
+                Some((_, Some(since))) if start - since >= FADE => tile.previous.take(),
+                _ => None,
+            })
+            .collect();
+        for (previous, _) in stood_in {
+            self.release_mesh(previous);
+        }
+        // The columns near chunks take in this job, and the tiles holding the
+        // job's new finer ones: a tile meshed again around them keeps its
+        // old mesh until they are in, so no hole shows through them.
+        let mut around_new = FxHashSet::default();
+        let new = self
+            .lod_pending
+            .iter()
+            .flat_map(|pending| pending.meshes.keys())
+            .filter(|key| !self.lods.contains_key(key))
+            .chain(
+                self.lods
+                    .iter()
+                    .filter(|(_, tile)| tile.shown.is_none())
+                    .map(|(key, _)| key),
+            );
+        for &key in new {
+            let mut key = key;
+            while key.level < MAX_LEVEL && around_new.insert(key.parent()) {
+                key = key.parent();
+            }
+        }
+        let taken: Vec<_> = self
+            .lod_pending
+            .iter()
+            .flat_map(|pending| pending.cutout.iter().flatten())
+            .filter(|column| !self.lod_cutout.contains(column))
+            .copied()
+            .collect();
         while let Some(pending) = &mut self.lod_pending {
             let Some(&key) = pending.meshes.keys().next() else {
                 let pending = self.lod_pending.take().expect("pending tiles");
+                // A tile fades in over the ones it replaces. One over nothing
+                // shows whole: its hidden chunks would open holes to the sky
+                // or the sea bed (dark patches, as far terrain first loads).
+                let replaced: FxHashSet<TileKey> = pending
+                    .removed
+                    .iter()
+                    .copied()
+                    .filter(|key| self.lods.contains_key(key))
+                    .collect();
+                let mut above_replaced = FxHashSet::default();
+                for &key in &replaced {
+                    let mut key = key;
+                    while key.level < MAX_LEVEL && above_replaced.insert(key.parent()) {
+                        key = key.parent();
+                    }
+                }
+                let over_replaced = |key: TileKey| {
+                    let mut ancestor = key;
+                    replaced.contains(&key)
+                        || above_replaced.contains(&key)
+                        || (key.level..MAX_LEVEL).any(|_| {
+                            ancestor = ancestor.parent();
+                            replaced.contains(&ancestor)
+                        })
+                };
+                let whole = start.checked_sub(FADE).unwrap_or(start);
+                for (&key, tile) in &mut self.lods {
+                    if tile.shown.is_none() {
+                        tile.shown = Some(if over_replaced(key) { start } else { whole });
+                    }
+                    if let Some((_, since)) = &mut tile.previous {
+                        since.get_or_insert(start);
+                    }
+                }
                 for key in pending.removed {
-                    self.remove_lod(key);
+                    if let Some(tile) = self.lods.get_mut(&key) {
+                        tile.dying.get_or_insert(start);
+                    }
                 }
                 if let Some(cutout) = pending.cutout {
                     self.set_lod_cutout(cutout);
@@ -175,7 +356,13 @@ impl Renderer {
                 return;
             };
             let mesh = pending.meshes.remove(&key).expect("pending tile");
-            self.upload_lod(key, &mesh);
+            let [x, _, z] = key.origin();
+            let size = key.size();
+            let keep = around_new.contains(&key)
+                || taken.iter().any(|&(cx, cz)| {
+                    (x..x + size).contains(&(cx * 16)) && (z..z + size).contains(&(cz * 16))
+                });
+            self.upload_lod(key, &mesh, keep);
             if start.elapsed() >= budget {
                 return;
             }
@@ -203,6 +390,24 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
+
+    #[test]
+    fn tiles_fade_in_on_their_own_grid() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        // terrain.wgsl's `faded` reads the level and sixty-fourths back.
+        let decode = |code: u32| ((code - 1) / 65, (code - 1) % 65);
+        assert_eq!(fade_code(None, 0, at(0)), None, "waits for its job");
+        assert_eq!(fade_code(Some(start), 3, at(0)).map(decode), Some((3, 1)));
+        let mut last = 0;
+        for ms in [0, 100, 300, 500, 590] {
+            let (level, shown) = decode(fade_code(Some(start), 10, at(ms)).unwrap());
+            assert_eq!(level, 10);
+            assert!(shown > last && shown < 64, "{shown} at {ms} ms");
+            last = shown;
+        }
+        assert_eq!(fade_code(Some(start), 10, at(600)), Some(0), "whole");
+    }
 
     #[test]
     fn joined_jobs_apply_as_if_in_turn() {

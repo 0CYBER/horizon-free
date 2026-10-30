@@ -366,7 +366,7 @@ impl TileKey {
     pub fn origin(self) -> [i32; 3] {
         [self.x * self.size(), 0, self.z * self.size()]
     }
-    fn parent(self) -> Self {
+    pub(crate) fn parent(self) -> Self {
         Self {
             x: self.x.div_euclid(2),
             z: self.z.div_euclid(2),

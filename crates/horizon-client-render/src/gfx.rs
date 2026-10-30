@@ -154,12 +154,19 @@ fn world_pass_after_culling<'e>(
         ..Default::default()
     })
 }
-fn section_instance(origin: [f32; 3]) -> [f32; 4] {
+/// A section's instance: its camera-relative origin and its UV step, negated
+/// past its fade code while it fades in over far terrain (`lod::instance`).
+fn section_instance(origin: [f32; 3], fade: u32) -> [f32; 4] {
+    let step = 1.0 / crate::mesher::UV_STEPS;
     [
         origin[0],
         origin[1],
         origin[2],
-        1.0 / crate::mesher::UV_STEPS,
+        if fade == 0 {
+            step
+        } else {
+            -(fade as f32 + step)
+        },
     ]
 }
 /// A new value for `Renderer::block_entity_revision`.
@@ -210,6 +217,18 @@ struct SectionGpu {
     sorted_indices: Option<(u32, u64)>,
     /// Its id for flat draws (`flat::Flat::add`), when they are on.
     flat_id: Option<u32>,
+    /// When it began to fade in over the far terrain it replaces, which
+    /// stays whole behind it until then: a section new where far tiles are
+    /// drawn. Meshed again, it stays as it was.
+    fading: Option<std::time::Instant>,
+}
+impl SectionGpu {
+    /// Its fade code this frame (`lod::fade_code`), 0 once whole.
+    fn fade(&self, now: std::time::Instant) -> u32 {
+        self.fading
+            .and_then(|since| lod::fade_code(Some(since), 0, now))
+            .unwrap_or(0)
+    }
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
@@ -3101,8 +3120,14 @@ impl Renderer {
         if !self.lod_retiring.is_empty() {
             self.lod_retiring.remove(&key);
         }
+        let fading = match self.sections.find(key) {
+            Some(old) => old.fading,
+            None => (!self.lods.is_empty()).then(std::time::Instant::now),
+        };
         self.release_section(key);
-        let section = self.upload_mesh(mesh);
+        let section = self
+            .upload_mesh(mesh)
+            .map(|section| SectionGpu { fading, ..section });
         self.set_detail(
             key,
             section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()),
@@ -3192,6 +3217,7 @@ impl Renderer {
             ),
             sorted_indices,
             flat_id,
+            fading: None,
         })
     }
     /// The section copies recorded since the last submission, closed.
@@ -4072,15 +4098,16 @@ impl Renderer {
                 &mut visible,
             )
         });
+        let now = std::time::Instant::now();
         let mut visible_lods = std::mem::take(&mut self.visible_lods);
         visible_lods.clear();
         if frame.title {
             visible.clear();
         } else {
             visible_lods.extend(
-                self.lods
-                    .iter()
-                    .filter_map(|(&key, tile)| tile.visible(key, camera, frame.distance, &view)),
+                self.lods.iter().filter_map(|(&key, tile)| {
+                    tile.visible(key, camera, frame.distance, &view, now)
+                }),
             );
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }
@@ -4133,12 +4160,13 @@ impl Renderer {
             });
         }
         self.origins.clear();
+        let sections = &self.sections;
         self.origins.extend(
             visible
                 .iter()
-                .map(|v| section_instance(v.origin))
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin)))
-                .chain(shadow_visible.iter().map(|v| section_instance(v.origin))),
+                .map(|v| section_instance(v.origin, sections.get(v.slot).fade(now)))
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin, v.fade)))
+                .chain(shadow_visible.iter().map(|v| section_instance(v.origin, 0))),
         );
         if !self.origins.is_empty() {
             self.uploads.buffer(
@@ -4229,7 +4257,7 @@ impl Renderer {
         let tiles = self.draws.len();
         self.solid_runs.clear();
         for (i, v) in visible_lods.iter().enumerate() {
-            let s = &self.lods[&v.key].mesh;
+            let s = self.lods[&v.key].drawn();
             let start = self.draws.len();
             let instance = (visible.len() + i) as u32;
             facing_runs(&s.sides, eye, v.origin, |first, quads| {
@@ -4298,7 +4326,7 @@ impl Renderer {
         for (i, v) in visible_lods.iter().enumerate() {
             let instance = visible.len() + i;
             let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
-            let s = &mut tile.mesh;
+            let s = tile.drawn_mut();
             if let Some((index_page, index_start)) = s.sorted_indices {
                 let scheduled = (instance + count - self.translucency_cursor) % count < budget;
                 if (!s.sort.is_sorted() || scheduled)
@@ -4332,8 +4360,26 @@ impl Renderer {
         }
         // Near water and distant water share one back-to-front draw order.
         if self.translucent_draws.len() > section_translucent {
+            // Distant water goes after the near chunks', and replaced tiles'
+            // after all: each is a hair behind the one before, so depth leaves
+            // it only where that one has none. Back to front together, a far
+            // tile's water under a near chunk's (one fading in, or brought
+            // into view by a longer render distance) blended twice and looked
+            // opaque. The cost: far water just behind near water shows no
+            // surface of its own there.
+            let tier = |instance: usize| match instance.checked_sub(visible.len()) {
+                None => 0,
+                Some(tile) if visible_lods[tile].old => 2,
+                Some(_) => 1,
+            };
             self.translucent_draws
-                .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+                .sort_unstable_by_key(|&(distance, instance, ..)| {
+                    (
+                        tier(instance),
+                        std::cmp::Reverse(distance),
+                        std::cmp::Reverse(instance),
+                    )
+                });
         }
         for &(_, _, draw, pages) in &self.translucent_draws {
             self.draws.push(draw);
@@ -4724,12 +4770,15 @@ impl Renderer {
                             .iter()
                             .chain(&shadow_visible)
                             .filter_map(|v| {
-                                let id = sections.get(v.slot).flat_id?;
-                                Some((id, section_instance(v.origin)))
+                                let section = sections.get(v.slot);
+                                Some((
+                                    section.flat_id?,
+                                    section_instance(v.origin, section.fade(now)),
+                                ))
                             })
                             .chain(visible_lods.iter().filter_map(|v| {
-                                let id = lods[&v.key].mesh.flat_id?;
-                                Some((id, lod::instance(v.origin)))
+                                let id = lods[&v.key].drawn().flat_id?;
+                                Some((id, lod::instance(v.origin, v.fade)))
                             })),
                         |page| sorted.buffer(page).clone(),
                     )
