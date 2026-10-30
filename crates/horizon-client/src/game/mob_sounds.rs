@@ -1,6 +1,6 @@
 //! The looping sound instances of mobs: a bee's buzz
 //! (`ClientPacketListener.postAddEntitySoundInstance`) and a guardian's
-//! attack hum (entity event 21), and the happy ghast's riding sound. The
+//! attack hum (entity event 21), and the riding sound of a happy ghast or nautilus. The
 //! sound engine ticks them with what `start_mob_sounds` and
 //! `start_riding_sound` read off the mobs.
 use super::Game;
@@ -10,32 +10,49 @@ use horizon_client::{
 };
 
 impl Game<'_> {
-    /// `LocalPlayer.startRiding` on a happy ghast: its riding sound (a
-    /// minecart's are `start_cart_sounds`'). Then what the instance reads
-    /// about the mob the player rides.
+    /// `LocalPlayer.startRiding` on a happy ghast or an `AbstractNautilus`:
+    /// its riding sound (a minecart's are `start_cart_sounds`'). Then what the
+    /// instance reads about the mob the player rides.
     pub(super) fn start_riding_sound(&mut self) -> Option<RiddenSound> {
         let ridden = self
             .riding
             .and_then(|id| self.mobs.iter().find(|m| m.id == id && !m.removed))
             .map(|m| {
-                let ghast = m.species() == Species::HappyGhast;
+                let species = m.species();
                 let sound = RiddenSound {
                     id: m.id,
                     // Vec3.length.
                     speed: m.velocity.length(),
                     silent: m.silent,
+                    // Entity.isUnderWater: wasEyeInWater && isInWater.
+                    underwater: m.was_eye_in_water && m.fluids.in_water,
                 };
-                (ghast, sound)
+                (species, sound)
             });
-        let ghast = ridden.filter(|r| r.0).map(|r| r.1);
-        if let Some(sound) = ghast
-            && self.riding_ghast_sound != Some(sound.id)
+        let started = ridden
+            .filter(|r| {
+                matches!(
+                    r.0,
+                    Species::HappyGhast | Species::Nautilus | Species::ZombieNautilus
+                )
+            })
+            .map(|r| r.1);
+        if let Some(sound) = started
+            && self.riding_sound != Some(sound.id)
             && !sound.silent
         {
-            let instance = SoundInstance::riding_happy_ghast(&sound, SoundEngine::unseeded());
+            let nautilus = matches!(
+                ridden.map(|r| r.0),
+                Some(Species::Nautilus | Species::ZombieNautilus)
+            );
+            let instance = if nautilus {
+                SoundInstance::riding_nautilus(&sound, SoundEngine::unseeded())
+            } else {
+                SoundInstance::riding_happy_ghast(&sound, SoundEngine::unseeded())
+            };
             self.audio.play_instance(instance, false);
         }
-        self.riding_ghast_sound = ghast.map(|g| g.id);
+        self.riding_sound = started.map(|g| g.id);
         ridden.map(|r| r.1)
     }
     /// Start the buzz of each bee that has none (or whose anger changed, which
