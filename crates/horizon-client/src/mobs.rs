@@ -2152,6 +2152,8 @@ pub struct MobWorld<'a> {
     /// player in the level stands, alive or not (the despawn distance).
     pub nearest_player: Option<Vec3>,
     pub others: &'a [Seen],
+    /// The boats and rafts a lead can hang on (`Holder::Boat`): id and state.
+    pub leash_boats: &'a [(u32, leash::HolderState)],
     /// `others` by position, when the caller keeps one (the mob ticks).
     pub others_grid: Option<&'a seen_grid::SeenGrid>,
     /// Where each id stands in `others`, when the caller keeps one.
