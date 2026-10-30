@@ -328,7 +328,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
-          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls']
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'rocket-ceilings']
 
 
 class Game:
@@ -3588,6 +3588,39 @@ def check_rocket_walls(host, guest, out):
     return result
 
 
+def check_rocket_ceilings(host, guest, out):
+    """A rising rocket explodes on the block above only with explosions.
+
+    FireworkRocketEntity.tick: every rocket that isn't attached checks its move against blocks
+    (`getHitResultOnMoveVector`), not only one shot at an angle; onHitBlock: `hasExplosion()`. Launched from
+    the floor under a ceiling two blocks up, it reaches it in about 9 ticks; a plain one lives 20-31. Spans
+    are measured as in check_rocket_walls.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamemode creative')
+    host('command', command=f'fill {x - 2} {y - 1} {z + 1} {x + 2} {y - 1} {z + 5} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 1} {z + 5} minecraft:air')
+    host('command', command=f'fill {x - 2} {y + 2} {z + 1} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    plain = 'minecraft:firework_rocket'
+    star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
+    result = {}
+    for label, item in (('plain', plain), ('star', star)):
+        host('command', command=f'item replace entity @s weapon.mainhand with {item}')
+        host.wait(5)
+        replies = host.script([f'interact {x} {y - 1} {z + 3}'] + ['wait 1', 'status'] * 45, every=True)
+        samples = [(r['ticks'], r['rockets']) for r in replies if 'rockets' in r]
+        seen = [tick for tick, n in samples if n]
+        result[label] = {'span': seen[-1] - seen[0] if seen else None, 'samples': len(samples),
+                         'last': samples[-1][1], 'guest_last': guest('status')['rockets']}
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
+        f'a rocket outlived its lifetime: {result}')
+    assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the ceiling: {result}'
+    assert result['star']['span'] is not None and result['star']['span'] < 14, (
+        f'star rocket did not explode on the ceiling: {result}')
+    return result
+
+
 def check_sparks(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -5444,7 +5477,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'sidebar': check_sidebar,
              'border': check_border,
              'particles': check_particles, 'fireworks': check_fireworks,
-             'rocket-walls': check_rocket_walls}
+             'rocket-walls': check_rocket_walls, 'rocket-ceilings': check_rocket_ceilings}
 
 
 def run(ctl, out, resources, checks):
