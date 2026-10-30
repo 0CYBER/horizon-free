@@ -165,6 +165,8 @@ pub struct Audio {
     /// How many times each selection was stopped ("record *", "* minecraft:…", `*` for
     /// any), with or without an audio device, as `heard`.
     pub stopped: std::collections::BTreeMap<String, u32>,
+    /// The volume sliders' `SoundPreviewHandler`.
+    preview: crate::sound_preview::SoundPreview,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -634,6 +636,7 @@ impl Audio {
             capture: None,
             heard: Default::default(),
             stopped: Default::default(),
+            preview: Default::default(),
         }
     }
     #[cfg(not(feature = "audio"))]
@@ -816,6 +819,13 @@ impl Audio {
             ),
             false,
         );
+    }
+    /// `SoundPreviewHandler.preview`: a category volume slider moved to
+    /// `volume` on the title screen's options.
+    pub fn preview(&mut self, source: usize, volume: f32) {
+        let mut preview = std::mem::take(&mut self.preview);
+        preview.preview(self, source, volume);
+        self.preview = preview;
     }
     /// `play` with the seed a sound packet carries.
     pub fn play_seeded(

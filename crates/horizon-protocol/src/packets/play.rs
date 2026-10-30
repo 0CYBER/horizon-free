@@ -211,6 +211,18 @@ packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i1
 // ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
 // its entry lasts (0 ends it).
 packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
+packet!(
+    /// ClientboundCustomChatCompletionsPacket: how the server changes the
+    /// extra chat completions (`custom_chat_action`) and the entries.
+    CustomChatCompletions { action: i32 => VarInt, entries: Vec<String> => List<Str> }
+);
+/// ClientboundCustomChatCompletionsPacket.Action, by id (`ByIdMap.continuous`
+/// with `OutOfBoundsStrategy.ZERO`: an unknown id is `ADD`).
+pub mod custom_chat_action {
+    pub const ADD: i32 = 0;
+    pub const REMOVE: i32 = 1;
+    pub const SET: i32 = 2;
+}
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -307,6 +319,39 @@ impl Codec<PositionPath> for PositionPath {
 }
 packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPath, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool });
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
+packet!(
+    /// ClientboundChunksBiomesPacket.ChunkBiomeData: a column and its
+    /// sections' biome containers, in order (`extractChunkData`).
+    ChunkBiomeData { pos: [i32; 2] => ChunkPos, buffer: Vec<u8> => BytesN<2097152> }
+);
+impl ChunkBiomeData {
+    /// `LevelChunk.replaceBiomes`' read: `count` sections' biome
+    /// containers, one after another.
+    pub fn biomes(&self, count: usize, biome_bits: u8) -> Result<Vec<crate::chunk::Paletted>> {
+        let mut r = Reader::new(&self.buffer);
+        (0..count)
+            .map(|_| {
+                crate::chunk::Paletted::read(&mut r, crate::chunk::Strategy::Biomes, biome_bits)
+            })
+            .collect()
+    }
+    /// `extractChunkData`: the sections' biome containers, in order.
+    pub fn from_biomes(pos: [i32; 2], biomes: &[crate::chunk::Paletted]) -> Self {
+        let mut w = Writer::new();
+        for b in biomes {
+            b.write(&mut w);
+        }
+        Self {
+            pos,
+            buffer: w.data,
+        }
+    }
+}
+packet!(
+    /// ClientboundChunksBiomesPacket: columns whose biomes changed
+    /// (`/fillbiome`, through `ChunkMap.resendBiomesForChunks`).
+    ChunksBiomes { chunks: Vec<ChunkBiomeData> => List<ChunkBiomeData> }
+);
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
 packet!(
@@ -598,6 +643,11 @@ packet!(PlayerChat {
     filter: (i32, Vec<i64>) => FilterMask,
     chat_type: ChatTypeBound => ChatTypeBound,
 });
+packet!(
+    /// ClientboundDeleteChatPacket: the server deleted a player message,
+    /// named by its packed signature.
+    DeleteChat { signature: (i32, Option<Vec<u8>>) => PackedSignature }
+);
 packet!(PlayerCombatKill { id: i32 => VarInt, message: Tag => Nbt });
 packet!(PlayerInfoRemove { uuids: Vec<u128> => List<Uuid> });
 /// One ClientboundPlayerInfoUpdatePacket entry; fields are set for the
@@ -797,6 +847,11 @@ packet!(SetEquipment { id: i32 => VarInt, slots: Vec<(u8, Option<Stack>)> => Equ
 packet!(SetExperience { progress: f32 => Float, level: i32 => VarInt, total: i32 => VarInt });
 packet!(SetHealth { health: f32 => Float, food: i32 => VarInt, saturation: f32 => Float });
 packet!(SetHeldSlot { slot: i32 => VarInt });
+packet!(
+    /// ClientboundSetCameraPacket: the entity the view is attached to (the
+    /// player's own id puts it back on the player).
+    SetCamera { camera_id: i32 => VarInt }
+);
 packet!(SetPlayerInventory { slot: i32 => VarInt, item: Option<Stack> => Slot });
 packet!(
     /// ClockNetworkState for one world clock (registry id).
@@ -838,6 +893,11 @@ packet!(Sound {
     seed: i64 => Long,
 });
 packet!(SystemChat { content: Tag => Nbt, overlay: bool => Bool });
+packet!(
+    /// ClientboundTagQueryPacket: the answer to a debug NBT query (F3+I), with
+    /// the transaction it answers; `Tag::End` when there was no block entity.
+    TagQuery { transaction: i32 => VarInt, tag: Tag => Nbt }
+);
 packet!(TakeItemEntity { item: i32 => VarInt, player: i32 => VarInt, amount: i32 => VarInt });
 packet!(TeleportEntity {
     id: i32 => VarInt,
@@ -1840,11 +1900,14 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
     Cooldown(Cooldown) = COOLDOWN,
+    CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
+    DeleteChat(DeleteChat) = DELETE_CHAT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
     EntityEvent(EntityEvent) = ENTITY_EVENT,
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
+    ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
@@ -1891,6 +1954,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetBorderWarningDelay(SetBorderWarningDelay) = SET_BORDER_WARNING_DELAY,
     SetBorderWarningDistance(SetBorderWarningDistance) = SET_BORDER_WARNING_DISTANCE,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
+    SetCamera(SetCamera) = SET_CAMERA,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
     SetCursorItem(SetCursorItem) = SET_CURSOR_ITEM,
     SetDefaultSpawnPosition(SetDefaultSpawnPosition) = SET_DEFAULT_SPAWN_POSITION,
@@ -1925,6 +1989,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
+    TagQuery(TagQuery) = TAG_QUERY,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
     TickingState(TickingState) = TICKING_STATE,
@@ -2064,6 +2129,11 @@ packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Dou
 packet!(Attack { id: i32 => VarInt });
 packet!(TeleportToEntity { uuid: u128 => Uuid });
 packet!(
+    /// ServerboundSpectatorActionPacket: the entity a spectator clicked, or
+    /// none for a click on nothing.
+    SpectatorAction { target: Option<i32> => OptVarInt }
+);
+packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
 );
@@ -2163,6 +2233,16 @@ packet!(
 );
 packet!(SelectTrade { item: i32 => VarInt });
 packet!(
+    /// ServerboundBlockEntityTagQueryPacket: an operator's F3+I asks for the
+    /// block entity's data at a position.
+    BlockEntityTagQuery { transaction: i32 => VarInt, pos: [i32; 3] => Pos }
+);
+packet!(
+    /// ServerboundEntityTagQueryPacket: an operator's F3+I asks for an
+    /// entity's data, by its network id.
+    EntityTagQuery { transaction: i32 => VarInt, entity: i32 => VarInt }
+);
+packet!(
     /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
     /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
     ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
@@ -2181,11 +2261,133 @@ packet!(
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
 packet!(
+    /// ServerboundSetJigsawBlockPacket: the jigsaw block's edit screen. The
+    /// joint is `JointType.getSerializedName`; an unknown one reads as aligned.
+    SetJigsawBlock {
+        pos: [i32; 3] => Pos,
+        name: String => Ident,
+        target: String => Ident,
+        pool: String => Ident,
+        final_state: String => Str,
+        joint: String => Str,
+        selection_priority: i32 => VarInt,
+        placement_priority: i32 => VarInt
+    }
+);
+packet!(
+    /// ServerboundSetTestBlockPacket: the test block's edit screen; `mode` is
+    /// a `TestBlockMode` id.
+    SetTestBlock { pos: [i32; 3] => Pos, mode: i32 => VarInt, message: String => Str }
+);
+packet!(
+    /// ServerboundJigsawGeneratePacket: the jigsaw block's Generate button.
+    JigsawGenerate { pos: [i32; 3] => Pos, levels: i32 => VarInt, keep_jigsaws: bool => Bool }
+);
+packet!(
     /// ServerboundSetCommandBlockPacket: the command block's command, its
     /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
     /// conditional (2) and automatic (4) flags.
     SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
 );
+/// ServerboundSetStructureBlockPacket: the structure block's edit screen.
+/// `update_type` and `mode` are `StructureBlockEntity.UpdateType` and
+/// `StructureMode` ordinals, `mirror` and `rotation` the enums' ordinals.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetStructureBlock {
+    pub pos: [i32; 3],
+    pub update_type: i32,
+    pub mode: i32,
+    pub name: String,
+    pub offset: [i32; 3],
+    pub size: [i32; 3],
+    pub mirror: i32,
+    pub rotation: i32,
+    pub data: String,
+    pub ignore_entities: bool,
+    pub strict: bool,
+    pub show_air: bool,
+    pub show_bounding_box: bool,
+    pub integrity: f32,
+    pub seed: i64,
+}
+impl SetStructureBlock {
+    const FLAG_IGNORE_ENTITIES: i8 = 1;
+    const FLAG_SHOW_AIR: i8 = 2;
+    const FLAG_SHOW_BOUNDING_BOX: i8 = 4;
+    const FLAG_STRICT: i8 = 8;
+}
+impl Codec<SetStructureBlock> for SetStructureBlock {
+    /// `ServerboundSetStructureBlockPacket(FriendlyByteBuf)`: the offsets,
+    /// sizes and integrity are clamped as they are read.
+    fn read(r: &mut Reader) -> Result<Self> {
+        let pos = Pos::read(r)?;
+        let update_type = r.varint()?;
+        let mode = r.varint()?;
+        let name = r.string(32767)?;
+        let mut offset = [0; 3];
+        for v in &mut offset {
+            *v = i32::from(r.i8()?).clamp(-48, 48);
+        }
+        let mut size = [0; 3];
+        for v in &mut size {
+            *v = i32::from(r.i8()?).clamp(0, 48);
+        }
+        let mirror = r.varint()?;
+        let rotation = r.varint()?;
+        let data = r.string(128)?;
+        let integrity = r.f32()?.clamp(0.0, 1.0);
+        let seed = r.varlong()?;
+        let flags = r.i8()?;
+        Ok(Self {
+            pos,
+            update_type,
+            mode,
+            name,
+            offset,
+            size,
+            mirror,
+            rotation,
+            data,
+            ignore_entities: flags & Self::FLAG_IGNORE_ENTITIES != 0,
+            strict: flags & Self::FLAG_STRICT != 0,
+            show_air: flags & Self::FLAG_SHOW_AIR != 0,
+            show_bounding_box: flags & Self::FLAG_SHOW_BOUNDING_BOX != 0,
+            integrity,
+            seed,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        Pos::write(&v.pos, w);
+        w.varint(v.update_type);
+        w.varint(v.mode);
+        w.string(&v.name);
+        for o in v.offset {
+            w.i8(o as i8);
+        }
+        for s in v.size {
+            w.i8(s as i8);
+        }
+        w.varint(v.mirror);
+        w.varint(v.rotation);
+        w.string(&v.data);
+        w.f32(v.integrity);
+        w.varlong(v.seed);
+        let mut flags = 0;
+        if v.ignore_entities {
+            flags |= Self::FLAG_IGNORE_ENTITIES;
+        }
+        if v.show_air {
+            flags |= Self::FLAG_SHOW_AIR;
+        }
+        if v.show_bounding_box {
+            flags |= Self::FLAG_SHOW_BOUNDING_BOX;
+        }
+        if v.strict {
+            flags |= Self::FLAG_STRICT;
+        }
+        w.i8(flags);
+    }
+}
 packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
     /// the off hand), its pages and, to sign it, its title.
@@ -2310,7 +2512,10 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    BlockEntityTagQuery(BlockEntityTagQuery) = BLOCK_ENTITY_TAG_QUERY,
+    EntityTagQuery(EntityTagQuery) = ENTITY_TAG_QUERY,
     TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
+    SpectatorAction(SpectatorAction) = SPECTATOR_ACTION,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -2351,6 +2556,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     RenameItem(RenameItem) = RENAME_ITEM,
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
+    JigsawGenerate(JigsawGenerate) = JIGSAW_GENERATE,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
@@ -2358,6 +2564,9 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SetJigsawBlock(SetJigsawBlock) = SET_JIGSAW_BLOCK,
+    SetTestBlock(SetTestBlock) = SET_TEST_BLOCK,
+    SetStructureBlock(SetStructureBlock) = SET_STRUCTURE_BLOCK,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
     UseItemOn(UseItemOn) = USE_ITEM_ON,
@@ -2399,6 +2608,34 @@ mod tests {
         for len in 0..bytes.len() {
             assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
         }
+    }
+
+    #[test]
+    fn custom_chat_completions_are_an_action_and_a_string_list() {
+        // ClientboundCustomChatCompletionsPacket.STREAM_CODEC: Action.STREAM_CODEC
+        // (ByteBufCodecs.idMapper, a VarInt), then STRING_UTF8 in a list.
+        let payload = b"Steve#tag";
+        let packet = Clientbound::CustomChatCompletions(CustomChatCompletions {
+            action: custom_chat_action::SET,
+            entries: vec!["Steve".into(), "#tag".into()],
+        });
+        assert_eq!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                payload
+            )
+            .unwrap(),
+            packet
+        );
+        assert_eq!(&packet.encode()[1..], payload);
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        assert!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                &payload[..payload.len() - 1]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2605,6 +2842,18 @@ mod tests {
                 pitch: 2.0,
                 on_ground: true,
             }),
+            Clientbound::ChunksBiomes(ChunksBiomes {
+                chunks: vec![
+                    ChunkBiomeData {
+                        pos: [-3, 7],
+                        buffer: vec![0, 4, 1, 2],
+                    },
+                    ChunkBiomeData {
+                        pos: [i32::MAX, i32::MIN],
+                        buffer: Vec::new(),
+                    },
+                ],
+            }),
             Clientbound::ForgetLevelChunk(ForgetLevelChunk { pos: [-1, 2] }),
             Clientbound::GameEvent(GameEvent {
                 event: 13,
@@ -2692,6 +2941,12 @@ mod tests {
                 xp: 12,
                 show_progress: true,
                 can_restock: true,
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None),
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![9; 256])),
             }),
             Clientbound::PlayerChat(PlayerChat {
                 global_index: 0,
@@ -2890,6 +3145,27 @@ mod tests {
     }
 
     #[test]
+    fn delete_chat_decodes_a_packed_signature() {
+        use crate::ids::play::clientbound::DELETE_CHAT;
+        // MessageSignature.Packed: id + 1, so 5 names cache slot 4...
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &[5]).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None)
+            })
+        );
+        // ...and 0 carries the full 256-byte signature.
+        let mut full = vec![0];
+        full.extend([3; 256]);
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &full).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![3; 256]))
+            })
+        );
+    }
+
+    #[test]
     fn serverbound_round_trips() {
         let packets = vec![
             Serverbound::PingRequest(crate::packets::status::Ping { time: -7 }),
@@ -3050,6 +3326,54 @@ mod tests {
     }
 
     #[test]
+    fn debug_tag_queries_decode_as_their_packets() {
+        use crate::ids::play::{clientbound, serverbound};
+        // ServerboundBlockEntityTagQueryPacket: VarInt transaction, BlockPos.
+        let pos = [3, 64, -2];
+        let mut body = vec![7];
+        body.extend_from_slice(&crate::buf::pack_block_pos(pos).to_be_bytes());
+        let packet = Serverbound::decode(serverbound::BLOCK_ENTITY_TAG_QUERY, &body).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::BlockEntityTagQuery(BlockEntityTagQuery {
+                transaction: 7,
+                pos
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ServerboundEntityTagQueryPacket: VarInt transaction, VarInt entity id.
+        let packet = Serverbound::decode(serverbound::ENTITY_TAG_QUERY, &[0, 42]).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::EntityTagQuery(EntityTagQuery {
+                transaction: 0,
+                entity: 42
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ClientboundTagQueryPacket: VarInt transaction, then the nullable
+        // compound of FriendlyByteBuf.writeNbt (a bare End tag for null).
+        let packet = Clientbound::decode(clientbound::TAG_QUERY, &[1, 0]).unwrap();
+        assert_eq!(
+            packet,
+            Clientbound::TagQuery(TagQuery {
+                transaction: 1,
+                tag: Tag::End
+            })
+        );
+        let mut items = horizon_world::nbt::Compound::new();
+        items.insert("Lock".into(), Tag::String("key".into()));
+        round_trip(
+            Clientbound::TagQuery(TagQuery {
+                transaction: 2,
+                tag: Tag::Compound(items),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
     fn change_game_mode_uses_the_game_type_varint() {
         for mode in 0..=3 {
             let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
@@ -3098,6 +3422,90 @@ mod tests {
                     .unwrap(),
                 Clientbound::PlayerLookAt(p)
             );
+        }
+    }
+
+    /// ClientboundChunksBiomesPacket is read, not passed through as an
+    /// unknown packet: one column (1, -2) with two bytes of biomes.
+    #[test]
+    fn chunks_biomes_is_a_known_packet() {
+        let id = crate::ids::play::clientbound::CHUNKS_BIOMES;
+        let payload = [1, 0xFF, 0xFF, 0xFF, 0xFE, 0, 0, 0, 1, 2, 5, 6];
+        let p = Clientbound::decode(id, &payload).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert_eq!(p.encode()[1..], payload);
+        // Cut short, it is an error rather than a packet.
+        assert!(Clientbound::decode(id, &payload[..10]).is_err());
+    }
+
+    /// ClientboundChunksBiomesPacket.STREAM_CODEC: a list of (ChunkPos as
+    /// one long, x low and z high; `byteArray(2097152)`), the bytes being
+    /// each section's biome container (`ChunkBiomeData.extractChunkData`).
+    #[test]
+    fn chunks_biomes_wire_and_biomes() {
+        let p = Clientbound::ChunksBiomes(ChunksBiomes {
+            chunks: vec![ChunkBiomeData {
+                pos: [1, -2],
+                buffer: vec![5, 6],
+            }],
+        });
+        let bytes = p.encode();
+        assert_eq!(
+            bytes,
+            [
+                crate::ids::play::clientbound::CHUNKS_BIOMES as u8,
+                1,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFE,
+                0,
+                0,
+                0,
+                1,
+                2,
+                5,
+                6
+            ]
+        );
+        assert_eq!(
+            Clientbound::decode(bytes[0].into(), &bytes[1..]).unwrap(),
+            p
+        );
+        use crate::chunk::{Paletted, Strategy};
+        let sections = [
+            Paletted::from_values(&[3; 64], Strategy::Biomes, 6),
+            Paletted::from_values(
+                &(0..64).map(|i| i % 5).collect::<Vec<_>>(),
+                Strategy::Biomes,
+                6,
+            ),
+        ];
+        let data = ChunkBiomeData::from_biomes([4, 4], &sections);
+        assert_eq!(data.biomes(2, 6).unwrap(), sections);
+    }
+
+    /// ClientboundSetCameraPacket: one VarInt, the camera entity's id.
+    #[test]
+    fn set_camera_is_the_camera_entity_id() {
+        // 300 as a VarInt: 0xAC 0x02.
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::SET_CAMERA, &[0xAC, 0x02]).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert!(format!("{p:?}").contains("camera_id: 300"), "{p:?}");
+        assert_eq!(p.encode()[1..], [0xAC, 0x02]);
+    }
+
+    /// ServerboundSpectatorActionPacket: `OPTIONAL_VAR_INT`, the clicked
+    /// entity's id plus one, or 0 for a click on nothing.
+    #[test]
+    fn spectator_action_is_an_optional_entity_id() {
+        let id = crate::ids::play::serverbound::SPECTATOR_ACTION;
+        for (bytes, shown) in [([8u8], "Some(7)"), ([0u8], "None")] {
+            let p = Serverbound::decode(id, &bytes).unwrap();
+            assert!(!matches!(p, Serverbound::Unknown(..)), "{p:?}");
+            assert!(format!("{p:?}").contains(shown), "{p:?}");
+            assert_eq!(p.encode()[1..], bytes);
         }
     }
 
@@ -3261,6 +3669,89 @@ mod tests {
             Serverbound::CustomClickAction(CustomClickAction {
                 id: "minecraft:custom".into(),
                 payload: None,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+    }
+
+    #[test]
+    fn set_structure_block_round_trips_and_clamps_like_vanilla() {
+        let packet = SetStructureBlock {
+            pos: [-3, 70, 12],
+            update_type: 1,
+            mode: 0,
+            name: "minecraft:house".into(),
+            offset: [-48, 1, 48],
+            size: [0, 48, 5],
+            mirror: 2,
+            rotation: 3,
+            data: "meta".into(),
+            ignore_entities: true,
+            strict: false,
+            show_air: true,
+            show_bounding_box: true,
+            integrity: 0.5,
+            seed: -7,
+        };
+        round_trip(
+            Serverbound::SetStructureBlock(packet.clone()),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        // The flag byte: ignoreEntities 1, showAir 2, showBoundingBox 4, strict 8.
+        let mut w = Writer::new();
+        SetStructureBlock::write(&packet, &mut w);
+        assert_eq!(*w.data.last().unwrap(), 1 | 2 | 4);
+        // Offsets clamp to +-48, sizes to 0..=48 and the integrity to 0..=1.
+        let wild = SetStructureBlock {
+            offset: [-100, 100, 0],
+            size: [-5, 100, 7],
+            integrity: 4.0,
+            ..packet
+        };
+        let mut w = Writer::new();
+        SetStructureBlock::write(&wild, &mut w);
+        let read = SetStructureBlock::read(&mut Reader::new(&w.data)).unwrap();
+        assert_eq!(read.offset, [-48, 48, 0]);
+        assert_eq!(read.size, [0, 48, 7]);
+        assert_eq!(read.integrity, 1.0);
+    }
+
+    #[test]
+    fn set_test_block_round_trips() {
+        round_trip(
+            Serverbound::SetTestBlock(SetTestBlock {
+                pos: [1, 2, 3],
+                mode: 3,
+                message: "passed".into(),
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+    }
+
+    #[test]
+    fn jigsaw_packets_round_trip() {
+        round_trip(
+            Serverbound::SetJigsawBlock(SetJigsawBlock {
+                pos: [4, -60, 9],
+                name: "minecraft:bottom".into(),
+                target: "minecraft:top".into(),
+                pool: "minecraft:village/plains/houses".into(),
+                final_state: "minecraft:oak_planks".into(),
+                joint: "aligned".into(),
+                selection_priority: 3,
+                placement_priority: -2,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        round_trip(
+            Serverbound::JigsawGenerate(JigsawGenerate {
+                pos: [0, 64, 0],
+                levels: 20,
+                keep_jigsaws: true,
             }),
             Serverbound::encode,
             Serverbound::decode,

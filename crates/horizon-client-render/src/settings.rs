@@ -50,6 +50,9 @@ pub fn sound_source(event: &str) -> usize {
         index("ambient")
     } else if e.starts_with("music_disc.") {
         index("record")
+    } else if e.starts_with("item.goat_horn.") {
+        // InstrumentItem.play: SoundSource.RECORDS.
+        index("record")
     } else if e.starts_with("music.") {
         index("music")
     } else if e.starts_with("weather.") || e.starts_with("entity.lightning_bolt") {
@@ -830,6 +833,17 @@ mod tests {
         let again = Settings::parse(&out);
         assert_eq!(again.fov, 90.0);
         assert_eq!(again.keys.get("key.jump"), "key.keyboard.j");
+    }
+    #[test]
+    fn client_information_maps_the_stored_main_hand() {
+        // The Skin Customization option is stored by name; ClientInformation
+        // sends HumanoidArm (LEFT = 0, RIGHT = 1).
+        for (stored, arm) in [("left", 0), ("right", 1)] {
+            let s = Settings::parse(&format!("mainHand:{stored}\n"));
+            assert_eq!(s.client_information(10).main_hand, arm);
+            assert!(s.serialize().contains(&format!("mainHand:\"{stored}\"")));
+        }
+        assert_eq!(Settings::default().client_information(10).main_hand, 1);
     }
     #[test]
     fn no_options_txt_paces_frames_like_an_empty_one() {

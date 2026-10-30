@@ -77,6 +77,10 @@ impl StartupMenu {
             );
             title.last_server = settings.file.string("lastServer");
             title.skip_multiplayer_warning = settings.file.bool("skipMultiplayerWarning");
+            // Gui.addInitialScreens: the accessibility onboarding comes first.
+            if settings.file.bool("onboardAccessibility") {
+                title.start_onboarding();
+            }
             self.title = Some(title);
         }
     }
@@ -284,11 +288,12 @@ impl Loading {
                     Err(TryRecvError::Disconnected) => {
                         // The loader sends `Done` before it returns: it panicked.
                         let reason = match self.handle.take().map(JoinHandle::join) {
-                            Some(Err(payload)) => format!(": {}", panic_text(payload.as_ref())),
-                            _ => String::new(),
+                            Some(Err(payload)) => panic_text(payload.as_ref()).to_owned(),
+                            Some(Ok(())) => "it returned without a result".into(),
+                            None => "no loader thread was running".into(),
                         };
                         return Err(
-                            format!("resource loader stopped before finishing{reason}").into()
+                            format!("resource loader stopped before finishing: {reason}").into(),
                         );
                     }
                 }
@@ -434,8 +439,9 @@ impl Loading {
                 }
                 // Mods' settings pages open only in a running game.
                 Event::NativeSettings(_) | Event::NativeButton(..) => {}
-                // The startup menu runs before the game opens a control socket.
-                Event::ButtonClick | Event::CopyAgentDetails => {}
+                // The startup menu runs before the game opens a control socket,
+                // and before its sound engine (no clicks, no volume previews).
+                Event::ButtonClick | Event::CopyAgentDetails | Event::Volume(..) => {}
             }
         }
     }
@@ -463,6 +469,8 @@ impl Loading {
             Action::Options => self.open_menu_options(Page::Main),
             Action::Accessibility => self.open_menu_options(Page::Accessibility),
             Action::Language => self.open_menu_options(Page::Language),
+            Action::Sounds => self.open_menu_options(Page::Sound),
+            Action::Credits => self.open_menu_options(Page::Credits),
             Action::DataPacks { dir, selected } => {
                 let resources = self.vanilla_root.clone();
                 self.menu.options.open_data_packs(dir, selected, resources);
@@ -495,6 +503,14 @@ impl Loading {
         }
         match event {
             WindowEvent::CloseRequested => {
+                if !self.settings.quit_shortcuts
+                    && horizon_client::input::is_quit_shortcut_down(
+                        self.menu.modifiers,
+                        &self.menu.physical_keys,
+                    )
+                {
+                    return Ok(());
+                }
                 self.save_menu_settings();
                 event_loop.exit();
             }
@@ -683,6 +699,14 @@ impl Loading {
                 .draw(&self.settings, batch, &gui.atlas, self.menu.cursor);
         } else if let Some(title) = &mut self.menu.title {
             title.poll_backup();
+            if std::mem::take(&mut title.onboarding_finished) {
+                // Options.onboardingAccessibilityFinished.
+                self.settings.file.set(
+                    "onboardAccessibility",
+                    horizon_client::options_file::V::Bool(false),
+                );
+                self.settings.save(&Game::options_path());
+            }
             let _ = title.update_toast(self.settings.notification_display_time);
             title.draw(
                 &gui.atlas,
@@ -887,7 +911,7 @@ mod tests {
         let mut loading = loading(receiver);
         assert_eq!(
             loading.poll_menu_resources().unwrap_err().to_string(),
-            "resource loader stopped before finishing"
+            "resource loader stopped before finishing: no loader thread was running"
         );
     }
 }

@@ -109,6 +109,9 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
                 target: Who::Player,
                 ..
             }
+            | MobEvent::StabDismount {
+                target: Who::Player,
+            }
             | MobEvent::Ignite {
                 target: Who::Player,
                 ..
@@ -437,6 +440,7 @@ mod tests {
             sleeping: false,
             sleep_timer: 0,
             passenger: false,
+            vehicle: None,
         }
     }
 

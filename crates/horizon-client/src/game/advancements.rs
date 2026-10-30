@@ -81,14 +81,17 @@ impl Toast {
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
     pub(super) fall: Option<[f64; 3]>,
-    /// `currentExplosionImpactPos`, and whether a wind charge made the blast.
-    pub(super) blast: Option<([f64; 3], bool)>,
+    /// `currentExplosionImpactPos` and `currentExplosionCause` (the entity
+    /// that made the blast, if any).
+    pub(super) blast: Option<([f64; 3], Option<EntityView>)>,
     /// `enteredLavaOnVehiclePosition`.
     pub(super) lava_ride: Option<[f64; 3]>,
     /// `enteredNetherPosition`.
     pub(super) nether: Option<[f64; 3]>,
     /// The (effect, amplifier) pairs `EffectsChangedTrigger` last saw.
     pub(super) effects: Vec<(&'static str, i32)>,
+    /// `PlayerEffects::changes` as the last tick saw it.
+    pub(super) effect_changes: u32,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -407,6 +410,12 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| Box::new(self.mob_entity(m)))
+                .or_else(|| {
+                    self.boats
+                        .iter()
+                        .find(|b| b.id == id)
+                        .map(|b| Box::new(self.boat_entity(b)))
+                })
         });
         EntityView {
             kind: "minecraft:player".into(),
@@ -426,6 +435,33 @@ impl Game<'_> {
                 .map(|e| (format!("minecraft:{}", e.id), e.amplifier, e.duration))
                 .collect(),
             gamemode: Some(self.mode.name().to_owned()),
+            ..Default::default()
+        }
+    }
+    /// The player as a passenger of the vehicle `id` (`Entity.getPassengers`).
+    fn rider_entity(&self, id: u32) -> Option<EntityView> {
+        let p = self.player.as_ref().filter(|_| self.riding == Some(id))?;
+        Some(EntityView {
+            kind: "minecraft:player".into(),
+            position: [p.position.x, p.position.y, p.position.z],
+            gamemode: Some(self.mode.name().to_owned()),
+            ..Default::default()
+        })
+    }
+    /// A boat as the predicates see it: its type, and its passengers (the
+    /// mobs seated on it, then the player riding it).
+    pub(super) fn boat_entity(&self, b: &super::boats::Boat) -> EntityView {
+        EntityView {
+            kind: b.entity_type(),
+            position: [b.position.x, b.position.y, b.position.z],
+            on_ground: b.on_ground,
+            passengers: self
+                .mobs
+                .iter()
+                .filter(|m| m.extra.mount == Some(b.id))
+                .map(|m| self.mob_entity(m))
+                .chain(self.rider_entity(b.id))
+                .collect(),
             ..Default::default()
         }
     }
@@ -461,6 +497,13 @@ impl Game<'_> {
             components: horizon_client::mobs::finalize::variant_component(m)
                 .map(|(id, value)| (id.to_owned(), value))
                 .into_iter()
+                .collect(),
+            passengers: self
+                .mobs
+                .iter()
+                .filter(|r| r.extra.mount == Some(m.id))
+                .map(|r| self.mob_entity(r))
+                .chain(self.rider_entity(m.id))
                 .collect(),
             ..Default::default()
         }
@@ -773,10 +816,21 @@ impl Game<'_> {
     /// `KilledTrigger` (`player_killed_entity`): the entity killed and the
     /// killing blow's damage source (none: any `killing_blow` fails).
     pub(super) fn trigger_killed(&mut self, target: &EntityView, blow: Option<&adv::DamageView>) {
+        self.trigger_killed_as("minecraft:player_killed_entity", target, blow);
+    }
+    /// `KilledTrigger.trigger` for any of its three instances
+    /// (`player_killed_entity`, `entity_killed_player`,
+    /// `kill_mob_near_sculk_catalyst`).
+    pub(super) fn trigger_killed_as(
+        &mut self,
+        name: &str,
+        target: &EntityView,
+        blow: Option<&adv::DamageView>,
+    ) {
         let me = self.player_entity();
         let target = target.clone();
         let blow = blow.cloned();
-        self.trigger("minecraft:player_killed_entity", move |c, w| {
+        self.trigger(name, move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
                 origin: me.position,
@@ -843,13 +897,13 @@ impl Game<'_> {
         match (falling, self.adv.marks.fall) {
             (true, None) => {
                 self.adv.marks.fall = Some(at);
-                // The blast a wind charge made is spent by the fall, and counts
-                // only if the player was above where it hit.
-                if let Some((impact, wind_charge)) = self.adv.marks.blast.take()
-                    && wind_charge
+                // `trackStartFallingPosition`: the last blast is spent by the
+                // fall (whatever made it), and counts only if the player was
+                // above where it hit.
+                if let Some((impact, cause)) = self.adv.marks.blast.take()
                     && impact[1] <= at[1]
                 {
-                    self.trigger_fall_after_explosion(impact);
+                    self.trigger_fall_after_explosion(impact, cause);
                 }
             }
             // `resetFallDistance`: a fall ends by landing, climbing or water.
@@ -874,17 +928,31 @@ impl Game<'_> {
             self.adv.marks.nether = None;
             self.trigger_distance("minecraft:nether_travel", start);
         }
-        let effects: Vec<(&'static str, i32)> = self
-            .potions
+        let effects = self.effects_seen();
+        // `onEffectAdded`, `onEffectUpdated` (an `update` that changed the
+        // duration, amplifier or flags too) and `onEffectsRemoved`.
+        let changes = self.potions.effects.changes;
+        if effects != self.adv.marks.effects || changes != self.adv.marks.effect_changes {
+            self.adv.marks.effects = effects;
+            self.adv.marks.effect_changes = changes;
+            self.trigger_effects_changed(None);
+        }
+    }
+    /// The (effect, amplifier) pairs `marks.effects` compares.
+    fn effects_seen(&self) -> Vec<(&'static str, i32)> {
+        self.potions
             .effects
             .list
             .iter()
             .map(|e| (e.id, e.amplifier))
-            .collect();
-        if effects != self.adv.marks.effects {
-            self.adv.marks.effects = effects;
-            self.trigger_effects_changed(None);
-        }
+            .collect()
+    }
+    /// `EffectsChangedTrigger` for a change the caller knows the source of;
+    /// the end-of-tick check then does not fire it a second time.
+    pub(super) fn trigger_effects_changed_by(&mut self, source: Option<EntityView>) {
+        self.adv.marks.effects = self.effects_seen();
+        self.adv.marks.effect_changes = self.potions.effects.changes;
+        self.trigger_effects_changed(source);
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
     /// at `start`, and the `distance` from `start` to the player.
@@ -902,15 +970,12 @@ impl Game<'_> {
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
         });
     }
-    /// `FallAfterExplosionTrigger` for a wind charge's blast that hit the
-    /// player at `impact`, measured to where the player is now.
-    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3]) {
+    /// `FallAfterExplosionTrigger.trigger`: a blast that hit the player at
+    /// `impact` (made by `cause`, or by nothing), measured to where the
+    /// player is now. `matches` tests `cause` only when the instance has one,
+    /// and a missing cause fails it.
+    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3], cause: Option<EntityView>) {
         let me = self.player_entity();
-        let cause = EntityView {
-            kind: "minecraft:wind_charge".into(),
-            position: impact,
-            ..EntityView::default()
-        };
         self.trigger("minecraft:fall_after_explosion", move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
@@ -918,21 +983,24 @@ impl Game<'_> {
                 tool: None,
                 block_pos: None,
             };
-            let cctx = adv::Entities {
-                this: Some(&cause),
-                origin: me.position,
-                tool: None,
-                block_pos: None,
-            };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::location(&c["start_position"], impact, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], impact, me.position))
-                && adv::conditions(&c["cause"], &cctx, w)
+                && (c["cause"].is_null()
+                    || cause.as_ref().is_some_and(|cause| {
+                        let cctx = adv::Entities {
+                            this: Some(cause),
+                            origin: me.position,
+                            tool: None,
+                            block_pos: None,
+                        };
+                        adv::conditions(&c["cause"], &cctx, w)
+                    }))
         });
     }
     /// `EffectsChangedTrigger`: the player's `effects`, and for an effect that
     /// `source` gave, that entity (`source`).
-    pub(super) fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
+    fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
         let me = self.player_entity();
         self.trigger("minecraft:effects_changed", move |c, w| {
             let pctx = adv::Entities {
@@ -961,15 +1029,25 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && effects && source
         });
     }
-    /// `ItemDurabilityTrigger`: a player's item takes damage (`ItemStack.applyDamage`),
-    /// `stack` as it is before the damage. The durability and delta ranges are not
-    /// read: no advancement in the data uses them.
-    pub(super) fn trigger_item_durability(&mut self, stack: &ItemStack) {
+    /// `ItemDurabilityTrigger.trigger` and `TriggerInstance.matches`: a player's
+    /// item takes damage (`ItemStack.applyDamage`), `stack` as it is before the
+    /// damage and `new_damage` the unclamped damage value it is about to get.
+    /// `durability` tests `maxDamage - newDamage`, `delta` tests
+    /// `damageValue - newDamage`.
+    pub(super) fn trigger_item_durability(&mut self, stack: &ItemStack, new_damage: u32) {
         if self.remote.is_some() || self.no_player_here() {
             return;
         }
         let me = self.player_entity();
         let item = item_view(stack);
+        let max = self
+            .res
+            .items()
+            .get(&stack.item)
+            .map_or(0, |i| i.max_damage) as i64;
+        // ItemStack.getDamageValue clamps to 0..=getMaxDamage.
+        let damage = i64::from(stack.damage).clamp(0, max);
+        let new_damage = i64::from(new_damage);
         self.trigger("minecraft:item_durability_changed", move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
@@ -979,6 +1057,8 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &pctx, w)
                 && (c["item"].is_null() || adv::item(&c["item"], &item, w))
+                && adv::range_i(&c["durability"], max - new_damage)
+                && adv::range_i(&c["delta"], damage - new_damage)
         });
     }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with

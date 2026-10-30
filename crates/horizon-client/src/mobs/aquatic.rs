@@ -154,7 +154,25 @@ pub fn register(m: &mut Mob) {
             g.add(5, LookAtPlayer::new(6.0));
             g.add(5, super::dolphin::Jump::new(10));
             g.add(6, MeleeAttack::new(1.2, true));
-            m.ai.targets.add(1, HurtByTarget::new().alert());
+            g.add(8, super::dolphin::FollowPlayerRidden::new(false));
+            g.add(8, super::dolphin::FollowPlayerRidden::new(true));
+            // `Dolphin.registerGoals`: AvoidEntityGoal(Guardian.class, 8, 1, 1).
+            g.add(
+                9,
+                AvoidEntity::new(
+                    Avoid::Species(vec![S::Guardian, S::ElderGuardian]),
+                    8.0,
+                    1.0,
+                    1.0,
+                ),
+            );
+            // `HurtByTargetGoal(this, Guardian.class)`: guardians' hits are ignored.
+            m.ai.targets.add(
+                1,
+                HurtByTarget::new()
+                    .alert()
+                    .ignoring(&[S::Guardian, S::ElderGuardian]),
+            );
             m.ai.mov.kind = MoveKind::SmoothSwimming {
                 max_turn_x: 85.0,
                 max_turn_y: 10.0,
@@ -203,6 +221,13 @@ pub fn puff_scale(state: i32) -> f64 {
         _ => 1.0,
     }
 }
+/// `Tadpole.setAgeLockedData`: a golden dandelion flips the lock, puts the
+/// age back to 0 and starts the particle timer (40 ticks).
+pub fn set_age_locked_data(m: &mut Mob) {
+    m.extra.age_locked = !m.extra.age_locked;
+    m.extra.age = 0;
+    m.extra.age_lock_particle_timer = 40;
+}
 /// Species aiStep additions.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     use Species as S;
@@ -218,7 +243,12 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.extra.age += 1;
                 if m.extra.age >= 24_000 && !m.removed {
                     m.removed = true;
-                    m.sound("entity.tadpole.grow_up", events);
+                    // Tadpole.ageUp: playSound at its feet, volume 0.15 (not
+                    // when silent: Entity.playSound).
+                    if !m.silent {
+                        let at = [m.position.x, m.position.y, m.position.z];
+                        events.push(MobEvent::Sound("entity.tadpole.grow_up", at, 0.15, 1.0));
+                    }
                     events.push(MobEvent::SpawnKind {
                         kind: "minecraft:frog".into(),
                         at: [m.position.x, m.position.y, m.position.z],
@@ -240,6 +270,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.on_ground = false;
                 m.sound("entity.tadpole.flop", events);
             }
+            // Tadpole.aiStep: the age lock's particles, after the age.
+            super::ai::make_age_locked_particle(m, events);
         }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             // AbstractFish.aiStep flops on land (applied before travel next tick).
@@ -707,6 +739,9 @@ impl FollowFlockLeader {
 }
 impl Goal for FollowFlockLeader {
     goal_clone!();
+    fn set_start_delay(&mut self, ticks: i32) {
+        self.next_start = ticks;
+    }
     fn name(&self) -> &'static str {
         "FollowFlockLeaderGoal"
     }
@@ -729,20 +764,25 @@ impl Goal for FollowFlockLeader {
         // follow no one, in level order; itself as it is now.
         let species = m.species();
         let area = m.bounds().inflate(Vec3::new(8.0, 8.0, 8.0));
-        let candidates: Vec<(u32, Option<u32>, i32)> =
+        let mut near: Vec<&crate::mobs::Seen> =
             cx.w.others_near(area)
                 .filter(|s| s.species == species && s.alive && s.bounds.intersects(area))
-                .map(|s| {
-                    if s.id == m.id {
-                        (s.id, m.extra.leader, m.extra.followers)
-                    } else {
-                        (s.id, s.school.0, s.school.1)
-                    }
-                })
-                .filter(|&(_, leader, followers)| {
-                    can_be_followed(species, followers) || !follows(cx.w, leader)
-                })
                 .collect();
+        // `getEntitiesOfClass`: the sections by x, z, y; in each, as they entered it.
+        near.sort_by_key(|s| (s.section.0[0], s.section.0[2], s.section.0[1], s.section.1));
+        let candidates: Vec<(u32, Option<u32>, i32)> = near
+            .into_iter()
+            .map(|s| {
+                if s.id == m.id {
+                    (s.id, m.extra.leader, m.extra.followers)
+                } else {
+                    (s.id, s.school.0, s.school.1)
+                }
+            })
+            .filter(|&(_, leader, followers)| {
+                can_be_followed(species, followers) || !follows(cx.w, leader)
+            })
+            .collect();
         let (leader, school_size) = candidates
             .iter()
             .find(|c| can_be_followed(species, c.2))

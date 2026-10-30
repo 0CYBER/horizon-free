@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
+use horizon_launcher::github_mods;
 use horizon_launcher::instances;
 use horizon_launcher::loaders;
 use horizon_launcher::native_mods;
@@ -587,6 +588,40 @@ enum ModsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
+    /// Install a native mod from a GitHub link (docs/native-mods.md, "Install from GitHub"):
+    /// https://github.com/OWNER/REPO (its latest release, else its default branch),
+    /// .../releases/tag/TAG, .../tree/REF or .../commit/SHA. Resolved to an exact release file or
+    /// commit, checked like a registry mod. NOT reviewed by the Horizon registry
+    AddGithub {
+        url: String,
+        /// The mod to install when the link holds several
+        #[arg(long = "mod")]
+        mod_id: Option<String>,
+        /// Install every mod the link holds
+        #[arg(long)]
+        all: bool,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+        /// You read the mod's source (the link printed) and trust it with full access to this computer
+        #[arg(long)]
+        trust_native_code: bool,
+    },
+    /// Look for newer versions of the native mods installed from GitHub (the latest release, or the
+    /// default branch's head for a mod installed from a commit), and install them
+    UpdateGithub {
+        /// One mod (default: all of them)
+        id: Option<String>,
+        /// Only say what is newer
+        #[arg(long)]
+        check: bool,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+        /// You read the new source and trust it with full access to this computer
+        #[arg(long)]
+        trust_native_code: bool,
+    },
     /// Remove a pack the browser installed
     Remove {
         project: String,
@@ -724,6 +759,9 @@ enum Cmd {
         /// You read the mods' source and trust it with full access to this computer
         #[arg(long)]
         trust_native_code: bool,
+        /// Build mods made for different Horizon versions together anyway, on the newest of them
+        #[arg(long)]
+        allow_version_mismatch: bool,
     },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
@@ -1135,6 +1173,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             instance,
             version,
             trust_native_code,
+            allow_version_mismatch,
         } => {
             if !trust_native_code {
                 return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
@@ -1152,8 +1191,20 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     Some(&target),
                 ),
             };
-            let built = horizon_launcher::native_mods::build(&base, &folder, target, |step| {
-                eprintln!("{}", step.label())
+            let built = horizon_launcher::native_mods::build(
+                &base,
+                &folder,
+                target,
+                allow_version_mismatch,
+                |step| eprintln!("{}", step.label()),
+            )
+            .map_err(|e| {
+                match e.starts_with(horizon_launcher::native_mods::MISMATCH) {
+                    true => {
+                        format!("{e} They often still build: pass --allow-version-mismatch to try.")
+                    }
+                    false => e,
+                }
             })?;
             println!(
                 "{built} built and selected for its instance ({:.0} s).",
@@ -1958,6 +2009,60 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Installs the native mods of `found` (a GitHub link, resolved) into the game folder `home`: the
+/// warning and the exact source link first, and nothing downloaded without `trust`.
+fn github_native(
+    home: &Path,
+    java: bool,
+    found: &github_mods::Resolved,
+    only: Option<&str>,
+    all: bool,
+    trust: bool,
+) -> Result<(), String> {
+    if java {
+        return Err("Native mods from GitHub are for Horizon instances.".into());
+    }
+    println!("{}", found.label());
+    println!("Source, to read: {}", found.source_url());
+    eprintln!("{}", github_mods::WARNING);
+    if !trust {
+        return Err(format!(
+            "Read the source at {}, then pass --trust-native-code.",
+            found.source_url()
+        ));
+    }
+    let mods = github_mods::fetch(found)?;
+    let chosen = github_mods::choose(&mods, only, all);
+    let done = chosen.and_then(|chosen| {
+        chosen
+            .into_iter()
+            .map(|p| github_mods::install(home, found, p))
+            .collect::<Result<Vec<_>, _>>()
+    });
+    github_mods::discard(found);
+    for o in done? {
+        println!(
+            "Installed {} {} from GitHub ({}), sha256 {}.",
+            o.id,
+            o.version,
+            o.label(),
+            o.sha256
+        );
+    }
+    // A native mod turns Native mods on, with the window's notice, once.
+    let mut settings = backend::Settings::load();
+    if !settings.native_mods {
+        if !settings.native_mods_noticed {
+            eprintln!("{}", native_mods::NOTICE);
+        }
+        settings.native_mods = true;
+        settings.native_mods_noticed = true;
+        settings.save();
+    }
+    println!("Build it next: horizon-launcher native-build --trust-native-code");
+    Ok(())
+}
+
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     use horizon_launcher::browser::{horizon, installed, java_instance, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
@@ -1969,6 +2074,8 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
         | ModsCmd::Install { instance, .. }
         | ModsCmd::Update { instance, .. }
         | ModsCmd::Remove { instance, .. }
+        | ModsCmd::AddGithub { instance, .. }
+        | ModsCmd::UpdateGithub { instance, .. }
         | ModsCmd::Enable { instance, .. }
         | ModsCmd::Disable { instance, .. } => match instance {
             Some(name) => Some(instances::find(name)?),
@@ -2004,9 +2111,21 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             let list = installed::Installed::load(&home).entries;
             if as_json {
                 json(list.iter().map(entry_json).collect());
-            } else if list.is_empty() {
+            } else if list.is_empty() && github_mods::origins(&home).is_empty() {
                 println!(
                     "Nothing installed from the browser yet: horizon-launcher mods search <text>"
+                );
+            }
+            for o in horizon_launcher::github_mods::origins(&home)
+                .iter()
+                .filter(|_| !as_json && java.is_none())
+            {
+                println!(
+                    "{} {}  (native mod, from GitHub: {})\n  {}",
+                    o.id,
+                    o.version,
+                    o.label(),
+                    o.source_url()
                 );
             }
             for e in list.iter().filter(|_| !as_json) {
@@ -2288,6 +2407,64 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     }
                 }
             }
+        }
+        ModsCmd::AddGithub {
+            url,
+            mod_id,
+            all,
+            trust_native_code,
+            ..
+        } => {
+            let link = github_mods::parse(&url)?;
+            let found = github_mods::resolve(&link, &github_mods::api)?;
+            github_native(
+                &home,
+                java.is_some(),
+                &found,
+                mod_id.as_deref(),
+                all,
+                trust_native_code,
+            )?;
+        }
+        ModsCmd::UpdateGithub {
+            id,
+            check,
+            trust_native_code,
+            ..
+        } => {
+            if java.is_some() {
+                return Err("Native mods from GitHub are for Horizon instances.".into());
+            }
+            let mut origins = github_mods::origins(&home);
+            origins.retain(|o| id.as_deref().is_none_or(|i| o.id == i));
+            if origins.is_empty() {
+                return Err(match id {
+                    Some(i) => format!("{i} wasn't installed from GitHub."),
+                    None => "No native mod was installed from GitHub: horizon-launcher mods add-github <url>".into(),
+                });
+            }
+            for o in origins {
+                let latest = github_mods::resolve(&o.follows(), &github_mods::api)?;
+                if !github_mods::is_update(&o, &latest) {
+                    println!("{} {}: up to date ({}).", o.id, o.version, o.label());
+                    continue;
+                }
+                println!(
+                    "{}: {} is available (now {}).",
+                    o.id,
+                    latest.label(),
+                    o.label()
+                );
+                if !check {
+                    github_native(&home, false, &latest, Some(&o.id), false, trust_native_code)?;
+                }
+            }
+        }
+        ModsCmd::Remove { project, .. }
+            if java.is_none() && github_mods::origin(&home, &project).is_some() =>
+        {
+            github_mods::remove(&home, &project)?;
+            println!("Removed {project} (installed from GitHub).");
         }
         ModsCmd::Remove { project, .. } => {
             let e = match java {
@@ -3305,6 +3482,33 @@ mod tests {
             Some(ModsCmd::List { instance: None })
         ));
         assert!(parse(&[]).is_none());
+        match parse(&[
+            "add-github",
+            "https://github.com/a/b",
+            "--mod",
+            "zoom",
+            "--all",
+        ]) {
+            Some(ModsCmd::AddGithub {
+                url,
+                mod_id,
+                all,
+                trust_native_code,
+                ..
+            }) => assert_eq!(
+                (url.as_str(), mod_id.as_deref(), all, trust_native_code),
+                ("https://github.com/a/b", Some("zoom"), true, false)
+            ),
+            _ => panic!("expected mods add-github"),
+        }
+        assert!(matches!(
+            parse(&["update-github", "--check"]),
+            Some(ModsCmd::UpdateGithub {
+                check: true,
+                id: None,
+                ..
+            })
+        ));
         // Search names one for a Java instance's version and loader; Check reads none: checks
         // are shared.
         assert!(matches!(

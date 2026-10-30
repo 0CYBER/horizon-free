@@ -25,6 +25,12 @@ enum MendSlot {
     Armor(usize),
 }
 
+/// `Player.getDestroySpeed` multiplies by `BLOCK_BREAK_SPEED`; a player
+/// without the attribute keeps the vanilla default of 1.0.
+fn block_break_speed_factor(value: Option<f64>) -> f32 {
+    value.map_or(1.0, |value| value as f32)
+}
+
 impl Game<'_> {
     /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
     /// and mining fatigue.
@@ -38,6 +44,15 @@ impl Game<'_> {
                 .attribute_add(held, "minecraft:mining_efficiency") as f32;
         }
         speed * self.potions.effects.mining_speed_factor()
+    }
+    /// `Player.getDestroySpeed`'s final `Attributes.BLOCK_BREAK_SPEED` factor:
+    /// 1.0 by default, so a missing player or attribute changes nothing.
+    pub(super) fn block_break_speed(&mut self) -> f32 {
+        block_break_speed_factor(
+            self.player
+                .as_mut()
+                .and_then(|p| p.attribute("minecraft:block_break_speed").ok()),
+        )
     }
     /// `Attributes.SUBMERGED_MINING_SPEED` (0.2, raised by aqua affinity).
     pub(super) fn submerged_mining_speed(&self) -> f32 {
@@ -76,7 +91,7 @@ impl Game<'_> {
     pub(super) fn wear(&mut self, stack: &ItemStack, amount: u32) -> u32 {
         let loss = self.durability_loss(stack, amount);
         if loss > 0 {
-            self.trigger_item_durability(stack);
+            self.trigger_item_durability(stack, stack.damage + loss);
         }
         loss
     }
@@ -119,7 +134,7 @@ impl Game<'_> {
     /// enchantment, halved) plus 0.5 for a sprinting full-strength hit, and
     /// whether the hit is that knockback attack.
     pub(super) fn extra_knockback(&mut self, target_kind: &str, scale: f32) -> (f32, bool) {
-        let knockback_attack = scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting);
+        let sprinting = self.player.as_ref().is_some_and(|p| p.sprinting);
         let enchanted = match self.held().cloned() {
             Some(held) => {
                 let ctx = EffectContext {
@@ -140,8 +155,7 @@ impl Game<'_> {
             }
             None => 0.0,
         };
-        let bonus = if knockback_attack { 0.5 } else { 0.0 };
-        (enchanted / 2.0 + bonus, knockback_attack)
+        horizon_client::attack_strength::extra_knockback(enchanted, scale, sprinting)
     }
     /// `causeExtraKnockback`'s direction, `(sin yRot, -cos yRot)` from Mth's
     /// sine table: the target flies where the attacker looks, not away from
@@ -152,9 +166,11 @@ impl Game<'_> {
         (f64::from(trig::sin(yaw)), -f64::from(trig::cos(yaw)))
     }
     /// The attacker's side of `causeExtraKnockback` as the attacking client
-    /// sees it: the server's player stops sprinting, and its flag reaches the
-    /// client. (The server's 0.6 speed cut never does: the client's own
-    /// `Player.attack` simulates no hurt, so it skips the knockback.)
+    /// sees it after a hit on a mob: the server's player stops sprinting, and
+    /// its flag reaches the client. (The server's 0.6 speed cut never does:
+    /// the client's own `Player.attack` simulates no hurt on a mob, so it
+    /// skips the knockback. A hit on another player does simulate one:
+    /// `remote_player_attack`.)
     pub(super) fn stop_sprint_after_extra_knockback(&mut self) {
         if let Some(p) = self.player.as_mut() {
             let _ = p.set_sprinting(false);
@@ -760,6 +776,8 @@ impl Game<'_> {
                     0.8 + self.world.random.next_float() * 0.4,
                 );
             }
+            // LivingEntity.breakItem: the broken boots' five crumbs.
+            self.eat_particles(&stack, 5);
             self.apply_equipment();
         }
     }
@@ -1008,5 +1026,21 @@ fn location_requirements(req: &Value, on_ground: bool, riding: bool) -> bool {
                 && (p["minecraft:vehicle"].is_null() || riding)
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::block_break_speed_factor;
+
+    /// #4094: `BLOCK_BREAK_SPEED` is a multiplier on the destroy speed.
+    #[test]
+    fn block_break_speed_is_a_destroy_speed_multiplier() {
+        assert_eq!(block_break_speed_factor(None), 1.0);
+        assert_eq!(block_break_speed_factor(Some(1.0)), 1.0);
+        assert_eq!(block_break_speed_factor(Some(0.5)), 0.5);
+        assert_eq!(block_break_speed_factor(Some(2.0)), 2.0);
+        assert_eq!(8.0 * block_break_speed_factor(Some(0.5)), 4.0);
+        assert_eq!(8.0 * block_break_speed_factor(Some(2.0)), 16.0);
     }
 }
