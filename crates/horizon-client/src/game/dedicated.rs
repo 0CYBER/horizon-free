@@ -609,13 +609,9 @@ impl Game<'_> {
         // MinecraftServer.initializeKeyPair (only online mode uses it).
         log("INFO", "Generating keypair");
         let online = if props.online_mode {
-            let key = horizon_protocol::rsa::RsaPrivateKey::generate(1024)
-                .map_err(|e| format!("Failed to generate key pair: {e}"))?;
-            Some(Arc::new(OnlineMode {
-                public_der: key.public_der(),
-                key,
-                prevent_proxy: props.prevent_proxy_connections,
-            }))
+            Some(Arc::new(OnlineMode::generate(
+                props.prevent_proxy_connections,
+            )?))
         } else {
             None
         };
@@ -767,6 +763,8 @@ impl Game<'_> {
         self.sync_ops(&lists);
         if let Some(host) = self.lan.as_mut() {
             host.hub.spawn_protection = props.spawn_protection;
+            host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
+            host.hub.command_spam_threshold = props.command_spam_threshold_seconds.wrapping_mul(20);
         }
         log(
             "INFO",
