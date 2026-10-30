@@ -201,6 +201,21 @@ pub fn catch_stop_signals() {}
 /// 16% of a chunk's generation time), mimalloc keeps a heap per thread.
 pub use mimalloc::MiMalloc as Allocator;
 
+/// `mi_option_purge_delay` in mimalloc.h (index 15 in v2 and v3); the bindings
+/// don't name it.
+const PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+
+/// Set the allocator up, first thing in `main`: free pages go back to the OS
+/// at once instead of a second later. With mimalloc's delay the game held a
+/// quarter more memory than with the system heap; without it a few percent,
+/// and generation keeps most of its speed-up.
+pub fn configure_allocator() {
+    // SAFETY: sets one integer option, which mimalloc reads at each purge.
+    unsafe {
+        libmimalloc_sys::mi_option_set(PURGE_DELAY, 0);
+    }
+}
+
 /// Give back to the OS the memory the allocator holds free, after something
 /// large was dropped: mimalloc's free pages, then the system heap's, which
 /// native libraries still use: glibc keeps freed pages in the arena of the
@@ -309,5 +324,18 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// The option set is the purge delay: mimalloc v3's default for it is
+    /// 1000 ms, and it is 0 once configured.
+    #[test]
+    fn configuring_the_allocator_purges_at_once() {
+        // SAFETY: reads and sets one integer option.
+        let get = || unsafe { libmimalloc_sys::mi_option_get(super::PURGE_DELAY) };
+        if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+            assert_eq!(get(), 1000);
+        }
+        super::configure_allocator();
+        assert_eq!(get(), 0);
     }
 }
