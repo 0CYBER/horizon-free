@@ -466,7 +466,7 @@ impl Game<'_> {
         self.clear_lod();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
-            r.clear_sections();
+            r.clear_sections(self.world.layout());
         }
         self.apply_settings();
         self.clear_waypoints();
@@ -628,7 +628,7 @@ impl Game<'_> {
         self.clear_lod();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
-            r.clear_sections();
+            r.clear_sections(self.world.layout());
         }
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
@@ -1268,7 +1268,7 @@ impl Game<'_> {
             self.clear_lod();
             self.pending_uploads.clear();
             if let Some(renderer) = self.renderer.as_mut() {
-                renderer.clear_sections();
+                renderer.clear_sections(self.world.layout());
             }
         }
         let has_sky = self
