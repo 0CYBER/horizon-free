@@ -20,6 +20,19 @@ impl Hub {
         }
     }
 
+    /// `ChunkMap.sendToTrackingPlayers`: send to every placed guest that
+    /// tracks the entity `id`.
+    pub fn send_to_tracking(&self, id: i32, packet: &C) {
+        let body = packet.encode();
+        for g in self
+            .guests
+            .iter()
+            .filter(|g| self.here(g) && g.tracker.is_tracking(id))
+        {
+            g.sender.send(body.clone());
+        }
+    }
+
     /// Send to every placed guest within `range` blocks of `at`.
     pub fn broadcast_near(&self, at: [f64; 3], range: f64, packet: &C, except: Option<u32>) {
         let body = packet.encode();

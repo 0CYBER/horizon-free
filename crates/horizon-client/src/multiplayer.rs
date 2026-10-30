@@ -34,6 +34,15 @@ pub enum Ping {
         ms: u128,
         version: String,
     },
+    /// `ServerData.State.INCOMPATIBLE`: the server answered, but not with this
+    /// game's protocol (or only to the legacy ping).
+    Incompatible {
+        motd: Text,
+        players: Option<(i64, i64)>,
+        player_list: Vec<Text>,
+        /// `ServerData.version`, shown in red in place of the player count.
+        version: Text,
+    },
     Failed(String),
 }
 impl Ping {
@@ -199,6 +208,14 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
                             .map(|(online, _)| player_list(&json["players"], online))
                             .unwrap_or_default();
                         let version = json["version"]["name"].as_str().unwrap_or("?").to_owned();
+                        // ServerStatus.version absent: `multiplayer.status.old`
+                        // and protocol 0.
+                        let protocol = json["version"]["protocol"].as_i64().unwrap_or(0);
+                        let version_text = if json["version"].is_object() {
+                            Text::literal(version.clone())
+                        } else {
+                            Text::translate("multiplayer.status.old", &[])
+                        };
                         // A new favicon replaces the saved one (an invalid one
                         // clears it) and servers.dat is saved again.
                         if let Some(png) = favicon_bytes(&json) {
@@ -213,15 +230,38 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
                                 save_icon(&file, &address, icon);
                             }
                         }
-                        Ping::Ok {
-                            motd,
-                            players,
-                            player_list,
-                            ms,
-                            version,
+                        // OnlineServerEntry: SUCCESSFUL only for this game's protocol.
+                        if protocol == i64::from(horizon_protocol::PROTOCOL_VERSION) {
+                            Ping::Ok {
+                                motd,
+                                players,
+                                player_list,
+                                ms,
+                                version,
+                            }
+                        } else {
+                            Ping::Incompatible {
+                                motd,
+                                players,
+                                player_list,
+                                version: version_text,
+                            }
                         }
                     }
-                    Err(e) => Ping::Failed(e),
+                    // ClientStatusPacketListener.onDisconnect without a
+                    // status: pingLegacyServer.
+                    Err(e) => match crate::net::ping_legacy(&address, Duration::from_secs(5)) {
+                        Ok(legacy) => Ping::Incompatible {
+                            motd: Text::literal(legacy.motd),
+                            players: Some((
+                                i64::from(legacy.players),
+                                i64::from(legacy.max_players),
+                            )),
+                            player_list: Vec::new(),
+                            version: Text::literal(legacy.version),
+                        },
+                        Err(_) => Ping::Failed(e),
+                    },
                 };
                 pings.lock().unwrap().insert(address, result);
             });
@@ -425,6 +465,10 @@ fn ping_tooltip(
             &crate::lang::get_or("multiplayer.status.ping", "%s ms"),
             &[Text::literal(ms.to_string())],
         ),
+        Some(Ping::Incompatible { .. }) => Text::literal(crate::lang::get_or(
+            "multiplayer.status.incompatible",
+            "Incompatible version!",
+        )),
         Some(Ping::Failed(_)) => Text::literal(crate::lang::get_or(
             "multiplayer.status.no_connection",
             "(no connection)",
@@ -448,18 +492,23 @@ fn player_list_tooltip(
     let Row::Server(i) = row_at(servers.len(), 0, cursor, size, scroll)? else {
         return None;
     };
-    let Some(Ping::Ok {
-        players,
-        player_list,
-        ..
-    }) = pings.get(&servers[i].ip)
-    else {
-        return None;
+    let (status, player_list) = match pings.get(&servers[i].ip)? {
+        Ping::Ok {
+            players,
+            player_list,
+            ..
+        } => (Ping::player_count(*players), player_list),
+        Ping::Incompatible {
+            player_list,
+            version,
+            ..
+        } => (version.clone().with_color(crate::text::RED), player_list),
+        _ => return None,
     };
     let (top, _, left) = list_area(size.0, size.1);
     let icon_x = left + 2.0 + ROW_WIDTH - 4.0 - 15.0;
     let y = top + 4.0 - scroll.trunc() + i as f32 * ROW_HEIGHT;
-    let w = width(&Ping::player_count(*players)).ceil();
+    let w = width(&status).ceil();
     let x = icon_x - w - 5.0;
     if cursor.0 < x || cursor.0 >= x + w || cursor.1 < y || cursor.1 >= y + 8.0 {
         return None;
@@ -851,6 +900,11 @@ impl Screen {
                                             _ => 1,
                                         }
                                     ),
+                                ),
+                                Some(Ping::Incompatible { motd, version, .. }) => (
+                                    motd.resolve_legacy(),
+                                    version.clone().with_color(crate::text::RED),
+                                    "gui/sprites/server_list/incompatible".to_owned(),
                                 ),
                                 Some(Ping::Failed(_)) => (
                                     Text::translate("multiplayer.status.cannot_connect", &[])

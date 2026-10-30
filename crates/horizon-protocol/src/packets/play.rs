@@ -75,6 +75,9 @@ packet!(BlockChangedAck { sequence: i32 => VarInt });
 packet!(BlockDestruction { id: i32 => VarInt, pos: [i32; 3] => Pos, progress: u8 => UByte });
 packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => Nbt });
 packet!(BlockUpdate { pos: [i32; 3] => Pos, state: i32 => VarInt });
+// ClientboundAddTransientBlockPacket: a block the client shows for a moment
+// while its section mesh catches up (a falling block that landed).
+packet!(AddTransientBlock { pos: [i32; 3] => Pos, state: i32 => VarInt });
 packet!(ChangeDifficulty { difficulty: i32 => VarInt, locked: bool => Bool });
 // ResourceKey<GameRule<?>> is an identifier, followed by its string value.
 packet!(GameRuleEntry { name: String => Ident, value: String => Str });
@@ -2000,6 +2003,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
     LevelParticles(LevelParticles) = LEVEL_PARTICLES,
     Explode(Explode) = EXPLODE,
+    AddTransientBlock(AddTransientBlock) = ADD_TRANSIENT_BLOCK,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -2841,6 +2845,10 @@ mod tests {
                 data: 0,
             }),
             Clientbound::BlockUpdate(BlockUpdate {
+                pos: [-5, -60, 7],
+                state: 1,
+            }),
+            Clientbound::AddTransientBlock(AddTransientBlock {
                 pos: [-5, -60, 7],
                 state: 1,
             }),
