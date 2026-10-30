@@ -50,6 +50,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     m.invisible = invisible;
                 }
             }
+            // Entity.DATA_SILENT: Entity.isSilent, which keeps the sounds
+            // a client plays itself quiet (LivingEntity.breakItem's).
+            (4, Value::Bool(silent)) => m.silent = *silent,
             // Entity.DATA_POSE: the pose the species animates by.
             (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
@@ -124,6 +127,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
             (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // Bogged.DATA_SHEARED: the mushrooms on its head are gone.
+            (Species::Bogged, 16, Value::Bool(sheared)) => m.extra.sheared = *sheared,
             // Tadpole.AGE_LOCKED (after AbstractFish's FROM_BUCKET).
             (Species::Tadpole, 17, Value::Bool(locked)) => m.extra.age_locked = *locked,
             // MushroomCow.DATA_TYPE (after AgeableMob's DATA_BABY_ID and
@@ -148,7 +153,7 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.color = (*c & 15) as u8;
             }
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
-            (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
+            (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
@@ -462,6 +467,10 @@ pub(super) fn client_defaults(m: &mut Mob) {
         // Bat's constructor sets resting only on the server; the data default is 0.
         bat::set_resting(m, false);
     }
+    // A horse's jump strength until the server syncs its own: the type's.
+    if equine::moved_by_rider(m.species()) {
+        m.extra.vector[0] = m.kind.jump_strength;
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +501,23 @@ mod tests {
         let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
         client_defaults(&mut m);
         Some(m)
+    }
+
+    /// #2920: a server's horse is moved by its rider's client, which jumps
+    /// it by the type's jump strength (`createBaseHorseAttributes`,
+    /// `createBaseChestedHorseAttributes`) until the server syncs its own.
+    #[test]
+    fn a_servers_horse_jumps_its_types_strength() {
+        for (kind, strength) in [("horse", 0.7), ("donkey", 0.5), ("mule", 0.5)] {
+            let Some(m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert!(
+                (m.extra.vector[0] - strength).abs() < 1e-6,
+                "{kind}: {}",
+                m.extra.vector[0]
+            );
+        }
     }
 
     #[test]
@@ -566,6 +592,21 @@ mod tests {
         assert!(calf.is_baby());
         apply(&mut calf, &[(16, s::BOOLEAN, Value::Bool(false))]);
         assert!(!calf.is_baby());
+    }
+
+    #[test]
+    fn cube_mobs_receive_size_from_metadata() {
+        for kind in ["slime", "magma_cube", "sulfur_cube"] {
+            let Some(mut m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert_eq!(m.extra.size, 1);
+            apply(&mut m, &[(18, s::INT, Value::Int(2))]);
+            assert_eq!(m.extra.size, 2);
+            if kind == "sulfur_cube" {
+                assert!(!m.is_baby());
+            }
+        }
     }
 
     #[test]

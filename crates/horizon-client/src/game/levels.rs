@@ -112,6 +112,11 @@ pub(super) struct Levels {
 }
 
 impl Levels {
+    /// A parked level, without opening or loading it.
+    pub(super) fn parked_world(&self, dim: Dim) -> Option<&World> {
+        self.parked.get(&dim).map(|level| &level.world)
+    }
+
     /// The level not in place, in `dim`.
     pub(super) fn parked_mut(&mut self, dim: Dim) -> Option<&mut Parked> {
         self.parked.get_mut(&dim)
@@ -133,9 +138,11 @@ impl Game<'_> {
             &self.settings,
             &self.world_root,
             dim,
+            self.level_shapes.get(dim.id()),
             self.level.seed,
         )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
+        world.shape = self.level_shapes.get(dim.id());
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
             world,
@@ -365,8 +372,18 @@ impl Game<'_> {
             }
         }
         self.level_pass = Pass::default();
+        if result.is_err() {
+            self.native_lifecycle.cancel_server_tick();
+        }
         result?;
-        self.close_idle_levels()
+        if let Err(error) = self.close_idle_levels() {
+            self.native_lifecycle.cancel_server_tick();
+            return Err(error);
+        }
+        // `ServerTickEnd`: an errored tick or an idle-close failure (at
+        // the `?` above) never reaches this site.
+        self.native_lifecycle_server_tick_end(paused);
+        Ok(())
     }
 
     /// `tick_server` as a server thread runs it. With `HORIZON_SPIKES=MS`, a

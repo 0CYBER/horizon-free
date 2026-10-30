@@ -1426,6 +1426,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         } else if data.is(Class::Door) {
             self.set_block_and_update(above(pos), b.table.set_text(state, p.half, "upper"));
+        } else if data.is(Class::DriedGhast) {
+            // DriedGhastBlock.setPlacedBy: the place sound, the water one when waterlogged.
+            let sound = if b.table.bool(state, p.waterlogged) {
+                "minecraft:block.dried_ghast.place_in_water"
+            } else {
+                "minecraft:block.dried_ghast.place"
+            };
+            self.sound(pos, &sound.into(), 1.0, 1.0);
         } else if data.is(Class::PitcherCrop) {
         } else if data.is(Class::SmallDripleaf) {
             let above_pos = above(pos);
