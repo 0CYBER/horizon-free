@@ -1527,15 +1527,20 @@ suggestion list and clipboard keys.
 vanilla's own `CreativeModeTabs.tryRebuildTabContents` over the vanilla data
 pack's registries: every stack with its components, and for each stack of the
 search tab the creative tooltip lines and item tags that the client's search
-trees index. The search ports `refreshSearchResults` and `SessionSearchTrees`
+trees index. The tabs are built with permissions, and the export marks the
+stacks only that build lists (`permissions_only`): the operator tab and its
+stacks at the end of the search tab, shown while the player
+`canUseGameMasterBlocks` with the Operator Items Tab option on
+(`CreativeModeInventoryScreen.hasPermissions`, checked on opening and every
+tick as `tryRefreshInvalidatedTabs` does). The search ports `refreshSearchResults` and `SessionSearchTrees`
 (substring matches over tooltip lines; after a colon the item id's namespace,
 then its path or a line; tags after `#`), and the scrollbar follows
 `mouseClicked`/`mouseDragged`/`mouseScrolled`. `tools/test_creative_parity.py`
 compares every shown tab's stacks, the search tab and 6,793 searches (fixed
 queries, then every stack's item path and tooltip lines and every tag, whole
 and halved) with the vanilla client's own search trees
-(`VanillaCreativeSearchOracle`). Not compared: the operator tab (off by
-default, `operatorItemsTab`) and the saved hotbars tab.
+(`VanillaCreativeSearchOracle`), then again with permissions (13 tabs, 2,034
+search stacks, 6,845 searches). Not compared: the saved hotbars tab.
 
 ## Pillager patrols and raids
 

@@ -141,9 +141,7 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the creative tabs, the quit keys and the mouse
-                // don't read them yet.
-                | Opt::OperatorItemsTab
+                // Saved, but the quit keys and the mouse don't read them yet.
                 | Opt::QuitShortcuts
                 | Opt::CtrlClickEmulatesRightClick
         )
@@ -3432,6 +3430,16 @@ mod tests {
         assert!(!loaded.quit_shortcuts);
         assert!(loaded.ctrl_click_emulates_right_click);
         assert!(loaded.toggle_attack && loaded.toggle_use);
+    }
+
+    #[test]
+    fn operator_items_tab_option_can_be_switched() {
+        // The creative screen reads it (CreativeModeInventoryScreen.hasPermissions).
+        assert!(Opt::OperatorItemsTab.available());
+        let mut s = Settings::default();
+        assert!(!s.operator_items_tab);
+        Opt::OperatorItemsTab.cycle(&mut s, false, [854, 480]);
+        assert!(s.operator_items_tab);
     }
 
     #[test]
