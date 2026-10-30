@@ -5634,7 +5634,7 @@ mod breeding_tests {
 }
 
 #[cfg(test)]
-mod pearl_water_tests {
+mod pearl_tests {
     use super::*;
 
     /// A pearl's water test is `Entity.isInWater`: `wasTouchingWater` from the
