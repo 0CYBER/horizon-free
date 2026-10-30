@@ -96,6 +96,36 @@ impl Glint {
         ]
     }
 }
+/// The glint inputs of one frame, read once: `GameRenderer.extract` snapshots
+/// `glintSpeed` and `glintStrength` into `OptionsRenderState`
+/// (`extractOptions`), and `TextureTransform.setupGlintTexturing` reads
+/// `Util.getMillis()` once per glint render-type batch, not per item.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlintFrame {
+    /// `Util.getMillis()` this frame.
+    pub millis: f32,
+    /// `OptionsRenderState.glintSpeed`.
+    pub speed: f32,
+    /// `OptionsRenderState.glintStrength`.
+    pub alpha: f32,
+    /// The atlas has `misc/enchanted_glint_item`.
+    pub sprite: bool,
+}
+impl GlintFrame {
+    /// The glint at a texturing scale, if the atlas has its sprite.
+    pub fn glint(&self, scale: f32) -> Option<Glint> {
+        self.sprite.then_some(Glint {
+            speed: self.speed,
+            alpha: self.alpha,
+            millis: self.millis,
+            scale,
+        })
+    }
+    /// [`Glint::scroll_ticks`] for this frame.
+    pub fn scroll_ticks(&self) -> f32 {
+        Glint::scroll_ticks(self.millis, self.speed)
+    }
+}
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Foil {
@@ -862,6 +892,39 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One frame's glint is read once and shared: every item drawn from the
+    /// same `GlintFrame` scrolls by the same phase, and without the atlas
+    /// sprite no item gets a glint (`TextureTransform.setupGlintTexturing`
+    /// once per batch, `GameRenderer.extractOptions` once per frame).
+    #[test]
+    fn a_frame_glint_is_shared_by_every_item() {
+        let frame = GlintFrame {
+            millis: 123_456.0,
+            speed: 0.5,
+            alpha: 0.75,
+            sprite: true,
+        };
+        let world = frame.glint(0.5).expect("the atlas has the glint sprite");
+        assert_eq!(
+            (world.speed, world.alpha, world.millis),
+            (0.5, 0.75, 123_456.0)
+        );
+        assert_eq!(world.scale, 0.5);
+        let uvs: Vec<_> = (0..1000)
+            .map(|_| frame.glint(0.5).unwrap().uv([0.25, 0.75]))
+            .collect();
+        assert!(uvs.iter().all(|uv| *uv == uvs[0]));
+        assert_eq!(frame.scroll_ticks(), Glint::scroll_ticks(123_456.0, 0.5));
+        // 123456 ms * 0.5 * 8 = 493824 ticks, modulo 330000.
+        assert_eq!(frame.scroll_ticks(), 163_824.0);
+        let missing = GlintFrame {
+            sprite: false,
+            ..frame
+        };
+        assert!(missing.glint(0.5).is_none());
+        assert_eq!(missing.scroll_ticks(), frame.scroll_ticks());
+    }
 
     /// A bad item model surfaces only once items.json has loaded, so a broken
     /// items.json still reports itself first.

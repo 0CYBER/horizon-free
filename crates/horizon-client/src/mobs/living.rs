@@ -1280,6 +1280,8 @@ impl Mob {
             // Creaking.updateWalkAnimation walks the model faster.
             let target = if self.species() == super::Species::Creaking {
                 (distance * 25.0).min(3.0)
+            } else if self.species() == super::Species::Frog {
+                super::frog::walk_target(self, distance)
             } else {
                 (distance * 4.0).min(1.0)
             };

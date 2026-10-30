@@ -218,15 +218,15 @@ pub fn keeps_alive(m: &Mob, distance_squared: f64) -> bool {
 
 /// `Heightmap.Types.MOTION_BLOCKING_NO_LEAVES` position above (x, z).
 pub fn heightmap_pos(w: &MobWorld, x: i32, z: i32) -> [i32; 3] {
-    let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;
-    let y = (crate::chunk::MIN_Y..top)
+    let top = w.world.top_y();
+    let y = (w.world.bottom_y()..top)
         .rev()
         .find(|&y| {
             let f = w.facts.get(w.world.block(x, y, z));
             (f.full_collision || f.fluid != crate::blocks::Fluid::None)
                 && !f.name.ends_with("leaves")
         })
-        .map_or(crate::chunk::MIN_Y, |y| y + 1);
+        .map_or(w.world.bottom_y(), |y| y + 1);
     [x, y, z]
 }
 
@@ -380,8 +380,8 @@ impl Goal for ObtainBanner {
     fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
         !m.ai.nav.is_done() && state(m).is_some_and(|s| s.banner_at.is_some())
     }
-    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        m.nav_move_to_path(self.path_to_banner.take(), 1.15);
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to_path(cx.w, self.path_to_banner.take(), 1.15);
     }
 }
 

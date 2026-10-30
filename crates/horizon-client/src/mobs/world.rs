@@ -38,14 +38,14 @@ impl MobWorld<'_> {
     }
     /// `Heightmap.Types.MOTION_BLOCKING`: above the highest blocking block.
     pub fn motion_blocking_height(&self, x: i32, z: i32) -> i32 {
-        let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;
-        (crate::chunk::MIN_Y..top)
+        let top = self.world.top_y();
+        (self.world.bottom_y()..top)
             .rev()
             .find(|&y| {
                 let f = self.facts.get(self.world.block(x, y, z));
                 f.full_collision || f.fluid != crate::blocks::Fluid::None
             })
-            .map_or(crate::chunk::MIN_Y, |y| y + 1)
+            .map_or(self.world.bottom_y(), |y| y + 1)
     }
     /// BlockState.isSolid (the legacy solid flag).
     pub fn solid(&self, x: i32, y: i32, z: i32) -> bool {

@@ -78,27 +78,11 @@ impl LevelShape {
     pub fn has_section(self, y: i32) -> bool {
         (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
     }
-    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
-    /// old `DIM-1` and `DIM1`).
-    pub fn for_dir(root: &std::path::Path) -> Self {
-        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
-            Self::NETHER
-        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
-            Self::END
-        } else {
-            Self::OVERWORLD
-        }
-    }
     /// The sections a chunk of this level holds: the level's, widened to the
     /// vanilla Overworld's `-64..320` so that vanilla's Nether and End keep
     /// the 24 sections they have always had.
     pub fn column(self) -> ColumnLayout {
-        let low = self.min_y.min(MIN_Y);
-        let high = self.max_y().max(MIN_Y + HEIGHT);
-        ColumnLayout {
-            min_y: low,
-            sections: ((high - low) / 16) as usize,
-        }
+        ColumnLayout::of_level(self.min_y, self.height)
     }
 }
 
@@ -114,6 +98,16 @@ impl ColumnLayout {
         min_y: MIN_Y,
         sections: SECTIONS,
     };
+    /// The column of a level from `min_y`, `height` high
+    /// (`LevelShape::column`).
+    pub fn of_level(min_y: i32, height: i32) -> Self {
+        let low = min_y.min(MIN_Y);
+        let high = (min_y + height).max(MIN_Y + HEIGHT);
+        Self {
+            min_y: low,
+            sections: ((high - low) / 16) as usize,
+        }
+    }
     /// `DimensionType.MIN_Y`, `MAX_Y`: 12 bits of `BlockPos` Y, less 32.
     pub const LOWEST_Y: i32 = -2032;
     pub const HIGHEST_Y: i32 = 2031;
@@ -165,6 +159,13 @@ impl ColumnLayout {
     pub fn section_y(self, index: usize) -> i32 {
         self.min_y + index as i32 * 16
     }
+}
+/// `true` for each section of `layout`: what callers that keep no
+/// per-section record (of fluids, say) pass as "every section may have it".
+pub fn every_section(layout: ColumnLayout) -> &'static [bool] {
+    static ALL: [bool; crate::section_mask::SectionMask::CAPACITY] =
+        [true; crate::section_mask::SectionMask::CAPACITY];
+    &ALL[..layout.sections()]
 }
 impl Default for ColumnLayout {
     fn default() -> Self {

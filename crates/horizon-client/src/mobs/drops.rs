@@ -2,11 +2,15 @@
 //! killer's `killedEntity` hook (a charged creeper's head drop), then
 //! `dropAllDeathLoot`: the entity loot table (drawn from the world's random
 //! sequence), `Mob.dropCustomDeathLoot` (equipment by drop chance, with the
-//! entity random), the species' extra drops and the experience orbs.
+//! entity random), the species' extra drops (an enderman's carried block) and
+//! the experience orbs.
 use super::{Mob, Species, equine, gear, raider, render::DYE_NAMES, species};
 use crate::random_sequences::RandomSequences;
 use horizon_core::random::RandomSource;
-use horizon_world::loot::{EntityLootParams, LootDamage, LootData, LootEntity, LootStack};
+use horizon_world::{
+    loot::{EntityLootParams, LootDamage, LootData, LootEntity, LootStack},
+    registry::BlockStateId,
+};
 
 /// `DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE`.
 pub const DEFAULT_DROP_CHANCE: f32 = 0.085;
@@ -17,6 +21,9 @@ pub use horizon_world::loot::EQUIPMENT_SLOTS as SLOTS;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Drop {
     Item(LootStack),
+    /// `Enderman.dropCustomDeathLoot`: the carried block's own drops, rolled
+    /// with `enderman::carried_block_tool` (`enderman::carried_block_drops`).
+    CarriedBlock(BlockStateId),
     /// An experience orb of this value.
     Orb(i32),
 }
@@ -479,6 +486,12 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
             }
             out.push(Drop::Item(stack));
             clear_slot(m, slot);
+        }
+        // Enderman.dropCustomDeathLoot: after Monster's, the carried block.
+        if s == Species::Enderman
+            && let Some(state) = m.extra.carried
+        {
+            out.push(Drop::CarriedBlock(state));
         }
         // WitherBoss.dropCustomDeathLoot.
         if s == Species::Wither {
