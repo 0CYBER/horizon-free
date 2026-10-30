@@ -79,10 +79,10 @@ GoalSelector.removeGoal	missing		minor: no per-goal removal; callers (cat and oc
 GoalSelector.goalContainsAnyFlags	inline	crates/horizon-client/src/mobs/goals.rs::GoalSelector::tick	flags & disabled
 GoalSelector.goalCanBeReplacedForAllFlags	inline	crates/horizon-client/src/mobs/goals.rs::GoalSelector::tick	the replaceable check over the locked slots
 GoalSelector.tickRunningGoals	port	crates/horizon-client/src/mobs/goals.rs::GoalSelector::tick_running	
-GolemRandomStrollInVillageGoal	missing		player: iron golems stroll with a plain water-avoiding stroll, so they do not stay in the village or go towards villagers who want a golem
+GolemRandomStrollInVillageGoal	inline	crates/horizon-client/src/mobs/golem.rs::register_iron	a named Stroll with a gate and a position; tick for tick with vanilla in mob_ai iron_golem_village_*
 MeleeAttackGoal.checkAndPerformAttack	inline	crates/horizon-client/src/mobs/goals.rs::MeleeAttack::tick	reset cooldown, swing, do_hurt_target
 MeleeAttackGoal.canPerformAttack	inline	crates/horizon-client/src/mobs/goals.rs::MeleeAttack::tick	cooldown over, within melee range, line of sight
-MoveBackToVillageGoal	missing		player: iron golems outside a village never walk back towards it (goal missing from register_iron)
+MoveBackToVillageGoal	inline	crates/horizon-client/src/mobs/golem.rs::register_iron	a named Stroll with a gate and a position; tick for tick with vanilla in mob_ai iron_golem_village_*
 MoveThroughVillageGoal	missing		player: zombies never walk purposefully through a village towards its POIs and doors at night; they only wander (priority 6 goal missing; the raider variant is separate)
 MoveToBlockGoal.moveMobToBlock	inline	crates/horizon-client/src/mobs/goals.rs::MoveToBlock::start	nav_move_to the block centre one up
 MoveTowardsTargetGoal.start	inline	crates/horizon-client/src/mobs/golem.rs::MoveTowardsTarget::can_use	gap: minor: paths straight to the target entity in can_use, not to a random position towards it chosen in canUse

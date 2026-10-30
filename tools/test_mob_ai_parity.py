@@ -79,6 +79,16 @@ def scenarios():
         'player 12.5 -60 0.5',
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
+    # Village goals of iron golems (GolemRandomStrollInVillageGoal, MoveBackToVillageGoal; POIs: beds, a bell, a composter, a door).
+    VILLAGE = ['block 4 -60 0 minecraft:composter',
+               'block -4 -60 2 minecraft:red_bed[facing=north,part=foot]',
+               'block -4 -60 1 minecraft:red_bed[facing=north,part=head]',
+               'block 0 -60 -6 minecraft:bell',
+               'block 8 -60 -3 minecraft:oak_door[facing=east,half=lower]',
+               'block 8 -59 -3 minecraft:oak_door[facing=east,half=upper]']
+    for i, (x, seed) in enumerate([(0.5, 240), (6.5, 241)]):
+        add(f'iron_golem_village_{i}', 400, VILLAGE + [f'mob minecraft:iron_golem {x} -60 3.5 0 {seed} persistent'], 'difficulty=0')
+    add('iron_golem_outside_village', 400, VILLAGE + ['mob minecraft:iron_golem 30.5 -60 3.5 0 242 persistent'], 'difficulty=0')
     # The warden: idle, sniffing out a player, roaring and fighting (WardenAi).
     # Without finalizeSpawn's dig cooldown a warden digs straight back down. warden_player
     # and warden_cow stop before the first blow kills the player or the cow (the probe has no dying
