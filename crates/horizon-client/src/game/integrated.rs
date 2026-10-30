@@ -19,7 +19,6 @@ use super::{
 use horizon_client::{
     Result,
     audio::Audio,
-    hud::HudAtlas,
     lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
@@ -850,15 +849,7 @@ fn server_game(
     options: Options,
     settings: Settings,
 ) -> Result<Game<'_>> {
-    // It draws nothing: only the font, which books and chat measure with.
-    let atlas = HudAtlas::fonts(&options.resources)?;
-    let gui = UiResources {
-        atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-            size: 1,
-            pixels: [0u8; 4].repeat(6),
-        }),
-    };
+    let gui = UiResources::server(&options.resources)?;
     let audio = Audio::silent(&options.resources);
     Game::new(res, pack, gui, options, settings, audio, None)
 }

@@ -251,6 +251,7 @@ pub(super) fn spawn_loader(
                 &settings,
                 started,
                 true,
+                false,
                 &progress,
                 &mut |gui, root| {
                     let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
