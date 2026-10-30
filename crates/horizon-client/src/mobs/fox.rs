@@ -60,6 +60,31 @@ pub fn resets_x_rot(m: &Mob) -> bool {
     !flag(m, POUNCING | CROUCHING | INTERESTED | FACEPLANTED)
 }
 
+/// `Fox.populateDefaultEquipmentSlots`: one fox in five holds an emerald, an
+/// egg, rabbit feet or hide, wheat, leather or a feather in its mouth.
+pub fn populate_default_equipment(m: &mut Mob) {
+    if m.random.next_float() < 0.2 {
+        let odds = m.random.next_float();
+        let held = if odds < 0.05 {
+            "minecraft:emerald"
+        } else if odds < 0.2 {
+            "minecraft:egg"
+        } else if odds < 0.4 {
+            if m.random.next_boolean() {
+                "minecraft:rabbit_foot"
+            } else {
+                "minecraft:rabbit_hide"
+            }
+        } else if odds < 0.6 {
+            "minecraft:wheat"
+        } else if odds < 0.8 {
+            "minecraft:leather"
+        } else {
+            "minecraft:feather"
+        };
+        m.extra.main_hand = Some(held.into());
+    }
+}
 /// `Fox.registerGoals` and `setTargetGoals` (the targets wait for the variant:
 /// red foxes prefer chickens and rabbits, snow foxes fish).
 pub fn register(m: &mut Mob) {
@@ -88,7 +113,7 @@ pub fn register(m: &mut Mob) {
     g.add(6, SeekShelter::new(1.25));
     g.add(
         7,
-        Wrap::new(MeleeAttack::new(1.2, true))
+        Wrap::new(MeleeAttack::new(1.2, true).bite("entity.fox.bite"))
             .when(
                 |m| !flag(m, SITTING | SLEEPING | CROUCHING | FACEPLANTED),
                 false,
@@ -178,6 +203,12 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         } else if eaten > 560 && m.random.next_float() < 0.1 {
             let at = [m.position.x, m.position.y, m.position.z];
             events.push(MobEvent::Sound("entity.fox.eat", at, 1.0, 1.0));
+            // Fox.handleEntityEvent 45: the clients throw the crumbs of the food.
+            events.push(MobEvent::EntityEvent {
+                mob: m.id,
+                event: 45,
+                at,
+            });
         }
     }
     if !m.target_info(w).is_some_and(|t| t.alive) {

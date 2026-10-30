@@ -3,24 +3,78 @@
 //! jukeboxes and duplicate when given an amethyst shard mid-dance.
 use super::{
     Mob, MobEvent, MobWorld,
-    anim::{Poses, State},
+    anim::{Poses, State as AnimState},
     control::MoveKind,
     goals::{Cx, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, goal_clone},
     nav::NavKind,
 };
+use crate::sculk::{self, Context, Info};
 use horizon_core::geometry::Vec3;
 use horizon_core::geometry::trig::Mth;
 
 // Allay state: `main_hand` the held item, `ints[1]` how many it carries,
 // `tame` a liked player, `point` the wanted item (set by the game),
-// `home` the liked note block with `ints[2]` its cooldown, `ints[3]` the
-// pickup cooldown, `flag` dancing with `ints[4]` the dance clock,
+// `State::noteblock` the liked note block with `ints[2]` its cooldown,
+// `ints[3]` the pickup cooldown, `flag` dancing with `ints[4]` the dance clock,
 // `egg_time` the duplication cooldown. AnimState slots: holding (0),
 // spinning (1).
 pub const HOLD: usize = 0;
 pub const SPIN: usize = 1;
+/// `Allay.VibrationUser.VIBRATION_EVENT_LISTENER_RANGE`.
+const LISTENER_RADIUS: i64 = 16;
+
+/// `AllayAi.TIME_TO_FORGET_NOTEBLOCK`.
+const TIME_TO_FORGET_NOTEBLOCK: i32 = 600;
+/// `Allay.MAX_NOTEBLOCK_DISTANCE`.
+const MAX_NOTEBLOCK_DISTANCE: i32 = 1024;
+
+/// `GlobalPos`: a block position in a dimension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobalPos {
+    pub dimension: &'static str,
+    pub pos: [i32; 3],
+}
+impl GlobalPos {
+    /// `GlobalPos.isCloseEnough`: the same dimension and at most
+    /// `max_distance` blocks away on every axis (`Vec3i.distChessboard`).
+    pub fn is_close_enough(&self, dimension: &str, pos: [i32; 3], max_distance: i32) -> bool {
+        let chessboard = (0..3)
+            .map(|i| self.pos[i].wrapping_sub(pos[i]).wrapping_abs())
+            .max()
+            .unwrap_or(0);
+        self.dimension == dimension && chessboard <= max_distance
+    }
+}
+/// The identifier of a dimension as a `'static` string, for loading saves.
+pub fn dimension_id(id: &str) -> &'static str {
+    match id {
+        "minecraft:the_nether" => "minecraft:the_nether",
+        "minecraft:the_end" => "minecraft:the_end",
+        _ => "minecraft:overworld",
+    }
+}
+/// `Level.dimension` of the level the mob ticks in.
+pub fn dimension(w: &MobWorld) -> &'static str {
+    if w.nether {
+        "minecraft:the_nether"
+    } else if w.end {
+        "minecraft:the_end"
+    } else {
+        "minecraft:overworld"
+    }
+}
+
+/// An allay's vibration listener (`Allay.vibrationData`) and the brain
+/// memory `LIKED_NOTEBLOCK_POSITION`; `LIKED_NOTEBLOCK_COOLDOWN_TICKS` is
+/// `ints[2]`.
+#[derive(Clone, Debug, Default)]
+pub struct State {
+    pub vibration: sculk::Data,
+    pub noteblock: Option<GlobalPos>,
+}
 
 pub fn register(m: &mut Mob) {
+    m.extra.allay = Some(Box::default());
     m.ai.mov.kind = MoveKind::Flying {
         max_turn: 20.0,
         hovers: true,
@@ -37,16 +91,85 @@ pub fn register(m: &mut Mob) {
     g.add(5, LookAtPlayer::new(6.0));
     g.add(6, RandomLookAround::default());
 }
-/// Where carried items go: the liked note block, else the player.
-fn deposit(m: &Mob, cx: &Cx) -> Option<[f64; 3]> {
-    if let Some(h) = m.extra.home
+/// `Entity.blockPosition`.
+fn block_pos(m: &Mob) -> [i32; 3] {
+    [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ]
+}
+/// `Allay.VibrationUser.canReceiveVibration`: not without AI; with no liked
+/// note block any note will do, with one only that block's, while the allay
+/// is within 1024 blocks of it in its dimension (`liked_noteblock_position`).
+pub fn can_receive_vibration(m: &Mob, dimension: &str, pos: [i32; 3]) -> bool {
+    if m.no_ai {
+        return false;
+    }
+    let Some(liked_noteblock_position) = m.extra.allay.as_ref().and_then(|st| st.noteblock) else {
+        return true;
+    };
+    liked_noteblock_position.is_close_enough(dimension, block_pos(m), MAX_NOTEBLOCK_DISTANCE)
+        && liked_noteblock_position.pos == pos
+}
+/// `AllayAi.hearNoteblock`: an allay without a liked note block likes the
+/// one it heard (`liked_noteblock_position`) and waits 600 ticks
+/// (`liked_noteblock_cooldown_ticks`); one it already likes starts the wait over.
+pub fn hear_noteblock(m: &mut Mob, dimension: &'static str, pos: [i32; 3]) {
+    let heard = GlobalPos { dimension, pos };
+    let Some(st) = m.extra.allay.as_mut() else {
+        return;
+    };
+    let liked_noteblock_cooldown_ticks = TIME_TO_FORGET_NOTEBLOCK;
+    let liked_noteblock_position = st.noteblock;
+    match liked_noteblock_position {
+        None => {
+            st.noteblock = Some(heard);
+            m.extra.ints[2] = liked_noteblock_cooldown_ticks;
+        }
+        Some(liked) if liked == heard => m.extra.ints[2] = liked_noteblock_cooldown_ticks,
+        Some(_) => {}
+    }
+}
+/// `Allay.VibrationUser.onReceiveVibration`: a note block's note is heard.
+fn receive_vibration(m: &mut Mob, dimension: &'static str, info: Info) {
+    if info.event == "minecraft:note_block_play" {
+        hear_noteblock(m, dimension, info.pos.map(|v| v.floor() as i32));
+    }
+}
+/// `AllayAi.getItemDepositPosition` for the liked note block: the centre of
+/// the block above it while the allay is within 1024 blocks of it, it is
+/// still a note block and the cooldown runs (`shouldDepositItemsAtLikedNoteblock`),
+/// else the memory (`liked_noteblock_position`) is erased and the liked player
+/// is the target.
+pub fn noteblock_deposit(
+    m: &mut Mob,
+    dimension: &str,
+    is_note_block: impl Fn([i32; 3]) -> bool,
+) -> Option<[f64; 3]> {
+    let liked = m.extra.allay.as_ref()?.noteblock?;
+    if liked.is_close_enough(dimension, block_pos(m), MAX_NOTEBLOCK_DISTANCE)
+        && is_note_block(liked.pos)
         && m.extra.ints[2] > 0
     {
+        // `BlockPosTracker(pos.above())`: `Vec3.atCenterOf`.
         return Some([
-            f64::from(h[0]) + 0.5,
-            f64::from(h[1]) + 1.0,
-            f64::from(h[2]) + 0.5,
+            f64::from(liked.pos[0]) + 0.5,
+            f64::from(liked.pos[1]) + 1.5,
+            f64::from(liked.pos[2]) + 0.5,
         ]);
+    }
+    m.extra.allay.as_mut()?.noteblock = None;
+    None
+}
+/// `AllayAi.getItemDepositPosition`: the liked note block, else the player
+/// (`getLikedPlayerPositionTracker`).
+fn deposit(m: &mut Mob, cx: &Cx) -> Option<[f64; 3]> {
+    let dimension = dimension(cx.w);
+    if let Some(p) = noteblock_deposit(m, dimension, |p| {
+        cx.w.block_name(p[0], p[1], p[2]) == "minecraft:note_block"
+    }) {
+        return Some(p);
     }
     if !m.extra.tame {
         return None;
@@ -134,6 +257,78 @@ impl Goal for StayClose {
         }
     }
 }
+/// `VibrationSystem.Listener.handleGameEvent` for an allay: a free listener
+/// within 16 blocks of its eyes schedules the note block notes it can hear
+/// (`GameEventTags.ALLAY_CAN_LISTEN`). `occluded` is
+/// `VibrationSystem.Listener.isOccluded`.
+pub fn listen(
+    m: &mut Mob,
+    now: i64,
+    event: &'static str,
+    pos: [f64; 3],
+    ctx: &Context,
+    dimension: &str,
+    occluded: impl Fn([f64; 3], [f64; 3]) -> bool,
+) {
+    let eye = [m.position.x, m.eye_y(), m.position.z];
+    let Some(st) = m.extra.allay.as_ref() else {
+        return;
+    };
+    if st.vibration.current.is_some() {
+        return;
+    }
+    let block = |p: [f64; 3]| p.map(|v| i64::from(v.floor() as i32));
+    let (source, listener) = (block(pos), block(eye));
+    let d = [0, 1, 2].map(|i| source[i] - listener[i]);
+    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > LISTENER_RADIUS * LISTENER_RADIUS {
+        return;
+    }
+    if !sculk::valid_vibration(sculk::allay_can_listen(event), event, ctx)
+        || !can_receive_vibration(m, dimension, block(pos).map(|v| v as i32))
+        || occluded(pos, eye)
+    {
+        return;
+    }
+    let d = [pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]];
+    let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
+    if let Some(st) = m.extra.allay.as_mut() {
+        st.vibration.schedule(
+            Info {
+                event,
+                distance,
+                pos,
+                source: ctx.source,
+                owner: ctx.owner,
+            },
+            now,
+        );
+    }
+}
+/// `VibrationSystem.Ticker.tick` for an allay, run after the living tick as
+/// the server branch of its `tick` override does: it chooses a vibration, lets
+/// it travel to the eyes at a block a tick (the particle starts there) and
+/// hands it over on arrival.
+pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    let tick = m
+        .extra
+        .allay
+        .as_mut()
+        .map(|st| {
+            st.vibration
+                .tick(w.game_time, true, false, |d| d.floor() as i32)
+        })
+        .unwrap_or_default();
+    if let Some((info, travel)) = tick.started {
+        events.push(MobEvent::Vibration {
+            from: info.pos,
+            to: [m.position.x, m.eye_y(), m.position.z],
+            ticks: travel,
+        });
+    }
+    if let Some(info) = tick.received {
+        receive_vibration(m, dimension(w), info);
+    }
+}
 /// `Allay.travel`: `travelFlying(input, getSpeed())` — the airborne speed is
 /// the one the move control set this tick, and no gravity applies, so an
 /// allay never falls under its own travel.
@@ -174,7 +369,7 @@ pub fn animate(m: &mut Mob) {
     }
 }
 /// `AllayModel.setupAnim`.
-pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
+pub fn anim(m: &Mob, s: &AnimState, p: &mut Poses) {
     use std::f32::consts::PI;
     let (speed, pos) = (s.speed, s.pos);
     let flap_speed = (s.age * 20.0).to_radians() + pos;

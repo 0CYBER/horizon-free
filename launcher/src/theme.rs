@@ -8,9 +8,10 @@ use horizon_launcher::themes::Accent;
 use horizon_theme as tokens;
 use std::time::Duration;
 
-pub use tokens::night;
+pub use tokens::night::{self, Night};
 pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, LABEL, MICRO, TITLE, UI, WORDMARK};
 pub const FONT: &str = night::FONT;
+pub const DISPLAY_FONT: &str = night::DISPLAY_FONT;
 pub const MONO: &str = tokens::MONO;
 /// What the Blocks parts set in their pixel face (headings, navigation, buttons) until their
 /// screens are rebuilt: the night's UI family.
@@ -38,10 +39,8 @@ pub const STAGGER: Duration = tokens::STAGGER;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
-    /// The page behind everything (under its stone texture), and its colour as `0xRRGGBB` for
-    /// the texture.
+    /// The page behind everything the sky doesn't cover.
     pub page: Hsla,
-    pub page_rgb: u32,
     /// Hover plates, fields and the console: the raised panel colour.
     pub plate_soft: Hsla,
     /// Pressed plates, a switch that is off: the button colour.
@@ -71,6 +70,8 @@ pub struct Theme {
     pub face_bevel: Hsla,
     pub face_lip: Hsla,
     pub on_face: Hsla,
+    /// The night look's own tokens (the sky, plates with their opacity), for rebuilt screens.
+    pub night: Night,
     pub dark: bool,
 }
 
@@ -103,13 +104,12 @@ impl Theme {
         );
         let dark = pinned_dark(choice).unwrap_or(system_dark);
         let night = if dark { night::NIGHT } else { night::DAWN };
-        Self::from(accent.apply(night.blocks()))
+        Self::from(accent.apply(night.blocks()), night)
     }
 
-    fn from(p: tokens::Blocks) -> Self {
+    fn from(p: tokens::Blocks, night: Night) -> Self {
         Self {
             page: c(p.page),
-            page_rgb: p.page,
             plate_soft: c(p.raised),
             plate: c(p.button),
             surface: c(p.panel),
@@ -135,6 +135,7 @@ impl Theme {
             face_bevel: c(p.face_bevel),
             face_lip: c(p.face_lip),
             on_face: c(p.on_face),
+            night,
             dark: p.dark,
         }
     }
