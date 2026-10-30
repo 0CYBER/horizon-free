@@ -315,6 +315,7 @@ def scenarios():
     # scenario waits for #2720: a rearing horse is immobile (AbstractHorse.isImmobile).
     add('llama_hurt', 200, ['player 4.5 -60 0.5', 'mob minecraft:llama 0.5 -60 0.5 0 182 persistent']
         + [f'hurt {t} 0' for t in range(10, 190, 25)])
+    add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])
     # Chickens fleeing a hit (PanicGoal) beside a pool.
     for seed in range(191, 193):
         add(f'chicken_panic_{seed}', 60, ['fill -3 -61 -6 3 -61 6 minecraft:water',
