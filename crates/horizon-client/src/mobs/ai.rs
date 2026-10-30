@@ -997,6 +997,10 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Cat if !m.extra.tame => {
             super::finalize::variant_sound(m, "stray_ambient").unwrap_or("entity.cat.stray_ambient")
         }
+        // Fox.getAmbientSound: a sleeping fox makes its sleep sound.
+        Species::Fox if super::fox::flag(m, super::fox::SLEEPING) => "entity.fox.sleep",
+        // Turtle.getAmbientSound: the land ambient only on land and grown up, else silent.
+        Species::Turtle if m.fluids.in_water || !m.on_ground || m.is_baby() => return,
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
         // Turtle.getAmbientSound: only an adult on land makes a sound.
         Species::Turtle if turtle_ambient_silent(m) => return,
@@ -1039,6 +1043,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
         Species::Piglin => super::piglin::piglin_ambient(m, w),
         Species::Hoglin => super::piglin::hoglin_ambient(m, w),
+        // Zoglin.getAmbientSound: with an attack target, the angry sound.
+        Species::Zoglin if m.ai.target.is_some() => "entity.zoglin.angry",
         _ => voice_sounds(m)[0],
     };
     let _ = w;

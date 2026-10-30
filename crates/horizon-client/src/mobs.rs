@@ -2306,6 +2306,8 @@ impl Mob {
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
+        // IronGolem.hurtServer: the crack level before the damage, compared after.
+        let crackiness = (self.species() == Species::IronGolem).then(|| golem::crackiness(self));
         let mut amount = if reflected { 1000.0 } else { amount };
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
@@ -2437,6 +2439,15 @@ impl Mob {
                 }
             }
         }
+        // IronGolem.hurtServer: a new crack level plays the damage sound.
+        if let Some(before) = crackiness
+            && before != golem::crackiness(self)
+            && !self.silent
+        {
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox
+                .push(MobEvent::Sound("entity.iron_golem.damage", at, 1.0, 1.0));
+        }
         if self.has_effect("minecraft:infested") {
             self.outbox.push(MobEvent::Infested { mob: self.id });
         }
@@ -2511,7 +2522,11 @@ impl Mob {
         }
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
+    /// `Creaking.knockback`: a creaking that cannot move is not shoved.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
+        if creaking::is_creaking(self) && !creaking::can_move(self) {
+            return;
+        }
         let power = power * (1.0 - self.attrs.knockback_resistance);
         if power <= 0.0 {
             return;
