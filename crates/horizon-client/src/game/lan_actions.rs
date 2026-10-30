@@ -214,6 +214,24 @@ impl Rules for ItemRules<'_> {
     }
 }
 
+/// `Player.isWithinEntityInteractionRange(entity, buffer)` for a guest: the
+/// eyes closer than the entity interaction range (3, 5 in creative) plus
+/// `buffer` to the entity's box.
+pub(super) fn guest_within_entity_range(
+    g: &horizon_client::lan::guest::Guest,
+    bounds: &horizon_core::geometry::Aabb,
+    buffer: f64,
+) -> bool {
+    let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+    let (lo, hi) = (bounds.min_position(), bounds.max_position());
+    let d = [
+        eye[0] - eye[0].clamp(lo.x, hi.x),
+        eye[1] - eye[1].clamp(lo.y, hi.y),
+        eye[2] - eye[2].clamp(lo.z, hi.z),
+    ];
+    let range = if g.creative() { 5.0 } else { 3.0 } + buffer;
+    d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
+}
 fn direction(face: i32) -> [i32; 3] {
     match face {
         0 => [0, -1, 0],
@@ -982,18 +1000,7 @@ impl Game<'_> {
                     .find(|b| b.id as i32 == id)
                     .map(|b| b.bounds())
             });
-        let Some(b) = bounds else {
-            return false;
-        };
-        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-        let (lo, hi) = (b.min_position(), b.max_position());
-        let d = [
-            eye[0] - eye[0].clamp(lo.x, hi.x),
-            eye[1] - eye[1].clamp(lo.y, hi.y),
-            eye[2] - eye[2].clamp(lo.z, hi.z),
-        ];
-        let range = if g.creative() { 5.0 } else { 3.0 } + 4.0;
-        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
+        bounds.is_some_and(|b| guest_within_entity_range(g, &b, 4.0))
     }
 
     /// DedicatedServer.isUnderSpawnProtection: no operators, an operator or a
