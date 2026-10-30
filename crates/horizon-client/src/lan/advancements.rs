@@ -16,7 +16,7 @@ use std::{
 };
 
 pub struct ServerAdvancements {
-    tree: Tree,
+    tree: std::sync::Arc<Tree>,
     kids: Vec<Vec<usize>>,
     layout: Vec<Option<(i32, f32)>>,
     /// Recipe files by id.
@@ -35,7 +35,7 @@ pub struct FirstTick {
 
 impl ServerAdvancements {
     pub fn load(resources: &Path, overlay: &horizon_world::loot::PackOverlay) -> Self {
-        let tree = Tree::load_with(&resources.join("data"), overlay);
+        let tree = Tree::shared(&resources.join("data"), overlay);
         let kids = tree.children();
         let layout = tree.layout();
         let mut recipes = BTreeMap::new();
