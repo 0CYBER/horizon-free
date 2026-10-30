@@ -4963,6 +4963,9 @@ impl Game<'_> {
                 let player = self.use_context();
                 let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
                 let item = held.as_ref().map(|s| s.item.to_string());
+                let cake = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+                let adds_candle =
+                    self.with_level(|b, _, _| b.cake_candle_state(cake, item.as_deref()).is_some());
                 let result = self.with_level(|b, level, ticks| {
                     b.use_item_on(
                         level,
@@ -4975,6 +4978,15 @@ impl Game<'_> {
                     )
                 });
                 self.process_level_events()?;
+                // CakeBlock.useItemOn: the candle is used up and counted.
+                if adds_candle
+                    && result == horizon_world::level::InteractionResult::Success
+                    && let Some(used) = held.as_ref()
+                {
+                    self.stats.add("used", &used.item, 1);
+                    self.consume_held();
+                    self.trigger_block("minecraft:item_used_on_block", hit.pos, used);
+                }
                 // NoteBlock.useWithoutItem (tuned) and BellBlock.onHit (rung).
                 if result == horizon_world::level::InteractionResult::Success {
                     let name = self
