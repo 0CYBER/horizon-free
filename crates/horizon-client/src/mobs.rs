@@ -21,6 +21,7 @@ pub mod breeze;
 pub mod camel;
 pub mod caravan;
 pub mod control;
+pub mod conversion;
 pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
@@ -44,6 +45,7 @@ pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
 pub mod illusioner;
+pub mod item_break;
 pub mod keyframes;
 pub mod leash;
 pub mod living;
@@ -875,6 +877,10 @@ pub struct Extra {
     pub swing_stab: bool,
     pub flag: bool,
     pub flag2: bool,
+    /// `AbstractHorse.allowStandSliding`: the rider's jump sets it, and a
+    /// horse still rearing then goes on with the rider's keys until the rear
+    /// ends (`tick` clears it).
+    pub stand_sliding: bool,
     /// Species scratch values (the wither's head targets and clocks).
     pub ints: [i32; 6],
     pub counter: i32,
@@ -1303,6 +1309,15 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `AbstractCubeMob.dealDamage` on a mob (an iron golem it touches): the
+    /// hit, then, only when `hurtServer` let it land, the cube's
+    /// `entity.slime.attack` with its pitch drawn from the cube's random.
+    CubeHurtMob {
+        cube: u32,
+        target: u32,
+        amount: f32,
+        source: Damage,
+    },
     /// `LivingEntity.stabAttack`'s `target.stopRiding()`: a spear knocks the
     /// target off its mount.
     StabDismount {
@@ -1349,6 +1364,14 @@ pub enum MobEvent {
         kind: String,
         at: [f64; 3],
         setup: SpawnSetup,
+    },
+    /// `Mob.convertTo` with `ConversionType.SINGLE` ([`conversion::single`]):
+    /// a new mob of `kind` takes the place of `from` (already removed) and
+    /// keeps its gear, name and flags.
+    Convert {
+        from: Box<Mob>,
+        kind: &'static str,
+        params: conversion::Params,
     },
     DropItem {
         item: Arc<str>,
@@ -1610,6 +1633,13 @@ pub enum MobEvent {
     /// `Panda.afterSneeze`: the grown pandas within 10 blocks start.
     PandaSneezed {
         mob: u32,
+    },
+    /// `Entity.propagateFallToPassengers`: the mob landed and what rides it
+    /// (a player or a mob) takes `causeFallDamage` of the same fall.
+    FallToPassengers {
+        mob: u32,
+        distance: f64,
+        modifier: f32,
     },
 }
 /// How a spawned-by-kind mob should be set up.

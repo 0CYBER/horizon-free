@@ -35,6 +35,10 @@ pub struct EntityMemory {
     /// the dragon): the UUID and compound they were loaded with, found again by
     /// type and position (an entity that has moved since loading is saved afresh).
     anon: HashMap<(String, [u64; 3]), (Vec3, Option<[i32; 4]>, Tag)>,
+    /// UUIDs of the vehicles `restore_saved_vehicle` brought in from the
+    /// player's file: their chunk copies must not spawn a second one. Cleared
+    /// with the rest when a world closes.
+    restored: HashSet<[i32; 4]>,
 }
 
 fn anon_key(kind: &str, p: Vec3) -> (String, [u64; 3]) {
@@ -249,12 +253,17 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
+                if uuid.is_some_and(|u| self.restored_vehicle(u).is_some()) {
+                    continue;
+                }
                 if matches!(
                     kind.as_str(),
                     "minecraft:experience_orb"
                         | "minecraft:arrow"
                         | "minecraft:fireball"
                         | "minecraft:small_fireball"
+                        | "minecraft:wind_charge"
+                        | "minecraft:breeze_wind_charge"
                         | "minecraft:falling_block"
                         | "minecraft:end_crystal"
                         | "minecraft:ender_dragon"
@@ -294,7 +303,10 @@ impl Game<'_> {
                             self.add_projectile(p);
                         }
                     }
-                    "minecraft:fireball" | "minecraft:small_fireball" => {
+                    "minecraft:fireball"
+                    | "minecraft:small_fireball"
+                    | "minecraft:wind_charge"
+                    | "minecraft:breeze_wind_charge" => {
                         if let Some(p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
                             self.add_projectile(p);
                         }
@@ -466,8 +478,11 @@ impl Game<'_> {
     }
     /// A saved mob and, under `Passengers`, the mobs riding it.
     pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
-        self.next_entity += 1;
         let uuid = entity_nbt::uuid(&tag);
+        if let Some(id) = uuid.and_then(|u| self.restored_vehicle(u)) {
+            return Some(id);
+        }
+        self.next_entity += 1;
         // Structure mobs that generation left to finish: saves from before
         // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
@@ -638,6 +653,86 @@ impl Game<'_> {
             i = j;
         }
         i
+    }
+    /// `RootVehicle.Attach` names the immediate mount, not the root of its tree.
+    pub(super) fn root_vehicle_uuid(&mut self, id: Option<u32>) -> Option<[i32; 4]> {
+        Some(self.uuid_for(id?))
+    }
+    /// The vehicle with this UUID, among the ones in the world.
+    pub(super) fn vehicle_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        let id = *self
+            .persist
+            .uuids
+            .iter()
+            .find(|(_, u)| **u == uuid)
+            .map(|(id, _)| id)?;
+        let there = self.mobs.iter().any(|m| m.id == id && m.alive())
+            || self.boats.iter().any(|b| b.id == id)
+            || self.carts.iter().any(|c| c.id == id);
+        there.then_some(id)
+    }
+    /// A vehicle already in the world that was restored from the player's file
+    /// during this load (not any entity whose UUID is remembered).
+    fn restored_vehicle(&self, uuid: [i32; 4]) -> Option<u32> {
+        if !self.persist.restored.contains(&uuid) {
+            return None;
+        }
+        self.vehicle_by_uuid(uuid)
+    }
+    /// Vanilla stores the root entity in the player's file, outside chunk entities.
+    /// Keep the raw wrapper until attachment succeeds, including unsupported trees.
+    pub(super) fn restore_saved_vehicle(
+        &mut self,
+        uuid: [i32; 4],
+        raw: Option<&Tag>,
+    ) -> Option<u32> {
+        if let Some(id) = self.vehicle_by_uuid(uuid) {
+            return Some(id);
+        }
+        let tag = raw?.get("RootVehicle")?.get("Entity")?.clone();
+        let root_uuid = entity_nbt::uuid(&tag)?;
+        let kind = entity_nbt::kind(&tag)?;
+        if !self.res.mob_types().contains_key(&kind)
+            && super::boats::any_boat_wood(&kind).is_none()
+            && super::minecarts::CartKind::from_id(&kind).is_none()
+        {
+            return None;
+        }
+        if self.vehicle_by_uuid(root_uuid).is_none() {
+            let at = entity_nbt::position(&tag)?;
+            let key = (
+                (at.x.floor() as i32).div_euclid(16),
+                (at.z.floor() as i32).div_euclid(16),
+            );
+            self.persist.restored.insert(root_uuid);
+            self.world.loaded_entities.push((key, vec![tag]));
+            self.spawn_loaded_entities();
+        }
+        self.persist.restored.insert(uuid);
+        self.vehicle_by_uuid(uuid)
+    }
+    /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
+    /// names, once the vehicle is in the world.
+    pub(super) fn restore_root_vehicle(&mut self) {
+        if self.serving.is_some()
+            || self.options.dedicated.is_some()
+            || self.riding.is_some()
+            || self.player.is_none()
+        {
+            return;
+        }
+        let Some(uuid) = self.pending_vehicle else {
+            return;
+        };
+        let raw = self.level.player_extra.clone();
+        let Some(id) = self.restore_saved_vehicle(uuid, raw.as_ref()) else {
+            return;
+        };
+        if let Some(Tag::Compound(p)) = &mut self.level.player_extra {
+            p.remove(&"RootVehicle".into());
+        }
+        self.pending_vehicle = None;
+        self.riding = Some(id);
     }
     /// A mob's entity tag with the mobs riding it under `Passengers`.
     pub(super) fn mob_tree_nbt(&mut self, i: usize) -> Tag {

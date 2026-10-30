@@ -202,6 +202,7 @@ impl Server {
             tick_steps: (0, 0),
             collision: None,
             border: &horizon_client::worldborder::WorldBorder::default(),
+            streaming: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -328,7 +329,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 );
             }
             let mut saved = horizon_client::save::Level::default();
-            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved);
+            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved, None);
             let mut reopened = horizon_client::save::Level::default();
             reopened.read_player(&saved.player_tag());
             assert_eq!(reopened.recipe_book.open, settings.open);
@@ -735,6 +736,7 @@ fn guests_see_each_other_and_the_world_entities() {
         precise: false,
         needs_sync: false,
         leash: None,
+        spectator: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;

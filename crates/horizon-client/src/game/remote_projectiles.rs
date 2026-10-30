@@ -114,14 +114,16 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
 fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     p.previous = p.position;
     p.age += 1;
-    // AbstractArrow.tick: `inGroundTime` counts the ticks in a block.
+    // AbstractArrow.tick: the shake timer runs down, and `inGroundTime` counts
+    // the ticks in a block.
     if let Some(a) = p.arrow.as_mut() {
+        a.shake = (a.shake - 1).max(0);
         a.in_ground_time = if p.stuck { a.in_ground_time + 1 } else { 0 };
     }
     if p.stuck {
         return;
     }
-    let water = w.in_water(p.position);
+    let water = w.in_water(p.bounds());
     if water {
         p.velocity = p.velocity.scale(0.6);
     }
@@ -130,6 +132,12 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
         p.position = at;
         p.velocity = Vec3::ZERO;
         p.stuck = true;
+        // AbstractArrow.onSyncedDataUpdated: IN_GROUND turning true starts the shake.
+        if let Some(a) = p.arrow.as_mut()
+            && a.shake <= 0
+        {
+            a.shake = 7;
+        }
         return;
     }
     p.position = to;
@@ -164,8 +172,7 @@ impl Game<'_> {
     /// fifth tick in a block; a spectral arrow an effect sparkle at its
     /// position while flying.
     fn arrow_effect_particles(&mut self) {
-        // The arrow's box: `EntityType.ARROW` is 0.5 x 0.5.
-        const SIZE: f64 = 0.5;
+        let mut puffs: Vec<(Vec3, i32, u32)> = Vec::new();
         for p in &self.creatures.projectiles {
             let Some(a) = p.arrow.as_ref().filter(|_| p.is_arrow()) else {
                 continue;
@@ -178,30 +185,54 @@ impl Game<'_> {
                 }
                 continue;
             }
-            let color = a.effect_color;
             let count = match (p.stuck, a.in_ground_time % 5) {
                 (true, 0) => 1,
                 (true, _) => 0,
                 (false, _) => 2,
             };
-            if color == -1 {
-                continue;
-            }
-            // ColorParticleOption.create(ENTITY_EFFECT, colour): ARGB as floats.
-            let channel = |shift: u32| (color as u32 >> shift & 255) as f32 / 255.0;
-            let options = ParticleOptions::colored(
-                ParticleType::EntityEffect,
-                [channel(16), channel(8), channel(0), channel(24)],
-            );
-            for _ in 0..count {
-                // getRandomX(0.5), getRandomY, getRandomZ(0.5).
-                let r = self.particles.random();
-                let x = at.x + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
-                let y = at.y + SIZE * r.next_double();
-                let z = at.z + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
-                self.particles.add(&options, [x, y, z], [0.0; 3]);
-            }
+            puffs.push((at, a.effect_color, count));
         }
+        for (at, color, count) in puffs {
+            self.arrow_makeparticle(at, color, count);
+        }
+    }
+
+    /// `Arrow.makeParticle`: `count` entity-effect swirls in `color` (an ARGB
+    /// int, -1 for none) inside the arrow's 0.5 x 0.5 box.
+    fn arrow_makeparticle(&mut self, at: Vec3, color: i32, count: u32) {
+        // `EntityType.ARROW` is 0.5 x 0.5.
+        const SIZE: f64 = 0.5;
+        if color == -1 {
+            return;
+        }
+        // ColorParticleOption.create(ENTITY_EFFECT, colour): ARGB as floats.
+        let channel = |shift: u32| (color as u32 >> shift & 255) as f32 / 255.0;
+        let options = ParticleOptions::colored(
+            ParticleType::EntityEffect,
+            [channel(16), channel(8), channel(0), channel(24)],
+        );
+        for _ in 0..count {
+            // getRandomX(0.5), getRandomY, getRandomZ(0.5).
+            let r = self.particles.random();
+            let x = at.x + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
+            let y = at.y + SIZE * r.next_double();
+            let z = at.z + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
+            self.particles.add(&options, [x, y, z], [0.0; 3]);
+        }
+    }
+
+    /// `Arrow.handleEntityEvent(0)`: a tipped arrow stuck for 600 ticks bursts
+    /// into twenty particles in its colour. The server turns it into a plain
+    /// arrow and does not send the colour again, so it stops here.
+    pub(super) fn remote_arrow_puff(&mut self, id: u32) {
+        let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) else {
+            return;
+        };
+        let Some(a) = p.arrow.as_mut() else {
+            return;
+        };
+        let (at, color) = (p.position, std::mem::replace(&mut a.effect_color, -1));
+        self.arrow_makeparticle(at, color, 20);
     }
 
     /// `AbstractHurtingProjectile.createParticleTrail`: one smoke puff half a
@@ -424,6 +455,16 @@ impl Game<'_> {
                         *critical = flags & 1 != 0;
                     }
                     (ProjectileKind::Arrow { .. }, 10, Value::Bool(in_ground)) => {
+                        // AbstractArrow.onSyncedDataUpdated: IN_GROUND turning true after
+                        // the first tick starts the shake.
+                        if *in_ground
+                            && !p.stuck
+                            && p.age > 0
+                            && let Some(a) = p.arrow.as_mut()
+                            && a.shake <= 0
+                        {
+                            a.shake = 7;
+                        }
                         p.stuck = *in_ground;
                     }
                     // Arrow.ID_EFFECT_COLOR.
@@ -714,7 +755,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(Who, Aabb)] {

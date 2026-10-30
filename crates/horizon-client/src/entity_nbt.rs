@@ -1986,6 +1986,8 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
             power: number(tag.get("ExplosionPower")).unwrap_or(1) as i32,
         },
         "minecraft:small_fireball" => ProjectileKind::SmallFireball,
+        "minecraft:wind_charge" => ProjectileKind::WindCharge,
+        "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
         _ => return None,
     };
     let owner = uuid_from_tag(tag.get("Owner"));
@@ -3419,6 +3421,20 @@ mod fireball_nbt_tests {
             (p.kind, p.acceleration),
             (ProjectileKind::LargeFireball { power: 1 }, 0.1)
         );
+        // `/summon` and a saved world give back both wind charges.
+        for (id, kind) in [
+            ("minecraft:wind_charge", ProjectileKind::WindCharge),
+            (
+                "minecraft:breeze_wind_charge",
+                ProjectileKind::BreezeWindCharge,
+            ),
+        ] {
+            let tag = Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("Pos", doubles(&[0.0, 0.0, 0.0])),
+            ]);
+            assert_eq!(fireball_from_nbt(&tag, None).unwrap().kind, kind);
+        }
     }
 }
 
