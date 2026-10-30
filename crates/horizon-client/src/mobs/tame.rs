@@ -1175,12 +1175,12 @@ fn give_morning_gift(m: &mut Mob, cx: &mut Cx) {
     let z = at[2] + m.random.next_int_bound(11).unwrap_or(5) - 5;
     let tagged = |p: [i32; 3], tag| has_tag(w, p, tag);
     let mut ground = y - 1;
-    while ground > crate::chunk::MIN_Y
+    while ground > w.world.bottom_y()
         && !tagged([x, ground, z], "minecraft:entities_can_teleport_to")
     {
         ground -= 1;
     }
-    if w.world.loaded(x, z) && ground > crate::chunk::MIN_Y {
+    if w.world.loaded(x, z) && ground > w.world.bottom_y() {
         let feet = f64::from(ground + 1);
         let half = f64::from(m.width()) / 2.0;
         let b = Aabb::new(

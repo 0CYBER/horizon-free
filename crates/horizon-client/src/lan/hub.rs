@@ -358,7 +358,7 @@ impl Hub {
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
         let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
+        encoder.set_dimension(level_shape(&d));
         Self {
             lan,
             config,
@@ -1788,6 +1788,7 @@ impl Hub {
             precise: false,
             needs_sync: false,
             leash: None,
+            spectator: false,
         }
     }
 
@@ -1824,7 +1825,7 @@ impl Hub {
                 let e = &h.equipment;
                 self.equipment_of(&e[0], &e[1], [&e[5], &e[4], &e[3], &e[2]])
             };
-            all.push(self.player_state(
+            let mut state = self.player_state(
                 h.entity_id,
                 h.uuid,
                 h.position,
@@ -1839,7 +1840,9 @@ impl Hub {
                 equipment,
                 h.attributes.clone(),
                 &[],
-            ));
+            );
+            state.spectator = h.game_mode == 3;
+            all.push(state);
         }
         let placed: Vec<usize> = (0..self.guests.len())
             .filter(|&i| self.here(&self.guests[i]))
@@ -1858,7 +1861,7 @@ impl Hub {
                 let equipment =
                     self.equipment_of(&main, &off, [&armor[0], &armor[1], &armor[2], &armor[3]]);
                 let g = &self.guests[i];
-                self.player_state(
+                let mut state = self.player_state(
                     g.entity_id,
                     g.uuid,
                     g.position,
@@ -1876,7 +1879,9 @@ impl Hub {
                         .map(|m| super::attributes::syncable(&m.attributes))
                         .unwrap_or_default(),
                     &g.effects.list,
-                )
+                );
+                state.spectator = g.spectator();
+                state
             })
             .collect();
         all.extend(guest_states);
@@ -1897,6 +1902,7 @@ impl Hub {
             .zip(outs.iter_mut())
             .map(|(g, out)| Viewer {
                 entity_id: g.entity_id,
+                spectator: g.spectator(),
                 moved: std::mem::take(&mut g.moved),
                 position: g.position,
                 view_distance: g.view_distance,
@@ -2752,8 +2758,7 @@ impl Hub {
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
         let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder
-            .set_dimension(d.min_y, d.height, d.has_skylight);
+        self.encoder.set_dimension(level_shape(&d));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2941,6 +2946,16 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
         shared |= -128;
     }
     shared
+}
+
+/// The shape a level of the dimension type `d` has.
+fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
+    crate::chunk::LevelShape {
+        sky_light: d.has_skylight,
+        min_y: d.min_y,
+        height: d.height,
+        logical_height: d.height,
+    }
 }
 
 #[cfg(test)]

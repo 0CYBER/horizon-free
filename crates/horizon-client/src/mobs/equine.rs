@@ -47,6 +47,9 @@ pub struct Rider {
     pub sprint: bool,
     /// Holding the jump key (a happy ghast rises).
     pub jumping: bool,
+    /// A server's player whose own client moves the mount
+    /// (`Entity.isClientAuthoritative`): here it only turns (`tickRidden`).
+    pub client: bool,
 }
 
 pub fn is_equine(s: Species) -> bool {
@@ -214,6 +217,18 @@ pub fn controlled(m: &Mob) -> bool {
         // tamed skeleton horse (SkeletonTrapGoal only tames it) needs the saddle too.
         _ => m.extra.saddled,
     }
+}
+/// `AbstractHorse`s (camels too, not llamas, which no player steers): the
+/// player controlling one moves it on its own client
+/// (`Entity.isLocalInstanceAuthoritative`, `LivingEntity.travelRidden`) and
+/// sends the moves (`ServerboundMoveVehiclePacket`).
+pub fn moved_by_rider(s: Species) -> bool {
+    is_equine(s) && !super::llama::is_llama(s)
+}
+/// A server's mount that its rider's client moves: `travelRidden` without
+/// `canSimulateMovement` turns it (`tickRidden`) and stops it there.
+pub fn moved_by_client(m: &Mob) -> bool {
+    moved_by_rider(m.species()) && m.rider.is_some_and(|r| r.client) && controlled(m)
 }
 /// `ItemBasedSteering.boost`: 140 to 980 ticks of extra speed.
 pub fn boost(m: &mut Mob) -> bool {

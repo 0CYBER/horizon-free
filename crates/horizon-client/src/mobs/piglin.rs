@@ -946,9 +946,9 @@ impl Goal for WalkAway {
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.source(m, cx.w).is_some() && !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.speed);
+        m.nav_move_to_path(cx.w, path, self.speed);
     }
     fn every_tick(&self) -> bool {
         true
@@ -956,7 +956,7 @@ impl Goal for WalkAway {
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if self.step(m, cx) {
             let path = m.ai.pending_path.take();
-            m.nav_move_to_path(path, self.speed);
+            m.nav_move_to_path(cx.w, path, self.speed);
         }
     }
 }
@@ -1262,9 +1262,9 @@ impl Goal for HoglinAvoidRepellent {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(cx.w, path, 1.0);
     }
 }
 /// `PiglinAi.avoidRepellent`: `SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0, 8, false)`
@@ -1315,9 +1315,9 @@ impl Goal for PiglinAvoidRepellent {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(cx.w, path, 1.0);
     }
 }
 /// `PiglinAi.isPlayerHoldingLovedItem`: the idle and celebrate activities'
