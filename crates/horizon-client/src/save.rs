@@ -361,28 +361,66 @@ fn dimension_is_vanilla_like(key: &str, dimension: &Tag) -> bool {
         _ => false,
     }
 }
-/// `data.worldGenSettingsLifecycle() != Lifecycle.stable()` (`WorldDimensions.bake`): the world
-/// lacks one of the three builtin dimensions, or has one that is not the vanilla one. Data
-/// packs' own dimensions are not read.
+/// A data pack's JSON as the NBT `dimension_is_vanilla_like` reads (what a codec gets from
+/// either one is the same data).
+fn json_tag(value: &serde_json::Value) -> Tag {
+    use serde_json::Value;
+    match value {
+        Value::Null => Tag::compound(std::iter::empty::<(&str, Tag)>()),
+        Value::Bool(b) => Tag::Byte(i8::from(*b)),
+        Value::Number(n) => n.as_i64().map_or_else(
+            || Tag::Double(n.as_f64().unwrap_or_default().to_bits()),
+            Tag::Long,
+        ),
+        Value::String(s) => Tag::String(s.as_str().into()),
+        Value::Array(items) => Tag::List(items.iter().map(json_tag).collect()),
+        Value::Object(map) => Tag::compound(map.iter().map(|(k, v)| (k.as_str(), json_tag(v)))),
+    }
+}
+/// The level stems the world's enabled data packs define, as `WorldOpenFlows.loadWorldStem`'s
+/// `datapackDimensions`.
+fn datapack_dimensions(world: &Path) -> Vec<(String, Tag)> {
+    let packs = crate::datapack::discover(world);
+    let enabled = crate::datapack::enabled_ids(world, &packs);
+    let enabled: Vec<&crate::datapack::DataPack> = enabled
+        .iter()
+        .filter_map(|id| packs.iter().find(|p| &p.id == id))
+        .collect();
+    crate::datapack::dimension_stems(&enabled)
+        .into_iter()
+        .map(|(id, json)| (id, json_tag(&json)))
+        .collect()
+}
+/// `data.worldGenSettingsLifecycle() != Lifecycle.stable()` (`WorldDimensions.bake`): the known
+/// dimensions (the saved ones and the enabled data packs', a pack's replacing the saved one of
+/// its id) lack one of the three builtin ones, or have one that is not the vanilla one.
 pub fn world_gen_unstable(world: &Path) -> bool {
-    let Some(Tag::Compound(dimensions)) = world_gen_settings(world)
+    let saved = world_gen_settings(world)
         .as_ref()
         .and_then(|s| s.get("dimensions"))
-        .cloned()
-    else {
+        .cloned();
+    let stems = datapack_dimensions(world);
+    if saved.is_none() && stems.is_empty() {
         return false;
+    }
+    let mut dimensions: std::collections::BTreeMap<String, Tag> = match saved {
+        Some(Tag::Compound(saved)) => saved
+            .into_iter()
+            .map(|(key, dimension)| (key.to_string_lossy(), dimension))
+            .collect(),
+        _ => std::collections::BTreeMap::new(),
     };
+    // `baseDimensions.getOptional(key).or(saved)`.
+    dimensions.extend(stems);
     let builtin = [
         "minecraft:overworld",
         "minecraft:the_nether",
         "minecraft:the_end",
     ];
-    builtin
-        .iter()
-        .any(|key| !dimensions.contains_key(&(*key).into()))
+    builtin.iter().any(|key| !dimensions.contains_key(*key))
         || dimensions
             .iter()
-            .any(|(key, dimension)| !dimension_is_vanilla_like(&key.to_string_lossy(), dimension))
+            .any(|(key, dimension)| !dimension_is_vanilla_like(key, dimension))
 }
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
@@ -2796,6 +2834,11 @@ fn read_saved_data(world: &Path, name: &str) -> Option<Tag> {
 /// The world's generator settings: world_gen_settings.dat (26.3) or
 /// level.dat's Data.WorldGenSettings.
 pub fn world_gen_settings(world: &Path) -> Option<Tag> {
+    // A world still to be file-fixed has them in level.dat in an older shape: they are read as
+    // the fixes would leave them, so the questions on opening it are the same ones.
+    if let Ok(Some(settings)) = horizon_world::datafix::files::current_world_gen_settings(world) {
+        return Some(settings);
+    }
     read_saved_data(world, "world_gen_settings").or_else(|| {
         read_dat(&world.join("level.dat"))?
             .get("Data")?
@@ -6276,6 +6319,83 @@ mod tests {
             }
         });
         assert!(is_old_customized_world(&dir));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// `WorldOpenFlows.loadWorldStem`: the enabled data packs' level stems are the base of
+    /// `WorldDimensions.bake`, replacing the saved one of their id.
+    #[test]
+    fn world_stem_compatibility_reads_data_pack_dimensions() {
+        let dir = gen_world("stem-datapack");
+        write_world_gen_settings(&dir, 7, WorldGen::default()).unwrap();
+        assert!(!world_gen_unstable(&dir));
+        let write = |pack: &str, file: &str, text: &str| {
+            let path = dir.join("datapacks").join(pack).join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write("p", "pack.mcmeta", "{}");
+        // A pack's dimension of another id is not vanilla-like.
+        write(
+            "p",
+            "data/mypack/dimension/moon.json",
+            r#"{"type":"minecraft:the_end","generator":{"type":"minecraft:noise","settings":"minecraft:end","biome_source":{"type":"minecraft:the_end"}}}"#,
+        );
+        assert!(world_gen_unstable(&dir));
+        // Disabled, it counts for nothing.
+        fs::write(dir.join("datapacks.json"), r#"{"disabled":["file/p"]}"#).unwrap();
+        assert!(!world_gen_unstable(&dir));
+        fs::remove_file(dir.join("datapacks.json")).unwrap();
+        fs::remove_file(dir.join("datapacks/p/data/mypack/dimension/moon.json")).unwrap();
+        assert!(!world_gen_unstable(&dir));
+        // A pack's Nether with another biome source replaces the saved vanilla one.
+        write(
+            "p",
+            "data/minecraft/dimension/the_nether.json",
+            r#"{"type":"minecraft:the_nether","generator":{"type":"minecraft:noise","settings":"minecraft:nether","biome_source":{"type":"minecraft:fixed","biome":"minecraft:plains"}}}"#,
+        );
+        assert!(world_gen_unstable(&dir));
+        // And a vanilla-like one stays stable.
+        write(
+            "p",
+            "data/minecraft/dimension/the_nether.json",
+            r#"{"type":"minecraft:the_nether","generator":{"type":"minecraft:noise","settings":"minecraft:nether","biome_source":{"type":"minecraft:multi_noise","preset":"minecraft:nether"}}}"#,
+        );
+        assert!(!world_gen_unstable(&dir));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A world that still needs its file fixes keeps its generator settings in level.dat; they
+    /// are read as the fixes would leave them, so the question is asked on the first open.
+    #[test]
+    fn world_gen_settings_of_a_world_needing_file_fixes_are_read_in_memory() {
+        let dir = gen_world("stem-prefix");
+        write_world_gen_settings(&dir, 7, WorldGen::default()).unwrap();
+        let settings = world_gen_settings(&dir).unwrap();
+        let customized = {
+            let mut tag = settings.clone();
+            if let Tag::Compound(map) = &mut tag {
+                map.insert("legacy_custom_options".into(), string("{\"seaLevel\":63}"));
+            }
+            tag
+        };
+        // 26.3 layout moved back to the old one: settings in level.dat, no saved data file.
+        fs::remove_file(saved_data_path(&dir, "world_gen_settings")).unwrap();
+        write_dat(
+            &dir.join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("DataVersion", Tag::Int(4700)),
+                    ("WorldGenSettings", customized),
+                ]),
+            )]),
+        )
+        .unwrap();
+        assert!(needs_file_fixes(&dir));
+        let read = world_gen_settings(&dir).expect("settings");
+        assert!(read.get("dimensions").is_some());
+        assert!(!world_gen_unstable(&dir));
         let _ = fs::remove_dir_all(dir);
     }
 
