@@ -358,6 +358,7 @@ pub(super) fn make_streaming(
                 &s,
                 pack.assets.registry,
                 res.biomes(),
+                dim.shape(),
             )
         });
     let mut streaming = if let Some(inner) = flat {

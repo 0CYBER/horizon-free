@@ -82,12 +82,7 @@ impl LevelShape {
     /// vanilla Overworld's `-64..320` so that vanilla's Nether and End keep
     /// the 24 sections they have always had.
     pub fn column(self) -> ColumnLayout {
-        let low = self.min_y.min(MIN_Y);
-        let high = self.max_y().max(MIN_Y + HEIGHT);
-        ColumnLayout {
-            min_y: low,
-            sections: ((high - low) / 16) as usize,
-        }
+        ColumnLayout::of_level(self.min_y, self.height)
     }
 }
 
@@ -103,6 +98,16 @@ impl ColumnLayout {
         min_y: MIN_Y,
         sections: SECTIONS,
     };
+    /// The column of a level from `min_y`, `height` high
+    /// (`LevelShape::column`).
+    pub fn of_level(min_y: i32, height: i32) -> Self {
+        let low = min_y.min(MIN_Y);
+        let high = (min_y + height).max(MIN_Y + HEIGHT);
+        Self {
+            min_y: low,
+            sections: ((high - low) / 16) as usize,
+        }
+    }
     /// `DimensionType.MIN_Y`, `MAX_Y`: 12 bits of `BlockPos` Y, less 32.
     pub const LOWEST_Y: i32 = -2032;
     pub const HIGHEST_Y: i32 = 2031;

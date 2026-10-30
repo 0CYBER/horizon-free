@@ -212,7 +212,7 @@ impl Column {
         };
         let mut column = Self::default();
         for (sy, section) in chunk.sections.iter().enumerate() {
-            let min = MIN_Y + sy as i32 * 16;
+            let min = chunk.min_y() + sy as i32 * 16;
             let uniform = section.blocks.bits() == 0
                 && section.biomes.bits() == 0
                 && matches!(section.light, crate::chunk::Light::Uniform(_));
@@ -256,7 +256,7 @@ impl Column {
             && let Some((height, state)) = water
         {
             column.surface = Some(Surface {
-                height: MIN_Y,
+                height: chunk.min_y(),
                 state: BlockStateId(
                     kinds.iter().position(|&kind| kind & AIR != 0).unwrap_or(0) as u32
                 ),
