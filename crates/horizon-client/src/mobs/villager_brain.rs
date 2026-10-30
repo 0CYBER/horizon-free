@@ -503,6 +503,28 @@ pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<M
     sync(m, w.game_time);
 }
 
+/// `Villager.ageBoundaryReached`: a villager that grew up gets a new brain
+/// (the schedule it follows is the adult's), as `refreshBrain` builds it.
+pub fn age_boundary_reached(
+    m: &mut Mob,
+    w: &MobWorld,
+    lr: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    if brain(m).is_none() {
+        return;
+    }
+    let mut list = std::mem::take(&mut brain_mut(m).list);
+    let mut cx = Bx {
+        w,
+        lr,
+        events,
+        now: w.game_time,
+        refresh: false,
+    };
+    refresh(m, &mut list, usize::MAX, &mut cx);
+}
+
 /// `Villager.refreshBrain`: stop every running behaviour, then rebuild the
 /// brain from the remembered memories.
 fn refresh(m: &mut Mob, list: &mut [Entry], current: usize, cx: &mut Bx) {
@@ -872,7 +894,10 @@ fn tickets(m: &Mob, others: &crate::fast_hash::FxHashMap<[i32; 3], usize>, p: [i
     n + others.get(&p).copied().unwrap_or(0)
 }
 /// The tickets the other living villagers' POIs take, by POI.
-fn others_tickets(m: &Mob, w: &MobWorld) -> crate::fast_hash::FxHashMap<[i32; 3], usize> {
+pub(super) fn others_tickets(
+    m: &Mob,
+    w: &MobWorld,
+) -> crate::fast_hash::FxHashMap<[i32; 3], usize> {
     let mut taken = crate::fast_hash::FxHashMap::default();
     for o in w.others {
         if o.id != m.id && o.alive && o.species == Species::Villager {
@@ -952,12 +977,42 @@ fn pois_in_range(
     found.sort_by_key(|&(_, p)| dist_sqr(p, c));
     found
 }
+/// `PoiManager.getInRange(poiType -> true, center, radius, IS_OCCUPIED)`: the
+/// POIs within `radius` of `center` that some villager holds a ticket on
+/// (`taken`, from [`others_tickets`]), in scan order.
+pub(super) fn occupied_pois_in_range(
+    w: &MobWorld,
+    taken: &crate::fast_hash::FxHashMap<[i32; 3], usize>,
+    center: [i32; 3],
+    radius: i32,
+) -> Vec<[i32; 3]> {
+    let mut found = Vec::new();
+    let r2 = i64::from(radius) * i64::from(radius);
+    let (cx, cz) = (center[0] >> 4, center[2] >> 4);
+    let chunks = radius.div_euclid(16) + 1;
+    let y0 = (center[1] - radius).max(crate::chunk::MIN_Y);
+    let y1 = (center[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
+    for qz in cz - chunks..=cz + chunks {
+        for qx in cx - chunks..=cx + chunks {
+            chunk_pois(w, (qx, qz), y0, y1, |_, p| {
+                if (p[0] - center[0]).abs() <= radius
+                    && (p[2] - center[2]).abs() <= radius
+                    && dist_sqr(p, center) <= r2
+                    && taken.get(&p).is_some_and(|&n| n > 0)
+                {
+                    found.push(p);
+                }
+            });
+        }
+    }
+    found
+}
 /// `PoiManager.exists(pos, predicate)`.
 fn poi_exists(m: &Mob, w: &MobWorld, p: [i32; 3], f: PoiFilter) -> bool {
     poi_at(w, p[0], p[1], p[2]).is_some_and(|poi| poi_matches(m, f, poi))
 }
 /// `BlockPos.closerToCenterThan(position, d)`.
-fn closer_to_center(p: [i32; 3], at: Vec3, d: f64) -> bool {
+pub(super) fn closer_to_center(p: [i32; 3], at: Vec3, d: f64) -> bool {
     let c = Vec3::new(
         f64::from(p[0]) + 0.5,
         f64::from(p[1]) + 0.5,
@@ -969,7 +1024,7 @@ fn manhattan(a: [i32; 3], b: [i32; 3]) -> i32 {
     (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
 }
 /// The village sections: sections holding a taken village POI.
-fn village_sections(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
+pub(super) fn village_sections(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
     let mut out = Vec::new();
     let mut add = |p: [i32; 3]| {
         let s = [p[0] >> 4, p[1] >> 4, p[2] >> 4];
@@ -1007,7 +1062,7 @@ fn village_sections(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
 }
 /// `PoiManager.sectionsToVillage`: the Chebyshev distance in sections to a
 /// village section, at most 7.
-fn sections_to_village(villages: &[[i32; 3]], s: [i32; 3]) -> i32 {
+pub(super) fn sections_to_village(villages: &[[i32; 3]], s: [i32; 3]) -> i32 {
     villages
         .iter()
         .map(|v| {
@@ -1721,7 +1776,7 @@ impl B {
                 }
                 t.begin(cx.lr, cx.now);
                 bonemeal_target(m, *crop);
-                m.extra.main_hand = Some("minecraft:bone_meal".into());
+                m.extra.set_main_hand(Some("minecraft:bone_meal".into()));
                 *next_work = cx.now;
                 *worked = 0;
                 *repick = false;
@@ -3200,7 +3255,7 @@ impl B {
                 t, last_session, ..
             } => {
                 t.running = false;
-                m.extra.main_hand = None;
+                m.extra.set_main_hand(None);
                 *last_session = i64::from(m.age);
             }
             B::WorkAtPoi { t, .. } => t.running = false,
@@ -3774,7 +3829,7 @@ fn happy_particles(m: &Mob, cx: &mut Bx) {
     });
 }
 /// `BehaviorUtils.findSectionClosestToVillage`.
-fn closest_section(villages: &[[i32; 3]], center: [i32; 3], radius: i32) -> [i32; 3] {
+pub(super) fn closest_section(villages: &[[i32; 3]], center: [i32; 3], radius: i32) -> [i32; 3] {
     let here = sections_to_village(villages, center);
     let mut best: Option<([i32; 3], i32)> = None;
     for z in center[2] - radius..=center[2] + radius {
