@@ -140,6 +140,13 @@ impl Game<'_> {
                 display.vehicle = None;
             }
         }
+        for (&id, i) in &mut self.interactions {
+            if passengers.contains(&id) {
+                i.vehicle = Some(vehicle_id);
+            } else if i.vehicle == Some(vehicle_id) {
+                i.vehicle = None;
+            }
+        }
         if passengers.contains(&me)
             && let Some(r) = self.remote.as_mut()
         {

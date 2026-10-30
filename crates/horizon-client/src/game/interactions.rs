@@ -14,6 +14,9 @@ pub(super) struct RemoteInteraction {
     pub width: f32,
     pub height: f32,
     pub response: bool,
+    /// `Entity.getVehicle`: ModelEngine's hitboxes ride the pivot that
+    /// carries them.
+    pub vehicle: Option<u32>,
 }
 
 impl RemoteInteraction {
@@ -23,7 +26,13 @@ impl RemoteInteraction {
             width: 1.0,
             height: 1.0,
             response: false,
+            vehicle: None,
         }
+    }
+    /// `Entity.positionRider`'s move: a passenger is placed on its vehicle's
+    /// seat, not moved on its own.
+    pub fn ride_to(&mut self, at: glam::DVec3) {
+        self.position = Vec3::new(at.x, at.y, at.z);
     }
     /// `Interaction.refreshDimensions`: `width` square about the entity's
     /// x and z, from its feet up `height` (its position is the box's bottom
@@ -107,5 +116,17 @@ mod tests {
             assert!((got - want).abs() < 1e-6, "{hi:?}");
         }
         assert!(i.response);
+    }
+    #[test]
+    fn a_riding_hitbox_moves_with_its_pivot() {
+        let mut i = RemoteInteraction::new([10.0, 64.0, -3.0]);
+        i.vehicle = Some(9);
+        i.ride_to(glam::DVec3::new(12.0, 65.5, -3.0));
+        assert_eq!(i.position, Vec3::new(12.0, 65.5, -3.0));
+        let b = i.bounds();
+        assert_eq!(
+            (b.min_position().components(), b.max_position().components()),
+            ([11.5, 65.5, -3.5], [12.5, 66.5, -2.5])
+        );
     }
 }
