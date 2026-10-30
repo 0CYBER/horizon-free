@@ -192,6 +192,7 @@ fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Op
 
 /// `in_view` without the distance test; `inside`: the section's column is
 /// entirely inside the frustum, so the section is too.
+#[cfg(test)]
 fn in_frustum(
     key: SectionKey,
     min_y: i32,
@@ -202,12 +203,14 @@ fn in_frustum(
 ) -> Option<(f64, Vec3)> {
     let origin = origin(key, min_y, camera);
     let min = origin.as_vec3();
-    let (bmin, bmax) = match bounds {
-        Some([bmin, bmax]) => (min + bmin, min + bmax),
-        None => (min, min + Vec3::splat(16.0)),
-    };
-    if !inside && !frustum.intersects(bmin, bmax) {
-        return None;
+    if !inside {
+        let (bmin, bmax) = match bounds {
+            Some([bmin, bmax]) => (min + bmin, min + bmax),
+            None => (min, min + Vec3::splat(16.0)),
+        };
+        if !frustum.intersects(bmin, bmax) {
+            return None;
+        }
     }
     Some(((origin + DVec3::splat(8.0)).length_squared(), min))
 }
@@ -247,18 +250,53 @@ impl<T> Resident<T> {
             if !inside && !frustum.intersects(min, max) {
                 continue;
             }
-            for &(y, slot) in &column.sections {
-                let key = (column.x, y, column.z);
-                if near && !reachable(key) {
-                    continue;
-                }
-                let bounds = self.bounds[slot as usize];
-                if let Some((d, o)) = in_frustum(key, self.min_y, camera, frustum, inside, bounds) {
+            let ox = f64::from(column.x * 16) - camera.x;
+            let oz = f64::from(column.z * 16) - camera.z;
+            let min_x = ox as f32;
+            let min_z = oz as f32;
+            let dx8 = ox + 8.0;
+            let dz8 = oz + 8.0;
+            let xz_sq = dx8 * dx8 + dz8 * dz8;
+
+            if inside {
+                for &(y, slot) in &column.sections {
+                    let key = (column.x, y, column.z);
+                    if near && !reachable(key) {
+                        continue;
+                    }
+                    let oy = f64::from(self.min_y + y * 16) - camera.y;
+                    let min = Vec3::new(min_x, oy as f32, min_z);
+                    let dy8 = oy + 8.0;
+                    let distance = xz_sq + dy8 * dy8;
                     out.push(Visible {
-                        distance: d.to_bits(),
+                        distance: distance.to_bits(),
                         key,
                         slot,
-                        origin: o.to_array(),
+                        origin: min.to_array(),
+                    });
+                }
+            } else {
+                for &(y, slot) in &column.sections {
+                    let key = (column.x, y, column.z);
+                    if near && !reachable(key) {
+                        continue;
+                    }
+                    let oy = f64::from(self.min_y + y * 16) - camera.y;
+                    let min = Vec3::new(min_x, oy as f32, min_z);
+                    let (bmin, bmax) = match self.bounds[slot as usize] {
+                        Some([bmin, bmax]) => (min + bmin, min + bmax),
+                        None => (min, min + Vec3::splat(16.0)),
+                    };
+                    if !frustum.intersects(bmin, bmax) {
+                        continue;
+                    }
+                    let dy8 = oy + 8.0;
+                    let distance = xz_sq + dy8 * dy8;
+                    out.push(Visible {
+                        distance: distance.to_bits(),
+                        key,
+                        slot,
+                        origin: min.to_array(),
                     });
                 }
             }
