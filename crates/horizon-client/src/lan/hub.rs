@@ -64,6 +64,8 @@ pub struct HubConfig {
     /// the owner's level from `ops`, the others' from Allow Commands and
     /// the guests' command access, and the integrated-only commands.
     pub integrated: bool,
+    /// The shapes of the world's levels (their dimension types).
+    pub levels: crate::chunk::LevelShapes,
 }
 
 /// The host player as the other players see them.
@@ -361,8 +363,7 @@ impl Hub {
             .unwrap_or(0);
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
-        let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(level_shape(&d));
+        encoder.set_dimension(config.levels.get(&config.dimension));
         Self {
             lan,
             config,
@@ -513,6 +514,18 @@ impl Hub {
         })
         .encode();
         for g in self.guests.iter().filter(|g| g.placed && hears(&g.name)) {
+            g.sender.send(body.clone());
+        }
+    }
+    /// `ServerPlayer.sendSystemMessage` to the guest with `uuid`, in any
+    /// dimension.
+    pub fn system_message_to_player(&self, uuid: u128, content: Tag) {
+        let body = C::SystemChat(play::SystemChat {
+            content,
+            overlay: false,
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| g.placed && g.uuid == uuid) {
             g.sender.send(body.clone());
         }
     }
@@ -1563,6 +1576,26 @@ impl Hub {
             .take(budget)
             .collect();
         (!batch.is_empty()).then_some(batch)
+    }
+
+    /// `ChunkMap.resendBiomesForChunks`: each player in the level is sent,
+    /// in one packet, the biomes of those of `columns` it has been sent
+    /// (`getPlayers(pos, false)`), in the order given.
+    pub fn resend_biomes(&self, world: &World, columns: &[(i32, i32)]) {
+        let data: Vec<_> = columns
+            .iter()
+            .filter_map(|key| Some((*key, self.encoder.biome_data(world.chunks.get(key)?))))
+            .collect();
+        for g in self.guests.iter().filter(|g| self.here(g)) {
+            let chunks: Vec<_> = data
+                .iter()
+                .filter(|(key, _)| g.sent_chunks.contains(key))
+                .map(|(_, d)| d.clone())
+                .collect();
+            if !chunks.is_empty() {
+                g.send(&C::ChunksBiomes(play::ChunksBiomes { chunks }));
+            }
+        }
     }
 
     /// `ChunkHolder.broadcastChanges`' light part: the light sections that
@@ -2784,8 +2817,8 @@ impl Hub {
             .sync
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
-        let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder.set_dimension(level_shape(&d));
+        self.encoder
+            .set_dimension(self.config.levels.get(dimension));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2973,16 +3006,6 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
         shared |= -128;
     }
     shared
-}
-
-/// The shape a level of the dimension type `d` has.
-fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
-    crate::chunk::LevelShape {
-        sky_light: d.has_skylight,
-        min_y: d.min_y,
-        height: d.height,
-        logical_height: d.height,
-    }
 }
 
 #[cfg(test)]

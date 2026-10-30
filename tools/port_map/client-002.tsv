@@ -20,9 +20,9 @@ ClientPacketListener.queueLightRemoval	inline	crates/horizon-client-render/src/s
 ClientPacketListener.handleBlockUpdate	port	crates/horizon-client/src/game/remote.rs::Game::server_block	
 ClientPacketListener.handleConfigurationStart	port	crates/horizon-client/src/net.rs::receive_play	gap: player: no reconfiguring screen is shown and the chat state is not stored
 ClientPacketListener.handleSystemChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SystemChat arm: overlay to the action bar, otherwise the chat
-ClientPacketListener.handlePlayerChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm; gap: minor: no signature, chat index or validity checks
+ClientPacketListener.handlePlayerChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm; gap: minor: no chat index or validity checks
 ClientPacketListener.handleDisguisedChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	DisguisedChat arm
-ClientPacketListener.handleDeleteChat	missing		player: a chat line the server deletes (moderation) stays on screen
+ClientPacketListener.handleDeleteChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_delete_chat	gap: minor: no LastSeenMessagesTracker.ignorePending, the client signs no chat
 ClientPacketListener.handleAnimate	port	crates/horizon-client/src/game/remote.rs::Game::remote_animate	action 0 stops sleeping, 1 and 2 emit crit and enchanted hit particles
 ClientPacketListener.handleHurtAnimation	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	HurtAnimation arm: own player's hurt tilt, or a mob's hurt time
 ClientPacketListener.handleSetSpawn	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetDefaultSpawnPosition arm; gap: minor: only an overworld spawn is kept, other dimensions are dropped

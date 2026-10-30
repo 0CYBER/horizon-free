@@ -616,8 +616,8 @@ impl HandWorld for GameHands<'_, '_> {
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }
-    fn block_action_restricted(&mut self, _: [i32; 3]) -> bool {
-        !self.game.may_build()
+    fn block_action_restricted(&mut self, pos: [i32; 3]) -> bool {
+        self.game.block_action_restricted(pos)
     }
     fn within_border(&mut self, _: [i32; 3]) -> bool {
         true

@@ -38,6 +38,8 @@ pub(super) enum Field {
     InstanceGroup,
     /// Its search in Mojang's versions (`new_instance.rs`).
     InstanceVersion,
+    /// Home's Mods tab's filter (`instance_mods.rs`).
+    InstanceModsFilter,
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
     ServerName,
     ServerAddress,
@@ -54,7 +56,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 21] = [
+    const ALL: [Field; 22] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -67,6 +69,7 @@ impl Field {
         Field::InstanceName,
         Field::InstanceGroup,
         Field::InstanceVersion,
+        Field::InstanceModsFilter,
         Field::ServerName,
         Field::ServerAddress,
         Field::ConsoleSearch,
@@ -999,6 +1002,7 @@ impl Launcher {
             Field::InstanceName
             | Field::InstanceGroup
             | Field::InstanceVersion
+            | Field::InstanceModsFilter
             | Field::ConsoleSearch
             | Field::DeleteServer => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {

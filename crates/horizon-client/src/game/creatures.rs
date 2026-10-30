@@ -57,8 +57,9 @@ pub(super) struct Creatures {
     /// (game/lan_pvp.rs).
     pub sweeps: Vec<super::lan_pvp::Sweep>,
     /// Explosion packets from a guest's turn, waiting for it to end
-    /// (centre, small, radius, blocks hit; game/lan_particles.rs).
-    pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
+    /// (centre, small, radius, blocks hit, the players it pushed;
+    /// game/lan_particles.rs).
+    pub lan_explosions: Vec<([f64; 3], bool, f32, usize, Vec<(u32, [f64; 3])>)>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
@@ -636,8 +637,10 @@ impl Game<'_> {
             self.died.insert(m.id);
             self.mob_died(&m);
         }
-        // Their victims have been looted: no charged creeper is waiting any more.
+        // Their victims have been looted and mourned: no charged creeper is
+        // waiting any more.
         self.combat.charged_exploders.clear();
+        self.combat.exploded.clear();
         let uuid = self.level.player_uuid;
         let mut snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
@@ -880,6 +883,8 @@ impl Game<'_> {
             self.set_bed_occupied(bed, false);
         }
         let killer = self.last_hurt_by_player.remove(&m.id);
+        // TamableAnimal.die, before the rest of LivingEntity.die.
+        self.tell_owner_pet_died(m, killer);
         self.love_cause.remove(&m.id);
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
@@ -1435,6 +1440,7 @@ impl Game<'_> {
                     self.combat.explosion_source = Some(mob);
                     // The creeper causes the blast's damage, but it is out of
                     // the mob list already: its name comes with the event.
+                    self.combat.exploded.push((mob, name.clone()));
                     self.note_named_attacker("minecraft:explosion", mob, name);
                     if charged {
                         self.combat.charged_exploders.push(mob);
@@ -3442,7 +3448,7 @@ impl Game<'_> {
             }
             // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
             (ProjectileKind::Trident, Hit::Block { .. }) => {}
-            (ProjectileKind::Arrow { effect, .. }, Hit::Entity { who, .. }) => {
+            (ProjectileKind::Arrow { .. }, Hit::Entity { who, .. }) => {
                 let mut arrow = p.clone();
                 let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
                 let player_fire = self.player.as_ref().map(|pl| pl.fire_ticks);
@@ -3455,17 +3461,11 @@ impl Game<'_> {
                     }])?;
                 }
                 let hurt = match who {
-                    Who::Player => {
-                        let hurt = self.mob_hits_player(
-                            amount,
-                            [p.previous.x, p.previous.y, p.previous.z],
-                            "minecraft:arrow",
-                        );
-                        if hurt && let Some((e, t)) = effect {
-                            self.give_player_effect(e, *t, 0);
-                        }
-                        hurt
-                    }
+                    Who::Player => self.mob_hits_player(
+                        amount,
+                        [p.previous.x, p.previous.y, p.previous.z],
+                        "minecraft:arrow",
+                    ),
                     Who::Mob(id) => {
                         let hurt = self
                             .mobs
@@ -3583,6 +3583,9 @@ impl Game<'_> {
                         target: who,
                         velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
                     }])?;
+                }
+                if hurt {
+                    self.arrow_post_hurt_effects(p, who);
                 }
                 match (hurt, who) {
                     (true, _) => self.finish_arrow_hit(arrow, EntityHit::Hurt),
@@ -5493,6 +5496,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Spit => "minecraft:spit",
         K::Stalagmite => "minecraft:stalagmite",
         K::Starve => "minecraft:starve",
+        K::HotFloor => "minecraft:hot_floor",
         K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
         K::WindCharge => "minecraft:wind_charge",
         K::Wither => "minecraft:wither",

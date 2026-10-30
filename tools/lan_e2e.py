@@ -301,6 +301,7 @@ Needs the prepared resources in .local/horizon-client. On Linux the games run on
 desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -331,7 +332,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
-          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'tag-query']
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'rocket-ceilings', 'tag-query']
 
 
 class Game:
@@ -3843,6 +3844,40 @@ def check_rocket_walls(host, guest, out):
     return result
 
 
+def check_rocket_ceilings(host, guest, out):
+    """A rising rocket explodes on the block above only with explosions.
+
+    FireworkRocketEntity.tick: every rocket that isn't attached checks its move against blocks
+    (`getHitResultOnMoveVector`), not only one shot at an angle; onHitBlock: `hasExplosion()`. Launched from
+    the floor under a ceiling two blocks up, it reaches it in about 9 ticks; a plain one lives 20-31. Spans
+    are measured as in check_rocket_walls.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamemode creative')
+    host('command', command=f'fill {x - 2} {y - 1} {z + 1} {x + 2} {y - 1} {z + 5} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 1} {z + 5} minecraft:air')
+    host('command', command=f'fill {x - 2} {y + 2} {z + 1} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    plain = 'minecraft:firework_rocket'
+    star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
+    result = {}
+    for label, item in (('plain', plain), ('star', star)):
+        host('command', command=f'item replace entity @s weapon.mainhand with {item}')
+        host.wait(5)
+        replies = host.script([f'interact {x} {y - 1} {z + 3}'] + ['wait 1', 'status'] * 45, every=True)
+        samples = [(r['ticks'], r['rockets']) for r in replies if 'rockets' in r]
+        seen = [tick for tick, n in samples if n]
+        result[label] = {'span': seen[-1] - seen[0] if seen else None, 'samples': len(samples),
+                         'last': samples[-1][1], 'guest_last': guest('status')['rockets']}
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
+        f'a rocket outlived its lifetime: {result}')
+    assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the ceiling: {result}'
+    # It rises about 8 ticks first: gone at once would be a burst at launch.
+    assert result['star']['span'] is not None and 3 <= result['star']['span'] < 14, (
+        f'star rocket did not explode on the ceiling: {result}')
+    return result
+
+
 def check_sparks(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -5699,7 +5734,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'sidebar': check_sidebar,
              'border': check_border,
              'particles': check_particles, 'fireworks': check_fireworks,
-             'rocket-walls': check_rocket_walls,
+             'rocket-walls': check_rocket_walls, 'rocket-ceilings': check_rocket_ceilings,
              'tag-query': check_tag_query}
 
 
@@ -9221,6 +9256,50 @@ def check_keys_released(host, guest, out):
 
 CHECKS += ['keys_released']
 CHECK_FNS['keys_released'] = check_keys_released
+
+
+def offline_uuid_ints(name):
+    """UUIDUtil.createOfflinePlayerUUID as the contents of an int-array UUID tag."""
+    digest = bytearray(hashlib.md5(f'OfflinePlayer:{name}'.encode()).digest())
+    digest[6] = digest[6] & 0x0f | 0x30
+    digest[8] = digest[8] & 0x3f | 0x80
+    return ','.join(str(int.from_bytes(digest[i:i + 4], 'big', signed=True)) for i in range(0, 16, 4))
+
+
+def check_pet_death(host, guest, out):
+    """TamableAnimal.die (#3514): with showDeathMessages, a tame pet's owner, and nobody else, hears how it
+    died (CombatTracker.getDeathMessage): the guest's wolf slain by a zombie, the host's cat killed."""
+    hx, hy, hz = pos_of(host)
+    tag = 'pet_death'
+    try:
+        host('command', command=f'summon minecraft:zombie {hx + 1.5:.2f} {hy:.2f} {hz - 2:.2f} '
+                                f'{{NoAI:1b,Silent:1b,Tags:["{tag}"]}}')
+        host('command', command=f'summon minecraft:wolf {hx - 1.5:.2f} {hy:.2f} {hz - 2:.2f} '
+                                f'{{CustomName:"Rex",NoAI:1b,Tags:["{tag}","rex"],'
+                                f'Owner:[I;{offline_uuid_ints(GUEST_NAME)}]}}')
+        host('command', command=f'summon minecraft:cat {hx:.2f} {hy:.2f} {hz - 3:.2f} '
+                                f'{{CustomName:"Tom",NoAI:1b,Tags:["{tag}","tom"],'
+                                f'Owner:[I;{offline_uuid_ints(host.player)}]}}')
+        host.wait(5)
+        host('command', command=f'damage @e[tag=rex,limit=1] 100 minecraft:mob_attack '
+                                f'by @e[type=minecraft:zombie,tag={tag},limit=1]')
+        host('command', command='kill @e[tag=tom]')
+        host.wait(20)
+        guest_chat = guest.raw('messages', 10)['chat']
+        host_chat = host.raw('messages', 10)['chat']
+        guest.shot(out, 'pet-death')
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+    seen = {'guest': guest_chat, 'host': host_chat}
+    assert 'Rex was slain by Zombie' in guest_chat, f"the wolf's owner was not told: {seen}"
+    assert 'Rex was slain by Zombie' not in host_chat, f"someone else's wolf was told to the host: {seen}"
+    assert 'Tom was killed' in host_chat, f"the cat's owner was not told: {seen}"
+    assert 'Tom was killed' not in guest_chat, f"someone else's cat was told to the guest: {seen}"
+    return seen
+
+
+CHECKS += ['pet_death']
+CHECK_FNS['pet_death'] = check_pet_death
 
 
 if __name__ == '__main__':

@@ -1138,7 +1138,7 @@ impl Game<'_> {
                             let _ = g.break_block(pos);
                             return true;
                         }
-                        if g.may_build() {
+                        if !g.block_action_restricted(pos) {
                             let _ = g.attack_block(pos);
                             g.mining = Some(Mining {
                                 pos,

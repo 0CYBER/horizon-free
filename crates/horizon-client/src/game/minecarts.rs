@@ -1504,7 +1504,7 @@ impl Game<'_> {
             texts: None,
             partial: 0.0,
             game_time: self.world.game_time,
-            max_y: self.dim.max_y(),
+            max_y: self.world.shape.max_y() - 1,
             world: &self.world,
             sprites: &self.gui.atlas.sprites,
             nether: self.dim == super::Dim::Nether,
