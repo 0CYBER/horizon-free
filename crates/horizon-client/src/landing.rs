@@ -69,6 +69,15 @@ pub enum SceneSound {
     BigFall,
 }
 impl SceneSound {
+    /// The sound event of `LivingEntity.getFallDamageSound` for a player, if
+    /// this is one of the two fall sounds.
+    pub fn player_fall_sound(self) -> Option<&'static str> {
+        match self {
+            Self::BigFall => Some("minecraft:entity.player.big_fall"),
+            Self::SmallFall => Some("minecraft:entity.player.small_fall"),
+            Self::Block(_) => None,
+        }
+    }
     fn name(self) -> &'static str {
         match self {
             Self::SmallFall => "small",
@@ -213,6 +222,12 @@ impl FallEvent {
 impl MotionWorld<'_, '_, '_> {
     fn fall_event(&mut self, event: FallEvent) {
         self.player.events.push(MotionEvent::Fall(event));
+    }
+    /// `Entity.propagateFallToPassengers`: the call on this player, whose
+    /// vehicle fell `distance` blocks at `multiplier`, so the player takes
+    /// `Player.causeFallDamage` of it.
+    pub fn cause_mount_fall(&mut self, distance: f64, multiplier: f32) -> Result<bool> {
+        BlockLandingWorld::cause_fall_damage(self, distance, multiplier, LandingDamage::Fall)
     }
 }
 impl FallDamageWorld for MotionWorld<'_, '_, '_> {
@@ -527,5 +542,25 @@ impl LivingFallWorld for FallCall<'_, '_, '_, '_> {
             amount,
         )?;
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fall_sounds_map_to_player_events() {
+        assert_eq!(
+            SceneSound::BigFall.player_fall_sound(),
+            Some("minecraft:entity.player.big_fall")
+        );
+        assert_eq!(
+            SceneSound::SmallFall.player_fall_sound(),
+            Some("minecraft:entity.player.small_fall")
+        );
+        assert_eq!(
+            SceneSound::Block(LandingSound::HoneyFall).player_fall_sound(),
+            None
+        );
     }
 }

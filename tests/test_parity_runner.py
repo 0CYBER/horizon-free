@@ -189,7 +189,7 @@ class ParityRunnerTests(unittest.TestCase):
 
 class DependencyPathTests(unittest.TestCase):
     def test_traced_dependencies_use_repository_posix_paths(self):
-        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp).resolve()):
             source = Path(temp, "crates/w/src/lib.rs")
             source.parent.mkdir(parents=True)
             source.write_text("")

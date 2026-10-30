@@ -9,8 +9,13 @@ use horizon_client::{
     mobs::Who,
     save::{ChunkExtras, random_uuid},
 };
-use horizon_core::{geometry::Vec3, position::ChunkPos, random::RandomSource, ticks::ChunkTicks};
-use horizon_world::{chunk::BlockState, nbt::Tag, registry::BlockStateId};
+use horizon_core::{
+    geometry::{Direction, Vec3},
+    position::{BlockPos, ChunkPos},
+    random::RandomSource,
+    ticks::ChunkTicks,
+};
+use horizon_world::{chunk::BlockState, level::MovingPiston, nbt::Tag, registry::BlockStateId};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -30,6 +35,10 @@ pub struct EntityMemory {
     /// the dragon): the UUID and compound they were loaded with, found again by
     /// type and position (an entity that has moved since loading is saved afresh).
     anon: HashMap<(String, [u64; 3]), (Vec3, Option<[i32; 4]>, Tag)>,
+    /// UUIDs of the vehicles `restore_saved_vehicle` brought in from the
+    /// player's file: their chunk copies must not spawn a second one. Cleared
+    /// with the rest when a world closes.
+    restored: HashSet<[i32; 4]>,
 }
 
 fn anon_key(kind: &str, p: Vec3) -> (String, [u64; 3]) {
@@ -66,6 +75,10 @@ fn painting_center(p: &horizon_client::entities::Painting) -> Vec3 {
         (lo[2] + hi[2]) / 2.0,
     )
 }
+fn block_entity_pos(tag: &Tag) -> [i32; 3] {
+    [tag.get("x"), tag.get("y"), tag.get("z")]
+        .map(|v| horizon_client::save::number(v).unwrap_or(0) as i32)
+}
 fn chunk_of(p: Vec3) -> (i32, i32) {
     ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
 }
@@ -86,6 +99,19 @@ impl Game<'_> {
             extras.fluid_ticks = t.pack(time);
         }
         extras.last_update = time;
+        // PistonMovingBlockEntity.saveAdditional: a block caught mid-move is
+        // saved with its chunk (#3310).
+        for (p, piston) in &self.block_ticks.moving_pistons {
+            if (p.x >> 4, p.z >> 4) != (chunk.x, chunk.z) {
+                continue;
+            }
+            extras
+                .block_entities
+                .retain(|tag| block_entity_pos(tag) != [p.x, p.y, p.z]);
+            extras
+                .block_entities
+                .push(self.moving_piston_to_nbt(*p, piston));
+        }
         // TheEndGatewayBlockEntity saves its Age (the server copy's).
         for tag in &mut extras.block_entities {
             let pos = [tag.get("x"), tag.get("y"), tag.get("z")]
@@ -142,6 +168,82 @@ impl Game<'_> {
                 s.fluid_ticks.clear();
             }
         }
+        // PistonMovingBlockEntity.loadAdditional: blocks saved mid-move carry
+        // on moving; later saves take them from the level (#3310).
+        let pistons: Vec<_> = saved.as_deref().map_or_else(Vec::new, |s| {
+            s.block_entities
+                .iter()
+                .filter_map(|tag| self.moving_piston_from_nbt(tag))
+                .collect()
+        });
+        if pistons.is_empty() {
+            return;
+        }
+        for &(pos, piston) in &pistons {
+            self.block_ticks.load_moving_piston(pos, piston);
+        }
+        if let Some(c) = self.world.chunks.get_mut(&key) {
+            let c = Arc::make_mut(c);
+            if let Some(s) = c.saved.as_mut() {
+                Arc::make_mut(s).block_entities.retain(|tag| {
+                    let at = block_entity_pos(tag);
+                    !pistons.iter().any(|(p, _)| [p.x, p.y, p.z] == at)
+                });
+            }
+        }
+    }
+    /// `PistonMovingBlockEntity.saveAdditional`.
+    fn moving_piston_to_nbt(&self, pos: BlockPos, piston: &MovingPiston) -> Tag {
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        Tag::compound([
+            ("id", Tag::String("minecraft:piston".into())),
+            ("x", Tag::Int(pos.x)),
+            ("y", Tag::Int(pos.y)),
+            ("z", Tag::Int(pos.z)),
+            ("blockState", self.state_to_nbt(piston.moved_state)),
+            // Direction.LEGACY_ID_CODEC: the 3D data value as a byte.
+            ("facing", Tag::Byte(piston.direction as i8)),
+            ("progress", Tag::Float(piston.progress_o.to_bits())),
+            ("extending", flag(piston.extending)),
+            ("source", flag(piston.source)),
+        ])
+    }
+    /// `PistonMovingBlockEntity.loadAdditional`, for a `minecraft:piston`
+    /// entity whose block is still a moving piston.
+    fn moving_piston_from_nbt(&self, tag: &Tag) -> Option<(BlockPos, MovingPiston)> {
+        use horizon_client::save::{float, number, text};
+        if text(tag.get("id")).as_deref() != Some("minecraft:piston") {
+            return None;
+        }
+        let [x, y, z] = block_entity_pos(tag);
+        let here = self.world.block(x, y, z);
+        if &*self.res.facts().get(here).name != "minecraft:moving_piston" {
+            return None;
+        }
+        let moved_state = tag
+            .get("blockState")
+            .and_then(|t| self.state_from_nbt(t))
+            .or_else(|| self.pack.assets.registry.default_state("minecraft:air"))?;
+        let direction = usize::try_from(number(tag.get("facing")).unwrap_or(0))
+            .ok()
+            .and_then(|i| Direction::ALL.get(i).copied())
+            .unwrap_or(Direction::Down);
+        let progress = float(tag.get("progress")).unwrap_or(0.0) as f32;
+        let flag = |k: &str| number(tag.get(k)).unwrap_or(0) != 0;
+        Some((
+            BlockPos::new(x, y, z),
+            MovingPiston {
+                moved_state,
+                direction,
+                extending: flag("extending"),
+                source: flag("source"),
+                progress,
+                progress_o: progress,
+                last_ticked: 0,
+                death_ticks: 0,
+                id: 0,
+            },
+        ))
     }
     /// Spawn the entities of chunks that finished loading.
     pub(super) fn spawn_loaded_entities(&mut self) {
@@ -151,12 +253,17 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
+                if uuid.is_some_and(|u| self.restored_vehicle(u).is_some()) {
+                    continue;
+                }
                 if matches!(
                     kind.as_str(),
                     "minecraft:experience_orb"
                         | "minecraft:arrow"
                         | "minecraft:fireball"
                         | "minecraft:small_fireball"
+                        | "minecraft:wind_charge"
+                        | "minecraft:breeze_wind_charge"
                         | "minecraft:falling_block"
                         | "minecraft:end_crystal"
                         | "minecraft:ender_dragon"
@@ -196,7 +303,10 @@ impl Game<'_> {
                             self.add_projectile(p);
                         }
                     }
-                    "minecraft:fireball" | "minecraft:small_fireball" => {
+                    "minecraft:fireball"
+                    | "minecraft:small_fireball"
+                    | "minecraft:wind_charge"
+                    | "minecraft:breeze_wind_charge" => {
                         if let Some(p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
                             self.add_projectile(p);
                         }
@@ -368,8 +478,11 @@ impl Game<'_> {
     }
     /// A saved mob and, under `Passengers`, the mobs riding it.
     pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
-        self.next_entity += 1;
         let uuid = entity_nbt::uuid(&tag);
+        if let Some(id) = uuid.and_then(|u| self.restored_vehicle(u)) {
+            return Some(id);
+        }
+        self.next_entity += 1;
         // Structure mobs that generation left to finish: saves from before
         // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
@@ -379,6 +492,9 @@ impl Game<'_> {
         }
         let riders = self.take_mob_passengers(&mut tag);
         let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
+        if horizon_client::mobs::camel::is_camel(m.species()) {
+            horizon_client::mobs::camel::finish_load(&mut m, self.world.game_time);
+        }
         // `NeutralMob.readPersistentAngerSaveData`: the anger runs until its
         // end time, and the mob is angry at the target again.
         m.extra.anger = horizon_client::mobs::anger_left(m.extra.anger_end, self.world.game_time);
@@ -538,6 +654,86 @@ impl Game<'_> {
         }
         i
     }
+    /// `RootVehicle.Attach` names the immediate mount, not the root of its tree.
+    pub(super) fn root_vehicle_uuid(&mut self, id: Option<u32>) -> Option<[i32; 4]> {
+        Some(self.uuid_for(id?))
+    }
+    /// The vehicle with this UUID, among the ones in the world.
+    pub(super) fn vehicle_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        let id = *self
+            .persist
+            .uuids
+            .iter()
+            .find(|(_, u)| **u == uuid)
+            .map(|(id, _)| id)?;
+        let there = self.mobs.iter().any(|m| m.id == id && m.alive())
+            || self.boats.iter().any(|b| b.id == id)
+            || self.carts.iter().any(|c| c.id == id);
+        there.then_some(id)
+    }
+    /// A vehicle already in the world that was restored from the player's file
+    /// during this load (not any entity whose UUID is remembered).
+    fn restored_vehicle(&self, uuid: [i32; 4]) -> Option<u32> {
+        if !self.persist.restored.contains(&uuid) {
+            return None;
+        }
+        self.vehicle_by_uuid(uuid)
+    }
+    /// Vanilla stores the root entity in the player's file, outside chunk entities.
+    /// Keep the raw wrapper until attachment succeeds, including unsupported trees.
+    pub(super) fn restore_saved_vehicle(
+        &mut self,
+        uuid: [i32; 4],
+        raw: Option<&Tag>,
+    ) -> Option<u32> {
+        if let Some(id) = self.vehicle_by_uuid(uuid) {
+            return Some(id);
+        }
+        let tag = raw?.get("RootVehicle")?.get("Entity")?.clone();
+        let root_uuid = entity_nbt::uuid(&tag)?;
+        let kind = entity_nbt::kind(&tag)?;
+        if !self.res.mob_types().contains_key(&kind)
+            && super::boats::any_boat_wood(&kind).is_none()
+            && super::minecarts::CartKind::from_id(&kind).is_none()
+        {
+            return None;
+        }
+        if self.vehicle_by_uuid(root_uuid).is_none() {
+            let at = entity_nbt::position(&tag)?;
+            let key = (
+                (at.x.floor() as i32).div_euclid(16),
+                (at.z.floor() as i32).div_euclid(16),
+            );
+            self.persist.restored.insert(root_uuid);
+            self.world.loaded_entities.push((key, vec![tag]));
+            self.spawn_loaded_entities();
+        }
+        self.persist.restored.insert(uuid);
+        self.vehicle_by_uuid(uuid)
+    }
+    /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
+    /// names, once the vehicle is in the world.
+    pub(super) fn restore_root_vehicle(&mut self) {
+        if self.serving.is_some()
+            || self.options.dedicated.is_some()
+            || self.riding.is_some()
+            || self.player.is_none()
+        {
+            return;
+        }
+        let Some(uuid) = self.pending_vehicle else {
+            return;
+        };
+        let raw = self.level.player_extra.clone();
+        let Some(id) = self.restore_saved_vehicle(uuid, raw.as_ref()) else {
+            return;
+        };
+        if let Some(Tag::Compound(p)) = &mut self.level.player_extra {
+            p.remove(&"RootVehicle".into());
+        }
+        self.pending_vehicle = None;
+        self.riding = Some(id);
+    }
     /// A mob's entity tag with the mobs riding it under `Passengers`.
     pub(super) fn mob_tree_nbt(&mut self, i: usize) -> Tag {
         let id = self.mobs[i].id;
@@ -552,11 +748,24 @@ impl Game<'_> {
             -1
         };
         self.mobs[i].extra.angry_at = if anger > 0 {
-            self.mobs[i].ai.target
+            // A wolf keeps its anger's target itself, also once the target
+            // is gone (`tame::update_persistent_anger`).
+            if self.mobs[i].species() == horizon_client::mobs::Species::Wolf {
+                self.mobs[i].extra.angry_at
+            } else {
+                self.mobs[i].ai.target
+            }
         } else {
             None
         };
         let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+        if horizon_client::mobs::camel::is_camel(self.mobs[i].species())
+            && let Tag::Compound(c) = &mut tag
+        {
+            let tick =
+                horizon_client::mobs::camel::synced_pose_tick(&self.mobs[i], self.world.game_time);
+            c.insert("LastPoseTick".into(), Tag::Long(tick));
+        }
         self.write_leash(&mut tag, i);
         self.put_mob_passengers(&mut tag, id);
         tag
@@ -588,7 +797,10 @@ impl Game<'_> {
         if cart.items.is_empty() || cart.items.iter().any(Option::is_some) {
             return;
         }
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         let p = cart.position;
         let pos = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
         let biome = self.biome_name_at(p).unwrap_or_default();
@@ -625,7 +837,7 @@ impl Game<'_> {
         *self.persist.uuids.entry(id).or_insert_with(random_uuid)
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
-    fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
+    pub(super) fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
         let registry = self.pack.assets.registry;
         let state = match tag.get("Name") {
             Some(Tag::String(name)) => BlockState {
