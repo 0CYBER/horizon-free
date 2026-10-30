@@ -59,6 +59,8 @@ Whoever moves the work (the orchestrator on each heartbeat, or anyone in their p
    `2026-43.md`): `# Title`, a paragraph or two for players, then `## Technical` and the same week for
    contributors, with its pull requests. `build` puts it into roadmap/roadmap.json, which the website reads from main; the hub's Journal tab
    shows it among the releases, and `/data/journal.json` carries it to Kira's #updates and to X.
+   In the same pass, `python3 tools/parity_gaps.py readme --write` refreshes the parity headline: the
+   player-visible gaps still open in the port ledger's ten lists (#3512 to #3521), on the README and the website.
 6. Suggestions from the website and Discord reach the maintainers' private channel through Kira (below). A good
    one becomes an item in a normal pull request; none is published automatically.
 

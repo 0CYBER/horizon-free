@@ -236,6 +236,11 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     } else if path.ends_with("_banner_pattern") {
         // The item name component of the pattern items that have one.
         Some(format!("item.minecraft.{path}.new"))
+    } else if &*stack.item == "minecraft:shield"
+        && let Some(color) = stack.data().and_then(|d| d.base_color.as_deref())
+    {
+        // `ShieldItem.getName`: the banner's base colour names the shield.
+        Some(format!("item.minecraft.shield.{color}"))
     } else {
         None
     };
@@ -873,6 +878,7 @@ pub fn styled_name(stack: &ItemStack, fallback: impl FnOnce() -> String) -> crat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_world::loot::PackOverlay;
     use std::sync::Arc;
 
     #[test]
@@ -1319,7 +1325,7 @@ mod tests {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
-        let items = crate::items::Items::catalog(&root).unwrap();
+        let items = crate::items::Items::catalog(&root, &PackOverlay::NONE).unwrap();
         let enchantments = crate::enchant::Enchantments::load(&root);
         let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
         for (item, expected) in [

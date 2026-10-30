@@ -324,6 +324,9 @@ def scenarios():
     # scenario waits for #2720: a rearing horse is immobile (AbstractHorse.isImmobile).
     add('llama_hurt', 200, ['player 4.5 -60 0.5', 'mob minecraft:llama 0.5 -60 0.5 0 182 persistent']
         + [f'hurt {t} 0' for t in range(10, 190, 25)])
+    # Constructor path maluses: an Animal avoids fire (FIRE -1, FIRE_IN_NEIGHBOR 16).
+    add('pig_tempt_fire', 100, ['player 9.5 -60 0.5 hand=minecraft:carrot', 'fill 3 -61 -3 3 -61 3 minecraft:netherrack',
+                                'fill 3 -60 -3 3 -60 3 minecraft:fire', 'mob minecraft:pig 0.5 -60 0.5 0 221 persistent'])
     # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
     # avoidSun: the path stops at the first node the sky sees).
     add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',

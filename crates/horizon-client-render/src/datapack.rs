@@ -423,8 +423,30 @@ pub struct DataStore {
     pub predicates: BTreeMap<String, serde_json::Value>,
     /// `item_modifier` files, for `/item modify`.
     pub item_modifiers: BTreeMap<String, serde_json::Value>,
+    /// The content tables' raw files from the packs after the built-in one:
+    /// `recipe/`, `loot_table/`, `advancement/` and `tags/…/` files, by
+    /// `<kind-dir>/<ns>:<path>`, each id's files in pack order. The tables
+    /// merge them over what they read from the resource root.
+    pub files: BTreeMap<String, Vec<Vec<u8>>>,
     /// Functions that failed to parse (id, message), for logging.
     pub errors: Vec<(String, String)>,
+}
+/// `<kind-dir>/<ns>:<path>` for a pack file the content tables read:
+/// `recipe/`, `loot_table/`, `advancement/` or `tags/<sub>/`, where the id
+/// keeps the sub path so a nested tag kind stays addressable.
+fn content_id(file: &str) -> Option<String> {
+    let rest = file.strip_prefix("data/")?;
+    let (ns, rest) = rest.split_once('/')?;
+    let (kind, rest) = rest.split_once('/')?;
+    let kind = match kind {
+        "recipe" | "loot_table" | "advancement" => kind,
+        "tags" => {
+            let (sub, name) = rest.rsplit_once('/')?;
+            return Some(format!("tags/{sub}/{ns}:{}", name.strip_suffix(".json")?));
+        }
+        _ => return None,
+    };
+    Some(format!("{kind}/{ns}:{}", rest.strip_suffix(".json")?))
 }
 /// `ns:path` for a file `data/<ns>/<kind>/<path>.<ext>`.
 fn resource_id(file: &str, kind: &str, ext: &str) -> Option<String> {
@@ -440,7 +462,22 @@ impl DataStore {
     pub fn load(packs: &[&DataPack]) -> Self {
         let mut s = Self::default();
         for pack in packs {
-            for f in pack.list_kinds(&["function", "item_modifier", "predicate", "tags/function"]) {
+            // `tags` walks the whole tags tree, so a `tags/function` file is
+            // listed by both kinds: handle every file once.
+            let mut seen = std::collections::BTreeSet::new();
+            let builtin = pack.id == "vanilla";
+            for f in pack.list_kinds(&[
+                "advancement",
+                "function",
+                "item_modifier",
+                "loot_table",
+                "predicate",
+                "recipe",
+                "tags",
+            ]) {
+                if !seen.insert(f.clone()) {
+                    continue;
+                }
                 if let Some(id) = resource_id(&f, "function", ".mcfunction")
                     && let Some(bytes) = pack.read(&f)
                 {
@@ -470,6 +507,14 @@ impl DataStore {
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.item_modifiers.insert(id, v);
+                } else if !builtin
+                    && let Some(id) = content_id(&f)
+                    && let Some(bytes) = pack.read(&f)
+                {
+                    // The built-in pack's content files are the resource
+                    // root's own, which the tables read from disk; only the
+                    // world's packs come through here.
+                    s.files.entry(id).or_default().push(bytes);
                 }
             }
         }

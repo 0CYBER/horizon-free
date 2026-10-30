@@ -27,6 +27,7 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::LegacyRandom,
 };
+use horizon_world::loot::PackOverlay;
 use horizon_world::{chunk::BlockState, registry::BlockRegistry, registry::BlockStateId};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -874,7 +875,7 @@ pub fn main() -> horizon_client::Result<()> {
         .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
         .collect();
     let biomes = Biomes::load(root)?;
-    let items = Items::load(root, registry, &facts)?;
+    let items = Items::load(root, registry, &facts, &PackOverlay::NONE)?;
     let tables = LightTables::load(root, registry, &facts)?;
     let collision = collisions::load(root, registry)?;
     let air = registry.default_state("minecraft:air").ok_or("no air")?;

@@ -23,6 +23,7 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::{LegacyRandom, RandomSource},
 };
+use horizon_world::loot::PackOverlay;
 use std::{collections::HashMap, fmt::Write as _, fs, path::Path, sync::Arc};
 
 struct Level<'a> {
@@ -399,7 +400,7 @@ pub fn main() -> horizon_client::Result<()> {
     let assets = Assets::load(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
     let mob_data = MobData::load(root, &facts);
-    let items = Items::tags_only(root)?;
+    let items = Items::tags_only(root, &PackOverlay::NONE)?;
     let enchantments = Enchantments::load(root);
     let types = MobTypes::load(root)?;
     let registries = SpawnRegistries::load(root);
