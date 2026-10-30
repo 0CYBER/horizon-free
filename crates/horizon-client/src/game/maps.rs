@@ -348,7 +348,7 @@ pub(super) fn decoration_pose(d: &Decoration, z: f32) -> glam::Mat4 {
         * glam::Mat4::from_scale(glam::Vec3::splat(4.0))
         * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.125, 0.0))
 }
-fn shown_on_frame(sprite: &str) -> bool {
+pub(super) fn shown_on_frame(sprite: &str) -> bool {
     !matches!(
         decoration_type(sprite),
         Some("player" | "red_marker" | "blue_marker" | "player_off_map" | "player_off_limits")

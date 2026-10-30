@@ -12,6 +12,7 @@
 //! portal) until the player is in that dimension and its exit is loaded.
 use super::{Dim, Game, Screen};
 use horizon_client::Result;
+use horizon_client::fast_hash::FxHashMap;
 use horizon_client::nether_portal::{ENTITY_DELAY, PortalState};
 use horizon_core::{
     geometry::{Aabb, Axis, Vec3},
@@ -87,7 +88,7 @@ pub(super) struct Portals {
     /// Items and mobs, by entity id.
     entities: HashMap<u32, PortalState>,
     /// Positions before this tick's moves, by entity id.
-    pub(super) before: HashMap<u32, Vec3>,
+    pub(super) before: FxHashMap<u32, Vec3>,
     arrivals: Vec<Arrival>,
     /// The vehicles server players ride that went through a portal this
     /// tick, in their level, with their entry: they carry their riders
@@ -632,19 +633,29 @@ impl Game<'_> {
         for c in &self.carts {
             self.portals.before.insert(c.id, c.position);
         }
-        let ids: Vec<(u32, bool)> = self
-            .dropped
-            .iter()
-            .map(|e| (e.id, true))
-            .chain(self.mobs.iter().map(|m| (m.id, self.mob_can_use_portal(m))))
-            .chain(
-                self.boats
-                    .iter()
-                    .map(|b| b.id)
-                    .chain(self.carts.iter().map(|c| c.id))
-                    .map(|id| (id, self.vehicle_can_use_portal(id))),
-            )
-            .collect();
+        // Only an entity in a portal, or cooling down from one, has a state
+        // here: whether the others could use a portal is not worth asking
+        // for each of them on every tick.
+        let mut ids: Vec<(u32, bool)> = Vec::new();
+        if !self.portals.entities.is_empty() {
+            let tracked = &self.portals.entities;
+            for e in &self.dropped {
+                if tracked.contains_key(&e.id) {
+                    ids.push((e.id, true));
+                }
+            }
+            for m in &self.mobs {
+                if tracked.contains_key(&m.id) {
+                    ids.push((m.id, self.mob_can_use_portal(m)));
+                }
+            }
+            let vehicles = self.boats.iter().map(|b| b.id);
+            for id in vehicles.chain(self.carts.iter().map(|c| c.id)) {
+                if tracked.contains_key(&id) {
+                    ids.push((id, self.vehicle_can_use_portal(id)));
+                }
+            }
+        }
         let present: std::collections::HashSet<u32> = ids.iter().map(|(id, _)| *id).collect();
         self.portals.entities.retain(|id, _| present.contains(id));
         for (id, allowed) in ids {

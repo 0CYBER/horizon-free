@@ -869,10 +869,18 @@ pub struct Extra {
     pub synced_pose: u8,
     /// `LivingEntity.isAutoSpinAttack` (Riptide).
     pub auto_spin_attack: bool,
+    /// `LivingEntity.DATA_ARROW_COUNT_ID`: the arrows stuck in a player
+    /// (`ArrowLayer`).
+    pub arrow_count: i32,
+    /// `LivingEntity.DATA_STINGER_COUNT_ID`: the bee stingers stuck in a
+    /// player (`BeeStingerLayer`).
+    pub stinger_count: i32,
     pub main_hand_left: bool,
     /// The skin layers a player hides (`PlayerModelPart` bits, set to
     /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
     pub hidden_model_parts: u8,
+    /// `AvatarRenderState.isSpectator`: a player in spectator mode shows only its head.
+    pub spectator: bool,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,
     /// `ClientAvatarState` of a player: the cloak, bob and walked distance its cape swings with.
@@ -1252,6 +1260,13 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
+    /// `Bee.doHurtTarget` on a player: a sting that lands leaves its stinger
+    /// in them and poisons them for `poison_ticks` (none on easy).
+    StingPlayer {
+        amount: f32,
+        from: [f64; 3],
+        poison_ticks: i32,
+    },
     /// A melee hit whose effect comes only if the hit lands (husk hunger,
     /// cave spider poison, wither skeleton wither, bee and pufferfish
     /// poison): a shield-blocked hit gives nothing.

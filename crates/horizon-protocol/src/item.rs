@@ -8,7 +8,10 @@ use crate::{
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
+mod hash;
 mod skip;
+
+pub use hash::{Names, NoNames};
 
 /// minecraft:data_component_type registry ids (26.3).
 pub mod component {
@@ -614,6 +617,26 @@ impl WirePatch {
         })
     }
 }
+impl WirePatch {
+    /// The components and removals a patch in this form holds, read as
+    /// [`DelimitedSlot`] does.
+    pub fn decode(patch: &[u8]) -> Result<(Vec<(i32, Component)>, Vec<i32>)> {
+        let mut r = Reader::new(patch);
+        let positive = r.count(65536)?;
+        let negative = r.count(65536)?;
+        let mut added = Vec::with_capacity(positive.min(64));
+        for _ in 0..positive {
+            let kind = r.varint()?;
+            let len = r.count(r.remaining())?;
+            added.push((
+                kind,
+                Component::read(kind, &mut Reader::new(r.bytes(len)?))?,
+            ));
+        }
+        let removed = (0..negative).map(|_| r.varint()).collect::<Result<_>>()?;
+        Ok((added, removed))
+    }
+}
 impl PartialEq for WirePatch {
     fn eq(&self, _: &Self) -> bool {
         true
@@ -787,9 +810,7 @@ impl Codec<Stack> for Template {
 }
 
 /// HashedStack: what the client believes a slot holds. Component values are
-/// sent as hashes; Horizon sends patches without hashes, so a server whose
-/// stack carries components resynchronises that slot (as it does for any
-/// mismatched prediction).
+/// sent as hashes ([`Hashed::create`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hashed {
     pub item: i32,
@@ -798,13 +819,10 @@ pub struct Hashed {
     pub removed: Vec<i32>,
 }
 impl Hashed {
+    /// The stack hashed without registry names: only components that hold no
+    /// registry id get a hash (see [`Hashed::create`]).
     pub fn of(stack: &Stack) -> Self {
-        Self {
-            item: stack.item,
-            count: stack.count,
-            added: Vec::new(),
-            removed: stack.removed.clone(),
-        }
+        Self::create(stack, &NoNames)
     }
 }
 pub struct HashedSlot;

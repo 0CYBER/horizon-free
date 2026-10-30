@@ -239,6 +239,20 @@ impl Game<'_> {
                     (13, Value::Bool(lit)) if c.kind == super::minecarts::CartKind::Furnace => {
                         c.fuel = i32::from(*lit);
                     }
+                    // MinecartCommandBlock.onSyncedDataUpdated: setCommand
+                    // (which resets the success count) and setLastOutput.
+                    (13, Value::String(command))
+                        if c.kind == super::minecarts::CartKind::CommandBlock =>
+                    {
+                        c.command.set_command(command);
+                    }
+                    (14, Value::Text(output))
+                        if c.kind == super::minecarts::CartKind::CommandBlock =>
+                    {
+                        c.command.last_output = Some(horizon_client::scoreboard::comp_text(
+                            &horizon_client::scoreboard::tag_to_json(output),
+                        ));
+                    }
                     _ => {}
                 }
             }

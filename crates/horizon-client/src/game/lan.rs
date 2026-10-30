@@ -1531,6 +1531,7 @@ impl Game<'_> {
             // Bit 4: Riptide's spin (LivingEntity.isAutoSpinAttack).
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
+            stuck: (self.combat.stuck.arrows, self.combat.stuck.stingers),
             bed: self.sleeping,
             body: BodyFlags {
                 gliding: p.fall_flying,
@@ -1878,6 +1879,7 @@ impl Game<'_> {
             self.tick_guests(&mut host);
         }
         self.lan_living_flags(&mut host);
+        self.lan_stuck(&mut host, paused);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
@@ -2369,6 +2371,7 @@ impl Game<'_> {
             m.extra.fall_flying = body.gliding;
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
+            (m.extra.arrow_count, m.extra.stinger_count) = g.stuck;
             m.velocity = g
                 .motion
                 .as_ref()
@@ -2387,6 +2390,7 @@ impl Game<'_> {
             // ClientInformation.mainHand (HumanoidArm: 0 left, 1 right).
             m.extra.main_hand_left = g.info.main_hand == 0;
             m.extra.hidden_model_parts = !g.info.model_customisation & 0x7F;
+            m.extra.spectator = g.game_mode == horizon_client::lan::guest::SPECTATOR;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
@@ -2485,6 +2489,9 @@ impl Game<'_> {
                 self.player_ears_geometry(m, &g.name, camera, alpha as f32, packed, out);
             }
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
+            if let Some(g) = host.hub.guest(*conn) {
+                self.stuck_in_body_geometry(m, g.entity_id, camera, alpha as f32, packed, out);
+            }
             self.held_item_geometry(m, camera, alpha, packed, true, out);
             self.player_pumpkin_geometry(
                 m,

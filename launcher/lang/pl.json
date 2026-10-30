@@ -132,7 +132,6 @@
   "{days} days ago": "{days} dni temu",
   "Not played yet": "Jeszcze nie grano",
   "under a minute": "mniej niż minuta",
-  "Sign in": "Zaloguj się",
   "Sign in with Microsoft": "Zaloguj się przez Microsoft",
   "Not now": "Nie teraz",
   "Cancel": "Anuluj",
@@ -237,5 +236,6 @@
   "No mod matches.": "Żaden mod nie pasuje.",
   "{source} · needed by another mod": "{source} · wymagany przez inny mod",
   "Local file · {file}": "Plik lokalny · {file}",
-  "Update {version}": "Aktualizuj do {version}"
+  "Update {version}": "Aktualizuj do {version}",
+  "Choose image…": "Wybierz obraz…"
 }

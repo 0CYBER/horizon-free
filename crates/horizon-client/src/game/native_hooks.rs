@@ -6,12 +6,18 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 22 adds mod messages between a mod's server and client halves
+//! API 23 adds mod messages between a mod's server and client halves
 //! (`native_net_from_client`, `native_net_from_server`, and
 //! `native_net_send_to_player`, `native_net_send_to_server` in
 //! `native_net.rs`), and hearing players and mobs: `native_player_died`,
 //! `native_mob_spawned`, `native_mob_killed`, `native_item_dropped`,
 //! `native_item_picked_up`.
+//!
+//! API 22 adds what a mod needs to keep the world from changing blocks
+//! it guards: fluid and fire spreading (`native_block_spread`), pistons
+//! (`native_piston_move`), explosions (`native_explosion_detonate`),
+//! buckets (`native_fill_bucket`) and a player's attack on an entity
+//! (`native_attack_entity`).
 //!
 //! API 21 adds right clicking a block (`native_right_click_block`), and in
 //! `native_server.rs` the acting player (`native_acting_player`), a player's
@@ -118,7 +124,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 22;
+pub(crate) const NATIVE_HOOKS_API: u32 = 23;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -146,6 +152,41 @@ impl GameLevel<'_> {
         moved: bool,
     ) {
         let _ = (dimension, pos, state, changed, moved);
+    }
+
+    /// On an authoritative server, a fluid flows or fire spreads from `from`
+    /// into `to` (`kind` is `fluid` or `fire`): `FlowingFluid.spreadTo`, and
+    /// `FireBlock.tick` setting fire to `to` or burning it (`checkBurnOut`).
+    /// Set `canceled` to leave the block at `to` as it is. Fluids ask on
+    /// every flow: answer fast. API 22.
+    #[inline(always)]
+    pub(super) fn native_block_spread(
+        &self,
+        dimension: LevelDimension,
+        kind: &str,
+        from: BlockPos,
+        to: BlockPos,
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, kind, from, to, canceled);
+    }
+
+    /// On an authoritative server, the piston at `piston` is about to push
+    /// the blocks at `push` one step `direction` (`[0, 1, 0]` is up; pulling
+    /// when it retracts) and destroy those at `destroy`:
+    /// `PistonBaseBlock.moveBlocks`, once its structure resolved. Set
+    /// `canceled` and nothing moves, as when the structure can't. API 22.
+    #[inline(always)]
+    pub(super) fn native_piston_move(
+        &self,
+        dimension: LevelDimension,
+        piston: BlockPos,
+        direction: [i32; 3],
+        push: &[BlockPos],
+        destroy: &[BlockPos],
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, piston, direction, push, destroy, canceled);
     }
 }
 
@@ -728,15 +769,56 @@ impl Game<'_> {
     ) {
         let _ = (pos, face, canceled);
     }
+    /// An explosion at `center` in `dimension` (`minecraft:overworld`) is
+    /// about to break `blocks`: `ServerExplosion.explode` with its `toBlow`,
+    /// before any block is hit. Take out the positions to spare; they keep
+    /// their block and get no fire. Entities are hurt as before. Server-side.
+    /// API 22.
+    pub(super) fn native_explosion_detonate(
+        &mut self,
+        dimension: &str,
+        center: [f64; 3],
+        blocks: &mut Vec<[i32; 3]>,
+    ) {
+        let _ = (dimension, center, blocks);
+    }
+    /// A player fills (`stack` an empty bucket) or empties a bucket at `pos`:
+    /// `BucketItem.use`, where it asks `Level.mayInteract`. Set `canceled`
+    /// and the bucket does nothing. Server-side, for every player of the
+    /// world (`native_acting_player` says who). API 22.
+    pub(super) fn native_fill_bucket(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (stack, pos, canceled);
+    }
+    /// A player attacks the entity `entity` (`Entity.getId`) of type `kind`
+    /// (`minecraft:item_frame`, `minecraft:cow`, `minecraft:player`) standing
+    /// at `pos`: `ServerGamePacketListenerImpl.handleInteract`'s attack, once
+    /// in reach, where `Player.attack` starts. Set `canceled` and the blow
+    /// does nothing (no damage, no knockback, the frame keeps its item).
+    /// Server-side, for every player of the world (`native_acting_player`
+    /// says who). API 22.
+    pub(super) fn native_attack_entity(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        pos: [f64; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (entity, kind, pos, canceled);
+    }
     /// A message from `player`'s client on `channel` (`mod_id:name`), within
     /// the caps (`native_net.rs`): check `channel`, and treat `data` as the
     /// player's own bytes, checked by nothing. Runs in the tick after it
-    /// arrives, with no player's state swapped in. Server-side. API 22.
+    /// arrives, with no player's state swapped in. Server-side. API 23.
     pub(super) fn native_net_from_client(&mut self, player: u128, channel: &str, data: &[u8]) {
         let _ = (player, channel, data);
     }
     /// A message from the server on `channel` (`mod_id:name`), whose `data`
-    /// is the sender's own bytes. The window's game only. API 22.
+    /// is the sender's own bytes. The window's game only. API 23.
     pub(super) fn native_net_from_server(&mut self, channel: &str, data: &[u8]) {
         let _ = (channel, data);
     }
@@ -744,7 +826,7 @@ impl Game<'_> {
     /// message's key when the game knows it (`death.attack.lava`; none for a
     /// message it builds from the combat). It only hears. Server-side, for
     /// every player of the world, whether death messages are shown or not.
-    /// API 22.
+    /// API 23.
     pub(super) fn native_player_died(&mut self, player: u128, cause: Option<&str>) {
         let _ = (player, cause);
     }
@@ -754,7 +836,7 @@ impl Game<'_> {
     /// jockey the world spawned). One call a mob: a `/summon` with passengers
     /// tells each. Not told of a mob loaded with its chunk, leaving a hive or
     /// changing level. It only hears; the mob is already among the game's
-    /// mobs. Server-side. API 22.
+    /// mobs. Server-side. API 23.
     pub(super) fn native_mob_spawned(
         &mut self,
         dimension: &str,
@@ -766,18 +848,18 @@ impl Game<'_> {
     }
     /// `player`'s melee blow killed the mob `entity` of `kind` (other deaths
     /// aren't told yet). It only hears, after the blow landed. Server-side.
-    /// API 22.
+    /// API 23.
     pub(super) fn native_mob_killed(&mut self, player: u128, entity: u32, kind: &str) {
         let _ = (player, entity, kind);
     }
     /// `player` threw `count` of `item` (`Player.drop`: the drop key, a
-    /// menu's throw...). It only hears. Server-side. API 22.
+    /// menu's throw...). It only hears. Server-side. API 23.
     pub(super) fn native_item_dropped(&mut self, player: u128, item: &str, count: u32) {
         let _ = (player, item, count);
     }
     /// `player` is about to take `count` of `item` from the ground
     /// (`ItemEntity.playerTouch`). Set `canceled` to leave it there: the
-    /// stack isn't offered again for 10 ticks. Server-side. API 22.
+    /// stack isn't offered again for 10 ticks. Server-side. API 23.
     pub(super) fn native_item_picked_up(
         &mut self,
         player: u128,

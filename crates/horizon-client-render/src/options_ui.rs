@@ -141,6 +141,9 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
+                // Saved, but the terrain sampler has no RGSS or anisotropic filtering yet.
+                | Opt::TextureFiltering
+                | Opt::MaxAnisotropy
                 // Saved, but the mouse doesn't read it yet.
                 | Opt::CtrlClickEmulatesRightClick
         )
@@ -201,6 +204,11 @@ impl Opt {
             Opt::MaxFps => "options.framerateLimit",
             Opt::Vsync => "options.vsync",
             Opt::Fullscreen => "options.fullscreen",
+            Opt::ExclusiveFullscreen => "options.exclusiveFullscreen",
+            Opt::ExclusiveMode => "options.fullscreen.exclusive.mode",
+            Opt::GraphicsBackend => "options.graphicsApi",
+            Opt::TextureFiltering => "options.textureFiltering",
+            Opt::MaxAnisotropy => "options.maxAnisotropy",
             Opt::SmoothLighting => "options.ao",
             Opt::Clouds => "options.renderClouds",
             Opt::CloudRange => "options.renderCloudsDistance",
@@ -332,6 +340,15 @@ impl Opt {
             Opt::BiomeBlend => unit(s.biome_blend as f32, 0.0, 7.0),
             Opt::Preset => unit(preset_index(&s.graphics_preset) as f32, 0.0, 3.0),
             Opt::Mipmaps => unit(s.mipmap_levels as f32, 0.0, 4.0),
+            Opt::MaxAnisotropy => unit(s.file.int("maxAnisotropyBit") as f32, 1.0, 3.0),
+            Opt::ExclusiveMode => {
+                let last = s.video_modes.len() as f32 - 1.0;
+                if last < 0.0 {
+                    Kind::Slider(0.0)
+                } else {
+                    unit(s.video_mode_index() as f32, -1.0, last)
+                }
+            }
             Opt::WeatherRadius => unit(s.weather_radius as f32, 3.0, 10.0),
             Opt::ChunkFade => unit(s.chunk_fade, 0.0, 2.0),
             Opt::MenuBlur => unit(s.menu_blur as f32, 0.0, 10.0),
@@ -365,6 +382,19 @@ impl Opt {
                 "options.prioritizeChunkUpdates.byPlayer",
                 "options.prioritizeChunkUpdates.nearby",
             ][usize::from(s.prioritize_chunk_updates.min(2))],
+            // Options.exclusiveFullscreen: a tooltip per value.
+            Opt::ExclusiveFullscreen => {
+                if s.file.bool("exclusiveFullscreen") {
+                    "options.exclusiveFullscreen.on"
+                } else {
+                    "options.exclusiveFullscreen.off"
+                }
+            }
+            Opt::TextureFiltering => [
+                "options.textureFiltering.none",
+                "options.textureFiltering.rgss",
+                "options.textureFiltering.anisotropic",
+            ][s.file.int("textureFiltering").clamp(0, 2) as usize],
             _ => self.caption(),
         };
         format!("{key}.tooltip")
@@ -469,6 +499,26 @@ impl Opt {
                 )),
             ),
             Opt::Preset => generic(c, tr(&format!("options.graphics.{}", s.graphics_preset))),
+            Opt::MaxAnisotropy => match s.file.int("maxAnisotropyBit") {
+                0 => generic(c, tr("options.off")),
+                bit => generic(c, Text::tr("options.multiplier", &[&(1 << bit)])),
+            },
+            Opt::ExclusiveMode => match s.video_modes.get(s.video_mode_index().max(0) as usize) {
+                None if s.video_modes.is_empty() => tr("options.fullscreen.unavailable"),
+                Some(mode) if s.video_mode_index() >= 0 => generic(
+                    c,
+                    Text::tr(
+                        "options.fullscreen.entry",
+                        &[
+                            &mode.width,
+                            &mode.height,
+                            &mode.refresh_rate_label(),
+                            &mode.bits(),
+                        ],
+                    ),
+                ),
+                _ => generic(c, tr("options.fullscreen.current")),
+            },
             Opt::Mipmaps => {
                 if s.mipmap_levels == 0 {
                     generic(c, tr("options.off"))
@@ -579,6 +629,17 @@ impl Opt {
             Opt::ViewBobbing => on_off(s.view_bobbing),
             Opt::Vsync => on_off(s.vsync),
             Opt::Fullscreen => on_off(s.fullscreen),
+            Opt::ExclusiveFullscreen => on_off(s.file.bool("exclusiveFullscreen")),
+            Opt::TextureFiltering => tr([
+                "options.textureFiltering.none",
+                "options.textureFiltering.rgss",
+                "options.textureFiltering.anisotropic",
+            ][s.file.int("textureFiltering").clamp(0, 2) as usize]),
+            Opt::GraphicsBackend => tr(match s.horizon.api {
+                crate::graphics::GraphicsApi::OpenGl => "options.graphicsApi.opengl",
+                crate::graphics::GraphicsApi::Vulkan => "options.graphicsApi.vulkan",
+                _ => "options.graphicsApi.default",
+            }),
             Opt::SmoothLighting => on_off(s.smooth_lighting),
             Opt::Clouds => tr(match s.clouds.as_str() {
                 "false" => "options.off",
@@ -730,6 +791,20 @@ impl Opt {
             Opt::BiomeBlend => s.biome_blend = step(0.0, 7.0) as i32,
             Opt::Preset => s.graphics_preset = PRESETS[step(0.0, 3.0) as usize].into(),
             Opt::Mipmaps => s.mipmap_levels = step(0.0, 4.0) as i32,
+            Opt::MaxAnisotropy => s.file.set(
+                "maxAnisotropyBit",
+                crate::options_file::V::Int(step(1.0, 3.0) as i32),
+            ),
+            Opt::ExclusiveMode => {
+                // Window.setPreferredFullscreenVideoMode: -1 is the desktop's own mode.
+                let Some(last) = s.video_modes.len().checked_sub(1) else {
+                    return;
+                };
+                let index = step(-1.0, last as f32) as i32;
+                s.file.fullscreen_resolution = usize::try_from(index)
+                    .ok()
+                    .map(|i| s.video_modes[i].write());
+            }
             Opt::WeatherRadius => s.weather_radius = step(3.0, 10.0) as i32,
             Opt::ChunkFade => s.chunk_fade = step(0.0, 40.0) / 20.0,
             Opt::MenuBlur => s.menu_blur = step(0.0, 10.0) as i32,
@@ -769,6 +844,8 @@ impl Opt {
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
                 | Opt::ChunkBuilder
+                | Opt::TextureFiltering
+                | Opt::MaxAnisotropy
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
@@ -818,6 +895,45 @@ impl Opt {
             Opt::ViewBobbing => s.view_bobbing = !s.view_bobbing,
             Opt::Vsync => s.vsync = !s.vsync,
             Opt::Fullscreen => s.fullscreen = !s.fullscreen,
+            Opt::ExclusiveFullscreen => {
+                let on = s.file.bool("exclusiveFullscreen");
+                s.file
+                    .set("exclusiveFullscreen", crate::options_file::V::Bool(!on));
+            }
+            Opt::TextureFiltering => {
+                let n = next(s.file.int("textureFiltering").clamp(0, 2) as u8, 3);
+                s.file.set(
+                    "textureFiltering",
+                    crate::options_file::V::Int(i32::from(n)),
+                );
+            }
+            Opt::GraphicsBackend => {
+                // PreferredGraphicsApi: Default, OpenGL, Vulkan; a platform lacking one skips it.
+                use crate::graphics::GraphicsApi::{Auto, OpenGl, Vulkan};
+                let offered: Vec<_> = [Auto, OpenGl, Vulkan]
+                    .into_iter()
+                    .filter(|a| crate::graphics::GraphicsApi::choices().contains(a))
+                    .collect();
+                let at = offered
+                    .iter()
+                    .position(|a| *a == s.horizon.api)
+                    .unwrap_or(0);
+                let count = offered.len();
+                let api = offered[if back {
+                    (at + count - 1) % count
+                } else {
+                    (at + 1) % count
+                }];
+                s.horizon.api = api;
+                s.file.set_name(
+                    "preferredGraphicsBackend",
+                    match api {
+                        OpenGl => "opengl",
+                        Vulkan => "vulkan",
+                        _ => "default",
+                    },
+                );
+            }
             Opt::SmoothLighting => s.smooth_lighting = !s.smooth_lighting,
             Opt::Clouds => {
                 let order = ["false", "fast", "true"];
@@ -967,8 +1083,7 @@ fn drag_slider(opt: Opt, s: &mut Settings, v: f32, events: &mut Vec<Event>) {
         events.push(Event::Volume(source, after));
     }
 }
-/// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set (texture
-/// filtering and anisotropy have no option here yet).
+/// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set.
 pub fn apply_preset(s: &mut Settings) {
     let fabulous = s.graphics_preset == "fabulous";
     match s.graphics_preset.as_str() {
@@ -988,6 +1103,7 @@ pub fn apply_preset(s: &mut Settings) {
             s.cutout_leaves = false;
             s.improved_transparency = false;
             s.weather_radius = 5;
+            set_filtering(s, 1, 0);
         }
         "fancy" | "fabulous" => {
             s.biome_blend = 2;
@@ -1005,9 +1121,39 @@ pub fn apply_preset(s: &mut Settings) {
             s.cutout_leaves = true;
             s.improved_transparency = fabulous;
             s.weather_radius = 10;
+            // Fabulous takes anisotropic filtering (RGSS on a device with known issues, which
+            // wgpu does not report).
+            set_filtering(
+                s,
+                if fabulous { 2 } else { 1 },
+                if fabulous { 2 } else { 1 },
+            );
         }
         _ => {}
     }
+}
+/// The preset's `maxAnisotropyBit` and `textureFiltering` (0 none, 1 RGSS, 2 anisotropic).
+fn set_filtering(s: &mut Settings, anisotropy_bit: i32, filtering: i32) {
+    use crate::options_file::V;
+    s.file.set("maxAnisotropyBit", V::Int(anisotropy_bit));
+    s.file.set("textureFiltering", V::Int(filtering));
+}
+
+/// `Options.preferredGraphicsBackend`'s tooltip: the restart note once the choice differs from
+/// the startup one, the description, and Vulkan's warning.
+fn graphics_api_tooltip(s: &Settings) -> Text {
+    let line = |key: &str| lang::get_or(key, key);
+    let mut lines = Vec::new();
+    if s.horizon.api != s.startup_api {
+        lines.push(line("options.needsRestart"));
+        lines.push(String::new());
+    }
+    lines.push(line("options.graphicsApi.tooltip"));
+    if s.horizon.api == crate::graphics::GraphicsApi::Vulkan {
+        lines.push(String::new());
+        lines.push(line("options.graphicsApi.tooltip.vulkan"));
+    }
+    Text::literal(lines.join("\n"))
 }
 
 /// `selected_key` while a native mod's key waits (`selected_native_key`).
@@ -1647,13 +1793,16 @@ impl OptionsUi {
                     )),
                 )];
                 rows.push(Row::Header("options.video.display.header"));
+                rows.push(Row::Big(Opt::ExclusiveMode));
                 rows.extend(pairs(&[
                     Opt::MaxFps,
                     Opt::Vsync,
                     Opt::InactivityFps,
                     Opt::GuiScale,
                     Opt::Fullscreen,
+                    Opt::ExclusiveFullscreen,
                     Opt::Gamma,
+                    Opt::GraphicsBackend,
                 ]));
                 rows.push(Row::Header("options.video.quality.header"));
                 rows.push(Row::Big(Opt::Preset));
@@ -1672,6 +1821,8 @@ impl OptionsUi {
                     Opt::CloudRange,
                     Opt::CutoutLeaves,
                     Opt::ImprovedTransparency,
+                    Opt::TextureFiltering,
+                    Opt::MaxAnisotropy,
                     Opt::WeatherRadius,
                 ]));
                 rows.push(Row::Header("options.video.preferences.header"));
@@ -2000,6 +2151,21 @@ impl OptionsUi {
                 });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
+                // VideoSettingsScreen.addTitle: a changed graphics API needs a restart.
+                if page == Page::Video && s.horizon.api != s.startup_api {
+                    out.push(Widget {
+                        x: 0.0,
+                        y: 15.0,
+                        w,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: tr("options.restartRequired"),
+                            color: rgba(223, 80, 80, 255),
+                            centered: true,
+                        },
+                        list: false,
+                    });
+                }
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 let mut last_category = "";
@@ -2488,6 +2654,13 @@ impl OptionsUi {
                 };
                 if let Some(key) = key.filter(|key| lang::has(key)) {
                     tooltip = Some(atlas.font.split(&tr(&key), 170.0));
+                }
+                if let WKind::Button {
+                    act: Act::Cycle(Opt::GraphicsBackend),
+                    ..
+                } = &wd.kind
+                {
+                    tooltip = Some(atlas.font.split(&graphics_api_tooltip(s), 170.0));
                 }
                 if let WKind::Button {
                     act: Act::Cycle(opt),
@@ -3732,6 +3905,183 @@ mod tests {
         assert_eq!(key_label(&mut ui, &s).unwrap().0, "R");
         let saved = crate::mod_list::ModList::parse(&s.mods.serialize());
         assert_eq!(saved.keys_of("zoom"), vec![("zoom", "key.keyboard.r")]);
+    }
+
+    fn mode(width: i32, rate: f32) -> crate::window::VideoMode {
+        crate::window::VideoMode {
+            width,
+            height: width * 9 / 16,
+            red_bits: 8,
+            green_bits: 8,
+            blue_bits: 8,
+            refresh_rate: rate,
+        }
+    }
+
+    #[test]
+    fn video_page_lists_vanilla_display_and_quality_options_in_order() {
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        let rows = ui.list_rows(&Settings::default());
+        let opts: Vec<Opt> = rows
+            .iter()
+            .flat_map(|r| match r {
+                Row::Big(o) => vec![*o],
+                Row::Pair(a, b) => std::iter::once(*a).chain(*b).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        // VideoSettingsScreen.addOptions: the exclusive mode row, displayOptions, the preset,
+        // qualityOptions, then the preferences.
+        assert_eq!(
+            opts[..9],
+            [
+                Opt::ExclusiveMode,
+                Opt::MaxFps,
+                Opt::Vsync,
+                Opt::InactivityFps,
+                Opt::GuiScale,
+                Opt::Fullscreen,
+                Opt::ExclusiveFullscreen,
+                Opt::Gamma,
+                Opt::GraphicsBackend,
+            ]
+        );
+        let at = |o| opts.iter().position(|x| *x == o).unwrap();
+        assert_eq!(at(Opt::ImprovedTransparency) + 1, at(Opt::TextureFiltering));
+        assert_eq!(at(Opt::TextureFiltering) + 1, at(Opt::MaxAnisotropy));
+        assert_eq!(at(Opt::MaxAnisotropy) + 1, at(Opt::WeatherRadius));
+    }
+
+    #[test]
+    fn exclusive_fullscreen_mode_picks_a_monitor_mode_or_the_current_one() {
+        let mut s = Settings::default();
+        // No monitor mode: the slider changes nothing.
+        Opt::ExclusiveMode.set_slider(&mut s, 1.0);
+        assert_eq!(s.file.fullscreen_resolution, None);
+        s.video_modes = vec![mode(1280, 60.0), mode(1920, 144.0), mode(2560, 59.94)];
+        assert_eq!(s.video_mode_index(), -1);
+        // IntRange(-1, 2): the slider's thirds are -1, 0, 1, 2.
+        Opt::ExclusiveMode.set_slider(&mut s, 2.0 / 3.0);
+        assert_eq!(s.video_mode_index(), 1);
+        assert_eq!(Opt::ExclusiveMode.slider_position(&s), Some(2.0 / 3.0));
+        Opt::ExclusiveMode.set_slider(&mut s, 1.0);
+        assert_eq!(s.video_mode_index(), 2);
+        Opt::ExclusiveMode.set_slider(&mut s, 0.0);
+        assert_eq!(s.file.fullscreen_resolution, None);
+    }
+
+    #[test]
+    fn exclusive_fullscreen_and_its_tooltips_follow_the_option() {
+        let mut s = Settings::default();
+        assert!(!s.file.bool("exclusiveFullscreen"));
+        assert_eq!(
+            Opt::ExclusiveFullscreen.tooltip_key(&s),
+            "options.exclusiveFullscreen.off.tooltip"
+        );
+        Opt::ExclusiveFullscreen.cycle(&mut s, false, [854, 480]);
+        assert!(s.file.bool("exclusiveFullscreen"));
+        assert_eq!(
+            Opt::ExclusiveFullscreen.tooltip_key(&s),
+            "options.exclusiveFullscreen.on.tooltip"
+        );
+        // The mode row's own tooltip says it only matters with Exclusive Fullscreen.
+        assert_eq!(
+            Opt::ExclusiveMode.tooltip_key(&s),
+            "options.fullscreen.exclusive.mode.tooltip"
+        );
+    }
+
+    #[test]
+    fn the_graphics_api_option_cycles_default_opengl_vulkan_and_asks_for_a_restart() {
+        use crate::graphics::GraphicsApi;
+        let mut s = Settings::default();
+        s.startup_api = s.horizon.api;
+        let offered = GraphicsApi::choices();
+        let mut seen = vec![s.horizon.api];
+        for _ in 1..offered.len() {
+            Opt::GraphicsBackend.cycle(&mut s, false, [854, 480]);
+            seen.push(s.horizon.api);
+        }
+        // Dx12 is Horizon's own Graphics page's; this option has the three of vanilla.
+        assert!(!seen.contains(&GraphicsApi::Dx12));
+        assert_eq!(seen[0], GraphicsApi::Auto);
+        if offered.len() == 3 {
+            assert_eq!(seen[1..], [GraphicsApi::OpenGl, GraphicsApi::Vulkan]);
+            assert_eq!(s.file.name("preferredGraphicsBackend"), "vulkan");
+            Opt::GraphicsBackend.cycle(&mut s, false, [854, 480]);
+            assert_eq!(s.horizon.api, GraphicsApi::Auto);
+            assert_eq!(s.file.name("preferredGraphicsBackend"), "default");
+        }
+    }
+
+    #[test]
+    fn texture_filtering_rows_exist_and_the_presets_set_them() {
+        let mut s = Settings::default();
+        for (preset, bit, filtering) in [("fast", 1, 0), ("fancy", 1, 1), ("fabulous", 2, 2)] {
+            s.graphics_preset = preset.into();
+            apply_preset(&mut s);
+            assert_eq!(s.file.int("maxAnisotropyBit"), bit, "{preset}");
+            assert_eq!(s.file.int("textureFiltering"), filtering, "{preset}");
+        }
+        // Nothing samples the terrain atlas with them yet, so the buttons stay greyed out.
+        assert!(!Opt::TextureFiltering.available());
+        assert!(!Opt::MaxAnisotropy.available());
+    }
+
+    #[test]
+    #[ignore = "requires prepared language data in HORIZON_TEST_RESOURCES; run alone"]
+    fn the_new_video_options_read_as_vanilla_words_them() {
+        use crate::graphics::GraphicsApi;
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        lang::set(lang::Language::load(&[&root], "en_us"));
+        let mut s = Settings::default();
+        assert_eq!(Opt::ExclusiveMode.label(&s).plain(), "Setting unavailable");
+        s.video_modes = vec![mode(1280, 60.0), mode(1920, 144.0), mode(2560, 59.94)];
+        assert_eq!(
+            Opt::ExclusiveMode.label(&s).plain(),
+            "Exclusive Fullscreen Mode: Current"
+        );
+        Opt::ExclusiveMode.set_slider(&mut s, 2.0 / 3.0);
+        assert_eq!(
+            Opt::ExclusiveMode.label(&s).plain(),
+            "Exclusive Fullscreen Mode: 1920x1080@144 (24bit)"
+        );
+        Opt::ExclusiveMode.set_slider(&mut s, 1.0);
+        assert_eq!(
+            Opt::ExclusiveMode.label(&s).plain(),
+            "Exclusive Fullscreen Mode: 2560x1440@59.94 (24bit)"
+        );
+        s.horizon.api = GraphicsApi::Vulkan;
+        assert_eq!(
+            Opt::GraphicsBackend.label(&s).plain(),
+            "Graphics API: Prefer Vulkan (Experimental)"
+        );
+        assert!(
+            graphics_api_tooltip(&s)
+                .plain()
+                .starts_with("Requires a game restart to take effect.\n\n")
+        );
+        s.startup_api = GraphicsApi::Vulkan;
+        assert!(
+            graphics_api_tooltip(&s)
+                .plain()
+                .starts_with("Which graphics API")
+        );
+        s.file
+            .set("maxAnisotropyBit", crate::options_file::V::Int(2));
+        s.file
+            .set("textureFiltering", crate::options_file::V::Int(2));
+        assert_eq!(
+            Opt::MaxAnisotropy.label(&s).plain(),
+            "Anisotropic Filtering: 4x"
+        );
+        assert_eq!(
+            Opt::TextureFiltering.label(&s).plain(),
+            "Texture Filtering: Anisotropic"
+        );
     }
 
     #[test]

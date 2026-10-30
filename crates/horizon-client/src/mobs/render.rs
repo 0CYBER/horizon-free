@@ -1397,6 +1397,120 @@ pub fn ears(
         out,
     );
 }
+/// `PlayerModel.bodyParts`: what `getRandomBodyPart` picks from.
+const BODY_PARTS: [&str; 6] = [
+    "head",
+    "body",
+    "left_arm",
+    "right_arm",
+    "left_leg",
+    "right_leg",
+];
+
+/// The cubes of a part as `ModelPart.cubes` has them: min and max corners in
+/// model units. The part keeps six faces per cube, in cube order.
+fn cube_bounds(part: &Part) -> Vec<[f32; 6]> {
+    let size = if part.polygons.len().is_multiple_of(6) {
+        6
+    } else {
+        part.polygons.len().max(1)
+    };
+    part.polygons
+        .chunks(size)
+        .map(|faces| {
+            let mut b = [f32::MAX, f32::MAX, f32::MAX, f32::MIN, f32::MIN, f32::MIN];
+            for v in faces.iter().flat_map(|f| f.vertices) {
+                for k in 0..3 {
+                    b[k] = b[k].min(v[k]);
+                    b[3 + k] = b[3 + k].max(v[k]);
+                }
+            }
+            b
+        })
+        .collect()
+}
+
+/// `StuckInBodyLayer.snapToFace`.
+fn snap_to_face(value: f32) -> f32 {
+    if value > 0.5 { 1.0 } else { 0.5 }
+}
+
+/// `StuckInBodyLayer.submit` (with `submitStuckItem`) for a player: `count`
+/// copies of `item` (`ArrowLayer`'s arrow model, `BeeStingerLayer`'s stinger)
+/// stuck in random cubes of the posed body, placed from a random source
+/// seeded by the entity id `id`. `on_surface` is `PlacementStyle.ON_SURFACE`.
+#[allow(clippy::too_many_arguments)]
+pub fn stuck_in_body(
+    m: &Mob,
+    id: i32,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    count: i32,
+    on_surface: bool,
+    item: &Part,
+    uv: [f32; 4],
+    light: u32,
+    out: &mut Vec<Vertex>,
+) {
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    if count <= 0 {
+        return;
+    }
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let mut random = LegacyRandom::new(i64::from(id));
+    for _ in 0..count {
+        let name = BODY_PARTS[random.next_int_bound(BODY_PARTS.len() as i32).unwrap_or(0) as usize];
+        let Some(part) = find_part(&model, name) else {
+            return;
+        };
+        let cubes = cube_bounds(part);
+        let Ok(index) = random.next_int_bound(cubes.len() as i32) else {
+            return;
+        };
+        let cube = cubes[index as usize];
+        let Some(mut t) = part_matrix(&model, base, &poses, name, 0.0) else {
+            return;
+        };
+        let mut mid = [
+            random.next_float(),
+            random.next_float(),
+            random.next_float(),
+        ];
+        if on_surface {
+            let plane = random.next_int_bound(3).unwrap_or(0) as usize;
+            if plane < 3 {
+                mid[plane] = snap_to_face(mid[plane]);
+            }
+        }
+        let lerp = |k: usize| cube[k] + mid[k] * (cube[3 + k] - cube[k]);
+        t *= glam::Mat4::from_translation(glam::Vec3::new(lerp(0), lerp(1), lerp(2)) / 16.0);
+        let (dx, dy, dz) = (
+            -(mid[0] * 2.0 - 1.0),
+            -(mid[1] * 2.0 - 1.0),
+            -(mid[2] * 2.0 - 1.0),
+        );
+        let dxz = f64::from(dx * dx + dz * dz).sqrt() as f32;
+        let degrees = |y: f32, x: f32| {
+            (horizon_core::jmath::atan2(f64::from(y), f64::from(x)) * 180.0
+                / f64::from(std::f32::consts::PI)) as f32
+        };
+        let y_rot = degrees(dx, dz);
+        let x_rot = degrees(dy, dxz);
+        t *= glam::Mat4::from_rotation_y((y_rot - 90.0).to_radians())
+            * glam::Mat4::from_rotation_z(x_rot.to_radians());
+        super::render_model(item, t, &|p| p.pose, uv, light, 0, out);
+    }
+}
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
@@ -1908,6 +2022,45 @@ pub fn held_item_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Six faces whose corners span `min` to `max`.
+    fn cube(min: [f32; 3], max: [f32; 3]) -> Vec<super::super::Polygon> {
+        let corner = |p: [f32; 3]| [p[0], p[1], p[2], 0.0, 0.0];
+        (0..6)
+            .map(|_| super::super::Polygon {
+                normal: [0.0; 3],
+                vertices: [corner(min), corner(max), corner(min), corner(max)],
+            })
+            .collect()
+    }
+
+    /// `ModelPart.cubes`: the corners of each cube of a part, six faces apiece.
+    #[test]
+    fn cube_bounds_follow_the_faces_of_each_cube() {
+        let mut polygons = cube([-4.0, -8.0, -2.0], [4.0, 0.0, 2.0]);
+        polygons.extend(cube([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]));
+        let part = Part {
+            name: "body".into(),
+            pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            polygons,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            cube_bounds(&part),
+            vec![
+                [-4.0, -8.0, -2.0, 4.0, 0.0, 2.0],
+                [0.0, 0.0, 0.0, 1.0, 2.0, 3.0]
+            ]
+        );
+    }
+
+    /// `StuckInBodyLayer.snapToFace`.
+    #[test]
+    fn a_stuck_item_snaps_to_the_far_or_the_middle_face() {
+        assert_eq!(snap_to_face(0.75), 1.0);
+        assert_eq!(snap_to_face(0.5), 0.5);
+        assert_eq!(snap_to_face(0.1), 0.5);
+    }
 
     /// VillagerProfessionLayer's textures (type, or baby for a baby;
     /// profession; level) of every villager and zombie villager are in the

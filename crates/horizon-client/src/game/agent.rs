@@ -422,6 +422,7 @@ impl Game<'_> {
             Screen::ConfirmLink => "confirm-link",
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
+            Screen::BlockEditor => "block-editor",
             Screen::Win => "win",
         }
     }
@@ -602,6 +603,9 @@ impl Game<'_> {
             Mode::BackupBeforeUpgrade { world, .. } => {
                 json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
             }
+            Mode::LowDiskSpace { world } => {
+                json!({ "mode": "low-disk-space", "folder": world.folder, "name": world.name })
+            }
             Mode::Recover { world, issues } => {
                 let issue = |i: &Option<horizon_client::save::DatIssue>| match i {
                     None => json!(null),
@@ -625,6 +629,7 @@ impl Game<'_> {
             Mode::MultiplayerWarning { check } => {
                 json!({ "mode": "multiplayer-warning", "check": check })
             }
+            Mode::Onboarding(_) => json!({ "mode": "accessibility-onboarding" }),
         }
     }
 

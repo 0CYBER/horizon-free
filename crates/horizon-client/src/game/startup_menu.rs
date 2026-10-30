@@ -77,6 +77,10 @@ impl StartupMenu {
             );
             title.last_server = settings.file.string("lastServer");
             title.skip_multiplayer_warning = settings.file.bool("skipMultiplayerWarning");
+            // Gui.addInitialScreens: the accessibility onboarding comes first.
+            if settings.file.bool("onboardAccessibility") {
+                title.start_onboarding();
+            }
             self.title = Some(title);
         }
     }
@@ -307,10 +311,26 @@ impl Loading {
             gui.atlas.font.uniform = self.settings.force_unicode;
             gui.atlas.font.japanese = self.settings.japanese_glyphs;
         }
-        if let Some(window) = &self.window
-            && let Some(want) = self.fullscreen.request(self.settings.fullscreen)
-        {
-            window.set_fullscreen(want.then_some(winit::window::Fullscreen::Borderless(None)));
+        if let Some(window) = self.window.clone() {
+            let modes = window
+                .current_monitor()
+                .or_else(|| window.primary_monitor())
+                .map(|m| horizon_client::window::monitor_video_modes(&m))
+                .unwrap_or_default();
+            let preferred = self
+                .settings
+                .file
+                .fullscreen_resolution
+                .as_deref()
+                .and_then(horizon_client::window::VideoMode::read);
+            self.fullscreen.apply(
+                &window,
+                self.settings.fullscreen,
+                self.settings.file.bool("exclusiveFullscreen"),
+                preferred,
+                false,
+            );
+            self.settings.video_modes = modes;
         }
         self.update_menu_cursor();
     }
@@ -465,6 +485,7 @@ impl Loading {
             Action::Options => self.open_menu_options(Page::Main),
             Action::Accessibility => self.open_menu_options(Page::Accessibility),
             Action::Language => self.open_menu_options(Page::Language),
+            Action::Sounds => self.open_menu_options(Page::Sound),
             Action::Credits => self.open_menu_options(Page::Credits),
             Action::DataPacks { dir, selected } => {
                 let resources = self.vanilla_root.clone();
@@ -693,6 +714,14 @@ impl Loading {
                 .draw(&self.settings, batch, &gui.atlas, self.menu.cursor);
         } else if let Some(title) = &mut self.menu.title {
             title.poll_backup();
+            if std::mem::take(&mut title.onboarding_finished) {
+                // Options.onboardingAccessibilityFinished.
+                self.settings.file.set(
+                    "onboardAccessibility",
+                    horizon_client::options_file::V::Bool(false),
+                );
+                self.settings.save(&Game::options_path());
+            }
             let _ = title.update_toast(self.settings.notification_display_time);
             title.draw(
                 &gui.atlas,
