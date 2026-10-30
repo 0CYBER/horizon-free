@@ -1171,7 +1171,7 @@ impl Hub {
                         events.push(HostEvent::Left(Box::new(g)));
                     }
                 }
-                NetEvent::Packet(conn, packet) => {
+                NetEvent::Packet(conn, packet, bytes) => {
                     let Some(g) = self.guest_mut(conn) else {
                         continue;
                     };
@@ -1179,15 +1179,19 @@ impl Hub {
                     if !g.left_reason.is_empty() {
                         continue;
                     }
-                    g.inbox.push_back(*packet);
+                    g.inbox.push_back((*packet, bytes));
+                    g.inbox_bytes += bytes;
                     // A client sending faster than its budget is handled
                     // would grow the inbox until the server runs out of memory.
-                    if g.inbox.len() > INBOX_LIMIT {
-                        g.inbox = Default::default();
+                    if g.inbox.len() > INBOX_LIMIT || g.inbox_bytes > INBOX_BYTES {
                         events.push(HostEvent::Warn(format!(
-                            "{} sent more packets than the server handles ({INBOX_LIMIT} waiting)",
-                            g.name
+                            "{} sent more packets than the server handles ({} waiting, {} kB)",
+                            g.name,
+                            g.inbox.len(),
+                            g.inbox_bytes >> 10
                         )));
+                        g.inbox = Default::default();
+                        g.inbox_bytes = 0;
                         self.kick(conn, translatable("disconnect.exceeded_packet_rate", &[]));
                     }
                 }
@@ -2132,7 +2136,7 @@ impl Hub {
         self.guests[i]
             .inbox
             .iter()
-            .any(|p| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
+            .any(|(p, _)| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
     }
 
     fn process_inbox(&mut self, i: usize, ctx: &mut TickCtx, events: &mut Vec<HostEvent>) {
@@ -2143,9 +2147,10 @@ impl Hub {
         g.known_moves = g.received_moves;
         let mut budget = PACKETS_PER_TICK;
         while budget > 0 {
-            let Some(packet) = self.guests[i].inbox.pop_front() else {
+            let Some((packet, bytes)) = self.guests[i].inbox.pop_front() else {
                 break;
             };
+            self.guests[i].inbox_bytes -= bytes;
             budget -= 1;
             let conn = self.guests[i].conn;
             // ServerPlayer.resetLastActionTime: every handler of a player's
@@ -2853,6 +2858,9 @@ const PACKETS_PER_TICK: usize = 400;
 /// The packets a player may have waiting (a second of its budget) before it is
 /// disconnected, as vanilla's rate-limit does: no real client gets near it.
 const INBOX_LIMIT: usize = 20 * PACKETS_PER_TICK;
+/// The same in bytes on the wire: 8000 full books would hold gigabytes. A
+/// real client's largest packets (a 100-page book) are a few hundred kB.
+const INBOX_BYTES: usize = 16 << 20;
 
 fn invalid_movement() -> Tag {
     translatable("multiplayer.disconnect.invalid_player_movement", &[])
