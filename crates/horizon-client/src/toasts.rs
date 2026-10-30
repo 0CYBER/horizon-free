@@ -71,10 +71,16 @@ pub struct SystemToast {
     changed: bool,
     last_changed: i64,
     force_hide: bool,
+    /// `SystemToastId.displayTime`, in milliseconds.
+    display_time: f64,
+    /// The title's colour (`ChatFormatting.YELLOW` unless the text is styled).
+    title_color: u32,
 }
 impl SystemToast {
     /// `SystemToastId.displayTime`'s default, in milliseconds.
     const DISPLAY_TIME: f64 = 5000.0;
+    /// `SystemToastId.LOW_DISK_SPACE`'s and `UNSECURE_SERVER_WARNING`'s display time.
+    pub const LONG_DISPLAY_TIME: f64 = 10000.0;
     pub fn new(title: String, message: Option<String>) -> Self {
         Self {
             slide: Slide::default(),
@@ -84,13 +90,33 @@ impl SystemToast {
             changed: false,
             last_changed: 0,
             force_hide: false,
+            display_time: Self::DISPLAY_TIME,
+            title_color: crate::hud::rgba(255, 255, 0, 255),
         }
+    }
+    /// A toast of an id with its own display time (`new SystemToastId(displayTime)`).
+    pub fn with_display_time(mut self, ms: f64) -> Self {
+        self.display_time = ms;
+        self
+    }
+    /// A title with its own colour (`Component.withStyle(ChatFormatting.RED)`).
+    pub fn with_title_color(mut self, color: u32) -> Self {
+        self.title_color = color;
+        self
     }
     /// `reset`: new text, and the display time starts again.
     pub fn reset(&mut self, title: String, message: Option<String>) {
         self.title = title;
         self.message = message;
         self.changed = true;
+    }
+    pub fn display_time(&self) -> f64 {
+        self.display_time
+    }
+    /// `addOrUpdate` on a toast that is still shown: `reset` to `other`'s text.
+    pub fn reset_from(&mut self, other: SystemToast) {
+        self.title_color = other.title_color;
+        self.reset(other.title, other.message);
     }
     pub fn force_hide(&mut self) {
         self.force_hide = true;
@@ -104,7 +130,7 @@ impl SystemToast {
                 self.last_changed = fully;
             }
             !self.force_hide
-                && ((fully - self.last_changed) as f64) < Self::DISPLAY_TIME * multiplier
+                && ((fully - self.last_changed) as f64) < self.display_time * multiplier
         })
     }
     /// `extractRenderState` at `y`, in from the right edge by the visible
@@ -119,7 +145,7 @@ impl SystemToast {
             + 30.0;
         let x = batch.width - width * self.slide.portion;
         background(atlas, batch, x, y, width);
-        let yellow = crate::hud::rgba(255, 255, 0, 255);
+        let yellow = self.title_color;
         match &self.message {
             Some(message) => {
                 batch.text(atlas, &self.title, x + 18.0, y + 7.0, yellow, false);
