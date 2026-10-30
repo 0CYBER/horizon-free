@@ -6911,10 +6911,16 @@ impl Game<'_> {
                 rgba(255, 255, 255, 128),
             );
         }
+        let effect_tip = if self.container.is_none() && self.craft_size == 2 && !self.mount_active()
+        {
+            self.draw_inventory_effects(batch, (ox, oy), 176)
+        } else {
+            None
+        };
         self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
-        if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
-            self.draw_inventory_effects(batch, (ox, oy), 176);
+        if let Some(lines) = effect_tip {
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
     }
     /// `AbstractContainerScreen` keeps `isQuickCrafting` and the drag it
@@ -11691,6 +11697,7 @@ impl Game<'_> {
                 oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
             );
         }
+        let effect_tip = self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             if self.cursor.0 >= ox + tx
@@ -11734,7 +11741,9 @@ impl Game<'_> {
             // A `CustomCreativeSlot`: TooltipFlag.asCreative.
             self.draw_stack_tooltip_with(batch, &item, grid, self.cursor.0, self.cursor.1, tabs);
         }
-        self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
+        if let Some(lines) = effect_tip {
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        }
     }
     fn creative_trash_hovered(batch: &HudBatch, cursor: (f32, f32)) -> bool {
         let (ox, oy) = Self::creative_origin(batch);
