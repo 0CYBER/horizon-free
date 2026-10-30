@@ -1079,6 +1079,44 @@ impl Game<'_> {
         );
     }
 
+    /// `ServerGamePacketListenerImpl.wasBlockPlacementAttempt`: a block item,
+    /// or a bucket with something in it, that is not cooling down.
+    fn was_block_placement_attempt(&mut self, hand: Hand) -> bool {
+        let Some(stack) = self.with_hand(hand, |g| g.held().cloned()) else {
+            return false;
+        };
+        let Some(info) = self.items().get(&stack.item).cloned() else {
+            return false;
+        };
+        (info.block.is_some() || horizon_client::items::bucket_contents(&stack.item).is_some())
+            && !self
+                .cooldowns
+                .is_on_cooldown(&horizon_client::cooldowns::group(
+                    &stack,
+                    info.use_cooldown.as_ref(),
+                ))
+    }
+
+    /// `ServerPlayer.sendBuildLimitMessage`: the red overlay with the limit.
+    fn build_limit_message(&self, host: &LanHost, conn: u32, too_high: bool, limit: i32) {
+        let message = horizon_client::text::Text::translate(
+            if too_high {
+                "build.tooHigh"
+            } else {
+                "build.tooLow"
+            },
+            &[horizon_client::text::Text::literal(limit.to_string())],
+        )
+        .with_color(horizon_client::text::RED);
+        host.hub.send_to(
+            conn,
+            &C::SystemChat(play::SystemChat {
+                content: horizon_client::lan::data::component_nbt(&message.component()),
+                overlay: true,
+            }),
+        );
+    }
+
     /// A packet from a guest that the hub does not handle itself.
     pub(super) fn lan_guest_packet(&mut self, host: &mut LanHost, conn: u32, packet: S) {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
@@ -1293,10 +1331,21 @@ impl Game<'_> {
                     ],
                 };
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
-                // handleUseItemOn: under spawn protection nothing is used or
-                // placed; the player is told and the blocks below go back.
-                // mayInteract: nothing is used on a block outside the world
-                // border either.
+                // handleUseItemOn: above or below the world nothing is used and
+                // the player is told the limit (the blocks are not resent);
+                // under spawn protection nothing is used or placed; the player
+                // is told and the blocks below go back. mayInteract: nothing is
+                // used on a block outside the world border either.
+                let min_y = self.world.shape.min_y;
+                let max_y = self.world.shape.max_y() - 1;
+                if p.pos[1] > max_y {
+                    self.build_limit_message(host, conn, true, max_y);
+                    return;
+                }
+                if p.pos[1] < min_y {
+                    self.build_limit_message(host, conn, false, min_y);
+                    return;
+                }
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
                 } else if self
@@ -1305,17 +1354,30 @@ impl Game<'_> {
                 {
                     let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
                     let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
-                    let swung = self.as_guest(host, conn, |g| {
+                    let used = self.as_guest(host, conn, |g| {
+                        let attempt = g.was_block_placement_attempt(hand);
                         g.forced_hit = Some(hit);
                         g.guest_use = Some(GuestUse::OnBlock(hand));
                         let swings = g.swings_started;
-                        let _ = g.use_item();
+                        let consumed = matches!(g.use_item(), Ok(Some(_)));
                         g.forced_hit = None;
                         g.guest_use = None;
-                        g.swings_started != swings
+                        (g.swings_started != swings, consumed, attempt)
                     });
+                    let swung = used.map(|u| u.0);
                     self.lan_swing_back(host, conn, swung);
                     self.guest_use_sounds(host, conn, logged, heard);
+                    // A placement that did nothing at the top or bottom of the
+                    // world says why.
+                    if let Some((_, false, true)) = used {
+                        if p.face == 1 && p.pos[1] >= max_y {
+                            self.build_limit_message(host, conn, true, max_y);
+                        } else if p.face == 0 && p.pos[1] <= min_y {
+                            self.build_limit_message(host, conn, false, min_y);
+                        }
+                    }
+                } else {
+                    self.build_limit_message(host, conn, true, max_y);
                 }
                 // The client predicted a result: correct it with what really is.
                 for pos in [
