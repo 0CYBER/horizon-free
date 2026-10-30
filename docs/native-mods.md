@@ -81,6 +81,9 @@ drops; `native_place_block` hears a block placed from an item (`BlockItem.place`
 API 15 adds block entities for a mod's blocks (`native_block_entity`, `native_block_entity_ticks`,
 `native_block_entity_tick`): made when the block is placed, ticked on the server and saved with the chunk. Bundles that use them need `"hooks": 15`.
 
+API 16 adds item slots for those block entities (`native_block_entity_container`): hoppers, comparators and breaking the
+block use them as they use vanilla's containers, and `native_block_entity_tick` also gets the slots. Bundles that use them need `"hooks": 16`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

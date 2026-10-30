@@ -3,8 +3,8 @@
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
 pub use crate::chunk::block_entity::{
     Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
-    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, ModBlockEntity, PotentSulfur, Shelf, Skull,
-    SkullSkin,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, ModBlockEntity, ModContainer, PotentSulfur,
+    Shelf, Skull, SkullSkin,
 };
 use crate::items::ItemStack;
 use std::collections::HashMap;
@@ -375,8 +375,8 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::PotentSulfur(_)
             | Self::DaylightDetector
-            | Self::Brushable(_)
-            | Self::Mod(_) => Vec::new(),
+            | Self::Brushable(_) => Vec::new(),
+            Self::Mod(m) => m.items.iter().flatten().cloned().collect(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
@@ -405,6 +405,7 @@ impl BlockEntity {
             Self::Crafter(c) => &c.items,
             Self::ChiseledBookshelf(b) => &b.items,
             Self::Shelf(b) => &b.items,
+            Self::Mod(m) => &m.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -412,8 +413,7 @@ impl BlockEntity {
             | Self::Beehive(_)
             | Self::CommandBlock(_)
             // Not a Container (only Clearable): hoppers don't reach in.
-            | Self::Campfire(_)
-            | Self::Mod(_) => &[],
+            | Self::Campfire(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -435,14 +435,14 @@ impl BlockEntity {
             Self::Crafter(c) => &mut c.items,
             Self::ChiseledBookshelf(b) => &mut b.items,
             Self::Shelf(b) => &mut b.items,
+            Self::Mod(m) => &mut m.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
             | Self::Vault(_)
             | Self::Beehive(_)
             | Self::CommandBlock(_)
-            | Self::Campfire(_)
-            | Self::Mod(_) => &mut [],
+            | Self::Campfire(_) => &mut [],
         }
     }
 }
