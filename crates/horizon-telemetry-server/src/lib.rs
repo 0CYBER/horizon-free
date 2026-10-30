@@ -7,7 +7,7 @@
 //!   least 3 installs only (`summary`), cached; the website's Benchmarks page reads it.
 //! - `POST /v1/live`: a game's anonymous "I'm playing" ping (`live`, in memory only).
 //! - `GET /v1/live`: how many play now, rounded, cached briefly.
-//! - `/hub/…`: the hub's votes (`hub`), bug reports and suggestions (`intake`).
+//! - `/hub/…`: the hub's votes (`hub`) and bug reports (`intake`).
 //! - `GET /healthz`.
 //!
 //! Abuse limits: a token bucket per IP address (kept in memory for an hour, never stored), a
@@ -64,16 +64,12 @@ pub struct Config {
     pub live_max_sessions: usize,
     /// The hub's votes and reads of their counts an IP address may make an hour.
     pub hub_per_hour: f64,
-    /// Bug reports and suggestions together an IP address may send an hour.
+    /// Bug reports an IP address may send an hour.
     pub hub_posts_per_hour: f64,
     /// Bug reports taken a day, from everyone: each one opens a GitHub issue.
     pub hub_reports_per_day: u32,
-    /// Suggestions taken a day, from everyone.
-    pub hub_suggestions_per_day: u32,
-    /// Days reports and suggestions are kept (Kira has relayed them long before).
+    /// Days reports are kept (opened as issues long before).
     pub hub_keep_days: u32,
-    /// The bearer token `GET /hub/suggestions` wants (Kira's); unset, it answers 404.
-    pub hub_token: Option<String>,
     /// Opens the website's bug reports as issues; unset, `POST /hub/report` answers 503.
     pub github_token: Option<String>,
     /// Where those issues go, `owner/name`.
@@ -95,11 +91,9 @@ impl Default for Config {
             hub_per_hour: 600.0,
             hub_posts_per_hour: 20.0,
             hub_reports_per_day: 30,
-            hub_suggestions_per_day: 200,
             hub_keep_days: 90,
-            hub_token: None,
             github_token: None,
-            github_repo: "ludovic111/horizon".into(),
+            github_repo: "horizon-rust/horizon".into(),
         }
     }
 }
@@ -108,8 +102,8 @@ impl Config {
     /// The defaults, with `HORIZON_TELEMETRY_RETENTION_DAYS`, `…_MIN_INSTALL_DAYS`,
     /// `…_REQUESTS_PER_HOUR`, `…_ITEMS_PER_DAY`, `…_TRUST_PROXY` (1), `…_ALLOW_ORIGIN`,
     /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS`, `…_HUB_PER_HOUR`,
-    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_SUGGESTIONS_PER_DAY`, `…_HUB_KEEP_DAYS`,
-    /// `…_HUB_TOKEN`, `…_GITHUB_TOKEN` and `…_GITHUB_REPO`. Empty tokens count as unset.
+    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_KEEP_DAYS`, `…_GITHUB_TOKEN` and
+    /// `…_GITHUB_REPO`. An empty token counts as unset.
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(format!("HORIZON_TELEMETRY_{k}")).ok();
         let secret = |k: &str| {
@@ -151,13 +145,9 @@ impl Config {
             hub_reports_per_day: var("HUB_REPORTS_PER_DAY")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_reports_per_day),
-            hub_suggestions_per_day: var("HUB_SUGGESTIONS_PER_DAY")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(d.hub_suggestions_per_day),
             hub_keep_days: var("HUB_KEEP_DAYS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_keep_days),
-            hub_token: secret("HUB_TOKEN"),
             github_token: secret("GITHUB_TOKEN"),
             github_repo: var("GITHUB_REPO").unwrap_or(d.github_repo),
         }
@@ -185,7 +175,7 @@ pub struct App {
     hub_key: RandomState,
     /// The hub's votes and vote counts, per hashed address.
     hub_buckets: Mutex<hub::HashedBuckets>,
-    /// The hub's reports and suggestions, per hashed address.
+    /// The hub's bug reports, per hashed address.
     hub_post_buckets: Mutex<hub::HashedBuckets>,
     /// `GET /hub/votes`'s answer and when it was made.
     votes_cache: Mutex<Option<(Instant, String)>>,
@@ -265,7 +255,7 @@ impl App {
     /// The address requests are counted under, for the rate limits only: kept in memory, never
     /// stored or logged. Behind a proxy (Railway) the TCP peer is the proxy, so it is the proxy's
     /// `X-Real-IP`, else the last `X-Forwarded-For` entry: the one the proxy added, which a client
-    /// can't choose (the first one it can).
+    /// can't choose (the first one it can). An IPv6 client counts by its /64.
     fn client(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> IpAddr {
         let header = |name: &str| headers.get(name)?.to_str().ok();
         let forwarded = self
@@ -284,9 +274,11 @@ impl App {
                     })
             })
             .flatten();
-        forwarded
-            .or(peer.map(|p| p.ip()))
-            .unwrap_or(IpAddr::from([0, 0, 0, 0]))
+        rate_key(
+            forwarded
+                .or(peer.map(|p| p.ip()))
+                .unwrap_or(IpAddr::from([0, 0, 0, 0])),
+        )
     }
 
     /// The day an install's newest row came in, if it has any left.
@@ -301,7 +293,7 @@ impl App {
     }
 
     /// Daily upkeep: totals rebuilt, expired rows removed, idle rate-limit entries and live
-    /// sessions forgotten, the hub's old reports and suggestions removed. Reports still waiting for
+    /// sessions forgotten, the hub's old reports removed. Reports still waiting for
     /// their issue are [`Self::file_pending`]'s.
     pub fn maintain(&self) -> rusqlite::Result<usize> {
         let oldest = (self.today)().saturating_sub(self.config.retention_days);
@@ -337,6 +329,22 @@ fn take<K: Hash + Eq>(buckets: &Mutex<HashMap<K, (f64, Instant)>>, per_hour: f64
     }
     *tokens -= 1.0;
     true
+}
+
+/// The address a client's requests count under: IPv4 (an IPv4-mapped IPv6 address as IPv4 too),
+/// or an IPv6 address's /64, which one home or host holds whole, so addresses rotated inside it
+/// don't get fresh buckets.
+fn rate_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+        v4 => v4,
+    }
 }
 
 fn peer(req: &Request) -> Option<SocketAddr> {
@@ -572,11 +580,26 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/hub/vote", post(hub::vote).options(hub::preflight))
         .route("/hub/votes", get(hub::votes))
         .route("/hub/report", post(intake::report).options(hub::preflight))
-        .route(
-            "/hub/suggest",
-            post(intake::suggest).options(hub::preflight),
-        )
-        .route("/hub/suggestions", get(intake::suggestions))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv6_rates_count_by_64() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // Rotated inside a /64: one key. Another /64: another key.
+        assert_eq!(rate_key(ip("2001:db8::1")), rate_key(ip("2001:db8::99")));
+        assert_ne!(rate_key(ip("2001:db8::1")), rate_key(ip("2001:db8:1::1")));
+        // IPv4-mapped counts as the IPv4 it is.
+        assert_eq!(
+            rate_key(ip("::ffff:203.0.113.7")),
+            IpAddr::from([203, 0, 113, 7])
+        );
+        // Plain IPv4 unchanged.
+        assert_eq!(rate_key(ip("203.0.113.8")), IpAddr::from([203, 0, 113, 8]));
+    }
 }

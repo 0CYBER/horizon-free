@@ -338,41 +338,115 @@ impl<'p> Stage<'p> {
         }
     }
 
-    /// A global `T name = a ? b : c;`: naga can't evaluate a conditional at global scope, so
-    /// the initializer becomes a function of ours on the same line (`T name; T hz_init_name() {
-    /// return a ? b : c; }`), called by our `main` before the pack's.
+    /// A global `T name = a ? b : c;` or, without `const`, any initialized global: naga only
+    /// evaluates constant initializers at global scope (a conditional is not one; GL drivers
+    /// also take uniforms and other globals there), so each initializer becomes a function of
+    /// ours on the same line (`T a; T hz_init_a() { return T(...); } T b; ...`), called by our
+    /// `main` before the pack's, in file order. The return converts as GLSL's initialization
+    /// does (`vec2 v = ivec2(...)`).
     pub(super) fn initializer(&mut self, words: &[usize], to: usize) {
         let text = |i: usize| self.tokens[i];
         let Some(eq) = words.iter().position(|&i| text(i) == "=") else {
             return;
         };
-        if !words[eq..].iter().any(|&i| text(i) == "?")
-            || words[..eq].iter().any(|&i| text(i) == ",")
-        {
+        // Declarators, split at top-level commas: (first word, `=` if any, end).
+        let mut declarators = Vec::new();
+        let (mut begin, mut nesting, mut assign) = (0, 0i32, None);
+        for (n, &i) in words.iter().enumerate() {
+            match text(i) {
+                "(" | "[" | "{" => nesting += 1,
+                ")" | "]" | "}" => nesting -= 1,
+                "=" if nesting == 0 && assign.is_none() => assign = Some(n),
+                "," if nesting == 0 => {
+                    declarators.push((begin, assign.take(), n));
+                    begin = n + 1;
+                }
+                _ => {}
+            }
+        }
+        declarators.push((begin, assign, words.len()));
+        let constant = words[..eq].iter().any(|&i| text(i) == "const");
+        let conditional =
+            |d: &(usize, Option<usize>, usize)| words[d.0..d.2].iter().any(|&i| text(i) == "?");
+        if constant && !declarators.iter().any(conditional) {
             return;
         }
-        let Some(name_at) = words[..eq].iter().rposition(|&i| is_ident(text(i))) else {
+        // The first declarator's name ends the type.
+        let first_end = declarators[0].1.unwrap_or(declarators[0].2);
+        let Some(name_at) = words[..first_end].iter().rposition(|&i| is_ident(text(i))) else {
             return;
         };
-        let name = text(words[name_at]).to_owned();
-        let array: String = words[name_at + 1..eq].iter().map(|&i| text(i)).collect();
-        let ty: Vec<&str> = words[..name_at]
-            .iter()
-            .map(|&i| text(i))
-            .filter(|&t| t != "const")
-            .collect();
-        let Some(ty) = ty.last() else { return };
+        // The type, with a `vec3[]`'s count written in.
+        let mut ty = String::new();
+        for &i in &words[..name_at] {
+            match text(i) {
+                "const" => {}
+                "]" if ty.ends_with('[') => match self.array_length(i) {
+                    Some(n) => write!(ty, "{n}]").unwrap(),
+                    None => return,
+                },
+                t if ty.is_empty() || t == "[" => ty.push_str(t),
+                // Qualifiers before the type (`highp`...): the type is the last word.
+                t => ty = t.to_owned(),
+            }
+        }
+        if ty.is_empty() {
+            return;
+        }
+        let mut replaced = Vec::new();
+        let mut names = Vec::new();
+        for (n, &(begin, assign, end)) in declarators.iter().enumerate() {
+            let name_at = if n == 0 { name_at } else { begin };
+            let name = text(words[name_at]).to_owned();
+            if !is_ident(&name) {
+                return;
+            }
+            let stop = assign.unwrap_or(end);
+            let mut array: String = words[name_at + 1..stop].iter().map(|&i| text(i)).collect();
+            if array == "[]" {
+                // `T x[] = T[](a, b)`: the count is written in, as the rewrite does for the name.
+                match assign.and_then(|a| self.array_length(words[a - 1])) {
+                    Some(n) => array = format!("[{n}]"),
+                    None => return,
+                }
+            }
+            let next = if n + 1 < declarators.len() {
+                format!(" {ty}")
+            } else {
+                String::new()
+            };
+            let end_token = words.get(end).copied().unwrap_or(to);
+            match assign {
+                Some(a) => {
+                    // Scalars, vectors and matrices convert; arrays and structs must match.
+                    let scalar = array.is_empty()
+                        && !ty.contains('[')
+                        && (matches!(ty.as_str(), "float" | "int" | "uint" | "bool")
+                            || ty.contains("vec")
+                            || ty.starts_with("mat"));
+                    let (open, close) = if scalar {
+                        (format!("{ty}("), ")")
+                    } else {
+                        (String::new(), "")
+                    };
+                    replaced.push((
+                        words[a],
+                        format!("; {ty}{array} hz_init_{name}() {{ return {open}"),
+                    ));
+                    replaced.push((end_token, format!("{close}; }}{next}")));
+                    names.push(name);
+                }
+                None if n + 1 < declarators.len() => replaced.push((end_token, format!(";{next}"))),
+                None => {}
+            }
+        }
         for &i in &words[..name_at] {
             if text(i) == "const" {
                 self.removed.push(i..i + 1);
             }
         }
-        self.replaced.insert(
-            words[eq],
-            format!("; {ty}{array} hz_init_{name}() {{ return"),
-        );
-        self.replaced.insert(to, "; }".into());
-        self.inits.push(name);
+        self.replaced.extend(replaced);
+        self.inits.extend(names);
     }
 
     /// A function definition or prototype: remember which parameters are samplers.

@@ -2,7 +2,7 @@
 //! sitting, following and defending the owner, begging, anger and shaking
 //! off water (`Wolf`, `WolfModel`).
 use super::{
-    Damage, Mob, MobEvent, MobWorld, Species, Who,
+    Damage, Mob, MobEvent, MobWorld, PlayerView, Species, Who,
     anim::{Poses, State},
     goals::{
         Breed, Cx, Float, Goal, HurtByTarget, JUMP, LOOK, LeapAtTarget, LookAtPlayer, MOVE,
@@ -12,7 +12,7 @@ use super::{
 };
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Axis, Vec3},
     random::RandomSource,
 };
 use std::f32::consts::PI;
@@ -100,6 +100,49 @@ pub fn register(m: &mut Mob) {
         ),
     );
 }
+/// `Parrot.registerGoals`: a tamed parrot sits when told to and follows its
+/// owner from five blocks away; it wanders to trees (`ParrotWanderGoal`) and
+/// lands on its owner's shoulder.
+pub fn register_parrot(m: &mut Mob) {
+    let g = &mut m.ai.goals;
+    g.add(0, TamePanic(Panic::new(1.25)));
+    g.add(0, Float);
+    g.add(1, LookAtPlayer::new(8.0));
+    g.add(2, SitWhenOrdered);
+    g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
+    g.add(2, Stroll::parrot(1.0));
+    g.add(3, LandOnOwnersShoulder);
+}
+/// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
+/// the shoulder of the owner it touches; the host does the landing.
+#[derive(Clone, Debug)]
+struct LandOnOwnersShoulder;
+impl Goal for LandOnOwnersShoulder {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // ShoulderRidingEntity.canSitOnShoulder: rideCooldownCounter > 100.
+        is_owner(m, cx.w)
+            && owner(m, cx.w).is_some_and(|(_, _, spectator)| !spectator)
+            && !m.extra.sitting
+            && m.age > 100
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if !m.extra.sitting
+            && m.extra.leash.is_none()
+            && is_owner(m, cx.w)
+            && cx
+                .w
+                .player
+                .as_ref()
+                .is_some_and(|p| m.bounds().intersects(p.bounds))
+        {
+            cx.events.push(MobEvent::ParrotToShoulder { mob: m.id });
+        }
+    }
+}
 /// `Wolf.PREY_SELECTOR`: sheep, rabbits and foxes.
 fn wolf_prey(s: &super::Seen) -> bool {
     matches!(s.species, Species::Sheep | Species::Rabbit | Species::Fox)
@@ -107,8 +150,9 @@ fn wolf_prey(s: &super::Seen) -> bool {
 fn baby_turtle_on_land(s: &super::Seen) -> bool {
     s.species == Species::Turtle && s.baby
 }
+/// `NeutralMob.isAngryAt(player)`: the player is the anger's target.
 fn angry_at_player(m: &Mob, _: &MobWorld) -> bool {
-    m.extra.anger > 0
+    m.extra.angry_at == Some(Who::Player)
 }
 /// `Wolf.isAngry`.
 pub fn angry(m: &Mob) -> bool {
@@ -124,17 +168,35 @@ pub fn set_tame(m: &mut Mob, tame: bool) {
         m.attrs.max_health = 8.0;
     }
 }
-/// The owner (the local player) when tame.
-fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
+/// `TamableAnimal.getOwner`: the player the saved owner UUID names, when it
+/// is the one this mob sees; anyone else nearby is not its owner.
+fn owner_view<'a>(m: &Mob, w: &'a MobWorld) -> Option<&'a PlayerView> {
     if !m.extra.tame {
         return None;
     }
     let p = w.player.as_ref()?;
+    (m.extra.owner == Some(p.uuid)).then_some(p)
+}
+/// The owner's position, eye height and spectator flag when tame.
+fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
+    let p = owner_view(m, w)?;
     Some((p.position, p.eye[1], p.spectator))
+}
+/// Whether the player the mob sees is the one saved as its owner (with
+/// guests on, that player is whoever stands nearest).
+fn is_owner(m: &Mob, w: &MobWorld) -> bool {
+    w.player
+        .as_ref()
+        .is_some_and(|p| owned_by(m.extra.owner, p.uuid))
+}
+/// Whether `uuid` is the saved owner. A host with no UUID yet owns what it
+/// tamed under the placeholder `[0, 0, 0, 1]`.
+pub fn owned_by(owner: Option<[i32; 4]>, uuid: [i32; 4]) -> bool {
+    owner.is_some_and(|o| o == uuid || (o == [0, 0, 0, 1] && uuid == [0; 4]))
 }
 /// `TamableAnimal.unableToMoveToOwner`.
 fn unable_to_move_to_owner(m: &Mob, w: &MobWorld) -> bool {
-    m.extra.sitting || w.player.as_ref().is_some_and(|p| p.spectator)
+    m.extra.sitting || owner_view(m, w).is_some_and(|p| p.spectator)
 }
 /// `TamableAnimal.tryToTeleportToOwner`: ten tries around the owner.
 fn teleport_to_owner(m: &mut Mob, w: &MobWorld) {
@@ -166,10 +228,12 @@ fn teleport_to_owner(m: &mut Mob, w: &MobWorld) {
         }
     }
 }
-/// `TamableAnimal.canTeleportTo`: walkable, not on leaves, no collision.
+/// `TamableAnimal.canTeleportTo`: walkable, not on leaves (unless it can
+/// fly, `Parrot.canFlyToOwner`), no collision.
 fn can_teleport_to(m: &Mob, w: &MobWorld, p: [i32; 3]) -> bool {
     let below = w.facts.get(w.world.block(p[0], p[1] - 1, p[2]));
-    if !below.full_collision || below.name.ends_with("_leaves") {
+    let flies = m.species() == Species::Parrot;
+    if !below.full_collision || (!flies && below.name.ends_with("_leaves")) {
         return false;
     }
     let here = w.facts.get(w.world.block(p[0], p[1], p[2]));
@@ -240,7 +304,7 @@ impl Goal for SitWhenOrdered {
         match owner_distance_sqr(m, cx.w) {
             None => true,
             Some(d) => {
-                let attacked = cx.w.player.as_ref().is_some_and(|p| p.hurt_by.is_some());
+                let attacked = owner_view(m, cx.w).is_some_and(|p| p.hurt_by.is_some());
                 !(d < 144.0 && attacked) && m.extra.sitting
             }
         }
@@ -360,7 +424,7 @@ impl Goal for FollowOwner {
         };
         let far = m.distance_sqr(at) >= 144.0;
         if !far {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([at.x, eye, at.z], 10.0, max);
         }
         self.recalc -= 1;
@@ -388,7 +452,7 @@ impl Goal for OwnerHurtBy {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) else {
+        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.hurt_by) else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -399,7 +463,7 @@ impl Goal for OwnerHurtBy {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) {
+        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.hurt_by) {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -422,7 +486,7 @@ impl Goal for OwnerHurt {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) else {
+        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -433,7 +497,7 @@ impl Goal for OwnerHurt {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) {
+        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -442,7 +506,8 @@ impl Goal for OwnerHurt {
         m.ai.target = None;
     }
 }
-/// `Wolf.wantsToAttack`: never creepers, ghasts or tame wolves and cats.
+/// `Wolf.wantsToAttack`: never creepers, ghasts, tame cats and parrots, or a
+/// tame wolf of the same owner.
 fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     let Who::Mob(id) = who else {
         return false;
@@ -455,7 +520,8 @@ fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     };
     match s.species {
         Species::Creeper | Species::Ghast => false,
-        Species::Wolf | Species::Cat | Species::Parrot => !s.tame,
+        Species::Wolf => !s.tame || s.owner != m.extra.owner,
+        Species::Cat | Species::Parrot => !s.tame,
         Species::Horse | Species::Donkey | Species::Mule | Species::Llama => !s.tame,
         _ => true,
     }
@@ -467,15 +533,14 @@ struct Beg {
     ticks: i32,
 }
 impl Beg {
-    fn interesting(&self, m: &Mob, w: &MobWorld) -> bool {
+    fn interesting(&self, w: &MobWorld) -> bool {
         let Some(p) = &w.player else {
             return false;
         };
         let held = |i: &Option<std::sync::Arc<str>>| {
-            i.as_deref().is_some_and(|i| {
-                (!m.extra.tame && i == "minecraft:bone")
-                    || (m.extra.tame && self.food.iter().any(|f| f == i))
-            })
+            // `BegGoal.playerHoldingInteresting`: a bone or food, tame or not.
+            i.as_deref()
+                .is_some_and(|i| i == "minecraft:bone" || self.food.iter().any(|f| f == i))
         };
         p.alive && !p.spectator && (held(&p.main_hand) || held(&p.off_hand))
     }
@@ -489,14 +554,14 @@ impl Goal for Beg {
         cx.w.player
             .as_ref()
             .is_some_and(|p| m.distance_sqr(p.position) <= 64.0)
-            && self.interesting(m, cx.w)
+            && self.interesting(cx.w)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         cx.w.player
             .as_ref()
             .is_some_and(|p| p.alive && m.distance_sqr(p.position) <= 64.0)
             && self.ticks > 0
-            && self.interesting(m, cx.w)
+            && self.interesting(cx.w)
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         m.extra.flag = true;
@@ -507,78 +572,203 @@ impl Goal for Beg {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if let Some(p) = &cx.w.player {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([p.position.x, p.eye[1], p.position.z], 10.0, max);
         }
         self.ticks -= 1;
     }
 }
-/// `Wolf.tick` / `aiStep`: anger countdown, begging tilt and shaking off water.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    if m.extra.anger > 0 {
-        m.extra.anger -= 1;
-        if m.extra.anger == 0 && m.ai.target == Some(Who::Player) {
-            m.ai.target = None;
-        }
+/// `NeutralMob.isValidPlayerTarget`: a player in survival or adventure, off
+/// peaceful.
+fn valid_player_target(w: &MobWorld) -> bool {
+    w.player
+        .as_ref()
+        .is_some_and(|p| !p.creative && !p.spectator)
+        && w.difficulty.id != 0
+}
+/// `NeutralMob.stopBeingAngry`.
+fn stop_being_angry(m: &mut Mob) {
+    // setLastHurtByMob(null) also stamps the time.
+    m.ai.last_hurt_by = None;
+    m.ai.last_hurt_by_time = m.age as i32;
+    m.ai.target = None;
+    m.extra.angry_at = None;
+    m.extra.anger = 0;
+}
+/// `NeutralMob.playerDied`: the anger at the player who died ends.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if m.extra.angry_at == Some(Who::Player) {
+        stop_being_angry(m);
     }
+}
+/// `NeutralMob.updatePersistentAnger(level, true)` from `Wolf.aiStep`: any
+/// target (the attacker, a pack-mate's attacker the `HurtByTargetGoal` alert
+/// gave it, prey, the owner's enemy) is the anger's target, and the 20 to 39
+/// seconds of `PERSISTENT_ANGER_TIME` start over every tick it is held.
+/// Without a target the anger runs out (`extra.anger` counts down to the end
+/// time), and anger at a mob ends when that mob dies.
+fn update_persistent_anger(m: &mut Mob, w: &MobWorld) {
+    let angry_at = m.extra.angry_at;
+    if let Some(target @ Who::Mob(id)) = m.ai.target
+        && w.seen(id).is_none_or(|s| !s.alive)
+        && angry_at == Some(target)
+    {
+        stop_being_angry(m);
+        return;
+    }
+    // Mob.getTarget: a player in creative or spectator mode is no target.
+    let target = m.ai.target.filter(|t| {
+        *t != Who::Player
+            || w.player
+                .as_ref()
+                .is_some_and(|p| !p.creative && !p.spectator)
+    });
+    if let Some(target) = target {
+        m.extra.angry_at = Some(target);
+        // Wolf.startPersistentAngerTimer: TimeUtil.rangeOfSeconds(20, 39).
+        m.extra.anger = 400 + m.random.next_int_bound(381).unwrap_or(0);
+    } else if m.extra.anger > 0 {
+        m.extra.anger -= 1;
+    }
+    if angry_at.is_some()
+        && m.extra.anger == 0
+        && !(target == Some(Who::Player) && valid_player_target(w))
+    {
+        stop_being_angry(m);
+    }
+    // The anger's target as it was when the tick began, once it is found: a
+    // player who is not here yet (a reloaded wolf ticks before the player
+    // joins) keeps the anger.
+    if angry_at == Some(Who::Player)
+        && w.player
+            .as_ref()
+            .is_some_and(|p| p.creative || p.spectator || w.difficulty.id == 0)
+    {
+        stop_being_angry(m);
+    }
+}
+/// The part of `Wolf.tick` both sides run: `interestedAngle` eases toward 1
+/// while the wolf begs (`isInterested`, `DATA_INTERESTED_ID`), toward 0
+/// otherwise, for `getHeadRollAngle`.
+pub fn interest_tick(m: &mut Mob) {
+    let goal = if m.extra.flag { 1.0 } else { 0.0 };
+    m.anim.vo[INTEREST] = m.anim.v[INTEREST];
+    m.anim.v[INTEREST] += (goal - m.anim.v[INTEREST]) * 0.4;
+}
+/// `Wolf.tick` / `aiStep`: anger, begging tilt and shaking off water.
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    update_persistent_anger(m, w);
     if !m.alive() {
         return;
     }
-    // interestedAngle eases toward 1 while begging.
-    let goal = if m.extra.flag { 1.0 } else { 0.0 };
-    let v = &mut m.anim.v;
-    v[INTEREST] += (goal - v[INTEREST]) * 0.4;
+    interest_tick(m);
     // isWet (extra.flag2), isShaking (counter2 > 0).
-    let rain = w.raining
-        && w.can_see_sky(
-            m.position.x.floor() as i32,
-            (m.position.y + f64::from(m.height())).floor() as i32,
-            m.position.z.floor() as i32,
-        );
+    let wet = m.fluids.in_water || super::ai::in_rain(m, w);
+    server_shake(m, wet, events);
+}
+/// A server's wolf: `Wolf.aiStep` starts shaking a wet wolf that stands on
+/// the ground and is not pathing, and tells the clients (entity event 8),
+/// then `Wolf.tick` runs the shake (`shake_tick`). `wet` is
+/// `isInWaterOrRain`.
+pub fn server_shake(m: &mut Mob, wet: bool, events: &mut Vec<MobEvent>) {
+    if m.extra.flag2 && m.extra.counter2 == 0 && m.ai.nav.is_done() && m.on_ground {
+        start_shaking(m);
+        broadcast(m, events, 8);
+    }
+    shake_tick(m, wet, true, events);
+}
+/// `Wolf.tick` for a wolf of a server (`rain` is `isInRain` at the wolf):
+/// a client knows it is wet on its own, starts and cancels the shake from
+/// the server's entity events (`entity_event`) and draws the splashes.
+pub fn client_tick(m: &mut Mob, rain: bool, events: &mut Vec<MobEvent>) {
+    if m.alive() {
+        shake_tick(m, m.fluids.in_water || rain, false, events);
+    }
+}
+/// `Entity.isInRain`, for a client's wolves.
+pub fn in_rain(m: &Mob, w: &MobWorld) -> bool {
+    super::ai::in_rain(m, w)
+}
+/// `Wolf.handleEntityEvent`: 8 starts the shake, 56 cancels it.
+pub fn entity_event(m: &mut Mob, event: u8) {
+    match event {
+        8 => start_shaking(m),
+        56 => cancel_shake(m),
+        _ => {}
+    }
+}
+/// `isShaking = true`, `shakeAnim` and `shakeAnimO` from 0.
+fn start_shaking(m: &mut Mob) {
+    m.extra.counter2 = 1;
+    m.anim.v[SHAKE] = 0.0;
+    m.anim.vo[SHAKE] = 0.0;
+}
+/// `Wolf.cancelShake`: it stays wet.
+fn cancel_shake(m: &mut Mob) {
+    m.extra.counter2 = 0;
+    m.anim.v[SHAKE] = 0.0;
+    m.anim.vo[SHAKE] = 0.0;
+}
+fn broadcast(m: &Mob, events: &mut Vec<MobEvent>, event: i8) {
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
+}
+/// The wet and shaking part of `Wolf.tick`. In water or rain the wolf is
+/// wet, and a server cancels its shake (entity event 56). Out of it a
+/// shaking wolf shakes for 2 (`shakeAnim` by 0.05 a tick), dry at the end,
+/// with splashes past 0.4 (drawn by a client). The sound is the server's:
+/// `Entity.playSound` plays nothing on a client (`ClientLevel.playSound`
+/// with no player).
+fn shake_tick(m: &mut Mob, wet: bool, server: bool, events: &mut Vec<MobEvent>) {
     let shaking = m.extra.counter2 > 0;
-    if m.fluids.in_water || rain {
+    if wet {
         m.extra.flag2 = true;
-        if shaking {
-            m.extra.counter2 = 0;
-            m.anim.v[SHAKE] = 0.0;
-            m.anim.vo[SHAKE] = 0.0;
+        if shaking && server {
+            broadcast(m, events, 56);
+            cancel_shake(m);
         }
     } else if shaking {
         if m.anim.v[SHAKE] == 0.0 {
             let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
-            events.push(MobEvent::Sound("entity.wolf.shake", m.center(), 0.4, pitch));
+            if server {
+                events.push(MobEvent::Sound("entity.wolf.shake", m.center(), 0.4, pitch));
+            }
         }
+        m.anim.vo[SHAKE] = m.anim.v[SHAKE];
         m.anim.v[SHAKE] += 0.05;
         if m.anim.vo[SHAKE] >= 2.0 {
             m.extra.flag2 = false;
-            m.extra.counter2 = 0;
-            m.anim.v[SHAKE] = 0.0;
-            m.anim.vo[SHAKE] = 0.0;
+            cancel_shake(m);
         }
         if m.anim.v[SHAKE] > 0.4 {
-            let count = (((m.anim.v[SHAKE] - 0.4) * PI).msin() * 7.0) as u32;
-            if count > 0 {
-                events.push(MobEvent::Particles {
+            // The server draws the offsets too (its addParticle draws nothing).
+            let y = m.position.y as f32 + 0.8;
+            let count = (((m.anim.v[SHAKE] - 0.4) * PI).msin() * 7.0) as i32;
+            let half = m.width() * 0.5;
+            let v = m.velocity;
+            for _ in 0..count {
+                let dx = (m.random.next_float() * 2.0 - 1.0) * half;
+                let dz = (m.random.next_float() * 2.0 - 1.0) * half;
+                events.push(MobEvent::ParticleAt {
                     kind: "splash",
-                    at: [m.position.x, m.position.y + 0.8, m.position.z],
-                    count,
+                    at: [
+                        m.position.x + f64::from(dx),
+                        f64::from(y),
+                        m.position.z + f64::from(dz),
+                    ],
+                    velocity: [v.x, v.y, v.z],
                 });
             }
         }
-    } else if m.extra.flag2 && m.ai.nav.is_done() && m.on_ground {
-        // Wolf.aiStep: start shaking when wet, standing and not pathing.
-        m.extra.counter2 = 1;
-        m.anim.v[SHAKE] = 0.0;
-        m.anim.vo[SHAKE] = 0.0;
     }
 }
-/// `Wolf.hurtServer` and `NeutralMob` anger: stop sitting; untamed wolves
-/// hit by the player stay angry for 20 to 39 seconds.
-pub fn after_hurt(m: &mut Mob, source: &Damage) {
+/// `Wolf.hurtServer`: stop sitting. The anger comes with the target
+/// (`HurtByTargetGoal`, then `updatePersistentAnger`).
+pub fn after_hurt(m: &mut Mob, _source: &Damage) {
     m.extra.sitting = false;
-    if source.attacker == Some(Who::Player) && !m.extra.tame {
-        m.extra.anger = 400 + m.random.next_int_bound(380).unwrap_or(0);
-    }
 }
 /// `Wolf.getTailAngle`.
 fn tail_angle(m: &Mob) -> f32 {
@@ -683,14 +873,6 @@ pub fn texture(m: &Mob) -> String {
     let baby = if m.is_baby() { "_baby" } else { "" };
     format!("entity/wolf/{file}{state}{baby}")
 }
-/// `Wolf.getMaxHeadXRot`: 20 degrees while sitting.
-fn max_head_x_rot(m: &Mob) -> f32 {
-    if m.extra.sitting {
-        20.0
-    } else {
-        m.kind.max_head_x_rot
-    }
-}
 
 /// Cat variants (`CatVariants`): registry name, texture file.
 pub const CAT_VARIANTS: [&str; 11] = [
@@ -719,12 +901,8 @@ pub fn register_cat(m: &mut Mob) {
     g.add(1, Float);
     g.add(1, TamePanic(Panic::new(1.5)));
     g.add(2, SitWhenOrdered);
-    g.add(4, CatTempt(super::goals::Tempt::new(0.6, food, true)));
-    g.add(
-        4,
-        super::goals::AvoidEntity::new(super::goals::Avoid::Player, 16.0, 0.8, 1.33)
-            .when(|m| !m.extra.tame),
-    );
+    g.add(3, CatRelaxOnOwner::default());
+    g.add(4, CatTempt(super::goals::Tempt::new(0.6, food, true), None));
     g.add(
         5,
         CatLieOnBlock(super::goals::MoveToBlock {
@@ -739,6 +917,13 @@ pub fn register_cat(m: &mut Mob) {
     g.add(10, Breed::new(0.8));
     g.add(11, Stroll::avoiding_water(0.8));
     g.add(12, LookAtPlayer::new(10.0));
+    // `reassessTameGoals` adds the avoidance after `registerGoals`: goals run
+    // in insertion order, so it comes last.
+    g.add(
+        4,
+        super::goals::AvoidEntity::new(super::goals::Avoid::Player, 16.0, 0.8, 1.33)
+            .when(|m| !m.extra.tame),
+    );
     m.ai.targets.add(
         1,
         NearestTarget::species(&[Species::Rabbit], false).when(|m, _| !m.extra.tame),
@@ -748,20 +933,43 @@ pub fn register_cat(m: &mut Mob) {
         NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).when(|m, _| !m.extra.tame),
     );
 }
-/// `Cat.isInSittingPose`: ordered to sit or sitting on a block.
-pub fn cat_sitting(m: &Mob) -> bool {
-    m.extra.sitting || m.extra.flag2
+/// `Ocelot.registerGoals`, then `reassessTrustingGoals` adds the player
+/// avoidance last. Trust (`Ocelot.mobInteract`, the `Trusting` tag) is not
+/// ported yet, so every ocelot is wild: it flees players and can be scared
+/// off while tempted.
+pub fn register_ocelot(m: &mut Mob) {
+    let food = m.kind.food.clone();
+    let mut stroll = Stroll::avoiding_water(0.8);
+    stroll.water_avoiding = Some(1.000_000_1e-5);
+    let g = &mut m.ai.goals;
+    g.add(1, Float);
+    g.add(3, OcelotTempt(super::goals::Tempt::new(0.6, food, true)));
+    g.add(7, LeapAtTarget::new(0.3));
+    g.add(8, OcelotAttack { attack_time: 0 });
+    g.add(9, Breed::new(0.8));
+    g.add(10, stroll);
+    g.add(11, LookAtPlayer::new(10.0));
+    g.add(4, OcelotAvoid::new());
+    m.ai.targets
+        .add(1, NearestTarget::species(&[Species::Chicken], false));
+    m.ai.targets.add(
+        1,
+        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false),
+    );
 }
-/// `Cat.CatTemptGoal`: only wild cats come for fish.
+/// `Ocelot.OcelotTemptGoal(ocelot, 0.6, ocelot food, true)`.
 #[derive(Clone, Debug)]
-struct CatTempt(super::goals::Tempt);
-impl Goal for CatTempt {
+struct OcelotTempt(super::goals::Tempt);
+impl Goal for OcelotTempt {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        "OcelotTemptGoal"
+    }
     fn flags(&self) -> u8 {
         self.0.flags()
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        !m.extra.tame && self.0.can_use(m, cx)
+        self.0.can_use(m, cx)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.0.can_continue(m, cx)
@@ -776,16 +984,99 @@ impl Goal for CatTempt {
         self.0.every_tick()
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx)
+    }
+}
+/// `Ocelot.OcelotAvoidEntityGoal(ocelot, Player.class, 16.0F, 0.8, 1.33)`.
+#[derive(Clone, Debug)]
+struct OcelotAvoid(super::goals::AvoidEntity);
+impl OcelotAvoid {
+    fn new() -> Self {
+        Self(super::goals::AvoidEntity::new(
+            super::goals::Avoid::Player,
+            16.0,
+            0.8,
+            1.33,
+        ))
+    }
+}
+impl Goal for OcelotAvoid {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "OcelotAvoidEntityGoal"
+    }
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx)
+    }
+}
+/// `Cat.isInSittingPose`: ordered to sit or sitting on a block.
+pub fn cat_sitting(m: &Mob) -> bool {
+    m.extra.sitting || m.extra.flag2
+}
+/// `Cat.CatTemptGoal`: only wild cats come for fish. The second field is
+/// `selectedPlayer`, the player the cat has picked to approach unscared.
+#[derive(Clone, Debug)]
+struct CatTempt(super::goals::Tempt, Option<[i32; 4]>);
+impl Goal for CatTempt {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !m.extra.tame && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // CatTemptGoal.canScare: a selected player that is the tempter is not scared.
+        let picked = self.1.is_some() && self.1 == cx.w.player.as_ref().map(|p| p.uuid);
+        let scare = self.0.can_scare;
+        self.0.can_scare = scare && !picked;
+        let go = self.0.can_continue(m, cx);
+        self.0.can_scare = scare;
+        go
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         // Cat.tick: a wild cat being tempted begs every 100 ticks.
         if m.age.is_multiple_of(100) {
             cx.events.push(MobEvent::Sound(
-                "entity.cat.beg_for_food",
+                super::finalize::variant_sound(m, "beg_for_food")
+                    .unwrap_or("entity.cat.beg_for_food"),
                 m.center(),
                 1.0,
                 1.0,
             ));
         }
-        self.0.tick(m, cx)
+        self.0.tick(m, cx);
+        // CatTemptGoal.tick: pick the tempting player with a 1 in 600 chance a
+        // tick while none is picked, else drop the pick with a 1 in 500 chance.
+        if self.1.is_none() && m.random.next_int_bound(reduced(600)).unwrap_or(1) == 0 {
+            self.1 = cx.w.player.as_ref().map(|p| p.uuid);
+        } else if m.random.next_int_bound(reduced(500)).unwrap_or(1) == 0 {
+            self.1 = None;
+        }
     }
 }
 fn has_tag(w: &MobWorld, p: [i32; 3], tag: &str) -> bool {
@@ -798,6 +1089,202 @@ fn empty_above(w: &MobWorld, p: [i32; 3]) -> bool {
         .name
         .as_ref()
         == "minecraft:air"
+}
+/// Whether `p` is the player that owns `m` (a cat without a recorded owner
+/// belongs to whoever it sees).
+pub fn is_owner_of(m: &Mob, p: &super::PlayerView) -> bool {
+    m.extra.owner.is_none_or(|o| o == p.uuid)
+}
+/// `Cat.CatRelaxOnOwnerGoal`: while the owner sleeps, the cat lies down beside
+/// them, and may leave a morning gift when they wake up.
+#[derive(Clone, Debug, Default)]
+struct CatRelaxOnOwner {
+    goal: Option<[i32; 3]>,
+    on_bed_ticks: i32,
+}
+impl CatRelaxOnOwner {
+    /// `spaceIsOccupied`: another cat lying or relaxing within two blocks.
+    fn occupied(&self, m: &Mob, w: &MobWorld) -> bool {
+        let Some(g) = self.goal else { return true };
+        let area = Aabb::new(
+            Vec3::new(
+                f64::from(g[0]) - 2.0,
+                f64::from(g[1]) - 2.0,
+                f64::from(g[2]) - 2.0,
+            ),
+            Vec3::new(
+                f64::from(g[0]) + 3.0,
+                f64::from(g[1]) + 3.0,
+                f64::from(g[2]) + 3.0,
+            ),
+        );
+        w.others.iter().any(|o| {
+            o.species == Species::Cat && o.id != m.id && o.lying && o.bounds.intersects(area)
+        })
+    }
+    /// The owner's sleeping state, when this cat may relax on them: the
+    /// player it sees has to be its owner (`Cat.getOwner`).
+    fn sleeping_owner<'w>(m: &Mob, w: &'w MobWorld) -> Option<&'w super::PlayerView> {
+        w.player
+            .as_ref()
+            .filter(|p| m.extra.tame && !m.extra.sitting && p.sleeping && is_owner_of(m, p))
+    }
+}
+impl Goal for CatRelaxOnOwner {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let w = cx.w;
+        let Some(p) = Self::sleeping_owner(m, w) else {
+            return false;
+        };
+        if m.distance_sqr(p.position) > 100.0 {
+            return false;
+        }
+        let at = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        if !has_tag(w, at, "minecraft:cats_can_lie_on") {
+            return false;
+        }
+        // The bed's foot: against `BedBlock.FACING`.
+        let back = match w.prop(at[0], at[1], at[2], "facing") {
+            Some("north") => [0, 0, 1],
+            Some("south") => [0, 0, -1],
+            Some("east") => [-1, 0, 0],
+            Some("west") => [1, 0, 0],
+            Some("up") => [0, -1, 0],
+            Some("down") => [0, 1, 0],
+            _ => [0, 0, 0],
+        };
+        self.goal = Some([at[0] + back[0], at[1] + back[1], at[2] + back[2]]);
+        !self.occupied(m, w)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        Self::sleeping_owner(m, cx.w).is_some() && self.goal.is_some() && !self.occupied(m, cx.w)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(g) = self.goal {
+            m.extra.flag2 = false;
+            m.nav_move_to(
+                cx.w,
+                [f64::from(g[0]), f64::from(g[1]), f64::from(g[2])],
+                1.1,
+            );
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.extra.flag = false;
+        // The `gameplay/cat_waking_up_gift_chance` of the `day` timeline: 0.7
+        // from tick 23667 of the day to tick 362 of the next, 0 in between.
+        let day = cx.w.day_time.rem_euclid(24000);
+        let chance = if !cx.w.nether && !cx.w.end && !(362..23667).contains(&day) {
+            0.7
+        } else {
+            0.0
+        };
+        if cx
+            .w
+            .player
+            .as_ref()
+            .is_some_and(|p| is_owner_of(m, p) && p.sleep_timer >= 100)
+            && m.random.next_float() < chance
+        {
+            give_morning_gift(m, cx);
+        }
+        self.on_bed_ticks = 0;
+        m.extra.relax_one = false;
+        m.nav_stop();
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let (Some(p), Some(g)) = (cx.w.player.as_ref(), self.goal) else {
+            return;
+        };
+        m.extra.flag2 = false;
+        m.nav_move_to(
+            cx.w,
+            [f64::from(g[0]), f64::from(g[1]), f64::from(g[2])],
+            1.1,
+        );
+        if m.distance_sqr(p.position) < 2.5 {
+            self.on_bed_ticks += 1;
+            if self.on_bed_ticks > reduced(16) {
+                m.extra.flag = true;
+                m.extra.relax_one = false;
+            } else {
+                m.look_at_speed(p.eye, 45.0, 45.0);
+                m.extra.relax_one = true;
+            }
+        } else {
+            m.extra.flag = false;
+        }
+    }
+}
+/// `CatRelaxOnOwnerGoal.giveMorningGift`: hop to a spot within five blocks
+/// (`randomTeleport`, avoiding `#dangerous_for_teleportation`) and drop a
+/// `gameplay/cat_morning_gift` item at its feet.
+fn give_morning_gift(m: &mut Mob, cx: &mut Cx) {
+    let w = cx.w;
+    let at = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
+    let x = at[0] + m.random.next_int_bound(11).unwrap_or(5) - 5;
+    let y = at[1] + m.random.next_int_bound(5).unwrap_or(2) - 2;
+    let z = at[2] + m.random.next_int_bound(11).unwrap_or(5) - 5;
+    let tagged = |p: [i32; 3], tag| has_tag(w, p, tag);
+    let mut ground = y - 1;
+    while ground > w.world.bottom_y()
+        && !tagged([x, ground, z], "minecraft:entities_can_teleport_to")
+    {
+        ground -= 1;
+    }
+    if w.world.loaded(x, z) && ground > w.world.bottom_y() {
+        let feet = f64::from(ground + 1);
+        let half = f64::from(m.width()) / 2.0;
+        let b = Aabb::new(
+            Vec3::new(f64::from(x) - half, feet, f64::from(z) - half),
+            Vec3::new(
+                f64::from(x) + half,
+                feet + f64::from(m.height()),
+                f64::from(z) + half,
+            ),
+        );
+        let dangerous = |p| tagged(p, "minecraft:dangerous_for_teleportation");
+        let in_box = |f: &dyn Fn([i32; 3]) -> bool| {
+            (b.min(Axis::X).floor() as i32..=b.max(Axis::X).floor() as i32).any(|bx| {
+                (b.min(Axis::Y).floor() as i32..=b.max(Axis::Y).floor() as i32).any(|by| {
+                    (b.min(Axis::Z).floor() as i32..=b.max(Axis::Z).floor() as i32)
+                        .any(|bz| f([bx, by, bz]))
+                })
+            })
+        };
+        let fluids = w.fluids(b, feet);
+        if !dangerous([x, ground, z])
+            && w.no_collision(b)
+            && !(fluids.in_water || fluids.in_lava)
+            && !in_box(&dangerous)
+        {
+            m.position = Vec3::new(f64::from(x), feet, f64::from(z));
+            m.previous = m.position;
+            m.velocity = Vec3::ZERO;
+        }
+    }
+    let yaw = m.body_yaw * (PI / 180.0);
+    let here = [
+        m.position.x.floor() - f64::from(yaw.msin()),
+        m.position.y.floor(),
+        m.position.z.floor() + f64::from(yaw.mcos()),
+    ];
+    cx.events.push(MobEvent::DropGift {
+        table: "minecraft:gameplay/cat_morning_gift",
+        at: here,
+    });
 }
 /// `CatLieOnBlockGoal`: tame cats lie on beds and other warm blocks.
 #[derive(Clone, Debug)]
@@ -835,7 +1322,7 @@ impl Goal for CatLieOnBlock {
         m.extra.flag = self.0.reached;
     }
 }
-/// `CatSitOnBlockGoal`: chests, lit furnaces and beds.
+/// `CatSitOnBlockGoal`: unopened chests, lit furnaces and the foot of beds.
 #[derive(Clone, Debug)]
 struct CatSitOnBlock(super::goals::MoveToBlock);
 fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
@@ -846,7 +1333,15 @@ fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
     match f.name.as_ref() {
         // The lit state is the only light source a furnace has.
         "minecraft:furnace" => f.emission > 0,
-        _ => true,
+        // `ChestBlockEntity.getOpenCount(level, pos) < 1`: players' openers
+        // and the copper golems' own count.
+        "minecraft:chest" => {
+            let key = (p[0], p[1], p[2]);
+            !w.lid_openers.contains_key(&key)
+                && w.world.chest_openers.get(&key).is_none_or(|o| o.0 < 1)
+        }
+        // A bed's foot only (`BedBlock.PART != HEAD`).
+        _ => w.prop(p[0], p[1], p[2], "part") != Some("head"),
     }
 }
 impl Goal for CatSitOnBlock {
@@ -940,7 +1435,18 @@ impl Goal for OcelotAttack {
 }
 /// `Cat.tick`: lying and relaxing amounts and the purr.
 pub fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    cat_amounts(m);
+    if (m.extra.flag || m.extra.relax_one) && m.age.is_multiple_of(5) {
+        let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
+        let sound = super::finalize::variant_sound(m, "purr").unwrap_or("entity.cat.purr");
+        events.push(MobEvent::Sound(sound, m.center(), volume, 1.0));
+    }
+}
+/// The lying and relaxing amounts of `Cat.tick` (also a client's, from the
+/// synched flags).
+pub fn cat_amounts(m: &mut Mob) {
     let lying = m.extra.flag;
+    let relaxing = m.extra.relax_one;
     let v = &mut m.anim.v;
     if lying {
         v[LIE] = (v[LIE] + 0.15).min(1.0);
@@ -949,11 +1455,11 @@ pub fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
         v[LIE] = (v[LIE] - 0.22).max(0.0);
         v[LIE_TAIL] = (v[LIE_TAIL] - 0.13).max(0.0);
     }
-    v[RELAX] = (v[RELAX] - 0.13).max(0.0);
-    if lying && m.age.is_multiple_of(5) {
-        let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
-        events.push(MobEvent::Sound("entity.cat.purr", m.center(), volume, 1.0));
-    }
+    v[RELAX] = if relaxing {
+        (v[RELAX] + 0.1).min(1.0)
+    } else {
+        (v[RELAX] - 0.13).max(0.0)
+    };
 }
 /// `Cat.finalizeSpawn` variant: any but all-black, which a full moon allows.
 pub fn cat_variant(m: &mut Mob, w_moon_full: bool) -> u8 {
@@ -971,8 +1477,29 @@ pub fn cat_rotations(m: &Mob, partial: f32) -> glam::Mat4 {
     if lie <= 0.0 {
         return glam::Mat4::IDENTITY;
     }
+    let on_top = if m.extra.on_sleeper { 0.15 * lie } else { 0.0 };
     glam::Mat4::from_translation(glam::Vec3::new(0.4 * lie, 0.15 * lie, 0.1 * lie))
         * glam::Mat4::from_rotation_z((90.0 * lie).to_radians())
+        * glam::Mat4::from_translation(glam::Vec3::new(on_top, 0.0, 0.0))
+}
+/// `Cat.handleLieDown`'s `isLyingOnTopOfSleepingPlayer`: a lying cat with a
+/// sleeping player within two blocks of its block (`sleepers` are their
+/// bounding boxes).
+pub fn cat_lying_on_sleeper(m: &mut Mob, sleepers: &[horizon_core::geometry::Aabb]) {
+    m.extra.on_sleeper = false;
+    if !m.extra.flag {
+        return;
+    }
+    let (x, y, z) = (
+        m.position.x.floor(),
+        m.position.y.floor(),
+        m.position.z.floor(),
+    );
+    let area = horizon_core::geometry::Aabb::new(
+        Vec3::new(x - 2.0, y - 2.0, z - 2.0),
+        Vec3::new(x + 3.0, y + 3.0, z + 3.0),
+    );
+    m.extra.on_sleeper = sleepers.iter().any(|b| b.intersects(area));
 }
 /// `Mth.rotLerp`: degrees-wrapping, applied by the feline models to radians.
 fn rot_lerp(t: f32, from: f32, to: f32) -> f32 {
@@ -988,14 +1515,25 @@ pub struct Feline {
     pub lie_down_tail: f32,
     pub relax_one: f32,
 }
+/// `Cat.customServerAiStep` and `Ocelot.customServerAiStep`: crouch while
+/// stalking (the move control's 0.6), sprint while dashing (1.33). Sprinting
+/// adds `LivingEntity.SPEED_MODIFIER_SPRINTING` (`Mob::movement_speed`) to the
+/// move control's tick that follows.
+pub fn feline_server_ai_step(m: &mut Mob) {
+    let speed = m.ai.mov.has_wanted().then_some(m.ai.mov.speed_modifier);
+    m.extra.pose = if speed == Some(0.6) {
+        super::sync::CROUCHING
+    } else {
+        super::sync::STANDING
+    };
+    m.extra.sprinting = speed == Some(1.33);
+}
 /// `AdultFelineModel` / `BabyFelineModel.setupAnim` for cats and ocelots.
 pub fn cat_anim(m: &Mob, s: &State, p: &mut Poses) {
-    let wanted = m.ai.mov.has_wanted();
-    let speed_mod = m.ai.mov.speed_modifier;
-    // Cat.customServerAiStep: crouch while stalking, sprint while dashing.
+    // FelineRenderState: Entity.isCrouching (the pose) and isSprinting.
     let st = Feline {
-        crouching: wanted && (speed_mod - 0.6).abs() < 1e-6,
-        sprinting: wanted && (speed_mod - 1.33).abs() < 1e-6,
+        crouching: m.extra.pose == super::sync::CROUCHING,
+        sprinting: m.extra.sprinting,
         sitting: cat_sitting(m),
         lie_down: m.anim.lerp(LIE, s.partial),
         lie_down_tail: m.anim.lerp(LIE_TAIL, s.partial),
@@ -1119,5 +1657,159 @@ pub fn feline(p: &mut Poses, s: &State, st: &Feline) {
     if relax > 0.0 {
         let hx = p.get("head")[3];
         p.xrot("head", rot_lerp(relax, hx, -0.581_776_44));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use std::sync::Arc;
+
+    const WHITE: u32 = 0xFFFF_FFFF;
+
+    fn cat() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:cat".into();
+        k.species = Species::Cat;
+        Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+    }
+    #[test]
+    fn a_cat_lying_near_a_sleeper_lies_on_top_of_them() {
+        use horizon_core::geometry::Aabb;
+        let sleeper = Aabb::new(Vec3::new(2.4, 64.0, 0.4), Vec3::new(2.6, 64.2, 0.6));
+        let far = Aabb::new(Vec3::new(5.4, 64.0, 0.4), Vec3::new(5.6, 64.2, 0.6));
+        let mut m = cat();
+        m.anim.v[LIE] = 1.0;
+        m.extra.flag = true;
+        cat_lying_on_sleeper(&mut m, &[far]);
+        assert!(!m.extra.on_sleeper);
+        cat_lying_on_sleeper(&mut m, &[far, sleeper]);
+        assert!(m.extra.on_sleeper);
+        let on_top = cat_rotations(&m, 1.0);
+        // The extra `translate(0.15 * lie, 0, 0)` after the roll.
+        m.extra.on_sleeper = false;
+        let plain = cat_rotations(&m, 1.0);
+        assert_ne!(on_top, plain);
+        assert!((on_top.w_axis.y - plain.w_axis.y - 0.15).abs() < 1.0e-4);
+        // Not lying: nothing to lie on.
+        m.extra.flag = false;
+        cat_lying_on_sleeper(&mut m, &[sleeper]);
+        assert!(!m.extra.on_sleeper);
+    }
+    fn wolf() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:wolf".into();
+        k.species = Species::Wolf;
+        k.width = 0.6;
+        k.height = 0.85;
+        let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
+        m.on_ground = true;
+        m
+    }
+    fn entity_events(events: &[MobEvent]) -> Vec<i8> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                MobEvent::EntityEvent { event, .. } => Some(*event),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A wolf of a server (the default single player's server thread, a LAN
+    /// guest): `Wolf.tick` makes it wet in water on the client too, which
+    /// `getWetShade` darkens; entity event 8 starts the shake, which the
+    /// client runs to the end, splashing, and then the wolf is dry (#2885).
+    #[test]
+    fn a_wolf_of_a_server_darkens_in_water_and_shakes_dry_on_its_event() {
+        let mut m = wolf();
+        let mut events = Vec::new();
+        m.fluids.in_water = true;
+        client_tick(&mut m, false, &mut events);
+        // 0.75 of the colour: 191.
+        assert_eq!(tint(&m, 1.0), 0xFFBF_BFBF, "wet in water");
+        m.fluids.in_water = false;
+        client_tick(&mut m, false, &mut events);
+        assert_eq!(tint(&m, 1.0), 0xFFBF_BFBF, "still wet before it shakes");
+        assert_eq!(m.anim.v[SHAKE], 0.0);
+        // Rain wets it as well.
+        let mut dry = wolf();
+        client_tick(&mut dry, true, &mut events);
+        assert_ne!(tint(&dry, 1.0), WHITE, "wet in the rain");
+
+        crate::mobs::sync::entity_event(&mut m, 8);
+        let mut ticks = 0;
+        while m.extra.flag2 && ticks < 100 {
+            client_tick(&mut m, false, &mut events);
+            ticks += 1;
+            if ticks == 1 {
+                assert!((m.anim.v[SHAKE] - 0.05).abs() < 1e-6);
+                assert_eq!(m.anim.vo[SHAKE], 0.0);
+            }
+        }
+        // shakeAnimO reaches 2 on the 41st tick.
+        assert!((41..=42).contains(&ticks), "shook for {ticks} ticks");
+        assert_eq!(tint(&m, 1.0), WHITE, "dry after the shake");
+        assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MobEvent::ParticleAt { kind: "splash", .. })),
+            "the client draws the splashes"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, MobEvent::Sound(..))),
+            "the shake sound is the server's"
+        );
+    }
+
+    /// `Wolf.handleEntityEvent(56)`: back in the water, the server cancels
+    /// the shake; the wolf stays wet. A client does not cancel on its own.
+    #[test]
+    fn a_wolf_of_a_server_stops_shaking_on_its_cancel_event() {
+        let mut m = wolf();
+        let mut events = Vec::new();
+        m.fluids.in_water = true;
+        client_tick(&mut m, false, &mut events);
+        m.fluids.in_water = false;
+        crate::mobs::sync::entity_event(&mut m, 8);
+        for _ in 0..10 {
+            client_tick(&mut m, false, &mut events);
+        }
+        assert!(m.anim.v[SHAKE] > 0.4);
+        m.fluids.in_water = true;
+        client_tick(&mut m, false, &mut events);
+        assert!(m.extra.counter2 > 0, "only the server cancels");
+        crate::mobs::sync::entity_event(&mut m, 56);
+        assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
+        assert_ne!(tint(&m, 1.0), WHITE, "still wet");
+    }
+
+    /// `Wolf.aiStep` broadcasts entity event 8 when a wet wolf standing on
+    /// the ground starts shaking, and `Wolf.tick` event 56 when water or rain
+    /// cancels it: the clients' only way to know.
+    #[test]
+    fn a_server_tells_the_clients_when_a_wolf_shakes() {
+        let mut m = wolf();
+        let mut events = Vec::new();
+        server_shake(&mut m, true, &mut events);
+        assert!(m.extra.flag2);
+        // Out of the water: it starts and makes its sound in the same tick.
+        server_shake(&mut m, false, &mut events);
+        assert_eq!(entity_events(&events), [8]);
+        assert!(m.extra.counter2 > 0);
+        assert!((m.anim.v[SHAKE] - 0.05).abs() < 1e-6);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MobEvent::Sound("entity.wolf.shake", ..)))
+        );
+        server_shake(&mut m, true, &mut events);
+        assert_eq!(entity_events(&events), [8, 56]);
+        assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
+        assert!(m.extra.flag2, "still wet");
     }
 }

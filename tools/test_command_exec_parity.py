@@ -4,7 +4,7 @@
 Java (VanillaCommandExecOracle) starts a stand-in integrated server: a real
 MinecraftServer with a generated world, Commands.CommandSelection.INTEGRATED
 and one single-player owner named Player. Rust runs the same script through
-the Horizon client headless (HORIZON_COMMAND_SCRIPT). Both run each command as
+Horizon's integrated server with a connected headless client (HORIZON_COMMAND_SCRIPT). Both run each command as
 the player through Commands.performPrefixedCommand and record every system or
 chat message the player receives (text and resolved style: colour, bold,
 italic, underlined, strikethrough, obfuscated) together with the results the
@@ -25,9 +25,11 @@ import sys
 
 try:
     from . import lab, test_rust_parity as base
+    from .integration_env import run_game
     from . import command_exec_corpus as corpus_module
 except ImportError:
     import lab
+    from integration_env import run_game
     import test_rust_parity as base
     import command_exec_corpus as corpus_module
 
@@ -55,7 +57,8 @@ def main():
 
     def run(command, name, **kw):
         with (build / (name + '.log')).open('w', encoding='utf-8') as log:
-            result = subprocess.run(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT, **kw)
+            runner = run_game if Path(command[0]).name == 'horizon-client' else subprocess.run
+            result = runner(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT, **kw)
         if result.returncode:
             tail = (build / (name + '.log')).read_text(errors='replace')[-3000:]
             sys.exit(f'{name} failed ({result.returncode}):\n{tail}')
@@ -76,13 +79,13 @@ def main():
     run(['java', '-Xmx3G', '-Duser.timezone=UTC', '-cp', os.pathsep.join([str(classes), str(jars['server']), dependency_path]),
          'dev.horizonlab.parity.VanillaCommandExecOracle', vanilla_dir / 'universe', script_path, build / 'vanilla.jsonl', SEED], 'java', cwd=vanilla_dir)
 
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], 'compile-rust', cwd=lab.ROOT)
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], 'compile-rust', cwd=lab.ROOT)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     rust_dir = build / 'rust'
     shutil.rmtree(rust_dir, ignore_errors=True)
     rust_dir.mkdir()
-    env = lab.game_env(HORIZON_COMMAND_SCRIPT=script_path, HORIZON_COMMAND_OUTPUT=build / 'rust.jsonl')
+    env = lab.game_env(HORIZON_SERVER_THREAD=1, HORIZON_PLAYER_NAME="Player", HORIZON_COMMAND_SCRIPT=script_path, HORIZON_COMMAND_OUTPUT=build / 'rust.jsonl')
     run([binary, '--resources', lab.RESOURCES, '--world', 'harness', '--seed', SEED, '--radius', 4], 'rust', cwd=rust_dir, env=env)
 
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').open(encoding='utf-8')]

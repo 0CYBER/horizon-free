@@ -31,6 +31,7 @@ impl Fixture {
                     "Data",
                     Tag::compound([
                         ("LevelName", Tag::String(name.into())),
+                        ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                         ("GameType", Tag::Int(1)),
                         ("allowCommands", Tag::Byte(1)),
                         (
@@ -87,6 +88,9 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     let mut f = Fixture::new();
     f.title.last_server = "localhost:25566".into();
     f.click("Multiplayer");
+    // SafetyScreen comes first while its box was never ticked.
+    assert!(matches!(f.title.mode, Mode::MultiplayerWarning { .. }));
+    f.click("Proceed");
     f.click("Direct Connection");
     assert_eq!(f.title.focused_field().unwrap().1, "localhost:25566");
 
@@ -99,6 +103,7 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     f.title.escape();
     f.title.escape();
     f.click("Multiplayer");
+    f.click("Proceed");
     f.click("Direct Connection");
     assert_eq!(f.title.focused_field().unwrap().1, "[::1]:25568");
 
@@ -115,6 +120,33 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     f.title.escape();
     f.click("Direct Connection");
     assert!(f.title.focused_field().unwrap().1.is_empty());
+}
+
+#[test]
+fn f5_reloads_the_server_list() {
+    let mut f = Fixture::new();
+    f.click("Multiplayer");
+    f.click("Proceed");
+    let file = crate::multiplayer::servers_file(&f.title.saves);
+    horizon_protocol::servers::save(
+        &file,
+        &[horizon_protocol::servers::ServerEntry::new(
+            "Local",
+            "127.0.0.1:1",
+        )],
+    )
+    .unwrap();
+    let listed = |f: &Fixture| match &f.title.mode {
+        Mode::Multiplayer(crate::multiplayer::Screen::List { servers, .. }) => servers.len(),
+        _ => usize::MAX,
+    };
+    assert_eq!(listed(&f), 0);
+    f.title.refresh_servers();
+    assert_eq!(listed(&f), 1);
+    // Only the list refreshes.
+    f.title.mode = Mode::Main;
+    f.title.refresh_servers();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
@@ -288,10 +320,35 @@ fn delete_requires_confirmation_and_both_cancel_paths_preserve_world() {
     assert_eq!((delete.x, delete.y, delete.w), (88.0, 146.0, 150.0));
     f.click("Delete");
     assert!(!f.title.saves.join("World").exists());
-    assert!(matches!(&f.title.mode, Mode::Select { worlds, selected: None } if worlds.is_empty()));
-    f.click("Back");
+    // The last world gone, vanilla opens a fresh Create New World, not an empty list.
+    assert!(matches!(&f.title.mode, Mode::Create { name, .. } if name == "New World"));
+    f.click("Cancel");
+    assert!(matches!(f.title.mode, Mode::Main));
     f.click("Singleplayer");
     assert!(matches!(f.title.mode, Mode::Create { .. }));
+}
+
+#[test]
+fn deleting_one_of_two_worlds_keeps_the_list() {
+    let mut f = Fixture::new();
+    f.world("One", "One");
+    f.world("Two", "Two");
+    f.select();
+    f.click("Delete");
+    f.click("Delete");
+    assert!(matches!(&f.title.mode, Mode::Select { worlds, .. } if worlds.len() == 1));
+}
+
+#[test]
+fn a_list_emptied_elsewhere_opens_create_world() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    world_management::delete(&f.title.saves, "World").unwrap();
+    f.title.worlds_changed();
+    assert!(matches!(f.title.mode, Mode::Create { .. }));
+    f.title.escape();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
@@ -353,7 +410,7 @@ fn backup_screen_blocks_navigation_and_returns_to_the_selected_world() {
         matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
     );
     assert!(
-        matches!(&f.title.toast, Some((_, BackupToast::Created { folder, bytes })) if folder == "World" && *bytes > 0)
+        matches!(&f.title.toast, Some((_, WorldToast::Created { folder, bytes })) if folder == "World" && *bytes > 0)
     );
     assert_eq!(
         Level::read(&f.title.saves.join("World")).unwrap().name,
@@ -375,7 +432,7 @@ fn failed_backup_returns_to_the_selected_world_with_an_error_toast() {
     assert!(
         matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
     );
-    let Some((_, BackupToast::Failed(error))) = &f.title.toast else {
+    let Some((_, WorldToast::Failed(error))) = &f.title.toast else {
         panic!("backup failures should produce an error toast");
     };
     assert!(!error.is_empty());
@@ -404,7 +461,7 @@ fn stopped_backup_worker_returns_to_the_list_with_an_error_toast() {
         matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
     );
     assert!(
-        matches!(&f.title.toast, Some((_, BackupToast::Failed(error))) if error == "Backup worker stopped")
+        matches!(&f.title.toast, Some((_, WorldToast::Failed(error))) if error == "Backup worker stopped")
     );
 }
 
@@ -551,6 +608,34 @@ fn classic_world_selection_is_silent_until_the_entry_launches() {
 }
 
 #[test]
+fn a_world_open_elsewhere_stays_closed_behind_a_toast() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    let open = crate::save::SessionLock::acquire(&f.title.saves.join("World")).unwrap();
+    let (icon_x, icon_y) = (240.0 - 135.0 + 2.0, LIST_TOP + 4.0);
+    assert_eq!(
+        f.title
+            .click(icon_x + 16.0, icon_y + 16.0, (480.0, 262.0))
+            .0,
+        Action::None
+    );
+    assert!(
+        matches!(&f.title.toast, Some((_, WorldToast::AccessFailure(folder))) if folder == "World")
+    );
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
+    drop(open);
+    assert_eq!(
+        f.title
+            .click(icon_x + 16.0, icon_y + 16.0, (480.0, 262.0))
+            .0,
+        Action::Play {
+            folder: "World".into()
+        }
+    );
+}
+
+#[test]
 fn clicking_a_world_icon_joins_it_at_once() {
     let mut f = Fixture::new();
     f.world("World", "World");
@@ -600,7 +685,7 @@ fn world_management_buttons_sound_when_enabled() {
     assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
     assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
     assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
-    assert!(matches!(f.title.mode, Mode::Select { .. }));
+    assert!(matches!(f.title.mode, Mode::Create { .. }));
 }
 
 #[test]
@@ -658,6 +743,32 @@ fn delete_removes_links_without_following_them() {
     world_management::delete(&f.title.saves, "World").unwrap();
     assert!(!f.title.saves.join("World").exists());
     assert!(outside.join("keep.txt").is_file());
+}
+
+#[test]
+fn hovered_buttons_ask_for_the_hand_or_not_allowed() {
+    use crate::widgets::Cursor;
+    let mut f = Fixture::new();
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let cursor_over = |title: &Title, label: Option<&str>| {
+        let mouse = label.map_or((0.0, 0.0), |label| {
+            let buttons = title.buttons(480.0, 262.0);
+            let b = buttons.iter().find(|b| b.label == label).unwrap();
+            (b.x + b.w / 2.0, b.y + 10.0)
+        });
+        let _ = crate::widgets::take_cursor();
+        title.draw(&atlas, &mut HudBatch::new([480, 262]), mouse, true);
+        crate::widgets::take_cursor()
+    };
+    assert_eq!(
+        cursor_over(&f.title, Some("Singleplayer")),
+        Cursor::PointingHand
+    );
+    assert_eq!(cursor_over(&f.title, None), Cursor::Arrow);
+    // The world list's footer is inactive until a world is selected.
+    f.world("A", "Alpha");
+    f.title.enter_singleplayer();
+    assert_eq!(cursor_over(&f.title, Some("Edit")), Cursor::NotAllowed);
 }
 
 #[test]
@@ -745,34 +856,76 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
     };
     assert!(*creative && !options.hardcore && options.commands(true));
     // The World tab (second of three 124-wide tabs from x 54): its seed box
-    // takes the focus, Superflat and the switches toggle.
+    // takes the focus, the world type cycles and the switches toggle.
     let (action, sound) = f.title.click(54.0 + 124.0 + 10.0, 10.0, size);
     assert!(sound && action == Action::None);
     let world = labels(&f);
     assert_eq!((world[0].1, world[0].2), (85.0, 38.0));
     assert_eq!((world[2].1, world[2].2), (85.0 + 266.0, 38.0 + 73.0));
-    f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+    // The world-type button cycles through vanilla's world presets.
+    let world_type = |f: &Fixture| -> crate::save::WorldPreset {
+        let Mode::Create { options, .. } = &f.title.mode else {
+            panic!()
+        };
+        options.world_type
+    };
+    assert_eq!(world_type(&f), crate::save::WorldPreset::Normal);
+    for expected in [
+        crate::save::WorldPreset::Flat,
+        crate::save::WorldPreset::LargeBiomes,
+        crate::save::WorldPreset::Amplified,
+        crate::save::WorldPreset::SingleBiomeSurface,
+        crate::save::WorldPreset::Normal,
+    ] {
+        f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+        assert_eq!(world_type(&f), expected);
+    }
+    // The amplified preset is the third one.
+    for _ in 0..3 {
+        f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+    }
     f.title.click(world[3].1 + 10.0, world[3].2 + 10.0, size);
     f.title.click(100.0, 38.0 + 41.0 + 10.0, size);
     let Mode::Create { focus, options, .. } = &f.title.mode else {
         panic!()
     };
     assert_eq!(*focus, 1);
-    assert!(options.flat && options.bonus_chest());
+    assert_eq!(options.world_type, crate::save::WorldPreset::Amplified);
+    assert!(options.bonus_chest());
     let Action::Create { options, .. } = f.title.create_action() else {
         panic!()
     };
     assert_eq!(
         options.world_gen(),
         crate::save::WorldGen {
-            flat: true,
+            preset: crate::save::WorldPreset::Amplified,
             structures: true,
             bonus_chest: true
         }
     );
-    // The More tab's screens don't exist yet.
+    // The More tab: Experiments has no screen yet; Data
+    // Packs opens on a new pack folder, and its selection reaches the action.
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
-    assert!(labels(&f)[..3].iter().all(|b| !b.3));
+    let more = labels(&f);
+    assert_eq!(
+        more[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
+        [true, false, true]
+    );
+    let (action, sound) = f.title.click(more[2].1 + 10.0, more[2].2 + 10.0, size);
+    let Action::DataPacks { dir, selected } = action else {
+        panic!("{action:?}")
+    };
+    assert!(sound && dir.is_dir() && selected == ["vanilla"]);
+    f.title
+        .set_data_packs(vec!["vanilla".into(), "file/ttm.zip".into()]);
+    let Action::Create { options, .. } = f.title.create_action() else {
+        panic!()
+    };
+    assert_eq!(options.data_packs, ["vanilla", "file/ttm.zip"]);
+    assert_eq!(options.pack_dir.as_ref(), Some(&dir));
+    // Cancel removes the folder (removeTempDataPackDir).
+    f.title.escape();
+    assert!(!dir.exists());
 }
 
 #[test]
@@ -780,23 +933,84 @@ fn new_world_generation_settings_round_trip() {
     let f = Fixture::new();
     let dir = f.root.join("flat");
     let options = crate::save::WorldGen {
-        flat: true,
+        preset: crate::save::WorldPreset::Flat,
         structures: false,
         bonus_chest: true,
     };
     crate::save::write_world_gen_settings(&dir, 42, options).unwrap();
     assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
     let settings = crate::save::world_gen_settings(&dir).unwrap();
+    let generator = settings
+        .get("dimensions")
+        .and_then(|d| d.get("minecraft:overworld"))
+        .and_then(|o| o.get("generator"));
     assert_eq!(
-        crate::save::text(
-            settings
-                .get("dimensions")
-                .and_then(|d| d.get("minecraft:overworld"))
-                .and_then(|o| o.get("generator"))
-                .and_then(|g| g.get("type"))
-        )
-        .as_deref(),
+        crate::save::text(generator.and_then(|g| g.get("type"))).as_deref(),
         Some("minecraft:flat")
+    );
+}
+
+#[test]
+fn each_world_preset_writes_its_own_generator() {
+    let f = Fixture::new();
+    let generator = |preset: crate::save::WorldPreset| {
+        // A folder per preset; Windows refuses the `:` of the id in a name.
+        let dir = f.root.join(preset.id().replace(':', "_"));
+        let options = crate::save::WorldGen {
+            preset,
+            structures: true,
+            bonus_chest: false,
+        };
+        crate::save::write_world_gen_settings(&dir, 42, options).unwrap();
+        assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
+        let settings = crate::save::world_gen_settings(&dir).unwrap();
+        let generator = settings
+            .get("dimensions")
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"))
+            .cloned()
+            .unwrap();
+        (
+            crate::save::text(generator.get("type")),
+            crate::save::text(generator.get("settings")),
+            crate::save::text(generator.get("biome_source").and_then(|s| s.get("type"))),
+        )
+    };
+    assert_eq!(
+        generator(crate::save::WorldPreset::Normal),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:overworld".to_owned()),
+            Some("minecraft:multi_noise".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::Amplified),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:amplified".to_owned()),
+            Some("minecraft:multi_noise".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::LargeBiomes),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:large_biomes".to_owned()),
+            Some("minecraft:multi_noise".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::SingleBiomeSurface),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:overworld".to_owned()),
+            Some("minecraft:fixed".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::Flat).0,
+        Some("minecraft:flat".to_owned())
     );
 }
 
@@ -823,4 +1037,218 @@ fn world_fields_edit_at_their_cursor() {
     f.title.field_key(KeyCode::ArrowRight, false, false);
     f.title.field_key(KeyCode::Backspace, false, false);
     assert_eq!(f.title.search, "world");
+}
+
+#[test]
+fn server_fields_edit_at_their_cursor() {
+    use winit::keyboard::KeyCode;
+    let mut f = Fixture::new();
+    f.title.mode = Mode::Multiplayer(crate::multiplayer::Screen::Edit {
+        index: None,
+        name: "Minecraft Server".into(),
+        address: String::new(),
+        focus: 1,
+        packs: None,
+    });
+    f.title.type_text("localhost");
+    for _ in 0..4 {
+        assert!(f.title.field_key(KeyCode::ArrowLeft, false, false));
+    }
+    f.title.type_text("X");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { address, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(address, "localXhost");
+    // Shift+Home selects back to the start; typing replaces the selection.
+    f.title.field_key(KeyCode::Home, false, true);
+    f.title.type_text("Y");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { address, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(address, "Yhost");
+    // Tab moves to the name, which edits at its own cursor.
+    f.title.tab();
+    f.title.field_key(KeyCode::ArrowLeft, false, false);
+    f.title.type_text("X");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { name, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(name, "Minecraft ServeXr");
+    f.title.mode = Mode::Multiplayer(crate::multiplayer::Screen::Direct {
+        address: String::new(),
+    });
+    f.title.type_text("one two");
+    // Ctrl+Backspace deletes the word before the caret.
+    f.title.field_key(KeyCode::Backspace, true, false);
+    let Mode::Multiplayer(crate::multiplayer::Screen::Direct { address }) = &f.title.mode else {
+        panic!("direct");
+    };
+    assert_eq!(address, "one ");
+}
+#[test]
+fn world_list_names_every_game_mode_and_hardcore_in_red() {
+    let f = Fixture::new();
+    f.world("Creative", "Creative");
+    let level = |folder: &str, game_type: i32, hardcore: bool| {
+        crate::save::write_dat(
+            &f.title.saves.join(folder).join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("LevelName", Tag::String(folder.into())),
+                    ("GameType", Tag::Int(game_type)),
+                    (
+                        "difficulty_settings",
+                        Tag::compound([
+                            ("difficulty", Tag::String("hard".into())),
+                            ("hardcore", Tag::Byte(i8::from(hardcore))),
+                        ]),
+                    ),
+                    (
+                        "Version",
+                        Tag::compound([("Name", Tag::String("26.3".into()))]),
+                    ),
+                ]),
+            )]),
+        )
+        .unwrap();
+    };
+    level("Hardcore", 0, true);
+    level("Adventure", 2, false);
+    level("Spectator", 3, false);
+    let worlds = list_worlds(&f.title.saves);
+    let info = |folder: &str| world_info(worlds.iter().find(|w| w.folder == folder).unwrap());
+
+    let hardcore = info("Hardcore");
+    assert_eq!(hardcore.plain(), "Hardcore Mode, Version: 26.3");
+    assert_eq!(hardcore.spans[0].text, "Hardcore Mode");
+    assert_eq!(hardcore.spans[0].style.color, Some(0xFF0000));
+    assert!(hardcore.spans[1..].iter().all(|s| s.style.color.is_none()));
+    assert_eq!(info("Adventure").plain(), "Adventure Mode, Version: 26.3");
+    assert_eq!(info("Spectator").plain(), "Spectator Mode, Version: 26.3");
+    let creative = info("Creative");
+    assert_eq!(creative.plain(), "Creative Mode, Commands, Version: 26.3");
+    assert!(creative.spans.iter().all(|s| s.style.color.is_none()));
+}
+
+#[test]
+fn world_with_unreadable_level_dat_stays_in_the_world_list() {
+    let f = Fixture::new();
+    f.world("Broken", "My World");
+    f.world("Broken", "My World");
+    fs::write(f.title.saves.join("Broken/level.dat"), b"truncated").unwrap();
+    // A folder with only level.dat_old is a world too (findLevelCandidates).
+    f.world("Old only", "Old only");
+    f.world("Old only", "Old only");
+    fs::remove_file(f.title.saves.join("Old only/level.dat")).unwrap();
+    let mut listed: Vec<String> = list_worlds(&f.title.saves)
+        .into_iter()
+        .map(|w| w.folder)
+        .collect();
+    listed.sort();
+    assert_eq!(listed, ["Broken", "Old only"]);
+}
+
+#[test]
+fn world_with_unreadable_level_dat_is_listed_and_recovers_from_level_dat_old() {
+    let mut f = Fixture::new();
+    // A second save keeps the first level.dat as level.dat_old; then level.dat
+    // is cut short, as a crash in the middle of a save leaves it.
+    f.world("Broken", "My World");
+    f.world("Broken", "My World");
+    let dir = f.title.saves.join("Broken");
+    fs::write(dir.join("level.dat"), b"truncated").unwrap();
+
+    // LevelStorageSource.readLevelSummary: a CorruptedLevelSummary, still listed.
+    let worlds = list_worlds(&f.title.saves);
+    let broken = worlds
+        .iter()
+        .find(|w| w.folder == "Broken")
+        .expect("a world whose level.dat does not read stays in the list");
+    assert!(broken.corrupted);
+    assert_eq!(broken.name, "Broken");
+    let info = world_info(broken);
+    assert_eq!(info.plain(), "Failed to load world summary");
+    assert_eq!(info.spans[0].style.color, Some(0xFF0000));
+
+    f.select();
+    let buttons = f.title.buttons(480.0, 262.0);
+    let enabled = |label: &str| buttons.iter().find(|b| b.label == label).unwrap().enabled;
+    assert!(enabled("Attempt to Recover"));
+    assert!(!enabled("Edit") && !enabled("Re-Create") && enabled("Delete"));
+
+    // Its primary action opens RecoverWorldDataScreen, not the world.
+    assert_eq!(f.click("Attempt to Recover"), Action::None);
+    let Mode::Recover { issues, .. } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert!(matches!(
+        issues[0],
+        Some(crate::save::DatIssue::Unreadable(_))
+    ));
+    assert_eq!(issues[1], None);
+    assert_eq!(fs::read(dir.join("level.dat")).unwrap(), b"truncated");
+
+    // restoreLevelDataFromOld: level.dat_old back in place, the broken file kept aside.
+    f.click("Attempt to Restore");
+    assert!(matches!(
+        f.title.mode,
+        Mode::Recovered { success: true, .. }
+    ));
+    assert_eq!(Level::read_summary(&dir).unwrap().name, "My World");
+    assert!(!dir.join("level.dat_old").exists());
+    let kept: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("level.dat_corrupted_")
+        })
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(fs::read(kept[0].path()).unwrap(), b"truncated");
+    assert_eq!(
+        f.click("Continue"),
+        Action::Play {
+            folder: "Broken".into()
+        }
+    );
+    assert!(!list_worlds(&f.title.saves)[0].corrupted);
+}
+
+#[test]
+fn world_with_nothing_to_recover_from_is_listed_but_never_opened() {
+    let mut f = Fixture::new();
+    let dir = f.title.saves.join("Lost");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("level.dat"), b"garbage").unwrap();
+    // A folder without level.dat or level.dat_old is no world (findLevelCandidates).
+    fs::create_dir_all(f.title.saves.join("Not a world")).unwrap();
+    let worlds = list_worlds(&f.title.saves);
+    assert_eq!(worlds.len(), 1);
+    assert!(worlds[0].corrupted);
+
+    f.select();
+    f.click("Attempt to Recover");
+    let Mode::Recover { issues, .. } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert_eq!(issues[1], Some(crate::save::DatIssue::Missing));
+    let restore = f
+        .title
+        .buttons(480.0, 262.0)
+        .into_iter()
+        .find(|b| b.label == "Attempt to Restore")
+        .unwrap();
+    assert!(!restore.enabled);
+    // Pressed anyway, attemptRestore fails without touching the files.
+    f.title.attempt_restore(worlds[0].clone());
+    assert!(matches!(
+        f.title.mode,
+        Mode::Recovered { success: false, .. }
+    ));
+    assert_eq!(fs::read(dir.join("level.dat")).unwrap(), b"garbage");
+    f.click("Back");
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
 }

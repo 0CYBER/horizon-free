@@ -1,0 +1,77 @@
+name: parity-main
+# The vanilla harnesses on main, a batch of merges at a time (docs/release-flow.md#parity-on-main), on the Mac mini's
+# runner. One run at a time: merges that land while a run goes on wait in one pending run (GitHub keeps only the
+# newest), which checks every merge since main's last green parity-main (tools/parity_main.py base). On a failure it
+# bisects the failing harnesses over those merges and comments on the pull request that broke them. Releases ship
+# only a commit whose parity-main passed (tools/release_train.py), so nothing a harness catches reaches players.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  # The comment on the merge that broke a harness.
+  pull-requests: write
+  # tools/parity_main.py base reads earlier runs.
+  actions: read
+concurrency:
+  group: parity-main
+  cancel-in-progress: false
+env:
+  # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
+  HORIZON_TELEMETRY_URL: "off"
+
+jobs:
+  parity-main:
+    # A Mac mini runner of its own (ludovics-mac-mini-2 holds only this label since 2026-10-26): behind PR parity jobs
+    # this run waited 2 h while every merge replaced the pending one, and on the release runner a release then waited
+    # behind the next run. PR parity jobs have ludovics-mac-mini and playhorizon. Not playhorizon: its 4 CPUs
+    # make a core-crate run several times longer, and a failure here bisects and comments on merges.
+    runs-on: [self-hosted, macOS, horizon-parity-main]
+    timeout-minutes: 240  # a core-crate batch reruns ~300 harnesses (~60-90 min), a bisect a few rounds of the failures
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          # Keeps .local/ (parity state, probe builds, oracle results) and target/ between runs.
+          clean: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
+      - name: Vanilla data, and resources prepared by this preparer
+        run: bash tools/ci/vanilla-data.sh
+      - name: Main's last green parity-main
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "sha=$(python3 tools/parity_main.py base)" >> "$GITHUB_OUTPUT"
+      - name: The harnesses the merges since then can affect
+        id: harnesses
+        # A failure here is judged by the next step: the run passes when every failed harness passes again at HEAD.
+        continue-on-error: true
+        env:
+          PARITY_HOSTS: ''
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          echo "Merges since ${BASE_SHA}:"
+          git log --first-parent --format='  %h %s' "$BASE_SHA..HEAD"
+          python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400
+      - name: A flake, or the merge that broke them
+        if: steps.harnesses.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARITY_HOSTS: ''
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          rm -rf .local/parity-main-logs && cp -R .local/parity-runner/logs .local/parity-main-logs 2>/dev/null || true
+          python3 tools/parity_main.py bisect "$BASE_SHA" --comment
+      - name: Logs of the failed harnesses
+        if: steps.harnesses.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-main-logs
+          path: .local/parity-main-logs/
+          if-no-files-found: ignore
+          retention-days: 7

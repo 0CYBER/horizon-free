@@ -8,25 +8,9 @@
 //! - [`lithostitched`]: Lithostitched's jigsaw, worldgen modifiers and
 //!   processors.
 //! - [`ctov`]: Choice Theorem's Overhauled Village's code-registered set
-//!   entries and its modular compat processor.
+//!   entries.
 //!
 //! The general code reaches them only through the `pub(crate)` entry points
 //! of these three modules. Nothing in them is used by another mod's
 //! conversion.
 pub(crate) mod ctov;
-pub(crate) mod lithostitched;
-pub(crate) mod yung;
-
-#[cfg(test)]
-fn data() -> crate::processors::ProcessorData {
-    let mut d = crate::processors::ProcessorData::default();
-    d.spawners.insert(
-        "repurposed_structures:dungeons/badlands".into(),
-        vec![
-            ("minecraft:husk".into(), 10.),
-            ("minecraft:cave_spider".into(), 3.),
-        ],
-    );
-    d.replace_vanilla.insert(("mvs".into(), "village".into()));
-    d
-}

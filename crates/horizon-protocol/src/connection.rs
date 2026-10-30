@@ -174,6 +174,14 @@ pub struct ConnReader {
     pub threshold: Option<usize>,
     pub counters: Arc<Counters>,
 }
+/// Closes a connection from another thread: a read or a write blocked on it fails.
+pub struct Closer(Stream);
+impl Closer {
+    pub fn close(&self) {
+        self.0.shutdown();
+    }
+}
+
 pub struct ConnWriter {
     stream: Stream,
     encrypt: Option<Cfb8>,
@@ -187,6 +195,9 @@ fn ipv4_first(mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
     addrs.sort_by_key(SocketAddr::is_ipv6);
     addrs
 }
+/// RFC 8305's connection attempt delay: how long an address has alone before the next
+/// one is tried beside it.
+const ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 /// Both halves before the split.
 pub struct Connection {
     pub reader: ConnReader,
@@ -206,19 +217,54 @@ impl Connection {
         let addrs = crate::resolver::resolve(host, port)?;
         Self::connect_addresses(host, addrs, timeout)
     }
+    /// Each address starts once the earlier ones fail or [`ATTEMPT_DELAY`] after the last
+    /// start, alongside those still trying, and the first to connect wins: a dead address
+    /// in a round-robin set costs 250 ms instead of the whole timeout.
     fn connect_addresses(host: &str, addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
-        // Report the first address's failure: it is the one vanilla tries, and the IPv6
-        // fallbacks after it often fail only because the client has no IPv6 route.
-        let mut first = None;
-        for addr in ipv4_first(addrs) {
-            match TcpStream::connect_timeout(&addr, timeout) {
-                Ok(stream) => return Self::from_stream(stream),
-                Err(e) => {
-                    first.get_or_insert_with(|| Error::new(format!("Connection refused: {e}")));
+        let addrs = ipv4_first(addrs);
+        let (send, recv) = std::sync::mpsc::channel();
+        let mut errors: Vec<Option<std::io::Error>> = addrs.iter().map(|_| None).collect();
+        let (mut started, mut pending) = (0, 0);
+        loop {
+            if let Some(&addr) = addrs.get(started) {
+                let (send, index) = (send.clone(), started);
+                let spawned = std::thread::Builder::new()
+                    .name("horizon-connect".into())
+                    .spawn(move || {
+                        let _ = send.send((index, TcpStream::connect_timeout(&addr, timeout)));
+                    });
+                match spawned {
+                    Ok(_) => pending += 1,
+                    Err(e) => errors[index] = Some(e),
                 }
+                started += 1;
+            }
+            if pending == 0 {
+                if started < addrs.len() {
+                    continue;
+                }
+                break;
+            }
+            let reply = if started < addrs.len() {
+                match recv.recv_timeout(ATTEMPT_DELAY) {
+                    Ok(reply) => reply,
+                    Err(_) => continue,
+                }
+            } else {
+                recv.recv().expect("a sender is held here")
+            };
+            pending -= 1;
+            match reply {
+                (_, Ok(stream)) => return Self::from_stream(stream),
+                (index, Err(e)) => errors[index] = Some(e),
             }
         }
-        Err(first.unwrap_or_else(|| Error::new(format!("Unknown host {host}"))))
+        // Report the first address's failure: it is the one vanilla tries, and the IPv6
+        // fallbacks after it often fail only because the client has no IPv6 route.
+        match errors.into_iter().flatten().next() {
+            Some(e) => Err(Error::new(format!("Connection refused: {e}"))),
+            None => Err(Error::new(format!("Unknown host {host}"))),
+        }
     }
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream.set_nodelay(true)?;
@@ -281,6 +327,13 @@ impl ConnReader {
         loop {
             if let Some(frame) = frame::split(&mut self.buffer)? {
                 let body = frame::decompress(frame, self.threshold)?;
+                if body.is_empty() {
+                    // A frame with no packet in it. Vanilla's PacketDecoder
+                    // only decodes a packet from a readable buffer, so an
+                    // empty compressed frame is skipped and the connection
+                    // stays up.
+                    continue;
+                }
                 let mut r = Reader::new(&body);
                 let id = r.varint()?;
                 let start = r.position();
@@ -288,10 +341,21 @@ impl ConnReader {
                 return Ok((id, body[start..].to_vec()));
             }
             let mut chunk = [0u8; 16384];
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
-                return Err(Error::new("Connection closed by the server"));
-            }
+            let n = match self.stream.read(&mut chunk) {
+                Ok(0) => return Err(Error::end_of_stream()),
+                Ok(n) => n,
+                // The read timeout passed: Windows reports TimedOut, Unix
+                // WouldBlock.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err(Error::timed_out());
+                }
+                Err(e) => return Err(e.into()),
+            };
             self.counters
                 .bytes_in
                 .fetch_add(n as i64, Ordering::Relaxed);
@@ -301,6 +365,10 @@ impl ConnReader {
             }
             self.buffer.extend_from_slice(data);
         }
+    }
+    /// A [`Closer`] for this connection.
+    pub fn closer(&self) -> Result<Closer> {
+        Ok(Closer(self.stream.try_clone()?))
     }
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
         Ok(self.stream.set_read_timeout(timeout)?)
@@ -401,6 +469,59 @@ mod tests {
     }
 
     #[test]
+    fn a_dead_address_does_not_hold_up_the_next() {
+        // TEST-NET-1 never answers (or is unreachable at once).
+        let dead: SocketAddr = "192.0.2.1:25565".parse().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap();
+        let start = Instant::now();
+        let c = Connection::connect_addresses("test", vec![dead, live], Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(peer(&c), live);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn every_failure_reports_the_first_address() {
+        let closed = |_| {
+            TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+        };
+        let error = |host, addrs| {
+            Connection::connect_addresses(host, addrs, Duration::from_secs(5))
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        let refused = error("test", (0..3).map(closed).collect());
+        assert!(refused.starts_with("Connection refused"), "{refused}");
+        assert_eq!(error("nowhere", Vec::new()), "Unknown host nowhere");
+    }
+
+    #[test]
+    fn a_silent_peer_times_out_and_a_closed_one_ends_the_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        c.reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let silent = c.recv().unwrap_err();
+        assert!(silent.is_timed_out(), "{silent}");
+        assert_eq!(silent.to_string(), "Timed out");
+        drop(server);
+        let closed = c.recv().unwrap_err();
+        assert!(closed.is_end_of_stream(), "{closed}");
+    }
+
+    #[test]
     fn loopback_with_compression_and_encryption() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -495,5 +616,31 @@ mod tests {
         c.enable_encryption(&[7; 16]);
         assert_eq!(c.recv().unwrap(), (5, vec![4, 3]));
         client.join().unwrap();
+    }
+
+    /// A server may send a compressed frame that carries no packet: the
+    /// uncompressed length is 0 and the frame holds nothing else. Vanilla
+    /// skips it (its PacketDecoder only reads a packet from a readable
+    /// buffer), so the client stays connected.
+    #[test]
+    fn an_empty_compressed_frame_is_skipped() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut c = Connection::from_stream(stream).unwrap();
+            c.set_compression(64);
+            // The empty frame: its length prefix, then the uncompressed
+            // length 0 and nothing else.
+            c.writer.send_contents(&[0]).unwrap();
+            let mut body = vec![3];
+            body.extend_from_slice(b"after");
+            c.writer.send(&body).unwrap();
+        });
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+        c.set_compression(64);
+        let (id, payload) = c.recv().unwrap();
+        assert_eq!((id, payload.as_slice()), (3, &b"after"[..]));
+        server.join().unwrap();
     }
 }

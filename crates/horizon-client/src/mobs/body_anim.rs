@@ -59,11 +59,11 @@ pub struct Goat {
     pub ramming_x_head_rot: f32,
 }
 impl Goat {
-    pub fn from_mob(_m: &Mob) -> Self {
+    pub fn from_mob(m: &Mob) -> Self {
         Self {
-            left_horn: true,
-            right_horn: true,
-            ramming_x_head_rot: 0.0,
+            left_horn: !m.extra.lost_horns[0],
+            right_horn: !m.extra.lost_horns[1],
+            ramming_x_head_rot: super::goat::ramming_x_head_rot(m),
         }
     }
 }
@@ -959,8 +959,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
     let st = &m.anim.states;
     match m.species() {
         Species::Goat => goat(p, s, &Goat::from_mob(m)),
-        Species::PolarBear => polar_bear(p, s, 0.0),
-        Species::Panda => panda(p, s, &Panda::default()),
+        Species::PolarBear => polar_bear(p, s, super::polar_bear::standing_scale(m, s.partial)),
+        Species::Panda => panda(p, s, &super::panda::pose(m, s.partial)),
         Species::Llama | Species::TraderLlama => {
             llama(p, s, m.extra.chested && !s.baby);
         }
@@ -969,8 +969,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             s,
             &Turtle {
                 on_land: !m.fluids.in_water && m.on_ground,
-                laying_egg: false,
-                has_egg: false,
+                laying_egg: m.extra.flag2,
+                has_egg: m.extra.flag,
             },
         ),
         Species::Strider => strider(p, s, m.rider.is_some()),
@@ -980,9 +980,12 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
         Species::Parrot => {
             let flap = m.anim.flap_o + (m.anim.flap - m.anim.flap_o) * s.partial;
             let speed = m.anim.flap_speed_o + (m.anim.flap_speed - m.anim.flap_speed_o) * s.partial;
-            let pose = if m.extra.sitting {
+            // `Parrot.isFlying` is `!onGround`, in water too.
+            let pose = if m.extra.party_jukebox.is_some() {
+                ParrotPose::Party
+            } else if m.extra.sitting {
                 ParrotPose::Sitting
-            } else if !m.on_ground && !m.fluids.in_water {
+            } else if !m.on_ground {
                 ParrotPose::Flying
             } else {
                 ParrotPose::Standing
@@ -1007,7 +1010,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             p,
             s,
             &Armadillo {
-                hiding_in_shell: false,
+                hiding_in_shell: super::armadillo::hiding_in_shell(m),
                 roll_out: st[0],
                 roll_up: st[1],
                 peek: st[2],
@@ -1028,7 +1031,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             a,
         ),
         Species::Rabbit => rabbit(p, s, &st[0], &st[1], a),
-        Species::Fox => fox(p, s, &Fox::default(), a),
+        Species::Fox => fox(p, s, &super::fox::pose(m, s.partial), a),
         _ => return false,
     }
     true

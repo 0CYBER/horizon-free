@@ -1,24 +1,48 @@
 //! Zombies (zombie, husk, drowned, zombie villager) and skeletons (skeleton,
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
-    Mob, MobEvent, Species, Who,
+    Damage, Mob, MobEvent, Species, Who,
+    doors::{BreakDoor, can_navigate_ground, wooden_door},
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
     },
+    path::Path,
+    spear_use::SpearUse,
+    villager_brain::{
+        closer_to_center, occupied_pois_in_range, others_tickets, sections_to_village,
+        village_sections,
+    },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
+
+/// `Zombie.hurtServer`, once the hit landed: a zombie with a target (its own,
+/// else a living attacker) asks the game to try calling a reinforcement; the
+/// difficulty, chance and spawn tests are the game's (`call_reinforcements`).
+pub fn after_hurt(m: &mut Mob, source: &Damage) {
+    if let Some(target) = m.ai.target.or(source.attacker) {
+        m.outbox
+            .push(MobEvent::Reinforcements { mob: m.id, target });
+    }
+}
 
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
         S::Zombie | S::Husk | S::ZombieVillager => {
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
+            // Zombie.addBehaviourGoals: a spear in hand is used first.
+            g.add(2, SpearUse::new(1.0, 1.0, 10.0, 2.0));
             g.add(3, MeleeAttack::new(1.0, false).zombie());
+            g.add(
+                6,
+                MoveThroughVillage::new(1.0, true, 4, |m| m.extra.can_break_doors),
+            );
             g.add(7, Stroll::avoiding_water(1.0));
             let t = &mut m.ai.targets;
             let mut hurt = HurtByTarget::new().alert();
@@ -42,8 +66,12 @@ pub fn register(m: &mut Mob) {
         S::ZombifiedPiglin => {
             // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
+            // `Zombie.registerGoals`, which `ZombifiedPiglin` extends.
+            g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
+            g.add(1, SpearUse::new(1.0, 1.0, 10.0, 2.0));
             g.add(2, MeleeAttack::new(1.0, false).zombie());
             g.add(7, Stroll::avoiding_water(1.0));
             let t = &mut m.ai.targets;
@@ -58,6 +86,7 @@ pub fn register(m: &mut Mob) {
         S::Drowned => {
             // Zombie.registerGoals, then Drowned.addBehaviourGoals.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
@@ -117,6 +146,14 @@ pub fn register(m: &mut Mob) {
             g.add(6, LookAtPlayer::new(8.0));
             g.add(6, RandomLookAround::default());
             let t = &mut m.ai.targets;
+            // `WitherSkeleton.registerGoals` adds its piglin goal before
+            // calling super, so it comes first among the priority 3 goals.
+            if species == S::WitherSkeleton {
+                t.add(
+                    3,
+                    NearestTarget::species(&[S::Piglin, S::PiglinBrute], true),
+                );
+            }
             t.add(1, HurtByTarget::new());
             t.add(2, NearestTarget::player(true));
             t.add(3, NearestTarget::species(&[S::IronGolem], true));
@@ -128,20 +165,15 @@ pub fn register(m: &mut Mob) {
                 )
                 .interval(10),
             );
-            if species == S::WitherSkeleton {
-                t.add(
-                    3,
-                    NearestTarget::species(&[S::Piglin, S::PiglinBrute], true),
-                );
-            }
             // The AbstractSkeleton constructor's reassessWeaponGoal, after
             // registerGoals; the weapon itself comes with finalizeSpawn.
-            let interval = if matches!(species, S::Bogged | S::Parched) {
-                70
+            // getHardAttackInterval / getAttackInterval.
+            let (hard, normal) = if matches!(species, S::Bogged | S::Parched) {
+                (50, 70)
             } else {
-                40
+                (20, 40)
             };
-            m.ai.goals.add(4, SkeletonWeapon::new(interval));
+            m.ai.goals.add(4, SkeletonWeapon::new(hard, normal));
         }
         _ => {}
     }
@@ -165,6 +197,17 @@ fn drowned_ok_target(m: &Mob, w: &super::MobWorld) -> bool {
 /// Drowned.wantsToSwim
 pub fn drowned_wants_to_swim(m: &Mob, w: &super::MobWorld) -> bool {
     m.extra.flag2 || m.target_info(w).is_some_and(|t| in_water_at(w, t.position))
+}
+/// `Drowned.updateSwimming`: swimming under water while it wants to. `flag`
+/// holds `isSwimming`, which clients take from the entity's shared flags.
+pub fn drowned_update_swimming(m: &mut Mob, w: &super::MobWorld) {
+    m.extra.flag =
+        !m.no_ai && m.was_eye_in_water && m.fluids.in_water && drowned_wants_to_swim(m, w);
+}
+/// A drowned on a client: `LivingEntity.updateSwimAmount` follows the
+/// swimming flag (`Drowned.isVisuallySwimming`).
+pub fn drowned_client_tick(m: &mut Mob) {
+    m.extra.swim.tick(m.extra.flag, m.fluids.in_water);
 }
 /// Drowned.DrownedMoveControl
 pub fn drowned_move_control(m: &mut Mob, w: &super::MobWorld) {
@@ -217,8 +260,10 @@ pub fn drowned_travel(
     m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
     true
 }
-/// The trident throw of `Drowned.performRangedAttack`, until thrown tridents
-/// exist: an arrow-like shot with the trident's damage.
+/// The trident throw of `Drowned.performRangedAttack`: a `ThrownTrident` of
+/// the held trident (a plain one when it holds none), owned by the drowned,
+/// which cannot be picked up and does not return (`AbstractArrow` constructor:
+/// only a player's projectile is `Pickup.ALLOWED`).
 fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let Some(t) = cx.w.target_info(who) else {
         return;
@@ -228,15 +273,18 @@ fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let yd = t.position.y + (t.bounds.max_position().y - t.bounds.min_position().y) / 3.0 - start.y;
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
-    let mut p = Projectile::new(
-        ProjectileKind::Arrow {
-            base_damage: 8.0,
-            critical: false,
-            effect: None,
-        },
-        start,
-        Some(Who::Mob(m.id)),
-    );
+    let mut trident = crate::items::ItemStack::new("minecraft:trident", 1);
+    if m.extra.main_hand.as_deref() == Some("minecraft:trident")
+        && let Some(g) = super::gear::gear(m)
+    {
+        for (e, l) in &g.slots[super::gear::MAIN] {
+            trident.enchant(e, *l);
+        }
+    }
+    let mut p = Projectile::new(ProjectileKind::Trident, start, Some(Who::Mob(m.id)));
+    if let Some(a) = p.arrow.as_mut() {
+        a.set_item(&trident);
+    }
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + dist * f64::from(0.2_f32), zd],
@@ -478,15 +526,81 @@ fn zombified_piglin_step(m: &mut Mob, cx: &mut Cx) {
         }
     }
 }
+/// `Entity.isInPowderSnow`: the mob's box, shrunk by `1.0E-5` as in
+/// `checkInsideBlocks`, touches powder snow.
+fn in_powder_snow(m: &Mob, w: &super::MobWorld) -> bool {
+    let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    let (min, max) = (b.min_position(), b.max_position());
+    for x in min.x.floor() as i32..=max.x.floor() as i32 {
+        for y in min.y.floor() as i32..=max.y.floor() as i32 {
+            for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:powder_snow" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+/// `Skeleton.freezingTracker` (`ConversionTracker.tick`): 140 ticks in
+/// powder snow start a conversion into a stray that takes 300 more; leaving
+/// the snow stops it. `counter` is the affliction time (-1 outside the snow)
+/// and `counter2` the conversion time plus one while converting, so that
+/// reaching 0 is vanilla's `conversionTime < 0`.
+fn skeleton_freezing(m: &mut Mob, cx: &mut Cx) {
+    if !in_powder_snow(m, cx.w) {
+        m.extra.counter = -1;
+        m.extra.counter2 = 0;
+    } else if m.extra.counter2 > 0 {
+        m.extra.counter2 -= 1;
+        if m.extra.counter2 == 0 {
+            // ConversionTracker.doConversion: convertTo(STRAY,
+            // ConversionParams.single(this, true, true)).
+            convert(m, "minecraft:stray", cx);
+            // levelEvent 1048: the conversion sound at the stray, unless it
+            // is silent.
+            if !m.silent {
+                let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+                cx.events.push(MobEvent::Sound(
+                    "entity.skeleton.converted_to_stray",
+                    m.center(),
+                    2.0,
+                    pitch,
+                ));
+            }
+        }
+    } else {
+        m.extra.counter += 1;
+        if m.extra.counter >= 140 {
+            m.extra.counter2 = 301;
+        }
+    }
+}
+/// `Mob.convertTo(kind, ConversionParams.single(this, true, true))`: the
+/// mob is discarded and a new one of `kind` takes its place with its
+/// equipment, name, effects and flags (`MobEvent::Convert`).
+fn convert(m: &mut Mob, kind: &'static str, cx: &mut Cx) {
+    cx.events.push(MobEvent::Convert {
+        from: Box::new(m.clone()),
+        kind,
+        params: super::conversion::Params::KEEP_ALL,
+    });
+    m.removed = true;
+}
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
-    if m.species() == Species::ZombieVillager {
-        super::zombie_villager::step(m, cx);
+    if m.species() == Species::Skeleton && m.alive() && !m.no_ai {
+        skeleton_freezing(m, cx);
     }
     if m.species() == Species::ZombifiedPiglin {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {
@@ -494,18 +608,13 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
                 } else {
                     ("minecraft:drowned", "entity.zombie.converted_to_drowned")
                 };
-                cx.events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
-                cx.events.push(MobEvent::SpawnKind {
-                    kind: kind.into(),
-                    at: [m.position.x, m.position.y, m.position.z],
-                    setup: super::SpawnSetup {
-                        baby: m.is_baby(),
-                        yaw: m.yaw,
-                        persistent: m.persistent,
-                        ..Default::default()
-                    },
-                });
-                m.removed = true;
+                // ConversionTracker.doConversion: convertTo(type,
+                // ConversionParams.single(this, true, true)); levelEvent
+                // 1040 or 1041 unless the new mob is silent.
+                convert(m, kind, cx);
+                if !m.silent {
+                    cx.events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+                }
             }
         } else if m.fluids.eye_in_water {
             m.extra.counter += 1;
@@ -524,13 +633,20 @@ pub struct SkeletonWeapon {
     bow: BowAttack,
     melee: MeleeAttack,
     use_bow: bool,
+    /// The weapon the goal was last reassessed for.
+    assessed: Option<bool>,
+    hard_interval: i32,
+    normal_interval: i32,
 }
 impl SkeletonWeapon {
-    pub fn new(bow_interval: i32) -> Self {
+    pub fn new(hard_interval: i32, normal_interval: i32) -> Self {
         Self {
-            bow: BowAttack::new(1.0, bow_interval, 15.0),
+            bow: BowAttack::new(1.0, normal_interval, 15.0),
             melee: MeleeAttack::new(1.2, false),
             use_bow: false,
+            assessed: None,
+            hard_interval,
+            normal_interval,
         }
     }
 }
@@ -556,6 +672,18 @@ impl Goal for SkeletonWeapon {
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         // The goal registered for the weapon in hand.
         self.use_bow = holding_bow(m);
+        // reassessWeaponGoal: a bow gets the hard interval only on Hard; it
+        // is picked again when the weapon changes (the first check after
+        // spawning or loading stands for finalizeSpawn and
+        // readAdditionalSaveData).
+        if self.assessed != Some(self.use_bow) {
+            self.assessed = Some(self.use_bow);
+            self.bow.interval_min = if cx.w.difficulty.hard {
+                self.hard_interval
+            } else {
+                self.normal_interval
+            };
+        }
         if self.use_bow {
             self.bow.can_use(m, cx)
         } else {
@@ -621,8 +749,10 @@ impl BowAttack {
         }
     }
 }
+/// `LivingEntity.isHolding(Items.BOW)`: the bow can sit in either hand.
 fn holding_bow(m: &Mob) -> bool {
     m.extra.main_hand.as_deref() == Some("minecraft:bow")
+        || m.extra.off_hand.as_deref() == Some("minecraft:bow")
 }
 impl Goal for BowAttack {
     goal_clone!();
@@ -715,7 +845,10 @@ impl Goal for BowAttack {
         } else {
             self.attack_time -= 1;
             if self.attack_time <= 0 && self.see_time >= -60 {
+                // mob.startUsingItem(ProjectileUtil.getWeaponHoldingHand):
+                // the off hand when the main one doesn't hold the bow.
                 m.extra.using_item = 1;
+                m.extra.using_off_hand = m.extra.main_hand.as_deref() != Some("minecraft:bow");
             }
         }
     }
@@ -738,8 +871,9 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
     // AbstractArrow.setBaseDamageFromMob: power * 2 + triangle(difficulty * 0.11, 0.57425).
+    let id = i32::from(cx.w.difficulty.id);
     let mut arrow_random = crate::projectiles::own_random(m);
-    let base = f64::from(power) * 2.0 + arrow_random.triangle(2.0 * 0.11, 0.574_25);
+    let base = f64::from(power) * 2.0 + arrow_random.triangle(f64::from(id) * 0.11, 0.574_25);
     let effect = match m.species() {
         Species::Stray => Some(("minecraft:slowness", 600)),
         Species::Bogged => Some(("minecraft:poison", 100)),
@@ -760,7 +894,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
         &mut arrow_random,
         [xd, yd + dist * 0.2, zd],
         1.6,
-        (14 - 2 * 4) as f32,
+        (14 - id * 4) as f32,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 1.0 / (m.random.next_float() * 0.4 + 0.8);
@@ -815,6 +949,144 @@ impl Goal for DrownedGoToWater {
     }
 }
 
+/// `MoveThroughVillageGoal`: at night, walk to a village point of interest
+/// (a taken one) not visited lately, and on to the next.
+#[derive(Clone, Debug)]
+pub struct MoveThroughVillage {
+    speed: f64,
+    only_at_night: bool,
+    distance: i32,
+    can_deal_with_doors: fn(&Mob) -> bool,
+    path: Option<Path>,
+    poi: [i32; 3],
+    visited: Vec<[i32; 3]>,
+}
+impl MoveThroughVillage {
+    /// `MoveThroughVillageGoal.<init>`.
+    pub fn new(
+        speed: f64,
+        only_at_night: bool,
+        distance: i32,
+        can_deal_with_doors: fn(&Mob) -> bool,
+    ) -> Self {
+        Self {
+            speed,
+            only_at_night,
+            distance,
+            can_deal_with_doors,
+            path: None,
+            poi: [0; 3],
+            visited: Vec::new(),
+        }
+    }
+}
+impl Goal for MoveThroughVillage {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    /// `MoveThroughVillageGoal.canUse`.
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !can_navigate_ground(m) {
+            return false;
+        }
+        // updateVisited: the list keeps its last 16.
+        if self.visited.len() > 15 {
+            self.visited.remove(0);
+        }
+        if self.only_at_night && cx.w.daylight {
+            return false;
+        }
+        let w = cx.w;
+        let block = |p: Vec3| [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
+        let section = |p: [i32; 3]| [p[0] >> 4, p[1] >> 4, p[2] >> 4];
+        let pos = block(m.position);
+        let villages = village_sections(m, w);
+        // ServerLevel.isCloseToVillage(pos, 6).
+        if sections_to_village(&villages, section(pos)) > 6 {
+            return false;
+        }
+        let taken = others_tickets(m, w);
+        let visited = &self.visited;
+        let land = m.land_random_pos_scored(w, 15, 7, |p| {
+            if sections_to_village(&villages, section(p)) > 1 {
+                return f64::NEG_INFINITY;
+            }
+            // The first unvisited taken point within 10, by its distance.
+            occupied_pois_in_range(w, &taken, p, 10)
+                .into_iter()
+                .find(|q| !visited.contains(q))
+                .map_or(f64::NEG_INFINITY, |q| {
+                    let d = |i: usize| f64::from(q[i] - pos[i]);
+                    -(d(0) * d(0) + d(1) * d(1) + d(2) * d(2))
+                })
+        });
+        let Some(land) = land else { return false };
+        let Some(target) =
+            occupied_pois_in_range(w, &taken, block(Vec3::new(land[0], land[1], land[2])), 10)
+                .into_iter()
+                .find(|q| !self.visited.contains(q))
+        else {
+            return false;
+        };
+        self.poi = target;
+        let doors = (self.can_deal_with_doors)(m);
+        m.ai.nav.can_open_doors = doors;
+        let mut path = m.create_path_to(w, self.poi, 0);
+        m.ai.nav.can_open_doors = true;
+        if path.is_none() {
+            // No way there: a step of up to 10 blocks toward it instead.
+            let to = [
+                f64::from(self.poi[0]) + 0.5,
+                f64::from(self.poi[1]),
+                f64::from(self.poi[2]) + 0.5,
+            ];
+            let Some(step) =
+                m.default_random_pos_towards(w, 10, 7, to, f64::from(std::f32::consts::FRAC_PI_2))
+            else {
+                return false;
+            };
+            m.ai.nav.can_open_doors = doors;
+            path = m.create_path_to(w, block(Vec3::new(step[0], step[1], step[2])), 0);
+            m.ai.nav.can_open_doors = true;
+            if path.is_none() {
+                return false;
+            }
+        }
+        // A wooden door on the way: only as far as the door.
+        let door = path.as_ref().and_then(|p| {
+            p.nodes
+                .iter()
+                .find(|n| wooden_door(w, [n.x, n.y + 1, n.z]))
+                .map(|n| [n.x, n.y, n.z])
+        });
+        if let Some(at) = door {
+            path = m.create_path_to(w, at, 0);
+        }
+        self.path = path;
+        self.path.is_some()
+    }
+    /// `MoveThroughVillageGoal.canContinueToUse`.
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+            && !closer_to_center(
+                self.poi,
+                m.position,
+                f64::from(m.width()) + f64::from(self.distance),
+            )
+    }
+    /// `MoveThroughVillageGoal.start`.
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to_path(cx.w, self.path.clone(), self.speed);
+    }
+    /// `MoveThroughVillageGoal.stop`: a point reached (or the walk ended) is
+    /// visited.
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        if m.ai.nav.is_done() || closer_to_center(self.poi, m.position, f64::from(self.distance)) {
+            self.visited.push(self.poi);
+        }
+    }
+}
 /// `Zombie.ZombieAttackTurtleEggGoal` (a `RemoveBlockGoal` on turtle eggs):
 /// walk to a turtle egg within 24 blocks and trample it.
 #[derive(Clone, Debug)]
@@ -934,16 +1206,21 @@ impl Goal for AttackTurtleEgg {
                 pos: eat,
                 drop: false,
             });
+            // `sendParticles(POOF, ..., 1, xa, ya, za, 0.15)`, twenty times.
             for _ in 0..20 {
-                m.random.next_gaussian();
-                m.random.next_gaussian();
-                m.random.next_gaussian();
+                let spread = [
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                ];
+                cx.events.push(MobEvent::LevelParticles {
+                    kind: "poof",
+                    at: [center[0], f64::from(eat[1]), center[2]],
+                    spread,
+                    speed: 0.15,
+                    count: 1,
+                });
             }
-            cx.events.push(MobEvent::Particles {
-                kind: "poof",
-                at: [center[0], f64::from(eat[1]), center[2]],
-                count: 20,
-            });
             // The break sound's pitch draws from the level random.
             cx.events.push(MobEvent::Sound(
                 "block.turtle_egg.break",
@@ -957,5 +1234,120 @@ impl Goal for AttackTurtleEgg {
             ));
         }
         self.since_reached += 1;
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+    use crate::{items::ItemStack, mobs::world::with_test_world};
+    use std::sync::Arc;
+
+    /// The mob the game makes of a conversion event (`Game::convert_to` or,
+    /// for a plain spawn, `spawn_mob` plus `apply_setup` without the spawn
+    /// finalization's random gear).
+    fn resolve(event: &MobEvent, types: &crate::mobs::MobTypes) -> Option<Mob> {
+        let new = |kind: &str, at: Vec3, yaw: f32| {
+            Mob::new(2, Arc::new(types.types[kind].clone()), at, yaw)
+        };
+        match event {
+            MobEvent::Convert { from, kind, params } => {
+                let mut m = new(kind, from.position, from.yaw);
+                crate::mobs::conversion::single(from, &mut m, *params);
+                Some(m)
+            }
+            MobEvent::SpawnKind { kind, at, setup } => {
+                let mut m = new(kind, Vec3::new(at[0], at[1], at[2]), setup.yaw);
+                m.persistent = setup.persistent;
+                if setup.baby {
+                    m.extra.age = -24000;
+                }
+                Some(m)
+            }
+            _ => None,
+        }
+    }
+
+    /// `Zombie.drowningTracker` / `Husk`: the last tick of the conversion
+    /// under water turns the mob into `into`; what comes out (None only
+    /// without the extracted vanilla data).
+    fn drown(kind: &str, dress: impl FnOnce(&mut Mob)) -> Option<Mob> {
+        let mut out = None;
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(
+                1,
+                Arc::new(types.types[kind].clone()),
+                Vec3::new(0.5, 64.0, 0.5),
+                30.0,
+            );
+            dress(&mut m);
+            m.fluids.eye_in_water = true;
+            m.extra.counter2 = 1;
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut events = Vec::new();
+            let mut cx = Cx {
+                w,
+                lr: &mut lr,
+                events: &mut events,
+            };
+            custom_server_ai_step(&mut m, &mut cx);
+            assert!(m.removed, "the {kind} is discarded");
+            let new = events.iter().find_map(|e| resolve(e, types));
+            out = Some(new.expect("the conversion makes a new mob"));
+        });
+        out
+    }
+
+    #[test]
+    fn a_drowning_zombie_keeps_its_gear_and_name_tag() {
+        let Some(d) = drown("minecraft:zombie", |m| {
+            m.custom_name = Some("Bob".into());
+            m.name_visible = true;
+            m.persistent = true;
+            m.extra.head = Some("minecraft:iron_helmet".into());
+            m.extra.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
+            m.extra
+                .set_main_hand_stack(Some(ItemStack::new("minecraft:iron_sword", 1)));
+            m.extra.drop_chances = Some(Box::new([2.0; 8]));
+            m.extra.pick_up_loot = true;
+            m.add_effect("minecraft:speed", 600, 1);
+        }) else {
+            return;
+        };
+        assert_eq!(d.species(), Species::Drowned);
+        assert_eq!(d.custom_name.as_deref(), Some("Bob"));
+        assert!(d.name_visible && d.persistent);
+        assert_eq!(d.extra.head.as_deref(), Some("minecraft:iron_helmet"));
+        assert_eq!(
+            d.extra.armor[0].as_ref().map(|s| &*s.item),
+            Some("minecraft:iron_helmet")
+        );
+        assert_eq!(
+            d.extra.main_hand_stack().map(|s| &*s.item),
+            Some("minecraft:iron_sword")
+        );
+        assert_eq!(d.extra.drop_chances.as_deref(), Some(&[2.0; 8]));
+        assert!(d.extra.pick_up_loot);
+        assert!(d.has_effect("minecraft:speed"));
+        assert_eq!(d.position, Vec3::new(0.5, 64.0, 0.5));
+    }
+
+    #[test]
+    fn a_husk_turns_into_a_zombie_with_its_flags() {
+        let Some(z) = drown("minecraft:husk", |m| {
+            m.custom_name = Some("Dusty".into());
+            m.no_ai = false;
+            m.silent = true;
+            m.extra.age = i32::MIN / 2;
+            m.extra.feet = Some("minecraft:golden_boots".into());
+            m.extra.armor[3] = Some(ItemStack::new("minecraft:golden_boots", 1));
+            m.extra.left_handed = true;
+        }) else {
+            return;
+        };
+        assert_eq!(z.species(), Species::Zombie);
+        assert_eq!(z.custom_name.as_deref(), Some("Dusty"));
+        assert!(z.silent && z.is_baby() && z.extra.left_handed);
+        assert_eq!(z.extra.feet.as_deref(), Some("minecraft:golden_boots"));
     }
 }

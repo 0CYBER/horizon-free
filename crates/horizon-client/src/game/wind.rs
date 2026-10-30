@@ -52,14 +52,11 @@ fn triggers(name: &str) -> bool {
 impl Game<'_> {
     /// `WindChargeItem.use`.
     pub(super) fn throw_wind_charge(&mut self) -> Result<bool> {
-        if self.creatures.wind_cooldown > 0 {
-            return Ok(true);
-        }
-        self.creatures.wind_cooldown = 10;
         let (Some(eye), Some(p)) = (self.eye_position(), self.player.as_ref()) else {
             return Ok(false);
         };
-        let (velocity, on_ground, pos) = (p.velocity, p.ground.on_ground, p.position);
+        let (on_ground, pos) = (p.ground.on_ground, p.position);
+        let velocity = self.known_player_movement();
         let start = Vec3::new(pos.x, eye[1], pos.z);
         let mut proj = Projectile::new(ProjectileKind::WindCharge, start, Some(Who::Player));
         proj.shoot_from_rotation(
@@ -72,7 +69,7 @@ impl Game<'_> {
             velocity,
             on_ground,
         );
-        self.creatures.projectiles.push(proj);
+        self.add_projectile(proj);
         let pitch = 0.4 / (self.world.random.next_float() * 0.4 + 0.8);
         self.audio
             .play("minecraft:entity.wind_charge.throw", Some(eye), 0.5, pitch);
@@ -125,6 +122,13 @@ impl Game<'_> {
                     );
                 }
             }
+            // An ender dragon part takes the point of damage too; a crystal is
+            // not hit (`AbstractWindCharge.canHitEntity`).
+            Who::Mob(id) if id >= super::dragon::SPECIAL => {
+                if id < super::dragon::SPECIAL + 8 {
+                    self.hit_special(id, 1.0, p.owner == Some(Who::Player), false);
+                }
+            }
             Who::Mob(id) => {
                 let source = Damage {
                     kind: DamageKind::Thrown,
@@ -154,7 +158,7 @@ impl Game<'_> {
             .get("minecraft:blocks_wind_charge_explosions")
             .cloned()
             .unwrap_or_default();
-        let (min_y, max_y) = (horizon_client::chunk::MIN_Y, 320);
+        let (min_y, max_y) = (self.world.bottom_y(), self.world.top_y());
         let mut set: BTreeSet<[i32; 3]> = BTreeSet::new();
         for xx in 0..16 {
             for yy in 0..16 {
@@ -409,6 +413,7 @@ impl Game<'_> {
         // fall; any other burst ends the grace of the last impulse.
         let at = p.position;
         p.impulse.set_ignore_fall_damage(wind_charge, Some(at));
+        self.adv.marks.blast = Some(([at.x, at.y, at.z], wind_charge));
         Some(push)
     }
     /// The burst: knockback, the blocks that react, the gust and the sound.
@@ -474,6 +479,7 @@ impl Game<'_> {
     }
     /// The bursts guests' turns put off.
     pub(super) fn flush_wind_bursts(&mut self) -> Result<()> {
+        self.flush_smash_pushes();
         for b in std::mem::take(&mut self.creatures.wind_bursts) {
             self.wind_burst(b.center, b.radius, b.multiplier, b.breeze, b.wind_charge)?;
         }
@@ -509,6 +515,16 @@ impl Game<'_> {
             return Ok(());
         }
         if !triggers(&name) {
+            return Ok(());
+        }
+        // BellBlock.onExplosionHit: attemptToRing with no direction, so the bell
+        // rings toward its facing, not the face the burst came from,
+        // powered or not.
+        if &*name == "minecraft:bell" {
+            self.with_level(|b, level, ticks| {
+                b.bell_attempt_to_ring(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
+            });
+            self.process_level_events()?;
             return Ok(());
         }
         // Doors react in their lower half only; powered ones and pressed
@@ -573,11 +589,15 @@ impl Game<'_> {
         poses.yrot("wind", age * 16.0_f32.to_radians());
         let base = glam::Mat4::from_translation(at)
             * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
-        horizon_client::mobs::render::draw(
+        horizon_client::mobs::render::draw_scrolled(
             model,
             base,
             &poses,
             [r.u0, r.v0, r.u1, r.v1],
+            horizon_client::mobs::render::scroll_offset(
+                age,
+                horizon_client::mobs::render::WIND_CHARGE_SCROLL,
+            ),
             0xFFFF_FFFF,
             light,
             0,

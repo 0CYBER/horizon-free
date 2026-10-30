@@ -28,7 +28,11 @@ impl Game<'_> {
 
     /// SignableCommand.of: the command's message arguments, by name, with
     /// their text, not past a redirect to the root (`execute ... run`).
-    fn signable_arguments(&mut self, permission: u8, command: &str) -> Vec<(String, String)> {
+    pub(super) fn signable_arguments(
+        &mut self,
+        permission: u8,
+        command: &str,
+    ) -> Vec<(String, String)> {
         let parse = self.parse_as(permission, command);
         let nodes = &vanilla::game_dispatcher().nodes;
         let root = parse.context.root;
@@ -48,6 +52,35 @@ impl Game<'_> {
             context = c.child.as_deref().filter(|child| child.root != root);
         }
         out
+    }
+
+    /// ServerGamePacketListenerImpl.detectRateSpam: a chat message or command adds 20 to the
+    /// guest's throttler; over the threshold, a guest who is not an operator is kicked.
+    pub(super) fn detect_rate_spam(&mut self, host: &mut LanHost, conn: u32, command: bool) {
+        let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        let threshold = if command {
+            host.hub.command_spam_threshold
+        } else {
+            host.hub.chat_spam_threshold
+        };
+        let uuid = host.hub.guests[i].uuid;
+        let play = host.play.entry(conn).or_default();
+        let count = if command {
+            &mut play.command_spam
+        } else {
+            &mut play.chat_spam
+        };
+        *count = count.saturating_add(20);
+        // TickThrottler.isUnderThreshold: a threshold of 0 or less never kicks.
+        let under = threshold <= 0 || i64::from(*count) < i64::from(threshold);
+        if !under && !host.hub.ops.contains_key(&uuid) {
+            host.hub.kick(
+                conn,
+                horizon_protocol::text::translatable("disconnect.spam", &[]),
+            );
+        }
     }
 
     /// handleChatCommand (performUnsignedChatCommand): refused when the
@@ -73,9 +106,11 @@ impl Game<'_> {
                 content: component_nbt(&failure.component()),
                 overlay: false,
             }));
+            self.detect_rate_spam(host, conn, true);
             return;
         }
         self.guest_command(host, conn, command, None);
+        self.detect_rate_spam(host, conn, true);
     }
 
     /// handleSignedChatCommand: the acknowledgements, then each message
@@ -91,9 +126,11 @@ impl Game<'_> {
         };
         let mut events = Vec::new();
         let mut signed = None;
+        let mut ran = false;
         if let Some(last_seen) = host.hub.apply_last_seen(i, &p.last_seen, &mut events)
             && host.hub.try_handle_chat(i, &p.command, true)
         {
+            ran = true;
             let permission = host.hub.guests[i].permission;
             let parsed = self.signable_arguments(permission, &p.command);
             match host
@@ -109,6 +146,10 @@ impl Game<'_> {
         }
         if let Some(signed) = signed {
             self.guest_command(host, conn, &p.command, Some(signed));
+        }
+        // The lambda counts the command even when its arguments failed to decode.
+        if ran {
+            self.detect_rate_spam(host, conn, true);
         }
     }
 

@@ -6,10 +6,14 @@ license = "MIT"
 description = "Prepares Horizon's resources from the player's own Minecraft: imports and checks the pinned jars, runs the vanilla exporters, writes the resource folder"
 
 [dependencies]
+crc32fast = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
 sha1 = "0.10"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
 
 [build-dependencies]
 sha2 = "0.10"

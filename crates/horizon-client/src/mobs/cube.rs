@@ -2,7 +2,7 @@
 //! movement (`CubeMobMoveControl`), random directions, contact damage,
 //! squish animation and splitting.
 use super::{
-    Mob, MobEvent, MobWorld, Species,
+    Damage, Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
     control::{MoveKind, Operation, rotlerp},
     goals::{Cx, Goal, JUMP, LOOK, MOVE, NearestTarget, Prey, goal_clone, reduced},
@@ -151,37 +151,49 @@ pub fn jump(m: &mut Mob) {
     };
     m.velocity.y = f64::from(m.jump_power() + boost);
 }
+/// `AbstractCubeMob.tick`'s landing splash: crumbs of goo (or flames) around
+/// the cube's feet, drawn by the side that ticks the mob.
+fn landing_splash(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    let size = m.width() * 2.0;
+    let radius = size / 2.0;
+    let kind = match m.species() {
+        Species::MagmaCube => "flame",
+        Species::SulfurCube => "sulfur_cube_goo",
+        _ => "item_slime",
+    };
+    let mut i = 0;
+    while (i as f32) < size * 16.0 {
+        let dir = m.random.next_float() * std::f64::consts::TAU as f32;
+        let d = m.random.next_float() * 0.5 + 0.5;
+        let xd = trig::sin(f64::from(dir)) * radius * d;
+        let zd = trig::cos(f64::from(dir)) * radius * d;
+        events.push(MobEvent::Particles {
+            kind,
+            at: [
+                m.position.x + f64::from(xd),
+                m.position.y,
+                m.position.z + f64::from(zd),
+            ],
+            count: 0,
+        });
+        i += 1;
+    }
+}
+/// `AbstractCubeMob.tick` on a client of a server: the landing splash follows
+/// the on-ground flag the server sends.
+pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.on_ground && !m.extra.flag2 {
+        landing_splash(m, events);
+    }
+    m.extra.flag2 = m.on_ground;
+}
 /// AbstractCubeMob.tick squish and landing sounds, plus contact damage.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let v = &mut m.anim.v;
     v[SQUISH] += (v[TARGET_SQUISH] - v[SQUISH]) * 0.5;
     let was = m.extra.flag2;
     if m.on_ground && !was {
-        // The landing splash: drawn on the server too, where it spawns nothing.
-        let size = m.width() * 2.0;
-        let radius = size / 2.0;
-        let kind = match m.species() {
-            Species::MagmaCube => "flame",
-            Species::SulfurCube => "sulfur_cube_goo",
-            _ => "item_slime",
-        };
-        let mut i = 0;
-        while (i as f32) < size * 16.0 {
-            let dir = m.random.next_float() * std::f64::consts::TAU as f32;
-            let d = m.random.next_float() * 0.5 + 0.5;
-            let xd = trig::sin(f64::from(dir)) * radius * d;
-            let zd = trig::cos(f64::from(dir)) * radius * d;
-            events.push(MobEvent::Particles {
-                kind,
-                at: [
-                    m.position.x + f64::from(xd),
-                    m.position.y,
-                    m.position.z + f64::from(zd),
-                ],
-                count: 0,
-            });
-            i += 1;
-        }
+        landing_splash(m, events);
         let squish = match (m.species(), tiny(m)) {
             (Species::SulfurCube, _) => super::sulfur_cube::squish_sound(m),
             (Species::MagmaCube, true) => "entity.magma_cube.squish_small",
@@ -216,14 +228,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             .inflate(Vec3::new(reach, 0.0, reach))
             .intersects(p.bounds)
         {
-            let damage = m.attrs.attack_damage
-                + if m.species() == Species::MagmaCube {
-                    2.0
-                } else {
-                    0.0
-                };
             events.push(MobEvent::AttackPlayer(
-                damage,
+                attack_damage(m),
                 [m.position.x, m.position.y, m.position.z],
             ));
             if m.species() == Species::Slime {
@@ -235,6 +241,55 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     pitch,
                 ));
             }
+        }
+    }
+    hurt_touching_golems(m, w, events);
+}
+/// `AbstractCubeMob.getAttackDamage`: the attack damage attribute, plus 2 for
+/// a magma cube (`MagmaCube.getAttackDamage`).
+fn attack_damage(m: &Mob) -> f32 {
+    m.attrs.attack_damage
+        + if m.species() == Species::MagmaCube {
+            2.0
+        } else {
+            0.0
+        }
+}
+/// `AbstractCubeMob.push(entity)`: an iron golem whose `pushEntities` takes
+/// this cube (its box overlaps the cube's, `EntitySelector.pushableBy`) gets
+/// `dealDamage`: alive, `doTeamsAllowDamage`, `isWithinMeleeAttackRange`
+/// (always true for overlapping boxes) and `hasLineOfSight`, then a
+/// `mobAttack` hit for `getAttackDamage`.
+fn hurt_touching_golems(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    // canDealDamage also needs Mob.isEffectiveAi: a NoAI cube never hurts.
+    if !can_deal_damage(m) || m.no_ai || !m.alive() {
+        return;
+    }
+    let bounds = m.bounds();
+    let own = w.teams.of(Who::Mob(m.id));
+    let pushable = m.pushable();
+    let golems: Vec<u32> = w
+        .others_near(bounds)
+        .filter(|o| {
+            let theirs = w.teams.of(Who::Mob(o.id));
+            o.id != m.id
+                && o.species == Species::IronGolem
+                && o.alive
+                && o.bounds.intersects(bounds)
+                && crate::scoreboard::pushable_by(theirs, own, pushable)
+                && crate::scoreboard::teams_allow_damage(own, theirs)
+        })
+        .map(|o| o.id)
+        .collect();
+    let from = [m.position.x, m.position.y, m.position.z];
+    for golem in golems {
+        if m.sees(w, Who::Mob(golem)) {
+            events.push(MobEvent::CubeHurtMob {
+                cube: m.id,
+                target: golem,
+                amount: attack_damage(m),
+                source: Damage::mob(m.id, from),
+            });
         }
     }
 }
@@ -355,5 +410,84 @@ impl Goal for CubeKeepJumping {
     }
     fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
         set_wanted(m, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod golem_touch_tests {
+    use super::*;
+    use crate::mobs::world::with_test_world;
+    use std::sync::Arc;
+
+    /// The golems a cube of this kind and size, `x` blocks east of an iron
+    /// golem, hurts in one `ai_step`, and the damage.
+    fn hits(name: &str, size: i32, x: f64) -> Option<Vec<(u32, f32)>> {
+        hits_with(name, size, x, false)
+    }
+    fn hits_with(name: &str, size: i32, x: f64, no_ai: bool) -> Option<Vec<(u32, f32)>> {
+        let mut out = None;
+        with_test_world(&[], |_, types| {
+            let mob = |id: u32, name: &str, at: Vec3| {
+                Mob::new(id, Arc::new(types.types[name].clone()), at, 0.0)
+            };
+            let golem = mob(2, "minecraft:iron_golem", Vec3::new(0.5, 64.0, 0.5));
+            let mut cube = mob(1, name, Vec3::new(0.5 + x, 64.0, 0.5));
+            set_size(&mut cube, size);
+            cube.no_ai = no_ai;
+            out = Some((cube, golem.seen(None)));
+        });
+        let (mut cube, golem) = out?;
+        let mut events = Vec::new();
+        with_test_world(&[golem], |w, _| ai_step(&mut cube, w, &mut events));
+        Some(
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    MobEvent::CubeHurtMob {
+                        cube: 1,
+                        target,
+                        amount,
+                        source,
+                    } => {
+                        assert_eq!(source.attacker, Some(Who::Mob(1)));
+                        Some((*target, *amount))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    /// `AbstractCubeMob.push`: a slime or magma cube the iron golem bumps
+    /// into hurts it like a touching player (#3513), for `getAttackDamage`;
+    /// a tiny slime (`canDealDamage`) and a cube clear of the golem do not.
+    #[test]
+    fn a_cube_touching_an_iron_golem_hurts_it() {
+        let Some(slime) = hits("minecraft:slime", 2, 1.0) else {
+            return;
+        };
+        assert_eq!(slime, vec![(2, 2.0)], "a size 2 slime hits the golem for 2");
+        let magma = hits("minecraft:magma_cube", 4, 1.5).unwrap();
+        assert_eq!(magma, vec![(2, 6.0)], "a size 4 magma cube hits for 4 + 2");
+        let tiny = hits("minecraft:magma_cube", 1, 0.9).unwrap();
+        assert_eq!(
+            tiny,
+            vec![(2, 3.0)],
+            "a tiny magma cube still hits for 1 + 2"
+        );
+        assert!(
+            hits("minecraft:slime", 1, 0.9).unwrap().is_empty(),
+            "a tiny slime never hurts"
+        );
+        assert!(
+            hits("minecraft:slime", 2, 3.0).unwrap().is_empty(),
+            "the golem is out of touch"
+        );
+        assert!(
+            hits_with("minecraft:slime", 2, 1.0, true)
+                .unwrap()
+                .is_empty(),
+            "a NoAI cube is not isEffectiveAi, so it cannot deal damage"
+        );
     }
 }

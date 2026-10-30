@@ -23,6 +23,7 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::{LegacyRandom, RandomSource},
 };
+use horizon_world::loot::PackOverlay;
 use std::{collections::HashMap, fmt::Write as _, fs, path::Path, sync::Arc};
 
 struct Level<'a> {
@@ -142,8 +143,8 @@ const GENES: [&str; 7] = [
     "aggressive",
 ];
 const MEMORIES: [&str; 7] = [
-    "long_jump_cooldown",
-    "ram_cooldown",
+    "long_jump_cooling_down",
+    "ram_cooldown_ticks",
     "attack_target_cooldown",
     "hunted_recently",
     "dig_cooldown",
@@ -154,11 +155,11 @@ const MEMORIES: [&str; 7] = [
 fn variant(m: &Mob, regs: &SpawnRegistries, v: &mut Vec<String>) {
     use Species as S;
     let s = m.species();
-    let named = |reg: &finalize::VariantRegistry, i: u8| {
-        format!(
-            "minecraft:{}",
+    let named = |reg: &finalize::VariantRegistry, i: Option<u8>| {
+        let name = i.map_or("classic", |i| {
             reg.names.get(i as usize).map_or("?", |n| n.as_str())
-        )
+        });
+        format!("minecraft:{name}")
     };
     let var = format!("minecraft:{}", finalize::variant_name(s, m.extra.variant));
     match s {
@@ -399,7 +400,7 @@ pub fn main() -> horizon_client::Result<()> {
     let assets = Assets::load(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
     let mob_data = MobData::load(root, &facts);
-    let items = Items::tags_only(root)?;
+    let items = Items::tags_only(root, &PackOverlay::NONE)?;
     let enchantments = Enchantments::load(root);
     let types = MobTypes::load(root)?;
     let registries = SpawnRegistries::load(root);
@@ -506,6 +507,7 @@ pub fn main() -> horizon_client::Result<()> {
                 difficulty,
                 data: &data,
                 created: Vec::new(),
+                jockey_rider: None,
             };
             group = finalize::finalize(&mut cx, &mut mob, reason, group);
             let created = std::mem::take(&mut cx.created);

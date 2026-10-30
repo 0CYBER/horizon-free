@@ -102,7 +102,7 @@ impl AnimState {
     pub fn end_tick(&mut self, _swinging: bool) {}
 }
 /// Part poses for one draw, keyed by part name.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Poses {
     map: HashMap<String, [f32; 9]>,
     dummy: [f32; 9],
@@ -113,20 +113,24 @@ pub struct Poses {
 }
 impl Poses {
     pub fn new(model: &Part) -> Self {
-        let mut map = HashMap::new();
+        let mut poses = Self::default();
+        poses.reset(model);
+        poses
+    }
+    /// Refills this for another model, keeping the map and the sets' capacity:
+    /// a mob draws its body and every equipment layer each frame.
+    pub fn reset(&mut self, model: &Part) {
         fn walk(p: &Part, map: &mut HashMap<String, [f32; 9]>) {
             map.insert(p.name.clone(), p.pose);
             for c in &p.children {
                 walk(c, map);
             }
         }
-        walk(model, &mut map);
-        Self {
-            map,
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-        }
+        self.map.clear();
+        self.dummy = [0.0; 9];
+        self.skipped.clear();
+        self.hidden.clear();
+        walk(model, &mut self.map);
     }
     pub fn get(&mut self, name: &str) -> &mut [f32; 9] {
         match self.map.get_mut(name) {
@@ -189,14 +193,16 @@ pub fn state(m: &Mob, alpha: f32) -> State {
         swing += 1.0;
     }
     let swing = m.anim.attack_anim_o + swing * alpha;
-    let alive = m.alive();
+    // LivingEntityRenderer.extractRenderState: riding motion is not walking.
+    let walking = m.alive() && !m.extra.passenger;
     State {
-        pos: if alive {
-            m.limb_position - m.limb_speed * (1.0 - alpha)
+        pos: if walking {
+            // WalkAnimationState.position(partial): babies' legs move 3 times as far.
+            (m.limb_position - m.limb_speed * (1.0 - alpha)) * if m.is_baby() { 3.0 } else { 1.0 }
         } else {
             0.0
         },
-        speed: if alive {
+        speed: if walking {
             (m.previous_limb_speed + (m.limb_speed - m.previous_limb_speed) * alpha).min(1.0)
         } else {
             0.0
@@ -238,23 +244,35 @@ pub enum ArmPose {
     CrossbowCharge,
     /// Raising a trident to throw it (or to launch with Riptide).
     ThrowTrident,
+    /// Playing a goat horn.
+    TootHorn,
+    /// A spear held out (`HumanoidModel.ArmPose.SPEAR`), at rest or charging.
+    Spear,
+    /// A brush being used (`HumanoidModel.ArmPose.BRUSH`).
+    Brush,
 }
 /// HumanoidModel.setupAnim with empty hands (endermen).
 pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
     humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
 }
-/// `AnimationUtils.swingWeaponDown` with the right arm as the main arm.
-pub(super) fn swing_weapon_down(p: &mut Poses, swing: f32, age: f32) {
+/// `AnimationUtils.swingWeaponDown`: the main arm swings down, the other
+/// one hangs and bobs.
+pub(super) fn swing_weapon_down(p: &mut Poses, swing: f32, age: f32, left_main: bool) {
     let attack2 = (swing * PI).msin();
     let attack = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
+    let (main, off) = if left_main {
+        ("left_arm", "right_arm")
+    } else {
+        ("right_arm", "left_arm")
+    };
     p.zrot("right_arm", 0.0);
     p.zrot("left_arm", 0.0);
     p.yrot("right_arm", PI / 20.0);
     p.yrot("left_arm", -PI / 20.0);
-    p.xrot("right_arm", -1.884_955_8 + (age * 0.09).mcos() * 0.15);
-    p.xrot("left_arm", -0.0 + (age * 0.19).mcos() * 0.5);
-    p.get("right_arm")[3] += attack2 * 2.2 - attack * 0.4;
-    p.get("left_arm")[3] += attack2 * 1.2 - attack * 0.4;
+    p.xrot(main, -1.884_955_8 + (age * 0.09).mcos() * 0.15);
+    p.xrot(off, -0.0 + (age * 0.19).mcos() * 0.5);
+    p.get(main)[3] += attack2 * 2.2 - attack * 0.4;
+    p.get(off)[3] += attack2 * 1.2 - attack * 0.4;
     bob(p, "right_arm", age, 1.0);
     bob(p, "left_arm", age, -1.0);
 }
@@ -281,6 +299,14 @@ pub struct Hum {
     pub using_item: bool,
     /// The arm the current swing moves (`Some(true)` for the right one).
     pub swing_right_arm: Option<bool>,
+    /// The swing is a STAB (`SwingAnimationType` 2): a spear's jab.
+    pub stab: bool,
+    /// `mainArm` is the left one (`Mob.isLeftHanded`): a mob's swing uses it.
+    pub left_main: bool,
+    /// The spear each arm (right, left) holds, and how long that arm has
+    /// been using it (`ticksUsingItem(arm)`, 0 when it is not).
+    pub spear: [Option<crate::spear::Kinetic>; 2],
+    pub spear_ticks: [f32; 2],
 }
 impl Hum {
     pub fn new(right: ArmPose, left: ArmPose) -> Self {
@@ -298,6 +324,10 @@ impl Hum {
             swim: 0.0,
             using_item: false,
             swing_right_arm: None,
+            stab: false,
+            left_main: false,
+            spear: [None; 2],
+            spear_ticks: [0.0; 2],
         }
     }
 }
@@ -310,7 +340,7 @@ impl ArmPose {
     }
 }
 /// `AnimationUtils.animateCrossbowHold`.
-fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
+pub(super) fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
     let (hold, shoot) = if in_right {
         ("right_arm", "left_arm")
     } else {
@@ -322,7 +352,7 @@ fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
     p.xrot(shoot, -1.5 + hx);
 }
 /// `AnimationUtils.animateCrossbowCharge`.
-fn crossbow_charge(p: &mut Poses, max: f32, ticks: f32, in_right: bool) {
+pub(super) fn crossbow_charge(p: &mut Poses, max: f32, ticks: f32, in_right: bool) {
     let (hold, pull) = if in_right {
         ("right_arm", "left_arm")
     } else {
@@ -352,6 +382,12 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             p.xrot(arm, x * 0.5 - PI / 10.0);
             p.yrot(arm, 0.0);
         }
+        // Vanilla's BRUSH case: the ITEM pose with twice the drop.
+        ArmPose::Brush => {
+            let x = p.get(arm)[3];
+            p.xrot(arm, x * 0.5 - PI / 5.0);
+            p.yrot(arm, 0.0);
+        }
         ArmPose::Block => {
             let x = p.get(arm)[3] * 0.5 - 0.942_477_9 + hx.clamp(-1.396_263_4, 0.436_332_32);
             p.xrot(arm, x);
@@ -371,8 +407,29 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             p.xrot(arm, x * 0.5 - PI);
             p.yrot(arm, 0.0);
         }
+        ArmPose::TootHorn => {
+            p.xrot(arm, hx.clamp(-1.2, 1.2) - 1.483_529_8);
+            p.yrot(arm, hy + if right { -FRAC_PI_6 } else { FRAC_PI_6 });
+        }
         ArmPose::CrossbowHold => crossbow_hold(p, hx, hy, right),
         ArmPose::CrossbowCharge => crossbow_charge(p, h.charge.0, h.charge.1, right),
+        // SpearAnimations.thirdPersonHandUse.
+        ArmPose::Spear => {
+            let side = usize::from(!right);
+            let Some(kinetic) = h.spear[side] else {
+                return;
+            };
+            let (x, y, z) = crate::spear::third_person_arm(
+                &kinetic,
+                h.spear_ticks[side],
+                right,
+                (hx, hy),
+                h.fall_flying || h.swim > 0.0,
+            );
+            p.xrot(arm, x);
+            p.yrot(arm, y);
+            p.get(arm)[5] += z;
+        }
     }
 }
 /// `HumanoidModel.setupAnim` (and `ZombieModel.setupAttackAnimation`).
@@ -413,13 +470,17 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
             pose_arm(p, h.right, true, h);
         }
     }
-    // setupAttackAnimation (WHACK swing with the right arm).
+    // setupAttackAnimation: a WHACK or STAB swing of the swinging hand's arm.
     let hx = p.get("head")[3];
     let swing = s.swing;
+    let swing_left = h.swing_right_arm.map_or(h.left_main, |right| !right);
     if swing > 0.0 && h.weapon_swing {
-        swing_weapon_down(p, swing, s.age);
+        swing_weapon_down(p, swing, s.age, h.left_main);
     } else if swing > 0.0 {
-        let body_y = (swing.sqrt() * PI * 2.0).msin() * 0.2;
+        let mut body_y = (swing.sqrt() * PI * 2.0).msin() * 0.2;
+        if swing_left {
+            body_y = -body_y;
+        }
         p.yrot("body", body_y);
         let age_scale = if s.baby { 0.5 } else { 1.0 };
         {
@@ -432,19 +493,27 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
             l[2] = -body_y.msin() * 5.0 * age_scale;
             l[0] = body_y.mcos() * 5.0 * age_scale;
         }
-        p.get("right_arm")[4] += body_y;
-        p.get("left_arm")[4] += body_y;
-        p.get("left_arm")[3] += body_y;
-        // Ease.outQuart
-        let eased = 1.0 - (1.0 - swing).powi(4);
-        let aa = (eased * PI).msin();
-        let bb = (swing * PI).msin() * -(hx - 0.7) * 0.75;
-        let r = p.get("right_arm");
-        r[3] -= aa * 1.2 + bb;
-        r[4] += body_y * 2.0;
-        r[5] += (swing * PI).msin() * -0.4;
+        let arm = if swing_left { "left_arm" } else { "right_arm" };
+        if h.stab {
+            // SpearAnimations.thirdPersonAttackHand: the arms keep their turn.
+            p.get(arm)[3] += crate::spear::third_person_attack_arm(swing);
+        } else {
+            p.get("right_arm")[4] += body_y;
+            p.get("left_arm")[4] += body_y;
+            p.get("left_arm")[3] += body_y;
+            // Ease.outQuart
+            let eased = 1.0 - (1.0 - swing).powi(4);
+            let aa = (eased * PI).msin();
+            let bb = (swing * PI).msin() * -(hx - 0.7) * 0.75;
+            let r = p.get(arm);
+            r[3] -= aa * 1.2 + bb;
+            r[4] += body_y * 2.0;
+            r[5] += (swing * PI).msin() * -0.4;
+        }
     }
-    if let Some(aggressive) = h.zombie {
+    // AnimationUtils.animateZombieArms leaves the arms of a spear alone.
+    let using_spear = h.right == ArmPose::Spear || h.left == ArmPose::Spear;
+    if let Some(aggressive) = h.zombie.filter(|_| !using_spear) {
         // AnimationUtils.animateZombieArms
         let raise = !s.baby || !h.holding;
         let drop = if raise {
@@ -495,6 +564,26 @@ fn rot_lerp_rad(a: f32, from: f32, to: f32) -> f32 {
         diff -= PI * 2.0;
     }
     from + a * diff
+}
+/// `DrownedModel.setupSwimAnimation`: the arms reach up and sway, the legs
+/// kick and the head lies straight.
+fn drowned_swim(p: &mut Poses, s: &State, amount: f32) {
+    if amount <= 0.0 {
+        return;
+    }
+    let sway = amount * 0.35 * (0.1 * s.age).msin();
+    let kick = amount * 0.55 * (0.1 * s.age).msin();
+    let reach = -PI * 4.0 / 5.0;
+    let (right_x, left_x) = (p.get("right_arm")[3], p.get("left_arm")[3]);
+    let (right_z, left_z) = (p.get("right_arm")[5], p.get("left_arm")[5]);
+    p.xrot("right_arm", rot_lerp_rad(amount, right_x, reach) + sway);
+    p.xrot("left_arm", rot_lerp_rad(amount, left_x, reach) - sway);
+    p.zrot("right_arm", rot_lerp_rad(amount, right_z, -0.15));
+    p.zrot("left_arm", rot_lerp_rad(amount, left_z, 0.15));
+    let (left_leg, right_leg) = (p.get("left_leg")[3], p.get("right_leg")[3]);
+    p.xrot("left_leg", left_leg - kick);
+    p.xrot("right_leg", right_leg + kick);
+    p.xrot("head", 0.0);
 }
 /// `HumanoidModel.setupSwimAnimation`: the stroke of both arms over 26
 /// walk-animation units, the head down and a slow flutter kick. The left arm
@@ -637,21 +726,40 @@ pub fn setup(
             let throwing = m.kind.anim == Anim::Drowned
                 && m.ai.aggressive
                 && m.extra.main_hand.as_deref() == Some("minecraft:trident");
+            // HumanoidMobRenderer.getArmPose: the arm holding a spear (at rest too).
+            let spear = m
+                .extra
+                .main_hand
+                .as_deref()
+                .and_then(crate::spear::Kinetic::of);
             let main = if throwing {
                 ArmPose::ThrowTrident
+            } else if spear.is_some() {
+                ArmPose::Spear
             } else {
                 ArmPose::Empty
             };
-            let mut h = if m.extra.main_hand_left {
+            let mut h = if m.main_arm_left() {
                 Hum::new(ArmPose::Empty, main)
             } else {
                 Hum::new(main, ArmPose::Empty)
             };
+            h.left_main = m.main_arm_left();
+            let main_side = usize::from(m.main_arm_left());
+            if main == ArmPose::Spear {
+                h.spear[main_side] = spear;
+                if m.extra.using_item > 0 && !m.extra.using_off_hand {
+                    h.spear_ticks[main_side] = m.extra.using_item as f32 + s.partial;
+                }
+            }
             h.zombie = Some(m.ai.aggressive);
             h.holding = m.extra.main_hand.is_some();
             h.crouching = m.extra.crouching;
             h.passenger = m.extra.passenger;
             humanoid(p, s, &h);
+            if m.kind.anim == Anim::Drowned {
+                drowned_swim(p, s, m.extra.swim.amount(s.partial));
+            }
             if m.kind.anim == Anim::ZombifiedPiglin {
                 super::piglin::ears(p, s);
             }
@@ -667,17 +775,29 @@ pub fn setup(
                 ArmPose::Empty
             };
             let using_main = m.extra.using_item > 0 && !m.extra.using_off_hand;
+            let using_off = m.extra.using_item > 0 && m.extra.using_off_hand;
+            // AvatarRenderer.getArmPose: an arm holding a spear (at rest too).
+            let spear_in = |hand: &Option<std::sync::Arc<str>>| {
+                hand.as_deref()
+                    .filter(|_| player)
+                    .and_then(crate::spear::Kinetic::of)
+            };
+            let (main_spear, off_spear) =
+                (spear_in(&m.extra.main_hand), spear_in(&m.extra.off_hand));
             let pose = if player {
                 match m.extra.main_hand.as_deref() {
                     Some(_) if using_main && m.extra.blocking => ArmPose::Block,
                     Some("minecraft:bow") if using_main => ArmPose::Bow,
                     Some("minecraft:trident") if using_main => ArmPose::ThrowTrident,
+                    Some("minecraft:goat_horn") if using_main => ArmPose::TootHorn,
                     Some("minecraft:crossbow") if using_main && !m.extra.charged => {
                         ArmPose::CrossbowCharge
                     }
                     Some("minecraft:crossbow") if m.extra.charged && s.swing == 0.0 => {
                         ArmPose::CrossbowHold
                     }
+                    Some("minecraft:brush") if using_main => ArmPose::Brush,
+                    Some(_) if main_spear.is_some() => ArmPose::Spear,
                     Some(_) => ArmPose::Item,
                     None => ArmPose::Empty,
                 }
@@ -685,15 +805,21 @@ pub fn setup(
                 right
             };
             let off = if player && m.extra.off_hand.is_some() && !pose.affects_offhand() {
-                if m.extra.using_item > 0 && m.extra.using_off_hand && m.extra.blocking {
+                if off_spear.is_some() {
+                    ArmPose::Spear
+                } else if using_off && m.extra.blocking {
                     ArmPose::Block
+                } else if using_off && m.extra.off_hand.as_deref() == Some("minecraft:goat_horn") {
+                    ArmPose::TootHorn
+                } else if using_off && m.extra.off_hand.as_deref() == Some("minecraft:brush") {
+                    ArmPose::Brush
                 } else {
                     ArmPose::Item
                 }
             } else {
                 ArmPose::Empty
             };
-            let mut h = if m.extra.main_hand_left {
+            let mut h = if m.main_arm_left() {
                 Hum::new(off, pose)
             } else {
                 Hum::new(pose, off)
@@ -710,7 +836,34 @@ pub fn setup(
             h.swim = m.extra.swim.amount(s.partial);
             h.using_item = m.extra.using_item > 0;
             h.swing_right_arm = m.extra.swing_right_arm;
+            h.stab = m.extra.swing_stab;
+            h.left_main = m.main_arm_left();
+            let main_side = usize::from(m.main_arm_left());
+            h.spear[main_side] = main_spear;
+            h.spear[1 - main_side] = off_spear;
+            if m.extra.using_item > 0 {
+                let using_side = if m.extra.using_off_hand {
+                    1 - main_side
+                } else {
+                    main_side
+                };
+                h.spear_ticks[using_side] = m.extra.using_item as f32 + s.partial;
+            }
             humanoid(p, s, &h);
+            if player {
+                // PlayerModel.setupAnim: the layers the player hid (PlayerModelPart).
+                let hidden = m.extra.hidden_model_parts;
+                for (bit, part) in [
+                    (1, "jacket"),
+                    (2, "left_sleeve"),
+                    (3, "right_sleeve"),
+                    (4, "left_pants"),
+                    (5, "right_pants"),
+                    (6, "hat"),
+                ] {
+                    p.visible(part, hidden & (1 << bit) == 0);
+                }
+            }
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.
                 let sw = s.swing;
@@ -724,6 +877,10 @@ pub fn setup(
                 p.xrot("left_arm", -PI / 2.0 - (s2 * 1.2 - s1 * 0.4));
                 bob(p, "right_arm", s.age, 1.0);
                 bob(p, "left_arm", s.age, -1.0);
+            }
+            // BoggedModel.setupAnim: the mushrooms on the head come off once sheared.
+            if m.species() == super::Species::Bogged {
+                p.visible("mushrooms", !m.extra.sheared);
             }
         }
         Anim::Witch => super::witch::anim(m, s, p),
@@ -745,6 +902,11 @@ pub fn setup(
                 for part in ["left_chest", "right_chest"] {
                     p.visible(part, false);
                 }
+            }
+            // EquineSaddleModel.setupAnim: the reins show only while ridden
+            // (`isRidden` is `Entity.isVehicle`: a player or a mob rides it).
+            for part in ["left_saddle_line", "right_saddle_line"] {
+                p.visible(part, m.rider.is_some() || m.extra.rider.is_some());
             }
         }
         Anim::Hoglin => super::piglin::hoglin_anim(m, s, p),
@@ -802,6 +964,8 @@ pub fn setup(
 #[cfg(test)]
 mod flight_pose_tests {
     use super::*;
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
 
     #[test]
     fn blocking_arm_follows_the_head_with_limits_in_both_hands() {
@@ -940,9 +1104,144 @@ mod flight_pose_tests {
         );
         assert!(swinging.get("right_arm")[4] < 1.0);
         assert!(same_angle(swinging.get("left_arm")[4], PI));
+        // A STAB swing turns that arm's pitch alone, by the spear's curve.
+        let mut stabbing = make();
+        h.swim = 0.0;
+        h.stab = true;
+        let mut still = make();
+        humanoid(
+            &mut still,
+            &state,
+            &Hum::new(ArmPose::Empty, ArmPose::Empty),
+        );
+        let stab = State {
+            swing: 0.2,
+            ..state
+        };
+        humanoid(&mut stabbing, &stab, &h);
+        let arm_pitch = crate::spear::third_person_attack_arm(0.2);
+        assert!(same_angle(
+            stabbing.get("right_arm")[3],
+            still.get("right_arm")[3] + arm_pitch
+        ));
+        assert_eq!(stabbing.get("left_arm")[3], still.get("left_arm")[3]);
         // Out of the pose nothing changes.
         let mut dry = make();
         humanoid(&mut dry, &state, &Hum::new(ArmPose::Empty, ArmPose::Empty));
         assert_eq!(dry.get("head")[3], 30.0f32.to_radians());
+    }
+
+    /// A player: a humanoid model with a shield in its main hand.
+    fn player() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.anim = Anim::Humanoid { zombie_arms: false };
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    #[test]
+    fn a_raised_shield_holds_the_arm_across_the_body() {
+        // AvatarRenderer.getArmPose: the used item's use animation decides
+        // the arm's pose, and a shield (an item with `blocks_attacks`) uses
+        // the BLOCK animation, so the arm is held up across the body
+        // (#2289).
+        let state = State {
+            pos: 0.0,
+            speed: 0.0,
+            age: 0.0,
+            y_rot: 0.0,
+            x_rot: 0.0,
+            swing: 0.0,
+            baby: false,
+            partial: 0.0,
+        };
+        let mut p = Poses {
+            map: ["head", "right_arm", "left_arm"]
+                .into_iter()
+                .map(|n| (n.to_string(), [0.0; 9]))
+                .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:shield".into());
+        m.extra.using_item = 20;
+        m.extra.blocking = true;
+        setup(&m, &state, &mut p, &HashMap::new());
+        // HumanoidModel.setupAnim's BLOCK pose.
+        assert!((p.get("right_arm")[3] + 0.942_477_9).abs() < 1e-6);
+        assert!((p.get("right_arm")[4] + FRAC_PI_6).abs() < 1e-6);
+        // An item that does not block attacks leaves the arm holding it.
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:stick".into());
+        m.extra.using_item = 20;
+        let mut p = Poses {
+            map: ["head", "right_arm", "left_arm"]
+                .into_iter()
+                .map(|n| (n.to_string(), [0.0; 9]))
+                .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        setup(&m, &state, &mut p, &HashMap::new());
+        assert!((p.get("right_arm")[3] + PI / 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_brush_being_used_sweeps_the_arm_lower_than_a_plain_item() {
+        // AvatarRenderer.getArmPose: a brush being used is the BRUSH pose, and
+        // HumanoidModel.poseRightArm drops that arm twice as far as ITEM
+        // (#4273: brushing had no third-person arm pose at all).
+        let state = State {
+            pos: 0.0,
+            speed: 0.0,
+            age: 0.0,
+            y_rot: 0.0,
+            x_rot: 0.0,
+            swing: 0.0,
+            baby: false,
+            partial: 0.0,
+        };
+        let make = || Poses {
+            map: ["head", "right_arm", "left_arm"]
+                .into_iter()
+                .map(|n| (n.to_string(), [0.0; 9]))
+                .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:brush".into());
+        m.extra.using_item = 20;
+        let mut p = make();
+        setup(&m, &state, &mut p, &HashMap::new());
+        // HumanoidModel.setupAnim's BRUSH pose.
+        assert!((p.get("right_arm")[3] + PI / 5.0).abs() < 1e-6);
+        assert_eq!(p.get("right_arm")[4], 0.0);
+        // An item with no use animation keeps the ITEM pose: BRUSH cannot leak.
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:stick".into());
+        m.extra.using_item = 20;
+        let mut p = make();
+        setup(&m, &state, &mut p, &HashMap::new());
+        assert!((p.get("right_arm")[3] + PI / 10.0).abs() < 1e-6);
+        assert_eq!(p.get("right_arm")[4], 0.0);
+        // AvatarRenderer.getArmPose builds the pose per hand: brushing with the
+        // brush in the off hand is BRUSH on the left arm, and the main hand
+        // keeps its ITEM pose (the two must not swap).
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:stick".into());
+        m.extra.off_hand = Some("minecraft:brush".into());
+        m.extra.using_item = 20;
+        m.extra.using_off_hand = true;
+        let mut p = make();
+        setup(&m, &state, &mut p, &HashMap::new());
+        assert!((p.get("left_arm")[3] + PI / 5.0).abs() < 1e-6);
+        assert_eq!(p.get("left_arm")[4], 0.0);
+        assert!((p.get("right_arm")[3] + PI / 10.0).abs() < 1e-6);
+        assert_eq!(p.get("right_arm")[4], 0.0);
     }
 }

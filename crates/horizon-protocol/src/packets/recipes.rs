@@ -500,6 +500,33 @@ impl Codec<RecipeBookSettings> for RecipeBookSettings {
     }
 }
 
+/// ServerboundRecipeBookChangeSettingsPacket: the active book's open and
+/// filtering flags, with its `RecipeBookType` ordinal as a VarInt.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecipeBookChangeSettings {
+    pub book_type: i32,
+    pub open: bool,
+    pub filtering: bool,
+}
+impl Codec<RecipeBookChangeSettings> for RecipeBookChangeSettings {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let book_type = r.varint()?;
+        if !(0..4).contains(&book_type) {
+            return Err(crate::Error::new("invalid recipe book type"));
+        }
+        Ok(Self {
+            book_type,
+            open: r.bool()?,
+            filtering: r.bool()?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        w.varint(v.book_type);
+        w.bool(v.open);
+        w.bool(v.filtering);
+    }
+}
+
 /// ClientboundPlaceGhostRecipePacket: the recipe to show faded in a menu
 /// whose items were missing.
 #[derive(Clone, Debug, PartialEq)]

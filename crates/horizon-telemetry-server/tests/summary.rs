@@ -1,5 +1,5 @@
-//! `GET /v1/benchmarks/summary` against the website's fixtures (website/scripts/fixtures/benchmarks/): the same
-//! uploads must give the groups `website/scripts/benchmarks.mjs` gives.
+//! `GET /v1/benchmarks/summary` against the shared fixtures (tests/fixtures/benchmarks/): the same uploads must
+//! give the groups the website's `scripts/benchmarks.mjs` (horizon-rust/horizon-site) gives on its copy of them.
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
@@ -15,10 +15,7 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
-const FIXTURES: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../website/scripts/fixtures/benchmarks"
-);
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/benchmarks");
 
 fn items() -> Vec<Value> {
     std::fs::read_to_string(format!("{FIXTURES}/items.jsonl"))

@@ -19,7 +19,17 @@ use std::convert::Infallible;
 
 type ItemConsumable = Consumable<String, ConsumeEffect>;
 
+/// `EntityEvent.USE_ITEM_COMPLETE`: the server finished the player's use.
+pub(super) const USE_ITEM_COMPLETE_EVENT: i8 = 9;
+
 impl Game<'_> {
+    /// `ServerPlayer.completeUsingItem`: the player's own client is told
+    /// first, and completes the use itself (eating the food there too).
+    pub(super) fn send_use_item_complete(&mut self) {
+        if self.lan_acting.is_some() {
+            self.guest_entity_events.push(USE_ITEM_COMPLETE_EVENT);
+        }
+    }
     /// `Consumable.emitParticlesAndSounds(user.getRandom(), user, stack, count)`.
     pub(super) fn emit_consume(
         &mut self,
@@ -56,6 +66,17 @@ impl Game<'_> {
             let pitch = self.world.random.next_float() * (1.0f32 - 0.9f32) + 0.9;
             self.audio
                 .play("minecraft:entity.player.burp", self.feet(), 0.5, pitch);
+        }
+        // SuspiciousStewEffects.onConsume, a ConsumableListener: each entry is
+        // added as a `MobEffectInstance(effect, duration)` (amplifier 0).
+        if let Some(data) = stack.extra.as_deref() {
+            for (id, duration) in &data.stew_effects {
+                if let Some(def) = horizon_client::brewing::effect(id) {
+                    self.add_player_effect(horizon_client::effects::EffectInstance::new(
+                        def.id, *duration, 0,
+                    ));
+                }
+            }
         }
         for effect in &consumable.effects {
             self.apply_consume_effect(effect);
@@ -107,7 +128,7 @@ impl Game<'_> {
         if !self.world.loaded(pos.x, pos.z) {
             return false;
         }
-        while pos.y > self.dim.min_y() {
+        while pos.y > self.world.shape.min_y {
             pos.y -= 1;
             let state = self.world.block(pos.x, pos.y, pos.z);
             if self.state_in_tag("minecraft:entities_can_teleport_to", state) {
@@ -206,6 +227,8 @@ impl Game<'_> {
             self.dismount(i);
         } else if let Some(i) = self.carts.iter().position(|c| c.id == id) {
             self.dismount_cart(i);
+        } else if let Some(c) = self.cushions.iter().find(|c| c.id == id).cloned() {
+            self.get_up_from_cushion(&c);
         } else {
             self.dismount_mount();
         }
@@ -234,10 +257,19 @@ impl EmissionWorld for Emitter<'_, '_> {
     fn consume_sound(&mut self, _: ItemStack) -> Result<String, Infallible> {
         unreachable!("players play the consumable's own sound")
     }
-    /// `Entity.playSound`: at the player's position.
+    /// `Player.playSound`: at the player's position, for everyone but the
+    /// player, whose own client plays it (`level.playSound(player, ...)`):
+    /// a guest's server turn leaves the guest out.
     fn play_sound(&mut self, sound: String, volume: f32, pitch: f32) -> Result<(), Infallible> {
         let at = self.0.feet();
-        self.0.audio.play(&sound, at, volume, pitch);
+        if self.0.lan_acting.is_some() {
+            self.0.audio.play_unshared(&sound, at, volume, pitch);
+            if let Some(at) = at {
+                self.0.guest_player_sounds.push((sound, at, volume, pitch));
+            }
+        } else {
+            self.0.audio.play(&sound, at, volume, pitch);
+        }
         Ok(())
     }
 }
@@ -264,10 +296,10 @@ impl TeleportConsumeWorld for Teleporter<'_, '_> {
         &mut self.0.world.random
     }
     fn min_y(&mut self, level: Dim) -> Result<i32, Infallible> {
-        Ok(level.min_y())
+        Ok(self.0.level_shapes.get(level.id()).min_y)
     }
     fn logical_height(&mut self, level: Dim) -> Result<i32, Infallible> {
-        Ok(level.logical_height())
+        Ok(self.0.level_shapes.get(level.id()).logical_height)
     }
     fn is_passenger(&mut self) -> Result<bool, Infallible> {
         Ok(self.0.riding.is_some())

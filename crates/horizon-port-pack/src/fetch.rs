@@ -83,6 +83,12 @@ impl Fetched {
     }
 }
 
+/// A file name from a pack's index that stays inside `jars/`: one plain part, with no separator
+/// of any platform, no drive and not `.` or `..`.
+fn plain_file_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0'])
+}
+
 /// The jars of the records `want` picks that the work folder lacks.
 pub fn fetch(
     work: &Path,
@@ -110,6 +116,13 @@ pub fn fetch(
             how,
             detail,
         };
+        if !plain_file_name(name) {
+            // A name like `..\..\x.dll` or `C:\x` would write outside jars/ on Windows.
+            let o = outcome(How::Failed, format!("{name:?} is not a plain file name"));
+            log(format!("{}: {} ({})", o.key, o.how.label(), o.detail));
+            fetched.files.push(o);
+            continue;
+        }
         let dest = jars.join(name);
         let sha1 = file.sha1.as_deref();
         let o = if r.jar.is_some() || matches(&dest, sha1) {
@@ -143,7 +156,9 @@ pub fn fetch(
     if let Some((dest, url)) = crate::worldgen::loader_jar(work, &pack.loader, &pack.loader_version)
         .filter(|(dest, _)| !dest.exists())
     {
-        let sha1 = ureq::get(&format!("{url}.sha1"))
+        let checksum = format!("{url}.sha1");
+        let sha1 = crate::net::agent(&checksum)
+            .get(&checksum)
             .set("User-Agent", modrinth::AGENT)
             .call()
             .ok()
@@ -201,7 +216,8 @@ pub fn url_of(file: &PackFile, cache: &Cache) -> Option<String> {
 
 /// Downloads `url` to `dest`, kept only if its SHA-1 is `sha1`.
 fn download(url: &str, sha1: Option<&str>, dest: &Path) -> Result<(), String> {
-    let response = ureq::get(url)
+    let response = crate::net::agent(url)
+        .get(url)
         .set("User-Agent", modrinth::AGENT)
         .call()
         .map_err(|e| format!("{url}: {e}"))?;
@@ -295,6 +311,14 @@ pub fn curseforge_names(instance: &Value) -> HashMap<(u64, u64), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_pack_index_name_must_stay_inside_jars() {
+        assert!(plain_file_name("sodium-0.6.jar"));
+        for name in ["", ".", "..", "..\\..\\evil.dll", "C:evil.jar", "a/b.jar"] {
+            assert!(!plain_file_name(name), "{name:?}");
+        }
+    }
 
     fn file(sha1: Option<&str>, downloads: &[&str]) -> PackFile {
         PackFile {

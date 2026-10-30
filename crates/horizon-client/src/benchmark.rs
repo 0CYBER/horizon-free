@@ -323,10 +323,15 @@ const QUIET_MESHES_PER_S: f64 = 100.0;
 /// happened (`tools/perf_bench.py`'s `wait_loaded`). With `status.streaming`, the sections are
 /// drawn once no stage has held work for half a second: blocks changing after the load (fluids
 /// settling, random ticks) only remesh in bursts. Without it, meshing has to go quiet.
+///
+/// Right after a teleport (and at spawn) the game reports nothing queued and steady counts for over
+/// a second before it starts loading: the counts must change once, or stay full for 5 s, and the
+/// resident chunks reach [`view_chunks`], before "steady" means loaded.
 fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Instant, String> {
     let deadline = Instant::now() + LOAD_LIMIT;
     let (mut last, mut changed, mut meshing) = (None, Instant::now(), Instant::now());
     let mut previous: Option<(Instant, f64)> = None;
+    let (mut first, mut moved, began) = (None, false, Instant::now());
     while Instant::now() < deadline {
         let s = control.status();
         let now = Instant::now();
@@ -339,6 +344,19 @@ fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Insta
             (last, changed, previous, meshing) = (None, now, None, now);
         } else {
             let counts = (s["chunks"].as_u64(), s["generated_chunks"].as_u64());
+            let resident = counts.0.unwrap_or(0);
+            let min_chunks = view_chunks(s["render_distance"].as_u64().unwrap_or(0));
+            let first = *first.get_or_insert(counts);
+            moved = moved
+                || counts != first
+                || (min_chunks > 0
+                    && resident >= min_chunks
+                    && now - began > Duration::from_secs(5));
+            if min_chunks > 0 && (!moved || resident < min_chunks) {
+                (last, changed, previous, meshing) = (None, now, None, now);
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             if last != Some(counts) {
                 (last, changed) = (Some(counts), now);
             }
@@ -368,6 +386,12 @@ fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Insta
         thread::sleep(Duration::from_millis(50));
     }
     Err(format!("not loaded after {} s", LOAD_LIMIT.as_secs()))
+}
+
+/// 80% of the view circle (pi x RD^2): the game keeps 637 columns at RD 12 and 3725 at RD 32
+/// (`tools/perf_bench.py`'s `view_chunks`).
+fn view_chunks(distance: u64) -> u64 {
+    (0.8 * std::f64::consts::PI * (distance * distance) as f64) as u64
 }
 
 /// Vanilla's yaw facing from `start` to `end`.
@@ -418,6 +442,61 @@ mod tests {
         assert_eq!(scenes("standard").unwrap().len(), 4);
         assert_eq!(scenes("ocean").unwrap()[0].0, "ocean");
         assert!(scenes("nether").is_none());
+    }
+
+    #[test]
+    fn view_chunks_matches_perf_bench() {
+        assert_eq!(view_chunks(12), 361);
+        assert_eq!(view_chunks(32), 2573);
+        assert_eq!(view_chunks(0), 0);
+    }
+    /// The status a fake control answers with: the player is where it should
+    /// be, nothing is queued, and the world holds `chunks` resident chunks.
+    fn status(chunks: u64) -> String {
+        serde_json::json!({
+            "player": {"position": [0.0, 64.0, 0.0]},
+            "pending_chunks": 0,
+            "screen": "playing",
+            "render_distance": 12,
+            "chunks": chunks,
+            "generated_chunks": chunks,
+            "meshed_sections": 0,
+            "streaming": {},
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_load_waits_for_the_chunks_a_teleport_starts() {
+        // Right after a teleport the game reports steady counts and nothing
+        // queued for over a second, before the integrated server has sent the
+        // first chunk: the quiet rule alone would call that loaded, and the
+        // scene would be measured over an empty view (#1749).
+        const LATE: usize = 30;
+        let (tx, rx) = mpsc::channel::<Request>();
+        let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&polls);
+        let server = thread::spawn(move || {
+            let mut seen = 0;
+            while let Ok(request) = rx.recv() {
+                if request.line == "status" {
+                    let chunks = if seen < LATE { 0 } else { 400 };
+                    seen += 1;
+                    counted.store(seen, std::sync::atomic::Ordering::SeqCst);
+                    let _ = request.reply.send(status(chunks));
+                } else {
+                    let _ = request.reply.send("{}".to_owned());
+                }
+            }
+        });
+        let control = Control(tx);
+        wait_loaded(&control, |_| true).expect("the scene loads");
+        assert!(
+            polls.load(std::sync::atomic::Ordering::SeqCst) > LATE,
+            "the load finished before the chunks arrived"
+        );
+        drop(control);
+        let _ = server.join();
     }
 
     #[test]

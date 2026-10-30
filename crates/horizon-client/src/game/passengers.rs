@@ -27,16 +27,7 @@ fn zombie_kind(s: Species) -> bool {
 impl Game<'_> {
     /// `Entity.startRiding` for two mobs.
     pub(super) fn mount_mob(&mut self, rider: u32, vehicle: u32) {
-        if rider == vehicle {
-            return;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == rider) {
-            m.extra.mount = Some(vehicle);
-            m.extra.passenger = true;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == vehicle) {
-            m.extra.rider = Some(rider);
-        }
+        riders::link(&mut self.mobs, rider, vehicle);
     }
     /// Riders sit on their vehicles (`Entity.positionRider`), mobs or boats,
     /// and let go when the vehicle dies or is gone.
@@ -115,6 +106,113 @@ impl Game<'_> {
                 m.ai.nav.stop();
             }
         }
+        // Displays and interaction boxes riding anything the client tracks,
+        // as NPC plugins put a name over a head or a model's bones on a
+        // pivot: `Entity.rideTick` -> `positionRider`, the vehicle's passenger
+        // attachment (the top of its box in its pose) less the rider's own,
+        // which is 0 for both (Display and Interaction are 0 by 0). On the
+        // local player, the top of its box in its pose and scale
+        // (`Avatar.POSES`).
+        let me = self.remote.as_ref().map(|r| r.entity_id as u32);
+        let own_seat = self.player.as_ref().map(|p| {
+            p.position
+                .add_vector(Vec3::new(0.0, f64::from(p.dimensions.height), 0.0))
+        });
+        // A rider of a rider settles over a few passes, as the mobs above.
+        for _ in 0..3 {
+            let mut vehicles: Vec<u32> = self
+                .text_displays
+                .values()
+                .filter_map(|d| d.vehicle)
+                .chain(self.interactions.values().filter_map(|i| i.vehicle))
+                .collect();
+            vehicles.sort_unstable();
+            vehicles.dedup();
+            let seats: HashMap<u32, glam::DVec3> = vehicles
+                .into_iter()
+                .filter_map(|v| {
+                    self.passenger_riding_position(v, me, own_seat, &index)
+                        .map(|at| (v, at))
+                })
+                .collect();
+            for display in self.text_displays.values_mut() {
+                if let Some(at) = display.vehicle.and_then(|v| seats.get(&v)) {
+                    display.ride(*at);
+                }
+            }
+            for interaction in self.interactions.values_mut() {
+                if let Some(at) = interaction.vehicle.and_then(|v| seats.get(&v)) {
+                    interaction.ride_to(*at);
+                }
+            }
+        }
+    }
+
+    /// `Entity.getPassengerRidingPosition` of a vehicle: where the feet of a
+    /// passenger whose own vehicle attachment is 0 land.
+    fn passenger_riding_position(
+        &self,
+        vehicle: u32,
+        me: Option<u32>,
+        own_seat: Option<Vec3>,
+        index: &HashMap<u32, usize>,
+    ) -> Option<glam::DVec3> {
+        if Some(vehicle) == me {
+            let at = own_seat?;
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(&j) = index.get(&vehicle) {
+            let v = &self.mobs[j];
+            let at = riders::seat(riders::passenger_attachment(v), 0.0, v.position, v.yaw);
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(d) = self.text_displays.get(&(vehicle as i32)) {
+            return Some(d.position());
+        }
+        if let Some(i) = self.interactions.get(&(vehicle as i32)) {
+            let at = i.position;
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(b) = self.boats.iter().find(|b| b.id == vehicle) {
+            let count = self.boat_players(vehicle).max(1) + self.boat_mobs(vehicle).len();
+            let at = b.seat(0, count, false, 0.0, false);
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(c) = self.carts.iter().find(|c| c.id == vehicle) {
+            let at = c
+                .position
+                .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(a) = self.armor_stands.iter().find(|a| a.id == vehicle) {
+            // ArmorStand.getDefaultDimensions: a marker has no box to sit on.
+            let height = if a.marker {
+                0.0
+            } else if a.small {
+                0.9875
+            } else {
+                1.975
+            };
+            return Some(glam::DVec3::new(
+                a.position.x,
+                a.position.y + height,
+                a.position.z,
+            ));
+        }
+        // Any other tracked entity sits on its feet; an area effect cloud is
+        // 0.5 tall, and ModelEngine parks a model's pivot half a block below
+        // its feet for exactly that.
+        let (kind, position) = self.remote.as_ref()?.tracked(vehicle as i32)?;
+        let lift = if kind == "minecraft:area_effect_cloud" {
+            0.5
+        } else {
+            0.0
+        };
+        Some(glam::DVec3::new(
+            position[0],
+            position[1] + lift,
+            position[2],
+        ))
     }
 
     /// `finalizeSpawn` jockeys of a naturally spawned mob: baby zombies on
@@ -147,11 +245,19 @@ impl Game<'_> {
                 }
             }
             Species::Strider if !baby => self.spawn_strider_jockey(id, at),
-            // ZombieHorse.finalizeSpawn: a zombie with an iron spear.
-            Species::ZombieHorse if natural => {
+            // ZombieHorse.finalizeSpawn: a zombie with an iron spear. The rider
+            // comes from EntityType.create, which makes no zombie in peaceful
+            // (canSpawn), so a peaceful zombie horse spawns without one.
+            Species::ZombieHorse
+                if natural
+                    && (self.ui.difficulty != 0
+                        || horizon_client::mobs::spawn_rules::allowed_in_peaceful(
+                            Species::Zombie,
+                        )) =>
+            {
                 if let Some(zombie) = self.spawn_mob("minecraft:zombie", at, false) {
                     if let Some(z) = self.mobs.iter_mut().find(|m| m.id == zombie) {
-                        z.extra.main_hand = Some("minecraft:iron_spear".into());
+                        z.extra.set_main_hand(Some("minecraft:iron_spear".into()));
                     }
                     self.mount_mob(zombie, id);
                 }
@@ -181,7 +287,7 @@ impl Game<'_> {
             return;
         }
         if let Some(h) = self.mobs.iter_mut().find(|m| m.id == id) {
-            h.extra.main_hand = Some("minecraft:iron_spear".into());
+            h.extra.set_main_hand(Some("minecraft:iron_spear".into()));
         }
         let Some(camel) = self.spawn_mob("minecraft:camel_husk", at, false) else {
             return;
@@ -249,7 +355,8 @@ impl Game<'_> {
             if let Some(piglin) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
                 let baby = self.world.random.next_float() < CHICKEN_JOCKEY_ODDS;
                 if let Some(p) = self.mobs.iter_mut().find(|m| m.id == piglin) {
-                    p.extra.main_hand = Some("minecraft:warped_fungus_on_a_stick".into());
+                    p.extra
+                        .set_main_hand(Some("minecraft:warped_fungus_on_a_stick".into()));
                     p.extra.age = if baby { i32::MIN / 2 } else { 0 };
                 }
                 if let Some(s) = self.mobs.iter_mut().find(|m| m.id == id) {
@@ -271,11 +378,13 @@ impl Game<'_> {
     /// horse is a trap for fifteen minutes; a player within ten blocks springs
     /// it.
     pub(super) fn tick_skeleton_traps(&mut self) {
-        let player = self
-            .player
-            .as_ref()
-            .filter(|p| !p.health.dead_or_dying())
-            .map(|p| p.position);
+        // `Level.hasNearbyAlivePlayer`: alive, not a spectator, in the level.
+        let players: Vec<_> = self
+            .level_players()
+            .into_iter()
+            .filter(|p| p.alive && !p.spectator)
+            .map(|p| p.position)
+            .collect();
         let mut sprung = Vec::new();
         for m in &mut self.mobs {
             if m.species() != Species::SkeletonHorse || !m.extra.trap || !m.alive() {
@@ -288,7 +397,10 @@ impl Game<'_> {
                     continue;
                 }
             }
-            if player.is_some_and(|p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE) {
+            if players
+                .iter()
+                .any(|&p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE)
+            {
                 sprung.push(m.id);
             }
         }

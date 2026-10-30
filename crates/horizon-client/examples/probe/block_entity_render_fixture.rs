@@ -367,7 +367,9 @@ pub fn main() -> Result<()> {
             lid: &|_| open,
             sign: &|_| sign.as_ref(),
             banner: &|_| layers.clone(),
+            skull: &|_| None,
             glyph: &|c| atlas.glyph_cell(c),
+            glyphs: atlas.font.epoch(),
         };
         let mut verts = Vec::new();
         renderer.render_block(&scene, pos, state, Mat4::IDENTITY, packed, &mut verts);

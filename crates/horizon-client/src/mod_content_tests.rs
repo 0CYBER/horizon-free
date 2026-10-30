@@ -34,6 +34,40 @@ fn json_keeps_key_order_and_numbers() {
 }
 
 #[test]
+fn item_components_patch_the_template_entry() {
+    let mut entry: J =
+        serde_json::from_str(r#"{"minecraft:max_damage": 250, "minecraft:repairable": {}}"#)
+            .unwrap();
+    let known: BTreeSet<String> = [
+        "minecraft:max_damage",
+        "minecraft:repairable",
+        "minecraft:food",
+    ]
+    .map(str::to_owned)
+    .into();
+    let patch = |text: &str| -> Vec<(String, J)> {
+        let J::Obj(o) = serde_json::from_str(text).unwrap() else {
+            unreachable!()
+        };
+        o
+    };
+    patch_components(
+        &mut entry,
+        &patch(r#"{"minecraft:max_damage": 900, "!minecraft:repairable": {}, "minecraft:food": {"nutrition": 4}}"#),
+        &known,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&entry).unwrap(),
+        r#"{"minecraft:max_damage":900,"minecraft:food":{"nutrition":4}}"#
+    );
+    for typo in [r#"{"minecraft:fod": {}}"#, r#"{"!minecraft:fod": {}}"#] {
+        let e = patch_components(&mut entry, &patch(typo), &known).unwrap_err();
+        assert_eq!(e, "minecraft:fod is no component a vanilla item has");
+    }
+}
+
+#[test]
 fn tags_merge_without_repeats() {
     let vanilla = r#"{"values": ["minecraft:stone"]}"#;
     let more = [
@@ -46,6 +80,139 @@ fn tags_merge_without_repeats() {
         merged["values"],
         serde_json::json!(["minecraft:stone", "ruby:ruby_block"])
     );
+}
+
+/// Registry IDs and state IDs must not depend on package discovery order.
+#[test]
+fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-order-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join("facts.json"),
+        r#"{"states": [["minecraft:iron_block"], ["minecraft:iron_block"], ["minecraft:stone"]],
+            "defaults": {"minecraft:iron_block": 0, "minecraft:stone": 2}}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("gameplay-facts.json"),
+        r#"{"states": [{"item":"minecraft:iron_block"}, {"item":"minecraft:iron_block"},
+            {"item":"minecraft:stone"}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("items.json"),
+        r#"{"minecraft:stone": {}, "minecraft:iron_block": {}}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("registries.json"),
+        r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
+            "minecraft:iron_block":{"protocol_id":9}}},
+            "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
+            "minecraft:iron_block":{"protocol_id":11}}}}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(base.join("assets/minecraft/blockstates")).unwrap();
+    fs::write(
+        base.join("assets/minecraft/blockstates/iron_block.json"),
+        "{}",
+    )
+    .unwrap();
+    fs::write(base.join("assets/minecraft/blockstates/stone.json"), "{}").unwrap();
+    let ruby = folder_mod(
+        &scratch.join("ruby"),
+        &[
+            ("horizon-mod.toml", &manifest("ruby", "")),
+            (
+                "data/ruby/horizon/block/zblock.json",
+                r#"{"template":"minecraft:stone"}"#,
+            ),
+            (
+                "data/ruby/horizon/item/aitem.json",
+                r#"{"template":"minecraft:stone"}"#,
+            ),
+        ],
+    );
+    let alpha = folder_mod(
+        &scratch.join("alpha"),
+        &[
+            ("horizon-mod.toml", &manifest("alpha", "")),
+            (
+                "data/alpha/horizon/block/zblock.json",
+                r#"{"template":"minecraft:iron_block"}"#,
+            ),
+            (
+                "data/alpha/horizon/item/aitem.json",
+                r#"{"template":"minecraft:stone"}"#,
+            ),
+        ],
+    );
+    let mut mods = vec![ruby, alpha];
+    for index in 0..2 {
+        let plan = Plan::new(&base, &mods).unwrap();
+        let blocks: Vec<_> = plan
+            .blocks
+            .iter()
+            .map(|block| {
+                (
+                    block.decl.id.as_str(),
+                    block.rename.first,
+                    block.rename.states.len(),
+                )
+            })
+            .collect();
+        assert_eq!(blocks, [("alpha:zblock", 3, 2), ("ruby:zblock", 5, 1)]);
+        let items: Vec<_> = plan
+            .items
+            .iter()
+            .map(|item| item.rename.to.as_str())
+            .collect();
+        assert_eq!(
+            items,
+            ["alpha:aitem", "alpha:zblock", "ruby:aitem", "ruby:zblock"]
+        );
+
+        // Exercise the same registry rewrite the game and server read.
+        let mut registry: J = serde_json::from_str(
+            r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
+                "minecraft:iron_block":{"protocol_id":9}}},
+                "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
+                "minecraft:iron_block":{"protocol_id":11}}}}"#,
+        )
+        .unwrap();
+        plan.json("registries.json", &mut registry).unwrap();
+        let registry: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&registry).unwrap()).unwrap();
+        let id = |kind: &str, name: &str| {
+            registry[kind]["entries"][name]["protocol_id"]
+                .as_u64()
+                .unwrap()
+        };
+        assert_eq!(id("minecraft:item", "minecraft:stone"), 4);
+        assert_eq!(id("minecraft:item", "minecraft:iron_block"), 9);
+        assert_eq!(id("minecraft:item", "alpha:aitem"), 10);
+        assert_eq!(id("minecraft:item", "alpha:zblock"), 11);
+        assert_eq!(id("minecraft:item", "ruby:aitem"), 12);
+        assert_eq!(id("minecraft:item", "ruby:zblock"), 13);
+        assert_eq!(id("minecraft:block", "minecraft:stone"), 7);
+        assert_eq!(id("minecraft:block", "minecraft:iron_block"), 11);
+        assert_eq!(id("minecraft:block", "alpha:zblock"), 12);
+        assert_eq!(id("minecraft:block", "ruby:zblock"), 13);
+        drop(plan);
+
+        let output = scratch.join(format!("output-{index}"));
+        build(&base, &mods, &output).unwrap();
+        let built: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("registries.json")).unwrap()).unwrap();
+        assert_eq!(
+            built, registry,
+            "the built root must use the tested allocation"
+        );
+        mods.reverse();
+    }
+    fs::remove_dir_all(scratch).unwrap();
 }
 
 fn prepared() -> Option<PathBuf> {
@@ -61,7 +228,7 @@ fn prepared() -> Option<PathBuf> {
 /// A content mod folder: a full block, a door and an item-less glass from
 /// templates, an item, a vanilla tag addition and a language file.
 fn ruby_mod(dir: &Path) -> ContentMod {
-    let files: [(&str, &str); 8] = [
+    let files: [(&str, &str); 9] = [
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
@@ -82,6 +249,14 @@ fn ruby_mod(dir: &Path) -> ContentMod {
         (
             "data/ruby/horizon/item/ruby.json",
             r#"{"template": "minecraft:diamond", "max_stack_size": 16, "rarity": "rare"}"#,
+        ),
+        (
+            "data/ruby/horizon/item/ruby_sword.json",
+            r#"{"template": "minecraft:iron_sword", "components": {"minecraft:max_damage": 900,
+                "minecraft:attribute_modifiers": [{"type": "minecraft:attack_damage",
+                    "id": "minecraft:base_attack_damage", "amount": 7.0,
+                    "operation": "add_value", "slot": "mainhand"}],
+                "!minecraft:repairable": {}}}"#,
         ),
         // Carried-over tags name blocks left out and other mods' ids too.
         (
@@ -114,6 +289,7 @@ fn ruby_mod(dir: &Path) -> ContentMod {
 /// new blocks behave like their templates with the overrides, and vanilla's
 /// states are where they were.
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn content_root_loads_with_every_table() {
     let Some(base) = prepared() else {
         return;
@@ -246,11 +422,17 @@ fn content_root_loads_with_every_table() {
     assert_eq!(facts.get(iron).hardness, a.hardness);
     assert_eq!(&*facts.get(iron).name, "minecraft:iron_block");
 
-    let items = Items::load(&root, new, &facts).unwrap();
+    let items = Items::load(&root, new, &facts, &PackOverlay::NONE).unwrap();
     let ruby_block = &items.items["ruby:ruby_block"];
     assert_eq!(ruby_block.block, Some(ruby));
     let gem = &items.items["ruby:ruby"];
     assert_eq!(gem.max_stack, 16);
+    let sword = &items.items["ruby:ruby_sword"];
+    let iron_sword = &items.items["minecraft:iron_sword"];
+    assert_eq!((sword.max_damage, iron_sword.max_damage), (900, 250));
+    assert_eq!(sword.modifiers.len(), 1);
+    assert_eq!(sword.modifiers[0].2, 7.0);
+    assert_eq!(sword.tool.len(), iron_sword.tool.len());
     assert!(!items.items.contains_key("ruby:ruby_glass"));
     let pickaxe = &items.block_tags["minecraft:mineable/pickaxe"];
     assert!(pickaxe.contains("ruby:ruby_block"));
@@ -349,9 +531,11 @@ fn no_content_keeps_the_base_root() {
     );
 }
 
+use horizon_world::loot::PackOverlay;
 use horizon_world::registry::BlockStateId;
 
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn shared_behaviour_document_matches_independent_loaders() {
     let Some(root) = prepared() else { return };
     let assets = Assets::load(&root).expect("assets");
@@ -414,6 +598,7 @@ fn shared_behaviour_document_matches_independent_loaders() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     let Some(base) = prepared() else { return };
     let scratch = std::env::temp_dir().join(format!("horizon-json-reloads-{}", std::process::id()));
@@ -535,6 +720,7 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
 /// A built root is kept for later starts, and built again when a mod's
 /// files change.
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn content_root_is_reused_until_a_mod_changes() {
     let Some(base) = prepared() else {
         return;
@@ -571,6 +757,7 @@ fn content_root_is_reused_until_a_mod_changes() {
 /// set, pool and templates join the bundles, and its biome tag keeps only
 /// what the loader knows.
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn content_root_carries_a_structure_mod() {
     let Some(base) = prepared() else {
         return;
@@ -672,6 +859,24 @@ fn content_root_carries_a_structure_mod() {
         assert_eq!(entries(&ours[id]), expected, "{id}");
         assert!(!ours.keys().any(|k| k.starts_with("huts:added/")), "{name}");
         assert!(!ours.contains_key("othermod:houses"));
+    }
+
+    // The commands suggest the mod's structure, set and pool.
+    let registries: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("command-registries.json")).unwrap()).unwrap();
+    for (registry, id) in [
+        ("minecraft:worldgen/structure", "huts:hut"),
+        ("minecraft:worldgen/structure_set", "huts:huts"),
+        ("minecraft:worldgen/template_pool", "huts:hut/start"),
+    ] {
+        let ids = registries["by_registry"][registry]["ids"]
+            .as_array()
+            .unwrap();
+        assert!(ids.iter().any(|v| v == id), "{registry} lacks {id}");
+        assert!(
+            ids.iter()
+                .any(|v| v.as_str().unwrap().starts_with("minecraft:"))
+        );
     }
 
     let assets = Assets::load(&root).unwrap();
@@ -875,4 +1080,196 @@ fn a_replacing_mod_tag_reaches_the_root() {
         "{warnings}"
     );
     let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+#[ignore = "full content root: needs prepared vanilla data"]
+fn content_shapes_drive_outline_and_collision() {
+    use horizon_core::{
+        geometry::{Aabb, Axis, Vec3},
+        position::BlockPos,
+    };
+    use horizon_world::{collision::CachedCollisionRegistry, registry::BlockStateId};
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch =
+        std::env::temp_dir().join(format!("horizon-content-shapes-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let m = folder_mod(
+        &scratch.join("mod"),
+        &[
+            ("horizon-mod.toml", &manifest("shapetest", "")),
+            (
+                "data/shapetest/horizon/block/rod.json",
+                r#"{"template":"minecraft:oak_log","shapes":{"property":"axis","values":{"x":[[0,0.25,0.25,1,0.75,0.75]],"y":[[0.25,0,0.25,0.75,1,0.75]],"z":[[0.25,0.25,0,0.75,0.75,1]]}}}"#,
+            ),
+            (
+                "data/shapetest/horizon/block/plain.json",
+                r#"{"template":"minecraft:oak_log"}"#,
+            ),
+        ],
+    );
+    let root = resource_root(&base, &[m], &scratch.join("cache")).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let registry = assets.registry;
+    let facts = BlockFacts::load(&root, registry).unwrap();
+    let (named, _) = nbt::read_named(
+        &fs::read(root.join("cached-collision.nbt")).unwrap(),
+        Limits::tables(),
+    )
+    .unwrap();
+    let collision = CachedCollisionRegistry::from_nbt(&named.tag, registry).unwrap();
+    for axis in ["x", "y", "z"] {
+        let state = (0..registry.len())
+            .map(|i| BlockStateId(i as u32))
+            .find(|id| {
+                let s = registry.state(*id).unwrap();
+                s.name == "shapetest:rod" && s.properties.get("axis").is_some_and(|v| v == axis)
+            })
+            .unwrap();
+        let shape = collision.cached_shape(state).unwrap().unwrap();
+        let f = facts.get(state);
+        assert_eq!(shape.boxes().len(), 1);
+        assert_eq!(f.outline.len(), 1);
+        assert_eq!(f.outline_edges.len(), 12);
+        let expected = match axis {
+            "x" => [0., 0.25, 0.25, 1., 0.75, 0.75],
+            "y" => [0.25, 0., 0.25, 0.75, 1., 0.75],
+            _ => [0.25, 0.25, 0., 0.75, 0.75, 1.],
+        };
+        assert_eq!(f.outline[0], expected);
+        let start = Vec3::new(-1., 0.5, 0.5);
+        let end = Vec3::new(2., 0.5, 0.5);
+        let target = BlockPos::new(0, 0, 0);
+        assert!(shape.clip(start, end, target).is_some());
+        let bounds = f.outline[0];
+        let outline = Aabb::new(
+            Vec3::new(bounds[0], bounds[1], bounds[2]),
+            Vec3::new(bounds[3], bounds[4], bounds[5]),
+        );
+        assert_eq!(
+            shape.clip(start, end, target),
+            Aabb::clip_boxes([outline], start, end, target)
+        );
+        let player = Aabb::new(Vec3::new(-1., 0.4, 0.4), Vec3::new(-0.2, 0.6, 0.6));
+        assert!((shape.collide(Axis::X, player, 2.) - (expected[0] + 0.2)).abs() < 1e-9);
+        let miss = Aabb::new(Vec3::new(-1., 0.05, 0.05), Vec3::new(-0.2, 0.15, 0.15));
+        assert_eq!(shape.collide(Axis::X, miss, 2.), 2.);
+    }
+    let plain = registry.default_state("shapetest:plain").unwrap();
+    let oak = registry.default_state("minecraft:oak_log").unwrap();
+    assert_eq!(facts.get(plain).outline, facts.get(oak).outline);
+    assert_eq!(
+        collision.cached_shape(plain).unwrap().unwrap().boxes(),
+        collision.cached_shape(oak).unwrap().unwrap().boxes()
+    );
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn content_block_default_state_is_validated_and_overlaid() {
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-default-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+    let facts = r#"{"states":[
+      ["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"up","extended":"false"}}],
+      ["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"false"}}],
+      ["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"true"}}]],
+      "defaults":{"minecraft:piston":0}}"#;
+    fs::write(base.join("facts.json"), facts).unwrap();
+    fs::write(base.join("gameplay-facts.json"), r#"{"states":[{"item":"minecraft:piston"},{"item":"minecraft:piston"},{"item":"minecraft:piston"}]}"#).unwrap();
+    fs::write(base.join("items.json"), r#"{"minecraft:piston":{}}"#).unwrap();
+    fs::write(base.join("registries.json"), r#"{"minecraft:item":{"entries":{"minecraft:piston":{"protocol_id":0}}},"minecraft:block":{"entries":{"minecraft:piston":{"protocol_id":0}}}}"#).unwrap();
+    for (declaration, expected) in [
+        (r#"{"template":"minecraft:piston"}"#, Some(3)),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"facing":"north"}}"#,
+            Some(4),
+        ),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"facing":"north","extended":"true"}}"#,
+            Some(5),
+        ),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"facing":"sideways"}}"#,
+            None,
+        ),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"direction":"north"}}"#,
+            None,
+        ),
+    ] {
+        let m = folder_mod(
+            &scratch.join("mod"),
+            &[
+                ("horizon-mod.toml", &manifest("testmod", "")),
+                ("data/testmod/horizon/block/test.json", declaration),
+            ],
+        );
+        let mods = [m];
+        match (Plan::new(&base, &mods), expected) {
+            (Ok(plan), Some(id)) => {
+                let mut doc: J = serde_json::from_str(facts).unwrap();
+                plan.json("facts.json", &mut doc).unwrap();
+                assert_eq!(
+                    doc.get("defaults").unwrap().get("testmod:test"),
+                    Some(&J::Num(id.into()))
+                );
+            }
+            (Err(e), None) => assert!(e.to_string().contains("testmod:test"), "{e}"),
+            _ => panic!("unexpected result for {declaration}"),
+        }
+    }
+    // A malformed registry with duplicate states must not choose one silently.
+    let duplicate = facts.replace(
+        r#"["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"true"}}]"#,
+        r#"["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"false"}}]"#,
+    );
+    fs::write(base.join("facts.json"), duplicate).unwrap();
+    let m = folder_mod(
+        &scratch.join("mod"),
+        &[
+            ("horizon-mod.toml", &manifest("testmod", "")),
+            (
+                "data/testmod/horizon/block/test.json",
+                r#"{"template":"minecraft:piston","default_state":{"facing":"north"}}"#,
+            ),
+        ],
+    );
+    let error = match Plan::new(&base, &[m]) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("duplicate states accepted"),
+    };
+    assert!(error.contains("matches 2 states"), "{error}");
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn shapes_reject_unknown_or_missing_template_values() {
+    let Some(base) = prepared() else { return };
+    let scratch =
+        std::env::temp_dir().join(format!("horizon-shape-invalid-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    for declaration in [
+        r#"{"template":"minecraft:oak_log","shapes":{"property":"typo","values":{"x":[]}}}"#,
+        r#"{"template":"minecraft:oak_log","shapes":{"property":"axis","values":{"x":[]}}}"#,
+        r#"{"template":"minecraft:oak_log","shapes":{"property":"axis","values":{"x":[],"y":[],"z":[],"bad":[]}}}"#,
+    ] {
+        let m = folder_mod(
+            &scratch.join("mod"),
+            &[
+                ("horizon-mod.toml", &manifest("shapetest", "")),
+                ("data/shapetest/horizon/block/rod.json", declaration),
+            ],
+        );
+        let mods = [m];
+        let e = match Plan::new(&base, &mods) {
+            Ok(_) => panic!("accepted {declaration}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(e.contains("shapetest:rod"), "{e}");
+    }
+    fs::remove_dir_all(scratch).unwrap();
 }

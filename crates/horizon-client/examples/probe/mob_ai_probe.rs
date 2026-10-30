@@ -5,7 +5,7 @@
 //! usage: mob_ai_probe RESOURCES SCENARIOS OUTPUT
 use horizon_client::{
     assets::Assets,
-    beehive::HiveHost,
+    beehive::{BeehiveExt, HiveHost},
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, MIN_Y},
@@ -25,8 +25,9 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::LegacyRandom,
+    random::{LegacyRandom, RandomSource},
 };
+use horizon_world::loot::PackOverlay;
 use horizon_world::{chunk::BlockState, registry::BlockRegistry, registry::BlockStateId};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -49,6 +50,7 @@ struct Scenario {
     name: String,
     ticks: i32,
     time: i64,
+    difficulty: u8,
     rain: bool,
     thunder: bool,
     origin: [i32; 2],
@@ -57,6 +59,8 @@ struct Scenario {
     creative: bool,
     /// The tick from which the player faces another yaw.
     turn: Option<(i32, f32)>,
+    /// The player rides a boat that moves this far each tick (x, z).
+    boat: Option<[f64; 2]>,
     /// Creaking hearts placed when the scenario starts.
     hearts: Vec<Vec<String>>,
     /// `ServerLevel.isSpawningMonsters`.
@@ -66,8 +70,9 @@ struct Scenario {
     /// The player hits a mob for 1 at the start of a tick: (tick, mob index).
     hurts: Vec<(i32, usize)>,
     /// The player feeds an animal at the start of a tick (Animal.mobInteract):
-    /// (tick, mob index); the scenario only feeds each animal its food.
-    feeds: Vec<(i32, usize)>,
+    /// (tick, mob index, None); the scenario only feeds each animal its food.
+    /// `interact` uses another item on a horse: (tick, mob index, Some(item)).
+    feeds: Vec<(i32, usize, Option<String>)>,
     hand: Option<String>,
     mobs: Vec<MobSpec>,
 }
@@ -85,11 +90,13 @@ fn parse(text: &str) -> Vec<Scenario> {
             "scenario" => {
                 s.name = f[1].to_owned();
                 s.time = 6000;
+                s.difficulty = 2;
                 for kv in &f[2..] {
                     let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
                     match k {
                         "ticks" => s.ticks = v.parse().unwrap(),
                         "time" => s.time = v.parse().unwrap(),
+                        "difficulty" => s.difficulty = v.parse().unwrap(),
                         "rain" => s.rain = true,
                         "thunder" => s.thunder = true,
                         "levelseed" => {}
@@ -105,7 +112,14 @@ fn parse(text: &str) -> Vec<Scenario> {
             }
             "heart" => s.hearts.push(f.iter().map(|x| (*x).to_owned()).collect()),
             "hurt" => s.hurts.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
-            "feed" => s.feeds.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
+            "feed" => s
+                .feeds
+                .push((f[1].parse().unwrap(), f[2].parse().unwrap(), None)),
+            "interact" => s.feeds.push((
+                f[1].parse().unwrap(),
+                f[2].parse().unwrap(),
+                Some(f[3].to_owned()),
+            )),
             "player" => {
                 s.player = Some([
                     f[1].parse().unwrap(),
@@ -120,6 +134,9 @@ fn parse(text: &str) -> Vec<Scenario> {
                         s.turn = Some((tick.parse().unwrap(), yaw.parse().unwrap()));
                     } else if let Some(item) = opt.strip_prefix("hand=") {
                         s.hand = Some(item.to_owned());
+                    } else if let Some(v) = opt.strip_prefix("boat=") {
+                        let (x, z) = v.split_once(',').unwrap();
+                        s.boat = Some([x.parse().unwrap(), z.parse().unwrap()]);
                     } else {
                         panic!("unknown player option {opt}");
                     }
@@ -185,8 +202,21 @@ fn who(w: Option<Who>) -> String {
 fn goal_name(m: &Mob, name: &str) -> String {
     let vanilla = match name {
         "Float" => "FloatGoal",
+        "RandomFloatAround" => "RandomFloatAroundGoal",
+        "GhastLook" => "GhastLookGoal",
+        "GhastShoot" => "GhastShootFireballGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
+        "ParrotWander" => "ParrotWanderGoal",
         "RandomStroll" => "RandomStrollGoal",
+        // AbstractFish's private subclass of RandomSwimmingGoal.
+        "RandomSwimming"
+            if matches!(
+                m.species(),
+                Species::Cod | Species::Salmon | Species::TropicalFish | Species::Pufferfish
+            ) =>
+        {
+            "FishSwimGoal"
+        }
         "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",
         "RandomLookAround" => "RandomLookAroundGoal",
@@ -203,6 +233,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "MoveThroughVillage" => "MoveThroughVillageGoal",
         "RestrictSun" => "RestrictSunGoal",
         "FleeSun" => "FleeSunGoal",
+        // `Cat.CatAvoidEntityGoal`, `Fox.FoxAvoidEntityGoal`... name their subclass.
+        "AvoidEntity" if m.species() == Species::Cat => "CatAvoidEntityGoal",
         "AvoidEntity" => "AvoidEntityGoal",
         "BowAttack" => "RangedBowAttackGoal",
         "Swell" => "SwellGoal",
@@ -223,6 +255,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "FreezeWhenLookedAt" => "EndermanFreezeWhenLookedAt",
         "LookForPlayer" => "EndermanLookForPlayerGoal",
         "HealRaiders" => "NearestHealableRaiderTargetGoal",
+        "MountPanic" => "MountPanicGoal",
+        "LlamaHurtBy" => "LlamaHurtByTargetGoal",
         other => return other.to_owned(),
     };
     vanilla.to_owned()
@@ -564,7 +598,13 @@ fn print_heart(
 /// The damage of a mob's direct hit on the player (others count as none).
 fn player_damage(e: &MobEvent) -> f32 {
     match e {
-        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::AttackPlayer(amount, _)
+        | MobEvent::AttackPlayerWithEffect { amount, .. }
+        | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => 10.0,
         _ => 0.0,
     }
 }
@@ -575,9 +615,15 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
         return false;
     };
     match e {
-        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::AttackPlayer(amount, _)
+        | MobEvent::AttackPlayerWithEffect { amount, .. }
+        | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => true,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
-        MobEvent::Explode(at, radius) => {
+        MobEvent::Explode(at, radius, _) => {
             let d = Vec3::new(at[0], at[1], at[2])
                 .distance_squared(p.position)
                 .sqrt();
@@ -598,6 +644,7 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool, now: i6
         let _ = writeln!(out, " removed {reason}");
         return;
     }
+    let _ = write!(out, "\tleashed {}", u8::from(m.extra.leash.is_some()));
     let p = m.position;
     let v = m.velocity;
     let _ = write!(
@@ -708,6 +755,15 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool, now: i6
             .opened_chest
             .map_or("-".into(), |p| format!("{},{},{}", p[0], p[1], p[2]));
         let _ = write!(out, "\tcg {} {held} {opened}", m.extra.variant3);
+    }
+    if m.species() == Species::Wolf {
+        // NeutralMob anger left (the angry texture), -1 when calm.
+        let anger = if m.extra.anger > 0 {
+            i64::from(m.extra.anger)
+        } else {
+            -1
+        };
+        let _ = write!(out, "\twolf {anger}");
     }
     if let Some(b) = horizon_client::mobs::bee::get(m) {
         let anger = if b.anger_end > 0 {
@@ -829,7 +885,7 @@ pub fn main() -> horizon_client::Result<()> {
         .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
         .collect();
     let biomes = Biomes::load(root)?;
-    let items = Items::load(root, registry, &facts)?;
+    let items = Items::load(root, registry, &facts, &PackOverlay::NONE)?;
     let tables = LightTables::load(root, registry, &facts)?;
     let collision = collisions::load(root, registry)?;
     let air = registry.default_state("minecraft:air").ok_or("no air")?;
@@ -953,6 +1009,10 @@ pub fn main() -> horizon_client::Result<()> {
             for flag in &spec.flags {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
+                    "named" => {
+                        m.custom_name = Some("Peaceful regression".into());
+                        m.persistent = true;
+                    }
                     "ridden" => {
                         m.extra.head = Some("minecraft:red_harness".into());
                         m.rider = Some(horizon_client::mobs::equine::Rider::default());
@@ -977,6 +1037,7 @@ pub fn main() -> horizon_client::Result<()> {
                     }
                     // Set once the brain exists (below).
                     x if x.starts_with("cooldown=") => {}
+                    "dead" => m.health = 0.0,
                     "leashed" => m.extra.leash = Some(horizon_client::mobs::leash::Holder::Player),
                     x if x.starts_with("leashto=") => {
                         let n: u32 = x[8..].parse().unwrap();
@@ -986,6 +1047,15 @@ pub fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if matches!(
+                m.species(),
+                Species::Cod | Species::Salmon | Species::TropicalFish
+            ) {
+                // The oracle draws FollowFlockLeaderGoal's first delay again once seeded.
+                let delay =
+                    horizon_client::mobs::aquatic::FollowFlockLeader::next_start_tick(&mut m);
+                m.ai.goals.set_start_delay("FollowFlockLeaderGoal", delay);
+            }
             if m.species() == Species::Bee {
                 // The oracle draws the constructor's cooldowns again once seeded.
                 horizon_client::mobs::bee::draw_cooldowns(&mut m);
@@ -1036,30 +1106,41 @@ pub fn main() -> horizon_client::Result<()> {
                 alive: true,
                 creative: s.creative,
                 sneaking: false,
+                swimming: false,
                 look: [0.0, 0.0, 1.0],
                 main_hand: s.hand.as_deref().map(Into::into),
                 off_hand: None,
                 head: None,
                 armor_cover: 0.0,
+                invisible: false,
                 spectator: false,
                 gold_armor: false,
                 hurt_by: None,
                 last_hurt: None,
                 velocity: Vec3::ZERO,
                 yaw: 0.0,
+                sprinting: false,
+                riding: false,
                 hero: false,
+                effects: Vec::new(),
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
+                sleeping: false,
+                sleep_timer: 0,
+                passenger: false,
+                vehicle: None,
             }
         });
         let mut scratch = LegacyRandom::new(0);
-        // The level's random for eating sounds: only goats and sniffers draw
+        // The level random for eating sounds: only goats and sniffers draw
         // from it, and the scenarios feed neither.
         let mut level_random = LegacyRandom::new(0);
         for (i, m) in mobs.iter().enumerate() {
             print(&mut out, 0, i, m, s.creative, world.game_time);
         }
+        // No player has a chest open in the scenarios.
+        let lid_openers = std::collections::HashMap::new();
         // The MobWorld every step sees, over a snapshot of the mobs.
         macro_rules! mob_world {
             ($snapshot:expr) => {
@@ -1071,6 +1152,7 @@ pub fn main() -> horizon_client::Result<()> {
                     world: &world,
                     registry,
                     facts: &facts,
+                    fluid_tables: &motion.fluids,
                     movement: &motion.blocks,
                     collision: &collision,
                     data: &data,
@@ -1080,6 +1162,7 @@ pub fn main() -> horizon_client::Result<()> {
                     others_grid: $grid,
                     others_index: None,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,
+                    monsters_burn: !(12542..23460).contains(&world.day_time.rem_euclid(24000)),
                     game_time: world.game_time,
                     day_time: world.day_time,
                     raining: s.rain,
@@ -1088,15 +1171,19 @@ pub fn main() -> horizon_client::Result<()> {
                     block_tags: &items.block_tags,
                     biomes: &biomes,
                     mob_griefing: true,
-                    difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
+                    mob_drops: true,
+                    max_entity_cramming: 24,
+                    difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,
                     // FlatLevelSource.getSeaLevel.
                     sea_level: -63,
                     items: Some(&items),
+                    lid_openers: &lid_openers,
                 }
             };
         }
+        let mut dropped_leads = 0;
         for t in 1..=s.ticks {
             world.game_time += 1;
             if s.daycycle {
@@ -1109,6 +1196,30 @@ pub fn main() -> horizon_client::Result<()> {
                     (at[0], at[1], at[2]),
                     BlockEntity::CreakingHeart(Box::new(h.clone())),
                 );
+            }
+            if let (Some(p), Some([vx, vz]), Some(start)) = (player.as_mut(), s.boat, s.player) {
+                // The boat the player rides, moved by the script (the oracle's does not tick).
+                let at = [
+                    start[0] + vx * f64::from(t),
+                    start[1],
+                    start[2] + vz * f64::from(t),
+                ];
+                p.position = Vec3::new(at[0], at[1], at[2]);
+                p.bounds = Aabb::new(
+                    Vec3::new(at[0] - 0.3, at[1], at[2] - 0.3),
+                    Vec3::new(at[0] + 0.3, at[1] + 1.8, at[2] + 0.3),
+                );
+                p.eye = [at[0], at[1] + f64::from(1.62_f32), at[2]];
+                p.passenger = true;
+                p.riding = true;
+                p.vehicle = Some(horizon_client::mobs::Vehicle {
+                    nautilus: false,
+                    bounds: Aabb::new(
+                        Vec3::new(at[0] - 0.6875, at[1], at[2] - 0.6875),
+                        Vec3::new(at[0] + 0.6875, at[1] + 0.5625, at[2] + 0.6875),
+                    ),
+                    velocity: Vec3::new(vx, 0.0, vz),
+                });
             }
             if let (Some(p), Some((tick, yaw))) = (player.as_mut(), s.turn)
                 && t >= tick
@@ -1172,8 +1283,20 @@ pub fn main() -> horizon_client::Result<()> {
                 }
                 events.append(&mut mobs[i].outbox);
             }
-            for &(tick, i) in &s.feeds {
+            for (tick, i, item) in &s.feeds {
+                let (tick, i) = (*tick, *i);
                 if tick != t || i >= mobs.len() || mobs[i].removed {
+                    continue;
+                }
+                // Horse.mobInteract's held-item branch (makeMad).
+                if let Some(item) = item {
+                    horizon_client::mobs::equine::held_item(
+                        &mut mobs[i],
+                        item,
+                        false,
+                        item == "minecraft:golden_dandelion",
+                        &mut events,
+                    );
                     continue;
                 }
                 if let Some(Some((name, volume, pitch))) =
@@ -1207,6 +1330,16 @@ pub fn main() -> horizon_client::Result<()> {
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 if !alive {
                     m.removed = true;
+                }
+                // Apply the same detach/drop event as Game::break_leash.
+                for event in &events[from..] {
+                    if let MobEvent::LeashBreak { mob, drop, .. } = event
+                        && let Some(m) = mobs.iter_mut().find(|m| m.id == *mob)
+                        && horizon_client::mobs::leash::remove(m).is_some()
+                        && *drop
+                    {
+                        dropped_leads += 1;
+                    }
                 }
                 horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
                 villager_events(
@@ -1384,6 +1517,24 @@ pub fn main() -> horizon_client::Result<()> {
                 })
                 .collect();
             for (at, open) in doors {
+                // DoorBlock.setOpen: the sound (a wooden door's), its pitch from the level's
+                // random, when the door was not already so.
+                let was = registry
+                    .state(world.block(at[0], at[1], at[2]))
+                    .is_some_and(|s| s.properties.get("open").map(String::as_str) == Some("true"));
+                if was != open {
+                    let pitch = scratch.next_float() * 0.1 + 0.9;
+                    events.push(MobEvent::Sound(
+                        if open {
+                            "block.wooden_door.open"
+                        } else {
+                            "block.wooden_door.close"
+                        },
+                        [0.0; 3],
+                        1.0,
+                        pitch,
+                    ));
+                }
                 let Some(half) = registry
                     .state(world.block(at[0], at[1], at[2]))
                     .and_then(|s| s.properties.get("half").cloned())
@@ -1426,6 +1577,9 @@ pub fn main() -> horizon_client::Result<()> {
                     s.creative || player_killed,
                     world.game_time,
                 );
+            }
+            if s.name.starts_with("leash_death_") {
+                let _ = writeln!(out, "{t} leads {dropped_leads}");
             }
             for e in &events {
                 if let MobEvent::Sound(name, _, volume, pitch) = e {

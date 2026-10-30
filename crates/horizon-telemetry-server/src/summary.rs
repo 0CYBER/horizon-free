@@ -1,7 +1,7 @@
 //! `GET /v1/benchmarks/summary`: players' benchmark uploads, grouped for the website's Benchmarks page.
 //!
-//! The same rules as `website/scripts/benchmarks.mjs` (which builds the page's baked copy), checked against the
-//! same fixtures (`website/scripts/fixtures/benchmarks/`):
+//! The same rules as the website's `scripts/benchmarks.mjs` (horizon-rust/horizon-site; it builds the page's baked
+//! copy), checked against the same fixtures (`tests/fixtures/benchmarks/`, which the site's test keeps a copy of):
 //!
 //! - Only reports that compare: `horizon-benchmark-report` version 1, kind `game`, Horizon or plain vanilla, the
 //!   standard flight over the four scenes, VSync off, no frame cap, drawn on a screen, with a GPU and CPU name.
@@ -198,7 +198,7 @@ struct Group {
     versions: BTreeSet<String>,
 }
 
-/// Players' groups of at least `min_installs` installs, as `website/scripts/benchmarks.mjs` makes them.
+/// Players' groups of at least `min_installs` installs, as the website's `scripts/benchmarks.mjs` makes them.
 pub fn groups(uploads: &[Upload], min_installs: usize) -> Vec<Value> {
     let mut by: BTreeMap<(String, String, i64, &str), Group> = BTreeMap::new();
     for u in uploads {

@@ -28,6 +28,10 @@ pub enum ProjectileKind {
         critical: bool,
         effect: Option<(&'static str, i32)>,
     },
+    /// `ThrownTrident` of a mob (a drowned's): flies and sticks with
+    /// `AbstractArrow`'s tick; the trident itself is the arrow state's
+    /// `pickup_item`.
+    Trident,
     Snowball,
     Egg,
     EnderPearl,
@@ -62,10 +66,28 @@ pub enum ProjectileKind {
     },
 }
 impl ProjectileKind {
+    /// The width and height of its entity type's `sized(...)`.
+    pub fn size(&self) -> f64 {
+        match self {
+            Self::Arrow { .. } | Self::Trident => 0.5,
+            Self::Snowball
+            | Self::Egg
+            | Self::EnderPearl
+            | Self::LlamaSpit
+            | Self::Potion { .. } => 0.25,
+            Self::SmallFireball
+            | Self::WindCharge
+            | Self::BreezeWindCharge
+            | Self::ShulkerBullet { .. }
+            | Self::WitherSkull { .. } => 0.3125,
+            Self::LargeFireball { .. } => 1.0,
+        }
+    }
     /// Its entity type.
     pub fn id(&self) -> &'static str {
         match self {
             Self::Arrow { .. } => "minecraft:arrow",
+            Self::Trident => "minecraft:trident",
             Self::Snowball => "minecraft:snowball",
             Self::Egg => "minecraft:egg",
             Self::EnderPearl => "minecraft:ender_pearl",
@@ -104,6 +126,13 @@ pub struct Projectile {
     pub arrow: Option<Box<crate::arrows::ArrowState>>,
     /// `AbstractHurtingProjectile.accelerationPower`.
     pub acceleration: f64,
+    /// `Entity.needsSync`: a server tells its clients about the change this
+    /// tick instead of at the next update interval.
+    pub needs_sync: bool,
+    /// `Entity.wasTouchingWater`: what the last tick's
+    /// `updateFluidInteraction` found around the box after the move, read by
+    /// the next tick's inertia (false until the first tick has moved it).
+    pub touching_water: bool,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -123,7 +152,9 @@ pub enum Hit {
 /// the boxes of entities it could hit.
 pub trait ProjectileWorld {
     fn clip(&self, from: Vec3, to: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])>;
-    fn in_water(&self, at: Vec3) -> bool;
+    /// `Entity.isInWater` as `updateFluidInteraction` sets it: some water
+    /// block's surface reaches the bottom of the box (deflated by 0.001).
+    fn in_water(&self, bounds: Aabb) -> bool;
     fn targets(&self) -> &[(Who, Aabb)];
     /// `Level.isEmptyBlock`.
     fn empty(&self, _p: [i32; 3]) -> bool {
@@ -151,8 +182,26 @@ fn axis_of(d: u8) -> u8 {
     }
 }
 impl Projectile {
+    /// `Entity.getBoundingBox`: its type's square box standing on its position.
+    pub fn bounds(&self) -> Aabb {
+        let (p, half) = (self.position, self.kind.size() / 2.0);
+        let height = self.kind.size();
+        Aabb::new(
+            Vec3::new(p.x - half, p.y, p.z - half),
+            Vec3::new(p.x + half, p.y + height, p.z + half),
+        )
+    }
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
-        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. });
+        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
+        // `AbstractWindCharge`'s constructors set it to 0.
+        let acceleration = if matches!(
+            kind,
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+        ) {
+            0.0
+        } else {
+            0.1
+        };
         Self {
             id: 0,
             kind,
@@ -167,7 +216,9 @@ impl Projectile {
             stuck: false,
             left_owner: false,
             bonus: Default::default(),
-            acceleration: 0.1,
+            acceleration,
+            needs_sync: false,
+            touching_water: false,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
                 Box::new(crate::arrows::ArrowState::new(
@@ -178,6 +229,19 @@ impl Projectile {
             }),
         }
     }
+    /// Entity box from the feet (`EntityType.sized` cube of `kind.size()`).
+    pub fn aabb(&self) -> Aabb {
+        let s = self.kind.size();
+        let h = s * 0.5;
+        Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + s,
+                self.position.z + h,
+            ),
+        )
+    }
     /// The arrow's own random from now on (`Entity.random`).
     pub fn with_arrow_random(mut self, random: horizon_core::random::LegacyRandom) -> Self {
         if let Some(a) = self.arrow.as_mut() {
@@ -186,12 +250,13 @@ impl Projectile {
         self
     }
     /// The shooter's bow enchantments; Flame spawns the arrow burning for 100
-    /// seconds (`projectile_spawned` ignite).
+    /// seconds (`projectile_spawned` ignite), Piercing sets its pierce level.
     pub fn set_bonus(&mut self, bonus: crate::mobs::gear::ArrowBonus) {
-        if bonus.flame
-            && let Some(a) = self.arrow.as_mut()
-        {
-            a.ignite_for_seconds(100.0);
+        if let Some(a) = self.arrow.as_mut() {
+            if bonus.flame {
+                a.ignite_for_seconds(100.0);
+            }
+            a.pierce = bonus.pierce.min(127) as u8;
         }
         self.bonus = bonus;
     }
@@ -242,6 +307,38 @@ impl Projectile {
     pub fn is_arrow(&self) -> bool {
         matches!(self.kind, ProjectileKind::Arrow { .. })
     }
+    /// Whether it is a `SpectralArrow` (its own entity type): a spectral
+    /// arrow's pickup item, or the glowing effect a dispenser shoots with.
+    pub fn is_spectral_arrow(&self) -> bool {
+        let ProjectileKind::Arrow { effect, .. } = &self.kind else {
+            return false;
+        };
+        effect.is_some_and(|(id, _)| id == "minecraft:glowing")
+            || self
+                .arrow
+                .as_ref()
+                .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+    }
+    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): the opaque colour of the
+    /// potion the arrow carries, from its tipped pickup item or the effect a
+    /// stray, bogged or parched adds; -1 for none.
+    pub fn arrow_effect_color(&self) -> i32 {
+        let ProjectileKind::Arrow { effect, .. } = &self.kind else {
+            return -1;
+        };
+        if self.is_spectral_arrow() {
+            return -1;
+        }
+        let rgb = match (effect, &self.arrow) {
+            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.color),
+            (None, Some(a)) if &*a.pickup_item.item == "minecraft:tipped_arrow" => a
+                .pickup_item
+                .potion()
+                .map(|p| crate::brewing::potion_color(Some(p))),
+            _ => None,
+        };
+        rgb.map_or(-1, |rgb| (rgb | 0xFF00_0000) as i32)
+    }
     pub fn is_fireball(&self) -> bool {
         matches!(
             self.kind,
@@ -252,7 +349,7 @@ impl Projectile {
     }
     fn gravity(&self) -> f64 {
         match self.kind {
-            ProjectileKind::Arrow { .. } => 0.05,
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => 0.05,
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
             | ProjectileKind::WitherSkull { .. } => 0.0,
@@ -572,6 +669,25 @@ impl Projectile {
         }
         (self.position.y > -128.0, Hit::None)
     }
+    /// AbstractHurtingProjectile.applyInertia, on both server and client.
+    pub fn apply_hurting_inertia(&mut self, water: bool) {
+        // WitherSkull.getInertia: 0.73 for dangerous skulls.
+        let inertia = match self.kind {
+            ProjectileKind::WitherSkull { dangerous: true } => 0.73,
+            // AbstractWindCharge.getInertia and getLiquidInertia.
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => 1.0,
+            _ if water => 0.8,
+            _ => 0.95,
+        };
+        let v = self.velocity;
+        let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
+        self.velocity = Vec3::new(
+            (v.x + v.x / len * self.acceleration) * inertia,
+            (v.y + v.y / len * self.acceleration) * inertia,
+            (v.z + v.z / len * self.acceleration) * inertia,
+        );
+    }
+
     /// One tick: returns whether to keep the projectile and what it hit.
     pub fn tick(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
         self.previous = self.position;
@@ -579,28 +695,24 @@ impl Projectile {
         if matches!(self.kind, ProjectileKind::ShulkerBullet { .. }) {
             return self.tick_bullet(w);
         }
-        let water = w.in_water(self.position);
+        // ThrowableProjectile and AbstractHurtingProjectile.applyInertia read
+        // `isInWater` before their move and `Projectile.tick`'s base tick;
+        // LlamaSpit.tick runs that base tick first, at the spit's box here.
+        let water = if self.kind == ProjectileKind::LlamaSpit {
+            w.in_water(self.bounds())
+        } else {
+            self.touching_water
+        };
         match self.kind {
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
-            | ProjectileKind::WitherSkull { .. } => {
-                // WitherSkull.getInertia: 0.73 for dangerous skulls.
-                let inertia = match self.kind {
-                    ProjectileKind::WitherSkull { dangerous: true } => 0.73,
-                    _ if water => 0.8,
-                    _ => 0.95,
-                };
-                let v = self.velocity;
-                let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
-                self.velocity = Vec3::new(
-                    (v.x + v.x / len * self.acceleration) * inertia,
-                    (v.y + v.y / len * self.acceleration) * inertia,
-                    (v.z + v.z / len * self.acceleration) * inertia,
-                );
+            | ProjectileKind::WitherSkull { .. }
+            | ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge => {
+                self.apply_hurting_inertia(water);
             }
-            // Arrows tick with `arrows::tick`.
-            ProjectileKind::Arrow { .. } => {}
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
+            // Arrows and tridents tick with `arrows::tick`.
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
             ProjectileKind::LlamaSpit => {
                 if water {
@@ -688,6 +800,8 @@ impl Projectile {
         if !self.is_fireball() {
             self.update_rotation();
         }
+        // Entity.baseTick's updateFluidInteraction, after the move.
+        self.touching_water = w.in_water(self.bounds());
         let alive =
             self.position.y > -128.0 && self.age < if self.is_fireball() { 1200 } else { 6000 };
         (alive, Hit::None)
@@ -735,12 +849,14 @@ impl Projectile {
             }
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
-            ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
-            // Drawn as `WindChargeModel` by the game.
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
+            // Drawn as `WindChargeModel` and `ShulkerBulletModel` by the game.
+            ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge
+            | ProjectileKind::ShulkerBullet { .. } => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
-            ProjectileKind::Arrow { .. } => return None,
+            // Drawn as their models by the game.
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => return None,
         })
     }
     /// Render scale of the item billboard (fireball renderers).
@@ -762,7 +878,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(Who, Aabb)] {
@@ -818,6 +934,62 @@ mod tests {
         p.tick(&w);
         // (0.1 + 0.1) * 0.95
         assert!((p.velocity.x - 0.19).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fireball_inertia_preserves_custom_acceleration() {
+        let mut p = Projectile::fireball(
+            ProjectileKind::SmallFireball,
+            Vec3::new(0.0, 100.0, 0.0),
+            None,
+            [1.0, 0.0, 0.0],
+        );
+        // A redirected projectile can carry a different acceleration power.
+        p.acceleration = 0.2;
+        p.tick(&Empty(vec![]));
+        assert!((p.velocity.x - 0.285).abs() < 1e-9);
+        assert!((p.position.x - 0.285).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_wind_charge_holds_its_speed_until_a_deflection_gives_it_power() {
+        let mut p = Projectile::new(ProjectileKind::WindCharge, Vec3::ZERO, None);
+        p.velocity = Vec3::new(0.0, 1.5, 0.0);
+        p.apply_hurting_inertia(false);
+        assert_eq!(p.velocity, Vec3::new(0.0, 1.5, 0.0));
+        // Inertia 1 in water too, and the power adds along the movement.
+        p.acceleration = 0.1;
+        p.apply_hurting_inertia(true);
+        assert!((p.velocity.y - 1.6).abs() < 1e-12, "{p:?}");
+    }
+
+    #[test]
+    fn ender_pearl_hits_a_wind_charge_box() {
+        let mut pearl = Projectile::new(
+            ProjectileKind::EnderPearl,
+            Vec3::new(0.0, 1.0, 0.0),
+            Some(Who::Player),
+        );
+        pearl.left_owner = true;
+        pearl.velocity = Vec3::new(2.0, 0.0, 0.0);
+        let wind = Projectile::new(
+            ProjectileKind::WindCharge,
+            Vec3::new(0.6, 1.0, 0.0),
+            Some(Who::Player),
+        );
+        let w = Empty(vec![(Who::Mob(1), wind.aabb())]);
+        let (keep, hit) = pearl.tick(&w);
+        assert!(!keep, "ThrownEnderpearl.onHit discards the pearl");
+        assert!(
+            matches!(
+                hit,
+                Hit::Entity {
+                    who: Who::Mob(1),
+                    ..
+                }
+            ),
+            "pearl collides with a pickable wind charge"
+        );
     }
 }
 

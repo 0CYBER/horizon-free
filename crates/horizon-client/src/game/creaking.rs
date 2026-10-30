@@ -92,11 +92,14 @@ impl Game<'_> {
             .unwrap_or_default()
     }
     /// Runs `f` on the heart at `key` with the game's mobs and level random,
-    /// then applies what the heart reported.
+    /// then applies what the heart reported. `others`: whether `f` reads the
+    /// other mobs through the mob world (without, it holds none: building them
+    /// costs a pass over every mob).
     fn with_heart(
         &mut self,
         key: Pos,
         heart: &mut CreakingHeart,
+        others: bool,
         f: impl FnOnce(
             &mut CreakingHeart,
             &horizon_client::mobs::MobWorld,
@@ -112,7 +115,11 @@ impl Game<'_> {
         let spawning = self.spawning_monsters();
         let creaking = self.res.mob_types().get("minecraft:creaking").cloned();
         let player_uuid = self.level.player_uuid;
-        let snapshot: Vec<_> = mobs.iter().map(|m| seen(m, player_uuid)).collect();
+        let snapshot: Vec<_> = if others {
+            mobs.iter().map(|m| seen(m, player_uuid)).collect()
+        } else {
+            Vec::new()
+        };
         let mut events = Vec::new();
         let added = {
             let w = self.mob_world_base(&snapshot);
@@ -168,7 +175,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let _ = self.with_heart(key, &mut heart, |h, w, lr, host, out| {
+        let _ = self.with_heart(key, &mut heart, true, |h, w, lr, host, out| {
             creaking_heart::creaking_hurt(h, home, w, lr, host, out);
         });
         self.world
@@ -218,8 +225,9 @@ impl Game<'_> {
         );
     }
     /// `CreakingHeartBlock.playerWillDestroy`: the heart's creaking twitches to
-    /// death and a natural heart drops experience.
-    pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3]) {
+    /// death and a natural heart drops experience. `onExplosionHit` does the
+    /// same for the creaking (`by_player` false), without the experience.
+    pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3], by_player: bool) {
         let key = (pos[0], pos[1], pos[2]);
         if !matches!(
             self.world.block_entities.get(&key),
@@ -231,7 +239,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let _ = self.with_heart(key, &mut heart, |h, _, _, host, out| {
+        let _ = self.with_heart(key, &mut heart, false, |h, _, _, host, out| {
             creaking_heart::remove_protector(h, host, true, out);
         });
         let state = self.world.block(key.0, key.1, key.2);
@@ -242,7 +250,7 @@ impl Game<'_> {
             .state(state)
             .and_then(|s| s.properties.get("natural").cloned())
             .is_some_and(|v| v == "true");
-        if natural && !self.creative && !self.spectator() {
+        if by_player && natural && !self.creative && !self.spectator() {
             let xp = 20 + self.world.random.next_int_bound(5).unwrap_or(0) as u32;
             self.spawn_orbs(
                 [
@@ -269,7 +277,7 @@ impl Game<'_> {
         if &*self.res.facts().get(state).name != "minecraft:creaking_heart" {
             // The block is gone: preRemoveSideEffects.
             self.world.block_entities.forget(&key);
-            self.with_heart(key, &mut heart, |h, _, _, host, out| {
+            self.with_heart(key, &mut heart, false, |h, _, _, host, out| {
                 creaking_heart::remove_protector(h, host, false, out);
             })?;
             return Ok(());
@@ -277,7 +285,8 @@ impl Game<'_> {
         // getTicker: none once uprooted.
         if self.heart_state_name(state) != "uprooted" {
             let pos = [key.0, key.1, key.2];
-            self.with_heart(key, &mut heart, |h, w, lr, host, out| {
+            let others = creaking_heart::tick_updates(&heart);
+            self.with_heart(key, &mut heart, others, |h, w, lr, host, out| {
                 creaking_heart::server_tick(h, pos, w, lr, host, out);
             })?;
         }
@@ -341,7 +350,7 @@ impl Game<'_> {
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
                     let pos = (
                         key.0 * 16 + lx,
-                        horizon_client::chunk::MIN_Y + si as i32 * 16 + ly,
+                        self.world.bottom_y() + si as i32 * 16 + ly,
                         key.1 * 16 + lz,
                     );
                     self.world

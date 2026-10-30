@@ -1,7 +1,6 @@
 //! `/forceload`, `/fillbiome`, `/worldborder` and `/loot`.
 use super::{Arg, Context, Game, R, Target, err, items::Owner};
 use horizon_client::{
-    chunk::{HEIGHT, MIN_Y},
     command::CommandError,
     items::ItemStack,
     scoreboard_cmd::{Holder, Tracker},
@@ -30,7 +29,7 @@ fn ticks_to_seconds(ticks: i64) -> String {
 impl Game<'_> {
     // ---- /forceload ----------------------------------------------------------
 
-    fn column_arg(&self, ctx: &Context, name: &str) -> R<[i32; 2]> {
+    pub(super) fn column_arg(&self, ctx: &Context, name: &str) -> R<[i32; 2]> {
         let c = self
             .coords(ctx, name)
             .ok_or_else(|| err("argument.pos2d.incomplete", &[]))?;
@@ -119,6 +118,9 @@ impl Game<'_> {
                         };
                         tracker.track(&holder(chunk_text(x, z)), i32::from(changed));
                     }
+                }
+                if add {
+                    self.streaming.rank_forced(cx0, cz0, cx1, cz1);
                 }
                 let (lo, hi) = (chunk_text(cx0, cz0), chunk_text(cx1, cz1));
                 let verb = if add { "added" } else { "removed" };
@@ -210,7 +212,8 @@ impl Game<'_> {
                     if usize::from(current) == target {
                         continue;
                     }
-                    let qy = ((y - MIN_Y) >> 2).clamp(0, HEIGHT / 4 - 1);
+                    let qy = ((y - self.world.bottom_y()) >> 2)
+                        .clamp(0, self.world.layout().height() / 4 - 1);
                     if let Some(chunk) = self.world.chunks.get_mut(&key) {
                         let chunk = std::sync::Arc::make_mut(chunk);
                         chunk.set_biome_cell((x & 15) >> 2, qy, (z & 15) >> 2, target as u16);
@@ -225,9 +228,19 @@ impl Game<'_> {
         }
         for key in &touched {
             self.world.modified.insert(*key);
-            for sy in 0..horizon_client::chunk::SECTIONS as i32 {
+            for sy in 0..self.world.layout().sections() as i32 {
                 self.world.dirty_sections.insert((key.0, sy, key.1));
             }
+        }
+        // ChunkMap.resendBiomesForChunks: the players who see the changed
+        // columns are sent their new biomes, in the order the columns were
+        // gathered (z, then x).
+        if let Some(host) = self.lan.as_ref() {
+            let columns: Vec<(i32, i32)> = ((lo[2] >> 4)..=(hi[2] >> 4))
+                .flat_map(|cz| ((lo[0] >> 4)..=(hi[0] >> 4)).map(move |cx| (cx, cz)))
+                .filter(|key| touched.contains(key))
+                .collect();
+            host.hub.resend_biomes(&self.world, &columns);
         }
         self.feedback(Text::translate(
             "commands.fillbiome.success.count",
@@ -488,7 +501,7 @@ impl Game<'_> {
                         .inline_loot_table(&json, &mut self.world.random);
                     (drops, None)
                 } else {
-                    if !self.res.items().has_loot_table(&table) {
+                    if !self.items().has_loot_table(&table) {
                         return Err(err("argument.resource_or_id.failed_to_parse", &[&table]));
                     }
                     let held = if id == "loot.fish" {
@@ -496,14 +509,14 @@ impl Game<'_> {
                     } else {
                         None
                     };
-                    let drops = match self.res.items().loot_sequence(&table) {
+                    let drops = match world_items!(self).loot_sequence(&table) {
                         Some(seq) => {
                             let random = self.rand_sequences.get(&seq, self.level.seed);
                             self.res
                                 .items()
                                 .loot_table(&table, false, held.as_ref(), random)
                         }
-                        None => self.res.items().loot_table(
+                        None => world_items!(self).loot_table(
                             &table,
                             false,
                             held.as_ref(),
@@ -520,7 +533,7 @@ impl Game<'_> {
                 };
                 let ty = self.target_type(t);
                 let table = format!("minecraft:entities/{}", ty.trim_start_matches("minecraft:"));
-                if t == Target::Player || !self.res.items().has_loot_table(&table) {
+                if t == Target::Player || !world_items!(self).has_loot_table(&table) {
                     return Err(err(
                         "commands.drop.no_loot_table.entity",
                         &[&self.target_name(t).plain()],
@@ -531,14 +544,14 @@ impl Game<'_> {
                     None | Some(Some(Target::Player))
                 );
                 let held = self.slot_get(&super::items::Slot::Inv(self.selected));
-                let drops = match self.res.items().loot_sequence(&table) {
+                let drops = match world_items!(self).loot_sequence(&table) {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
                         self.res
                             .items()
                             .entity_drops(&ty, by_player, held.as_ref(), random)
                     }
-                    None => self.res.items().entity_drops(
+                    None => world_items!(self).entity_drops(
                         &ty,
                         by_player,
                         held.as_ref(),
@@ -553,21 +566,21 @@ impl Game<'_> {
                 let state = self.world.block(p[0], p[1], p[2]);
                 let name = self.data_block_name(p);
                 let table = format!("minecraft:blocks/{}", name.trim_start_matches("minecraft:"));
-                if !self.res.items().has_loot_table(&table) {
+                if !world_items!(self).has_loot_table(&table) {
                     return Err(err("commands.drop.no_loot_table.block", &[&name]));
                 }
                 let tool = self.tool_stack(ctx)?;
-                let drops = match self.res.items().loot_sequence(&table) {
+                let drops = match world_items!(self).loot_sequence(&table) {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
-                        self.res.items().block_drops(
+                        world_items!(self).block_drops(
                             self.pack.assets.registry,
                             state,
                             tool.as_ref(),
                             random,
                         )
                     }
-                    None => self.res.items().block_drops(
+                    None => world_items!(self).block_drops(
                         self.pack.assets.registry,
                         state,
                         tool.as_ref(),
@@ -634,7 +647,7 @@ impl Game<'_> {
                                 && cur.damage == left.damage
                                 && cur.extra == left.extra =>
                         {
-                            let max = self.res.items().get(&cur.item).map_or(64, |i| i.max_stack);
+                            let max = self.items().get(&cur.item).map_or(64, |i| i.max_stack);
                             let take = left.count.min(max.saturating_sub(cur.count));
                             if take > 0 {
                                 cur.count += take;

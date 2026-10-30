@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
 const API: &str = "https://api.modrinth.com/v2";
-pub(crate) const AGENT: &str = "ludovic111/horizon horizon-port-pack/0.1 (docs/modpacks.md)";
+pub(crate) const AGENT: &str = "horizon-rust/horizon horizon-port-pack/0.1 (docs/modpacks.md)";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Cache {
@@ -79,7 +79,8 @@ impl Cache {
 }
 
 fn post(url: &str, body: &Value) -> Result<Value, String> {
-    let response = ureq::post(url)
+    let response = crate::net::agent(url)
+        .post(url)
         .set("User-Agent", AGENT)
         .set("Content-Type", "application/json")
         .send_string(&body.to_string())
@@ -88,7 +89,8 @@ fn post(url: &str, body: &Value) -> Result<Value, String> {
 }
 
 fn get(url: &str) -> Result<Value, String> {
-    let response = ureq::get(url)
+    let response = crate::net::agent(url)
+        .get(url)
         .set("User-Agent", AGENT)
         .call()
         .map_err(|e| format!("{url}: {e}"))?;

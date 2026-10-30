@@ -13,7 +13,9 @@ use horizon_client::{
     save::VERSION_NAME,
     text::Text,
 };
-use horizon_core::geometry::Axis;
+use horizon_core::geometry::{Axis, Vec3};
+use horizon_protocol::packets::play::{BlockEntityTagQuery, EntityTagQuery, Serverbound};
+use horizon_world::nbt::Tag;
 use winit::keyboard::KeyCode;
 
 /// `ChatFormatting.YELLOW` and `RED`.
@@ -65,6 +67,9 @@ impl Game<'_> {
     /// own handling. Returns true when it is used up (a debug combination,
     /// F3 itself, F3+Escape).
     pub(super) fn debug_key(&mut self, key: KeyCode, action: KeyAction) -> bool {
+        if self.title.is_some() {
+            return false;
+        }
         let Some(name) = keybinds::key_name(key) else {
             return false;
         };
@@ -217,7 +222,7 @@ impl Game<'_> {
             self.debug_charts.log_packets([sent, received]);
         }
         if shown {
-            use horizon_protocol::packets::{play::Serverbound, status::Ping};
+            use horizon_protocol::packets::status::Ping;
             let time = self.debug_millis();
             self.send(Serverbound::PingRequest(Ping { time }));
         }
@@ -244,7 +249,8 @@ impl Game<'_> {
                 if on { "visible" } else { "hidden" }
             )
         };
-        let remote = self.remote.is_some();
+        // `DebugScreenOverlay`: the single-player variants for a local server.
+        let remote = !self.has_singleplayer_server();
         let c = &self.debug_charts;
         [
             format!(
@@ -272,8 +278,8 @@ impl Game<'_> {
     /// entries, over everything the frame drew (menus too), at the debug GUI
     /// scale. F1 hides it unless a screen is open.
     pub(super) fn draw_debug_overlay(&self, batch: &mut HudBatch, size: [u32; 2]) {
-        let screen_open = self.title.is_some() || self.screen != Screen::Playing;
-        if !self.debug || (self.ui.hide_gui && !screen_open) {
+        let screen_open = self.screen != Screen::Playing;
+        if self.title.is_some() || !self.debug || (self.ui.hide_gui && !screen_open) {
             return;
         }
         let framebuffer = size.map(|v| v as i32);
@@ -415,6 +421,20 @@ impl Game<'_> {
                 ],
             );
         }
+        // Horizon's own: HDR's output while the setting is on, under the GPU (a group of its
+        // own would move others to the other column).
+        if self.settings.horizon.hdr
+            && let Some(r) = self.renderer.as_ref()
+        {
+            d.group("system", [r.hdr_line()]);
+        }
+        // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
+        let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
+            debug_overlay::shader_pass_lines(&r.shader_pass_times())
+        });
+        if !pass_lines.is_empty() {
+            d.group("shader pack", pass_lines);
+        }
         // tps: DebugEntryTps for local and remote connections.
         if self.player.is_some() {
             let [tx, rx] = self.debug_charts.packet_rates.map(|n| n.round() as i64);
@@ -456,7 +476,7 @@ impl Game<'_> {
             height,
             self.settings.max_fps,
             1000.0 / self.clock.rate(),
-            self.remote.is_some(),
+            !self.has_singleplayer_server(),
         );
         draws.push(hud_layout::GuiDraw::Push(vec![hud_layout::PoseOp::Scale(
             scale, scale,
@@ -667,7 +687,7 @@ impl Game<'_> {
     /// `GameModeCommand.setGameMode` with its feedback.
     pub(super) fn change_game_mode(&mut self, mode: GameMode) {
         if self.remote.is_some() {
-            use horizon_protocol::packets::play::{ChangeGameMode, Serverbound};
+            use horizon_protocol::packets::play::ChangeGameMode;
             let mode = match mode {
                 GameMode::Survival => 0,
                 GameMode::Creative => 1,
@@ -683,10 +703,11 @@ impl Game<'_> {
         }
     }
     /// `KeyboardHandler.copyRecreateCommand`: the targeted block or mob as a
-    /// `/setblock` or `/summon` command. In a single-player world the
-    /// server's data (no Shift) is the game's own.
+    /// `/setblock` or `/summon` command. The server's data (no Shift) comes
+    /// from the server the game is connected to, the integrated one included
+    /// (`DebugQueryHandler`); without one, the game's own data is the server's.
     fn copy_recreate_command(&mut self, add_nbt: bool, from_server: bool) {
-        use horizon_client::java_text::format_fixed2 as f2;
+        let query = add_nbt && from_server && self.remote.is_some();
         let side = if add_nbt && from_server {
             "server"
         } else {
@@ -695,45 +716,135 @@ impl Game<'_> {
         if self.entity_targeted()
             && let Some((index, _)) = self.mob_hit()
         {
-            let (id, pos, mob) = {
+            let (kind, position, id) = {
                 let m = &self.mobs[index];
                 (m.kind.id.clone(), m.position, m.id)
             };
-            let mut command = format!("/summon {id} {} {} {}", f2(pos.x), f2(pos.y), f2(pos.z));
-            if add_nbt && let Some(mut tag) = self.entity_nbt(super::commands::Target::Mob(mob)) {
-                if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
-                    for key in ["id", "UUID", "Pos"] {
-                        c.remove(&key.into());
-                    }
+            if query {
+                // DebugQueryHandler.queryEntityTag: the answer copies it.
+                let reply = QueryReply::Entity { id, kind, position };
+                if let Some(transaction) = self.remote.as_mut().map(|r| r.debug_query.start(reply))
+                {
+                    self.send(Serverbound::EntityTagQuery(EntityTagQuery {
+                        transaction,
+                        entity: id as i32,
+                    }));
                 }
-                command.push(' ');
-                command.push_str(&horizon_client::snbt::pretty(&tag).plain());
+                return;
             }
-            self.set_clipboard(&command);
+            // Entity.saveWithoutId.
+            let tag = if add_nbt {
+                self.entity_nbt(super::commands::Target::Mob(id))
+                    .map(|mut tag| {
+                        if let Tag::Compound(c) = &mut tag {
+                            c.remove(&"id".into());
+                        }
+                        tag
+                    })
+            } else {
+                None
+            };
+            self.copy_create_entity_command(&kind, position, tag);
             self.debug_translated(&format!("debug.inspect.{side}.entity"));
             return;
         }
         let Some(hit) = self.pick() else {
             return;
         };
-        let p = hit.pos;
-        let mut description = self.state_string(self.world.block(p[0], p[1], p[2]));
-        if add_nbt && let Some(e) = self.world.block_entities.get(&(p[0], p[1], p[2])) {
-            // BlockEntity.saveWithoutMetadata: no id or position.
-            let name = self.data_block_name(p);
-            let mut tag = horizon_client::save::encode_block_entity((p[0], p[1], p[2]), e, &name);
-            if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
-                for key in ["id", "x", "y", "z", "keepPacked"] {
-                    c.remove(&key.into());
-                }
+        let pos = hit.pos;
+        let state = self.state_string(self.world.block(pos[0], pos[1], pos[2]));
+        if query {
+            // DebugQueryHandler.queryBlockEntityTag: the answer copies it.
+            let reply = QueryReply::Block { pos, state };
+            if let Some(transaction) = self.remote.as_mut().map(|r| r.debug_query.start(reply)) {
+                self.send(Serverbound::BlockEntityTagQuery(BlockEntityTagQuery {
+                    transaction,
+                    pos,
+                }));
             }
-            description.push_str(&horizon_client::snbt::to_snbt(&tag));
+            return;
+        }
+        let tag = if add_nbt {
+            self.block_entity_tag(pos)
+        } else {
+            None
+        };
+        self.copy_create_block_command(pos, &state, tag.as_ref());
+        self.debug_translated(&format!("debug.inspect.{side}.block"));
+    }
+    /// `BlockEntity.saveWithoutMetadata` of the block entity at `pos`, if
+    /// there is one: its data without the id or the position.
+    pub(super) fn block_entity_tag(&self, pos: [i32; 3]) -> Option<Tag> {
+        let e = self.world.block_entities.get(&(pos[0], pos[1], pos[2]))?;
+        let name = self.data_block_name(pos);
+        let mut tag = horizon_client::save::encode_block_entity((pos[0], pos[1], pos[2]), e, &name);
+        if let Tag::Compound(c) = &mut tag {
+            for key in ["id", "x", "y", "z", "keepPacked"] {
+                c.remove(&key.into());
+            }
+        }
+        Some(tag)
+    }
+    /// `ClientPacketListener.handleTagQueryPacket`: the server's answer to
+    /// the last debug query (`DebugQueryHandler.handleResponse`) completes
+    /// it; an answer to an older query is ignored.
+    pub(super) fn answer_tag_query(&mut self, transaction: i32, tag: Tag) {
+        let Some(reply) = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.debug_query.answer(transaction))
+        else {
+            return;
+        };
+        // FriendlyByteBuf.readNbt: an End tag is no compound.
+        let tag = match tag {
+            Tag::End => None,
+            tag => Some(tag),
+        };
+        match reply {
+            QueryReply::Block { pos, state } => {
+                self.copy_create_block_command(pos, &state, tag.as_ref());
+                self.debug_translated("debug.inspect.server.block");
+            }
+            QueryReply::Entity { id, kind, position } => {
+                // Entity.position() when the answer comes: where it is now,
+                // else where it was last.
+                let position = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map_or(position, |m| m.position);
+                self.copy_create_entity_command(&kind, position, tag);
+                self.debug_translated("debug.inspect.server.entity");
+            }
+        }
+    }
+    /// `KeyboardHandler.copyCreateBlockCommand`.
+    fn copy_create_block_command(&mut self, pos: [i32; 3], state: &str, tag: Option<&Tag>) {
+        let mut description = state.to_owned();
+        if let Some(tag) = tag {
+            description.push_str(&horizon_client::snbt::to_snbt(tag));
         }
         self.set_clipboard(&format!(
             "/setblock {} {} {} {description}",
-            p[0], p[1], p[2]
+            pos[0], pos[1], pos[2]
         ));
-        self.debug_translated(&format!("debug.inspect.{side}.block"));
+    }
+    /// `KeyboardHandler.copyCreateEntityCommand`: the data without its UUID
+    /// or position.
+    fn copy_create_entity_command(&mut self, kind: &str, pos: Vec3, tag: Option<Tag>) {
+        use horizon_client::java_text::format_fixed2 as f2;
+        let mut command = format!("/summon {kind} {} {} {}", f2(pos.x), f2(pos.y), f2(pos.z));
+        if let Some(mut tag) = tag {
+            if let Tag::Compound(c) = &mut tag {
+                for key in ["UUID", "Pos"] {
+                    c.remove(&key.into());
+                }
+            }
+            command.push(' ');
+            command.push_str(&horizon_client::snbt::pretty(&tag).plain());
+        }
+        self.set_clipboard(&command);
     }
     /// `KeyboardHandler.setClipboard`.
     fn set_clipboard(&mut self, text: &str) {
@@ -751,15 +862,16 @@ impl Game<'_> {
                 p.position.y.floor() as i32,
                 p.position.z.floor() as i32,
             ];
-            let min_y = horizon_client::chunk::MIN_Y;
-            g.chunk_borders(block, min_y, min_y + horizon_client::chunk::HEIGHT - 1);
+            let min_y = self.world.bottom_y();
+            g.chunk_borders(block, min_y, min_y + self.world.layout().height() - 1);
         }
         if !self.show_hitboxes {
             return g;
         }
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
-        for m in &self.mobs {
+        let guests = self.lan.iter().flat_map(|h| h.models.values());
+        for m in self.mobs.iter().chain(guests) {
             if m.removed || m.invisible || m.has_effect("minecraft:invisibility") {
                 continue;
             }
@@ -788,6 +900,170 @@ impl Game<'_> {
             ];
             // EntityType.ITEM: 0.25 by 0.25, eyes at 0.2125.
             g.hitbox(pos, (0.25, 0.25), 0.2125, false, (0.0, 0.0));
+        }
+        // The other entities (EntityTypes sizes; eyes at 0.85 of the height
+        // unless the type sets one). `at` is the interpolated position.
+        let at = |previous: Vec3, now: Vec3| {
+            [
+                lerp(previous.x, now.x),
+                lerp(previous.y, now.y),
+                lerp(previous.z, now.z),
+            ]
+        };
+        for p in &self.paintings {
+            let (min, max) = p.bounds();
+            let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
+            g.entity_box(min, max, centre, 0.425, false, step_view(p.step()));
+        }
+        for f in self.item_frames.iter().filter(|f| !f.invisible) {
+            let (min, max) = f.bounds();
+            let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
+            g.entity_box(min, max, centre, 0.0, false, step_view(f.step()));
+        }
+        for c in &self.cushions {
+            let (min, max) = c.bounds();
+            let p = c.position;
+            g.entity_box(min, max, [p.x, p.y, p.z], 0.2125, false, (0.0, c.yaw));
+        }
+        for a in self.armor_stands.iter().filter(|a| !a.invisible) {
+            // ArmorStand.getDimensions: a marker has none, a small one is
+            // half scale with its eyes at 0.9875.
+            let (size, eye) = match (a.marker, a.small) {
+                (true, _) => ((0.0, 0.0), 0.0),
+                (_, true) => ((0.25, 0.9875), 0.9875),
+                _ => ((0.5, 1.975), 1.7775),
+            };
+            let p = a.position;
+            g.hitbox([p.x, p.y, p.z], size, eye, true, (0.0, a.yaw));
+        }
+        for b in &self.boats {
+            let h = super::boats::HEIGHT as f32;
+            g.hitbox(
+                at(b.previous, b.position),
+                (super::boats::WIDTH as f32, h),
+                h,
+                false,
+                (0.0, b.yaw),
+            );
+        }
+        for c in &self.carts {
+            let (w, h) = (
+                super::minecarts::WIDTH as f32,
+                super::minecarts::HEIGHT as f32,
+            );
+            g.hitbox(
+                at(c.previous, c.position),
+                (w, h),
+                h * 0.85,
+                false,
+                (0.0, c.yaw),
+            );
+        }
+        for o in &self.orbs {
+            g.hitbox(
+                at(o.previous, o.position),
+                (0.5, 0.5),
+                0.425,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for f in &self.falling {
+            g.hitbox(
+                at(f.previous, f.position),
+                (0.98, 0.98),
+                0.833,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for t in &self.tnts {
+            g.hitbox(
+                at(t.previous, t.position),
+                (0.98, 0.98),
+                0.15,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for c in &self.crystals {
+            let p = c.position;
+            g.hitbox([p.x, p.y, p.z], (2.0, 2.0), 1.7, false, (0.0, 0.0));
+        }
+        for p in &self.creatures.projectiles {
+            use horizon_client::projectiles::ProjectileKind as K;
+            let (size, eye) = match p.kind {
+                K::Arrow { .. } | K::Trident => (0.5, 0.13),
+                K::Snowball | K::Egg | K::EnderPearl | K::LlamaSpit | K::Potion { .. } => {
+                    (0.25, 0.2125)
+                }
+                K::SmallFireball | K::ShulkerBullet { .. } | K::WitherSkull { .. } => {
+                    (0.3125, 0.265_625)
+                }
+                K::WindCharge | K::BreezeWindCharge => (0.3125, 0.0),
+                K::LargeFireball { .. } => (1.0, 0.85),
+            };
+            g.hitbox(
+                at(p.previous, p.position),
+                (size, size),
+                eye,
+                false,
+                (p.pitch, p.yaw),
+            );
+        }
+        for t in &self.tridents {
+            g.hitbox(
+                at(t.previous, t.position),
+                (0.5, 0.5),
+                0.13,
+                false,
+                (t.pitch, t.yaw),
+            );
+        }
+        // EntityType.EYE_OF_ENDER: 0.25 by 0.25, never turned.
+        for (previous, now) in self.end.eye_motions() {
+            let v = |p: glam::DVec3| Vec3::new(p.x, p.y, p.z);
+            g.hitbox(
+                at(v(previous), v(now)),
+                (0.25, 0.25),
+                0.2125,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for r in &self.rockets {
+            // Projectile.updateRotation: the look follows the motion.
+            let v = r.velocity;
+            let yaw = v.x.atan2(v.z).to_degrees() as f32;
+            let pitch = v.y.atan2(v.x.hypot(v.z)).to_degrees() as f32;
+            g.hitbox(
+                at(r.previous, r.position),
+                (0.25, 0.25),
+                0.2125,
+                false,
+                (pitch, yaw),
+            );
+        }
+        for h in self
+            .hook
+            .iter()
+            .map(|h| (h.previous, h.position))
+            .chain(self.remote_hooks.iter().map(|h| (h.previous, h.position)))
+        {
+            g.hitbox(at(h.0, h.1), (0.25, 0.25), 0.2125, false, (0.0, 0.0));
+        }
+        for b in &self.bolts {
+            g.hitbox(b.at, (0.0, 0.0), 0.0, false, (0.0, 0.0));
+        }
+        // The dragon: 16 by 8, a living entity; its parts follow.
+        if let Some(d) = &self.dragon {
+            g.hitbox(
+                at(d.previous, d.position),
+                (16.0, 8.0),
+                6.8,
+                true,
+                (0.0, d.yaw),
+            );
         }
         // The dragon's parts.
         for (id, b) in self.special_targets() {
@@ -819,5 +1095,89 @@ impl Game<'_> {
             );
         }
         g
+    }
+}
+
+/// The (x, y) rotations whose view vector is the step of a direction.
+fn step_view(step: [i32; 3]) -> (f32, f32) {
+    let [x, y, z] = step.map(f64::from);
+    (
+        (-y).asin().to_degrees() as f32,
+        (-x.atan2(z)).to_degrees() as f32,
+    )
+}
+
+/// `DebugQueryHandler`: the last debug NBT query (F3+I) sent to the server
+/// and what its answer completes. Only the newest query is answered.
+#[derive(Debug)]
+pub(super) struct DebugQuery {
+    transaction: i32,
+    pending: Option<QueryReply>,
+}
+impl Default for DebugQuery {
+    fn default() -> Self {
+        Self {
+            transaction: -1,
+            pending: None,
+        }
+    }
+}
+/// What a debug query's answer is copied into: the block command
+/// (`copyCreateBlockCommand`) or the entity's (`copyCreateEntityCommand`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum QueryReply {
+    Block {
+        pos: [i32; 3],
+        state: String,
+    },
+    Entity {
+        id: u32,
+        kind: String,
+        position: Vec3,
+    },
+}
+impl DebugQuery {
+    /// `DebugQueryHandler.startTransaction`: the next transaction id, which
+    /// replaces any query still waiting.
+    fn start(&mut self, reply: QueryReply) -> i32 {
+        self.pending = Some(reply);
+        self.transaction = self.transaction.wrapping_add(1);
+        self.transaction
+    }
+    /// `DebugQueryHandler.handleResponse`: what the answer to `transaction`
+    /// completes, once, when it answers the newest query.
+    fn answer(&mut self, transaction: i32) -> Option<QueryReply> {
+        if transaction == self.transaction {
+            self.pending.take()
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(x: i32) -> QueryReply {
+        QueryReply::Block {
+            pos: [x, 64, 0],
+            state: "minecraft:chest[facing=north,type=single,waterlogged=false]".into(),
+        }
+    }
+
+    #[test]
+    fn a_debug_query_is_answered_once_and_only_the_newest() {
+        let mut q = DebugQuery::default();
+        // The first transaction is 0 (the handler starts at -1).
+        assert_eq!(q.start(block(1)), 0);
+        assert_eq!(q.answer(0), Some(block(1)));
+        assert_eq!(q.answer(0), None);
+        // A second press before the first answer: the older answer is ignored
+        // and the newer one copies the newer target.
+        assert_eq!(q.start(block(2)), 1);
+        assert_eq!(q.start(block(3)), 2);
+        assert_eq!(q.answer(1), None);
+        assert_eq!(q.answer(2), Some(block(3)));
     }
 }

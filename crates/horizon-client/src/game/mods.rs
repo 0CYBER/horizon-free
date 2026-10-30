@@ -1,103 +1,19 @@
-//! Horizon mods in the game (`docs/mods.md`): loading the ones turned on,
-//! their tick, frame, chat and command hooks, their HUD panels and what
-//! they print. With no mod on, `horizon_mods::Mods` holds no engine and
-//! every hook here returns after one check.
-//!
-//! Code mods run only in builds with the `mods` feature (release builds):
-//! without it the game links no wasmtime, and every hook does nothing.
-//! Content mods (`content_root`) load in every build.
+//! Mods in the game (`docs/mods.md`): content mods' blocks, items, data and
+//! assets (`content_root`), and the Mods page's rows. Code mods are native
+//! (`native_hooks.rs`); WebAssembly code mods don't run any more.
 use super::Game;
 use horizon_client::{
-    command::{Dispatcher, vanilla},
-    extras_hud::Corners,
-    hud::HudBatch,
-    mod_list,
+    mod_list::{self, Installed},
+    text::Text,
 };
-use std::{path::PathBuf, time::Duration};
-#[cfg(feature = "mods")]
-use {
-    super::Screen,
-    horizon_client::{
-        extras::Corner,
-        extras_hud,
-        items::ItemStack,
-        mod_list::Installed,
-        options_ui::Page,
-        text::{self, Text},
-        ui,
-    },
-    horizon_mods::{Clock, Mods, Output, Player, Snapshot, Status, UiScreen, UiWidget},
-    std::time::Instant,
-};
+use std::path::PathBuf;
 
 #[derive(Default)]
 pub(super) struct ModsState {
-    #[cfg(feature = "mods")]
-    mods: Mods,
-    /// `--dev-mod PATH`: always on, reloaded when rebuilt.
+    /// `--dev-mod PATH`: always on.
     pub(super) dev: Vec<PathBuf>,
-    /// When dev mods were last checked for a rebuild.
-    #[cfg(feature = "mods")]
-    checked: Option<Instant>,
-    /// The chat's command tree while a running mod owns commands.
-    #[cfg(feature = "mods")]
-    tree: Option<Dispatcher>,
-    /// A `ui` mod's screen or settings page while it is up.
-    #[cfg(feature = "mods")]
-    screen: Option<ModScreen>,
-}
-
-/// A `ui` mod's own screen, or its settings page from Options > Mods: the
-/// widgets the mod pushed, laid out and drawn with the menus' own widgets.
-#[cfg(feature = "mods")]
-struct ModScreen {
-    /// The running mod's index in `mods.mods.entries()`.
-    owner: usize,
-    /// Opened from Options > Mods: Done and Esc return there.
-    settings: bool,
-    /// What the mod's screen replaced (Playing, Chat, ...), to restore.
-    under: Screen,
-    /// One scroll per `list` widget, in widget order.
-    scrolls: Vec<ui::Scroll>,
-}
-impl ModsState {
-    /// The chat's command tree: vanilla's, plus the running mods' commands.
-    pub(super) fn dispatcher(&self) -> &Dispatcher {
-        #[cfg(feature = "mods")]
-        if let Some(tree) = &self.tree {
-            return tree;
-        }
-        vanilla::game_dispatcher()
-    }
-    /// Whether a mod runs: the chat keeps its lines for them.
-    pub(super) fn running(&self) -> bool {
-        #[cfg(feature = "mods")]
-        if self.mods.is_running() {
-            return true;
-        }
-        false
-    }
-    /// Whether a mod draws a HUD panel.
-    pub(super) fn has_panels(&self) -> bool {
-        #[cfg(feature = "mods")]
-        if self.mods.panels().next().is_some() {
-            return true;
-        }
-        false
-    }
-}
-/// How often dev mods are checked for a rebuild.
-#[cfg(feature = "mods")]
-const RELOAD_CHECK: Duration = Duration::from_secs(1);
-
-/// A vanilla command name: mods may not take it.
-#[cfg(feature = "mods")]
-fn vanilla_command(name: &str) -> bool {
-    let d = vanilla::game_dispatcher();
-    d.nodes[0]
-        .children
-        .iter()
-        .any(|&c| d.nodes[c].name() == name)
+    /// The WebAssembly mods found that no longer run, for the one-time notice.
+    stopped: Vec<String>,
 }
 
 /// `root` with the content mods that are on layered over it
@@ -165,555 +81,74 @@ pub(super) fn content_root(
     }
 }
 
-/// A build without the `mods` feature: no mod runs.
-#[cfg(not(feature = "mods"))]
-impl Game<'_> {
-    /// Says why the installed and dev mods don't run.
-    pub(super) fn start_mods(&mut self) {
-        let dir = Self::options_path().with_file_name(mod_list::DIR);
-        let found = horizon_mods::find(&dir).len() + self.mods.dev.len();
-        if found > 0 {
-            log::warn!(
-                "Horizon: {found} mod(s) not started: this build has no mod runtime (build with --features mods)"
-            );
-        }
-    }
-    pub(super) fn sync_mods(&mut self) {}
-    pub(super) fn tick_mods(&mut self) {}
-    pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
-    pub(super) fn mod_command(&mut self, _command: &str) -> bool {
-        false
-    }
-    pub(super) fn mods_chat(&mut self, _line: &str) {}
-    pub(super) fn draw_mod_panels(&self, _batch: &mut HudBatch, _corners: &mut Corners) {}
-    pub(super) fn open_mod_screen(&mut self, _owner: usize, _settings: bool) {}
-    pub(super) fn close_mod_screen(&mut self, _tell: bool) {}
-    pub(super) fn draw_mod_screen(&mut self, _batch: &mut HudBatch) {}
-    pub(super) fn mod_screen_click(&mut self) {}
-    pub(super) fn mod_screen_scroll(&mut self, _delta: f32) {}
-}
+/// A WebAssembly code mod's row on the Mods page.
+const STOPPED: &str = "Doesn't run any more: needs a native port";
+/// The player was told once about the WebAssembly mods that stopped (`horizon-mods/<this>`).
+const NOTICE_SEEN: &str = ".native-notice";
 
-#[cfg(feature = "mods")]
 impl Game<'_> {
-    /// Reads `horizon-mods/` and the dev mods, and starts the ones turned on.
+    /// Lists the installed mods on the Mods page. Content mods load with the resources
+    /// (`content_root`); native ones are built into the game (`native_hooks.rs`). WebAssembly code
+    /// mods don't run any more: their rows say so, and the player hears it once in the chat
+    /// (`tell_native_now`).
     pub(super) fn start_mods(&mut self) {
         let dir = Self::options_path().with_file_name(mod_list::DIR);
-        let dev = &self.mods.dev;
         let mut paths = horizon_mods::find(&dir);
-        paths.retain(|p| !dev.contains(p));
-        paths.extend(dev.iter().cloned());
-        // A dev mod is on whatever the list says.
-        let dev_ids: Vec<String> = dev
+        paths.retain(|p| !self.mods.dev.contains(p));
+        paths.extend(self.mods.dev.iter().cloned());
+        self.settings.mods.installed = paths
             .iter()
-            .filter_map(|p| horizon_mods::Package::read(p).ok())
-            .map(|p| p.manifest.id)
-            .collect();
-        let enabled = &self.settings.mods.enabled;
-        let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
-        let mods = Mods::load(&paths, on, vanilla_command);
-        self.mods.mods = mods;
-        // Entries were replaced wholesale: a screen's owner index is stale.
-        self.mods.screen = None;
-        self.list_mods();
-        self.sync_mod_commands();
-        self.show_mod_output();
-    }
-    /// The Mods page's rows, from what loaded.
-    fn list_mods(&mut self) {
-        let dev = &self.mods.dev;
-        self.settings.mods.installed = self
-            .mods
-            .mods
-            .entries()
-            .iter()
-            .map(|e| {
-                let file = e.path.file_name().unwrap_or_default().to_string_lossy();
-                let problem = match &e.status {
-                    Status::Failed(reason) => Some(format!("Stopped: {reason}")),
-                    _ => None,
+            .map(|path| {
+                let file = path.file_name().unwrap_or_default().to_string_lossy();
+                let package = match horizon_mods::Package::read(path) {
+                    Ok(package) => package,
+                    Err(e) => {
+                        return Installed {
+                            id: String::new(),
+                            title: file.into_owned(),
+                            description: String::new(),
+                            problem: Some(format!("Can't be read: {e}")),
+                            dev: false,
+                            native: None,
+                        };
+                    }
                 };
-                let Some(m) = &e.manifest else {
-                    return Installed {
-                        id: String::new(),
-                        title: file.into_owned(),
-                        description: String::new(),
-                        problem,
-                        dev: false,
-                        has_settings: false,
-                    };
-                };
-                // What it may do first: the row cuts long descriptions.
-                let may: Vec<&str> = m.capabilities.iter().map(|c| c.describe()).collect();
-                let may = if may.is_empty() {
-                    "Asks for nothing.".to_owned()
-                } else {
-                    format!("May {}.", may.join(", "))
-                };
+                let m = &package.manifest;
+                let problem = package.wasm.is_some().then(|| STOPPED.to_owned());
                 Installed {
                     id: m.id.clone(),
                     title: format!("{} {}", m.name, m.version),
-                    description: format!("{may} {}", m.description).trim().to_owned(),
+                    description: m.description.clone(),
                     problem,
-                    dev: dev.contains(&e.path),
-                    has_settings: e.has_ui_settings(),
+                    dev: self.mods.dev.contains(path),
+                    native: None,
                 }
             })
             .collect();
-    }
-    /// The chat's tree after the running mods changed.
-    fn sync_mod_commands(&mut self) {
-        let mut names = self.mods.mods.commands().peekable();
-        self.mods.tree = names
-            .peek()
-            .is_some()
-            .then(|| vanilla::game_dispatcher().with_mod_commands(names));
-    }
-    /// After the options changed: restart the mods if the list of the ones
-    /// turned on did.
-    pub(super) fn sync_mods(&mut self) {
-        let running: Vec<&str> = self
-            .mods
-            .mods
-            .entries()
+        // A mod with a native version built in says so instead, and isn't news.
+        self.list_native_mods();
+        let installed = &self.settings.mods.installed;
+        self.mods.stopped = installed
             .iter()
-            .filter(|e| e.status != Status::Off)
-            .filter_map(|e| Some(e.manifest.as_ref()?.id.as_str()))
+            .filter(|row| row.problem.as_deref() == Some(STOPPED))
+            .map(|row| row.title.clone())
             .collect();
-        let wanted: Vec<&str> = self
-            .settings
-            .mods
-            .installed
-            .iter()
-            .enumerate()
-            .filter(|&(i, _)| self.settings.mods.is_on(i))
-            .map(|(_, m)| m.id.as_str())
-            .collect();
-        if running != wanted {
-            self.start_mods();
-        }
     }
-    /// What mods read this tick.
-    fn mod_snapshot(&self) -> Snapshot {
-        let player = self.player.as_ref().map(|p| Player {
-            x: p.position.x,
-            y: p.position.y,
-            z: p.position.z,
-            yaw: self.yaw,
-            pitch: self.pitch,
-            health: p.health.health(),
-            food: p.health.food.food.max(0) as u32,
-            dimension: self.dim.id().to_owned(),
-        });
-        let clock = player.is_some().then(|| Clock {
-            game_time: self.world.game_time.max(0) as u64,
-            day_time: self.world.day_time.max(0) as u64,
-        });
-        Snapshot { player, clock }
-    }
-    /// A game tick.
-    pub(super) fn tick_mods(&mut self) {
-        if !self.mods.mods.is_running() {
+    /// Once, in the first world after the update: which WebAssembly mods stopped.
+    pub(super) fn tell_native_now(&mut self) {
+        if self.mods.stopped.is_empty() || self.player.is_none() {
             return;
         }
-        let snapshot = self.mod_snapshot();
-        self.mods.mods.set_snapshot(snapshot);
-        self.mods.mods.tick(self.ticks);
-        self.show_mod_output();
-    }
-    /// Once per frame: the frame hook, and dev mods' rebuilds.
-    pub(super) fn mods_frame(&mut self, elapsed: Duration) {
-        if !self.mods.dev.is_empty()
-            && self
-                .mods
-                .checked
-                .is_none_or(|t| t.elapsed() >= RELOAD_CHECK)
-        {
-            self.mods.checked = Some(Instant::now());
-            if self.mods.mods.reload_changed(vanilla_command) {
-                self.list_mods();
-                self.sync_mod_commands();
-                self.system_message(Text::literal("Mods reloaded").with_color(text::GRAY));
-            }
-        }
-        if !self.mods.mods.is_running() {
+        let names = std::mem::take(&mut self.mods.stopped).join(", ");
+        let seen = Self::options_path()
+            .with_file_name(mod_list::DIR)
+            .join(NOTICE_SEEN);
+        if seen.exists() {
             return;
         }
-        self.mods.mods.frame(elapsed.as_secs_f32());
-        self.show_mod_output();
-    }
-    /// `/command` typed in chat: true when a mod owns it.
-    pub(super) fn mod_command(&mut self, command: &str) -> bool {
-        if !self.mods.mods.is_running() {
-            return false;
-        }
-        // The command may follow a teleport in the same tick.
-        let snapshot = self.mod_snapshot();
-        self.mods.mods.set_snapshot(snapshot);
-        if !self.mods.mods.command(command) {
-            return false;
-        }
-        self.show_mod_output();
-        true
-    }
-    /// A chat line the player received.
-    pub(super) fn mods_chat(&mut self, line: &str) {
-        self.mods.mods.chat(line);
-        self.show_mod_output();
-    }
-    /// Chat lines, command feedback and stopped mods, into the chat.
-    fn show_mod_output(&mut self) {
-        for output in self.mods.mods.drain() {
-            let line = match output {
-                Output::Chat { name, text } => {
-                    let mut line = Text::literal(format!("[{name}] ")).with_color(text::GRAY);
-                    line.push(Text::literal(text));
-                    line
-                }
-                Output::Feedback { text, error: false } => Text::literal(text),
-                Output::Feedback { text, error: true } => Text::literal(text).with_color(text::RED),
-                Output::Stopped { name, reason } => {
-                    // Its screen goes with it: the entry's run is gone, so
-                    // `mod_ui_view` finds no widgets and the screen closes.
-                    self.list_mods();
-                    self.sync_mod_commands();
-                    Text::literal(format!("Mod {name} stopped: {reason}")).with_color(text::RED)
-                }
-                Output::OpenScreen { owner } => {
-                    self.open_mod_screen(owner, false);
-                    continue;
-                }
-                Output::CloseScreen { owner } => {
-                    if self.mods.screen.as_ref().is_some_and(|s| s.owner == owner) {
-                        self.close_mod_screen(false);
-                    }
-                    continue;
-                }
-            };
-            // Not through system_message: a mod must not hear its own lines.
-            let focused = self.screen == Screen::Chat;
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
-        }
-        // A mod may set or clear its settings page in any call, not only
-        // while loading: its row's Settings button follows.
-        let rows = self.settings.mods.installed.iter_mut();
-        for (row, e) in rows.zip(self.mods.mods.entries()) {
-            row.has_settings = e.has_ui_settings();
-        }
-    }
-    /// The mods' HUD panels, stacked with the extras in their corners.
-    pub(super) fn draw_mod_panels(&self, batch: &mut HudBatch, corners: &mut Corners) {
-        for panel in self.mods.mods.panels() {
-            let corner = match panel.corner {
-                horizon_mods::Corner::TopLeft => Corner::TopLeft,
-                horizon_mods::Corner::TopRight => Corner::TopRight,
-                horizon_mods::Corner::BottomLeft => Corner::BottomLeft,
-                horizon_mods::Corner::BottomRight => Corner::BottomRight,
-            };
-            // F3 takes the top left, as it does from the extras.
-            if self.debug && corner == Corner::TopLeft {
-                continue;
-            }
-            let lines: Vec<(&str, u32)> = panel
-                .lines
-                .iter()
-                .map(|l| (l.text.as_str(), l.color))
-                .collect();
-            extras_hud::draw_lines(batch, &self.gui.atlas, corners, corner, &lines);
-        }
-    }
-
-    /// A `ui` screen's title and widgets as the mod last pushed them; None
-    /// when the surface is gone (the mod stopped or closed it).
-    fn mod_ui_view(&self) -> Option<(String, Vec<UiWidget>)> {
-        let ms = self.mods.screen.as_ref()?;
-        if ms.settings {
-            let widgets = self.mods.mods.settings_widgets(ms.owner);
-            if widgets.is_empty() {
-                return None;
-            }
-            let name = self
-                .mods
-                .mods
-                .entries()
-                .get(ms.owner)
-                .and_then(|e| e.manifest.as_ref())
-                .map_or("Mod", |m| m.name.as_str());
-            Some((name.to_string(), widgets.to_vec()))
-        } else {
-            let s: &UiScreen = self.mods.mods.screen(ms.owner)?;
-            Some((s.title.clone(), s.widgets.clone()))
-        }
-    }
-    /// The layout the mod screen's widgets get at `h`: (widget, top,
-    /// height), the column being `COLUMN` wide down the middle.
-    fn mod_ui_layout(&self, h: f32, widgets: &[UiWidget]) -> Vec<(f32, f32)> {
-        let mut out = Vec::with_capacity(widgets.len());
-        let mut y = MOD_UI_TOP;
-        for w in widgets {
-            let wh = match w {
-                UiWidget::Text(_) => 12.0,
-                UiWidget::Item(_) => 20.0,
-                UiWidget::List(l) => (l.rows.len().min(6) as f32 * 12.0) + 8.0,
-            };
-            // Nothing may cover Done; a crowded mod loses what won't fit.
-            if y + wh > h - 34.0 {
-                break;
-            }
-            out.push((y, wh));
-            y += wh + 6.0;
-        }
-        out
-    }
-    /// A mod pushes its screen (`ui.open-screen`), or Options > Mods opens
-    /// its settings page (`settings`, the mod's `installed` index).
-    pub(super) fn open_mod_screen(&mut self, owner: usize, settings: bool) {
-        if self.title.is_some() {
-            return;
-        }
-        if settings {
-            self.mods.mods.ui_settings_opened(owner);
-            if self.mods.mods.settings_widgets(owner).is_empty() {
-                self.show_mod_output();
-                return;
-            }
-        }
-        self.mods.screen = Some(ModScreen {
-            owner,
-            settings,
-            under: self.screen,
-            scrolls: Vec::new(),
-        });
-        self.screen = Screen::Mod;
-        if self.player.is_some() {
-            self.capture(false);
-        }
-        self.show_mod_output();
-    }
-    /// Leaves the mod screen: back to Options for a settings page, to what
-    /// it covered for a mod's own. `tell` is Esc/Done, heard as `closed`.
-    pub(super) fn close_mod_screen(&mut self, tell: bool) {
-        let Some(ms) = self.mods.screen.take() else {
-            return;
-        };
-        if ms.settings {
-            self.open_options_at(self.options_from_title, Page::Mods);
-        } else {
-            self.screen = ms.under;
-            if self.screen == Screen::Playing && self.player.is_some() {
-                self.capture(true);
-            }
-        }
-        if tell {
-            self.mods.mods.ui_closed(ms.owner);
-            self.show_mod_output();
-        }
-    }
-    /// The mod's screen or settings page: its title over widgets stacked
-    /// down the middle, a Done button, Esc to leave (vanilla's menus).
-    pub(super) fn draw_mod_screen(&mut self, batch: &mut HudBatch) {
-        if self.mods.screen.is_none() {
-            self.screen = Screen::Playing;
-            return;
-        }
-        let Some((title, widgets)) = self.mod_ui_view() else {
-            self.mods.screen = None;
-            self.screen = Screen::Playing;
-            return;
-        };
-        // Item icons draw in a second pass: `draw_item` needs `&mut self`,
-        // so `atlas` may not stay borrowed across it.
-        let mut items: Vec<(String, f32, f32)> = Vec::new();
-        let atlas = &self.gui.atlas;
-        let in_world = self.player.is_some();
-        ui::menu_background(batch, atlas, 0.0, 0.0, batch.width, batch.height, in_world);
-        ui::centered_text(
-            batch,
-            atlas,
-            &Text::literal(title),
-            0.0,
-            15.0,
-            batch.width,
-            u32::MAX,
-        );
-        let cx = (batch.width / 2.0).floor();
-        let x = cx - MOD_UI_COLUMN / 2.0;
-        let layout = self.mod_ui_layout(batch.height, &widgets);
-        let mut list_i = 0usize;
-        for (w, &(wy, wh)) in widgets.iter().zip(&layout) {
-            match w {
-                UiWidget::Text(t) => {
-                    let color = if t.color == 0 {
-                        u32::MAX
-                    } else {
-                        t.color | 0xFF00_0000
-                    };
-                    ui::centered_text(
-                        batch,
-                        atlas,
-                        &Text::literal(t.text.clone()),
-                        x,
-                        wy + 1.0,
-                        MOD_UI_COLUMN,
-                        color,
-                    );
-                }
-                UiWidget::Item(i) => {
-                    if self.res.items().get(&i.item).is_some() {
-                        items.push((i.item.clone(), x + 2.0, wy + 2.0));
-                    } else {
-                        batch.text(atlas, "?", x + 6.0, wy + 6.0, u32::MAX, true);
-                    }
-                    let name = if i.name.is_empty() {
-                        i.item.rsplit(':').next().unwrap_or(&i.item).to_string()
-                    } else {
-                        i.name.clone()
-                    };
-                    batch.text_styled(
-                        atlas,
-                        &Text::literal(name),
-                        x + 22.0,
-                        wy + 6.0,
-                        u32::MAX,
-                        true,
-                    );
-                }
-                UiWidget::List(l) => {
-                    let scroll = {
-                        let ms = self.mods.screen.as_mut().expect("checked");
-                        ms.scrolls.resize_with(list_i + 1, ui::Scroll::default);
-                        ms.scrolls[list_i]
-                    };
-                    list_i += 1;
-                    let rows_top = wy + 4.0;
-                    let rows_bottom = wy + wh - 4.0;
-                    batch.fill(atlas, x, wy, MOD_UI_COLUMN, wh, 0x8000_0000);
-                    for (b, yy) in [(x, wy), (x, wy + wh - 1.0)] {
-                        batch.fill(atlas, b, yy, MOD_UI_COLUMN, 1.0, 0xFF50_5050);
-                    }
-                    for (xx, yy) in [(x, wy), (x + MOD_UI_COLUMN - 1.0, wy)] {
-                        batch.fill(atlas, xx, yy, 1.0, wh, 0xFF50_5050);
-                    }
-                    let content = l.rows.len() as f32 * 12.0;
-                    let first = (scroll.amount / 12.0) as usize;
-                    let last = (first + ((rows_bottom - rows_top) / 12.0).ceil() as usize + 1)
-                        .min(l.rows.len());
-                    for (vi, ri) in (first..last).enumerate() {
-                        let ry = rows_top + vi as f32 * 12.0 - (scroll.amount % 12.0);
-                        if ui::hovered(self.cursor, x, ry, MOD_UI_COLUMN - 6.0, 12.0) {
-                            batch.fill(atlas, x + 1.0, ry, MOD_UI_COLUMN - 8.0, 12.0, 0x20FF_FFFF);
-                        }
-                        if l.selected == Some(ri as u32) {
-                            batch.fill(atlas, x + 1.0, ry, 3.0, 12.0, 0xFFFF_FFFF);
-                        }
-                        batch.text_styled(
-                            atlas,
-                            &Text::literal(l.rows[ri].clone()),
-                            x + 6.0,
-                            ry + 2.0,
-                            u32::MAX,
-                            true,
-                        );
-                    }
-                    ui::scrollbar(
-                        batch,
-                        atlas,
-                        x + MOD_UI_COLUMN - 5.0,
-                        rows_top,
-                        rows_bottom,
-                        content,
-                        scroll.amount,
-                    );
-                }
-            }
-        }
-        let hover = ui::hovered(self.cursor, cx - 100.0, batch.height - 27.0, 200.0, 20.0);
-        ui::button(
-            batch,
-            atlas,
-            cx - 100.0,
-            batch.height - 27.0,
-            200.0,
-            20.0,
-            &Text::literal("Done"),
-            true,
-            hover,
-        );
-        for (id, ix, iy) in items {
-            let stack = ItemStack::new(id.as_str(), 1);
-            self.draw_item(batch, &stack, ix, iy);
-        }
-    }
-    /// A click on the mod screen: Done leaves it, a `list` row is the mod's
-    /// `ui-events::select`.
-    pub(super) fn mod_screen_click(&mut self) {
-        let (w, h) = self.gui_size();
-        let cursor = self.cursor;
-        if ui::hovered(cursor, (w / 2.0).floor() - 100.0, h - 27.0, 200.0, 20.0) {
-            self.audio.play_button_click();
-            self.close_mod_screen(true);
-            return;
-        }
-        let Some((_, widgets)) = self.mod_ui_view() else {
-            return;
-        };
-        let x = (w / 2.0).floor() - MOD_UI_COLUMN / 2.0;
-        let layout = self.mod_ui_layout(h, &widgets);
-        let mut list_i = 0usize;
-        for (w, &(wy, wh)) in widgets.iter().zip(&layout) {
-            let UiWidget::List(l) = w else { continue };
-            let scroll = self
-                .mods
-                .screen
-                .as_ref()
-                .and_then(|ms| ms.scrolls.get(list_i).copied())
-                .unwrap_or_default();
-            list_i += 1;
-            let row = ((cursor.1 - (wy + 4.0) + scroll.amount) / 12.0) as i64;
-            if ui::hovered(cursor, x + 1.0, wy + 1.0, MOD_UI_COLUMN - 7.0, wh - 2.0)
-                && row >= 0
-                && (row as usize) < l.rows.len()
-            {
-                self.audio.play_button_click();
-                self.mods.mods.ui_select(
-                    self.mods.screen.as_ref().map_or(0, |ms| ms.owner),
-                    l.id,
-                    row as u32,
-                );
-                self.show_mod_output();
-                return;
-            }
-        }
-    }
-    /// The wheel over a `list` scrolls it.
-    pub(super) fn mod_screen_scroll(&mut self, delta: f32) {
-        let (w, h) = self.gui_size();
-        let cursor = self.cursor;
-        let Some((_, widgets)) = self.mod_ui_view() else {
-            return;
-        };
-        let x = (w / 2.0).floor() - MOD_UI_COLUMN / 2.0;
-        let layout = self.mod_ui_layout(h, &widgets);
-        let mut list_i = 0usize;
-        for (w, &(wy, wh)) in widgets.iter().zip(&layout) {
-            let UiWidget::List(l) = w else { continue };
-            let over = ui::hovered(cursor, x, wy, MOD_UI_COLUMN, wh);
-            let Some(ms) = self.mods.screen.as_mut() else {
-                return;
-            };
-            ms.scrolls.resize_with(list_i + 1, ui::Scroll::default);
-            if over {
-                let content = l.rows.len() as f32 * 12.0;
-                ms.scrolls[list_i].wheel(delta, 12.0, wy + 4.0, wy + wh - 4.0, content);
-                return;
-            }
-            list_i += 1;
-        }
+        self.system_message(Text::literal(format!(
+            "Horizon mods are native now: {names} stopped running until they have a native version. The launcher's Mods page has the native ones."
+        )));
+        let _ = std::fs::write(&seen, "");
     }
 }
-
-#[cfg(feature = "mods")]
-const MOD_UI_TOP: f32 = 40.0;
-#[cfg(feature = "mods")]
-const MOD_UI_COLUMN: f32 = 200.0;

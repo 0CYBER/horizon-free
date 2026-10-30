@@ -27,7 +27,8 @@ exactly:
 - the status response (MOTD, players, version, favicon) and the ping;
 - the legacy (pre-1.7, 0xFE) ping reply;
 - the login and configuration packets in order (compression, profile,
-  brand, features, known packs, every registry, tags);
+  brand (Horizon's server says "horizon", vanilla's "vanilla"), features,
+  known packs, every registry, tags);
 - the play packets up to the first chunk batch, in order, with entity ids,
   keep-alive ids and times left out (the recipe property sets and
   advancements, which vanilla keeps in hash maps, sorted); the command tree
@@ -65,13 +66,16 @@ import struct
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import zlib
 
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
+    from .integration_env import game_environment, run_game
     from .lab import free_port  # the other server harnesses import it from here
 except ImportError:
+    from integration_env import game_environment, run_game
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
@@ -124,9 +128,11 @@ class Server:
         self.log_path = directory.parent / f'{log_name}.log'
         self.log = self.log_path.open('w', encoding='utf-8')
         self.lines = []
-        self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
+        self.scratch = tempfile.TemporaryDirectory(prefix='hz-server-')
+        env = game_environment(os.environ, self.scratch.name)
+        self.process = subprocess.Popen(list(map(str, command)), cwd=directory, env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding='utf-8', errors='replace', env=lab.game_env())
+                                        encoding='utf-8', errors='replace')
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -163,6 +169,7 @@ class Server:
                 self.process.wait()
         self.reader.join(timeout=10)
         self.log.close()
+        self.scratch.cleanup()
 
 
 def settle(server, ticks=600, timeout=600):
@@ -198,6 +205,17 @@ def game_time(server, timeout=300):
                 return int(m.group(1))
         time.sleep(0.05)
     raise AssertionError(f'{server.log_path.name}: no game time in {timeout:.0f} s')
+
+
+def wait_ticks(server, count, timeout=300):
+    """Waits until the server's game clock has advanced `count` ticks: a server that stalls under load still gets
+    as many ticks as an idle one, where a sleep gives it fewer. (Not while ticking is frozen.)"""
+    deadline = time.time() + timeout
+    until = game_time(server, timeout) + count
+    while game_time(server, max(1.0, deadline - time.time())) < until:
+        if time.time() > deadline:
+            raise AssertionError(f'{server.log_path.name}: the game clock did not advance {count} ticks in {timeout} s')
+        time.sleep(0.2)
 
 
 def legacy_ping(port):
@@ -327,7 +345,9 @@ def run_side(label, command, directory, client):
         joined.join()
         if failure:
             raise failure[0]
-        time.sleep(1)
+        # The client has gone; `list` must find no one, once the server has handled its leaving (a busy machine
+        # took longer than a second).
+        server.wait_for(rf'{PLAYER} left the game', timeout=60)
         server.console('list')
         server.console('say console says hi')
         server.wait_for(r'\[Server\] console says hi', timeout=30)
@@ -359,7 +379,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
         server.wait_for(r'Done \(')
         env = lab.game_env(HORIZON_NET_REPORT=report)
         with (build / 'horizon-client-run.log').open('w') as log:
-            subprocess.run([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
+            run_game([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
                            cwd=client_dir, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300, check=True)
         server.wait_for(r'left the game', timeout=30)
@@ -405,11 +425,11 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
 
@@ -458,7 +478,12 @@ def main():
         (build / f'{label}.txt').write_text('\n'.join(results[label]) + '\n', encoding='utf-8')
     client_checks = horizon_client_joins(vanilla_server, binary, world, build, results['vanilla'])
     vanilla, horizon = results['vanilla'], results['horizon']
-    errors = [l for l in vanilla + horizon if l.startswith('error')] + [l for l in client_checks if not l.endswith(': ok')]
+    # The one intended difference: MinecraftServer.getServerModName is "vanilla" there, and Horizon's server names
+    # itself "horizon" as a modded server does (#3756). Check that, then compare the rest as vanilla's.
+    brand = 'config minecraft:custom_payload BrandPayload[brand={}]'
+    errors_brand = [] if brand.format('horizon') in horizon else ['error: Horizon\'s server did not send the brand "horizon"']
+    horizon = [brand.format('vanilla') if l == brand.format('horizon') else l for l in horizon]
+    errors = [l for l in vanilla + horizon if l.startswith('error')] + [l for l in client_checks if not l.endswith(': ok')] + errors_brand
     for line in client_checks:
         print(line)
     differences = []

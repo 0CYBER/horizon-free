@@ -156,6 +156,10 @@ const CLIENT_SOUNDS: &[&str] = &[
 impl Game<'_> {
     /// Run every scenario of `spec` ("SCENARIOS,OUTPUT") and write the results.
     pub(super) fn sculk_fixture(&mut self, spec: &str) -> Result<()> {
+        assert!(
+            !self.options.execution_role.is_client(),
+            "fixture requires a server Game"
+        );
         let (input, output) = spec
             .split_once(',')
             .ok_or("HORIZON_SCULK_FIXTURE=SCENARIOS,OUTPUT")?;

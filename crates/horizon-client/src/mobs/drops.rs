@@ -2,11 +2,15 @@
 //! killer's `killedEntity` hook (a charged creeper's head drop), then
 //! `dropAllDeathLoot`: the entity loot table (drawn from the world's random
 //! sequence), `Mob.dropCustomDeathLoot` (equipment by drop chance, with the
-//! entity random), the species' extra drops and the experience orbs.
+//! entity random), the species' extra drops (an enderman's carried block) and
+//! the experience orbs.
 use super::{Mob, Species, equine, gear, raider, render::DYE_NAMES, species};
 use crate::random_sequences::RandomSequences;
 use horizon_core::random::RandomSource;
-use horizon_world::loot::{EntityLootParams, LootDamage, LootData, LootEntity, LootStack};
+use horizon_world::{
+    loot::{EntityLootParams, LootDamage, LootData, LootEntity, LootStack},
+    registry::BlockStateId,
+};
 
 /// `DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE`.
 pub const DEFAULT_DROP_CHANCE: f32 = 0.085;
@@ -17,6 +21,9 @@ pub use horizon_world::loot::EQUIPMENT_SLOTS as SLOTS;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Drop {
     Item(LootStack),
+    /// `Enderman.dropCustomDeathLoot`: the carried block's own drops, rolled
+    /// with `enderman::carried_block_tool` (`enderman::carried_block_drops`).
+    CarriedBlock(BlockStateId),
     /// An experience orb of this value.
     Orb(i32),
 }
@@ -244,10 +251,23 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         }
         _ => (None, None),
     };
-    let mut stack = loot_stack(item?, 1);
+    // A panda keeps the whole stack it picked up in its mouth.
+    let count = if slot == "mainhand" && m.species() == Species::Panda {
+        super::panda::held_count(m)
+    } else {
+        1
+    };
+    let mut stack = loot_stack(item?, count as i32);
+    if slot == "body" && m.species() == Species::Wolf {
+        stack.damage = m.extra.body_damage;
+    }
     if let (Some(index), Some(g)) = (index, gear::gear(m)) {
         for (e, l) in &g.slots[index] {
             stack.enchantments.push((e.to_string(), *l as i32));
+        }
+        if let Some((material, pattern)) = &g.trims[index] {
+            let trim = serde_json::json!({ "material": &**material, "pattern": &**pattern });
+            stack.components.push(("minecraft:trim".to_owned(), trim));
         }
     }
     Some(stack)
@@ -257,7 +277,7 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
     let body = head_is_body(m.species());
     let index = match slot {
         "mainhand" => {
-            m.extra.main_hand = None;
+            m.extra.set_main_hand(None);
             gear::MAIN
         }
         "offhand" => {
@@ -282,6 +302,8 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
         }
         "body" if body => {
             m.extra.head = None;
+            m.extra.body_damage = 0;
+            m.extra.body_extra = None;
             return;
         }
         "saddle" => {
@@ -304,6 +326,9 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         map: false,
         exploration: None,
         ominous_amplifier: None,
+        stew_effects: Vec::new(),
+        names: Vec::new(),
+        components: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the
@@ -349,6 +374,9 @@ pub fn loot_entity(m: &Mob, vehicle: Option<LootEntity>) -> LootEntity {
                 [usize::from(m.extra.variant).min(2)]
             .to_owned(),
         );
+    }
+    if s == S::Chicken {
+        e.chicken_variant = super::finalize::variant_component(m).map(|(_, id)| id);
     }
     e.powered = s == S::Creeper && m.extra.charged;
     e.equipment = SLOTS
@@ -399,6 +427,15 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         out.push(Drop::Item(stack));
         clear_slot(m, "mainhand");
     }
+    // Allay: what it carries (`ints[1]` of the held item) is its inventory.
+    let allay_load = (s == Species::Allay)
+        .then(|| {
+            m.extra
+                .main_hand
+                .clone()
+                .map(|item| (item, m.extra.ints[1]))
+        })
+        .flatten();
     let drops_loot = d.mob_drops && (is_monster(s) || !m.is_baby());
     if drops_loot {
         let table = format!(
@@ -450,9 +487,36 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
             out.push(Drop::Item(stack));
             clear_slot(m, slot);
         }
+        // Enderman.dropCustomDeathLoot: after Monster's, the carried block.
+        if s == Species::Enderman
+            && let Some(state) = m.extra.carried
+        {
+            out.push(Drop::CarriedBlock(state));
+        }
         // WitherBoss.dropCustomDeathLoot.
         if s == Species::Wither {
             out.push(Drop::Item(loot_stack("minecraft:nether_star", 1)));
+        }
+    }
+    // Allay.dropEquipment: its inventory, then the main-hand item unless it
+    // prevents equipment drops.
+    if let Some((item, carried)) = allay_load {
+        if carried > 0 {
+            out.push(Drop::Item(loot_stack(&item, carried)));
+        }
+        if let Some(stack) = slot_item(m, "mainhand")
+            && !d.loot.prevents_equipment_drop(&stack)
+        {
+            out.push(Drop::Item(stack));
+            clear_slot(m, "mainhand");
+        }
+    }
+    // Piglin.dropCustomDeathLoot: everything in its inventory.
+    if s == Species::Piglin {
+        for stack in m.extra.inventory.drain(..) {
+            let mut item = loot_stack(&stack.item, stack.count as i32);
+            item.damage = stack.damage as i32;
+            out.push(Drop::Item(item));
         }
     }
     // dropEquipment: AbstractHorse's inventory, then a chested horse's chest.
@@ -470,13 +534,7 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         }
     }
     // dropExperience.
-    let drops_experience = match s {
-        Species::Tadpole => false,
-        Species::Hoglin => true,
-        s if is_monster(s) => true,
-        _ => !m.is_baby(),
-    };
-    if killed_by_player && drops_experience && d.mob_drops {
+    if killed_by_player && drops_experience(m) && d.mob_drops {
         let mut amount = base_experience(m);
         while amount > 0 {
             let value = orb_value(amount);
@@ -498,6 +556,16 @@ fn roll(
             d.loot.roll_entity(table, random, params)
         }
         None => Vec::new(),
+    }
+}
+/// `LivingEntity.shouldDropExperience`: babies drop none, except monsters and
+/// hoglins; tadpoles never do.
+pub fn drops_experience(m: &Mob) -> bool {
+    match m.species() {
+        Species::Tadpole => false,
+        Species::Hoglin => true,
+        s if is_monster(s) => true,
+        _ => !m.is_baby(),
     }
 }
 /// `getBaseExperienceReward` (no vanilla enchantment changes mob experience).

@@ -153,6 +153,9 @@ pub fn main() -> Result<()> {
                                 bits(position),
                                 bits(velocity)
                             )),
+                            ArrowEvent::PotionPuff { id, color } => {
+                                events.push(format!("potion-puff {id} {color:08x}"))
+                            }
                             ArrowEvent::Sound {
                                 sound,
                                 volume,
@@ -161,8 +164,11 @@ pub fn main() -> Result<()> {
                                 "sound {} {:08x} {:08x}",
                                 match sound {
                                     ArrowSound::HitGround => "hit",
+                                    ArrowSound::CrossbowHit => "crossbow_hit",
                                     ArrowSound::Splash => "splash",
                                     ArrowSound::Extinguish => "extinguish",
+                                    ArrowSound::TridentHitGround => "trident_hit_ground",
+                                    ArrowSound::TridentHit => "trident_hit",
                                 },
                                 volume.to_bits(),
                                 pitch.to_bits()
