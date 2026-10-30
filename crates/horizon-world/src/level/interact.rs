@@ -732,6 +732,14 @@ impl Behaviours {
         {
             return InteractionResult::Pass;
         }
+        // CakeBlock.useItemOn: a candle on an uneaten cake turns it into a candle cake.
+        if let Some(candle_cake) = self.cake_candle_state(state, item) {
+            let mut sim = self.sim(level, ticks);
+            sim.sound(pos, &"minecraft:block.cake.add_candle".into(), 1.0, 1.0);
+            sim.set_block_and_update(pos, candle_cake);
+            sim.game_event(pos, "minecraft:block_change");
+            return InteractionResult::Success;
+        }
         if self.data(state).chain.contains(&Class::CopperGolemStatue) {
             return self.turn_statue(level, ticks, pos, state, item);
         }
@@ -821,6 +829,24 @@ impl Behaviours {
             return InteractionResult::Success;
         }
         self.use_without_item(level, ticks, pos, face, hit, player)
+    }
+
+    /// `CakeBlock.useItemOn`: the unlit candle cake that `item` (a `#minecraft:candles` item)
+    /// turns the uneaten cake `state` into (`CandleCakeBlock.byCandle`), if any.
+    pub fn cake_candle_state(
+        &self,
+        state: BlockStateId,
+        item: Option<&str>,
+    ) -> Option<BlockStateId> {
+        if !self.data(state).chain.contains(&Class::Cake)
+            || self.table.int(state, self.props.bites) != 0
+        {
+            return None;
+        }
+        // Every candle item is `[color_]candle` and its candle cake `[color_]candle_cake`.
+        let candle = item?.strip_suffix("candle")?;
+        let id = self.table.block_by_name(&format!("{candle}candle_cake"))?;
+        Some(self.default_of(id))
     }
 
     /// `CopperGolemStatueBlock.useItemOn` (and its weathering subclass's): anything but an axe

@@ -303,6 +303,7 @@ impl Game<'_> {
             || before(self.cushion_hit().map(|h| h.1))
             || before(self.boat_hit().map(|h| h.1))
             || before(self.cart_hit().map(|h| h.1))
+            || before(self.interaction_hit().map(|h| h.1))
             || before(self.dragon_hit().map(|h| h.1))
             || before(self.mob_hit().map(|h| h.1))
             || before(self.guest_hit().map(|h| h.1))
@@ -367,6 +368,7 @@ impl Game<'_> {
             rest: format!("{} {} {:?}", s.count, s.damage, s.extra),
         })) {
             self.attack_ticks = 0;
+            self.apply_equipment();
         }
         self.attack_item = main.as_ref().map(|s| s.item.clone());
         let next = [(self.selected, main), (OFFHAND, self.offhand.clone())];

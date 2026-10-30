@@ -302,6 +302,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER):
             // `isOnStillTimeout` on a client, which keeps the ghast solid to
             // the player (`canBeCollidedWith`).
+            // HappyGhast.IS_LEASH_HOLDER: RopesLayer draws the ropes while set.
+            (Species::HappyGhast, 18, Value::Bool(holder)) => {
+                m.extra.scratch[1] = i32::from(*holder)
+            }
             (Species::HappyGhast, 19, Value::Bool(still)) => m.extra.counter = i32::from(*still),
             // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
             (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {

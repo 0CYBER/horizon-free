@@ -57,9 +57,17 @@ breaking and placing, item use: #4483, #4302), the SMP uses theirs.
 
 ## Mojang's rules
 
-The currency is earned in game only (the market, trades, playing): it can't be bought with real money and can't be
-cashed out, and nothing random is sold for money. Games of chance take and pay only the in-game currency, within
-limits the owner sets. Operators' corrections (`/eco`) are logged like every other transaction.
+The currency is earned in game only (the market, trades, playing). Rules that no setting changes:
+
+- **in-game currency only**: games of chance take and pay only the SMP's currency, within limits the owner sets;
+- **never bought with real money**: no store, rank or perk sells the currency, a stake or a ticket;
+- **never cashed out**: nothing turns the currency or winnings into money or anything outside the game;
+- **no paid random items**: nothing random (crates, keys, loot boxes) is sold, for money or for the currency bought
+  with money.
+
+Games of chance are off in the mod by default (`gambling.enabled: false`): a server that builds the mod turns them
+on itself. The official server has them on (Ludovic's decision, 2026-10-30). Operators' corrections (`/eco`) are
+logged like every other transaction.
 
 ## Commands
 
@@ -73,7 +81,7 @@ Player commands work for every player; operator commands need the permission lev
 | `/eco give\|take\|set <player> <amount>` (level 3) | operator corrections, logged |
 | `/sell hand [count]\|all\|<item> [count]`, `/buy <item> [count]`, `/worth [item]` | the server market, at the configured prices; plain items only, in survival and adventure |
 | `/trade <player>`, `/trade accept\|deny\|cancel`, `/trade money <amount>` | a two-sided trade window |
-| `/coinflip <amount>`, `/coinflip accept\|deny <player>` | a 50/50 bet between two players, the money held until it is decided |
+| `/coinflip <amount> [player]`, `/coinflip accept <player>`, `/coinflip cancel\|list` | a 50/50 bet between two players, both stakes held until it is decided |
 | `/lottery [buy <tickets>]` | tickets for the next draw; the pot goes to one ticket drawn at random |
 | `/spawn`, `/setspawn` (level 2) | the server's spawn |
 | `/sethome [name]`, `/home [name]`, `/delhome <name>`, `/homes` | up to `homes.max` homes |
@@ -133,7 +141,11 @@ never half of one. `audit.log` is appended before the balances change.
 ```
 
 In the market, `sell` is what the server pays for one item and `buy` what it asks; 0 closes that side. The later
-phases add their sections (`teleport`, `homes`, `claims`, `spawn`, `gambling` with `enabled: false`, `rules`).
+phases add their sections (`teleport`, `homes`, `claims`, `spawn`, `rules`). `gambling` holds `enabled` (false),
+`min_bet` (10), `max_bet` (1000), `cooldown_seconds` (30), `offer_seconds` (60) and `fee_percent` (0). A coinflip's
+stakes are held in `economy.json` itself (`held`), so one atomic write covers balances and stakes; an offer that
+ends, expires or whose player leaves gives its stake back, and so does the next start for one the server stopped
+with. The coin is a fresh random key from the system, never the world's random.
 
 ## Building the official server's engine
 

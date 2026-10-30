@@ -7,7 +7,7 @@ RETURN, MODIFY_ARG, OVERWRITE...; the tool's README lists them). A port such as 
 one module. Start a mod from [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template).
 
 Native mods are native code with the player's rights, not sandboxed. The launcher turns them on only when the player
-installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review; and
+installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review (its later releases are checked by machine); and
 they play in a game of their own, built for the instance they are installed in.
 
 ## Pinned to a Nightly
@@ -73,10 +73,35 @@ block once the block let it through (`ItemStack.useOn`), and `native_use_item` h
 after `native_use_item_on` let it through (`Item.use`). Each hears a click once. A mod that claims one swings the hand
 instead of the item's use. Bundles that use them need `"hooks": 13`.
 
-API 14 adds the player-health HUD rows through `native_health_hud`: every frame the HUD draws them, the
+API 14 adds breaking and placing a block, on the server for every player: `native_destroy_block` hears a player break a
+block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may cancel it, which keeps the block and its
+drops; `native_place_block` hears a block placed from an item (`BlockItem.place`). To stop a placement, a mod claims
+`native_use_item_on`, which runs before it. Bundles that use them need `"hooks": 14`.
+
+API 15 adds block entities for a mod's blocks (`native_block_entity`, `native_block_entity_ticks`,
+`native_block_entity_tick`): made when the block is placed, ticked on the server and saved with the chunk. Bundles that use them need `"hooks": 15`.
+
+API 16 adds item slots for those block entities (`native_block_entity_container`): hoppers, comparators and breaking the
+block use them as they use vanilla's containers, and `native_block_entity_tick` also gets the slots. Bundles that use them need `"hooks": 16`.
+
+API 17 adds menus for mod containers: the container names one of vanilla's slot-grid or furnace menus, which opens when the block is used,
+and `native_block_entity_tick` takes the whole block entity, with the data slots the menu shows. Bundles that use them need `"hooks": 17`.
+
+API 18 adds what a machine's tick reaches: `native_with_mod_block_entity` (change a neighbouring mod block entity, which marks its chunk
+and tells comparators when its items changed) and `native_set_block_property` (a property of the block's own state, through the level's
+normal update path). Bundles that use them need `"hooks": 18`.
+
+API 19 adds screens a mod draws for its blocks' menus: `native_screen` lays one out (its height, where each container slot is,
+where the inventory starts; a slot it leaves out is not in the menu, so shift-clicks skip it) and `native_screen_draw` draws it with the mod's
+own GUI textures (`assets/<namespace>/textures/gui`, drawn with `native_sprite`). Bundles that use them need `"hooks": 19`.
+
+API 20 adds buttons, tooltips and item icons on mod screens: `native_screen_click` and `native_screen_tooltip` (the client), `native_menu_button`
+(a button press on the server, on the mod block entity) and the helpers `native_item`, `native_screen_title`, `native_data`, `native_block`,
+`native_block_property`, `native_insert_item` and `native_cursor`. Bundles that use them need `"hooks": 20`.
+API 21 adds the player-health HUD rows through `native_health_hud`: every frame the HUD draws them, the
 hook hears the layout's inputs (`HealthInputs`) and the screen's GUI size, and a mod that answers with
 draws replaces all the rows — armour, hearts, food, air and the heights above the hotbar — for that
-frame. Nothing answered draws Horizon's own. Bundles that use it need `"hooks": 14`.
+frame. Nothing answered draws Horizon's own. Bundles that use it need `"hooks": 21`.
 
 ## What the launcher does
 
@@ -193,9 +218,12 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
   versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
   Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
-  has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
+  has read the source and the repository they come from. Its entry names the GitHub repository (`repo`); each
+  release of it with a `.hnmod` asset is a version once the bundle passes the registry's checks, with no further
+  review (nothing is built or run by the registry; the player's launcher builds it behind its warning). The `.hnmod` contains `.rs` and `.toml` files and may contain data files under
   `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
-  The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  The file is pinned by SHA-256 like every registry file, and the version, game and pins are the bundle's own
+  `horizon-native.json`. `revoked.toml` takes a bad release down.
   A content mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod`; removing the mod removes both.

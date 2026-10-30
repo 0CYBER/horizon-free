@@ -5,6 +5,7 @@ use super::{
     menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
 };
 use crate::{containers::BlockEntity, items::ItemStack, world::World};
+use horizon_core::random::RandomSource;
 use horizon_protocol::{
     item::Hashed,
     packets::play::{self, Clientbound as C},
@@ -69,7 +70,9 @@ impl Hub {
         source: i32,
         except: Option<u32>,
     ) {
-        let packet = self.sound_packet(name, at, volume, pitch, source, self.ticks as i64);
+        // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
+        let seed = next_sound_seed(&mut *self.sound_seeds.lock().unwrap());
+        let packet = self.sound_packet(name, at, volume, pitch, source, seed);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
 
@@ -241,8 +244,22 @@ impl Hub {
             sent: Vec::new(),
             drag: None,
             sent_data: Vec::new(),
+            hidden: Vec::new(),
         });
         self.send_menu_content(i, items);
+    }
+
+    /// The open menu of `conn` has no `hidden` container slots: a mod's screen
+    /// does not show them, so a click or a shift-click never reaches them.
+    pub fn hide_menu_slots(&mut self, conn: u32, hidden: Vec<usize>) {
+        if let Some(m) = self
+            .guests
+            .iter_mut()
+            .find(|g| g.conn == conn)
+            .and_then(|g| g.menu.as_mut())
+        {
+            m.hidden = hidden;
+        }
     }
 
     /// Opens a native mod's menu of `rows` rows (1 to 6, a chest's
@@ -285,6 +302,7 @@ impl Hub {
             sent: Vec::new(),
             drag: None,
             sent_data: Vec::new(),
+            hidden: Vec::new(),
         });
         self.send_menu_content(i, items);
         Some(window)
@@ -507,6 +525,11 @@ impl Hub {
         } else {
             self.guests[i].drag.take()
         };
+        let hidden = self.guests[i]
+            .menu
+            .as_ref()
+            .filter(|_| in_menu)
+            .map_or_else(Vec::new, |m| m.hidden.clone());
         let guest = &mut self.guests[i];
         let mut items = source.and_then(|s| s.read(world, guest));
         if in_menu && items.is_none() {
@@ -516,6 +539,7 @@ impl Hub {
             guest,
             container: items.as_deref_mut(),
             shulker,
+            hidden: &hidden,
         };
         let (drops, changed) = menu::click(
             &mut view,
@@ -738,6 +762,8 @@ impl Hub {
                 .chain([&c.triggered])
                 .map(|&d| i32::from(d))
                 .collect(),
+            // A mod's menu: the data slots its tick set.
+            Some(BlockEntity::Mod(m)) if !m.data.is_empty() => m.data.clone(),
             _ => return,
         }
         .into_iter()
@@ -813,4 +839,32 @@ impl Hub {
 /// Inventory index of the n-th player slot of a container menu (27 main, then the hotbar).
 fn player_slot(n: usize) -> usize {
     if n < 27 { 9 + n } else { n - 27 }
+}
+
+/// `Level.soundSeedGenerator.nextLong` for `ClientboundSoundPacket.seed`.
+fn next_sound_seed(g: &mut impl RandomSource) -> i64 {
+    g.next_long()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_sound_seed;
+    use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn two_sounds_in_one_tick_get_different_seeds() {
+        let mut g = LegacyRandom::new(0);
+        let a = next_sound_seed(&mut g);
+        let b = next_sound_seed(&mut g);
+        assert_ne!(a, b);
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+    }
+
+    #[test]
+    fn the_tick_is_not_the_sound_seed() {
+        let ticks = 12i64;
+        let mut g = LegacyRandom::new(0);
+        assert_ne!(next_sound_seed(&mut g), ticks);
+    }
 }

@@ -106,20 +106,11 @@ impl Session {
         address: &str,
         name: &str,
         auth: Option<Arc<AuthSession>>,
-        view_distance: i8,
+        info: cfg::ClientInformation,
         lang: Arc<Language>,
         resources: PathBuf,
     ) -> Self {
-        Self::start(
-            address,
-            name,
-            auth,
-            view_distance,
-            lang,
-            None,
-            None,
-            resources,
-        )
+        Self::start(address, name, auth, info, lang, None, None, resources)
     }
     /// `ConnectScreen.startConnecting` for a `transfer`: the cookies the
     /// server stored carry to the new connection (`TransferState`).
@@ -127,7 +118,7 @@ impl Session {
         address: &str,
         name: &str,
         auth: Option<Arc<AuthSession>>,
-        view_distance: i8,
+        info: cfg::ClientInformation,
         lang: Arc<Language>,
         cookies: Cookies,
         resources: PathBuf,
@@ -136,7 +127,7 @@ impl Session {
             address,
             name,
             auth,
-            view_distance,
+            info,
             lang,
             None,
             Some(cookies),
@@ -147,26 +138,17 @@ impl Session {
     pub fn connect_local(
         pipe: horizon_protocol::connection::Pipe,
         name: &str,
-        view_distance: i8,
+        info: cfg::ClientInformation,
         lang: Arc<Language>,
         resources: PathBuf,
     ) -> Self {
-        Self::start(
-            "local",
-            name,
-            None,
-            view_distance,
-            lang,
-            Some(pipe),
-            None,
-            resources,
-        )
+        Self::start("local", name, None, info, lang, Some(pipe), None, resources)
     }
     fn start(
         address: &str,
         name: &str,
         auth: Option<Arc<AuthSession>>,
-        view_distance: i8,
+        info: cfg::ClientInformation,
         lang: Arc<Language>,
         local: Option<horizon_protocol::connection::Pipe>,
         cookies: Option<Cookies>,
@@ -192,7 +174,7 @@ impl Session {
                     &address_owned,
                     &name_owned,
                     auth.as_deref(),
-                    view_distance,
+                    info,
                     &lang,
                     &send,
                     &thread_writer,
@@ -445,7 +427,7 @@ fn run(
     address: &str,
     name: &str,
     auth: Option<&AuthSession>,
-    view_distance: i8,
+    info: cfg::ClientInformation,
     lang: &Language,
     send: &Sender<Event>,
     shared_writer: &Mutex<Option<ConnWriter>>,
@@ -569,10 +551,8 @@ fn run(
         }
     };
     status(send, "Joining world...");
-    c.send(
-        &cfg::Serverbound::ClientInformation(cfg::ClientInformation::new(view_distance)).encode(),
-    )
-    .map_err(e)?;
+    c.send(&cfg::Serverbound::ClientInformation(info).encode())
+        .map_err(e)?;
     c.send(
         &cfg::Serverbound::CustomPayload(cfg::CustomPayload {
             channel: "minecraft:brand".into(),

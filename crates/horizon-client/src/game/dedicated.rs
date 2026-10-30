@@ -165,6 +165,29 @@ pub(super) fn player_joined(id: u128, name: &str) {
     }
 }
 
+/// `server.toml`'s `[anticheat]`, beside server.properties when horizon-server runs the game; off
+/// without the file or the section, or (with an error logged) when the section is wrong.
+fn load_anticheat() -> horizon_anticheat::Config {
+    let Ok(text) = std::fs::read_to_string("server.toml") else {
+        return Default::default();
+    };
+    match horizon_anticheat::Config::from_server_toml(&text) {
+        Ok(config) => {
+            if config.enabled {
+                log("INFO", "Anticheat on (server.toml [anticheat])");
+            }
+            config
+        }
+        Err(e) => {
+            log(
+                "ERROR",
+                &format!("server.toml: {e}; the anticheat stays off"),
+            );
+            Default::default()
+        }
+    }
+}
+
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
     log_from("Server thread", level, message);
@@ -701,6 +724,13 @@ impl Game<'_> {
             gate_lists.lock().unwrap().can_login(address, &user)
         });
         let bypass_lists = lists.clone();
+        // DedicatedServer's constructor: `enable-code-of-conduct` reads the
+        // `codeofconduct` folder, and a folder it can't read stops the start.
+        let code_of_conducts = if props.code_of_conduct {
+            horizon_client::lan::code_of_conduct::read(std::path::Path::new("codeofconduct"))?
+        } else {
+            Vec::new()
+        };
         let favicon = std::fs::read("server-icon.png")
             .ok()
             .filter(|b| png_size(b) == Some((64, 64)));
@@ -737,6 +767,7 @@ impl Game<'_> {
                 log_ips: props.log_ips,
             }),
             resource_pack: props.resource_pack.clone(),
+            code_of_conducts,
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
             levels: self.level_shapes,
@@ -758,8 +789,10 @@ impl Game<'_> {
                 );
                 Vec::new()
             },
+            owner_profile: None,
         };
         let config = HubConfig {
+            allow_flight: props.allow_flight,
             default_game_mode: game_mode,
             guest_commands: true,
             force_game_mode: props.force_game_mode,
@@ -785,7 +818,9 @@ impl Game<'_> {
             return Ok(());
         }
         self.sync_ops(&lists);
+        let anticheat = load_anticheat();
         if let Some(host) = self.lan.as_mut() {
+            host.hub.set_anticheat(anticheat);
             host.hub.spawn_protection = props.spawn_protection;
             host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
             host.hub.command_spam_threshold = props.command_spam_threshold_seconds.wrapping_mul(20);

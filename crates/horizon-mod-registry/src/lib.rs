@@ -494,7 +494,13 @@ pub struct Form {
     #[serde(default)]
     pub authors: Vec<String>,
     pub license: String,
+    /// The code's address (a file upload's); a repository listing's is the repository.
+    #[serde(default)]
     pub source: String,
+    /// `owner/name` on GitHub: lists the project by its repository, whose releases are its
+    /// versions. No file is sent.
+    #[serde(default)]
+    pub repo: Option<String>,
     /// `https://` only; an icon in the repository is a pull request by hand.
     #[serde(default)]
     pub icon: Option<String>,
@@ -504,7 +510,9 @@ pub struct Form {
     /// The `.minisig` text.
     #[serde(default)]
     pub signature: Option<String>,
+    #[serde(default)]
     pub version: String,
+    #[serde(default)]
     pub game: String,
     #[serde(default)]
     pub changelog: String,
@@ -637,8 +645,9 @@ async fn submit(
     let result = match result {
         Ok((form, file)) => {
             let inner = inner.clone();
-            tokio::task::spawn_blocking(move || {
-                publish(&inner.config, &login, user_id, &form, &file)
+            tokio::task::spawn_blocking(move || match &file {
+                Some(file) => publish(&inner.config, &login, user_id, &form, file),
+                None => list(&inner.config, &login, user_id, &form),
             })
             .await
             .unwrap_or_else(|_| {
@@ -655,7 +664,10 @@ async fn submit(
 }
 
 /// Reads the form's two parts: `entry` (JSON) and `file`, streamed to `dir`.
-async fn receive(multipart: &mut Multipart, dir: &Path) -> Result<(Form, PathBuf), Refusal> {
+async fn receive(
+    multipart: &mut Multipart,
+    dir: &Path,
+) -> Result<(Form, Option<PathBuf>), Refusal> {
     use tokio::io::AsyncWriteExt;
     let (mut form, mut file) = (None, None);
     while let Some(mut field) = multipart.next_field().await.map_err(torn)? {
@@ -689,7 +701,11 @@ async fn receive(multipart: &mut Multipart, dir: &Path) -> Result<(Form, PathBuf
         }
     }
     match (form, file) {
-        (Some(form), Some(file)) => Ok((form, file)),
+        (Some(form), None) if form.repo.is_some() => Ok((form, None)),
+        (Some(form), Some(_)) if form.repo.is_some() => Err(bad(
+            "a project listed by its repository sends no file: publish a GitHub release in it",
+        )),
+        (Some(form), Some(file)) => Ok((form, Some(file))),
         _ => Err(bad("send the page and the file")),
     }
 }
@@ -798,6 +814,7 @@ pub fn publish(
         None => (
             Entry {
                 id: form.id.clone(),
+                repo: None,
                 kind: kind.clone(),
                 name: form.name.trim().to_owned(),
                 summary: form.summary.trim().to_owned(),
@@ -820,6 +837,15 @@ pub fn publish(
                         "{} is {}'s: only its owners publish its updates",
                         form.id,
                         entry.owners.join(", ")
+                    ),
+                ));
+            }
+            if let Some(repo) = &entry.repo {
+                return Err(Refusal::new(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "{} is listed by its repository: publish a GitHub release in https://github.com/{repo} and it shows up within the hour",
+                        form.id
                     ),
                 ));
             }
@@ -982,6 +1008,109 @@ pub fn publish(
             eprintln!("labelling {url}: {} {}", e.status, e.message);
         }
     }
+    Ok(url)
+}
+
+/// A new project listed by its repository: the entry (a link and a page) on a new branch and a
+/// pull request opened. Its versions are the repository's GitHub releases, read by the registry
+/// without a pull request (docs/api/mod-index.md); a reviewer reads the repository now, once.
+pub fn list(config: &Config, login: &str, user_id: u64, form: &Form) -> Result<String, Refusal> {
+    let gh = &config.github;
+    let kind = Kind::from(form.kind.clone());
+    let repo = form.repo.as_deref().unwrap_or("").trim().to_owned();
+    if form
+        .icon
+        .as_ref()
+        .is_some_and(|i| !i.starts_with("https://"))
+    {
+        return Err(bad("the icon must be an https:// address"));
+    }
+    let entry = Entry {
+        id: form.id.clone(),
+        kind: kind.clone(),
+        repo: Some(repo.clone()),
+        name: form.name.trim().to_owned(),
+        summary: form.summary.trim().to_owned(),
+        description: form.description.clone(),
+        authors: form.authors.clone(),
+        owners: vec![login.to_owned()],
+        license: form.license.trim().to_owned(),
+        source: String::new(),
+        icon: form.icon.clone(),
+        key: form.key.clone().filter(|k| !k.trim().is_empty()),
+        versions: Vec::new(),
+    };
+    // The form asks for the page; the repository's horizon-registry.toml may change it later.
+    let problems = entry.resolved(&registry::Page::default()).check_fields();
+    if !problems.is_empty() {
+        return Err(bad(problems.join("; ")));
+    }
+    let Some(info) = gh.repository(&repo).map_err(github_down)? else {
+        return Err(bad(format!(
+            "https://github.com/{repo} was not found, or is private"
+        )));
+    };
+    if gh.entry(&form.id).map_err(github_down)?.is_some() {
+        return Err(Refusal::new(
+            StatusCode::CONFLICT,
+            format!(
+                "{} is already listed: publish a GitHub release in its repository",
+                form.id
+            ),
+        ));
+    }
+    let text = entry.to_toml().map_err(bad)?;
+    let branch = format!("list/{}", form.id);
+    if !gh.branch(&branch).map_err(github_down)? {
+        return Err(Refusal::new(
+            StatusCode::CONFLICT,
+            format!(
+                "{} was already submitted: its pull request is open",
+                form.id
+            ),
+        ));
+    }
+    let message = format!(
+        "List {}\n\nSubmitted by @{login} through the form.\n\nCo-authored-by: {login} <{user_id}+{login}@users.noreply.github.com>",
+        form.id
+    );
+    gh.put(
+        &format!("mods/{}.toml", form.id),
+        &text,
+        &branch,
+        None,
+        &message,
+    )
+    .map_err(github_down)?;
+    let owner = info["owner"]["login"].as_str().unwrap_or("?");
+    let body = format!(
+        "<!-- submitted-by: {login} -->\n🤖 Submitted through [{site}]({public}/mods/submit) by @{login}. The form opens the pull request with \
+         the registry's token: neither Ludovic nor a reviewer wrote it.\n\n\
+         | | |\n|---|---|\n| Project | `{id}` ({kind}, new) |\n| Repository | https://github.com/{repo} (owned by `{owner}`: {same}) |\n| Signed | {signed} |\n\n\
+         **Reviewers: this is the only review.** Releases published in that repository later are listed after the registry's automatic checks, with no pull request. \
+         Read the repository and its source, check that the submitter is allowed to speak for it, and that the page is accurate. \
+         The checks below trial the repository's existing releases.",
+        public = config.public_url,
+        site = config
+            .public_url
+            .split_once("://")
+            .map_or(config.public_url.as_str(), |(_, host)| host),
+        id = form.id,
+        kind = kind.name(),
+        same = if owner.eq_ignore_ascii_case(login) {
+            "the submitter"
+        } else {
+            "NOT the submitter: check they act for it"
+        },
+        signed = if entry.key.is_some() {
+            "releases must be signed with the key"
+        } else {
+            "no key: releases are unsigned"
+        },
+    );
+    let (url, _) = gh
+        .pull(&format!("List {}", form.id), &branch, &body)
+        .map_err(github_down)?;
     Ok(url)
 }
 

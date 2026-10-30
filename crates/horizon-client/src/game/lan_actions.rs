@@ -300,10 +300,14 @@ impl Game<'_> {
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
             // The first body after joining burns, breathes and falls on as saved.
-            if let Some(saved) = host.hub.guests[i].loaded_body.take()
-                && let Some(m) = host.hub.guests[i].motion.as_mut()
+            let g = &mut host.hub.guests[i];
+            if let Some(saved) = g.loaded_body.take()
+                && let Some(m) = g.motion.as_mut()
             {
                 saved.apply(m);
+                // LivingEntity.readAdditionalSaveData: the saved attributes.
+                let _ =
+                    m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
             }
             // The saved golden hearts go on the first body of a player who
             // has been here before.
@@ -928,6 +932,8 @@ impl Game<'_> {
                 Slots::Double(other, pos)
             };
             ("minecraft:generic_9x6", halves)
+        } else if let Some(menu) = self.mod_menu_at(pos) {
+            (menu, Slots::Block(pos))
         } else {
             let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
                 return false;
@@ -949,10 +955,16 @@ impl Game<'_> {
                 horizon_client::containers::double_chest_name(custom(first), custom(second))
             }
             Slots::Block(k) => {
-                let Some(key) = horizon_client::containers::default_name_key(name) else {
-                    return false;
+                // A mod block's container is named after its block
+                // (`Block.getDescriptionId`).
+                let key = match horizon_client::containers::default_name_key(name) {
+                    Some(key) => key.to_owned(),
+                    None if self.mod_menu_at(k).is_some() => {
+                        format!("block.{}", name.replace(':', "."))
+                    }
+                    None => return false,
                 };
-                horizon_client::containers::display_name(custom(k), key)
+                horizon_client::containers::display_name(custom(k), &key)
             }
             // Opened by a mod (`native_open_menu`), never here.
             Slots::Native => return false,
@@ -973,8 +985,12 @@ impl Game<'_> {
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
+        let hidden = self.native_hidden_slots(pos, items.len());
         host.hub
             .open_container(conn, menu, title, pos, slots, items);
+        if !hidden.is_empty() {
+            host.hub.hide_menu_slots(conn, hidden);
+        }
         true
     }
 
@@ -1068,6 +1084,44 @@ impl Game<'_> {
                 "{}, {}, {}",
                 pos[0], pos[1], pos[2]
             ))],
+        )
+        .with_color(horizon_client::text::RED);
+        host.hub.send_to(
+            conn,
+            &C::SystemChat(play::SystemChat {
+                content: horizon_client::lan::data::component_nbt(&message.component()),
+                overlay: true,
+            }),
+        );
+    }
+
+    /// `ServerGamePacketListenerImpl.wasBlockPlacementAttempt`: a block item,
+    /// or a bucket with something in it, that is not cooling down.
+    fn was_block_placement_attempt(&mut self, hand: Hand) -> bool {
+        let Some(stack) = self.with_hand(hand, |g| g.held().cloned()) else {
+            return false;
+        };
+        let Some(info) = self.items().get(&stack.item).cloned() else {
+            return false;
+        };
+        (info.block.is_some() || horizon_client::items::bucket_contents(&stack.item).is_some())
+            && !self
+                .cooldowns
+                .is_on_cooldown(&horizon_client::cooldowns::group(
+                    &stack,
+                    info.use_cooldown.as_ref(),
+                ))
+    }
+
+    /// `ServerPlayer.sendBuildLimitMessage`: the red overlay with the limit.
+    fn build_limit_message(&self, host: &LanHost, conn: u32, too_high: bool, limit: i32) {
+        let message = horizon_client::text::Text::translate(
+            if too_high {
+                "build.tooHigh"
+            } else {
+                "build.tooLow"
+            },
+            &[horizon_client::text::Text::literal(limit.to_string())],
         )
         .with_color(horizon_client::text::RED);
         host.hub.send_to(
@@ -1293,10 +1347,21 @@ impl Game<'_> {
                     ],
                 };
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
-                // handleUseItemOn: under spawn protection nothing is used or
-                // placed; the player is told and the blocks below go back.
-                // mayInteract: nothing is used on a block outside the world
-                // border either.
+                // handleUseItemOn: above or below the world nothing is used and
+                // the player is told the limit (the blocks are not resent);
+                // under spawn protection nothing is used or placed; the player
+                // is told and the blocks below go back. mayInteract: nothing is
+                // used on a block outside the world border either.
+                let min_y = self.world.shape.min_y;
+                let max_y = self.world.shape.max_y() - 1;
+                if p.pos[1] > max_y {
+                    self.build_limit_message(host, conn, true, max_y);
+                    return;
+                }
+                if p.pos[1] < min_y {
+                    self.build_limit_message(host, conn, false, min_y);
+                    return;
+                }
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
                 } else if self
@@ -1305,17 +1370,33 @@ impl Game<'_> {
                 {
                     let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
                     let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
-                    let swung = self.as_guest(host, conn, |g| {
+                    let used = self.as_guest(host, conn, |g| {
+                        let attempt = g.was_block_placement_attempt(hand);
                         g.forced_hit = Some(hit);
                         g.guest_use = Some(GuestUse::OnBlock(hand));
                         let swings = g.swings_started;
-                        let _ = g.use_item();
+                        let consumed = matches!(g.use_item(), Ok(Some(_)));
                         g.forced_hit = None;
                         g.guest_use = None;
-                        g.swings_started != swings
+                        (g.swings_started != swings, consumed, attempt)
                     });
+                    let swung = used.map(|u| u.0);
                     self.lan_swing_back(host, conn, swung);
                     self.guest_use_sounds(host, conn, logged, heard);
+                    // A placement that did nothing at the top or bottom of the
+                    // world says why. Vanilla asks twice for the top (once
+                    // before the swing, once in the check that also has the
+                    // bottom), so a player there is told twice.
+                    if let Some((_, false, true)) = used {
+                        if p.face == 1 && p.pos[1] >= max_y {
+                            self.build_limit_message(host, conn, true, max_y);
+                            self.build_limit_message(host, conn, true, max_y);
+                        } else if p.face == 0 && p.pos[1] <= min_y {
+                            self.build_limit_message(host, conn, false, min_y);
+                        }
+                    }
+                } else {
+                    self.build_limit_message(host, conn, true, max_y);
                 }
                 // The client predicted a result: correct it with what really is.
                 for pos in [
@@ -2991,7 +3072,13 @@ impl Game<'_> {
         });
         for event in events {
             match event {
-                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.playHurtSound: the server's `Entity.playSound`
+                // reaches every player around but the hurt one, whose own
+                // client plays it from handleDamageEvent (#4149).
+                MotionEvent::HurtSound(sound) => {
+                    let source = horizon_client::settings::sound_source(sound) as i32;
+                    host.hub.sound(sound, at, 1.0, 1.0, source, Some(conn));
+                }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,

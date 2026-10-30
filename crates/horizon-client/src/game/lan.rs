@@ -598,6 +598,11 @@ fn mob_meta(
         // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER),
         // set while `serverStillTimeout > 0` (`syncStayStillFlag`).
         "minecraft:happy_ghast" => {
+            // HappyGhast.IS_LEASH_HOLDER (`setLeashHolder` in `tick`).
+            if horizon_client::mobs::happy_ghast::is_leash_holder(m) {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
             if horizon_client::mobs::happy_ghast::on_still_timeout(m) {
                 meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
             }
@@ -1151,6 +1156,7 @@ impl Game<'_> {
             },
         );
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             guest_commands: settings.guest_commands,
             force_game_mode: settings.force_game_mode,

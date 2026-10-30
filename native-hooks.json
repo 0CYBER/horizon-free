@@ -81,6 +81,51 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
     },
     {
+      "name": "block_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity"
+    },
+    {
+      "name": "block_entity_ticks",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_ticks"
+    },
+    {
+      "name": "block_entity_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_tick"
+    },
+    {
+      "name": "block_entity_container",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"
+    },
+    {
+      "name": "screen",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen"
+    },
+    {
+      "name": "screen_draw",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_draw"
+    },
+    {
+      "name": "screen_click",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_click"
+    },
+    {
+      "name": "screen_tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_tooltip"
+    },
+    {
+      "name": "menu_button",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_button"
+    },
+    {
       "name": "register_commands",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
@@ -114,6 +159,16 @@
       "name": "use_item",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+    },
+    {
+      "name": "destroy_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"
+    },
+    {
+      "name": "place_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
     },
     {
       "name": "health_hud",
