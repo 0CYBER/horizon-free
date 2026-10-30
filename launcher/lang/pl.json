@@ -101,7 +101,6 @@
   "Playing offline": "Gra offline",
   "Online servers need a Microsoft account.": "Serwery online wymagają konta Microsoft.",
   "Accounts…": "Konta…",
-  "The first preparation takes a few minutes.": "Pierwsze przygotowanie zajmuje kilka minut.",
   "Horizon crashed": "Horizon uległ awarii",
   "Open report": "Otwórz raport",
   "Copied": "Skopiowano",
@@ -192,5 +191,12 @@
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Przenieść {name} do kosza razem z jego światami i ustawieniami? Możesz go stamtąd przywrócić.",
   "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Mody natywne kompilują się we własną wersję gry. Zainstalowanie jednego włącza mody natywne: potem budujesz z nim grę w Ustawienia > Mody natywne. Pierwsza kompilacja pobiera Rust i może potrwać od 20 do 30 minut; kolejne są szybsze.",
   "Folder": "Folder",
-  "Version": "Wersja"
+  "Version": "Wersja",
+  "Downloading Minecraft {version} from Mojang · {done} of {total} files": "Pobieranie Minecrafta {version} od Mojang · {done} z {total} plików",
+  "Downloading from Mojang · {done} of {total} files": "Pobieranie od Mojang · {done} z {total} plików",
+  "Getting ready…": "Przygotowywanie…",
+  "about a minute left": "zostało około minuty",
+  "about {n} min left": "zostało około {n} min",
+  "Game files": "Pliki gry",
+  "Sounds": "Dźwięki"
 }

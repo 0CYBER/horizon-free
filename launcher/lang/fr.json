@@ -107,7 +107,6 @@
   "Playing offline": "Jeu hors ligne",
   "Online servers need a Microsoft account.": "Les serveurs en ligne demandent un compte Microsoft.",
   "Accounts…": "Comptes…",
-  "The first preparation takes a few minutes.": "La première préparation prend quelques minutes.",
   "Horizon crashed": "Horizon a planté",
   "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing.": "Pour le signaler sur Discord, joignez le rapport de plantage (ou collez-le avec Copier le rapport) et dites ce que vous faisiez.",
   "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing.": "Le jeu s'est arrêté sans rapport de plantage. Pour le signaler sur Discord, joignez latest.log du dossier des journaux et dites ce que vous faisiez.",
@@ -192,5 +191,12 @@
   "Move to Trash": "Mettre à la corbeille",
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer.",
   "Folder": "Dossier",
-  "Version": "Version"
+  "Version": "Version",
+  "Downloading Minecraft {version} from Mojang · {done} of {total} files": "Téléchargement de Minecraft {version} depuis Mojang · {done} fichiers sur {total}",
+  "Downloading from Mojang · {done} of {total} files": "Téléchargement depuis Mojang · {done} fichiers sur {total}",
+  "Getting ready…": "Préparation…",
+  "about a minute left": "environ une minute restante",
+  "about {n} min left": "environ {n} min restantes",
+  "Game files": "Fichiers du jeu",
+  "Sounds": "Sons"
 }
