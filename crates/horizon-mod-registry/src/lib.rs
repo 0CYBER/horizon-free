@@ -798,6 +798,7 @@ pub fn publish(
         None => (
             Entry {
                 id: form.id.clone(),
+                repo: None,
                 kind: kind.clone(),
                 name: form.name.trim().to_owned(),
                 summary: form.summary.trim().to_owned(),
