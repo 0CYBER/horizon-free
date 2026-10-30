@@ -186,6 +186,9 @@ pub(super) struct Remote {
     chat_previous: Option<Instant>,
     /// The server's command tree (ClientboundCommandsPacket).
     pub commands: Option<horizon_client::command::Dispatcher>,
+    /// `ClientSuggestionProvider.customCompletionSuggestions`: the extra chat
+    /// completions this server sent (ClientboundCustomChatCompletionsPacket).
+    custom_completions: std::collections::BTreeSet<String>,
     players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
@@ -523,6 +526,7 @@ impl Game<'_> {
             chat_queue: VecDeque::new(),
             chat_previous: None,
             commands: None,
+            custom_completions: Default::default(),
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
@@ -913,6 +917,14 @@ impl Game<'_> {
         )
     }
 
+    /// `ClientSuggestionProvider.customCompletionSuggestions` of the server
+    /// connection (none without one).
+    pub(super) fn remote_custom_completions(&self) -> std::collections::BTreeSet<String> {
+        self.remote
+            .as_ref()
+            .map(|r| r.custom_completions.clone())
+            .unwrap_or_default()
+    }
     /// The names in the server's player list, sorted.
     pub(super) fn remote_online_names(&self) -> Option<Vec<String>> {
         let r = self.remote.as_ref()?;
@@ -1054,14 +1066,18 @@ impl Game<'_> {
                 }
                 Event::Reconfigured(registries) => {
                     // handleConfigurationStart → clearClientLevel, and the next
-                    // ClientPacketListener starts with no players or scoreboard.
+                    // ClientPacketListener starts with no players or scoreboard,
+                    // and its new ClientSuggestionProvider with no custom
+                    // chat completions.
                     self.hud_disconnected();
                     self.score.board = Default::default();
                     if let Some(r) = self.remote.as_mut() {
                         r.players.clear();
                         r.tab_players.clear();
                         r.listed.clear();
+                        r.custom_completions.clear();
                     }
+                    self.ui.registries.custom_completions.clear();
                     self.set_registries(registries);
                 }
                 // handleTransfer: "Cannot transfer to server from
@@ -3089,6 +3105,17 @@ impl Game<'_> {
                 if id == horizon_protocol::ids::play::clientbound::COMMAND_SUGGESTIONS =>
             {
                 self.handle_command_suggestions(&data);
+            }
+            C::CustomChatCompletions(p) => {
+                // ClientPacketListener.handleCustomChatCompletions.
+                if let Some(r) = self.remote.as_mut() {
+                    horizon_client::command::modify_custom_completions(
+                        &mut r.custom_completions,
+                        horizon_client::command::CustomCompletionAction::from_id(p.action),
+                        &p.entries,
+                    );
+                    self.ui.registries.custom_completions = r.custom_completions.clone();
+                }
             }
             C::Commands(p) => {
                 let tree = horizon_client::command::network::from_packet(
