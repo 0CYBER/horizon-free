@@ -688,7 +688,7 @@ impl Game<'_> {
             // tables' survives_explosion and explosion_decay draw from their
             // random sequence.
             let decay = (interaction == BlockInteraction::DestroyWithDecay).then_some(radius);
-            let drops = self.res.items().block_drops_exploded(
+            let drops = world_items!(self).block_drops_exploded(
                 self.pack.assets.registry,
                 state,
                 None,

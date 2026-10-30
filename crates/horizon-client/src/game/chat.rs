@@ -1035,7 +1035,7 @@ impl Game<'_> {
                 .hover_item
                 .as_deref()
                 .and_then(horizon_client::item_data::stack_from_hover)
-                .filter(|s| self.res.items().get(&s.item).is_some())
+                .filter(|s| self.items().get(&s.item).is_some())
             {
                 self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
             }

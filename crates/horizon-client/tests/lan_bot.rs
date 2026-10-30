@@ -224,7 +224,9 @@ impl Server {
 }
 
 fn server(resources: &Path) -> Server {
-    let sync = Arc::new(SyncData::load(resources).expect("sync data"));
+    let sync = Arc::new(
+        SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+    );
     let lan = Lan::start(sync.clone(), 0, "Test - World".into(), 8).unwrap();
     let biomes: Vec<String> = sync
         .dynamic
@@ -485,7 +487,9 @@ fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
     let Some(resources) = resources() else {
         return;
     };
-    let sync = Arc::new(SyncData::load(&resources).expect("sync data"));
+    let sync = Arc::new(
+        SyncData::load(&resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+    );
     let net = NetConfig {
         online: Some(Arc::new(OnlineMode::generate(false).unwrap())),
         announce: false,

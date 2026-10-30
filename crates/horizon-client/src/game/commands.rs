@@ -1137,7 +1137,7 @@ impl Game<'_> {
         };
         let count = Self::int(ctx, "count").unwrap_or(1);
         let targets = self.entities(ctx, "targets", true)?;
-        let max_stack = self.res.items().get(&id).map_or(64, |i| i.max_stack) as i32;
+        let max_stack = self.items().get(&id).map_or(64, |i| i.max_stack) as i32;
         if count > max_stack * 100 {
             return Err(CommandError::new(Text::translate(
                 "commands.give.failed.toomanyitems",
@@ -1946,7 +1946,7 @@ impl Game<'_> {
                 .items()
                 .block_tags
                 .get(tag)
-                .or_else(|| self.res.items().block_tags.get(&b.id))
+                .or_else(|| self.items().block_tags.get(&b.id))
                 .is_some_and(|set| {
                     set.contains(&s.name) || set.contains(s.name.trim_start_matches("minecraft:"))
                 })
@@ -2137,7 +2137,7 @@ impl Game<'_> {
         let table = save::text(tag.get("LootTable"));
         let rolled = match (table, entity) {
             (Some(table), BlockEntity::Chest(slots)) if slots.iter().all(Option::is_none) => {
-                let loot = structure_blocks::loot_data(&self.options.resources);
+                let loot = structure_blocks::loot_data(&self.options.resources, &self.pack_files());
                 let at = Vec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
                 let biome = self.biome_name_at(at).unwrap_or_default();
                 Some(structure_blocks::roll_container(
@@ -2735,7 +2735,7 @@ impl Game<'_> {
                 .items()
                 .item_tags
                 .get(tag)
-                .or_else(|| self.res.items().item_tags.get(&predicate.id))
+                .or_else(|| self.items().item_tags.get(&predicate.id))
                 .is_some_and(|s| {
                     s.contains(item) || s.contains(item.trim_start_matches("minecraft:"))
                 });

@@ -410,7 +410,9 @@ impl MobTypes {
         let types: Value = serde_json::from_slice(&bytes)?;
         let exact = exact_attributes(&bytes);
         let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
-        let item_tags = crate::items::load_tags(root, "item").unwrap_or_default();
+        let item_tags =
+            crate::items::load_tags(root, "item", &horizon_world::loot::PackOverlay::NONE)
+                .unwrap_or_default();
         sulfur_cube::load_archetype_items(&item_tags);
         let tag = |name: &str| -> Arc<[String]> {
             let mut v: Vec<String> = item_tags

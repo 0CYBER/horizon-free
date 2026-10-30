@@ -22,7 +22,7 @@ impl Game<'_> {
     }
     /// The item's `compostable` layers provider.
     fn compostable(&self, stack: &ItemStack) -> Option<serde_json::Value> {
-        self.res.items().get(&stack.item)?.compostable.clone()
+        self.items().get(&stack.item)?.compostable.clone()
     }
     /// `ComposterBlock.addLayer` and level event 1500: the provider is
     /// evaluated in the composter's block-interaction loot context (its

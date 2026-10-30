@@ -13,6 +13,7 @@ use horizon_core::{
 };
 use horizon_world::{
     heightmap::HeightmapType,
+    loot::PackOverlay,
     nbt::Tag,
     registry::BlockRegistry,
     worldgen::{
@@ -202,7 +203,9 @@ impl VanillaTerrain {
                 );
             }
         }
-        let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
+        let loot = dir
+            .parent()
+            .and_then(|root| crate::structure_blocks::loot_data(root, &PackOverlay::NONE));
         if let Some(root) = dir.parent() {
             crate::mobs::trial_spawner::load_registry(root);
         }

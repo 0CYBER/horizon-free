@@ -253,6 +253,7 @@ impl RenderAssets {
 #[cfg(test)]
 mod tests {
     use crate::items::ConsumeEffect;
+    use horizon_world::loot::PackOverlay;
 
     #[test]
     fn always_edible_and_consume_effects_loaded() {
@@ -263,7 +264,8 @@ mod tests {
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
-        let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
+        let items =
+            crate::items::Items::load(&root, assets.registry, &facts, &PackOverlay::NONE).unwrap();
 
         let apple = items.get("minecraft:golden_apple").expect("golden apple");
         assert!(apple.can_always_eat);

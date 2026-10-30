@@ -60,7 +60,7 @@ impl Game<'_> {
             })
     }
     fn piglin_max_stack(&self, item: &str) -> u32 {
-        self.res.items().get(item).map_or(64, |i| i.max_stack)
+        self.items().get(item).map_or(64, |i| i.max_stack)
     }
     /// `PiglinAi.wantsToPickup` (an adult that is not hurt-shy), without
     /// the baby rule, which babies skip entirely here.
@@ -313,7 +313,7 @@ impl Game<'_> {
         let m = &self.mobs[i];
         let from = [m.position.x, m.position.y + 1.3, m.position.z];
         let items = if !m.is_baby() {
-            self.res.items().loot_table(
+            world_items!(self).loot_table(
                 "minecraft:gameplay/piglin_bartering",
                 false,
                 None,

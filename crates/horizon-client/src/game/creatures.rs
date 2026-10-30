@@ -490,7 +490,7 @@ impl Game<'_> {
             raining: weather && rain > 0.2,
             thundering: weather && thunder > 0.9,
             nether: self.dim == Dim::Nether,
-            block_tags: &self.res.items().block_tags,
+            block_tags: &self.items().block_tags,
             biomes: self.res.biomes(),
             mob_griefing: self.ui.rules.bool("mob_griefing"),
             mob_drops: self.ui.rules.bool("mob_drops"),
@@ -499,7 +499,7 @@ impl Game<'_> {
             world_seed: self.level.seed,
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             teams: std::sync::Arc::new(self.mob_teams()),
-            items: Some(self.res.items()),
+            items: Some(self.items()),
             lid_openers: &self.lid_openers,
             // The first player in the level: a server has no player of its own.
             difficulty: self.local_difficulty(
@@ -962,8 +962,10 @@ impl Game<'_> {
     fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
         use horizon_client::mobs::{DamageKind, Who, drops};
         use horizon_world::loot::{LootDamage, LootEntity};
-        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources)
-        else {
+        let Some(loot) = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        ) else {
             return;
         };
         let player = || {
@@ -1123,7 +1125,10 @@ impl Game<'_> {
     fn drop_gift_loot(&mut self, mob: u32, table: &'static str, at: [f64; 3]) {
         use horizon_client::mobs::drops;
         use horizon_world::loot::EntityLootParams;
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         let this = self
             .mobs
             .iter()
@@ -1630,7 +1635,7 @@ impl Game<'_> {
                         self.destroy_particles(pos, old);
                     }
                     if drop {
-                        let drops = self.res.items().block_drops_in(
+                        let drops = world_items!(self).block_drops_in(
                             self.pack.assets.registry,
                             old,
                             None,
@@ -2781,10 +2786,10 @@ impl Game<'_> {
             attacker: (shot.owner == Some(Who::Player)).then_some("minecraft:player"),
             direct_attacker: Some("minecraft:trident"),
             damage_type: Some("minecraft:trident"),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
-        self.res.stations().enchantments.modify_value(
+        world_stations!(self).enchantments.modify_value(
             Some(&trident),
             "minecraft:damage",
             &ctx,
@@ -3897,7 +3902,7 @@ impl Game<'_> {
             Species::Sheep if item == "minecraft:shears" && !m.extra.sheared && !m.is_baby() => {
                 m.extra.sheared = true;
                 let color = horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
-                let stacks = self.res.items().loot_table(
+                let stacks = world_items!(self).loot_table(
                     &format!("minecraft:shearing/sheep/{color}"),
                     false,
                     None,

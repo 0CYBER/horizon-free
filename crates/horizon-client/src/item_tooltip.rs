@@ -878,6 +878,7 @@ pub fn styled_name(stack: &ItemStack, fallback: impl FnOnce() -> String) -> crat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_world::loot::PackOverlay;
     use std::sync::Arc;
 
     #[test]
@@ -1324,7 +1325,7 @@ mod tests {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
-        let items = crate::items::Items::catalog(&root).unwrap();
+        let items = crate::items::Items::catalog(&root, &PackOverlay::NONE).unwrap();
         let enchantments = crate::enchant::Enchantments::load(&root);
         let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
         for (item, expected) in [
