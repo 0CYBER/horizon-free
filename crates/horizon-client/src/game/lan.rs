@@ -1283,14 +1283,52 @@ impl Game<'_> {
     /// Save a guest when they leave or the world closes: an integrated
     /// server's owner with the world (`save_game`), anyone else in their file.
     pub(super) fn save_guest(&mut self, host: &LanHost, guest: &horizon_client::lan::guest::Guest) {
+        // The vehicle the guest rides, for the file that names it.
+        let vehicle = self.root_vehicle_uuid(guest.vehicle);
         if host.owner.as_ref().is_some_and(|o| o.uuid == guest.uuid) {
             if guest.placed {
-                playerdata::store(guest, &mut self.level);
+                playerdata::store(guest, &mut self.level, vehicle);
             }
         } else {
-            playerdata::save(guest, &self.world_root);
+            playerdata::save(guest, &self.world_root, vehicle);
         }
         self.save_guest_records(host, guest);
+    }
+    /// `ServerPlayer.loadAndSpawnParentVehicle`: a guest whose file names the
+    /// vehicle it rode rides it again, once the vehicle is in the world.
+    fn restore_guest_vehicles(&mut self, host: &mut LanHost) {
+        let waiting: Vec<(usize, [i32; 4])> = host
+            .hub
+            .guests
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| Some((i, g.saved_vehicle?)))
+            .filter(|(i, _)| {
+                let g = &host.hub.guests[*i];
+                let chunk = (
+                    (g.position[0].floor() as i32).div_euclid(16),
+                    (g.position[2].floor() as i32).div_euclid(16),
+                );
+                g.placed
+                    && g.vehicle.is_none()
+                    && g.dimension == self.dim.id()
+                    && g.sent_chunks.contains(&chunk)
+            })
+            .collect();
+        for (i, uuid) in waiting {
+            let raw = host.hub.guests[i].saved.clone();
+            let Some(id) = self.restore_saved_vehicle(uuid, raw.as_ref()) else {
+                continue;
+            };
+            let g = &mut host.hub.guests[i];
+            if let Some(horizon_world::nbt::Tag::Compound(p)) = &mut g.saved {
+                p.remove(&"RootVehicle".into());
+            }
+            g.vehicle = Some(id);
+            g.saved_vehicle = None;
+            // Pair the stationary restored entities before their passenger packet.
+            g.moved = true;
+        }
     }
     /// The file name of a player's advancements and statistics: an
     /// integrated server's owner keeps single player's.
@@ -1362,14 +1400,28 @@ impl Game<'_> {
     }
     /// The integrated server's owner into the world's player, for `Level::write`.
     pub(super) fn store_owner(&mut self) {
+        let Some(uuid) = self
+            .lan
+            .as_ref()
+            .and_then(|h| h.owner.as_ref())
+            .map(|o| o.uuid)
+        else {
+            return;
+        };
+        let riding = self.lan.as_ref().and_then(|h| {
+            h.hub
+                .guests
+                .iter()
+                .find(|g| g.uuid == uuid && g.placed)
+                .and_then(|g| g.vehicle)
+        });
+        // The vehicle the owner rides, by the UUID it is saved with.
+        let vehicle = self.root_vehicle_uuid(riding);
         let Some(host) = &self.lan else {
             return;
         };
-        let Some(uuid) = host.owner.as_ref().map(|o| o.uuid) else {
-            return;
-        };
         if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == uuid && g.placed) {
-            playerdata::store(g, &mut self.level);
+            playerdata::store(g, &mut self.level, vehicle);
             self.save_guest_records(host, g);
         }
     }
@@ -1553,6 +1605,8 @@ impl Game<'_> {
                 m.rider = None;
             }
         }
+        // A guest whose file names the vehicle it rode rides it again.
+        self.restore_guest_vehicles(&mut host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();
