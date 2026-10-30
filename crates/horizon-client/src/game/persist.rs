@@ -477,6 +477,9 @@ impl Game<'_> {
         }
         let riders = self.take_mob_passengers(&mut tag);
         let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
+        if horizon_client::mobs::camel::is_camel(m.species()) {
+            horizon_client::mobs::camel::finish_load(&mut m, self.world.game_time);
+        }
         // `NeutralMob.readPersistentAngerSaveData`: the anger runs until its
         // end time, and the mob is angry at the target again.
         m.extra.anger = horizon_client::mobs::anger_left(m.extra.anger_end, self.world.game_time);
@@ -661,6 +664,13 @@ impl Game<'_> {
             None
         };
         let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+        if horizon_client::mobs::camel::is_camel(self.mobs[i].species())
+            && let Tag::Compound(c) = &mut tag
+        {
+            let tick =
+                horizon_client::mobs::camel::synced_pose_tick(&self.mobs[i], self.world.game_time);
+            c.insert("LastPoseTick".into(), Tag::Long(tick));
+        }
         self.write_leash(&mut tag, i);
         self.put_mob_passengers(&mut tag, id);
         tag
@@ -692,7 +702,10 @@ impl Game<'_> {
         if cart.items.is_empty() || cart.items.iter().any(Option::is_some) {
             return;
         }
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         let p = cart.position;
         let pos = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
         let biome = self.biome_name_at(p).unwrap_or_default();
@@ -729,7 +742,7 @@ impl Game<'_> {
         *self.persist.uuids.entry(id).or_insert_with(random_uuid)
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
-    fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
+    pub(super) fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
         let registry = self.pack.assets.registry;
         let state = match tag.get("Name") {
             Some(Tag::String(name)) => BlockState {

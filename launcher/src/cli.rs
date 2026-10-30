@@ -740,7 +740,7 @@ enum Cmd {
     /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
     /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
     /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
-    /// system|en|fr|ru|de|zh|es|uk (the window's language; system follows the computer's), accent
+    /// system|en|fr|ru|de|zh|es|uk|pl (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
     Settings {
@@ -955,13 +955,12 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         }
         "language" => {
             use horizon_launcher::i18n::Language;
-            s.language =
-                match value.trim() {
-                    "system" | "default" => None,
-                    code => Some(Language::parse(code).ok_or_else(|| {
-                        format!("{value}: say system, en, fr, ru, de, zh, es or uk")
-                    })?),
-                }
+            s.language = match value.trim() {
+                "system" | "default" => None,
+                code => Some(Language::parse(code).ok_or_else(|| {
+                    format!("{value}: say system, en, fr, ru, de, zh, es, uk or pl")
+                })?),
+            }
         }
         "proxy" => {
             if value == "default" || value.is_empty() {
@@ -3232,7 +3231,7 @@ mod tests {
         }
         assert_eq!(
             set_setting(&mut settings, "language", "xx").unwrap_err(),
-            "xx: say system, en, fr, ru, de, zh, es or uk"
+            "xx: say system, en, fr, ru, de, zh, es, uk or pl"
         );
         set_setting(&mut settings, "language", "system").unwrap();
         assert_eq!(settings.language, None);
