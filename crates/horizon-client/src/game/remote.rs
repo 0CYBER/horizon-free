@@ -35,7 +35,7 @@ use horizon_protocol::{
         Empty,
         play::{self, Clientbound as C, Serverbound as S},
     },
-    registry::{Builtin, DimensionType, Dynamic, ceil_log2},
+    registry::{Builtin, DimensionType, Dynamic, SyncedNames, ceil_log2},
     secure_chat::Signature,
     text::{Language, plain},
 };
@@ -837,6 +837,16 @@ impl Game<'_> {
             },
             s,
         )
+    }
+    /// `HashedStack.create` with the connection's registries (the client's
+    /// `decoratedHashOpsGenerator`).
+    fn hashed_stack(&self, s: &Option<ItemStack>) -> Option<Hashed> {
+        let r = self.remote.as_ref()?;
+        let names = SyncedNames {
+            builtin: &r.builtin,
+            dynamic: &r.registries,
+        };
+        self.to_network(s).map(|s| Hashed::create(&s, &names))
     }
     /// A line in the connection's chat, with its styles, click and hover
     /// events (ChatComponent.addMessage). The lines the Chat option hides
@@ -7054,7 +7064,7 @@ impl Game<'_> {
     }
     fn send_clicks(&mut self, container: i32, clicks: Vec<Predicted>) {
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
-        let hashed = |g: &Self, s: &Option<ItemStack>| g.to_network(s).map(|s| Hashed::of(&s));
+        let hashed = |g: &Self, s: &Option<ItemStack>| g.hashed_stack(s);
         for (slot, button, input, changed, carried) in clicks {
             let changed = changed.iter().map(|(i, s)| (*i, hashed(self, s))).collect();
             let carried = hashed(self, &carried);
@@ -7101,7 +7111,7 @@ impl Game<'_> {
             }
             self.swing_arm();
         }
-        let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
+        let carried = self.hashed_stack(&self.carried);
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
         self.send(S::ContainerClick(play::ContainerClick {
             container,

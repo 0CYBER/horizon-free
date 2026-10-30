@@ -1,7 +1,7 @@
 //! `FlowingFluid` (water and lava) ticking and spreading, `LiquidBlock`
 //! interactions, liquid containers (waterlogging) and bucket pickup.
 use super::{
-    Behaviours, Dimension, LevelAccess, Sim,
+    Behaviours, Dimension, LevelAccess, Sim, Spread,
     classes::{Class, Interface},
     update::{HORIZONTAL, above, below, rel},
 };
@@ -521,6 +521,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         target: FluidState,
     ) {
         let b = self.b;
+        if !self
+            .level
+            .allow_spread(Spread::Fluid, rel(pos, direction.opposite()), pos)
+        {
+            return;
+        }
         if !is_water(kind)
             && direction == Direction::Down
             && b.is_water_fluid(self.fluid_at(pos).kind())
