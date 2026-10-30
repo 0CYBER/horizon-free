@@ -801,6 +801,37 @@ impl Audio {
         let seed = self.random.next_long();
         self.play_seeded(event, at, volume, pitch, seed);
     }
+    /// `ClientLevel.playLocalSound` with `distanceDelay`: a sound more than 10
+    /// blocks from the camera starts `sqrt(distance) / 40` seconds later.
+    pub fn play_distance_delayed(
+        &mut self,
+        event: &str,
+        at: [f64; 3],
+        volume: f32,
+        pitch: f32,
+        camera: [f64; 3],
+    ) {
+        let distance_sqr: f64 = (0..3).map(|i| (at[i] - camera[i]).powi(2)).sum();
+        if distance_sqr <= 100.0 {
+            self.play(event, Some(at), volume, pitch);
+            return;
+        }
+        let seed = self.random.next_long();
+        if let Some(capture) = self.capture.as_mut() {
+            capture.push((event.to_owned(), at, volume, pitch));
+        }
+        *self.heard.entry(event.to_owned()).or_default() += 1;
+        self.sync_volumes();
+        let event = crate::sound_events::normalize(event);
+        let source = self
+            .source_override
+            .unwrap_or_else(|| crate::settings::sound_source(&event));
+        let instance =
+            SoundInstance::at(&event, source, volume, pitch, LegacyRandom::new(seed), at);
+        let id = self.engine.add(instance, false);
+        self.engine
+            .play_delayed(id, (distance_sqr.sqrt() / 40.0 * 20.0) as i32);
+    }
     /// `play` for this client only: a sound a packet's handler plays
     /// (`playLocalSound`), which the guests play from that packet themselves.
     pub fn play_unshared(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) {

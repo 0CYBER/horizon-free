@@ -536,7 +536,7 @@ fn add_visible(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
     engine.add_with(&ParticleOptions::simple(ty), p, v, false, true);
 }
 fn sound(engine: &mut ParticleEngine, name: &'static str, p: [f64; 3], volume: f32, pitch: f32) {
-    engine.sounds.push((name, p, volume, pitch));
+    engine.sounds.push((name, p, volume, pitch, false));
 }
 fn redstone(engine: &mut ParticleEngine, p: [f64; 3]) {
     engine.add(&ParticleOptions::dust([1.0, 0.0, 0.0], 1.0), p, [0.0; 3]);
