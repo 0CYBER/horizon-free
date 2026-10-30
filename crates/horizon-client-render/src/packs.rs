@@ -944,8 +944,17 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let mut meta = b"\xEF\xBB\xBF".to_vec();
         meta.extend_from_slice(br#"{"pack":{"description":"d","pack_format":97}}"#);
-        fs::write(dir.join("pack.mcmeta"), meta).unwrap();
+        fs::write(dir.join("pack.mcmeta"), &meta).unwrap();
         assert!(read_meta(&Source::Dir(dir.clone())).is_some());
+        // Without a BOM the same JSON still reads; other leading bytes still fail.
+        fs::write(dir.join("pack.mcmeta"), &meta[3..]).unwrap();
+        assert!(read_meta(&Source::Dir(dir.clone())).is_some());
+        fs::write(
+            dir.join("pack.mcmeta"),
+            [b"\xEF\xBB".as_slice(), &meta[3..]].concat(),
+        )
+        .unwrap();
+        assert!(read_meta(&Source::Dir(dir.clone())).is_none());
         fs::remove_dir_all(&dir).ok();
     }
     #[test]
