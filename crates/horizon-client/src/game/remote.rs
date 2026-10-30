@@ -3685,9 +3685,13 @@ impl Game<'_> {
                     board.add_to_team(player, &p.name);
                 }
             }
+            // Scoreboard.removePlayerFromTeam: only out of this team (vanilla
+            // throws for a player in another one).
             4 => {
                 for player in &p.players {
-                    board.remove_from_team(player);
+                    if board.players_team(player).is_some_and(|t| t.name == p.name) {
+                        board.remove_from_team(player);
+                    }
                 }
             }
             _ => {}
