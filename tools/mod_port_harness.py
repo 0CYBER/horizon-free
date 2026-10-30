@@ -90,8 +90,10 @@ def sound_upgrades(oracle, horizon):
 
 
 def modifiers(entries):
-    """Attribute modifiers as comparable tuples, 1.21.1's `generic.` attribute prefix dropped."""
-    return sorted((m['type'].replace(':generic.', ':'), m['id'], round(m['amount'], 4), m['operation'], m['slot'])
+    """Attribute modifiers as comparable tuples, 1.21.1's `generic.` and `player.` attribute prefixes dropped
+    (1.21.2 renamed `player.entity_interaction_range` and the others too)."""
+    return sorted((m['type'].replace(':generic.', ':').replace(':player.', ':'), m['id'], round(m['amount'], 4),
+                   m['operation'], m['slot'])
                   for m in entries)
 
 
