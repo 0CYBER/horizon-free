@@ -1151,6 +1151,7 @@ impl Game<'_> {
             },
         );
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             guest_commands: settings.guest_commands,
             force_game_mode: settings.force_game_mode,

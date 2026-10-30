@@ -783,6 +783,7 @@ impl Game<'_> {
             },
         };
         let config = HubConfig {
+            allow_flight: props.allow_flight,
             default_game_mode: game_mode,
             guest_commands: true,
             force_game_mode: props.force_game_mode,

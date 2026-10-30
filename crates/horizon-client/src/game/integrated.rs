@@ -461,6 +461,7 @@ impl Game<'_> {
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             // Only the owner until it is opened to the LAN.
             guest_commands: false,
