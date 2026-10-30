@@ -57,6 +57,16 @@ fn is_dualsense(pad: &gilrs::Gamepad) -> bool {
         (Some(vendor), Some(product)) if horizon_dualsense::is_dualsense(vendor, product))
 }
 
+/// SDL rows gilrs' bundled DB is missing (or only ships for Windows). Newer
+/// than the crate's copy; `GilrsBuilder::add_mappings` prefers these. The
+/// Ultimate 2's Linux/BT rows put the right stick on a2/a3 — without them
+/// look never moves (#4343).
+const EXTRA_SDL_MAPPINGS: &str = concat!(
+    "03000000c82d00001260000011010000,8BitDo Ultimate 2,a:b0,b:b1,back:b10,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b6,leftstick:b13,lefttrigger:a5,leftx:a0,lefty:a1,paddle1:b17,paddle2:b16,paddle3:b2,paddle4:b5,rightshoulder:b7,rightstick:b14,righttrigger:a4,rightx:a2,righty:a3,start:b11,x:b3,y:b4,platform:Linux,\n",
+    "05000000c82d00001260000001000000,8BitDo Ultimate 2,a:b0,b:b1,back:b10,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b6,leftstick:b13,lefttrigger:a5,leftx:a0,lefty:a1,paddle1:b17,paddle2:b16,paddle3:b2,paddle4:b5,rightshoulder:b7,rightstick:b14,righttrigger:a4,rightx:a2,righty:a3,start:b11,x:b3,y:b4,platform:Linux,\n",
+    "03000000c82d00000b31000014010000,8BitDo Ultimate 2,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,\n",
+);
+
 impl Pads {
     /// Open gilrs on first use. A platform without it (or a Linux without
     /// udev) leaves controllers off; the game runs as before.
@@ -65,7 +75,10 @@ impl Pads {
             return;
         }
         self.devices.started = true;
-        self.devices.gilrs = match gilrs::Gilrs::new() {
+        self.devices.gilrs = match gilrs::GilrsBuilder::new()
+            .add_mappings(EXTRA_SDL_MAPPINGS)
+            .build()
+        {
             Ok(g) => {
                 for (_, pad) in g.gamepads() {
                     log::info!("Controller connected: {}", pad.name());
@@ -132,8 +145,17 @@ impl Pads {
         }
         let axis = |a| pad.value(a);
         use gilrs::Axis as A;
-        state.left = [axis(A::LeftStickX), axis(A::LeftStickY)];
-        state.right = [axis(A::RightStickX), axis(A::RightStickY)];
+        let sdl_mapped = pad.mapping_source() == gilrs::MappingSource::SdlMappings;
+        let (left, right) = gamepad::stick_axes(
+            [axis(A::LeftStickX), axis(A::LeftStickY)],
+            [axis(A::RightStickX), axis(A::RightStickY)],
+            axis(A::LeftZ),
+            pad.vendor_id(),
+            pad.product_id(),
+            sdl_mapped,
+        );
+        state.left = left;
+        state.right = right;
         // Triggers arrive as analog buttons on most mappings, as plain
         // buttons on some.
         let trigger = |b: gilrs::Button| {
