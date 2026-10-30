@@ -15,16 +15,20 @@ reference implementation. Proposed in horizon-rust/horizon#3545.
 
 ## Guide
 
-1. Ask the build what it takes: `horizon-client --launch-api` prints JSON with `launch_api` (the version) and
+1. Start Horizon only for a player signed in with a Microsoft account that owns Minecraft: Java Edition, and
+   hand over that account's session (`--session-stdin`, or `--session-file`), never on the command line. This
+   is the same owner gate `horizon-launcher` applies before every start. Horizon never downloads Mojang's
+   files; a launcher that does downloads them only for that owner.
+2. Ask the build what it takes: `horizon-client --launch-api` prints JSON with `launch_api` (the version) and
    `options`. Pass only options it lists: any other is refused with exit code 2.
-2. Start it with a folder per instance:
+3. Start it with a folder per instance:
 
    ```sh
-   horizon-client --resources PREPARED --game-dir INSTANCE --home INSTANCE --width 1280 --height 720
+   horizon-client --resources PREPARED --game-dir INSTANCE --home INSTANCE --width 1280 --height 720 --session-stdin
    ```
 
-3. Hand over the account with `--session-stdin` (or `--session-file`), never on the command line.
-4. Watch the exit code. On 1 or 101, the last line on stderr names the crash report.
+4. Watch the exit code. On 2, stderr names the refused option (`Horizon: --width: …`). On 1 or 101, the last
+   line on stderr names the crash report.
 
 ## Reference
 
@@ -44,7 +48,8 @@ The account the game joins online-mode servers with ([microsoft-account.md](../m
 - `--session-stdin`: write the JSON to the game's standard input and close it.
 - `--session-file PATH`: a file the game reads once and deletes at once. On Unix its mode must be 0600; a file
   older than two minutes is refused (and deleted).
-- A bad session leaves the game offline (`Horizon: not signed in: …` on stderr); it is not an error.
+- A session the game can't read is reported on stderr (`Horizon: not signed in: …`), and online-mode servers
+  will refuse the player.
 
 ## Examples
 

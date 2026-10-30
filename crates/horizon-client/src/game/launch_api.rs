@@ -66,14 +66,9 @@ pub const OPTIONS: &[LaunchOption] = &[
         "The same JSON on standard input, so it never touches the disk.",
     ),
     option(
-        "--name",
-        Some("NAME"),
-        "The player name when no account is given (offline mode).",
-    ),
-    option(
         "--quickPlaySingleplayer",
         Some("WORLD"),
-        "Opens this world of `saves/` at start, only if it exists (else the title screen).",
+        "Opens this world of `saves/` at start, only if it exists (else the title screen). WORLD is one folder name: a path is refused.",
     ),
     option(
         "--quickPlayMultiplayer",
@@ -225,6 +220,29 @@ mod tests {
         assert_eq!(o.game_dir.as_deref(), Some(std::path::Path::new("g")));
         assert!(parse(&["--launch-api"]).unwrap().is_none());
         assert!(parse(&["--no-such-option"]).is_err());
+    }
+
+    /// A launcher shows the error to the player, so it names the option.
+    #[test]
+    fn launch_api_bad_value_names_its_option() {
+        let error = |args: &[&str]| parse(args).err().unwrap().to_string();
+        assert_eq!(
+            error(&["--width", "wide"]),
+            "--width: invalid digit found in string"
+        );
+        assert_eq!(error(&["--bogus", "x"]), "--bogus: unknown option");
+    }
+
+    /// Quick play opens one folder of saves/, as on vanilla: nothing outside it.
+    #[test]
+    fn launch_api_quick_play_is_one_folder_of_saves() {
+        for name in ["../x", "a/b", "/abs", ".", ".."] {
+            assert!(
+                parse(&["--quickPlaySingleplayer", name]).is_err(),
+                "{name} is accepted"
+            );
+        }
+        assert!(parse(&["--quickPlaySingleplayer", "E2E World"]).is_ok());
     }
 
     /// docs/api/launch-reference.md is what `markdown` writes.

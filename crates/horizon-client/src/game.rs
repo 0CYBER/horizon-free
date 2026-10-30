@@ -508,72 +508,89 @@ impl Options {
                     let value = args
                         .next()
                         .ok_or_else(|| format!("missing value after {arg}"))?;
-                    match arg.as_str() {
-                        "--resources" => o.resources = value.into(),
-                        "--render-distance" | "--radius" => {
-                            o.distance = value.parse()?;
-                            o.distance_override = Some(o.distance);
-                            let max = horizon_client::options_file::MAX_RENDER_DISTANCE;
-                            if !(2..=max).contains(&o.distance) {
-                                return Err(format!("render distance must be 2..{max}").into());
+                    // A launcher shows the error to the player: it names the option.
+                    let read = || -> Result<()> {
+                        match arg.as_str() {
+                            "--resources" => o.resources = value.into(),
+                            "--render-distance" | "--radius" => {
+                                o.distance = value.parse()?;
+                                o.distance_override = Some(o.distance);
+                                let max = horizon_client::options_file::MAX_RENDER_DISTANCE;
+                                if !(2..=max).contains(&o.distance) {
+                                    return Err(format!("render distance must be 2..{max}").into());
+                                }
                             }
-                        }
-                        "--seed" => {
-                            o.seed = value.parse().unwrap_or_else(|_| {
-                                // Text seeds hash like String.hashCode.
-                                value
-                                    .encode_utf16()
-                                    .fold(0i32, |h, c| {
-                                        h.wrapping_mul(31).wrapping_add(i32::from(c))
-                                    })
-                                    .into()
-                            })
-                        }
-                        "--frames" => o.frames = Some(value.parse()?),
-                        "--world-frames" => {
-                            o.world_frames = Some(value.parse()?);
-                            // A frame-limited run in every other respect; --timeout-seconds still applies.
-                            o.frames.get_or_insert(u64::MAX);
-                        }
-                        "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
-                        "--smoke-report" => o.report = Some(value.into()),
-                        "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
-                        "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
-                        "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
-                        "--world" => o.world = Some(value),
-                        "--quickPlaySingleplayer" => o.quick_play = Some(value),
-                        "--game-dir" | "--gameDir" => o.game_dir = Some(value.into()),
-                        // main has made it the game home already (logging::set_game_home).
-                        "--home" => {}
-                        "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
-                        "--benchmark" => {
-                            if horizon_client::benchmark::scenes(&value).is_none() {
-                                return Err(format!(
+                            "--seed" => {
+                                o.seed = value.parse().unwrap_or_else(|_| {
+                                    // Text seeds hash like String.hashCode.
+                                    value
+                                        .encode_utf16()
+                                        .fold(0i32, |h, c| {
+                                            h.wrapping_mul(31).wrapping_add(i32::from(c))
+                                        })
+                                        .into()
+                                })
+                            }
+                            "--frames" => o.frames = Some(value.parse()?),
+                            "--world-frames" => {
+                                o.world_frames = Some(value.parse()?);
+                                // A frame-limited run in every other respect; --timeout-seconds still applies.
+                                o.frames.get_or_insert(u64::MAX);
+                            }
+                            "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
+                            "--smoke-report" => o.report = Some(value.into()),
+                            "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
+                            "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
+                            "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
+                            // Vanilla opens only a level id that is one folder of saves/. --world, for
+                            // harnesses, also takes a path (tools/bundle_tooltip_e2e.py).
+                            "--world" => o.world = Some(value),
+                            "--quickPlaySingleplayer" => {
+                                let mut parts = std::path::Path::new(&value).components();
+                                if !matches!(
+                                    (parts.next(), parts.next()),
+                                    (Some(std::path::Component::Normal(_)), None)
+                                ) {
+                                    return Err("not a folder name of saves/".into());
+                                }
+                                o.quick_play = Some(value);
+                            }
+                            "--game-dir" | "--gameDir" => o.game_dir = Some(value.into()),
+                            // main has made it the game home already (logging::set_game_home).
+                            "--home" => {}
+                            "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
+                            "--benchmark" => {
+                                if horizon_client::benchmark::scenes(&value).is_none() {
+                                    return Err(format!(
                                     "unknown benchmark {value}: standard, village, forest, ocean or mountain"
                                 )
                                 .into());
+                                }
+                                o.benchmark = Some(value);
                             }
-                            o.benchmark = Some(value);
+                            "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
+                            "--name" => o.player_name = Some(value),
+                            "--session-file" => o.session_file = Some(value),
+                            "--control-socket" => o.control = Some(value.into()),
+                            "--time" => o.time = Some(value.parse()?),
+                            "--weather" => o.weather = Some(value),
+                            "--dimension" => {
+                                o.dimension = Some(if value.contains(':') {
+                                    value
+                                } else {
+                                    format!("minecraft:{value}")
+                                })
+                            }
+                            "--look" => {
+                                let (y, p) =
+                                    value.split_once(',').ok_or("--look takes YAW,PITCH")?;
+                                o.look = Some((y.parse()?, p.parse()?));
+                            }
+                            _ => return Err("unknown option".into()),
                         }
-                        "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
-                        "--name" => o.player_name = Some(value),
-                        "--session-file" => o.session_file = Some(value),
-                        "--control-socket" => o.control = Some(value.into()),
-                        "--time" => o.time = Some(value.parse()?),
-                        "--weather" => o.weather = Some(value),
-                        "--dimension" => {
-                            o.dimension = Some(if value.contains(':') {
-                                value
-                            } else {
-                                format!("minecraft:{value}")
-                            })
-                        }
-                        "--look" => {
-                            let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
-                            o.look = Some((y.parse()?, p.parse()?));
-                        }
-                        _ => return Err(format!("unknown option {arg}").into()),
-                    }
+                        Ok(())
+                    };
+                    read().map_err(|e| format!("{arg}: {e}"))?;
                 }
             }
         }
