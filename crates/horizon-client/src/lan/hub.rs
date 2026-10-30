@@ -2637,6 +2637,20 @@ impl Hub {
             self.resend_teleport(i, Some(start));
             return;
         }
+        // The anticheat's `ground`: a claim of the ground with nothing to
+        // stand on is dropped (no-fall, walking on water).
+        let mut flags = flags;
+        if flags & 1 != 0 && self.anticheat.is_some() {
+            match self.anticheat_ground(i, to, stands, ctx, events) {
+                Some(true) => {
+                    let g = &mut self.guests[i];
+                    (g.yaw, g.pitch) = (yaw, pitch);
+                    return;
+                }
+                Some(false) => flags &= !1,
+                None => {}
+            }
+        }
         // clientIsFloating, from the move that is accepted: no upward-or-level
         // step onto something, nothing but air around the body, and nothing
         // that lets the player hover (the server's allow-flight, mayfly,

@@ -11,9 +11,13 @@ Checks:
 - timer: `[anticheat]` on: a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
          reported to the console and kicked; the legit bots (walking and exploring at 20 Hz) are never
          flagged.
+- ground: `[anticheat]` on, survival (allow-flight on, so vanilla's floating kick stays out of it): a bot
+         hovering 24 blocks up that claims the ground in every move (no-fall) and one standing on water
+         that does (jesus) are flagged, their claim dropped, and kicked; bots walking on the ground and
+         standing still are never flagged.
 
 Each server runs in a fresh folder with fresh HORIZON_HOME and XDG folders (lab.game_env), on a free port,
-in a flat creative world (the bots fly). Build first:
+in a flat world (creative unless the check says otherwise: the bots fly). Build first:
     cargo build --profile fast -p horizon-client --bin horizon-client
     cargo build --profile fast -p horizon-bots
 """
@@ -26,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lab  # noqa: E402
@@ -53,10 +58,10 @@ class Failed(Exception):
     pass
 
 
-def start(bins, folder, anticheat, out, name):
+def start(bins, folder, anticheat, out, name, **extra):
     folder.mkdir(parents=True)
     port = lab.free_port()
-    props = dict(PROPERTIES, **{'server-port': str(port)})
+    props = dict(PROPERTIES, **extra, **{'server-port': str(port)})
     (folder / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (folder / 'eula.txt').write_text('eula=true\n')
     if anticheat is not None:
@@ -128,7 +133,46 @@ def check_timer(bins, scratch, out, seconds):
           f'kicked; {legit["joined"]} legit bots never flagged')
 
 
-CHECKS = {'off': check_off, 'timer': check_timer}
+def check_ground(bins, scratch, out, seconds):
+    folder = scratch / 'ground'
+    server, port = start(bins, folder, ON, out, 'ground', **{'gamemode': 'survival', 'allow-flight': 'true'})
+    try:
+        with ThreadPoolExecutor(4) as pool:
+            runs = {
+                'Walk': pool.submit(bots, bins, port, out, 'Walk', 3, 'walk', seconds, '--height', '0', '--ground'),
+                'Stand': pool.submit(bots, bins, port, out, 'Stand', 2, 'stand', seconds),
+                'NoFall': pool.submit(bots, bins, port, out, 'NoFall', 1, 'idle', seconds, '--ground'),
+                'Jesus': pool.submit(bots, bins, port, out, 'Jesus', 1, 'idle', seconds, '--height', '0',
+                                     '--ground'),
+            }
+            # The jesus bot goes far from the others, then the ground under it turns to water.
+            server.wait_for('Jesus0 joined the game', 120)
+            server.console('tp Jesus0 200.5 -60 200.5')
+            time.sleep(4)
+            server.console('fill 196 -61 196 204 -61 204 minecraft:water')
+            runs = {k: v.result() for k, v in runs.items()}
+    finally:
+        server.stop()
+    log = folder / 'logs/anticheat.log'
+    log = log.read_text() if log.exists() else ''
+    for name in ('Walk', 'Stand'):
+        for bot in runs[name]['per_bot']:
+            if bot['name'] in log:
+                raise Failed(f'ground: legit {bot["name"]} was flagged:\n{log}')
+            if bot['error']:
+                raise Failed(f'ground: legit {bot["name"]} was dropped: {bot["error"]}')
+    for name, where in (('NoFall', 'in the air'), ('Jesus', 'on a fluid')):
+        cheater = runs[name]['per_bot'][0]
+        flags = log.count(f'{cheater["name"]} failed ground')
+        if flags < 3 or f'claims the ground {where}' not in log:
+            raise Failed(f'ground: {cheater["name"]} was flagged {flags} times ({where}):\n{log}')
+        if 'disconnected' not in (cheater['error'] or ''):
+            raise Failed(f'ground: {cheater["name"]} was not kicked ({cheater["error"]})')
+    walkers = runs['Walk']['joined'] + runs['Stand']['joined']
+    print(f'ground: the no-fall and jesus bots are flagged and kicked; {walkers} bots on the ground never flagged')
+
+
+CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground}
 
 
 def main():
