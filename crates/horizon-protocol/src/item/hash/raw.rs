@@ -236,6 +236,77 @@ pub(super) fn profile(p: &Profile) -> HashCode {
         .build()
 }
 
+/// `ByteBufCodecs.holder(key, direct)` as `RegistryCodecs.holder(key, directCodec)`
+/// writes it: a reference by identifier, a direct value as its record.
+fn holder_or(
+    registry: &str,
+    names: &dyn Names,
+    r: &mut Reader,
+    direct: impl FnOnce(&mut Reader) -> Option<HashCode>,
+) -> Option<HashCode> {
+    match r.varint().ok()? {
+        0 => direct(r),
+        id => entry(names, registry, id - 1),
+    }
+}
+/// `TrimMaterial.DIRECT_CODEC`.
+pub(super) fn trim_material(r: &mut Reader) -> Option<HashCode> {
+    let palette = string(&r.string(32767).ok()?);
+    let description = text(&r.nbt().ok()?);
+    Some(
+        RecordHash::new()
+            .field("palette_id", palette)
+            .field("description", description)
+            .build(),
+    )
+}
+/// `TrimPattern.DIRECT_CODEC` (`decal` is always written).
+fn trim_pattern(r: &mut Reader) -> Option<HashCode> {
+    let asset = string(&r.string(32767).ok()?);
+    let description = text(&r.nbt().ok()?);
+    let decal = r.bool().ok()?;
+    Some(
+        RecordHash::new()
+            .field("asset_id", asset)
+            .field("description", description)
+            .field("decal", HashOps::create_boolean(decal))
+            .build(),
+    )
+}
+/// `Instrument.DIRECT_CODEC`.
+fn instrument(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
+    let sound = super::gameplay::sound(r, names)?.code;
+    let (duration, range) = (r.f32().ok()?, r.f32().ok()?);
+    let damage = r.varint().ok()?;
+    let description = text(&r.nbt().ok()?);
+    let rec = RecordHash::new()
+        .field("sound_event", sound)
+        .field("use_duration", HashOps::create_f32(duration))
+        .field("range", HashOps::create_f32(range));
+    Some(
+        or_default(
+            rec,
+            "durability_damage",
+            damage,
+            0,
+            HashOps::create_int(damage),
+        )
+        .field("description", description)
+        .build(),
+    )
+}
+/// `BannerPattern.DIRECT_CODEC`.
+fn banner_pattern(r: &mut Reader) -> Option<HashCode> {
+    let asset = string(&r.string(32767).ok()?);
+    let key = string(&r.string(32767).ok()?);
+    Some(
+        RecordHash::new()
+            .field("asset_id", asset)
+            .field("translation_key", key)
+            .build(),
+    )
+}
+
 /// The hash of component `kind` from its stream bytes, or `None` when Horizon
 /// has no codec form for it (no persistent codec in vanilla, a direct holder, an
 /// id with no name, a component still to be ported).
@@ -305,6 +376,29 @@ pub(super) fn code(kind: i32, bytes: &[u8], names: &dyn Names) -> Option<HashCod
             }
             HashOps::create_map(entries)
         }
+        // `ArmorTrim`, `InstrumentComponent`, `provides_trim_material` and
+        // `BannerPatternLayers` holders (a reference stays typed in Horizon but
+        // a direct one comes here).
+        58 => {
+            let material = holder_or("minecraft:trim_material", names, r, trim_material)?;
+            let pattern = holder_or("minecraft:trim_pattern", names, r, trim_pattern)?;
+            RecordHash::new()
+                .field("material", material)
+                .field("pattern", pattern)
+                .build()
+        }
+        63 => holder_or("minecraft:instrument", names, r, |r| instrument(r, names))?,
+        64 => holder_or("minecraft:trim_material", names, r, trim_material)?,
+        74 => list(r, |r| {
+            let pattern = holder_or("minecraft:banner_pattern", names, r, banner_pattern)?;
+            let color = dye(r.varint().ok()?)?;
+            Some(
+                RecordHash::new()
+                    .field("pattern", pattern)
+                    .field("color", color)
+                    .build(),
+            )
+        })?,
         // `SulfurCubeContent`: one template.
         80 => template_code(r, names)?,
         // `PotDecorations`: back, left, right, front.
@@ -389,6 +483,7 @@ mod tests {
                 ("minecraft:entity_type", 30) => "minecraft:cow",
                 ("minecraft:block_entity_type", 1) => "minecraft:chest",
                 ("minecraft:data_component_type", 3) => "minecraft:damage",
+                ("minecraft:data_component_type", 12) => "minecraft:rarity",
                 ("minecraft:villager_type", 0) => "minecraft:desert",
                 ("minecraft:attribute", 1) => "minecraft:armor",
                 ("minecraft:attribute", 3) => "minecraft:attack_damage",
@@ -587,7 +682,47 @@ mod tests {
     /// The same for the components that tune an item's behaviour.
     #[test]
     fn gameplay_components_hash_as_vanilla_does() {
-        let cases: [(&str, i32, &str, i32); 42] = [
+        let cases: [(&str, i32, &str, i32); 52] = [
+            (
+                "trim",
+                58,
+                "000b6d696e6563726166743a700800034d6174000b6d696e6563726166743a610a080005636f6c6f7200037265640800047465787400035061740001",
+                58182709,
+            ),
+            (
+                "instrument",
+                63,
+                "00000d6d696e6563726166743a666f6f004000000042c8000000080004486f726e",
+                -2003793539,
+            ),
+            (
+                "instrument",
+                63,
+                "00bf054000000042c80000030a080004746578740004486f726e010004626f6c640100",
+                -1995771085,
+            ),
+            (
+                "provides_trim_material",
+                64,
+                "000b6d696e6563726166743a7108000164",
+                167259767,
+            ),
+            (
+                "banner_patterns",
+                74,
+                "02000b6d696e6563726166743a62016b0e000b6d696e6563726166743a63016c0b",
+                -178464072,
+            ),
+            ("can_break", 15, "0101020100000000", -1161294463),
+            (
+                "can_place_on",
+                14,
+                "02010301090103036c6974000101300006666163696e6701056e6f727468036167650001013101013300000001020900000000",
+                -279938577,
+            ),
+            ("can_break", 15, "010000000203030c0200", 1412654667),
+            ("can_break", 15, "010000000000", -982207288),
+            ("can_break", 15, "01000100000000", 281125914),
             ("use_effects", 5, "01013f000000", -1226654547),
             ("use_effects", 5, "00013e4ccccd", -982207288),
             (

@@ -79,13 +79,13 @@ fn list<T>(r: &mut Reader, mut element: impl FnMut(&mut Reader) -> Option<T>) ->
 
 /// A `SoundEvent` holder: the codec form and, for a reference, its name (what a
 /// field default compares against).
-struct Sound {
-    code: HashCode,
+pub(super) struct Sound {
+    pub(super) code: HashCode,
     name: Option<String>,
 }
 /// `SoundEvent.STREAM_CODEC`: 0 and the event itself (`DIRECT_CODEC`: `sound_id`
 /// and an optional `range`), or the registry id plus one.
-fn sound(r: &mut Reader, names: &dyn Names) -> Option<Sound> {
+pub(super) fn sound(r: &mut Reader, names: &dyn Names) -> Option<Sound> {
     match int(r)? {
         0 => {
             let id = ident(r)?;
@@ -213,6 +213,55 @@ fn kinetic_condition(r: &mut Reader) -> Option<HashCode> {
     let rec = RecordHash::new().field("max_duration_ticks", HashOps::create_int(ticks));
     let rec = float_or(rec, "min_speed", speed, 0.0);
     Some(float_or(rec, "min_relative_speed", relative, 0.0).build())
+}
+
+/// `BlockPredicate.STREAM_CODEC` as `BlockPredicate.CODEC` writes it. A block
+/// entity `nbt` (a lenient SNBT string) and `predicates` (partial component
+/// matchers) have no codec form built here.
+fn block_predicate(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
+    let blocks = optional(r, |r| holder_set("minecraft:block", names, r))?;
+    // StatePropertiesPredicate: a name and an exact value or a (min, max) range.
+    let state = optional(r, |r| {
+        let props = list(r, |r| {
+            let name = string(&r.string(32767).ok()?);
+            let matcher = if boolean(r)? {
+                string(&r.string(32767).ok()?)
+            } else {
+                let min = optional(r, |r| Some(string(&r.string(32767).ok()?)))?;
+                let max = optional(r, |r| Some(string(&r.string(32767).ok()?)))?;
+                RecordHash::new()
+                    .optional("min", min)
+                    .optional("max", max)
+                    .build()
+            };
+            Some((name, matcher))
+        })?;
+        Some(HashOps::create_map(props))
+    })?;
+    if boolean(r)? {
+        return None;
+    }
+    // DataComponentExactPredicate: the expected components, by type name.
+    let exact = list(r, |r| {
+        let kind = int(r)?;
+        let name = entry(names, "minecraft:data_component_type", kind)?;
+        let value = Component::read(kind, r).ok()?.code(kind, names)?;
+        Some((name, value))
+    })?;
+    if r.count(r.remaining()).ok()? != 0 {
+        return None;
+    }
+    let rec = RecordHash::new()
+        .optional("blocks", blocks)
+        .optional("state", state);
+    Some(
+        if exact.is_empty() {
+            rec
+        } else {
+            rec.field("components", HashOps::create_map(exact))
+        }
+        .build(),
+    )
 }
 
 /// The hash of component `kind` from its stream, or `None`.
@@ -480,18 +529,11 @@ pub(super) fn code(kind: i32, r: &mut Reader, names: &dyn Names) -> Option<HashC
                 .build()
         }
         40 | 41 => swing(r)?,
-        // A holder that may be direct: only a reference has a name.
-        64 | 66 => match int(r)? {
+        // `JukeboxSong.CODEC` is a `RegistryFixedCodec`: a direct song cannot be
+        // encoded (vanilla's client would throw), so only a reference hashes.
+        66 => match int(r)? {
             0 => return None,
-            id => entry(
-                names,
-                if kind == 64 {
-                    "minecraft:trim_material"
-                } else {
-                    "minecraft:jukebox_song"
-                },
-                id - 1,
-            )?,
+            id => entry(names, "minecraft:jukebox_song", id - 1)?,
         },
         67 => holder_set("minecraft:banner_pattern", names, r)?,
         83 => sound(r, names)?.code,
@@ -514,6 +556,16 @@ pub(super) fn code(kind: i32, r: &mut Reader, names: &dyn Names) -> Option<HashC
                 .field("targeting_entity_types", types)
                 .field("visibility", HashOps::create_f32(float(r)?))
                 .build()
+        }
+        // AdventureModePredicate (can_place_on, can_break): `compactListCodec`
+        // writes one predicate as itself and `nonEmptyList` refuses none.
+        14 | 15 => {
+            let mut predicates = list(r, |r| block_predicate(r, names))?;
+            match predicates.len() {
+                0 => return None,
+                1 => predicates.remove(0),
+                _ => HashOps::create_list(predicates),
+            }
         }
         // UseRemainder: one template.
         25 => super::raw::template_code(r, names)?,
