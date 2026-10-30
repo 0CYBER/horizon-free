@@ -197,6 +197,9 @@ fn who(w: Option<Who>) -> String {
 fn goal_name(m: &Mob, name: &str) -> String {
     let vanilla = match name {
         "Float" => "FloatGoal",
+        "RandomFloatAround" => "RandomFloatAroundGoal",
+        "GhastLook" => "GhastLookGoal",
+        "GhastShoot" => "GhastShootFireballGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
         "ParrotWander" => "ParrotWanderGoal",
         "RandomStroll" => "RandomStrollGoal",

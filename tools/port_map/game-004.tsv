@@ -41,15 +41,10 @@ WitherMobEffect.shouldApplyEffectTickThisTick	port	crates/horizon-client-render/
 AbstractInterpolationHandler.adjustInterpolationPosition	skip:other		Horizon moves a remote entity only through SteppedInterpolation, so there is no client-side move to add to the target
 AbstractInterpolationHandler.adjustInterpolationTargetFromDeltas	skip:other		same: the entity never drifts from where the interpolation put it (see SteppedInterpolation::interpolate)
 AbstractInterpolationHandler.setLastPositionAndRotation	skip:other		only feeds the delta adjustments above; Horizon's own last is the start of the step
-AgeableMob.mobInteract	missing		player: using a golden dandelion on a baby animal does nothing; vanilla uses one up, locks its growth and plays a sound (no golden_dandelion handling exists)
-AgeableMob.canUseGoldenDandelion	missing		player: part of the golden dandelion age lock, which is not implemented
-AgeableMob.setAgeLockedData	missing		player: nothing toggles AgeLocked in play (only NBT, buckets and spawn data set it); golden dandelion age lock is missing
-AgeableMob.setAgeLocked	missing		player: golden dandelion consumption, persistence and the use or unuse sound are missing
-AgeableMob.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	gap: minor: the baby flag is sent (baby_index); the age-locked entry is not
+AgeableMob.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	the baby flag (baby_index) and AGE_LOCKED after it; a kind outside baby_index (sulfur cube, nautilus, happy ghast) sends neither
 AgeableMob.getAge	inline	crates/horizon-client/src/game/remote_mob_data.rs::apply	m.extra.age on the host; a remote client only learns baby or not (-1 or 0)
 AgeableMob.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	Age, ForcedAge and AgeLocked for creatures
 AgeableMob.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	Age, ForcedAge and AgeLocked
-AgeableMob.makeAgeLockedParticle	missing		player: no age lock particle timer, so no pause or reset growth particles; the particle types exist
 AnimationState.getTimeInMillis	port	crates/horizon-client/src/mobs/keyframes.rs::AnimationState::millis	
 AreaEffectCloud.defineSynchedData	port	crates/horizon-client/src/game/lan_entities.rs::Game::lan_projectile_states	radius, waiting and particle for dragon breath and lingering clouds; read back in remote_projectiles.rs::remote_projectile_data
 AreaEffectCloud.setRadius	inline	crates/horizon-client/src/game/potions.rs::Game::tick_potion_cloud	radius shrinks per tick and per victim; the 0..32 clamp is not needed

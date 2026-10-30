@@ -396,6 +396,11 @@ impl Mob {
     /// `getDimensions(Pose.STANDING)`, whose eye height lays it in the bed
     /// (`LivingEntityRenderer.submit`).
     pub fn awake_dims(&self) -> (f64, f64, f64) {
+        self.awake_dims_in(self.extra.pose == super::sync::LONG_JUMPING)
+    }
+    /// `Entity.getDimensions(Pose)` of the standing pose, or of
+    /// `Pose.LONG_JUMPING` (what `LongJumpUtil` checks an arc with).
+    pub fn awake_dims_in(&self, long_jumping: bool) -> (f64, f64, f64) {
         let k = &self.kind;
         // Avatar.POSES: a player's or mannequin's box follows its pose.
         if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
@@ -422,6 +427,10 @@ impl Mob {
                 }
                 super::species::Baby::None => {}
             }
+        }
+        // Goat.getDefaultDimensions: a long jump scales the box by 0.7.
+        if long_jumping && k.species == super::Species::Goat {
+            (w, h, e) = (w * 0.7_f32, h * 0.7_f32, e * 0.7_f32);
         }
         // Warden.getDefaultDimensions: a metre tall while digging or emerging.
         if self.kind.species == super::Species::Warden && super::warden::digging_or_emerging(self) {
@@ -901,9 +910,12 @@ impl Mob {
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
         let mut damage = (power * self.kind.fall_damage_multiplier).floor();
-        // Frog.calculateFallDamage: five points less than the base damage.
-        if self.species() == super::Species::Frog {
-            damage -= 5.0;
+        // Frog.calculateFallDamage: five points less than the base damage;
+        // Goat.calculateFallDamage: ten, so a long jump down a ledge is safe.
+        match self.species() {
+            super::Species::Frog => damage -= 5.0,
+            super::Species::Goat => damage -= 10.0,
+            _ => {}
         }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
@@ -1078,8 +1090,12 @@ impl Mob {
         } else {
             y -= self.gravity();
         }
-        // LivingEntity.shouldDiscardFriction (a breeze's or a frog's long jump).
-        if super::breeze::discards_friction(self) || self.extra.frog.discard_friction {
+        // LivingEntity.shouldDiscardFriction (a breeze's, a frog's or a goat's
+        // long jump).
+        if super::breeze::discards_friction(self)
+            || self.extra.frog.discard_friction
+            || self.extra.goat.discard_friction
+        {
             self.velocity = Vec3::new(movement.x, y, movement.z);
             return;
         }
@@ -1264,6 +1280,8 @@ impl Mob {
             // Creaking.updateWalkAnimation walks the model faster.
             let target = if self.species() == super::Species::Creaking {
                 (distance * 25.0).min(3.0)
+            } else if self.species() == super::Species::Frog {
+                super::frog::walk_target(self, distance)
             } else {
                 (distance * 4.0).min(1.0)
             };
