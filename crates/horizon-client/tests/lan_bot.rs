@@ -186,6 +186,7 @@ impl Server {
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,
+            stuck: (0, 0),
             body: Default::default(),
         };
         let mut ctx = TickCtx {

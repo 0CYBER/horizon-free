@@ -245,6 +245,10 @@ pub(super) struct Remote {
     /// The player's own shared flag 5 (`Entity.isInvisible`) as the server
     /// last set it.
     pub(super) own_invisible: bool,
+    /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID` of the
+    /// own player, as the server synced them.
+    pub(super) own_arrows: i32,
+    pub(super) own_stingers: i32,
     /// The local player's profile UUID (always in the level).
     profile: u128,
     /// The local player's profile name: its score holder and team member.
@@ -595,6 +599,8 @@ impl Game<'_> {
             level_player_textures: HashMap::new(),
             glowing: Default::default(),
             own_invisible: false,
+            own_arrows: 0,
+            own_stingers: 0,
             profile: 0,
             profile_name: String::new(),
             destroying: None,
@@ -2633,6 +2639,17 @@ impl Game<'_> {
                             (1, Value::Int(air)) => {
                                 if let Some(pl) = self.player.as_mut() {
                                     pl.air = *air;
+                                }
+                            }
+                            // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
+                            (12, Value::Int(count)) => {
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_arrows = *count;
+                                }
+                            }
+                            (13, Value::Int(count)) => {
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_stingers = *count;
                                 }
                             }
                             (17, Value::Float(amount)) => {

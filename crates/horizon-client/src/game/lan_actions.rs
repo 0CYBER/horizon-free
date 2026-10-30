@@ -3762,6 +3762,26 @@ impl Game<'_> {
         }
     }
 
+    /// `LivingEntity.tick`'s arrows and bee stingers falling out of the
+    /// players' bodies, and their counts for the players around
+    /// (`DATA_ARROW_COUNT_ID`, `DATA_STINGER_COUNT_ID`).
+    pub(super) fn lan_stuck(&mut self, host: &mut LanHost, paused: bool) {
+        if !paused {
+            self.combat.stuck.tick();
+        }
+        for g in &mut host.hub.guests {
+            g.stuck = match self.guest_combat.get_mut(&g.conn) {
+                Some(combat) => {
+                    if !paused {
+                        combat.stuck.tick();
+                    }
+                    (combat.stuck.arrows, combat.stuck.stingers)
+                }
+                None => (0, 0),
+            };
+        }
+    }
+
     /// The guests' items in use, for the players around (`LivingEntity.startUsingItem`
     /// and `stopUsingItem` set DATA_LIVING_ENTITY_FLAGS).
     pub(super) fn lan_living_flags(&mut self, host: &mut LanHost) {

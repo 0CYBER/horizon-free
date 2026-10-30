@@ -24,8 +24,51 @@ struct Entry {
     /// (`DamageSource.directEntity`: a potion with no thrower, a cloud).
     direct: Option<Text>,
 }
+/// What is stuck in a player's body: `LivingEntity.DATA_ARROW_COUNT_ID` and
+/// `DATA_STINGER_COUNT_ID` with the timers that pull them out
+/// (`removeArrowTime`, `removeStingerTime`). Kept with the combat record,
+/// which is swapped with the body it belongs to.
+#[derive(Default)]
+pub(super) struct Stuck {
+    pub(super) arrows: i32,
+    pub(super) stingers: i32,
+    remove_arrow_time: i32,
+    remove_stinger_time: i32,
+}
+impl Stuck {
+    /// `AbstractArrow.onHitEntity`: a hit that hurt, from an arrow that
+    /// does not pierce, leaves it stuck.
+    pub(super) fn add_arrow(&mut self) {
+        self.arrows += 1;
+    }
+    /// `Bee.doHurtTarget`: a sting that hurt.
+    pub(super) fn add_stinger(&mut self) {
+        self.stingers += 1;
+    }
+    /// The server's part of `LivingEntity.tick`: one in a count's worth of
+    /// `20 * (30 - count)` ticks falls out. Whether the counts changed.
+    pub(super) fn tick(&mut self) -> bool {
+        let (arrows, stingers) = (self.arrows, self.stingers);
+        Self::decay(&mut self.arrows, &mut self.remove_arrow_time);
+        Self::decay(&mut self.stingers, &mut self.remove_stinger_time);
+        (arrows, stingers) != (self.arrows, self.stingers)
+    }
+    fn decay(count: &mut i32, remove_time: &mut i32) {
+        if *count > 0 {
+            if *remove_time <= 0 {
+                *remove_time = 20 * (30 - *count);
+            }
+            *remove_time -= 1;
+            if *remove_time <= 0 {
+                *count -= 1;
+            }
+        }
+    }
+}
 #[derive(Default)]
 pub(super) struct CombatTracker {
+    /// The arrows and bee stingers stuck in the body.
+    pub(super) stuck: Stuck,
     entries: Vec<Entry>,
     last_damage: i64,
     in_combat: bool,
@@ -570,5 +613,45 @@ fn mob_name(m: &Mob) -> Text {
         (Some(text), _) => text.clone(),
         (None, Some(name)) => Text::literal(name.clone()),
         (None, None) => Text::translate(&format!("entity.{}", m.kind.id.replace(':', ".")), &[]),
+    }
+}
+
+#[cfg(test)]
+mod stuck_tests {
+    use super::Stuck;
+
+    /// `LivingEntity.tick`: with `n` stuck the timer starts at
+    /// `20 * (30 - n)` and one falls out when it runs down.
+    #[test]
+    fn arrows_fall_out_after_twenty_ticks_times_the_gap_to_thirty() {
+        let mut s = Stuck::default();
+        s.add_arrow();
+        s.add_arrow();
+        let wait = 20 * (30 - 2);
+        for _ in 0..wait - 1 {
+            assert!(!s.tick());
+        }
+        assert!(s.tick());
+        assert_eq!(s.arrows, 1);
+        // The timer starts again from the new count.
+        for _ in 0..20 * (30 - 1) - 1 {
+            assert!(!s.tick());
+        }
+        assert!(s.tick());
+        assert_eq!(s.arrows, 0);
+        assert!(!s.tick());
+    }
+
+    #[test]
+    fn stingers_have_their_own_timer() {
+        let mut s = Stuck::default();
+        s.add_stinger();
+        s.add_arrow();
+        for _ in 0..20 * 29 - 1 {
+            assert!(!s.tick());
+        }
+        // Both timers run 580 ticks.
+        assert!(s.tick());
+        assert_eq!((s.arrows, s.stingers), (0, 0));
     }
 }
