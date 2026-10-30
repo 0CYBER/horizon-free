@@ -12977,12 +12977,9 @@ impl Game<'_> {
         // FishingHookRenderer's line, then DebugRenderer: chunk borders and
         // hitboxes (F3+G, F3+B).
         let mut lines = self.fishing_line(alpha, size);
-        let mut on_top = Vec::new();
-        if self.show_hitboxes || self.show_chunk_borders {
-            let g = self.debug_gizmos(alpha as f32);
-            lines.extend(g.lines);
-            on_top = g.on_top;
-        }
+        let g = self.debug_gizmos(alpha as f32, camera.to_array());
+        lines.extend(g.lines);
+        let on_top = g.on_top;
         let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
         let at = camera.to_array();
         // GameRenderer.render3dHud: the debug crosshair, first person with the HUD shown.
