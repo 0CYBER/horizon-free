@@ -1863,7 +1863,7 @@ struct Game<'a> {
     /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
     riding_cart_sounds: Option<u32>,
     /// The happy ghast its riding sound was started for (`LocalPlayer.startRiding`).
-    riding_ghast_sound: Option<u32>,
+    riding_sound: Option<u32>,
     /// `LocalPlayer.wasFallFlying` for the elytra's flying sound.
     was_fall_flying: bool,
     /// Bees whose buzz is playing, and whether it is the aggressive one.
@@ -15314,7 +15314,7 @@ impl<'a> Game<'a> {
             sound_paused: false,
             cart_sounds: HashSet::new(),
             riding_cart_sounds: None,
-            riding_ghast_sound: None,
+            riding_sound: None,
             was_fall_flying: false,
             bee_sounds: HashMap::new(),
             guardian_sounds: HashSet::new(),
