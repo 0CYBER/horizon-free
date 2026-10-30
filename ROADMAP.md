@@ -76,7 +76,7 @@ Owner: [levzzz5154](https://github.com/levzzz5154) · Tracking: [#3911](https://
 
 <details><summary>Technical</summary>
 
-One item for all modding work ([#3911](https://github.com/horizon-rust/horizon/issues/3911)), led by levzzz5154 with vladislav_hagen; the order between the parts is theirs. Native mods on stable hook points (game/native_hooks.rs, [#3345](https://github.com/horizon-rust/horizon/issues/3345), [#3346](https://github.com/horizon-rust/horizon/issues/3346), [#3434](https://github.com/horizon-rust/horizon/issues/3434), [#3435](https://github.com/horizon-rust/horizon/issues/3435)) built by the launcher ([#3388](https://github.com/horizon-rust/horizon/issues/3388), [#3855](https://github.com/horizon-rust/horizon/issues/3855)); server-side hooks ([#3878](https://github.com/horizon-rust/horizon/issues/3878), [#3706](https://github.com/horizon-rust/horizon/issues/3706)); mod-owned screens, input and drawing; tools for mod makers (templates, `native.py check`); the registry ([#1634](https://github.com/horizon-rust/horizon/issues/1634), [#1642](https://github.com/horizon-rust/horizon/issues/1642), [#1659](https://github.com/horizon-rust/horizon/issues/1659)); machines with inventories and menus ([#1189](https://github.com/horizon-rust/horizon/issues/1189)); mods that read and change the world through the server. The WebAssembly runtime is being removed ([#3351](https://github.com/horizon-rust/horizon/issues/3351), [#3353](https://github.com/horizon-rust/horizon/issues/3353)). [docs/native-mods.md](docs/native-mods.md).
+One item for all modding work ([#3911](https://github.com/horizon-rust/horizon/issues/3911)), led by levzzz5154 with vladislav_hagen; the order between the parts is theirs. Native mods on stable hook points (game/native_hooks.rs, [#3345](https://github.com/horizon-rust/horizon/issues/3345), [#3346](https://github.com/horizon-rust/horizon/issues/3346), [#3434](https://github.com/horizon-rust/horizon/issues/3434), [#3435](https://github.com/horizon-rust/horizon/issues/3435)) built by the launcher ([#3388](https://github.com/horizon-rust/horizon/issues/3388), [#3855](https://github.com/horizon-rust/horizon/issues/3855)); server-side hooks ([#3878](https://github.com/horizon-rust/horizon/issues/3878), [#3706](https://github.com/horizon-rust/horizon/issues/3706)); mod-owned screens, input and drawing; tools for mod makers (templates, `native.py check`); the registry ([#1634](https://github.com/horizon-rust/horizon/issues/1634), [#1642](https://github.com/horizon-rust/horizon/issues/1642), [#1659](https://github.com/horizon-rust/horizon/issues/1659)); machines with inventories and menus ([#1189](https://github.com/horizon-rust/horizon/issues/1189)); mods that read and change the world through the server. The WebAssembly runtime is removed ([#3350](https://github.com/horizon-rust/horizon/issues/3350), [#3351](https://github.com/horizon-rust/horizon/issues/3351), [#3353](https://github.com/horizon-rust/horizon/issues/3353)). [docs/native-mods.md](docs/native-mods.md).
 
 More: [#3360](https://github.com/horizon-rust/horizon/issues/3360) · [#1596](https://github.com/horizon-rust/horizon/issues/1596) · [#1635](https://github.com/horizon-rust/horizon/issues/1635)
 
@@ -350,7 +350,7 @@ Run Java mods that nobody has rewritten for Horizon yet, through a bridge or a c
 
 <details><summary>Technical</summary>
 
-Earlier research ([#527](https://github.com/horizon-rust/horizon/issues/527), closed) found that Java mods can't simply run, because they call Minecraft's own classes. Options to look at again: a jar-to-WebAssembly backend, or a bridge for simple Fabric mods. Whatever is chosen has to run inside the same sandbox and capability checks as native mods.
+Earlier research ([#527](https://github.com/horizon-rust/horizon/issues/527), closed) found that Java mods can't simply run, because they call Minecraft's own classes. Option to look at again: a bridge for simple Fabric mods.
 
 </details>
 
@@ -370,7 +370,7 @@ When a mod, shader pack or modpack hasn't been rewritten for Horizon, one button
 
 <details><summary>Technical</summary>
 
-Generalise the mod browser's Port step (`horizon-port-pack`: the data, assets, worldgen and block and item definitions of Java mods, .mrpack and CurseForge zips) to every kind of content: code mods where the API allows it (see 'Mods with code') and shader packs, converting an Iris/OptiFine pack into Horizon's format. The browser says what works before the install. Java code itself does not run ([docs/modpacks.md](docs/modpacks.md), [docs/mod-browser.md](docs/mod-browser.md)).
+Generalise the mod browser's Port step (`horizon-port-pack`: the data, assets, worldgen and block and item definitions of Java mods, .mrpack and CurseForge zips) to every kind of content: code mods as native mods (see 'Mods with code') and shader packs, converting an Iris/OptiFine pack into Horizon's format. The browser says what works before the install. Java code itself does not run ([docs/modpacks.md](docs/modpacks.md), [docs/mod-browser.md](docs/mod-browser.md)).
 
 </details>
 
@@ -380,7 +380,7 @@ Making mods that add machines, magic and mobs work in Horizon, in steps, startin
 
 <details><summary>Technical</summary>
 
-333 of the 496 mods in a big pack (ATM10) contain code. Issue [#1854](https://github.com/horizon-rust/horizon/issues/1854) ranks the API gaps (ticking block entities, networking, rendering, menus, inventories) that unlock them in tiers, with machines first as the recommended path and a furnace ported tick for tick as proof. The first API step is a draft ([#1189](https://github.com/horizon-rust/horizon/issues/1189), see 'Machines and blocks with inventories'). The path isn't started yet ([docs/modpacks.md](docs/modpacks.md)).
+333 of the 496 mods in a big pack (ATM10) contain code. Issue [#1854](https://github.com/horizon-rust/horizon/issues/1854) ranks the gaps (ticking block entities, networking, rendering, menus, inventories) that unlock them in tiers, with machines first as the recommended path. Code mods are native mods now ([docs/native-mods.md](docs/native-mods.md)): each port is a horizon-mixins bundle. The path isn't started yet ([docs/modpacks.md](docs/modpacks.md)).
 
 </details>
 
@@ -490,7 +490,7 @@ Small mods written as scripts, in the style of KubeJS, with no compiler.
 
 <details><summary>Technical</summary>
 
-Waits for native mods to settle: the earlier plan ran Lua inside the WebAssembly sandbox, which is being removed. A script layer over the native hook points is to be designed.
+Waits for native mods to settle: the earlier plan ran Lua inside the WebAssembly sandbox, which is removed. A script layer over the native hook points is to be designed.
 
 More: [docs/native-mods.md](docs/native-mods.md)
 
@@ -498,11 +498,11 @@ More: [docs/native-mods.md](docs/native-mods.md)
 
 #### Orbital Laser on the normal game
 
-The community mod Orbital Laser, made for a fork of Horizon, running on the normal game and listed in the registry as the showcase of the mod API.
+The community mod Orbital Laser, made for a fork of Horizon, running on the normal game as a native mod and listed in the registry.
 
 <details><summary>Technical</summary>
 
-A pull request on [https://github.com/Stink-O/orbital-laser](https://github.com/Stink-O/orbital-laser) (MIT) once the input, ui, render and world capabilities exist (see 'Screens, input and drawing for mods'): today the mod needs them through its author's fork. Tested in the game, and listed in the registry.
+A native port (a horizon-mixins bundle, docs/native-mods.md) of [https://github.com/Stink-O/orbital-laser](https://github.com/Stink-O/orbital-laser) (MIT), which today runs through its author's fork. Tested in the game, and listed in the registry.
 
 </details>
 
@@ -524,7 +524,7 @@ Contraptions and physics like the Create and Aeronautics mods, as a mod for Hori
 
 <details><summary>Technical</summary>
 
-Issue [#805](https://github.com/horizon-rust/horizon/issues/805) (porting QOL mods) closed with this answer: it would come as a native Horizon mod on the mod API. It needs server mods, entities and rendering first.
+Issue [#805](https://github.com/horizon-rust/horizon/issues/805) (porting QOL mods) closed with this answer: it would come as a native Horizon mod.
 
 </details>
 
@@ -534,7 +534,7 @@ Hear nearby players talk, as with the voice chat mods of other Minecraft version
 
 <details><summary>Technical</summary>
 
-Needs server mods, mod networking and an audio interface in the mod API before anything can be built ([docs/api/mods.md](docs/api/mods.md)).
+A native mod ([docs/native-mods.md](docs/native-mods.md)). It needs a way to carry voice between players and an audio path in the game before anything can be built.
 
 </details>
 
