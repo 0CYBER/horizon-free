@@ -141,7 +141,7 @@ fn delete(base: &Path, relative: &str) -> io::Result<()> {
     }
 }
 
-fn subdirectories(path: &Path) -> Vec<PathBuf> {
+pub(super) fn subdirectories(path: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = fs::read_dir(path)
         .map(|r| {
             r.filter_map(Result::ok)
@@ -701,7 +701,7 @@ pub fn current_world_gen_settings(base: &Path) -> io::Result<Option<Tag>> {
 // ------------------------------------------------------------------ the read-time upgrades
 
 /// Chunk generator types per dimension from `world_gen_settings.dat`.
-fn generators(base: &Path) -> io::Result<Vec<(String, String)>> {
+pub(super) fn generators(base: &Path) -> io::Result<Vec<(String, String)>> {
     let Some(tag) = read_dat(&base.join("data/minecraft/world_gen_settings.dat"))? else {
         return Ok(Vec::new());
     };
