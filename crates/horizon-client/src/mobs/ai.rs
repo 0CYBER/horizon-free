@@ -234,7 +234,7 @@ pub fn register(m: &mut Mob) {
         Family::Generic if m.species() == Species::Armadillo => super::armadillo::register(m),
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic if m.species() == Species::Fox => super::fox::register(m),
-        Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
+        Family::Generic if m.species() == Species::Parrot => super::parrot::register(m),
         Family::Generic if m.species() == Species::Rabbit => super::rabbit::register(m),
         Family::Generic if m.species() == Species::Ocelot => super::tame::register_ocelot(m),
         Family::Generic => {
@@ -1409,6 +1409,7 @@ fn species_ai_step(
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Parrot => super::parrot::calculate_flapping(m),
         Species::Armadillo => super::armadillo::tick(m),
         Species::Frog => super::frog::tick(m),
         Species::Goat => super::goat::tick(m),
@@ -2014,10 +2015,22 @@ pub fn ate(m: &mut Mob) {
         }
     }
 }
+/// `NeutralMob.playerDied` for a mob that is neutral: the anger at the
+/// player who died ends. The caller checks `forgive_dead_players`.
+pub fn forgive_dead_player(m: &mut Mob) {
+    match m.species() {
+        Species::Bee => super::bee::forgive_dead_player(m),
+        Species::PolarBear => super::polar_bear::forgive_dead_player(m),
+        _ => super::tame::forgive_dead_player(m),
+    }
+}
 /// Species-specific travel (fish, squid, dolphins swim with their own rules).
 pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
     if m.species() == Species::Drowned {
         return undead::drowned_travel(m, w, input, events);
+    }
+    if m.species() == Species::Turtle {
+        return super::turtle::travel(m, w, input, events);
     }
     match family(m.species()) {
         Family::Aquatic => aquatic::travel(m, w, input, events),

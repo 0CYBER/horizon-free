@@ -1101,6 +1101,20 @@ impl Game<'_> {
         let calls = screen::ghost(self.swap_index(), ox as i32, oy as i32, big_result, &ghosts);
         self.paint_book(batch, &calls);
     }
+    /// `GhostSlots.extractTooltip`: the stack a ghost shows on menu slot
+    /// `slot` now, cycling like its draw; only while the open book is visible
+    /// (`RecipeBookComponent.extractTooltip`).
+    pub(super) fn ghost_stack(&self, slot: usize) -> Option<ItemStack> {
+        if !self.book_open(self.active_book()?) {
+            return None;
+        }
+        let ghost = self
+            .recipe_ui
+            .ghost
+            .iter()
+            .find(|g| g.slot == slot && !g.items.is_empty())?;
+        Some(ghost.items[self.swap_index() % ghost.items.len()].clone())
+    }
     /// `RecipeBookComponent.extractRenderState` and `extractTooltip`, laid
     /// out by `horizon_client::recipe_book_screen`.
     fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {

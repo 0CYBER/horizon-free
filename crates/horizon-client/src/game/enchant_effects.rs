@@ -362,7 +362,7 @@ impl Game<'_> {
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):
     /// a burst at the player's feet that only knocks back and triggers
     /// blocks (`ExplodeEffect` with `block_interaction: trigger`).
-    fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
+    pub(super) fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
         let Some(p) = self.player.as_ref() else {
             return;
         };

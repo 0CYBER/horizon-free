@@ -236,6 +236,11 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     } else if path.ends_with("_banner_pattern") {
         // The item name component of the pattern items that have one.
         Some(format!("item.minecraft.{path}.new"))
+    } else if &*stack.item == "minecraft:shield"
+        && let Some(color) = stack.data().and_then(|d| d.base_color.as_deref())
+    {
+        // `ShieldItem.getName`: the banner's base colour names the shield.
+        Some(format!("item.minecraft.shield.{color}"))
     } else {
         None
     };

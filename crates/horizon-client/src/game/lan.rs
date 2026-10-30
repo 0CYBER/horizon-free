@@ -440,12 +440,12 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BYTE, Value::Byte(16)));
         }
-        // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+        // MushroomCow.DATA_TYPE (after AgeableMob's two): 0 red, 1 brown.
         "minecraft:mooshroom" => {
             if e.variant == 1 {
-                meta.push((17, serializer::INT, Value::Int(1)));
+                meta.push((18, serializer::INT, Value::Int(1)));
             }
-            defaults.push((17, serializer::INT, Value::Int(0)));
+            defaults.push((18, serializer::INT, Value::Int(0)));
         }
         // AbstractPiglin.DATA_IMMUNE_TO_ZOMBIFICATION (16: with the dimension it
         // makes it shake) and Piglin.DATA_IS_DANCING (after the baby flag and
@@ -718,6 +718,15 @@ fn mob_meta(
                 meta.push((16, serializer::BYTE, Value::Byte(1)));
             }
             defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // GlowSquid.DATA_DARK_TICKS_REMAINING (after AgeableMob's two): the
+        // dimming a hit gave, counted down by the server and the client alike.
+        "minecraft:glow_squid" => {
+            let ticks = horizon_client::mobs::aquatic::dark_ticks(m);
+            if ticks != 0 {
+                meta.push((18, serializer::INT, Value::Int(ticks)));
+            }
+            defaults.push((18, serializer::INT, Value::Int(0)));
         }
         // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
         "minecraft:creaking" => {
@@ -1423,7 +1432,8 @@ impl Game<'_> {
                 crouching: p.pose == horizon_client::pose::Pose::Crouching,
                 spin_attack: p.auto_spin_attack_ticks > 0,
                 on_fire: p.fire_ticks > 0,
-                invisible: self.potions.effects.get("invisibility").is_some(),
+                // ServerPlayer.updateInvisibilityStatus: a spectator is always invisible.
+                invisible: self.potions.effects.get("invisibility").is_some() || self.spectator(),
                 glowing: self.potions.effects.get("glowing").is_some(),
             },
         })
@@ -1594,6 +1604,13 @@ impl Game<'_> {
                     self.ui.rules.bool("player_movement_check"),
                     self.ui.rules.bool("elytra_movement_check"),
                 );
+                // IntegratedServer.getScaledTrackingDistance: the Entity Distance
+                // option scales what an integrated server or a LAN host tracks (a
+                // dedicated one keeps its entity-broadcast-range-percentage).
+                if host.hub.config.integrated || !host.hub.config.dedicated {
+                    host.hub.entity_range_percent =
+                        (self.settings.entity_distance * 100.0).round() as i32;
+                }
                 host.hub
                     .set_immediate_respawn(self.ui.rules.bool("immediate_respawn"));
                 // A server with several levels runs a pass for each
@@ -1621,7 +1638,17 @@ impl Game<'_> {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
                     }
-                    HostEvent::PlayerChat { .. } => {}
+                    HostEvent::PlayerChat { sender, .. } => {
+                        if let Some(conn) = host
+                            .hub
+                            .guests
+                            .iter()
+                            .find(|g| g.uuid == sender)
+                            .map(|g| g.conn)
+                        {
+                            self.detect_rate_spam(&mut host, conn, false);
+                        }
+                    }
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
                         if self.options.dedicated.is_some()
@@ -1840,9 +1867,18 @@ impl Game<'_> {
         if self.audio.capture.is_none() {
             return;
         }
+        // The acting guest's own break: `Block.playerWillDestroy` excludes the
+        // player from the destroy events up to the broken block's. What a
+        // break sets off after that (a torch popping off, a stalk falling) is
+        // `destroyBlock` with no player, which the breaker hears and sees too.
+        let mut own_break = self.lan_break_pos.is_some();
         for e in events {
             match e {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
+                    let own = *id == 2001 && own_break;
+                    if own && self.lan_break_pos == Some([pos.x, pos.y, pos.z]) {
+                        own_break = false;
+                    }
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, anvil result sounds, or a
                     // finished brushing or an eye inserted in a portal frame (these calls name no
@@ -1851,7 +1887,8 @@ impl Game<'_> {
                     let except = if matches!(
                         *id,
                         2015 | 1503 | 1505 | 1029 | 1030 | 1045 | 1052 | 2019 | 2020 | 3000 | 3008
-                    ) {
+                    ) || (*id == 2001 && self.lan_break_pos.is_some() && !own)
+                    {
                         None
                     } else {
                         self.lan_acting
