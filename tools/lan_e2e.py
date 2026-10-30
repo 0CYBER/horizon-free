@@ -1006,7 +1006,7 @@ def level_guest_end(host, guest, out):
     level_floor(guest, 700, 80, 0)
     guest('command', command='tp @s 700.5 80 0.5')
     guest.wait(20)
-    guest('command', command='setblock 702 80 0 minecraft:end_gateway{exit_portal:[I;100,50,0],exact_teleport:1b}')
+    guest('command', command='setblock 702 80 0 minecraft:end_gateway{exit_portal:[I;100,50,0],ExactTeleport:1b}')
     guest('command', command='tp @s 702.5 80 0.5')
     gateway = None
     for _ in range(20):
@@ -1021,6 +1021,16 @@ def level_guest_end(host, guest, out):
     ex, ey, ez = (int(v // 1) for v in pos_of(guest))
     guest('command', command=f'setblock {ex + 2} {ey} {ez} minecraft:end_portal')
     guest('command', command=f'tp @s {ex + 2.5} {ey} {ez + 0.5}')
+    # ServerPlayer.showEndCredits: the guest's first exit from the End rolls the credits; closing
+    # them (WinScreen.onClose sends PERFORM_RESPAWN) takes it home.
+    credits = False
+    for _ in range(60):
+        guest.wait(5)
+        if guest('screen').get('screen') == 'win':
+            credits = True
+            guest.raw('key', 'esc', 'tap')
+            break
+    assert credits, 'the guest left the End without the credits'
     home = wait_dimension(guest, OVERWORLD, 600)
     guest.wait(20)
     assert dims(host, guest) == (OVERWORLD, OVERWORLD), f'host, guest in {dims(host, guest)}'
