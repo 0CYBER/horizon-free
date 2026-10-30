@@ -159,9 +159,11 @@ mod music;
 mod names;
 mod native_hooks;
 mod native_lifecycle;
+mod native_menus;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
+mod native_server;
 mod native_shaders;
 mod native_world_read;
 mod natural_spawning;
@@ -767,6 +769,15 @@ struct GameLevel<'w> {
     client_side: bool,
     /// Only the integrated or dedicated server dispatches native observations.
     native_authoritative: bool,
+    native_particles: &'w mut Vec<(
+        &'static str,
+        horizon_client::particles::ParticleOptions,
+        Option<BlockStateId>,
+        [f64; 3],
+        [f64; 3],
+        f64,
+        i32,
+    )>,
 }
 struct PlayerCollision {
     y: f64,
@@ -3299,9 +3310,13 @@ impl Game<'_> {
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
             native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
+            native_particles: &mut self.creatures.lan_particles,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
+        if self.lan.is_some() {
+            self.flush_lan_particles();
+        }
         result
     }
     /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
@@ -4539,9 +4554,16 @@ impl Game<'_> {
         {
             return Ok(());
         }
-        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        // Native mods, once the game allowed the break: a canceled one keeps
+        // the block, and a guest's acknowledgement puts it back in its world.
+        let mut canceled = false;
+        self.native_destroy_block(pos, state, &mut canceled);
+        if canceled {
+            return Ok(());
+        }
+        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         let broken = state;
         let facts = self.res.facts().get(state).clone();
         let state = self.crack_mined_pot(pos, state);
@@ -4951,6 +4973,21 @@ impl Game<'_> {
         {
             return Ok(false);
         }
+        // Native mods, where ItemStack.useOn and Item.use start: the block
+        // aimed at had its turn, and the item is off cooldown. A guest's
+        // UseItemOn reaches only useOn, its UseItem only use.
+        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
+        let mut claimed = false;
+        if let Some(hit) = block_hit {
+            self.native_use_item_on(&stack, hit.pos, hit.face, &mut claimed);
+        }
+        if !claimed && !on_block {
+            self.native_use_item(&stack, &mut claimed);
+        }
+        if claimed {
+            self.swing_arm();
+            return Ok(true);
+        }
         // ItemStack.useOn: after the block's own useItemOn/useWithoutItem
         // passed. DebugStickItem.useOn cycles the selected property.
         if let Some(hit) = block_hit
@@ -4974,7 +5011,6 @@ impl Game<'_> {
         }
         // A guest's UseItemOn stops at ItemStack.useOn: what Item.use does
         // (throw, drink, eat, raise, equip) waits for its UseItem.
-        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
         let spawn_egg = stack.item.ends_with("_spawn_egg");
         use horizon_client::first_person::UseResult;
         let swings = self.swings_started;
@@ -5164,6 +5200,7 @@ impl Game<'_> {
         // BlockItem.place: the used statistic and the placed_block trigger.
         self.stats.add("used", &stack.item, 1);
         self.trigger_block("minecraft:placed_block", target, &stack);
+        self.native_place_block(&stack, target, state);
         self.check_wither_spawn(target)?;
         self.check_golem_spawn(target)?;
         self.consume_held();
@@ -5785,10 +5822,10 @@ impl Game<'_> {
         self.ticks += 1;
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
-        let running = self.clock.world_runs();
-        if self.serving.is_some() || self.options.dedicated.is_some() {
-            self.native_lifecycle_server_tick_start(running);
-        }
+        let running = match self.level_pass.running {
+            Some(running) => running,
+            None => self.clock.world_runs(),
+        };
         // GameRenderer.tick: a wither's bar darkens the world, then fades;
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
@@ -8871,6 +8908,15 @@ impl Game<'_> {
                 horizon_client::shadows::shadow(
                     &self.world,
                     self.res.facts(),
+                    &|state| {
+                        self.res
+                            .collision()
+                            .cached_shapes()
+                            .cached_shape(state)
+                            .ok()
+                            .flatten()
+                            .and_then(|shape| shape.bounds())
+                    },
                     sprite,
                     camera,
                     pos,
@@ -9328,7 +9374,7 @@ impl Game<'_> {
         // the offset is the one from the player to the particle.
         let origin = from.unwrap_or(at);
         let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
-        self.lan_send_particles(&arc, at, spread, 0.0, 0);
+        self.lan_send_particles(self.dim.id(), &arc, None, at, spread, 0.0, 0);
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
@@ -9558,11 +9604,13 @@ impl Game<'_> {
                 );
                 // The players a server serves are sent them too.
                 self.lan_send_particles(
+                    self.dim.id(),
                     &indicator,
+                    None,
                     [feet[0], feet[1] + height * 0.5, feet[2]],
                     [0.1, 0.0, 0.1],
                     0.2,
-                    (actual * 0.5) as u32,
+                    (actual * 0.5) as u32 as i32,
                 );
             }
             self.last_hurt_by_player

@@ -170,6 +170,8 @@ pub enum HostEvent {
 }
 
 pub struct Hub {
+    /// Clicks on and closings of native mods' menus, for the game.
+    pub native_menu_events: Vec<super::menu::NativeMenuEvent>,
     pub lan: Lan,
     pub config: HubConfig,
     pub encoder: ChunkEncoder,
@@ -395,6 +397,7 @@ impl Hub {
             entities: Default::default(),
             entity_out: Vec::new(),
             mod_commands: (serde_json::Value::Null, None),
+            native_menu_events: Vec::new(),
             teams: Vec::new(),
         }
     }
@@ -954,6 +957,11 @@ impl Hub {
         }
     }
 
+    /// Whether vanilla's command tree has a command of this name.
+    pub fn vanilla_command(&self, name: &str) -> bool {
+        self.sync.commands.as_ref().is_some_and(|t| t.has(name))
+    }
+
     /// The key [`Hub::set_mod_commands`] last had: the game compares it
     /// with its server mods' each tick.
     pub fn mod_commands_key(&self) -> Option<u64> {
@@ -1336,6 +1344,17 @@ impl Hub {
 
     fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
         let mut g = self.guests.remove(i);
+        if let Some(m) = g
+            .menu
+            .as_ref()
+            .filter(|m| m.slots == super::menu::Slots::Native)
+        {
+            self.native_menu_events
+                .push(super::menu::NativeMenuEvent::Closed {
+                    uuid: g.uuid,
+                    window: m.window,
+                });
+        }
         if g.left_reason.is_empty() {
             g.left_reason = reason.to_owned();
         }
