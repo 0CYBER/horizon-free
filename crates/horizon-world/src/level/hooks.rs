@@ -46,6 +46,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.schedule_tick(pos, block, 1);
                     }
                 }
+                // StructureBlock.neighborChanged: the caller owns the block entity.
+                Class::Structure => self.emit(LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "structure_block",
+                }),
                 Class::CopperBulb => self.copper_bulb_check(pos, state),
                 Class::Crafter => self.crafter_neighbor_changed(pos, state),
                 Class::Diode => self.diode_neighbor_changed(pos, state),

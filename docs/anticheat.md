@@ -42,6 +42,7 @@ Every flag goes to `log`, with the time, the player, the check, its level, what 
 | Check | Catches | How |
 |---|---|---|
 | `timer` | a sped-up game (more ticks a second than the server's clock) | vanilla's client ends each tick with ServerboundClientTickEndPacket, at the server's tick rate. Each one spends one tick of a balance that wall-clock time fills. A client more than `tolerance_ms` (300) ahead is flagged; a quiet connection banks at most `max_lag_ms` (1000), so a lag spike's backlog isn't flagged and a pause can't be saved for a burst. A slow server tick adds its own time before its backlog is counted. |
+| `ground` | no-fall (claiming the ground to skip fall damage) and walking on water | a move that says it ends on the ground is judged only when every block around the feet (0.6 below them, 1/16 wider than the body) is air or a fluid, nothing collides a tenth of a block down, and no boat, minecart, shulker or happy ghast is near. Anything else (powder snow, scaffolding, a waterlogged slab...) isn't judged. A false claim is always dropped, so vanilla's fall damage follows; creative, spectators and gliders are skipped (no fall damage to dodge). |
 
 More checks (movement, combat, world, anti-xray) come in their own pull requests; this table lists the
 ones in this version.
@@ -68,4 +69,5 @@ cargo build --profile fast -p horizon-client --bin horizon-client
 cargo build --profile fast -p horizon-bots
 python3 tools/anticheat_e2e.py --bin-dir target/fast
 python3 tools/server_bench.py --servers horizon --bots 60 --behaviour walk --anticheat   # its cost
+python3 tools/server_bench.py --servers horizon --bots 60 --behaviour walk --ground --anticheat   # survival, on the ground
 ```

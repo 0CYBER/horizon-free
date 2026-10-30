@@ -1410,6 +1410,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
                         random,
                         chunk_box,
                         reference,
+                        false,
                         place_feature,
                     )?;
                 }

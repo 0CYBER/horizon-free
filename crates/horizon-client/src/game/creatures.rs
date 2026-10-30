@@ -944,7 +944,14 @@ impl Game<'_> {
             };
             if let Some(who) = who {
                 self.for_player(who, |g| {
-                    g.trigger_player("minecraft:kill_mob_near_sculk_catalyst")
+                    // CatalystListener: trigger(player, killedEntity, damageSource).
+                    let view = g.mob_entity(m);
+                    let blow = m.last_damage.map(|(d, _)| g.damage_view(d));
+                    g.trigger_killed_as(
+                        "minecraft:kill_mob_near_sculk_catalyst",
+                        &view,
+                        blow.as_ref(),
+                    );
                 });
             }
         }
@@ -1021,7 +1028,7 @@ impl Game<'_> {
     }
     /// A mob's damage source as advancement predicates see it: its type, the
     /// causing entity, and the projectile when one dealt it.
-    fn damage_view(&self, d: Damage) -> horizon_client::advancements::DamageView {
+    pub(super) fn damage_view(&self, d: Damage) -> horizon_client::advancements::DamageView {
         let source = match d.attacker {
             Some(Who::Player) => Some(self.player_entity()),
             Some(Who::Mob(id)) => self
@@ -1397,6 +1404,20 @@ impl Game<'_> {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
                 // doHurtTarget: the effect only when hurtServer took damage.
+                // Bee.doHurtTarget: a sting that hurt leaves the stinger in the
+                // body, then the poison.
+                MobEvent::StingPlayer {
+                    amount,
+                    from,
+                    poison_ticks,
+                } => {
+                    if self.mob_hits_player(amount, from, "minecraft:mob_attack") {
+                        self.combat.stuck.add_stinger();
+                        if poison_ticks > 0 {
+                            self.give_player_effect("minecraft:poison", poison_ticks, 0);
+                        }
+                    }
+                }
                 MobEvent::AttackPlayerWithEffect {
                     amount,
                     from,
@@ -1496,6 +1517,17 @@ impl Game<'_> {
                     }
                     self.combat.explosion_source = source_mob;
                     self.combat.explosion_source_named = noted;
+                    self.combat.explosion_cause = match species {
+                        Species::Creeper => Some("minecraft:creeper"),
+                        Species::Wither => Some("minecraft:wither"),
+                        Species::SulfurCube => Some("minecraft:sulfur_cube"),
+                        _ => None,
+                    }
+                    .map(|kind| horizon_client::advancements::EntityView {
+                        kind: kind.into(),
+                        position: at,
+                        ..Default::default()
+                    });
                     // Only a creeper or a wither empties the hives it blows up.
                     // The creeper is already gone from the list, so the event
                     // carries its kind.
@@ -1506,6 +1538,7 @@ impl Game<'_> {
                     };
                     self.combat.explosion_source = None;
                     self.combat.explosion_source_named = false;
+                    self.combat.explosion_cause = None;
                     result?
                 }
                 MobEvent::AttackMob {
@@ -1920,7 +1953,7 @@ impl Game<'_> {
                         .iter()
                         .find(|m| m.id == mob)
                         .map(|m| self.mob_entity(m));
-                    self.trigger_effects_changed(source);
+                    self.trigger_effects_changed_by(source);
                 }
                 MobEvent::DolphinTreasure { mob } => {
                     // ServerLevel.findNearestMapStructure(#dolphin_located, 50).
@@ -3512,11 +3545,19 @@ impl Game<'_> {
                     }])?;
                 }
                 let hurt = match who {
-                    Who::Player => self.mob_hits_player(
-                        amount,
-                        [p.previous.x, p.previous.y, p.previous.z],
-                        "minecraft:arrow",
-                    ),
+                    Who::Player => {
+                        let hurt = self.mob_hits_player(
+                            amount,
+                            [p.previous.x, p.previous.y, p.previous.z],
+                            "minecraft:arrow",
+                        );
+                        // AbstractArrow.onHitEntity: a hit that hurt leaves a
+                        // non-piercing arrow stuck in the body.
+                        if hurt && p.arrow.as_ref().is_some_and(|a| a.pierce == 0) {
+                            self.combat.stuck.add_arrow();
+                        }
+                        hurt
+                    }
                     Who::Mob(id) => {
                         let hurt = self
                             .mobs
@@ -5178,8 +5219,16 @@ impl Game<'_> {
                 if !layers_only {
                     self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 }
+                if let Some((_, name)) = self
+                    .remote_player_names()
+                    .into_iter()
+                    .find(|(id, _)| *id == mob.id)
+                {
+                    self.player_ears_geometry(mob, &name, camera, alpha as f32, packed, out);
+                }
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+                self.stuck_in_body_geometry(mob, mob.id as i32, camera, alpha as f32, packed, out);
             }
             // CustomHeadLayer (a pumpkin, skull or head item) included.
             self.mob_block_geometry(mob, camera, alpha, packed, out);

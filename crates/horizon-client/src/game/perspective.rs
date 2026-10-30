@@ -486,6 +486,12 @@ impl Game<'_> {
         m.extra.fall_flying = fall_flying;
         m.extra.fall_fly_ticks = fly_ticks;
         m.extra.auto_spin_attack = spinning;
+        // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID: as the
+        // server synced them, else the local body's own.
+        (m.extra.arrow_count, m.extra.stinger_count) = match &self.remote {
+            Some(r) => (r.own_arrows, r.own_stingers),
+            None => (self.combat.stuck.arrows, self.combat.stuck.stingers),
+        };
         m.extra.main_hand_left = self.settings.main_hand_left;
         m.extra.hidden_model_parts = !self.settings.file.model_customisation() & 0x7F;
         m.extra.using_item = using;
@@ -617,8 +623,17 @@ impl Game<'_> {
         if !self.own_invisible() {
             self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
         }
+        self.player_ears_geometry(
+            m,
+            &self.own_profile_name(),
+            camera,
+            alpha as f32,
+            packed,
+            out,
+        );
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
+        self.stuck_in_body_geometry(m, self.own_entity_id(), camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
         // CustomHeadLayer: a pumpkin, skull or other head item.
         self.head_item_geometry(m, camera, alpha, packed, true, out);
@@ -708,6 +723,14 @@ impl Game<'_> {
         if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
+        self.player_ears_geometry(
+            &m,
+            &self.own_profile_name(),
+            camera,
+            1.0,
+            240 | 240 << 8,
+            &mut verts,
+        );
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
@@ -890,6 +913,94 @@ impl Game<'_> {
             self.res.mob_data(),
             out,
         );
+    }
+    /// `Deadmau5EarsLayer` (`AbstractClientPlayer.showExtraEars`): the ears
+    /// of a player whose profile name is `deadmau5`, in the player's skin.
+    pub(super) fn player_ears_geometry(
+        &self,
+        m: &Mob,
+        name: &str,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        if name != "deadmau5" {
+            return;
+        }
+        let sprites = &self.gui.atlas.sprites;
+        // The body's own fallback: a skin with no sprite draws the default.
+        let Some(rect) = m
+            .skin
+            .as_deref()
+            .and_then(|s| sprites.get(s))
+            .or_else(|| sprites.get(&m.kind.texture))
+        else {
+            return;
+        };
+        horizon_client::mobs::render::ears(
+            m,
+            partial,
+            horizon_client::mobs::render::base_transform(m, partial, camera),
+            [rect.u0, rect.v0, rect.u1, rect.v1],
+            light,
+            self.res.mob_data(),
+            out,
+        );
+    }
+    /// The entity id the local player has: the server's, else the LAN host's.
+    fn own_entity_id(&self) -> i32 {
+        match (&self.remote, &self.lan) {
+            (Some(r), _) => r.entity_id,
+            (None, Some(host)) => host.host_entity,
+            _ => 0,
+        }
+    }
+    /// `ArrowLayer` and `BeeStingerLayer` (`StuckInBodyLayer`) for a player:
+    /// the arrows and bee stingers stuck in the body, placed from the entity
+    /// id `id`.
+    pub(super) fn stuck_in_body_geometry(
+        &self,
+        m: &Mob,
+        id: i32,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let sprites = &self.gui.atlas.sprites;
+        let layers = [
+            (
+                m.extra.arrow_count,
+                false,
+                self.arrow_model.as_ref(),
+                "entity/projectiles/arrow",
+            ),
+            (
+                m.extra.stinger_count,
+                true,
+                self.bee_stinger_model.as_ref(),
+                "entity/bee/bee_stinger",
+            ),
+        ];
+        for (count, on_surface, model, texture) in layers {
+            let (true, Some(model), Some(rect)) = (count > 0, model, sprites.get(texture)) else {
+                continue;
+            };
+            horizon_client::mobs::render::stuck_in_body(
+                m,
+                id,
+                partial,
+                camera,
+                self.res.mob_data(),
+                count,
+                on_surface,
+                model,
+                [rect.u0, rect.v0, rect.u1, rect.v1],
+                light,
+                out,
+            );
+        }
     }
     /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
     /// player (`SpinAttackEffectModel.setupAnim`).

@@ -728,6 +728,7 @@ impl PoolPiece {
         random: &mut R,
         chunk_box: BoundingBox,
         reference: [i32; 3],
+        keep_jigsaws: bool,
         place_feature: &mut PlaceFeature<'_, W, R>,
     ) -> Result<bool, PlacementQueryError> {
         place_element(
@@ -740,6 +741,7 @@ impl PoolPiece {
             reference,
             self.rotation,
             self.waterlogging,
+            keep_jigsaws,
             place_feature,
         )
     }
@@ -758,6 +760,7 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
     reference: [i32; 3],
     rotation: Rotation,
     waterlogging: bool,
+    keep_jigsaws: bool,
     place_feature: &mut PlaceFeature<'_, W, R>,
 ) -> Result<bool, PlacementQueryError> {
     match element {
@@ -775,6 +778,7 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
                     reference,
                     rotation,
                     waterlogging,
+                    keep_jigsaws,
                     place_feature,
                 )? {
                     return Ok(false);
@@ -814,7 +818,10 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
             if !*legacy {
                 settings.processors.push(ignore);
             }
-            settings.processors.push(&Processor::JigsawReplacement);
+            // SinglePoolElement.getSettings: keepJigsaws skips the replacement.
+            if !keep_jigsaws {
+                settings.processors.push(&Processor::JigsawReplacement);
+            }
             settings.processors.extend(processors.0.iter());
             if *projection == Projection::TerrainMatching {
                 settings

@@ -11,7 +11,7 @@ impl Launcher {
     /// and an update when one waits. No `tag`: a Java instance's Minecraft (`game` then names its
     /// loader too).
     pub(super) fn hero(
-        &self,
+        &mut self,
         tag: &str,
         game: &str,
         prepared: bool,
@@ -19,6 +19,10 @@ impl Launcher {
     ) -> Div {
         let t = self.theme;
         let n = t.night;
+        let icon = self
+            .selected_instance()
+            .cloned()
+            .map(|i| self.instance_icon(&i, 56.));
         let instance = self.selected_instance();
         let name = instance.map_or(
             if tag.is_empty() {
@@ -63,9 +67,17 @@ impl Launcher {
             .gap(px(10.))
             .child(state)
             .child(
-                shell::text(night::DISPLAY, c(n.ink))
-                    .truncate()
-                    .child(name.to_string()),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .children(icon)
+                    .child(
+                        shell::text(night::DISPLAY, c(n.ink))
+                            .min_w_0()
+                            .truncate()
+                            .child(name.to_string()),
+                    ),
             )
             .children(instance.map(|i| {
                 shell::text(night::UI, c(n.ink_soft)).child(instances_page::played_line(i))

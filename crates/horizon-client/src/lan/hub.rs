@@ -94,6 +94,8 @@ pub struct HostState {
     pub attributes: Vec<play::AttributeSnapshot>,
     /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` (the item in use).
     pub living_flags: i8,
+    /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID`.
+    pub stuck: (i32, i32),
     /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
     pub bed: Option<[i32; 3]>,
     pub body: BodyFlags,
@@ -272,6 +274,17 @@ pub fn display_name(uuid: u128, name: &str) -> Tag {
         ),
         ("insertion", string(name)),
     ])
+}
+
+/// `LivingEntity.DATA_ARROW_COUNT_ID` (12) and `DATA_STINGER_COUNT_ID` (13):
+/// the counts of what is stuck in a player, 0 by default.
+fn stuck_meta(state: &mut EntityState, (arrows, stingers): (i32, i32)) {
+    for (index, count) in [(12, arrows), (13, stingers)] {
+        if count != 0 {
+            state.meta.push((index, serializer::INT, Value::Int(count)));
+        }
+        state.defaults.push((index, serializer::INT, Value::Int(0)));
+    }
 }
 
 impl Hub {
@@ -1941,6 +1954,7 @@ impl Hub {
                 &[],
             );
             state.spectator = h.game_mode == 3;
+            stuck_meta(&mut state, h.stuck);
             all.push(state);
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -1980,6 +1994,7 @@ impl Hub {
                     &g.effects.list,
                 );
                 state.spectator = g.spectator();
+                stuck_meta(&mut state, g.stuck);
                 state
             })
             .collect();
@@ -2622,6 +2637,20 @@ impl Hub {
             self.resend_teleport(i, Some(start));
             return;
         }
+        // The anticheat's `ground`: a claim of the ground with nothing to
+        // stand on is dropped (no-fall, walking on water).
+        let mut flags = flags;
+        if flags & 1 != 0 && self.anticheat.is_some() {
+            match self.anticheat_ground(i, to, stands, ctx, events) {
+                Some(true) => {
+                    let g = &mut self.guests[i];
+                    (g.yaw, g.pitch) = (yaw, pitch);
+                    return;
+                }
+                Some(false) => flags &= !1,
+                None => {}
+            }
+        }
         // clientIsFloating, from the move that is accepted: no upward-or-level
         // step onto something, nothing but air around the body, and nothing
         // that lets the player hover (the server's allow-flight, mayfly,
@@ -3193,6 +3222,22 @@ fn listed_properties(
 mod tests {
     use super::*;
     use crate::fast_hash::FxHashSet;
+
+    /// The counts of what is stuck in a player are sent when set, and a
+    /// count back at zero is sent as the default.
+    #[test]
+    fn stuck_counts_are_synched_as_entity_data() {
+        let mut state = EntityState::default();
+        stuck_meta(&mut state, (3, 0));
+        assert_eq!(state.meta, vec![(12, serializer::INT, Value::Int(3))]);
+        assert_eq!(
+            state.defaults,
+            vec![
+                (12, serializer::INT, Value::Int(0)),
+                (13, serializer::INT, Value::Int(0))
+            ]
+        );
+    }
 
     /// `getMaximumFlyingTicks`: 80 ticks at normal gravity, ceil(80 * 0.08 /
     /// gravity) where it is weaker, and never a kick without gravity.

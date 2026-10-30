@@ -76,6 +76,7 @@ mod recipe_book_fixture;
 mod recipe_book_render_fixture;
 mod recipe_book_view_fixture;
 mod recipe_fixture;
+mod remote_attack_probe;
 mod scene_collision_probe;
 mod scene_motion_probe;
 mod scoreboard_fixture;
@@ -171,6 +172,7 @@ probes! {
     recipe_book_render_fixture,
     recipe_book_view_fixture,
     recipe_fixture,
+    remote_attack_probe,
     scene_collision_probe,
     scene_motion_probe,
     scoreboard_fixture,

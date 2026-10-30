@@ -409,6 +409,29 @@ impl Game<'_> {
             })
             .map(|m| self.mob_entity(m))
             .collect();
+        // The players are entities in that box too, unless the bolt struck
+        // them (`thunderHit` reaches 3 blocks, 9 up: `hitEntities`).
+        let struck = |p: [f64; 3]| {
+            (p[0] - at[0]).abs() <= 3.0
+                && (p[2] - at[2]).abs() <= 3.0
+                && p[1] >= at[1] - 3.0
+                && p[1] <= at[1] + 9.0
+        };
+        let mut viewers = viewers;
+        self.for_each_player(|g| {
+            let Some(p) = g.player.as_ref().filter(|p| !p.health.dead_or_dying()) else {
+                return;
+            };
+            let pos = [p.position.x, p.position.y, p.position.z];
+            if (pos[0] - at[0]).abs() <= 15.0
+                && (pos[2] - at[2]).abs() <= 15.0
+                && pos[1] >= at[1] - 15.0
+                && pos[1] <= at[1] + 21.0
+                && !struck(pos)
+            {
+                viewers.push(g.player_entity());
+            }
+        });
         self.for_each_player(|g| {
             let Some(p) = g.player.as_ref().map(|p| p.position) else {
                 return;

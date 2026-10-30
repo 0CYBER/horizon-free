@@ -347,17 +347,11 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
                 3 => 18,
                 _ => 0,
             };
-            if seconds > 0 {
-                cx.events.push(MobEvent::AttackPlayerWithEffect {
-                    amount,
-                    from,
-                    effect: "minecraft:poison",
-                    ticks: seconds * 20,
-                    amplifier: 0,
-                });
-            } else {
-                cx.events.push(MobEvent::AttackPlayer(amount, from));
-            }
+            cx.events.push(MobEvent::StingPlayer {
+                amount,
+                from,
+                poison_ticks: seconds * 20,
+            });
         }
         Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
             target: id,
