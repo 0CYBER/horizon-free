@@ -5237,6 +5237,34 @@ impl Game<'_> {
     fn creative_stacks(&self) -> Vec<Option<ItemStack>> {
         creative_sync_stacks(&self.inventory, &self.offhand, &self.armor)
     }
+    /// `CreativeInventoryListener.slotChanged`: `handleCreativeModeItemAdd` for every slot the
+    /// player's inventory menu changed. `CreativeModeInventoryScreen.slotClicked` ends in
+    /// `broadcastChanges`, so a click's slots go out with the click, right behind a thrown
+    /// stack, and not at the end of the tick: a slot update the server sends meanwhile (the
+    /// pickup of what a held Q threw) can then never land on a change still unsent and undo it.
+    pub(super) fn send_creative_slots(&mut self) {
+        if !self.creative {
+            return;
+        }
+        let stacks = self.creative_stacks();
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let mut changed = Vec::new();
+        for (i, stack) in stacks.into_iter().enumerate() {
+            if stack != r.synced[i] {
+                r.synced[i] = stack.clone();
+                changed.push((creative_sync_slot(i), stack));
+            }
+        }
+        for (slot, stack) in changed {
+            let item = self.to_network(&stack);
+            self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
+                slot,
+                item,
+            }));
+        }
+    }
     /// Inventory as the server last described it.
     fn remote_synced(&mut self) {
         let stacks = self.creative_stacks();
