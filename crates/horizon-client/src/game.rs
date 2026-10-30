@@ -4554,9 +4554,16 @@ impl Game<'_> {
         {
             return Ok(());
         }
-        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        // Native mods, once the game allowed the break: a canceled one keeps
+        // the block, and a guest's acknowledgement puts it back in its world.
+        let mut canceled = false;
+        self.native_destroy_block(pos, state, &mut canceled);
+        if canceled {
+            return Ok(());
+        }
+        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         let broken = state;
         let facts = self.res.facts().get(state).clone();
         let state = self.crack_mined_pot(pos, state);
@@ -5193,6 +5200,7 @@ impl Game<'_> {
         // BlockItem.place: the used statistic and the placed_block trigger.
         self.stats.add("used", &stack.item, 1);
         self.trigger_block("minecraft:placed_block", target, &stack);
+        self.native_place_block(&stack, target, state);
         self.check_wither_spawn(target)?;
         self.check_golem_spawn(target)?;
         self.consume_held();

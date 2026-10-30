@@ -114,6 +114,16 @@
       "name": "use_item",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+    },
+    {
+      "name": "destroy_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"
+    },
+    {
+      "name": "place_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
     }
   ]
 }
