@@ -5178,6 +5178,13 @@ impl Game<'_> {
                 if !layers_only {
                     self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 }
+                if let Some((_, name)) = self
+                    .remote_player_names()
+                    .into_iter()
+                    .find(|(id, _)| *id == mob.id)
+                {
+                    self.player_ears_geometry(mob, &name, camera, alpha as f32, packed, out);
+                }
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
             }
