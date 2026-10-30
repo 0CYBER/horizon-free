@@ -2713,6 +2713,10 @@ impl Game<'_> {
                     self.remote_firework_explosion(p.id);
                 }
                 self.remote_fangs_event(p.id as u32, p.event);
+                // Arrow.handleEntityEvent 0: a tipped arrow's burst of particles.
+                if p.event == 0 {
+                    self.remote_arrow_puff(p.id as u32);
+                }
                 // LivingEntity.handleEntityEvent 2: a spear's hit felt.
                 if p.event == 2 {
                     self.remote_kinetic_hit(p.id);
@@ -3035,9 +3039,7 @@ impl Game<'_> {
                 }
             }
             C::ContainerSetContent(p) => {
-                if let Some(r) = self.remote.as_mut() {
-                    r.state_id = p.state;
-                }
+                self.remote_menu_state(p.container, p.state);
                 for (slot, item) in p.items.iter().enumerate() {
                     let stack = self.to_stack(item);
                     self.set_menu_slot(p.container, slot as i32, stack);
@@ -3046,9 +3048,7 @@ impl Game<'_> {
                 self.remote_synced();
             }
             C::ContainerSetSlot(p) => {
-                if let Some(r) = self.remote.as_mut() {
-                    r.state_id = p.state;
-                }
+                self.remote_menu_state(p.container, p.state);
                 let stack = self.to_stack(&p.item);
                 self.tutorial_get_item(stack.as_ref());
                 // ClientPacketListener.handleContainerSetSlot: a hotbar slot that
@@ -4623,7 +4623,8 @@ impl Game<'_> {
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
         // tropical fish lie on their side without `in_water`, #1591).
         // A frozen level ticks only the players, as below.
-        let (fluids, thundering): (Vec<_>, bool) = {
+        // Entity.isInRain for the wolves, which dry off by their own `Wolf.tick`.
+        let (fluids, rain, thundering): (Vec<_>, Vec<_>, bool) = {
             let w = self.mob_world_base(&[]);
             let players = self.remote.as_ref().map(|r| &r.level_players);
             let fluids = self
@@ -4634,7 +4635,15 @@ impl Game<'_> {
                         .then(|| w.fluids(m.bounds(), m.eye_y()))
                 })
                 .collect();
-            (fluids, w.thundering)
+            let rain = self
+                .mobs
+                .iter()
+                .map(|m| {
+                    m.species() == horizon_client::mobs::Species::Wolf
+                        && horizon_client::mobs::tame::in_rain(m, &w)
+                })
+                .collect();
+            (fluids, rain, w.thundering)
         };
         for (m, fluids) in self.mobs.iter_mut().zip(fluids) {
             if let Some(fluids) = fluids {
@@ -4682,7 +4691,7 @@ impl Game<'_> {
         let players = &r.level_players;
         let mut using = Vec::new();
         let mut mob_fx = Vec::new();
-        for m in &mut self.mobs {
+        for (m, rain) in self.mobs.iter_mut().zip(rain) {
             let player = players.contains_key(&(m.id as i32));
             if (!running && !player) || driven == Some(m.id) {
                 continue;
@@ -4723,8 +4732,11 @@ impl Game<'_> {
             }
             // The particles these mobs' own ticks draw on the client side.
             {
-                use horizon_client::mobs::{Species as S, cube, illusioner, nautilus, wither};
+                use horizon_client::mobs::{
+                    Species as S, cube, illusioner, nautilus, tame, wither,
+                };
                 match m.species() {
+                    S::Wolf => tame::client_tick(m, rain, &mut mob_fx),
                     S::Slime | S::MagmaCube | S::SulfurCube => cube::client_tick(m, &mut mob_fx),
                     S::Nautilus | S::ZombieNautilus => nautilus::client_tick(m, &mut mob_fx),
                     S::Illusioner => illusioner::client_tick(m, &mut mob_fx),
@@ -4826,8 +4838,13 @@ impl Game<'_> {
             horizon_client::mobs::aquatic::squid_client_step(m, &mut mob_fx);
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
-            let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
-            m.limb_speed += (target - m.limb_speed) * 0.4;
+            let (target, factor) = if horizon_client::mobs::camel::is_camel(m.species()) {
+                // Camel.updateWalkAnimation.
+                horizon_client::mobs::camel::walk_target(m, (dx * dx + dz * dz).sqrt() as f32)
+            } else {
+                ((((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0), 0.4)
+            };
+            m.limb_speed += (target - m.limb_speed) * factor;
             m.limb_position += m.limb_speed;
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::post_tick(m);
@@ -5026,11 +5043,17 @@ impl Game<'_> {
         // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
         let mut creative_slots = Vec::new();
         if self.creative {
+            // A server's open menu takes clicks, which it applies itself: what
+            // this client predicts for them isn't an edit to send (it would
+            // overwrite the server's stacks whenever the prediction is wrong).
+            let in_menu = r.menu.is_some();
             let stacks = creative_sync_stacks(&self.inventory, &self.offhand, &self.armor);
             for (i, stack) in stacks.into_iter().enumerate() {
                 if stack != r.synced[i] {
                     r.synced[i] = stack.clone();
-                    creative_slots.push((creative_sync_slot(i), stack));
+                    if !in_menu {
+                        creative_slots.push((creative_sync_slot(i), stack));
+                    }
                 }
             }
         }
@@ -5448,7 +5471,9 @@ impl Game<'_> {
             let stand_fits = held
                 .as_ref()
                 .is_some_and(|s| &*s.item == "minecraft:armor_stand")
-                && self.armor_stand_spawn(&hit).is_some();
+                && held
+                    .as_ref()
+                    .is_some_and(|s| self.armor_stand_spawn(&hit, s).is_some());
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -5976,6 +6001,12 @@ impl Game<'_> {
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
+            // InstrumentItem.use: the horn plays here too (`playSound(player, ...)`
+            // skips the player's own client), the server's copy tells the others.
+            "minecraft:goat_horn" => {
+                self.remote_use_instrument(held);
+                return;
+            }
             // EnderEyeItem.use: startUsingItem unless an End portal frame is
             // aimed at, with or without a stronghold to throw the eye at.
             "minecraft:ender_eye" => !self.aims_at_end_portal_frame(),
@@ -5989,6 +6020,27 @@ impl Game<'_> {
         };
         if start {
             self.using = Some((self.held_slot(), 0));
+        }
+    }
+    /// `InstrumentItem.use` on this client: unless the horn is on cooldown,
+    /// it is held up, plays its sound at the player and starts its cooldown.
+    fn remote_use_instrument(&mut self, held: &ItemStack) {
+        let Some(instrument) = self.res.items().instrument(held) else {
+            return;
+        };
+        let group = horizon_client::cooldowns::group(held, None);
+        if self.cooldowns.is_on_cooldown(&group) {
+            return;
+        }
+        self.using = Some((self.held_slot(), 0));
+        let at = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        self.audio
+            .play(&instrument.sound, at, instrument.range / 16.0, 1.0);
+        if instrument.use_duration > 0.0 {
+            self.add_cooldown(group, instrument.use_ticks());
         }
     }
     /// Whether `stack` stays in use until the button lets go (bows,
@@ -6088,6 +6140,15 @@ impl Game<'_> {
         // the button lets go.
         if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {
             self.using = in_hand.then_some((slot, ticks + 1));
+            return;
+        }
+        // A goat horn is held up for its instrument's use duration.
+        if let Some(duration) = stack
+            .as_ref()
+            .and_then(|s| self.res.items().instrument(s))
+            .map(|i| i.use_ticks().max(0) as u32)
+        {
+            self.using = (in_hand && ticks + 1 < duration).then_some((slot, ticks + 1));
             return;
         }
         let consumable = stack
@@ -6538,6 +6599,14 @@ impl Game<'_> {
             return;
         }
         self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
+    }
+    /// `AbstractContainerMenu.setItem`/`initializeContents`: the state id a
+    /// click answers with is the open menu's, not another window's.
+    fn remote_menu_state(&mut self, container: i32, state: i32) {
+        let open = self.remote_menu().0;
+        if let Some(r) = self.remote.as_mut().filter(|_| container == open) {
+            r.state_id = state;
+        }
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
     /// when none is open).

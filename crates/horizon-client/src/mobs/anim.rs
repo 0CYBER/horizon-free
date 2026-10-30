@@ -244,6 +244,8 @@ pub enum ArmPose {
     CrossbowCharge,
     /// Raising a trident to throw it (or to launch with Riptide).
     ThrowTrident,
+    /// Playing a goat horn.
+    TootHorn,
     /// A spear held out (`HumanoidModel.ArmPose.SPEAR`), at rest or charging.
     Spear,
     /// A brush being used (`HumanoidModel.ArmPose.BRUSH`).
@@ -404,6 +406,10 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             let x = p.get(arm)[3];
             p.xrot(arm, x * 0.5 - PI);
             p.yrot(arm, 0.0);
+        }
+        ArmPose::TootHorn => {
+            p.xrot(arm, hx.clamp(-1.2, 1.2) - 1.483_529_8);
+            p.yrot(arm, hy + if right { -FRAC_PI_6 } else { FRAC_PI_6 });
         }
         ArmPose::CrossbowHold => crossbow_hold(p, hx, hy, right),
         ArmPose::CrossbowCharge => crossbow_charge(p, h.charge.0, h.charge.1, right),
@@ -783,6 +789,7 @@ pub fn setup(
                     Some(_) if using_main && m.extra.blocking => ArmPose::Block,
                     Some("minecraft:bow") if using_main => ArmPose::Bow,
                     Some("minecraft:trident") if using_main => ArmPose::ThrowTrident,
+                    Some("minecraft:goat_horn") if using_main => ArmPose::TootHorn,
                     Some("minecraft:crossbow") if using_main && !m.extra.charged => {
                         ArmPose::CrossbowCharge
                     }
@@ -802,6 +809,8 @@ pub fn setup(
                     ArmPose::Spear
                 } else if using_off && m.extra.blocking {
                     ArmPose::Block
+                } else if using_off && m.extra.off_hand.as_deref() == Some("minecraft:goat_horn") {
+                    ArmPose::TootHorn
                 } else if using_off && m.extra.off_hand.as_deref() == Some("minecraft:brush") {
                     ArmPose::Brush
                 } else {
@@ -869,6 +878,10 @@ pub fn setup(
                 bob(p, "right_arm", s.age, 1.0);
                 bob(p, "left_arm", s.age, -1.0);
             }
+            // BoggedModel.setupAnim: the mushrooms on the head come off once sheared.
+            if m.species() == super::Species::Bogged {
+                p.visible("mushrooms", !m.extra.sheared);
+            }
         }
         Anim::Witch => super::witch::anim(m, s, p),
         Anim::Villager => super::villager::anim(m, s, p),
@@ -889,6 +902,11 @@ pub fn setup(
                 for part in ["left_chest", "right_chest"] {
                     p.visible(part, false);
                 }
+            }
+            // EquineSaddleModel.setupAnim: the reins show only while ridden
+            // (`isRidden` is `Entity.isVehicle`: a player or a mob rides it).
+            for part in ["left_saddle_line", "right_saddle_line"] {
+                p.visible(part, m.rider.is_some() || m.extra.rider.is_some());
             }
         }
         Anim::Hoglin => super::piglin::hoglin_anim(m, s, p),

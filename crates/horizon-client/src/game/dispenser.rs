@@ -908,6 +908,12 @@ impl Game<'_> {
         let Some(id) = self.spawn_mob_at(&kind, front, facing != Direction::Up) else {
             return Ok((Some(stack), CLICK));
         };
+        // Entity.applyImplicitComponents: a name from an anvil names the mob.
+        if let Some(name) = stack.custom_name()
+            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+        {
+            m.custom_name = Some(name.to_owned());
+        }
         self.mob_ambient(id)?;
         // SpawnEggItemBehavior: the entity was placed by the dispenser.
         self.post_block_game_event("minecraft:entity_place", [pos.0, pos.1, pos.2], None, None);
@@ -1051,8 +1057,12 @@ impl Game<'_> {
         // EntityType.create rolls a yaw from the level random before the stack config turns it.
         let _ = self.world.random.next_float();
         self.next_entity += 1;
-        let stand =
+        let mut stand =
             horizon_client::entities::ArmorStand::new(self.next_entity, foot, y_rot(facing));
+        // Entity.applyImplicitComponents: a name from an anvil names the stand.
+        if let Some(name) = stack.custom_name() {
+            stand.custom_name = Some(horizon_client::text::Text::literal(name));
+        }
         self.world.modified.insert((front.0 >> 4, front.2 >> 4));
         self.armor_stands.push(stand);
         (shrink(stack), CLICK)

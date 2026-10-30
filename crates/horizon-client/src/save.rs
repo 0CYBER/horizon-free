@@ -155,6 +155,27 @@ impl SessionLock {
         file.flush()?;
         Ok(Self(file))
     }
+    /// `DirectoryLock.isLocked`: another copy holds the world's `session.lock`.
+    /// A world without the file is not locked; one whose file may not be opened
+    /// is.
+    pub fn is_locked(world: &Path) -> bool {
+        let file = match fs::OpenOptions::new()
+            .write(true)
+            .open(world.join("session.lock"))
+        {
+            Ok(file) => file,
+            Err(e) => return e.kind() == std::io::ErrorKind::PermissionDenied,
+        };
+        match file.try_lock() {
+            Err(fs::TryLockError::WouldBlock) => true,
+            Err(_) => false,
+            // Take the probe's own lock back at once, as `SessionLock` does on drop.
+            Ok(()) => {
+                let _ = file.unlock();
+                false
+            }
+        }
+    }
 }
 /// Bring a world last saved by an older game version to the current format, as
 /// 26.3 does when it opens one: the file fixes and level.dat first
@@ -2981,6 +3002,9 @@ pub struct Level {
     pub food_tick_timer: i32,
     /// Abilities.flying: whether creative/spectator flight is active.
     pub flying: bool,
+    /// The vehicle the player rides, by UUID (`ServerPlayer.saveParentVehicle`'s
+    /// "RootVehicle"), so the ride comes back on the next login.
+    pub root_vehicle: Option<[i32; 4]>,
     /// The player compound as loaded, for fields Horizon does not model
     /// (ender chest, effects, abilities, recipe book, attributes, ...).
     pub player_extra: Option<Tag>,
@@ -3270,6 +3294,12 @@ impl Level {
                 .collect(),
             _ => Vec::new(),
         };
+        // ServerPlayer.saveParentVehicle: the vehicle the player rides, by
+        // UUID. Horizon keeps the vehicle in the world, so the file names it
+        // instead of holding a second copy of it.
+        self.root_vehicle = p
+            .get("RootVehicle")
+            .and_then(|r| uuid_from_tag(r.get("Attach")));
     }
     /// The player compound: the loaded one with Horizon's state written over it.
     pub fn player_tag(&self) -> Tag {
@@ -3477,6 +3507,18 @@ impl Level {
             ] {
                 map.entry(key.into()).or_insert(value);
             }
+        }
+        // ServerPlayer.saveParentVehicle: the vehicle the player rides, by
+        // UUID. Horizon keeps the vehicle in the world, so the file names it
+        // instead of holding a second copy of it.
+        if let Some(vehicle) = self.root_vehicle
+            && p.get("RootVehicle").is_none()
+        {
+            put(
+                &mut p,
+                "RootVehicle",
+                Tag::compound([("Attach", uuid_tag(vehicle))]),
+            );
         }
         p
     }
@@ -5621,6 +5663,31 @@ mod tests {
             .and_then(|a| number(a.get("flying")))
             .unwrap_or(0);
         assert_eq!(flying_survival, 0);
+    }
+
+    #[test]
+    fn unconsumed_root_vehicle_keeps_the_complete_vanilla_tree() {
+        let entity = Tag::compound([
+            ("id", Tag::String("minecraft:horse".into())),
+            ("UUID", uuid_tag([5, 6, 7, 8])),
+            (
+                "Passengers",
+                Tag::List(vec![Tag::compound([
+                    ("id", Tag::String("minecraft:pig".into())),
+                    ("UUID", uuid_tag([1, 2, 3, 4])),
+                ])]),
+            ),
+        ]);
+        let vehicle = Tag::compound([("Attach", uuid_tag([1, 2, 3, 4])), ("Entity", entity)]);
+        let raw = Tag::compound([("RootVehicle", vehicle.clone())]);
+        let mut level = Level::default();
+        level.read_player(&raw);
+        level.player_extra = Some(raw);
+        assert_eq!(level.root_vehicle, Some([1, 2, 3, 4]));
+        assert_eq!(level.player_tag().get("RootVehicle"), Some(&vehicle));
+        // Even saving before the vehicle is restored must not destroy it.
+        level.root_vehicle = None;
+        assert_eq!(level.player_tag().get("RootVehicle"), Some(&vehicle));
     }
 
     /// `RecipesUsed` is what a furnace owes in experience, so a save that drops it pays the
