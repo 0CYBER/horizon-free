@@ -382,7 +382,8 @@ impl Game<'_> {
             m.head_pitch = self.pitch;
             self.player_model = Some(m);
         }
-        let crouching = p.pose == Pose::Crouching;
+        let pose = p.pose;
+        let crouching = pose == Pose::Crouching;
         let position = p.position;
         let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
         let spinning = p.auto_spin_attack_ticks > 0;
@@ -478,6 +479,8 @@ impl Game<'_> {
         // The worn stacks, for the elytra's glint (`WingsLayer`).
         m.extra.armor = armor;
         m.extra.crouching = crouching;
+        // Guests and server players take their pose from DATA_POSE, not here.
+        m.extra.avatar_pose = pose;
         m.extra.passenger = riding;
         m.velocity = velocity;
         m.extra.fall_flying = fall_flying;
