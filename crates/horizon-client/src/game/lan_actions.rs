@@ -300,10 +300,14 @@ impl Game<'_> {
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
             // The first body after joining burns, breathes and falls on as saved.
-            if let Some(saved) = host.hub.guests[i].loaded_body.take()
-                && let Some(m) = host.hub.guests[i].motion.as_mut()
+            let g = &mut host.hub.guests[i];
+            if let Some(saved) = g.loaded_body.take()
+                && let Some(m) = g.motion.as_mut()
             {
                 saved.apply(m);
+                // LivingEntity.readAdditionalSaveData: the saved attributes.
+                let _ =
+                    m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
             }
             // The saved golden hearts go on the first body of a player who
             // has been here before.
