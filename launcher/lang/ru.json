@@ -107,7 +107,6 @@
   "Playing offline": "Игра офлайн",
   "Online servers need a Microsoft account.": "Для онлайн-серверов нужен аккаунт Microsoft.",
   "Accounts…": "Аккаунты…",
-  "The first preparation takes a few minutes.": "Первая подготовка занимает несколько минут.",
   "Horizon crashed": "Horizon вылетел",
   "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing.": "Сообщая об этом в Discord, приложите файл отчёта о сбое (или вставьте его через «Скопировать отчёт») и расскажите, что вы делали.",
   "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing.": "Игра закрылась без отчёта о сбое. Сообщая об этом в Discord, приложите latest.log из папки журналов и расскажите, что вы делали.",
@@ -195,5 +194,12 @@
   "Version": "Версия",
   "Sign in to play": "Войдите, чтобы играть",
   "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "Устанавливать Minecraft не нужно: Horizon скачает его с серверов Mojang для вашей учётной записи.",
-  "Waiting for Microsoft… the window goes on by itself.": "Ожидание Microsoft… окно продолжит само."
+  "Waiting for Microsoft… the window goes on by itself.": "Ожидание Microsoft… окно продолжит само.",
+  "Downloading Minecraft {version} from Mojang · {done} of {total} files": "Загрузка Minecraft {version} с серверов Mojang · {done} из {total} файлов",
+  "Downloading from Mojang · {done} of {total} files": "Загрузка с серверов Mojang · {done} из {total} файлов",
+  "Getting ready…": "Подготовка…",
+  "about a minute left": "осталось около минуты",
+  "about {n} min left": "осталось около {n} мин",
+  "Game files": "Файлы игры",
+  "Sounds": "Звуки"
 }

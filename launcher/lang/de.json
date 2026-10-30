@@ -107,7 +107,6 @@
   "Playing offline": "Offline spielen",
   "Online servers need a Microsoft account.": "Online-Server benötigen ein Microsoft-Konto.",
   "Accounts…": "Konten…",
-  "The first preparation takes a few minutes.": "Die erste Vorbereitung dauert ein paar Minuten.",
   "Horizon crashed": "Horizon ist abgestürzt",
   "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing.": "Wenn du es auf Discord meldest, hänge die Absturzbericht-Datei an (oder füge sie mit \"Bericht kopieren\" ein) und beschreibe, was du getan hast.",
   "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing.": "Das Spiel wurde ohne Absturzbericht beendet. Wenn du es auf Discord meldest, hänge die latest.log aus dem Protokollordner an und beschreibe, was du getan hast.",
@@ -195,5 +194,12 @@
   "Version": "Version",
   "Sign in to play": "Zum Spielen anmelden",
   "No Minecraft install needed: Horizon downloads it from Mojang for your account.": "Keine Minecraft-Installation nötig: Horizon lädt es für dein Konto von Mojang herunter.",
-  "Waiting for Microsoft… the window goes on by itself.": "Warte auf Microsoft… das Fenster geht von selbst weiter."
+  "Waiting for Microsoft… the window goes on by itself.": "Warte auf Microsoft… das Fenster geht von selbst weiter.",
+  "Downloading Minecraft {version} from Mojang · {done} of {total} files": "Minecraft {version} wird von Mojang heruntergeladen · {done} von {total} Dateien",
+  "Downloading from Mojang · {done} of {total} files": "Download von Mojang · {done} von {total} Dateien",
+  "Getting ready…": "Wird vorbereitet…",
+  "about a minute left": "noch etwa eine Minute",
+  "about {n} min left": "noch etwa {n} Min.",
+  "Game files": "Spieldateien",
+  "Sounds": "Sounds"
 }
