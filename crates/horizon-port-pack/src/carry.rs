@@ -687,6 +687,21 @@ fn without_comments(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Item models another item's overrides reach: looks, not items; models that only reach each other stay items.
+fn variant_models(overrides: &BTreeMap<String, BTreeSet<String>>) -> BTreeSet<String> {
+    let targets: BTreeSet<&String> = overrides.values().flatten().collect();
+    let mut todo: Vec<&String> = overrides.keys().filter(|m| !targets.contains(m)).collect();
+    let mut variants = BTreeSet::new();
+    while let Some(m) = todo.pop() {
+        for target in overrides.get(m).into_iter().flatten() {
+            if variants.insert(target.clone()) {
+                todo.push(target);
+            }
+        }
+    }
+    variants
+}
+
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
 /// the facts give; `allowed` says which vanilla blocks the game has;
@@ -721,7 +736,7 @@ pub fn carry(
     let mut blockstates: BTreeMap<String, Value> = BTreeMap::new();
     let mut item_models = BTreeSet::new();
     // Models another item model's `overrides` switch to (trim looks, a bow's pull): variants, not items.
-    let mut variant_models = BTreeSet::new();
+    let mut model_overrides: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut convention = BTreeSet::new();
     let mut block_loot = BTreeSet::new();
     let mut biome_conventions = BTreeSet::new();
@@ -911,10 +926,17 @@ pub fn carry(
                 item_models.insert(m.to_owned());
                 let model: Value = serde_json::from_slice(&bytes).unwrap_or_default();
                 for o in model["overrides"].as_array().into_iter().flatten() {
-                    let target = o["model"].as_str().unwrap_or_default();
-                    let path = target.split_once(':').map_or(target, |(_, p)| p);
-                    if let Some(v) = path.strip_prefix("item/").filter(|v| *v != m) {
-                        variant_models.insert(v.to_owned());
+                    // A target without a namespace is vanilla's, not the mod's.
+                    let target = o["model"].as_str().and_then(|t| t.split_once(':'));
+                    if let Some(v) = target
+                        .filter(|(ns, _)| *ns == id)
+                        .and_then(|(_, path)| path.strip_prefix("item/"))
+                        .filter(|v| *v != m)
+                    {
+                        model_overrides
+                            .entry(m.to_owned())
+                            .or_default()
+                            .insert(v.to_owned());
                     }
                 }
             }
@@ -950,7 +972,9 @@ pub fn carry(
             &serde_json::to_vec_pretty(&v).unwrap_or_default(),
         )?;
     }
-    item_models.retain(|m| !variant_models.contains(m));
+    let variants = variant_models(&model_overrides);
+    let registered = |m: &str| facts.is_some_and(|f| f.items.contains_key(&format!("{id}:{m}")));
+    item_models.retain(|m| !variants.contains(m) || registered(m));
     // 1.21.4 moved item models behind `items/<name>.json` definitions.
     for m in &item_models {
         let def = inside.join(format!("assets/{id}/items/{m}.json"));
@@ -1460,6 +1484,27 @@ mod tests {
     }
 
     #[test]
+    fn variant_models_are_the_ones_a_base_model_reaches() {
+        let overrides = |edges: &[(&str, &str)]| {
+            let mut map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for (from, to) in edges {
+                map.entry((*from).into()).or_default().insert((*to).into());
+            }
+            map
+        };
+        let names = |set: BTreeSet<String>| set.into_iter().collect::<Vec<_>>();
+        assert_eq!(
+            names(variant_models(&overrides(&[
+                ("gem", "glow"),
+                ("glow", "bright")
+            ]))),
+            ["bright", "glow"]
+        );
+        assert!(variant_models(&overrides(&[("a", "b"), ("b", "a")])).is_empty());
+        assert!(variant_models(&BTreeMap::new()).is_empty());
+    }
+
+    #[test]
     fn templates_from_blockstate_properties() {
         let door =
             json!({"variants": {"facing=east,half=lower,hinge=left,open=false,powered=false": {}}});
@@ -1779,6 +1824,88 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tag, json!({"values": ["minecraft:plains"]}));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Overrides make looks of the mod's own models only, and never of an item it registers.
+    #[test]
+    fn override_targets_lose_their_definition_only_when_they_are_looks() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-port-pack-looks-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join("gem-1.0.jar");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&jar).unwrap());
+        for (name, text) in [
+            (
+                "META-INF/neoforge.mods.toml",
+                "license = \"MIT\"\n[[mods]]\nmodId = \"gem\"\nversion = \"1.0\"\n",
+            ),
+            (
+                "assets/gem/models/item/gem.json",
+                r#"{"overrides": [{"model": "gem:item/look"}, {"model": "gem:item/shard"},
+                    {"model": "minecraft:item/vanilla_named"}, {"model": "item/unqualified"},
+                    {"model": "other:item/foreign"}]}"#,
+            ),
+            ("assets/gem/models/item/look.json", "{}"),
+            ("assets/gem/models/item/shard.json", "{}"),
+            ("assets/gem/models/item/vanilla_named.json", "{}"),
+            ("assets/gem/models/item/unqualified.json", "{}"),
+            ("assets/gem/models/item/foreign.json", "{}"),
+            (
+                "assets/gem/models/item/left.json",
+                r#"{"overrides": [{"model": "gem:item/right"}]}"#,
+            ),
+            (
+                "assets/gem/models/item/right.json",
+                r#"{"overrides": [{"model": "gem:item/left"}]}"#,
+            ),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        let info = crate::jar::read(&jar).unwrap();
+        let pack = Pack {
+            loaded: &|_| true,
+            mods: &|_| false,
+        };
+        let facts: Facts = serde_json::from_value(json!({"blocks": {}, "items": {
+            "gem:shard": {"class": "net.minecraft.world.item.Item", "max_stack_size": 64, "rarity": "common"}}}))
+        .unwrap();
+        let defined = |out: &Path, m: &str| {
+            out.join(format!("carry/assets/gem/items/{m}.json"))
+                .exists()
+        };
+        let out = dir.join("with-facts");
+        carry(
+            &jar,
+            &info,
+            &out,
+            Some(&facts),
+            &|_| true,
+            &pack,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(!defined(&out, "look"));
+        for m in [
+            "gem",
+            "shard",
+            "vanilla_named",
+            "unqualified",
+            "foreign",
+            "left",
+            "right",
+        ] {
+            assert!(defined(&out, m), "{m}");
+        }
+        let out = dir.join("no-facts");
+        carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();
+        assert!(!defined(&out, "look"));
+        assert!(!defined(&out, "shard"));
+        assert!(defined(&out, "left") && defined(&out, "right"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
