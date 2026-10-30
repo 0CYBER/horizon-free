@@ -5,6 +5,7 @@ use super::{
     menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
 };
 use crate::{containers::BlockEntity, items::ItemStack, world::World};
+use horizon_core::random::RandomSource;
 use horizon_protocol::{
     item::Hashed,
     packets::play::{self, Clientbound as C},
@@ -69,7 +70,9 @@ impl Hub {
         source: i32,
         except: Option<u32>,
     ) {
-        let packet = self.sound_packet(name, at, volume, pitch, source, self.ticks as i64);
+        // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
+        let seed = next_sound_seed(&mut *self.sound_seeds.lock().unwrap());
+        let packet = self.sound_packet(name, at, volume, pitch, source, seed);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
 
@@ -813,4 +816,32 @@ impl Hub {
 /// Inventory index of the n-th player slot of a container menu (27 main, then the hotbar).
 fn player_slot(n: usize) -> usize {
     if n < 27 { 9 + n } else { n - 27 }
+}
+
+/// `Level.soundSeedGenerator.nextLong` for `ClientboundSoundPacket.seed`.
+fn next_sound_seed(g: &mut impl RandomSource) -> i64 {
+    g.next_long()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_sound_seed;
+    use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn two_sounds_in_one_tick_get_different_seeds() {
+        let mut g = LegacyRandom::new(0);
+        let a = next_sound_seed(&mut g);
+        let b = next_sound_seed(&mut g);
+        assert_ne!(a, b);
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+    }
+
+    #[test]
+    fn the_tick_is_not_the_sound_seed() {
+        let ticks = 12i64;
+        let mut g = LegacyRandom::new(0);
+        assert_ne!(next_sound_seed(&mut g), ticks);
+    }
 }
