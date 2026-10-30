@@ -307,6 +307,13 @@ def scenarios():
     TREE = ['fill 4 -60 4 4 -56 4 minecraft:oak_log', 'fill 2 -55 2 6 -55 6 minecraft:oak_leaves[persistent=true]']
     for i, seed in enumerate([181, 182]):
         add(f'parrot_alone_{i}', 400, [f'mob minecraft:parrot 0.5 -60 0.5 {90 * i} {seed} persistent'], 'difficulty=0')
+    # FollowPlayerRiddenEntityGoal: a dolphin swims after the boat a player rides along a pool.
+    for i, (vx, vz, dx, seed) in enumerate([(0.15, 0.0, 0.5, 200), (0.0, 0.12, 2.5, 201), (-0.15, 0.0, 0.5, 202)]):
+        add(f'dolphin_boat_{i}', 240, ['fill -40 -64 -40 40 -61 40 minecraft:water',
+                                       f'player {-8.5 if vx >= 0 and vz == 0 else (8.5 if vx < 0 else 0.5)} -61 {-8.5 if vz > 0 else 0.5} boat={vx},{vz}',
+                                       f'mob minecraft:dolphin {dx} -63 0.5 0 {seed} persistent'], 'difficulty=0')
+    add('dolphin_boat_far', 160, ['fill -40 -64 -40 40 -61 40 minecraft:water', 'player -20.5 -61 0.5 boat=0.1,0',
+                                  'mob minecraft:dolphin 20.5 -63 0.5 0 203 persistent'], 'difficulty=0')
     add('parrot_tree', 400, TREE + ['mob minecraft:parrot 0.5 -60 0.5 0 183 persistent'], 'difficulty=0')
     add('parrot_falling', 100, ['mob minecraft:parrot 0.5 -50 0.5 0 184 persistent'], 'difficulty=0')
     # A wolf the player hits (#3185, #2820): any wolf with a target is angry (the angry texture):

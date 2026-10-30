@@ -59,6 +59,8 @@ struct Scenario {
     creative: bool,
     /// The tick from which the player faces another yaw.
     turn: Option<(i32, f32)>,
+    /// The player rides a boat that moves this far each tick (x, z).
+    boat: Option<[f64; 2]>,
     /// Creaking hearts placed when the scenario starts.
     hearts: Vec<Vec<String>>,
     /// `ServerLevel.isSpawningMonsters`.
@@ -132,6 +134,9 @@ fn parse(text: &str) -> Vec<Scenario> {
                         s.turn = Some((tick.parse().unwrap(), yaw.parse().unwrap()));
                     } else if let Some(item) = opt.strip_prefix("hand=") {
                         s.hand = Some(item.to_owned());
+                    } else if let Some(v) = opt.strip_prefix("boat=") {
+                        let (x, z) = v.split_once(',').unwrap();
+                        s.boat = Some([x.parse().unwrap(), z.parse().unwrap()]);
                     } else {
                         panic!("unknown player option {opt}");
                     }
@@ -1115,6 +1120,7 @@ pub fn main() -> horizon_client::Result<()> {
                 sleeping: false,
                 sleep_timer: 0,
                 passenger: false,
+                vehicle: None,
             }
         });
         let mut scratch = LegacyRandom::new(0);
@@ -1181,6 +1187,30 @@ pub fn main() -> horizon_client::Result<()> {
                     (at[0], at[1], at[2]),
                     BlockEntity::CreakingHeart(Box::new(h.clone())),
                 );
+            }
+            if let (Some(p), Some([vx, vz]), Some(start)) = (player.as_mut(), s.boat, s.player) {
+                // The boat the player rides, moved by the script (the oracle's does not tick).
+                let at = [
+                    start[0] + vx * f64::from(t),
+                    start[1],
+                    start[2] + vz * f64::from(t),
+                ];
+                p.position = Vec3::new(at[0], at[1], at[2]);
+                p.bounds = Aabb::new(
+                    Vec3::new(at[0] - 0.3, at[1], at[2] - 0.3),
+                    Vec3::new(at[0] + 0.3, at[1] + 1.8, at[2] + 0.3),
+                );
+                p.eye = [at[0], at[1] + f64::from(1.62_f32), at[2]];
+                p.passenger = true;
+                p.riding = true;
+                p.vehicle = Some(horizon_client::mobs::Vehicle {
+                    nautilus: false,
+                    bounds: Aabb::new(
+                        Vec3::new(at[0] - 0.6875, at[1], at[2] - 0.6875),
+                        Vec3::new(at[0] + 0.6875, at[1] + 0.5625, at[2] + 0.6875),
+                    ),
+                    velocity: Vec3::new(vx, 0.0, vz),
+                });
             }
             if let (Some(p), Some((tick, yaw))) = (player.as_mut(), s.turn)
                 && t >= tick
