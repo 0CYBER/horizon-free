@@ -1056,6 +1056,20 @@ impl Game<'_> {
                     // the orbs' merge ids and block ticks read next).
                     self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
                 }
+                drops::Drop::CarriedBlock(state) => {
+                    // Enderman.dropCustomDeathLoot: spawnAtLocation for each
+                    // of the carried block's silk-touch drops.
+                    let stacks = horizon_client::mobs::enderman::carried_block_drops(
+                        world_items!(self),
+                        self.pack.assets.registry,
+                        state,
+                        &mut self.world.random,
+                        Some((&mut self.rand_sequences, self.level.seed)),
+                    );
+                    for item in stacks {
+                        self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
+                    }
+                }
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
                 drops::Drop::Orb(_) => {}
             }
