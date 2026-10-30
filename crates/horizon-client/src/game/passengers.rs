@@ -148,7 +148,8 @@ impl Game<'_> {
         }
         // Armor stands riding a mob or the local player (a server's name tag
         // hologram): seated like the displays above, so the name follows its
-        // vehicle instead of staying where the stand spawned.
+        // vehicle instead of staying where the stand spawned. The stand's own
+        // vehicle attachment is the default 0, so its feet sit on the seat.
         for i in 0..self.armor_stands.len() {
             let Some(vehicle) = self.armor_stands[i].vehicle else {
                 continue;
