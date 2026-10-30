@@ -44,7 +44,12 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
 
   --server HOST:PORT     default 127.0.0.1:25565
   --bots N               default 10
-  --behaviour B          idle, walk, explore or mixed (60 % walk, 20 % explore, 20 % idle); default mixed
+  --behaviour B          idle, walk, explore or mixed (60 % walk, 20 % explore, 20 % idle); default mixed.
+                         One abusive client, to test a server's limits (run it beside a normal crowd):
+                         flood-move (--flood moves a tick, each 64 to 256 blocks away, ignoring chunks),
+                         flood-acks (--flood chunk batch acks asking for 64 chunks a tick, while exploring),
+                         flood-packets (--flood rotations a tick)
+  --flood N              packets a tick for the flood behaviours; default 100
   --join-every SECONDS   default 1
   --seconds N            how long to run after the first bot joins; default 60
   --view-distance N      what the bots ask for; default 10
@@ -59,6 +64,9 @@ enum Behaviour {
     Idle,
     Walk,
     Explore,
+    FloodMove,
+    FloodAcks,
+    FloodPackets,
 }
 
 impl Behaviour {
@@ -67,6 +75,9 @@ impl Behaviour {
             Self::Idle => "idle",
             Self::Walk => "walk",
             Self::Explore => "explore",
+            Self::FloodMove => "flood-move",
+            Self::FloodAcks => "flood-acks",
+            Self::FloodPackets => "flood-packets",
         }
     }
 }
@@ -81,6 +92,7 @@ struct Options {
     view_distance: i8,
     seed: u64,
     explore_speed: f64,
+    flood: usize,
     name: String,
     report: Option<String>,
 }
@@ -96,6 +108,7 @@ fn options() -> Result<Options, String> {
         view_distance: 10,
         seed: 12345,
         explore_speed: 22.0,
+        flood: 100,
         name: "Bot".into(),
         report: None,
     };
@@ -122,14 +135,24 @@ fn options() -> Result<Options, String> {
             "--explore-speed" => {
                 o.explore_speed = value.parse().map_err(|_| number("blocks a second"))?;
             }
+            "--flood" => o.flood = value.parse().map_err(|_| number("packets a tick"))?,
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
-    if !["idle", "walk", "explore", "mixed"].contains(&o.behaviour.as_str()) {
+    const BEHAVIOURS: [&str; 7] = [
+        "idle",
+        "walk",
+        "explore",
+        "mixed",
+        "flood-move",
+        "flood-acks",
+        "flood-packets",
+    ];
+    if !BEHAVIOURS.contains(&o.behaviour.as_str()) {
         return Err(format!(
-            "--behaviour {}: use idle, walk, explore or mixed",
+            "--behaviour {}: use idle, walk, explore, mixed, flood-move, flood-acks or flood-packets",
             o.behaviour
         ));
     }
@@ -504,7 +527,29 @@ fn run_bot(
             pos = at;
         }
         let here = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
-        if !lock(&bot.held).contains(&here) {
+        // The abusive client doesn't wait for its chunk, as a real client must.
+        if behaviour == Behaviour::FloodMove {
+            // The last of these moves goes out below, with the tick's end.
+            pos[1] = cruise;
+            for _ in 1..o.flood.max(1) {
+                let angle = random.unit() * std::f64::consts::TAU;
+                let reach = 64.0 + random.unit() * 192.0;
+                pos[0] += angle.cos() * reach;
+                pos[2] += angle.sin() * reach;
+                send(
+                    play::Serverbound::MovePlayerPos(play::MovePlayerPos {
+                        x: pos[0],
+                        y: pos[1],
+                        z: pos[2],
+                        flags: 0,
+                    })
+                    .encode(),
+                );
+            }
+            let angle = random.unit() * std::f64::consts::TAU;
+            pos[0] += angle.cos() * 128.0;
+            pos[2] += angle.sin() * 128.0;
+        } else if !lock(&bot.held).contains(&here) {
             bot.waited.fetch_add(1, Ordering::Relaxed);
         } else if pos[1] < cruise {
             pos[1] = (pos[1] + 0.5).min(cruise);
@@ -529,7 +574,30 @@ fn run_bot(
                         pos[2] += dz / distance * step;
                     }
                 }
-                Behaviour::Explore => {
+                Behaviour::FloodMove => {}
+                Behaviour::FloodPackets => {
+                    for i in 0..o.flood {
+                        send(
+                            play::Serverbound::MovePlayerRot(play::MovePlayerRot {
+                                yaw: (i % 360) as f32,
+                                pitch: 0.0,
+                                flags: 0,
+                            })
+                            .encode(),
+                        );
+                    }
+                }
+                Behaviour::FloodAcks | Behaviour::Explore => {
+                    if behaviour == Behaviour::FloodAcks {
+                        for _ in 0..o.flood {
+                            send(
+                                play::Serverbound::ChunkBatchReceived(play::ChunkBatchReceived {
+                                    chunks_per_tick: 64.0,
+                                })
+                                .encode(),
+                            );
+                        }
+                    }
                     // Flying in creative, by default about 22 blocks a second, which keeps new
                     // chunks coming as fast as the server sends them.
                     let step = o.explore_speed / 20.0;
@@ -569,6 +637,9 @@ fn behaviour_of(mode: &str, index: usize) -> Behaviour {
         "idle" => Behaviour::Idle,
         "walk" => Behaviour::Walk,
         "explore" => Behaviour::Explore,
+        "flood-move" => Behaviour::FloodMove,
+        "flood-acks" => Behaviour::FloodAcks,
+        "flood-packets" => Behaviour::FloodPackets,
         // mixed: of every five bots, three walk, one explores, one stands.
         _ => match index % 5 {
             0 | 2 | 4 => Behaviour::Walk,
