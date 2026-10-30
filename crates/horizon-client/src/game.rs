@@ -10013,6 +10013,14 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        // openWorldLoadLevelData: an existing world whose level data does not read opens
+        // RecoverWorldDataScreen instead.
+        if create.is_none()
+            && let Some(title) = self.title.as_mut()
+            && title.open_recover(folder)
+        {
+            return Ok(());
+        }
         world_loading::world_data_used();
         if self.defer_world_entry(PendingWorldEntry::Local {
             folder: folder.to_owned(),

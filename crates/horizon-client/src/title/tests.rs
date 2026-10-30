@@ -1252,3 +1252,177 @@ fn world_with_nothing_to_recover_from_is_listed_but_never_opened() {
     f.click("Back");
     assert!(matches!(f.title.mode, Mode::Select { .. }));
 }
+
+/// Rewrites a test world's `WorldGenSettings` (in level.dat, where `world_gen_settings` falls back).
+fn set_world_gen(f: &Fixture, folder: &str, change: impl FnOnce(&mut Tag)) {
+    let path = f.title.saves.join(folder).join("level.dat");
+    let mut root = crate::save::read_dat(&path).unwrap();
+    change(
+        root.get_mut("Data")
+            .unwrap()
+            .get_mut("WorldGenSettings")
+            .unwrap(),
+    );
+    crate::save::write_dat(&path, root).unwrap();
+}
+
+fn only_world(f: &Fixture) -> WorldEntry {
+    let worlds = list_worlds(&f.title.saves);
+    assert_eq!(worlds.len(), 1);
+    worlds[0].clone()
+}
+
+#[test]
+fn a_stable_world_opens_at_once() {
+    let mut f = Fixture::new();
+    f.world("Plain", "Plain");
+    let world = only_world(&f);
+    assert_eq!(
+        f.title.play(world),
+        Action::Play {
+            folder: "Plain".into()
+        }
+    );
+}
+
+#[test]
+fn a_customized_world_asks_for_a_backup_before_it_opens() {
+    let mut f = Fixture::new();
+    f.world("Custom", "Custom");
+    set_world_gen(&f, "Custom", |settings| {
+        if let Tag::Compound(map) = settings {
+            map.insert(
+                "legacy_custom_options".into(),
+                Tag::String("{\"seaLevel\":63}".into()),
+            );
+        }
+    });
+    let world = only_world(&f);
+    assert_eq!(f.title.play(world), Action::None);
+    assert!(matches!(
+        f.title.mode,
+        Mode::BackupBeforeUpgrade {
+            downgrade: None,
+            stem: Some(StemIssue::Customized),
+            ..
+        }
+    ));
+    // BackupConfirmScreen: Create Backup and Load, I Know What I'm Doing!, Cancel.
+    assert_eq!(
+        f.click("I Know What I'm Doing!"),
+        Action::Play {
+            folder: "Custom".into()
+        }
+    );
+}
+
+#[test]
+fn an_experimental_world_is_backed_up_then_opened_without_asking_again() {
+    let mut f = Fixture::new();
+    f.world("Exp", "Exp");
+    set_world_gen(&f, "Exp", |settings| {
+        let nether = Tag::compound([
+            ("type", Tag::String("minecraft:the_nether".into())),
+            (
+                "generator",
+                Tag::compound([
+                    ("type", Tag::String("minecraft:noise".into())),
+                    ("settings", Tag::String("minecraft:nether".into())),
+                    (
+                        "biome_source",
+                        Tag::compound([("type", Tag::String("minecraft:fixed".into()))]),
+                    ),
+                ]),
+            ),
+        ]);
+        let overworld = Tag::compound([("type", Tag::String("minecraft:overworld".into()))]);
+        let end = Tag::compound([
+            ("type", Tag::String("minecraft:the_end".into())),
+            (
+                "generator",
+                Tag::compound([
+                    ("type", Tag::String("minecraft:noise".into())),
+                    ("settings", Tag::String("minecraft:end".into())),
+                    (
+                        "biome_source",
+                        Tag::compound([("type", Tag::String("minecraft:the_end".into()))]),
+                    ),
+                ]),
+            ),
+        ]);
+        if let Tag::Compound(map) = settings {
+            map.insert(
+                "dimensions".into(),
+                Tag::compound([
+                    ("minecraft:overworld", overworld),
+                    ("minecraft:the_nether", nether),
+                    ("minecraft:the_end", end),
+                ]),
+            );
+        }
+    });
+    let world = only_world(&f);
+    assert_eq!(f.title.play(world), Action::None);
+    assert!(matches!(
+        f.title.mode,
+        Mode::BackupBeforeUpgrade {
+            stem: Some(StemIssue::Experimental),
+            ..
+        }
+    ));
+    f.click("Create Backup and Load");
+    assert!(matches!(f.title.mode, Mode::Backup { .. }));
+    f.finish_backup();
+    // The backup was the question's answer: the world opens next.
+    assert_eq!(f.title.take_open_request().as_deref(), Some("Exp"));
+    assert_eq!(fs::read_dir(f.root.join("backups")).unwrap().count(), 1);
+}
+
+#[test]
+fn low_disk_space_asks_to_continue_or_go_back() {
+    let mut f = Fixture::new();
+    f.world("Tight", "Tight");
+    let world = only_world(&f);
+    f.title.mode = Mode::LowDiskSpace {
+        world: world.clone(),
+    };
+    let labels: Vec<String> = f
+        .title
+        .buttons(480.0, 262.0)
+        .into_iter()
+        .map(|b| b.label)
+        .collect();
+    assert_eq!(labels, ["Continue", "Back"]);
+    assert_eq!(f.click("Back"), Action::None);
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
+    f.title.mode = Mode::LowDiskSpace { world };
+    assert_eq!(
+        f.click("Continue"),
+        Action::Play {
+            folder: "Tight".into()
+        }
+    );
+}
+
+#[test]
+fn a_world_opened_by_name_with_unreadable_level_data_shows_the_recovery_screen() {
+    let mut f = Fixture::new();
+    // No such world yet: it opens (and is made) as usual.
+    assert!(!f.title.open_recover("Fresh"));
+    f.world("Fine", "Fine");
+    assert!(!f.title.open_recover("Fine"));
+    assert!(matches!(f.title.mode, Mode::Main));
+    f.world("Broken", "Broken");
+    f.world("Broken", "Broken");
+    fs::write(f.title.saves.join("Broken/level.dat"), b"truncated").unwrap();
+    assert!(f.title.open_recover("Broken"));
+    let Mode::Recover { world, issues } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert_eq!(world.folder, "Broken");
+    assert!(matches!(
+        issues[0],
+        Some(crate::save::DatIssue::Unreadable(_))
+    ));
+    assert_eq!(issues[1], None);
+}
