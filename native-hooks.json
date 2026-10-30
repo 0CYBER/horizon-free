@@ -89,6 +89,16 @@
       "name": "perform_command",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_perform_command"
+    },
+    {
+      "name": "menu_clicked",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_clicked"
+    },
+    {
+      "name": "menu_closed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"
     }
   ]
 }

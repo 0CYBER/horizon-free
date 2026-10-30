@@ -191,6 +191,8 @@ pub struct Guest {
     pub craft_result: Option<ItemStack>,
     /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
     pub ender_items: Vec<Option<ItemStack>>,
+    /// What a native mod's menu shows (`Slots::Native`), while one is open.
+    pub native_menu: Vec<Option<ItemStack>>,
     pub health: f32,
     /// The saved `AbsorptionAmount`, until the player's first body on the
     /// server takes it (the body holds the live amount).
@@ -347,6 +349,7 @@ impl Guest {
             craft_grid: Default::default(),
             craft_result: None,
             ender_items: vec![None; 27],
+            native_menu: Vec::new(),
             health: 20.0,
             saved_absorption: None,
             food: 20,
