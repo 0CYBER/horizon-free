@@ -15532,6 +15532,18 @@ impl Game<'_> {
         self.world_tables = self.build_world_tables();
         horizon_client::structure_blocks::forget_loot_data();
         lan::forget_sync_data();
+        // PlayerList.reloadResources: the tags and recipes go to the players
+        // and their advancements reload.
+        if self.lan.is_some() {
+            match lan::sync_data(&self.options.resources, &self.pack_files()) {
+                Ok(sync) => {
+                    if let Some(host) = self.lan.as_mut() {
+                        host.hub.reload_resources(sync);
+                    }
+                }
+                Err(e) => log::warn!("Horizon: the players are not sent the reloaded data: {e}"),
+            }
+        }
         let overlay = pack_files(&self.world_tables);
         self.adv.tree = Arc::new(horizon_client::advancements::Tree::load_with(
             &self.options.resources.join("data"),

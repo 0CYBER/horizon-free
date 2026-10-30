@@ -724,6 +724,13 @@ impl Game<'_> {
             gate_lists.lock().unwrap().can_login(address, &user)
         });
         let bypass_lists = lists.clone();
+        // DedicatedServer's constructor: `enable-code-of-conduct` reads the
+        // `codeofconduct` folder, and a folder it can't read stops the start.
+        let code_of_conducts = if props.code_of_conduct {
+            horizon_client::lan::code_of_conduct::read(std::path::Path::new("codeofconduct"))?
+        } else {
+            Vec::new()
+        };
         let favicon = std::fs::read("server-icon.png")
             .ok()
             .filter(|b| png_size(b) == Some((64, 64)));
@@ -760,6 +767,7 @@ impl Game<'_> {
                 log_ips: props.log_ips,
             }),
             resource_pack: props.resource_pack.clone(),
+            code_of_conducts,
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
             levels: self.level_shapes,

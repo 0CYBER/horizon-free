@@ -804,7 +804,8 @@ fn login_and_configure(
         }
     }
     // Configuration.
-    let sync: &SyncData = &shared.sync;
+    let sync_data = shared.sync();
+    let sync: &SyncData = &sync_data;
     let send = |c: &mut Connection, p: cfg::Clientbound| c.send(&p.encode()).map_err(e);
     send(
         c,
@@ -929,6 +930,12 @@ fn login_and_configure(
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    // addOptionalTasks: the code of conduct task comes first.
+    if let Some(text) =
+        super::code_of_conduct::pick(&shared.config.code_of_conducts, &info.language)
+    {
+        accept_code_of_conduct(c, text, &mut info)?;
+    }
     if let Some(pack) = &shared.config.resource_pack
         && let Some(rejected) = offer_pack(c, pack, &mut info)?
     {
@@ -1012,6 +1019,54 @@ fn offer_pack(
     };
     c.send(&cfg::Clientbound::ResourcePackPush(push).encode())
         .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
+            let rejected = r.action == PACK_DECLINED && pack.required;
+            Some(Ok(rejected.then_some(r.id)))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// ServerCodeOfConductConfigurationTask: send the text, then wait for
+/// ServerboundAcceptCodeOfConductPacket (`handleAcceptCodeOfConduct`),
+/// keeping the connection alive while the player reads. Finishing the
+/// configuration first is `finishCurrentTask` of the wrong task type, an
+/// error that drops the connection.
+fn accept_code_of_conduct(
+    c: &mut Connection,
+    text: &str,
+    info: &mut ClientInformation,
+) -> Result<(), String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    c.send(&cfg::Clientbound::CodeOfConduct(cfg::CodeOfConduct { text: text.into() }).encode())
+        .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::AcceptCodeOfConduct(_)) => Some(Ok(())),
+        Ok(cfg::Serverbound::FinishConfiguration(_)) => {
+            Some(Err("Unexpected configuration task".to_owned()))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// Read configuration packets until `answer` has a result, sending a
+/// keep-alive every `KEEP_ALIVE_EVERY` meanwhile
+/// (ServerConfigurationPacketListenerImpl.tick).
+fn wait_alive<T>(
+    c: &mut Connection,
+    mut answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
+) -> Result<T, String> {
     std::thread::scope(|scope| {
         let (stop, stopped) = channel::<()>();
         let writer = &mut c.writer;
@@ -1025,23 +1080,19 @@ fn offer_pack(
                 }
             }
         });
-        let answer = loop {
-            let (id, payload) = match c.reader.recv() {
-                Ok(packet) => packet,
+        let result = loop {
+            let packet = match c.reader.recv() {
+                Ok((id, payload)) => {
+                    cfg::Serverbound::decode(id, &payload).map_err(|e| e.to_string())
+                }
                 Err(err) => break Err(err.to_string()),
             };
-            match cfg::Serverbound::decode(id, &payload) {
-                Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
-                    let rejected = r.action == PACK_DECLINED && pack.required;
-                    break Ok(rejected.then_some(r.id));
-                }
-                Ok(cfg::Serverbound::ClientInformation(i)) => *info = i,
-                Ok(_) => {}
-                Err(err) => break Err(err.to_string()),
+            if let Some(result) = answer(packet) {
+                break result;
             }
         };
         drop(stop);
-        answer
+        result
     })
 }
 
