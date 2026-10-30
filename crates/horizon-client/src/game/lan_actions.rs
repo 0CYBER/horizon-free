@@ -1572,6 +1572,7 @@ impl Game<'_> {
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
             S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
+            S::SetCommandMinecart(p) => self.lan_set_command_minecart(host, conn, p),
             S::SetStructureBlock(p) => self.lan_set_structure_block(host, conn, p),
             S::TestInstanceBlockAction(p) => self.lan_test_instance_action(host, conn, p),
             S::SetTestBlock(p) => self.lan_set_test_block(host, conn, p),

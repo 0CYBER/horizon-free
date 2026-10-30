@@ -134,14 +134,25 @@ impl Game<'_> {
                 }
                 // MinecartCommandBlock.DATA_ID_COMMAND_NAME.
                 super::minecarts::CartKind::CommandBlock => {
-                    if let Some(Tag::String(command)) =
-                        self.persist.raw.get(&c.id).and_then(|t| t.get("Command"))
-                    {
-                        let command = command.to_string_lossy();
-                        if !command.is_empty() {
-                            e.meta
-                                .push((13, serializer::STRING, Value::String(command)));
-                        }
+                    // and DATA_ID_LAST_OUTPUT (a component, defaults empty).
+                    let empty = Tag::String("".into());
+                    e.defaults
+                        .push((13, serializer::STRING, Value::String(String::new())));
+                    e.defaults
+                        .push((14, serializer::COMPONENT, Value::Text(empty.clone())));
+                    if !c.synced_command.is_empty() {
+                        e.meta.push((
+                            13,
+                            serializer::STRING,
+                            Value::String(c.synced_command.clone()),
+                        ));
+                    }
+                    if !c.synced_output.is_empty() {
+                        e.meta.push((
+                            14,
+                            serializer::COMPONENT,
+                            Value::Text(Tag::String(c.synced_output.as_str().into())),
+                        ));
                     }
                 }
                 _ => {}
