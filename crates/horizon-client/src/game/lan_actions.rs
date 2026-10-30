@@ -1319,14 +1319,25 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let g = &mut host.hub.guests[gi];
                 (g.yaw, g.pitch) = (p.yaw, p.pitch);
-                let swung = self.as_guest(host, conn, |g| {
+                let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
+                let used = self.as_guest(host, conn, |g| {
+                    // A horn's sound, inline instruments included.
+                    let horn = g.with_hand(hand, |g| {
+                        let held = g.held()?;
+                        g.res.items().instrument(held).map(|i| i.sound)
+                    });
                     g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
                     g.guest_use = None;
-                    g.swings_started != swings
+                    (g.swings_started != swings, horn)
                 });
+                let (swung, horn) = match used {
+                    Some((swung, horn)) => (Some(swung), horn),
+                    None => (None, None),
+                };
                 self.lan_swing_back(host, conn, swung);
+                self.guest_instrument_sound(host, conn, heard, horn);
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
@@ -3495,6 +3506,30 @@ impl Game<'_> {
         for (name, at, volume, pitch) in sounds {
             let source = horizon_client::settings::sound_source(&name) as i32;
             host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+        }
+    }
+
+    /// `InstrumentItem.play`'s `level.playSound(player, ...)`: the others hear
+    /// a guest's horn now, the guest's own client played it as it used it.
+    fn guest_instrument_sound(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        heard: usize,
+        horn: Option<String>,
+    ) {
+        let (Some(horn), Some(capture)) = (horn, self.audio.capture.as_mut()) else {
+            return;
+        };
+        let mut i = heard.min(capture.len());
+        while i < capture.len() {
+            if capture[i].0 == horn {
+                let (name, at, volume, pitch) = capture.remove(i);
+                let source = horizon_client::settings::sound_source(&name) as i32;
+                host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+            } else {
+                i += 1;
+            }
         }
     }
 
