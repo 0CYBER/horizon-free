@@ -2363,6 +2363,7 @@ mod tests {
             lines: [line.into(), "two".into(), String::new(), "four".into()],
             color: 3,
             glowing,
+            ..Default::default()
         };
         let first_text = crate::signs::SignData {
             front: text("one", false),

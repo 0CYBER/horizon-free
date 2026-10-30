@@ -127,6 +127,27 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
+
+/// `AbstractWindCharge` is pickable, so a thrown pearl's
+/// `ProjectileUtil.getEntityHitResult` can strike it (`ThrownEnderpearl.onHit`).
+const WIND_CHARGE_HIT: u32 = super::dragon::SPECIAL - 1;
+
+fn wind_charge_hitboxes(projectiles: &[Projectile], skip: usize) -> Vec<(Who, Aabb)> {
+    projectiles
+        .iter()
+        .enumerate()
+        .filter(|(j, q)| {
+            *j != skip
+                && !q.stuck
+                && matches!(
+                    q.kind,
+                    ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+                )
+        })
+        .map(|(_, q)| (Who::Mob(WIND_CHARGE_HIT), q.aabb()))
+        .collect()
+}
+
 /// `FlameFeatureRenderer`: fire quads stacked up a burning entity's box,
 /// turned to the camera around Y, at full block light. `at` is the entity's
 /// feet relative to the camera.
@@ -257,6 +278,7 @@ impl Game<'_> {
             snowy: has("minecraft:spawns_snow_foxes")
                 || b.name.contains("snow")
                 || b.name.contains("frozen"),
+            snow_fox: has("minecraft:spawns_snow_foxes"),
             swamp: b.name.contains("swamp"),
             ocean: has("minecraft:is_ocean"),
             mushroom: b.name == "minecraft:mushroom_fields",
@@ -1918,6 +1940,34 @@ impl Game<'_> {
             self.spawn_orbs(at, amount);
         }
     }
+    /// `ServerPlayer.tellNeutralMobsThatIDied`: the mobs within 32 blocks
+    /// across and 10 up and down get `NeutralMob.playerDied`, when the
+    /// `forgive_dead_players` rule is on. A mob's `Who::Player` is the guest
+    /// it is bound to in `bindings` (game/lan_mobs.rs), else the host's
+    /// player, so only the mobs whose binding is `conn` (`None` for the
+    /// host's player) hear it.
+    pub(super) fn tell_neutral_mobs_player_died(
+        &mut self,
+        feet: [f64; 3],
+        conn: Option<u32>,
+        bindings: &std::collections::HashMap<u32, u32>,
+    ) {
+        // A client of someone else's world has the server's mobs only to show.
+        if self.remote.is_some() || !self.ui.rules.bool("forgive_dead_players") {
+            return;
+        }
+        let block = feet.map(f64::floor);
+        let area = Aabb::new(
+            Vec3::new(block[0], block[1], block[2]),
+            Vec3::new(block[0] + 1.0, block[1] + 1.0, block[2] + 1.0),
+        )
+        .inflate(Vec3::new(32.0, 10.0, 32.0));
+        for m in self.mobs.iter_mut() {
+            if bindings.get(&m.id).copied() == conn && m.bounds().intersects(area) {
+                horizon_client::mobs::ai::forgive_dead_player(m);
+            }
+        }
+    }
     /// Animal.spawnChildFromBreeding
     fn breed(
         &mut self,
@@ -1990,6 +2040,24 @@ impl Game<'_> {
         }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
+        // Axolotl.getBreedOffspring: useRareVariant (one in 1200) makes it blue,
+        // else either parent's variant. The draws come from the mother's random.
+        let axolotl = if p.species() == Species::Axolotl {
+            let other = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            self.mobs.iter_mut().find(|m| m.id == parent).map(|m| {
+                if m.random.next_int_bound(1200).unwrap_or(1) == 0 {
+                    // Axolotl.Variant.getRareSpawnVariant: the one blue, still a draw.
+                    let _ = m.random.next_int_bound(1);
+                    4
+                } else if m.random.next_boolean() {
+                    p.extra.variant
+                } else {
+                    other
+                }
+            })
+        } else {
+            None
+        };
         // A horse and a donkey have a mule.
         let kind = match (p.species(), q.as_ref().map(|q| q.species())) {
             (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse)) => {
@@ -2004,6 +2072,24 @@ impl Game<'_> {
             // getBreedOffspring creates the baby without finalizeSpawn: it keeps
             // the default (`classic`) sound variant.
             child.extra.sound_variant = None;
+            // Fox.getBreedOffspring runs no finalizeSpawn: nothing in the
+            // baby fox's mouth.
+            if p.species() == Species::Fox {
+                child.extra.main_hand = None;
+            }
+            // Goat.getBreedOffspring: GoatAi.initMemories, then the baby
+            // screams if the parent a coin toss picks does, or on a 2% roll.
+            if p.species() == Species::Goat {
+                child.extra.lost_horns = [false; 2];
+                horizon_client::mobs::finalize::goat_init_memories(child, &mut self.world.random);
+                let pick_parent = self.world.random.next_boolean();
+                let parent_screams = if pick_parent {
+                    p.extra.screaming
+                } else {
+                    q.as_ref().unwrap_or(&p).extra.screaming
+                };
+                child.extra.screaming = parent_screams || self.world.random.next_double() < 0.02;
+            }
             // A llama's baby was drawn in the parent's tick, with the
             // experience.
             if let Some(o) = llama {
@@ -2087,6 +2173,14 @@ impl Game<'_> {
             // Panda.getBreedOffspring: genes from both parents.
             if p.species() == Species::Panda {
                 horizon_client::mobs::panda::inherit(child, &p, q.as_ref().unwrap_or(&p));
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
+            // Axolotl.getBreedOffspring: the drawn variant, and the baby is persistent.
+            if let Some(variant) = axolotl {
+                child.extra.variant = variant;
+                child.persistent = true;
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
@@ -2497,13 +2591,21 @@ impl Game<'_> {
                     .map(|g| g.conn)
                     .collect()
             });
-            projectiles.retain_mut(|p| {
+            let mut keep_flags = vec![true; projectiles.len()];
+            for i in 0..projectiles.len() {
+                let winds = if matches!(projectiles[i].kind, ProjectileKind::EnderPearl) {
+                    wind_charge_hitboxes(&projectiles, i)
+                } else {
+                    Vec::new()
+                };
+                let p = &mut projectiles[i];
                 if vanish
                     && matches!(p.kind, ProjectileKind::EnderPearl)
                     && p.owner == Some(Who::Player)
                     && p.guest.map_or(host_dead, |c| dead_guests.contains(&c))
                 {
-                    return false;
+                    keep_flags[i] = false;
+                    continue;
                 }
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
                 // A player's arrows, snowballs and eggs meet every player; a
@@ -2518,11 +2620,25 @@ impl Game<'_> {
                 if shooter.is_some() {
                     p.owner = shooter;
                 }
-                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp) {
-                    (true, false) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
-                    (true, true) => horizon_client::arrows::tick(p, &scene, &arrow_targets_guests),
-                    (false, false) => p.tick(&pw),
-                    (false, true) => p.tick(&pw_guests),
+                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp, winds.is_empty()) {
+                    (true, false, _) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
+                    (true, true, _) => {
+                        horizon_client::arrows::tick(p, &scene, &arrow_targets_guests)
+                    }
+                    (false, false, true) => p.tick(&pw),
+                    (false, true, true) => p.tick(&pw_guests),
+                    (false, pvp_shot, false) => {
+                        let mut targets = if pvp_shot {
+                            pw_guests.targets.clone()
+                        } else {
+                            pw.targets.clone()
+                        };
+                        targets.extend(winds);
+                        p.tick(&ProjWorld {
+                            w: if pvp_shot { pw_guests.w } else { pw.w },
+                            targets,
+                        })
+                    }
                 };
                 if shooter.is_some() {
                     p.owner = Some(Who::Player);
@@ -2568,7 +2684,7 @@ impl Game<'_> {
                         arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                     }
                     deflections.push([at.x, at.y, at.z]);
-                    return true;
+                    continue;
                 }
                 // AbstractWindCharge.tick: out of the world's top it bursts.
                 if wind && keep && p.position.y > 350.0 {
@@ -2580,12 +2696,19 @@ impl Game<'_> {
                             face: [0; 3],
                         },
                     ));
-                    return false;
+                    keep_flags[i] = false;
+                    continue;
                 }
                 if hit != Hit::None {
                     hits.push((p.clone(), hit));
                 }
-                keep
+                keep_flags[i] = keep;
+            }
+            let mut idx = 0;
+            projectiles.retain(|_| {
+                let k = keep_flags[idx];
+                idx += 1;
+                k
             });
         }
         self.smoke_trails(trails);
@@ -4143,6 +4266,12 @@ impl Game<'_> {
                     Some(sound) => {
                         consume = true;
                         eat = sound;
+                        // Axolotl.usePlayerItem: a tropical fish bucket is
+                        // emptied into a water bucket in its place.
+                        if species == Species::Axolotl && &*item == "minecraft:tropical_fish_bucket"
+                        {
+                            give = Some("minecraft:water_bucket");
+                        }
                         // Animal.setInLove: entity event 18 (a baby that
                         // only grew is not in love).
                         if self.mobs[index].extra.in_love > 0 {
@@ -4585,6 +4714,13 @@ impl Game<'_> {
             if mob.fire_ticks > 0 || matches!(mob.species(), Species::Blaze | Species::MagmaCube) {
                 packed = (15 * 16) | ((15 * 16) << 8);
             }
+            // GlowSquidRenderer.getBlockLightLevel: the body brightens as the
+            // dark ticks run out (the block light is the second byte).
+            if mob.species() == Species::GlowSquid {
+                let lit = (packed >> 12) & 15;
+                let block = horizon_client::mobs::aquatic::glow_squid_block_light(mob, lit);
+                packed = (packed & 0xFF) | ((block * 16) << 8);
+            }
             if mob.species() == Species::SulfurCube
                 && !horizon_client::mobs::trader::is_invisible(mob)
             {
@@ -4940,6 +5076,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Drown => "minecraft:drown",
         K::DryOut => "minecraft:dry_out",
         K::Magic => "minecraft:magic",
+        K::IndirectMagic => "minecraft:indirect_magic",
         K::Sting => "minecraft:sting",
         K::Cactus => "minecraft:cactus",
         K::SweetBerryBush => "minecraft:sweet_berry_bush",

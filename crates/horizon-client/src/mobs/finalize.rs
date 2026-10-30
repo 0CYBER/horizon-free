@@ -831,6 +831,27 @@ fn age_boundary_reached(m: &mut Mob) {
         _ => {}
     }
 }
+/// `Goat.finalizeSpawn` on a natural spawn (the spawn path in spawning.rs): the ram
+/// cooldowns (`GoatAi.initMemories`), screaming 2 percent of the time and a
+/// horn lost 10 percent of the time, adults only.
+pub fn goat_spawn(m: &mut Mob) {
+    let jump = m
+        .random
+        .next_int_between_inclusive(600, 1200)
+        .unwrap_or(600);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
+    let ram = m
+        .random
+        .next_int_between_inclusive(600, 6000)
+        .unwrap_or(600);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
+    m.extra.screaming = m.random.next_double() < 0.02;
+    age_boundary_reached(m);
+    if !m.is_baby() && m.random.next_float() < 0.1 {
+        let left = m.random.next_boolean();
+        m.extra.lost_horns[usize::from(!left)] = true;
+    }
+}
 /// `SpawnEggItem.spawnsEntity`: the spawn egg is for the mob's own kind, so
 /// it is used on it (`Mob.checkAndHandleImportantInteractions`).
 pub fn spawn_egg_is_for(egg: &str, kind: &str) -> bool {
@@ -1739,10 +1760,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 self.horse(m, g)
             }
             S::Goat => {
-                let jump = self.uniform(600, 1200);
-                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
-                let ram = self.uniform(600, 6000);
-                set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
+                goat_init_memories(m, self.random);
                 m.extra.screaming = self.random.next_double() < 0.02;
                 age_boundary_reached(m);
                 if !m.is_baby() && self.float() < 0.1 {
@@ -2006,6 +2024,14 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
         Some(x) => *x = (name, value, ttl),
         None => m.extra.memories.push((name, value, ttl)),
     }
+}
+/// `GoatAi.initMemories`: a long jump cooldown (600 to 1200 ticks) and a ram
+/// cooldown (600 to 6000), drawn from `random`.
+pub fn goat_init_memories(m: &mut Mob, random: &mut impl RandomSource) {
+    let jump = random.next_int_between_inclusive(600, 1200).unwrap_or(600);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
+    let ram = random.next_int_between_inclusive(600, 6000).unwrap_or(600);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).

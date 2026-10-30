@@ -528,6 +528,9 @@ pub enum DamageKind {
     /// `dry_out`: an axolotl out of water for too long.
     DryOut,
     Magic,
+    /// `indirect_magic`: a thrown potion's hit (`DamageSources.indirectMagic`),
+    /// which, unlike `magic`, knocks back.
+    IndirectMagic,
     Sting,
     Cactus,
     /// `sweet_berry_bush`.
@@ -616,6 +619,16 @@ impl Damage {
             from: Some(from),
         }
     }
+    /// `DamageSources.indirectMagic(potion, owner)`: `attacker` is the owner
+    /// (none for a dispenser's potion), `from` the potion's position, which
+    /// the knockback pushes away from.
+    pub fn indirect_magic(attacker: Option<Who>, from: [f64; 3]) -> Self {
+        Self {
+            kind: DamageKind::IndirectMagic,
+            attacker,
+            from: Some(from),
+        }
+    }
     pub fn mob(id: u32, from: [f64; 3]) -> Self {
         Self {
             kind: DamageKind::MobAttack,
@@ -652,6 +665,7 @@ impl Damage {
                 | DamageKind::OnFire
                 | DamageKind::Drown
                 | DamageKind::Magic
+                | DamageKind::IndirectMagic
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
@@ -927,6 +941,8 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// Whether a camel sits (`egg_time` is then the age it sat down at).
+    pub camel_sitting: bool,
     /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
     pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
@@ -1680,6 +1696,23 @@ impl Mob {
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
     }
+    /// `Entity.extinguishFire`: a burning mob first plays the extinguish sound
+    /// (`playEntityOnFireExtinguishedSound`: volume 0.7, pitch from two draws
+    /// of its random, at its feet), then `clearFire` keeps only the
+    /// fire-immune countdown.
+    pub fn extinguish_fire(&mut self) {
+        if self.is_on_fire() {
+            let pitch = 1.6 + (self.random.next_float() - self.random.next_float()) * 0.4;
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox.push(MobEvent::Sound(
+                "entity.generic.extinguish_fire",
+                at,
+                0.7,
+                pitch,
+            ));
+        }
+        self.fire_ticks = self.fire_ticks.min(0);
+    }
     /// `Entity.isFullyFrozen`.
     pub fn is_fully_frozen(&self) -> bool {
         self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
@@ -2279,7 +2312,10 @@ impl Mob {
                 amount = 0.0;
             } else if matches!(
                 source.kind,
-                DamageKind::Magic | DamageKind::SonicBoom | DamageKind::Thorns
+                DamageKind::Magic
+                    | DamageKind::IndirectMagic
+                    | DamageKind::SonicBoom
+                    | DamageKind::Thorns
             ) {
                 amount *= 0.15;
             }
@@ -2368,6 +2404,9 @@ impl Mob {
         if equine::is_equine(self.species()) {
             equine::after_hurt_server(self);
         }
+        if self.species() == Species::GlowSquid {
+            aquatic::hurt_server(self);
+        }
         true
     }
     /// A splash or cloud's harming effect on this mob: the potion's
@@ -2389,6 +2428,7 @@ impl Mob {
                 source.kind,
                 DamageKind::Drown
                     | DamageKind::Magic
+                    | DamageKind::IndirectMagic
                     | DamageKind::InWall
                     | DamageKind::Thorns
                     | DamageKind::OutOfWorld
@@ -2666,7 +2706,12 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
-                    glint_uv: [0.0, 0.0],
+                    // The armour glint scrolls the model UV in the shader.
+                    glint_uv: if overlay == render::ARMOR_GLINT {
+                        [v[3], v[4]]
+                    } else {
+                        [0.0, 0.0]
+                    },
                 });
             }
         }
