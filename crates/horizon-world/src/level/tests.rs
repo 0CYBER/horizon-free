@@ -1299,6 +1299,8 @@ fn dispenser_buckets_pick_up_and_empty() {
     );
     assert_eq!(w.prop(at, "waterlogged"), "false");
     // Emptying water into air makes a source; stone refuses.
+    let air = w.b().air();
+    w.put(at, air);
     assert!(
         w.b()
             .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
