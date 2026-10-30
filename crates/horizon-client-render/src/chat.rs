@@ -653,6 +653,42 @@ pub struct Commands<'a> {
     pub registries: &'a Registries,
 }
 
+/// `CommandSuggestions`' constructor arguments: how a screen's suggestions
+/// parse and where they are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SuggestLayout {
+    /// `commandsOnly`: the input is a command without a leading `/`.
+    pub commands_only: bool,
+    /// `onlyShowIfCursorPastError`: completions from the command's start,
+    /// not only past the `/`.
+    pub only_past_error: bool,
+    /// `suggestionLineLimit`.
+    pub line_limit: usize,
+    /// `anchorToBottom`: the list and usage over a box at the bottom, else
+    /// under one at the top (y 72).
+    pub anchor_to_bottom: bool,
+    /// `fillColor`: behind the list and the usage lines.
+    pub fill: i32,
+}
+impl SuggestLayout {
+    /// ChatScreen.init's `CommandSuggestions`.
+    pub const CHAT: Self = Self {
+        commands_only: false,
+        only_past_error: false,
+        line_limit: 10,
+        anchor_to_bottom: true,
+        fill: FILL,
+    };
+    /// AbstractCommandBlockEditScreen.init's `CommandSuggestions`.
+    pub const COMMAND_BLOCK: Self = Self {
+        commands_only: true,
+        only_past_error: true,
+        line_limit: 7,
+        anchor_to_bottom: false,
+        fill: i32::MIN,
+    };
+}
+
 /// The open chat screen: vanilla's `ChatScreen` with its `EditBox` and
 /// `CommandSuggestions` (argument colouring, usage lines, parse errors,
 /// the suggestion list, Tab completion, history).
@@ -680,6 +716,7 @@ pub struct ChatScreen {
     pub auto_suggestions: bool,
     /// `CommandSuggestions.setRestrictions`: what the Chat option allows.
     pub abilities: ChatAbilities,
+    pub layout: SuggestLayout,
 }
 /// Local completions waiting for the server's reply to request `id`.
 struct Awaiting {
@@ -750,6 +787,43 @@ impl ChatScreen {
             keep_suggestions: false,
             auto_suggestions: true,
             abilities,
+            layout: SuggestLayout::CHAT,
+        };
+        s.update_command_info(m, c);
+        s
+    }
+    /// `AbstractCommandBlockEditScreen.init`: the command box at the top,
+    /// focused, holding `command`, with suggestions from the start.
+    pub fn command_block(
+        m: &Measure,
+        c: &Commands,
+        command: &str,
+        width: i32,
+        height: i32,
+    ) -> Self {
+        let mut input = TextField::new(width / 2 - 150, 50, 300, 20);
+        input.max_length = 32500;
+        input.focused = true;
+        input.set_value(m, command);
+        let mut s = Self {
+            input,
+            width,
+            height,
+            history_buffer: String::new(),
+            history_pos: 0,
+            parse: None,
+            pending: None,
+            awaiting: None,
+            request: None,
+            suggestions: None,
+            usage: Vec::new(),
+            usage_position: 0,
+            usage_width: 0,
+            allow_suggestions: true,
+            keep_suggestions: false,
+            auto_suggestions: true,
+            abilities: ChatAbilities::new(ChatVisibility::Full),
+            layout: SuggestLayout::COMMAND_BLOCK,
         };
         s.update_command_info(m, c);
         s
@@ -768,7 +842,11 @@ impl ChatScreen {
             let value = self.input.value.clone();
             let auto = self.auto_suggestions;
             let abilities = self.abilities;
-            *self = Self::new(m, c, &value, self.history_pos, width, height, abilities);
+            *self = if self.layout == SuggestLayout::CHAT {
+                Self::new(m, c, &value, self.history_pos, width, height, abilities)
+            } else {
+                Self::command_block(m, c, &value, width, height)
+            };
             self.auto_suggestions = auto;
         }
     }
@@ -814,11 +892,18 @@ impl ChatScreen {
         self.usage.clear();
         let cursor = self.input.cursor;
         let cursor_b = byte_at(&command, cursor);
-        if command.starts_with('/') {
+        let slash = command.starts_with('/');
+        if self.layout.commands_only || slash {
+            let start = usize::from(slash);
             if self.parse.is_none() {
-                self.parse = Some(c.dispatcher.parse_at(&command, 1, c.registries));
+                self.parse = Some(c.dispatcher.parse_at(&command, start, c.registries));
             }
-            if cursor >= 1 && (self.suggestions.is_none() || !self.keep_suggestions) {
+            let from = if self.layout.only_past_error {
+                start
+            } else {
+                1
+            };
+            if cursor >= from && (self.suggestions.is_none() || !self.keep_suggestions) {
                 let parse = self.parse.as_ref().expect("parsed above");
                 let (range, list, ask) =
                     c.dispatcher
@@ -1002,7 +1087,11 @@ impl ChatScreen {
             0,
             self.input.screen_x(m, 0) + self.input.inner_width() - width,
         );
-        let y = self.height - 12;
+        let y = if self.layout.anchor_to_bottom {
+            self.height - 12
+        } else {
+            72
+        };
         // sortSuggestions: those starting with the word at the cursor first.
         let partial = &value[..byte_at(&value, self.input.cursor)];
         let word = partial[last_word_index(partial)..].to_lowercase();
@@ -1011,9 +1100,16 @@ impl ChatScreen {
                 s.text.starts_with(&word) || s.text.starts_with(&format!("minecraft:{word}"))
             });
         first.extend(rest);
-        let n = first.len().min(10) as i32;
+        // SuggestionsList: beside a bordered box, or over an unbordered one.
+        let n = first.len().min(self.layout.line_limit) as i32;
+        let bordered = i32::from(self.input.bordered);
+        let top = if self.layout.anchor_to_bottom {
+            y - 3 - n * 12
+        } else {
+            y - bordered
+        };
         let mut l = SuggestionList {
-            rect: [x - 1, y - 3 - n * 12, width + 1, n * 12],
+            rect: [x - (1 - bordered), top, width + 1, n * 12],
             original: value,
             list: first,
             offset: 0,
@@ -1042,11 +1138,12 @@ impl ChatScreen {
     }
     fn cycle(&mut self, l: &mut SuggestionList, dir: isize) {
         self.select(l, l.current as isize + dir);
-        let max = l.list.len().saturating_sub(10);
+        let limit = self.layout.line_limit;
+        let max = l.list.len().saturating_sub(limit);
         if l.current < l.offset {
             l.offset = l.current.min(max);
-        } else if l.current > l.offset + 9 {
-            l.offset = (l.current as isize + 1 - 10).clamp(0, max as isize) as usize;
+        } else if l.current >= l.offset + limit {
+            l.offset = (l.current as isize + 1 - limit as isize).clamp(0, max as isize) as usize;
         }
     }
     /// `SuggestionsList.useSuggestion`.
@@ -1074,7 +1171,57 @@ impl ChatScreen {
         ctrl: bool,
     ) -> ChatAction {
         use winit::keyboard::KeyCode as K;
-        // CommandSuggestions.keyPressed.
+        if self.suggestions_key(m, c, key, shift) {
+            return ChatAction::None;
+        }
+        match key {
+            K::Escape => return ChatAction::Close,
+            K::Enter | K::NumpadEnter => {
+                // ChatScreen.keyPressed: without `hasAllowedInput` the input
+                // stays, unsent, and the screen stays open.
+                if !self.abilities.allows(&self.input.value) {
+                    return ChatAction::None;
+                }
+                return ChatAction::Submit(self.normalized());
+            }
+            K::ArrowUp => self.move_in_history(m, c, history, -1),
+            K::ArrowDown => self.move_in_history(m, c, history, 1),
+            _ => {
+                self.field_key(m, c, key, shift, ctrl);
+            }
+        }
+        ChatAction::None
+    }
+    /// The input box's own keys (`EditBox.keyPressed`), the suggestions
+    /// following an edit: whether the box took the key.
+    pub fn field_key(
+        &mut self,
+        m: &Measure,
+        c: &Commands,
+        key: winit::keyboard::KeyCode,
+        shift: bool,
+        ctrl: bool,
+    ) -> bool {
+        match self.input.key(m, key, shift, ctrl) {
+            Some(changed) => {
+                if changed {
+                    self.edited(m, c);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+    /// `CommandSuggestions.keyPressed`: the list's arrows, Tab and Escape,
+    /// and Tab to show it. True when the suggestions took the key.
+    pub fn suggestions_key(
+        &mut self,
+        m: &Measure,
+        c: &Commands,
+        key: winit::keyboard::KeyCode,
+        shift: bool,
+    ) -> bool {
+        use winit::keyboard::KeyCode as K;
         if let Some(mut l) = self.suggestions.take() {
             let handled = match key {
                 K::ArrowUp | K::ArrowDown => {
@@ -1091,37 +1238,18 @@ impl ChatScreen {
                 }
                 K::Escape => {
                     self.input.suggestion = None;
-                    return ChatAction::None;
+                    return true;
                 }
                 _ => false,
             };
             self.suggestions = Some(l);
-            if handled {
-                return ChatAction::None;
-            }
+            handled
         } else if key == K::Tab {
             self.show_suggestions(m);
-            return ChatAction::None;
+            true
+        } else {
+            false
         }
-        match key {
-            K::Escape => return ChatAction::Close,
-            K::Enter | K::NumpadEnter => {
-                // ChatScreen.keyPressed: without `hasAllowedInput` the input
-                // stays, unsent, and the screen stays open.
-                if !self.abilities.allows(&self.input.value) {
-                    return ChatAction::None;
-                }
-                return ChatAction::Submit(self.normalized());
-            }
-            K::ArrowUp => self.move_in_history(m, c, history, -1),
-            K::ArrowDown => self.move_in_history(m, c, history, 1),
-            _ => {
-                if self.input.key(m, key, shift, ctrl) == Some(true) {
-                    self.edited(m, c);
-                }
-            }
-        }
-        ChatAction::None
     }
     /// `ChatScreen.moveInHistory`.
     fn move_in_history(&mut self, m: &Measure, c: &Commands, history: &[String], dir: isize) {
@@ -1175,7 +1303,7 @@ impl ChatScreen {
         if !l.contains(mouse.0, mouse.1) {
             return false;
         }
-        let max = l.list.len().saturating_sub(10) as i32;
+        let max = l.list.len().saturating_sub(self.layout.line_limit) as i32;
         l.offset = ((l.offset as f64 - amount.clamp(-1.0, 1.0)) as i32).clamp(0, max) as usize;
         true
     }
@@ -1246,7 +1374,9 @@ impl ChatScreen {
     ) -> Vec<Draw> {
         let (w, h) = (self.width, self.height);
         let mut out = Vec::new();
-        d::fill(&mut out, 2, h - 14, w - 2, h - 2, background);
+        if self.layout.anchor_to_bottom {
+            d::fill(&mut out, 2, h - 14, w - 2, h - 2, background);
+        }
         let format = |s: &str, o: usize| self.format(s, o);
         self.input.draw(&mut out, m, blink_ms, Some(&format));
         if let Some(mut l) = self.suggestions.take() {
@@ -1254,14 +1384,18 @@ impl ChatScreen {
             self.suggestions = Some(l);
         } else {
             for (i, line) in self.usage.iter().enumerate() {
-                let y = h - 27 - 12 * i as i32;
+                let y = if self.layout.anchor_to_bottom {
+                    h - 27 - 12 * i as i32
+                } else {
+                    72 + 12 * i as i32
+                };
                 d::fill(
                     &mut out,
                     self.usage_position - 1,
                     y,
                     self.usage_position + self.usage_width + 1,
                     y + 12,
-                    FILL,
+                    self.layout.fill,
                 );
                 d::text(&mut out, line.clone(), self.usage_position, y + 2, -1, true);
             }
@@ -1275,7 +1409,7 @@ impl ChatScreen {
         l: &mut SuggestionList,
         mouse: (i32, i32),
     ) {
-        let limit = l.list.len().min(10);
+        let limit = l.list.len().min(self.layout.line_limit);
         let [rx, ry, rw, rh] = l.rect;
         let has_prev = l.offset > 0;
         let has_next = l.list.len() > l.offset + limit;
@@ -1284,8 +1418,8 @@ impl ChatScreen {
             l.last_mouse = mouse;
         }
         if has_prev || has_next {
-            d::fill(out, rx, ry - 1, rx + rw, ry, FILL);
-            d::fill(out, rx, ry + rh, rx + rw, ry + rh + 1, FILL);
+            d::fill(out, rx, ry - 1, rx + rw, ry, self.layout.fill);
+            d::fill(out, rx, ry + rh, rx + rw, ry + rh + 1, self.layout.fill);
             if has_prev {
                 for x in (0..rw).step_by(2) {
                     d::fill(out, rx + x, ry - 1, rx + x + 1, ry, -1);
@@ -1300,7 +1434,7 @@ impl ChatScreen {
         let mut hovered = false;
         for i in 0..limit {
             let y = ry + 12 * i as i32;
-            d::fill(out, rx, y, rx + rw, y + 12, FILL);
+            d::fill(out, rx, y, rx + rw, y + 12, self.layout.fill);
             if mouse.0 > rx && mouse.0 < rx + rw && mouse.1 > y && mouse.1 < y + 12 {
                 if moved {
                     self.select(l, (i + l.offset) as isize);

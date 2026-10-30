@@ -454,7 +454,13 @@ pub fn do_push(m: &mut Mob, w: &MobWorld, who: Who, events: &mut Vec<MobEvent>) 
 }
 /// `Warden.doHurtTarget`: the attack keyframes (entity event 4), the impact
 /// sound, a sonic boom cooldown, then `Mob.doHurtTarget`.
-pub(super) fn do_hurt_target(m: &mut Mob, target: Who, w: &MobWorld, events: &mut Vec<MobEvent>) {
+pub(super) fn do_hurt_target(
+    m: &mut Mob,
+    target: Who,
+    w: &MobWorld,
+    lr: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     m.anim.states[ROAR].stop();
     m.anim.states[ATTACK].start(m.age as f32);
     events.push(MobEvent::EntityEvent {
@@ -465,7 +471,7 @@ pub(super) fn do_hurt_target(m: &mut Mob, target: Who, w: &MobWorld, events: &mu
     let pitch = voice_pitch(m);
     sound(m, "entity.warden.attack_impact", 10.0, pitch, events);
     warden_brain::mem(m).sonic_boom_cooldown.set_ttl((), 40);
-    let mut cx = warden_brain::cx(w, events);
+    let mut cx = warden_brain::cx(w, lr, events);
     super::ai::do_hurt_target(m, target, &mut cx);
 }
 

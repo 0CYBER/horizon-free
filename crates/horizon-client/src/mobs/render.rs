@@ -14,11 +14,12 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
-/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
-/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
-/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
-/// the model UV and reads `enchanted_glint_armor`.
-pub const ARMOR_GLINT: u32 = 13;
+/// The overlay code of an enchanted armour layer's glint, past the ones
+/// `gfx/entity_batch.rs` gives materials (13 is the boat water mask, which
+/// draws depth only: armour with 13 vanished; 35 is text pulled toward the
+/// camera). It marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl
+/// transforms the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 36;
 
 /// `RenderTypes.breezeWind`: the texture of the breeze's wind layer scrolls
 /// by 0.02 of the texture per tick.
@@ -1032,6 +1033,11 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
             let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
             glam::Mat4::from_rotation_x((-pitch).to_radians())
         }
+        // PhantomRenderer.setupRotations: the body follows its pitch.
+        Species::Phantom => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x(pitch.to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1056,8 +1062,14 @@ fn red_overlay(m: &Mob) -> bool {
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     if avatar(m) {
-        // AvatarRenderer.scale, shared by the inventory and world renderer.
-        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
+        // AvatarRenderer.scale, shared by the inventory and world renderer, on
+        // top of the entity's own `scale` (`LivingEntityRenderer.submit`).
+        let own = if m.extra.model_scale > 0.0 {
+            m.extra.model_scale
+        } else {
+            1.0
+        };
+        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375 * own));
     }
     match m.species() {
         Species::Wither => {
@@ -1075,6 +1087,13 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
         }
         Species::Slime | Species::MagmaCube => super::cube::scale(m, alpha),
         Species::SulfurCube => super::sulfur_cube::scale(m, alpha),
+        Species::Phantom => {
+            // PhantomRenderer.scale: 15% bigger per size, and the model moved
+            // down to the box (it is modelled 1.3125 blocks above the feet).
+            let s = 1.0 + 0.15 * m.extra.size as f32;
+            glam::Mat4::from_scale(glam::Vec3::splat(s))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 1.3125, 0.1875))
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1193,7 +1212,8 @@ pub fn render(
     render_with(m, alpha, camera, atlas, light, data, &[], out);
 }
 /// `render` plus extra layers posed like the body (`HumanoidArmorLayer`:
-/// the armour model's parts copy the body's): (model, texture rect, colour).
+/// the armour model's parts copy the body's): (model, texture rect, colour,
+/// overlay: 0 or `ARMOR_GLINT`, as `EquipmentLayerRenderer` never tints them).
 #[allow(clippy::too_many_arguments)]
 pub fn render_with(
     m: &Mob,
@@ -1202,7 +1222,7 @@ pub fn render_with(
     atlas: Atlas,
     light: u32,
     data: &MobData,
-    extra: &[(&Part, [f32; 4], u32)],
+    extra: &[(&Part, [f32; 4], u32, u32)],
     out: &mut Vec<Vertex>,
 ) {
     // The invisibility effect hides the model (a drinking wandering trader);
@@ -1215,7 +1235,7 @@ pub fn render_with(
                 let shifted =
                     camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
                 let base = base_transform(m, alpha, shifted);
-                render_visible(m, alpha, base, atlas, light, data, extra, out);
+                render_visible(m, alpha, base, atlas, light, data, extra, true, out);
             }
         }
         return;
@@ -1228,6 +1248,7 @@ pub fn render_with(
         light,
         data,
         extra,
+        true,
         out,
     );
 }
@@ -1273,6 +1294,24 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `render_with` without the body, for an avatar the viewer can't see:
+/// `LivingEntityRenderer.submit` gets no render type for an invisible body
+/// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
+/// (`HumanoidArmorLayer`: the armour in `extra`).
+#[allow(clippy::too_many_arguments)]
+pub fn render_layers(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    extra: &[(&Part, [f32; 4], u32, u32)],
+    out: &mut Vec<Vertex>,
+) {
+    let base = base_transform(m, alpha, camera);
+    render_visible(m, alpha, base, atlas, light, data, extra, false, out);
+}
 /// A mob drawn under `origin` instead of at its position (the spinning mob
 /// of `SpawnerRenderer.submitEntityInSpawner`).
 pub fn render_posed(
@@ -1285,7 +1324,7 @@ pub fn render_posed(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform_at(m, alpha, origin);
-    render_visible(m, alpha, base, atlas, light, data, &[], out);
+    render_visible(m, alpha, base, atlas, light, data, &[], true, out);
 }
 #[allow(clippy::too_many_arguments)]
 fn render_visible(
@@ -1295,7 +1334,8 @@ fn render_visible(
     atlas: Atlas,
     light: u32,
     data: &MobData,
-    extra: &[(&Part, [f32; 4], u32)],
+    extra: &[(&Part, [f32; 4], u32, u32)],
+    body_visible: bool,
     out: &mut Vec<Vertex>,
 ) {
     let overlay = u32::from(red_overlay(m));
@@ -1309,7 +1349,7 @@ fn render_visible(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let draw_body = |out: &mut Vec<Vertex>| {
-        if let Some(uv) = atlas(&texture) {
+        if body_visible && let Some(uv) = atlas(&texture) {
             draw(
                 &model,
                 base,
@@ -1327,8 +1367,8 @@ fn render_visible(
     if !shell_last {
         draw_body(out);
     }
-    for (part, uv, color) in extra {
-        draw(part, base, &poses, *uv, *color, light, overlay, out);
+    for (part, uv, color, layer_overlay) in extra {
+        draw(part, base, &poses, *uv, *color, light, *layer_overlay, out);
     }
     let mut all_layers = layers(m);
     // WardenRenderer: the translucent emissive layers fade with the animations.
@@ -1375,7 +1415,7 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the armour glint (13) when enchanted.
+        // the hurt tint, the armour glint (`ARMOR_GLINT`) when enchanted.
         let overlay = match armor_slot(&layer.model) {
             Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
@@ -1883,6 +1923,111 @@ mod tests {
                     (scale - 0.55).abs() < 1.0e-5,
                     "the vex's item is drawn at 0.55 scale, got {scale}"
                 );
+            }
+        }
+    }
+
+    /// PhantomRenderer.scale moves the model down into its 0.5-high box:
+    /// the model's origin ends 1.501 - 1.3125 blocks above the feet (times
+    /// the size's scale), not 1.501 like other mobs (#3008).
+    #[test]
+    fn the_phantom_model_sits_in_its_box() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:phantom"].clone());
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        for (size, scale) in [(0, 1.0f32), (5, 1.75)] {
+            mob.extra.size = size;
+            let origin =
+                base_transform(&mob, 1.0, glam::DVec3::ZERO).transform_point3(glam::Vec3::ZERO);
+            let y = (1.501 - 1.3125) * scale;
+            assert!(
+                (origin.y - y).abs() < 1.0e-4,
+                "size {size}: origin {origin}"
+            );
+            assert!(
+                (origin.z.abs() - 0.1875 * scale).abs() < 1.0e-4,
+                "size {size}: origin {origin}"
+            );
+        }
+    }
+    /// `EquipmentLayerRenderer.renderLayers`: the extra armour layers (a
+    /// player's) take their own overlay, `NO_OVERLAY` or the armour glint,
+    /// never the hurt tint of the body, and the glint samples the model UV.
+    #[test]
+    fn extra_armour_layers_carry_their_glint_not_the_hurt_tint() {
+        // The batch gives these overlays their own materials (13, the water
+        // mask, draws depth only): the glint must not be one of them.
+        use crate::gfx::{
+            ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
+            TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
+            WATER_MASK_OVERLAY,
+        };
+        assert!(
+            ![
+                WATER_MASK_OVERLAY,
+                SHADOW_OVERLAY,
+                TRANSLUCENT_PARTICLE_OVERLAY,
+                TRANSLUCENT_ITEM_OVERLAY,
+                TRANSLUCENT_GLINT_ITEM_OVERLAY,
+                ENERGY_SWIRL_OVERLAY,
+                TEXT_POLYGON_OFFSET_OVERLAY,
+            ]
+            .contains(&ARMOR_GLINT)
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:zombie"].clone());
+        let mut mob = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+        mob.hurt_time = 5;
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
+        let part = &kind.model;
+        for overlay in [ARMOR_GLINT, 0] {
+            let mut vertices = Vec::new();
+            render_with(
+                &mob,
+                0.5,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xf0f0,
+                &data,
+                &[(part, [0.5, 0.5, 0.75, 0.75], 0xFFFF_FFFF, overlay)],
+                &mut vertices,
+            );
+            let (armour, body): (Vec<&Vertex>, Vec<&Vertex>) =
+                vertices.iter().partition(|v| v.uv[0] >= 0.5);
+            assert!(!armour.is_empty() && !body.is_empty());
+            // The hurt body keeps its red overlay.
+            let hurt = body_overlay(&mob, 0.5);
+            assert_ne!(hurt, 0);
+            assert!(body.iter().all(|v| v.layer == hurt));
+            assert!(armour.iter().all(|v| v.layer == overlay));
+            // The glint scrolls the layer's model UV (0..1 over the texture).
+            for v in &armour {
+                if overlay == ARMOR_GLINT {
+                    assert!((v.glint_uv[0] - (v.uv[0] - 0.5) * 4.0).abs() < 1e-4);
+                    assert!((v.glint_uv[1] - (v.uv[1] - 0.5) * 4.0).abs() < 1e-4);
+                } else {
+                    assert_eq!(v.glint_uv, [0.0, 0.0]);
+                }
             }
         }
     }
