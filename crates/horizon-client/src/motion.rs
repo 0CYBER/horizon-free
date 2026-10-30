@@ -3590,6 +3590,56 @@ mod tests {
         w.player.count_down_server_spin();
         assert_eq!(w.player.auto_spin_attack_ticks, 0);
     }
+    /// #3684: `/attribute @s minecraft:scale base set 0.1` on the server's
+    /// copy of a player. `LivingEntity.tick`'s `refreshDirtyAttributes` runs
+    /// `onAttributeUpdated(SCALE)`, which calls `refreshDimensions`: the next
+    /// tick the server checks the player's moves with a 0.06 × 0.18 box, not
+    /// the 0.6 × 1.8 one that sent a small player back from every wall.
+    #[test]
+    fn a_server_copy_takes_its_new_scale_box_the_next_tick() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.server_player_pose_tick().unwrap();
+        assert_eq!(w.player.dimensions.width, 0.6);
+        assert_eq!(w.player.dimensions.height, 1.8);
+        // AttributeCommand's base set, as the server runs it.
+        let key = w.player.attributes.key("minecraft:scale").unwrap();
+        let handle = w
+            .player
+            .attributes
+            .get_instance(Some(key))
+            .unwrap()
+            .unwrap();
+        w.player
+            .attributes
+            .edit(&handle, |value, observer| {
+                value.set_base_value(0.1, observer)
+            })
+            .unwrap();
+        w.server_player_pose_tick().unwrap();
+        assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+        assert_eq!(w.player.dimensions.width, 0.6 * 0.1);
+        assert_eq!(w.player.dimensions.height, 1.8 * 0.1);
+        assert_eq!(w.player.dimensions.eye_height, 1.62 * 0.1);
+    }
     /// #3308: a swimmer who boards a boat stops swimming
     /// (`Entity.updateSwimming` needs `!isPassenger()`) and `updatePlayerPose`
     /// sits them up, eye at 1.62 instead of the swim's 0.4.

@@ -127,6 +127,27 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
+
+/// `AbstractWindCharge` is pickable, so a thrown pearl's
+/// `ProjectileUtil.getEntityHitResult` can strike it (`ThrownEnderpearl.onHit`).
+const WIND_CHARGE_HIT: u32 = super::dragon::SPECIAL - 1;
+
+fn wind_charge_hitboxes(projectiles: &[Projectile], skip: usize) -> Vec<(Who, Aabb)> {
+    projectiles
+        .iter()
+        .enumerate()
+        .filter(|(j, q)| {
+            *j != skip
+                && !q.stuck
+                && matches!(
+                    q.kind,
+                    ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+                )
+        })
+        .map(|(_, q)| (Who::Mob(WIND_CHARGE_HIT), q.aabb()))
+        .collect()
+}
+
 /// `FlameFeatureRenderer`: fire quads stacked up a burning entity's box,
 /// turned to the camera around Y, at full block light. `at` is the entity's
 /// feet relative to the camera.
@@ -1759,6 +1780,8 @@ impl Game<'_> {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
                     }
                 }
+                // Applied after the fish's tick (`apply_brain_events`).
+                MobEvent::StartFollowing { .. } | MobEvent::SchoolSize { .. } => {}
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)
@@ -2491,13 +2514,21 @@ impl Game<'_> {
                     .map(|g| g.conn)
                     .collect()
             });
-            projectiles.retain_mut(|p| {
+            let mut keep_flags = vec![true; projectiles.len()];
+            for i in 0..projectiles.len() {
+                let winds = if matches!(projectiles[i].kind, ProjectileKind::EnderPearl) {
+                    wind_charge_hitboxes(&projectiles, i)
+                } else {
+                    Vec::new()
+                };
+                let p = &mut projectiles[i];
                 if vanish
                     && matches!(p.kind, ProjectileKind::EnderPearl)
                     && p.owner == Some(Who::Player)
                     && p.guest.map_or(host_dead, |c| dead_guests.contains(&c))
                 {
-                    return false;
+                    keep_flags[i] = false;
+                    continue;
                 }
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
                 // A player's arrows, snowballs and eggs meet every player; a
@@ -2512,11 +2543,25 @@ impl Game<'_> {
                 if shooter.is_some() {
                     p.owner = shooter;
                 }
-                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp) {
-                    (true, false) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
-                    (true, true) => horizon_client::arrows::tick(p, &scene, &arrow_targets_guests),
-                    (false, false) => p.tick(&pw),
-                    (false, true) => p.tick(&pw_guests),
+                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp, winds.is_empty()) {
+                    (true, false, _) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
+                    (true, true, _) => {
+                        horizon_client::arrows::tick(p, &scene, &arrow_targets_guests)
+                    }
+                    (false, false, true) => p.tick(&pw),
+                    (false, true, true) => p.tick(&pw_guests),
+                    (false, pvp_shot, false) => {
+                        let mut targets = if pvp_shot {
+                            pw_guests.targets.clone()
+                        } else {
+                            pw.targets.clone()
+                        };
+                        targets.extend(winds);
+                        p.tick(&ProjWorld {
+                            w: if pvp_shot { pw_guests.w } else { pw.w },
+                            targets,
+                        })
+                    }
                 };
                 if shooter.is_some() {
                     p.owner = Some(Who::Player);
@@ -2562,7 +2607,7 @@ impl Game<'_> {
                         arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                     }
                     deflections.push([at.x, at.y, at.z]);
-                    return true;
+                    continue;
                 }
                 // AbstractWindCharge.tick: out of the world's top it bursts.
                 if wind && keep && p.position.y > 350.0 {
@@ -2574,12 +2619,19 @@ impl Game<'_> {
                             face: [0; 3],
                         },
                     ));
-                    return false;
+                    keep_flags[i] = false;
+                    continue;
                 }
                 if hit != Hit::None {
                     hits.push((p.clone(), hit));
                 }
-                keep
+                keep_flags[i] = keep;
+            }
+            let mut idx = 0;
+            projectiles.retain(|_| {
+                let k = keep_flags[idx];
+                idx += 1;
+                k
             });
         }
         self.smoke_trails(trails);
@@ -4653,14 +4705,7 @@ impl Game<'_> {
         self.elder_apparition_geometry(alpha, out);
         self.spawner_geometry(camera, alpha, out);
         // Projectiles: the baked vanilla arrow model, the rest as item billboards.
-        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(
-            -yaw.sin() * pitch.cos(),
-            -pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        );
-        let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
+        let (right, up) = thrown_item_axes(self.camera_type, self.yaw, self.pitch);
         let live = self.creatures.projectiles.iter().map(|a| {
             let at = [
                 a.previous.x + (a.position.x - a.previous.x) * alpha,
@@ -4886,6 +4931,18 @@ impl Game<'_> {
         }
     }
 }
+/// `ThrownItemRenderer.submit` turns the item by `CameraRenderState.orientation`
+/// (`Camera.setRotation`): the billboard's right and up axes are the camera's.
+/// They stay continuous at pitch ±90, and in third-person front view they are
+/// the turned-round camera's, not the player's.
+fn thrown_item_axes(
+    camera_type: super::perspective::CameraType,
+    yaw: f32,
+    pitch: f32,
+) -> (glam::Vec3, glam::Vec3) {
+    let orientation = super::camera_rotation(camera_type, yaw, pitch);
+    (orientation * glam::Vec3::X, orientation * glam::Vec3::Y)
+}
 /// `Bucketable.getBucketItemStack` and `getPickupSound` of a mob that a water
 /// bucket picks up.
 fn bucketable(species: Species) -> Option<(&'static str, &'static str)> {
@@ -5039,6 +5096,39 @@ impl Game<'_> {
         if let Some(id) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
             self.set_portal_cooldown(id);
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::super::perspective::CameraType;
+    use super::thrown_item_axes;
+
+    #[test]
+    fn thrown_item_billboard_does_not_flip_at_straight_up_or_down() {
+        for yaw in [0.0f32, 37.5, 90.0, 180.0, -135.0] {
+            for (edge, near) in [(-90.0f32, -89.9f32), (90.0, 89.9)] {
+                let (right_edge, up_edge) = thrown_item_axes(CameraType::FirstPerson, yaw, edge);
+                let (right_near, up_near) = thrown_item_axes(CameraType::FirstPerson, yaw, near);
+                assert!(
+                    right_edge.dot(right_near) > 0.99 && up_edge.dot(up_near) > 0.99,
+                    "yaw {yaw}, pitch {edge}: {right_edge}/{up_edge} vs {right_near}/{up_near} at {near}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn thrown_item_billboard_faces_the_front_camera() {
+        // Camera.setup turns the front camera round (yaw + 180, -pitch): its
+        // right is the player's left.
+        let (right, up) = thrown_item_axes(CameraType::FirstPerson, 0.0, 0.0);
+        assert!(right.abs_diff_eq(glam::Vec3::NEG_X, 1e-5), "{right}");
+        assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-5), "{up}");
+        let (right, up) = thrown_item_axes(CameraType::ThirdPersonFront, 0.0, 0.0);
+        assert!(right.abs_diff_eq(glam::Vec3::X, 1e-5), "{right}");
+        assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-5), "{up}");
+        let (right, _) = thrown_item_axes(CameraType::ThirdPersonBack, 0.0, 0.0);
+        assert!(right.abs_diff_eq(glam::Vec3::NEG_X, 1e-5), "{right}");
     }
 }
 
