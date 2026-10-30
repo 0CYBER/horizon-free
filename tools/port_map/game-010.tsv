@@ -22,7 +22,7 @@ PathNavigation.getGroundY	inline	crates/horizon-client/src/mobs/nav.rs::Mob::nav
 PathNavigation.shouldTargetNextNodeInDirection	port	crates/horizon-client/src/mobs/nav.rs::Mob::should_target_next_node	
 PathNavigation.trimPath	missing		minor: path nodes on a cauldron are not raised one block, so a route ending on a cauldron (leatherworker job site) aims into the block
 PathNavigation.isClearForMovementBetween	port	crates/horizon-client/src/mobs/world.rs::MobWorld::clear_between	collider clip from start to the target raised by half the height, optionally stopped by fluids
-PathNavigation.shouldRecomputePath	missing		player: nothing asks a mob to re-path when a block changes near its route (recompute_path is only reached after its own delay flag), so a mob keeps walking an old path into a wall you just placed or past one you removed
+PathNavigation.shouldRecomputePath	inline	crates/horizon-client/src/mobs/nav.rs::Mob::should_recompute_path, crates/horizon-client/src/mobs.rs::blocks_changed	called for every block write that changes a collision shape, when the mobs tick (`World::path_writes`); the recompute happens at the start of the mob's next navigation tick, not inside sendBlockUpdated
 WallClimberNavigation.createPath	port	crates/horizon-client/src/mobs/nav.rs::Mob::create_path_to	WallClimber kind remembers climb_to before the ground path
 WallClimberNavigation.tick	inline	crates/horizon-client/src/mobs/nav.rs::Mob::nav_tick	WallClimber branch: with no path it keeps steering at climb_to until within the body width
 WaterBoundPathNavigation.createPathFinder	inline	crates/horizon-client/src/mobs/nav.rs::Navigation::evaluator	Evaluator::Swim with breach for the dolphin; can_pass_doors stays true (minor)
