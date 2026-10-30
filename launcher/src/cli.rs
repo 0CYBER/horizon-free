@@ -68,9 +68,9 @@ enum ServersCmd {
         /// Let anyone in (no whitelist)
         #[arg(long)]
         open: bool,
-        /// Check players' Minecraft accounts (they must sign in with Microsoft)
+        /// Do not check players' Minecraft accounts (offline mode: anyone can use any name)
         #[arg(long)]
-        check_accounts: bool,
+        offline: bool,
         /// Who may join (repeatable); the first becomes an operator
         #[arg(long = "player")]
         players: Vec<String>,
@@ -1897,7 +1897,7 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
             difficulty,
             max_players,
             open,
-            check_accounts,
+            offline,
             players,
             version,
             accept_eula,
@@ -1914,7 +1914,7 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
                 difficulty,
                 max_players,
                 friends_only: !open,
-                check_accounts,
+                check_accounts: !offline,
                 players,
                 eula: accept_eula,
             };
