@@ -616,6 +616,7 @@ impl Game<'_> {
         }
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
+        self.shoulder_parrots_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
         // CustomHeadLayer: a pumpkin, skull or other head item.
         self.head_item_geometry(m, camera, alpha, packed, true, out);
@@ -706,6 +707,7 @@ impl Game<'_> {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
+        self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
@@ -888,6 +890,33 @@ impl Game<'_> {
             out,
         );
     }
+    /// `ParrotOnShoulderLayer`: the parrots the player keeps in its
+    /// `ShoulderEntityLeft` and `ShoulderEntityRight` (game/shoulders.rs).
+    pub(super) fn shoulder_parrots_geometry(
+        &self,
+        m: &Mob,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let Some(extra) = self.level.player_extra.as_ref() else {
+            return;
+        };
+        let Some(parrot) = self.res.mob_types().get("minecraft:parrot") else {
+            return;
+        };
+        let atlas = &self.gui.atlas;
+        let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let base = horizon_client::mobs::render::base_transform(m, partial, camera);
+        for (key, left) in [("ShoulderEntityLeft", true), ("ShoulderEntityRight", false)] {
+            if let Some(variant) = shoulder_parrot_variant(extra, key) {
+                horizon_client::mobs::render::shoulder_parrot(
+                    m, parrot, variant, left, partial, base, &lookup, light, out,
+                );
+            }
+        }
+    }
     /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
     /// player (`SpinAttackEffectModel.setupAnim`).
     pub(super) fn spin_attack_geometry(
@@ -929,6 +958,22 @@ impl Game<'_> {
             out,
         );
     }
+}
+
+/// `AbstractClientPlayer.getParrotVariantOnShoulder`: the variant of the
+/// parrot kept in the `key` shoulder slot, when one is (a parrot's saved
+/// compound, whose `Variant` defaults to 0).
+fn shoulder_parrot_variant(extra: &horizon_world::nbt::Tag, key: &str) -> Option<i32> {
+    use horizon_world::nbt::Tag;
+    let parrot = extra.get(key)?;
+    match parrot.get("id") {
+        Some(Tag::String(id)) if id.to_string_lossy() == "minecraft:parrot" => {}
+        _ => return None,
+    }
+    Some(match parrot.get("Variant") {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    })
 }
 
 fn player_preview_quads(
@@ -1032,6 +1077,39 @@ fn player_walk_distance(from: Vec3, to: Vec3) -> f32 {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+    #[test]
+    fn shoulder_slots_hold_parrots_by_variant() {
+        use horizon_world::nbt::Tag;
+        let parrot = |variant: Option<i32>, id: &str| {
+            let mut entries = vec![("id", Tag::String(id.into()))];
+            if let Some(v) = variant {
+                entries.push(("Variant", Tag::Int(v)));
+            }
+            Tag::compound(entries)
+        };
+        let extra = Tag::compound([
+            ("ShoulderEntityLeft", parrot(Some(3), "minecraft:parrot")),
+            ("ShoulderEntityRight", parrot(None, "minecraft:parrot")),
+        ]);
+        assert_eq!(
+            shoulder_parrot_variant(&extra, "ShoulderEntityLeft"),
+            Some(3)
+        );
+        // A parrot saved without a variant is the first one.
+        assert_eq!(
+            shoulder_parrot_variant(&extra, "ShoulderEntityRight"),
+            Some(0)
+        );
+        let empty = Tag::compound([
+            (
+                "ShoulderEntityLeft",
+                Tag::compound(Vec::<(&str, Tag)>::new()),
+            ),
+            ("ShoulderEntityRight", parrot(Some(1), "minecraft:cat")),
+        ]);
+        assert_eq!(shoulder_parrot_variant(&empty, "ShoulderEntityLeft"), None);
+        assert_eq!(shoulder_parrot_variant(&empty, "ShoulderEntityRight"), None);
+    }
     #[test]
     fn the_player_model_rises_with_the_camera_at_levitation_255() {
         // LivingEntity.travel at Levitation 255: 0.05 * 255 blocks a tick.

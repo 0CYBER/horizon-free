@@ -1328,6 +1328,54 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `ParrotOnShoulderLayer.submitOnShoulder`: a parrot of `variant` on the
+/// avatar's left or right shoulder, in `ParrotModel.Pose.ON_SHOULDER` with
+/// the avatar's walk animation, age and head turn. `base` is the avatar's
+/// root transform; `parrot` the parrot's entity type (its model).
+#[allow(clippy::too_many_arguments)]
+pub fn shoulder_parrot(
+    avatar: &Mob,
+    parrot: &super::MobType,
+    variant: i32,
+    left: bool,
+    alpha: f32,
+    base: glam::Mat4,
+    atlas: Atlas,
+    light: u32,
+    out: &mut Vec<Vertex>,
+) {
+    let Some(uv) = atlas(&shoulder_parrot_texture(variant)) else {
+        return;
+    };
+    let model = parrot.layer(&parrot.model_key()).unwrap_or(&parrot.model);
+    let s = anim::State {
+        baby: false,
+        ..anim::state(avatar, alpha)
+    };
+    let mut poses = Poses::new(model);
+    // ParrotRenderState.flapAngle stays 0.
+    super::body_anim::parrot(
+        &mut poses,
+        &s,
+        super::body_anim::ParrotPose::OnShoulder,
+        0.0,
+    );
+    let y = if avatar.extra.crouching { -1.3 } else { -1.5 };
+    let x = if left { 0.4 } else { -0.4 };
+    let base = base * glam::Mat4::from_translation(glam::Vec3::new(x, y, 0.0));
+    // ParrotModel's cutout render type with OverlayTexture.NO_OVERLAY.
+    draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
+}
+/// `ParrotRenderer.getVariantTexture` for `Parrot.Variant.byId` (an unknown
+/// id is the first variant).
+fn shoulder_parrot_texture(variant: i32) -> String {
+    const NAMES: [&str; 5] = ["red_blue", "blue", "green", "yellow_blue", "grey"];
+    let name = usize::try_from(variant)
+        .ok()
+        .and_then(|i| NAMES.get(i))
+        .unwrap_or(&NAMES[0]);
+    format!("entity/parrot/parrot_{name}")
+}
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
@@ -1830,6 +1878,15 @@ pub fn held_item_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shoulder_parrot_textures_follow_the_variant() {
+        assert_eq!(shoulder_parrot_texture(0), "entity/parrot/parrot_red_blue");
+        assert_eq!(shoulder_parrot_texture(4), "entity/parrot/parrot_grey");
+        // Parrot.Variant.byId: out of range is the first variant.
+        assert_eq!(shoulder_parrot_texture(5), "entity/parrot/parrot_red_blue");
+        assert_eq!(shoulder_parrot_texture(-1), "entity/parrot/parrot_red_blue");
+    }
 
     /// VillagerProfessionLayer's textures (type, or baby for a baby;
     /// profession; level) of every villager and zombie villager are in the
