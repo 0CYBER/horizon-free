@@ -901,9 +901,9 @@ impl Title {
     /// the one just answered), then `openWorldCheckDiskSpace`, then the load.
     fn after_prompt(&mut self, world: WorldEntry, stem_asked: bool) -> Action {
         let dir = self.saves.join(&world.folder);
-        // A world that still needs its file fixes has no 26.3 generator settings to read:
-        // its questions come after the fixes, which this build runs while it opens.
-        if !stem_asked && !crate::save::needs_file_fixes(&dir) {
+        // The generator settings of a world that still needs its file fixes are read as the
+        // fixes will leave them (`world_gen_settings`), so its question comes with this open.
+        if !stem_asked {
             let issue = if crate::save::is_old_customized_world(&dir) {
                 Some(StemIssue::Customized)
             } else if crate::save::world_gen_unstable(&dir) {

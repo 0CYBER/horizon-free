@@ -11,6 +11,16 @@ use horizon_client::{
 use horizon_world::nbt::Tag;
 
 /// `Vec3.yRot(angle)`.
+/// `LocalPlayer.getRopeHoldPosition`'s `Mth.lerp(partialTick * 0.5F, getYRot(),
+/// yRotO)` and the same for the pitch, in radians.
+fn rope_hold_angles(now: (f32, f32), old: (f32, f32), alpha: f32) -> (f64, f64) {
+    let t = alpha * 0.5;
+    let lerp = |a: f32, b: f32| a + t * (b - a);
+    (
+        f64::from(lerp(now.0, old.0) * (std::f32::consts::PI / 180.0)),
+        f64::from(lerp(now.1, old.1) * (std::f32::consts::PI / 180.0)),
+    )
+}
 fn rot_y(v: glam::DVec3, angle: f64) -> glam::DVec3 {
     let (s, c) = (angle.sin(), angle.cos());
     glam::DVec3::new(v.x * c + v.z * s, v.y, v.z * c - v.x * s)
@@ -468,26 +478,46 @@ impl Game<'_> {
         alpha: f64,
     ) -> glam::DVec3 {
         let pos = glam::DVec3::new(p.position.x, p.position.y, p.position.z);
-        let _ = alpha;
+        // Player.getRopeHoldPosition: `0.22 * (RIGHT ? -1 : 1)`.
+        let hand_dir = if self.settings.main_hand_left {
+            1.0
+        } else {
+            -1.0
+        };
         if self.camera_type.first_person() {
-            let (yaw, pitch) = (
-                f64::from(self.yaw.to_radians()),
-                f64::from(self.pitch.to_radians()),
-            );
-            let v = glam::DVec3::new(-0.39, -0.6, 0.3);
+            let (yaw, pitch) =
+                rope_hold_angles((self.yaw, self.pitch), self.rope_rot_old, alpha as f32);
+            let v = glam::DVec3::new(0.39 * hand_dir, -0.6, 0.3);
             // Vec3.xRot(-pitch) then yRot(-yaw).
             let (s, c) = ((-pitch).sin(), (-pitch).cos());
             let v = glam::DVec3::new(v.x, v.y * c + v.z * s, v.z * c - v.y * s);
-            let eye = pos + glam::DVec3::new(0.0, f64::from(p.dimensions.eye_height), 0.0);
+            // Entity.getEyePosition(partialTick).
+            let feet = self.previous_position.lerp(p.position, alpha);
+            let eye = glam::DVec3::new(feet.x, feet.y + f64::from(p.dimensions.eye_height), feet.z);
             return rot_y(v, -yaw) + eye;
         }
         let yaw = f64::from(self.yaw.to_radians());
         let crouching = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
         let v = glam::DVec3::new(
-            -0.22,
+            0.22 * hand_dir,
             f64::from(p.dimensions.height) - 1.0,
             if crouching { -0.2 } else { 0.07 },
         );
         pos + rot_y(v, -yaw)
+    }
+}
+
+#[cfg(test)]
+mod rope_hold_tests {
+    use super::rope_hold_angles;
+
+    #[test]
+    fn rope_hold_angles_lerp_by_half_the_partial_tick() {
+        // Mth.lerp(pt * 0.5, yRot, yRotO): at pt 1 the view is halfway to the old one.
+        let (y, x) = rope_hold_angles((90.0, 20.0), (50.0, 0.0), 1.0);
+        assert!((y - 70.0_f64.to_radians()).abs() < 1e-6);
+        assert!((x - 10.0_f64.to_radians()).abs() < 1e-6);
+        let (y, _) = rope_hold_angles((90.0, 20.0), (50.0, 0.0), 0.0);
+        assert!((y - 90.0_f64.to_radians()).abs() < 1e-6);
     }
 }

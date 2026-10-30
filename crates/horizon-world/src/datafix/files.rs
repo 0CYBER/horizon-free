@@ -669,6 +669,35 @@ fn fix_world_files_deferred(
     Ok((loaded, Some(data)))
 }
 
+/// The world's generator settings as 26.3 reads them once the file fixes have run, without
+/// running them: for a world older than 4772 they come out of level.dat the way
+/// `LevelDatToSavedDataFileFix` moves them (`world_gen_settings.dat` is not there yet), for any
+/// other from the saved data file, brought to the current version. `None` when there are none.
+pub fn current_world_gen_settings(base: &Path) -> io::Result<Option<Tag>> {
+    const V: i32 = 4772;
+    let Some(root) = read_dat(&base.join("level.dat"))? else {
+        return Ok(None);
+    };
+    let loaded = root.get("Data").map_or(-1, |data| data_version(data, -1));
+    if loaded < V {
+        let Some(content) = read_level(base, V)? else {
+            return Ok(None);
+        };
+        let Some(mut settings) = content.get("world_gen_settings").cloned() else {
+            return Ok(None);
+        };
+        let from = data_version(&content, -1);
+        update(Ty::WorldGenSettings, &mut settings, from, V);
+        update(Ty::WorldGenSettings, &mut settings, V, CURRENT);
+        return Ok(Some(settings));
+    }
+    read_saved_data(
+        &base.join("data/minecraft/world_gen_settings.dat"),
+        Ty::SavedWorldGenSettings,
+        CURRENT,
+    )
+}
+
 // ------------------------------------------------------------------ the read-time upgrades
 
 /// Chunk generator types per dimension from `world_gen_settings.dat`.

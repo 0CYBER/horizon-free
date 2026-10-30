@@ -1725,6 +1725,8 @@ struct Game<'a> {
     spawn: Option<Vec3>,
     clock: FixedStep,
     previous_position: Vec3,
+    /// `yRotO` / `xRotO` of the local player: the view at the start of the tick.
+    rope_rot_old: (f32, f32),
     eye: f32,
     previous_eye: f32,
     yaw: f32,
@@ -6026,6 +6028,7 @@ impl Game<'_> {
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
+        self.rope_rot_old = (self.yaw, self.pitch);
         if !riding {
             self.previous_position = player.position;
         }
@@ -15220,6 +15223,7 @@ impl<'a> Game<'a> {
             spawn: None,
             clock: FixedStep::default(),
             previous_position: Vec3::ZERO,
+            rope_rot_old: (0.0, 10.0),
             eye: 1.62,
             previous_eye: 1.62,
             yaw: look.map_or(level.rotation[0], |l| l.0),
