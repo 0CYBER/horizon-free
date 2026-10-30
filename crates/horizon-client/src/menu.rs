@@ -1073,7 +1073,8 @@ impl Menu {
             return false;
         }
         if let Some(result) = self.containers[RESULT][0].as_mut() {
-            result.data_mut().custom_name = (!name.trim().is_empty()).then(|| name.clone());
+            result.data_mut().custom_name = (!name.trim().is_empty())
+                .then(|| horizon_world::nbt::Tag::String(name.as_str().into()));
             result.tidy();
         }
         self.anvil.name = Some(name);

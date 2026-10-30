@@ -26,8 +26,9 @@
 //! - `port <pack> <work> [--from <folder>] [--resources <prepared>]`: every
 //!   step for the portable mods, as the launcher's "Import modpack" runs it.
 //! - `upgrade-datapack <pack> <out> | --world <world>`: a 26.2 data pack
-//!   (zip or folder) with its world generation rewritten in 26.3's formats,
-//!   into the folder `<out>`, or into `<world>/datapacks/<pack name>-26.3`.
+//!   (zip or folder) with its world generation rewritten in 26.3's formats
+//!   (`docs/datapack-upgrade.md`), into the folder `<out>`, or into
+//!   `<world>/datapacks/<pack name>-26.3`.
 //!
 //! The work folder belongs to the user: jars and carried-over files stay
 //! there and are never uploaded or committed.

@@ -227,6 +227,9 @@ pub struct Guest {
     pub moves: Vec<([f64; 3], bool)>,
     /// Whether the guest was on the ground before the first of `moves`.
     pub moves_from_ground: bool,
+    /// `ServerPlayer.lastKnownClientMovement`: the last move accepted from
+    /// their client, zero after a client tick without one.
+    pub known_movement: [f64; 3],
     pub dead: bool,
     /// `LivingEntity.deathTime`: ticks since the guest died.
     pub death_time: u32,
@@ -357,6 +360,7 @@ impl Guest {
             ticks: 0,
             moves: Vec::new(),
             moves_from_ground: false,
+            known_movement: [0.0; 3],
             dead: false,
             death_time: 0,
             placed: false,
@@ -658,6 +662,18 @@ fn network_stack(
                 horizon_protocol::item::Component::BannerPatterns(layers),
             ));
         }
+        // `painting/variant`: a reference into the synced registry.
+        if let Some(id) = crate::save::text(d.other("minecraft:painting/variant")).and_then(|v| {
+            synced_id(
+                "minecraft:painting_variant",
+                &horizon_world::datafix::dynamic::namespaced(&v),
+            )
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::PAINTING_VARIANT,
+                horizon_protocol::item::Component::PaintingVariant(id),
+            ));
+        }
         // A shield's `base_color`.
         if let Some(id) = d.base_color.as_deref().and_then(dye_id) {
             stack.added.push((
@@ -737,6 +753,21 @@ fn network_stack(
                 },
             ));
         }
+        // SuspiciousStewEffects: each effect by its `minecraft:mob_effect` id.
+        if !d.stew_effects.is_empty() {
+            let effects = d
+                .stew_effects
+                .iter()
+                .filter_map(|(effect, duration)| {
+                    let name = horizon_world::datafix::dynamic::namespaced(effect);
+                    Some((synced_id("minecraft:mob_effect", &name)?, *duration))
+                })
+                .collect();
+            stack.added.push((
+                horizon_protocol::item::component::SUSPICIOUS_STEW_EFFECTS,
+                horizon_protocol::item::Component::StewEffects(effects),
+            ));
+        }
         // A loaded crossbow's ammunition.
         if !d.charged.is_empty() {
             let charged = d
@@ -790,10 +821,11 @@ fn network_stack(
             ));
         }
     }
-    if let Some(name) = s.custom_name() {
+    // Keep the component's styles across integrated-server and LAN inventory sync.
+    if let Some(name) = s.data().and_then(|d| d.other("minecraft:custom_name")) {
         stack.added.push((
             horizon_protocol::item::component::CUSTOM_NAME,
-            horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
+            horizon_protocol::item::Component::Text(name.clone()),
         ));
     }
     // The component as loaded, so a translatable name stays one.
@@ -821,7 +853,32 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_protocol::buf::{Codec, Reader, Writer};
     use horizon_protocol::item::{Component, component};
+    use horizon_world::nbt::Tag;
+
+    #[test]
+    fn styled_custom_name_survives_inventory_sync() {
+        let name = Tag::compound([
+            ("text", Tag::String("Red".into())),
+            ("color", Tag::String("#ff0000".into())),
+            ("italic", Tag::Byte(0)),
+        ]);
+        let mut item = ItemStack::new("minecraft:stick", 1);
+        item.data_mut().custom_name = Some(name.clone());
+        let sent = stack_to_network(|_| 7, |_, _| None, &Some(item));
+        let mut writer = Writer::new();
+        horizon_protocol::item::Slot::write(&sent, &mut writer);
+        let mut reader = Reader::new(&writer.data);
+        let received = horizon_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(
+            received.component(component::CUSTOM_NAME),
+            Some(&Component::Text(name))
+        );
+    }
 
     #[test]
     fn potions_go_as_potion_registry_ids() {
