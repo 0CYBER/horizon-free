@@ -644,29 +644,41 @@ impl Game<'_> {
         let used_before = stack
             .as_ref()
             .map_or(0, |s| self.stats.get("used", &s.item));
-        let Some(&Target::Mob(id)) = targets.first() else {
-            return Err("an attack case hits a mob".into());
-        };
-        let index = self
-            .mobs
-            .iter()
-            .position(|m| m.id == id)
-            .ok_or("the target is gone")?;
-        let kind = self.mobs[index].kind.id.clone();
         let base = op["base"].as_f64().unwrap_or(0.0) as f32;
-        let bonus = self.smash_damage_bonus(&kind);
         let source = self.attack_source(feet);
-        let hurt = self.hurt_by_player(index, base + bonus, source);
-        // The hurt sound the mob raised, where it stands.
-        for event in std::mem::take(&mut self.mobs[index].outbox) {
-            if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
-                self.audio
-                    .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+        let (bonus, hurt) = match targets.first() {
+            Some(&Target::Mob(id)) => {
+                let index = self
+                    .mobs
+                    .iter()
+                    .position(|m| m.id == id)
+                    .ok_or("the target is gone")?;
+                let kind = self.mobs[index].kind.id.clone();
+                let bonus = self.smash_damage_bonus(&kind);
+                let hurt = self.hurt_by_player(index, base + bonus, source);
+                // The hurt sound the mob raised, where it stands.
+                for event in std::mem::take(&mut self.mobs[index].outbox) {
+                    if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
+                        self.audio
+                            .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+                    }
+                }
+                if hurt {
+                    self.weapon_hit(index);
+                }
+                (bonus, hurt)
             }
-        }
-        if hurt {
-            self.weapon_hit(index);
-        }
+            Some(&Target::Stand(id)) => {
+                let index = self
+                    .armor_stands
+                    .iter()
+                    .position(|s| s.id == id)
+                    .ok_or("the target is gone")?;
+                let bonus = self.smash_damage_bonus("minecraft:armor_stand");
+                (bonus, self.hit_armor_stand(index, |_, _, _| {}))
+            }
+            None => return Err("an attack case has a target".into()),
+        };
         self.process_level_events()?;
         let mut out = Vec::new();
         if let Some(s) = &stack {
@@ -692,7 +704,10 @@ impl Game<'_> {
                 },
                 Target::Stand(id) => match self.armor_stands.iter().find(|s| s.id == id) {
                     Some(s) => ("-".to_owned(), s.velocity),
-                    None => continue,
+                    None => {
+                        out.push(format!("V {i} gone"));
+                        continue;
+                    }
                 },
             };
             out.push(format!(
@@ -903,6 +918,9 @@ impl Game<'_> {
             let mut stand = horizon_client::entities::ArmorStand::new(id, at, yaw);
             stand.marker = e["marker"].as_bool().unwrap_or(false);
             stand.on_ground = e["ground"].as_bool().unwrap_or(false);
+            if let Some(last_hit) = e["last_hit"].as_i64() {
+                stand.last_hit = last_hit;
+            }
             self.armor_stands.push(stand);
             return Ok(Target::Stand(id));
         }
