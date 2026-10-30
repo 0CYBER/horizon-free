@@ -311,10 +311,26 @@ impl Loading {
             gui.atlas.font.uniform = self.settings.force_unicode;
             gui.atlas.font.japanese = self.settings.japanese_glyphs;
         }
-        if let Some(window) = &self.window
-            && let Some(want) = self.fullscreen.request(self.settings.fullscreen)
-        {
-            window.set_fullscreen(want.then_some(winit::window::Fullscreen::Borderless(None)));
+        if let Some(window) = self.window.clone() {
+            let modes = window
+                .current_monitor()
+                .or_else(|| window.primary_monitor())
+                .map(|m| horizon_client::window::monitor_video_modes(&m))
+                .unwrap_or_default();
+            let preferred = self
+                .settings
+                .file
+                .fullscreen_resolution
+                .as_deref()
+                .and_then(horizon_client::window::VideoMode::read);
+            self.fullscreen.apply(
+                &window,
+                self.settings.fullscreen,
+                self.settings.file.bool("exclusiveFullscreen"),
+                preferred,
+                false,
+            );
+            self.settings.video_modes = modes;
         }
         self.update_menu_cursor();
     }
