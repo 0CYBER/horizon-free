@@ -221,7 +221,91 @@ pub fn family(s: Species) -> Family {
         _ => Family::Generic,
     }
 }
+/// The `setPathfindingMalus` calls of the vanilla constructors, base classes
+/// first: the species' own register may still change them.
+fn constructor_maluses(m: &mut Mob) {
+    use super::path::PathType as P;
+    use Species as S;
+    let s = m.species();
+    // `Animal()`: no walking through fire, and a wide berth around it.
+    let animal = matches!(
+        s,
+        S::Armadillo
+            | S::Axolotl
+            | S::Bee
+            | S::Camel
+            | S::CamelHusk
+            | S::Cat
+            | S::Chicken
+            | S::Cow
+            | S::Donkey
+            | S::Fox
+            | S::Frog
+            | S::Goat
+            | S::HappyGhast
+            | S::Hoglin
+            | S::Horse
+            | S::Llama
+            | S::Mule
+            | S::Mooshroom
+            | S::Nautilus
+            | S::Ocelot
+            | S::Panda
+            | S::Parrot
+            | S::Pig
+            | S::PolarBear
+            | S::Rabbit
+            | S::Sheep
+            | S::SkeletonHorse
+            | S::Sniffer
+            | S::Strider
+            | S::TraderLlama
+            | S::Turtle
+            | S::Wolf
+            | S::ZombieHorse
+            | S::ZombieNautilus
+    );
+    // `AbstractVillager()`, `AbstractPiglin()` and `CopperGolem()` say the same.
+    if animal
+        || matches!(
+            s,
+            S::Villager | S::WanderingTrader | S::Piglin | S::PiglinBrute | S::CopperGolem
+        )
+    {
+        m.set_malus(P::FireInNeighbor, 16.0);
+        m.set_malus(P::Fire, -1.0);
+    }
+    match s {
+        S::Fox => {
+            m.set_malus(P::DamagingInNeighbor, 0.0);
+            m.set_malus(P::Damaging, 0.0);
+        }
+        S::Parrot => {
+            m.set_malus(P::FireInNeighbor, -1.0);
+            m.set_malus(P::Fire, -1.0);
+            m.set_malus(P::Cocoa, -1.0);
+        }
+        S::Frog => {
+            m.set_malus(P::Water, 4.0);
+            m.set_malus(P::Trapdoor, -1.0);
+        }
+        S::Goat | S::Wolf => {
+            m.set_malus(P::PowderSnow, -1.0);
+            m.set_malus(P::OnTopOfPowderSnow, -1.0);
+        }
+        S::CopperGolem => m.set_malus(P::DamagingInNeighbor, 16.0),
+        S::Blaze => {
+            m.set_malus(P::Water, -1.0);
+            m.set_malus(P::Lava, 8.0);
+            m.set_malus(P::FireInNeighbor, 0.0);
+            m.set_malus(P::Fire, 0.0);
+        }
+        S::ZombifiedPiglin | S::WitherSkeleton => m.set_malus(P::Lava, 8.0),
+        _ => {}
+    }
+}
 pub fn register(m: &mut Mob) {
+    constructor_maluses(m);
     // Raider subclasses call super.registerGoals() first.
     super::raider::register(m);
     match family(m.species()) {
