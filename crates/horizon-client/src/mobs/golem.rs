@@ -8,6 +8,10 @@ use super::{
         Cx, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack, NearestTarget, Prey,
         RandomLookAround, Stroll, goal_clone, reduced,
     },
+    villager_brain::{
+        closest_section, occupied_pois_in_range, others_tickets, sections_to_village,
+        village_sections,
+    },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -16,6 +20,8 @@ use horizon_core::{geometry::Vec3, random::RandomSource};
 fn golem_prey(s: &super::Seen) -> bool {
     s.hostile && s.species != Species::Creeper
 }
+/// `IronGolem.registerGoals`, without `ResetUniversalAngerTargetGoal`
+/// (nothing reads the `universal_anger` rule yet).
 pub fn register_iron(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(1, MeleeAttack::new(1.0, true));
@@ -26,7 +32,19 @@ pub fn register_iron(m: &mut Mob) {
             within: 32.0,
         },
     );
-    g.add(4, Stroll::avoiding_water(0.6));
+    let mut back = Stroll::new(0.6)
+        .interval(10)
+        .named("MoveBackToVillageGoal")
+        .gate(outside_village)
+        .position(back_to_village_position);
+    back.check_no_action = false;
+    g.add(2, back);
+    let mut stroll = Stroll::new(0.6)
+        .interval(240)
+        .named("GolemRandomStrollInVillageGoal")
+        .position(village_stroll_position);
+    stroll.check_no_action = false;
+    g.add(4, stroll);
     g.add(
         5,
         OfferFlower {
@@ -48,6 +66,125 @@ pub fn register_iron(m: &mut Mob) {
         3,
         NearestTarget::new(Prey::Filter(golem_prey), false).interval(5),
     );
+}
+/// `SectionPos.of`: the section a position is in.
+fn section_of(p: Vec3) -> [i32; 3] {
+    [
+        (p.x.floor() as i32) >> 4,
+        (p.y.floor() as i32) >> 4,
+        (p.z.floor() as i32) >> 4,
+    ]
+}
+/// `SectionPos.center` as `Vec3.atBottomCenterOf` reads it.
+fn section_center(s: [i32; 3]) -> [f64; 3] {
+    [
+        f64::from(s[0] * 16 + 8) + 0.5,
+        f64::from(s[1] * 16 + 8),
+        f64::from(s[2] * 16 + 8) + 0.5,
+    ]
+}
+/// `MoveBackToVillageGoal.canUse`: only a golem outside the village
+/// (`ServerLevel.isVillage` at its feet, at most 1 section from a village
+/// section) goes back to it.
+fn outside_village(m: &Mob, w: &MobWorld) -> bool {
+    sections_to_village(&village_sections(m, w), section_of(m.position)) > 1
+}
+/// `MoveBackToVillageGoal.getPosition`: toward the section within 2 that
+/// is closest to a village, a quarter turn either side; none when the
+/// golem's own section already is.
+fn back_to_village_position(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+    let villages = village_sections(m, cx.w);
+    let here = section_of(m.position);
+    let best = closest_section(&villages, here, 2);
+    if best == here {
+        return None;
+    }
+    m.default_random_pos_towards(
+        cx.w,
+        10,
+        7,
+        section_center(best),
+        f64::from(std::f32::consts::FRAC_PI_2),
+    )
+}
+/// `GolemRandomStrollInVillageGoal.getPosition`: now and then anywhere
+/// (3 in 10); else toward a villager who wants a golem or toward a spot in
+/// a village section (7 in 10 the villager first), and anywhere if neither
+/// is found. The picks draw from the level's random.
+fn village_stroll_position(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+    if cx.lr.next_float() < 0.3 {
+        return m.land_random_pos(cx.w, 10, 7);
+    }
+    let target = if cx.lr.next_float() < 0.7 {
+        towards_villager_who_wants_golem(m, cx).or_else(|| towards_poi(m, cx))
+    } else {
+        towards_poi(m, cx).or_else(|| towards_villager_who_wants_golem(m, cx))
+    };
+    target.or_else(|| m.land_random_pos(cx.w, 10, 7))
+}
+/// `GolemRandomStrollInVillageGoal.getPositionTowardsVillagerWhoWantsGolem`:
+/// one of the villagers within 32 blocks that want a golem, picked from
+/// the level's random.
+fn towards_villager_who_wants_golem(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+    let area = m.bounds().inflate(Vec3::new(32.0, 32.0, 32.0));
+    let now = cx.w.game_time;
+    let villagers: Vec<Vec3> =
+        cx.w.others_near(area)
+            .filter(|s| {
+                s.species == Species::Villager
+                    && s.bounds.intersects(area)
+                    && s.villager.as_ref().is_some_and(|v| v.wants_golem(now))
+            })
+            .map(|s| s.position)
+            .collect();
+    if villagers.is_empty() {
+        return None;
+    }
+    let at = villagers[cx.lr.next_int_bound(villagers.len() as i32).unwrap_or(0) as usize];
+    m.land_random_pos_towards(cx.w, 10, 7, [at.x, at.y, at.z])
+}
+/// `GolemRandomStrollInVillageGoal.getPositionTowardsPoi`: a taken point of
+/// interest within 8 blocks of the centre of a random village section
+/// (`getRandomVillageSection`, `getRandomPoiWithinSection`) among those
+/// within 2 sections of the golem.
+fn towards_poi(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+    let villages = village_sections(m, cx.w);
+    let here = section_of(m.position);
+    let mut sections = Vec::new();
+    for z in here[2] - 2..=here[2] + 2 {
+        for y in here[1] - 2..=here[1] + 2 {
+            for x in here[0] - 2..=here[0] + 2 {
+                if sections_to_village(&villages, [x, y, z]) == 0 {
+                    sections.push([x, y, z]);
+                }
+            }
+        }
+    }
+    if sections.is_empty() {
+        return None;
+    }
+    let s = sections[cx.lr.next_int_bound(sections.len() as i32).unwrap_or(0) as usize];
+    let taken = others_tickets(m, cx.w);
+    let pois = occupied_pois_in_range(
+        cx.w,
+        &taken,
+        [s[0] * 16 + 8, s[1] * 16 + 8, s[2] * 16 + 8],
+        8,
+    );
+    if pois.is_empty() {
+        return None;
+    }
+    let p = pois[cx.lr.next_int_bound(pois.len() as i32).unwrap_or(0) as usize];
+    m.land_random_pos_towards(
+        cx.w,
+        10,
+        7,
+        [
+            f64::from(p[0]) + 0.5,
+            f64::from(p[1]),
+            f64::from(p[2]) + 0.5,
+        ],
+    )
 }
 /// `DefendVillageTargetGoal`: a player that a villager nearby has no
 /// good word for (reputation of -100 or worse) is attacked on sight.

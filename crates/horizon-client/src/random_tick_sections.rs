@@ -4,32 +4,30 @@ use crate::{
     blocks::BlockFacts,
     chunk::{Chunk, MIN_Y, SECTIONS, Section},
     fast_hash::FxHashMap,
+    section_mask::SectionMask,
 };
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, Weak};
 
 /// A value snapshot, in ascending section order, with no per-chunk allocation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sections(u32);
+pub struct Sections(SectionMask);
 impl Sections {
     /// The minimum Y of the lowest section in the set from block `min_y` up.
     pub fn from(self, min_y: i32) -> Option<i32> {
-        let index = ((min_y - MIN_Y) >> 4).max(0) as u32;
-        Sections(self.0 & u32::MAX.checked_shl(index).unwrap_or(0)).next()
+        let index = ((min_y - MIN_Y) >> 4).max(0) as usize;
+        Sections(self.0.from(index)).next()
     }
 }
 impl Iterator for Sections {
     type Item = i32;
     fn next(&mut self) -> Option<i32> {
-        if self.0 == 0 {
-            return None;
-        }
-        let index = self.0.trailing_zeros();
-        self.0 &= self.0 - 1;
+        let index = self.0.iter().next()?;
+        self.0.remove(index);
         Some(MIN_Y + index as i32 * 16)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.0.count_ones() as usize;
+        let len = self.0.len();
         (len, Some(len))
     }
 }
@@ -72,9 +70,6 @@ impl RandomTickSections {
         chunk: &Arc<Chunk>,
         mut random: impl FnMut(u32) -> bool,
     ) -> Sections {
-        const {
-            assert!(SECTIONS <= u32::BITS as usize);
-        }
         let cached = self.chunks.entry(key).or_insert_with(|| Cached {
             chunk: Weak::new(),
             read: std::array::from_fn(|_| Weak::new()),
@@ -88,9 +83,9 @@ impl RandomTickSections {
                 // `isRandomlyTicking`: the blocks themselves, not the palette,
                 // which keeps the states no block uses any more.
                 if section.blocks.has(&mut random) {
-                    cached.sections.0 |= 1 << i;
+                    cached.sections.0.insert(i);
                 } else {
-                    cached.sections.0 &= !(1 << i);
+                    cached.sections.0.remove(i);
                 }
                 *read = Arc::downgrade(section);
             }

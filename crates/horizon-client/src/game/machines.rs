@@ -449,9 +449,9 @@ impl Game<'_> {
         Containers {
             world: &self.world,
             behaviours: self.res.behaviours(),
-            items: self.res.items(),
+            items: self.items(),
             registry: self.pack.assets.registry,
-            brewing: Some(&self.res.stations().brewing),
+            brewing: Some(&self.stations().brewing),
             bone_meal: bone_meal(),
         }
     }

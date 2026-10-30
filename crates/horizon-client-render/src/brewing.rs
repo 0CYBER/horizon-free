@@ -7,6 +7,7 @@ use crate::{
     items::{ItemStack, Items},
     providers::Providers,
 };
+use horizon_world::loot::PackOverlay;
 use serde_json::Value;
 use std::{collections::HashSet, fs, path::Path};
 
@@ -142,20 +143,41 @@ pub struct Brewing {
     pub inputs: HashSet<String>,
 }
 impl Brewing {
-    pub fn load(root: &Path, items: &Items) -> Self {
-        let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe/brewing"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        files.sort();
-        let mut recipes = Vec::new();
-        for p in files {
-            let Ok(bytes) = fs::read(&p) else { continue };
-            let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+    pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
+        let mut sources: Vec<(String, Value)> =
+            fs::read_dir(root.join("data/minecraft/recipe/brewing"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| {
+                    let bytes = fs::read(e.path()).ok()?;
+                    let v = serde_json::from_slice::<Value>(&bytes).ok()?;
+                    Some((
+                        format!(
+                            "minecraft:brewing/{}",
+                            e.file_name().to_string_lossy().strip_suffix(".json")?
+                        ),
+                        v,
+                    ))
+                })
+                .collect();
+        // The world's packs' brewing recipes over the game's own: the top
+        // pack's file for each id replaces it (`SimpleJsonResourceReloadListener`).
+        for (id, files) in overlay.kind("recipe") {
+            if !id.starts_with("minecraft:brewing/") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
                 continue;
             };
+            match sources.iter_mut().find(|(n, _)| n == id) {
+                Some(slot) => slot.1 = v,
+                None => sources.push((id.to_owned(), v)),
+            }
+        }
+        sources.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut recipes = Vec::new();
+        for (id, v) in sources {
             if v["type"] != "minecraft:brewing" {
                 continue;
             }
@@ -169,10 +191,7 @@ impl Brewing {
                 output = output.with_potion(potion);
             }
             recipes.push(BrewingRecipe {
-                id: format!(
-                    "minecraft:brewing/{}",
-                    p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
-                ),
+                id,
                 input: PotionIngredient::parse(&v["input"], items),
                 reagent: PotionIngredient::parse(&v["reagent"], items),
                 output,
