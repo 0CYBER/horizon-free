@@ -46,6 +46,12 @@ vanilla particles to nearby players. Block particles require a valid block state
 vibration particles are not supported by the current dispatch. Count zero sends one directional
 particle. The return value says whether the call was accepted, not whether any player received it. Bundles that use it need `"hooks": 11`.
 
+API next adds `GameLevel::native_play_sound` for registered vanilla sound events on an authoritative server.
+It queues the sound for nearby players in the level's dimension, including during a guest's turn.
+Pass a `SOUND_SOURCES` index, position, volume and pitch. The return value says whether the call
+was queued, not whether a player heard it. The server discards unknown sound events when it dispatches
+the queue.
+
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 

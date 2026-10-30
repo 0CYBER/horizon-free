@@ -1914,6 +1914,7 @@ impl Game<'_> {
         self.flush_hook_pulls();
         // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
         self.flush_lan_particles();
+        self.flush_native_sounds();
     }
 
     fn lan_guest_joined(
