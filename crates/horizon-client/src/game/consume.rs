@@ -128,7 +128,7 @@ impl Game<'_> {
         if !self.world.loaded(pos.x, pos.z) {
             return false;
         }
-        while pos.y > self.dim.min_y() {
+        while pos.y > self.world.shape.min_y {
             pos.y -= 1;
             let state = self.world.block(pos.x, pos.y, pos.z);
             if self.state_in_tag("minecraft:entities_can_teleport_to", state) {
@@ -296,10 +296,10 @@ impl TeleportConsumeWorld for Teleporter<'_, '_> {
         &mut self.0.world.random
     }
     fn min_y(&mut self, level: Dim) -> Result<i32, Infallible> {
-        Ok(level.min_y())
+        Ok(self.0.level_shapes.get(level.id()).min_y)
     }
     fn logical_height(&mut self, level: Dim) -> Result<i32, Infallible> {
-        Ok(level.logical_height())
+        Ok(self.0.level_shapes.get(level.id()).logical_height)
     }
     fn is_passenger(&mut self) -> Result<bool, Infallible> {
         Ok(self.0.riding.is_some())

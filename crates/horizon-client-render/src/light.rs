@@ -467,8 +467,15 @@ fn pack_lighting(
 /// edits and immutable snapshots retained by other workers.
 pub fn apply_lighting(chunk: &mut Chunk, lights: Vec<Light>) {
     for (section, light) in chunk.sections.iter_mut().zip(lights) {
+        // A shared section already lit so stays as it is.
+        if let (Light::Uniform(a), Light::Uniform(b)) = (&section.light, &light)
+            && a == b
+        {
+            continue;
+        }
         Arc::make_mut(section).light = light;
     }
+    crate::chunk::share_uniform(&mut chunk.sections);
 }
 
 /// `apply_lighting` for a chunk lit before: writes only the sections whose
@@ -535,6 +542,7 @@ pub fn light_from_layers<L: AsRef<[u8]>>(
         section.light = Light::Full(data);
         section.compact();
     }
+    crate::chunk::share_uniform(&mut chunk.sections);
     chunk.lit = true;
     chunk.light_loaded = true;
 }
@@ -657,6 +665,12 @@ impl<'w> Region<'w> {
     fn state(&mut self, x: i32, y: i32, z: i32) -> Option<u32> {
         let slot = self.slot(x, y, z)?;
         Some(self.slots[slot].section.get(index(x, y, z)))
+    }
+    /// The one state of the section holding `y`, when it has a single one.
+    fn uniform_state(&mut self, x: i32, y: i32, z: i32) -> Option<u32> {
+        let slot = self.slot(x, y, z)?;
+        let section = &self.slots[slot].section;
+        (section.blocks.bits() == 0).then(|| section.get(0))
     }
     /// Packed light (sky << 4 | block), None outside loaded, lit chunks.
     fn light(&mut self, x: i32, y: i32, z: i32) -> Option<u8> {
@@ -826,6 +840,15 @@ fn lowest_sky_source(world: &mut Region, tables: &LightTables, x: i32, z: i32) -
         return min_y;
     };
     while y > min_y {
+        // A section of one state that lets light through itself (the air of
+        // a tall column) holds no source edge: go to its bottom block.
+        if let Some(state) = world.uniform_state(x, y - 1, z)
+            && state == top
+            && !tables.edge_occluded(top as usize, top as usize)
+        {
+            y = ((y - 1 - min_y) & !15) + min_y;
+            continue;
+        }
         let Some(bottom) = world.state(x, y - 1, z) else {
             break;
         };
@@ -1352,6 +1375,14 @@ mod tests {
         assert_eq!(chunk.light(8, 1601, 8) >> 4, 15);
         assert_eq!(chunk.light(8, 1599, 8) >> 4, 0, "under the roof");
         assert_eq!(chunk.light(8, 2031, 8), 0xF0);
+        // The empty sections above are one shared allocation.
+        let top = chunk.sections.len() - 1;
+        assert!(Arc::ptr_eq(&chunk.sections[top], &chunk.sections[top - 10]));
+        let other = Chunk::with_layout(1, 0, layout);
+        apply_lighting(&mut other.clone(), vec![Light::Uniform(0xF0); 131]);
+        let mut lit = other.clone();
+        apply_lighting(&mut lit, vec![Light::Uniform(0xF0); 131]);
+        assert!(Arc::ptr_eq(&chunk.sections[top], &lit.sections[top]));
     }
     #[test]
     fn a_tall_column_relights_as_its_full_light_and_keys_its_sections() {
@@ -1626,9 +1657,10 @@ mod tests {
                     .iter()
                     .all(|v| matches!(v, Light::Uniform(n) if *n == if sky { 0xF0 } else { 0 }))
             );
-            let section = Arc::as_ptr(&chunk.sections[0]);
             apply_lighting(&mut chunk, lights);
-            assert_eq!(section, Arc::as_ptr(&chunk.sections[0]));
+            // Uniform sections are one shared allocation (`share_uniform`).
+            let first = &chunk.sections[0];
+            assert!(chunk.sections.iter().all(|s| Arc::ptr_eq(s, first)));
         }
     }
 
