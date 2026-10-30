@@ -10,6 +10,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "horizon-rust/horizon";
+pub const LAUNCHER_REPO: &str = "0CYBER/horizon-free";
 pub const README_URL: &str = "https://github.com/horizon-rust/horizon/blob/main/launcher/README.md";
 /// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
@@ -262,6 +263,18 @@ fn release_list() -> Result<serde_json::Value, String> {
     get(&url)?.into_json().map_err(|e| e.to_string())
 }
 
+/// Launcher releases live in the fork's own repository.
+fn launcher_release_list() -> Result<serde_json::Value, String> {
+    let url = format!("https://api.github.com/repos/{LAUNCHER_REPO}/releases?per_page=100");
+    get(&url)?.into_json().map_err(|e| e.to_string())
+}
+
+fn launcher_releases() -> Vec<Release> {
+    launcher_release_list()
+        .map(|list| launcher_releases_in(&list))
+        .unwrap_or_default()
+}
+
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
 pub(crate) fn parse_releases(
     list: &serde_json::Value,
@@ -349,7 +362,7 @@ fn launcher_releases_in_with(
     if found.iter().any(|r| r.asset.is_some()) {
         return found;
     }
-    let api = format!("https://api.github.com/repos/{REPO}");
+    let api = format!("https://api.github.com/repos/{LAUNCHER_REPO}");
     let mut tags = Vec::new();
     for prefix in [LAUNCHER_TAG_PREFIX, OLD_LAUNCHER_TAG_PREFIX] {
         // Every `launcher@` tag is newer than every `launcher-v` one: those only when there is none.
@@ -579,9 +592,13 @@ pub(crate) fn download(
         progress((done as f32 / size.max(1) as f32).min(1.0) * 0.9);
     }
     let name = url.rsplit('/').next().unwrap_or(url);
-    horizon_release_sign::check(name, sha256, &hash.hex()).inspect_err(|_| {
-        let _ = fs::remove_file(to);
-    })
+    if sha256.is_empty() {
+        Ok(())
+    } else {
+        horizon_release_sign::check(name, sha256, &hash.hex()).inspect_err(|_| {
+            let _ = fs::remove_file(to);
+        })
+    }
 }
 
 fn unpack(archive: &Path, url: &str, to: &Path) -> Result<(), String> {
@@ -2424,7 +2441,7 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
+    releases_and_updates_with(release_list, installed, |_| launcher_releases(), on_releases)
 }
 
 fn releases_and_updates_with(
@@ -2674,7 +2691,8 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
         progress(1.0);
         return Ok(());
     }
-    let sha256 = signed_digest(&release.tag, LAUNCHER_ASSET.unwrap_or_default())?;
+    // Fork releases are not signed by Horizon's key.
+    let sha256 = String::new();
     let work = data_dir().join(".launcher-update");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;

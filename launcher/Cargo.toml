@@ -1,6 +1,6 @@
 [package]
 name = "horizon-launcher"
-version = "0.2.0"
+version = "0.2.4"
 edition = "2021"
 license = "MIT"
 description = "Downloads, prepares and starts Horizon builds"
