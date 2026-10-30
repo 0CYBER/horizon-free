@@ -1075,6 +1075,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-anticheat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "horizon-assets"
 version = "0.1.0"
 dependencies = [
@@ -1111,6 +1119,7 @@ dependencies = [
  "flate2",
  "gilrs",
  "glam",
+ "horizon-anticheat",
  "horizon-assets",
  "horizon-bench",
  "horizon-client-core",
@@ -1175,6 +1184,7 @@ name = "horizon-client-render"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "base64",
  "bytemuck",
  "chrono",
  "cpal",
@@ -1203,6 +1213,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "symphonia",
  "unicode-bidi",
@@ -1350,6 +1361,7 @@ name = "horizon-server"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "horizon-anticheat",
  "horizon-bench",
  "horizon-release-sign",
  "horizon-server-files",

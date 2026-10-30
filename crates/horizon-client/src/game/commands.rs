@@ -11,6 +11,7 @@ mod misc;
 mod place;
 mod players;
 pub(super) mod pregen;
+mod profiles;
 mod raid;
 mod terrain_cmds;
 mod text_commands;
@@ -202,6 +203,20 @@ impl Game<'_> {
             return;
         }
         self.system_message(message);
+    }
+    /// `sendSuccess(message, false)`: the source is told (when it takes
+    /// success feedback), the operators are not.
+    pub(super) fn feedback_unbroadcast(&mut self, message: Text) {
+        if self.command_source.is_some_and(|s| s.silent) {
+            return;
+        }
+        if let Some(block) = self.command_source.and_then(|s| s.block) {
+            self.command_block_success(block, message);
+            return;
+        }
+        if self.ui.rules.bool("send_command_feedback") {
+            self.system_message(message);
+        }
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {
@@ -923,6 +938,8 @@ impl Game<'_> {
             id if id.starts_with("dialog.") => self.cmd_dialog(id, ctx),
             id if id.starts_with("posteffect.") => self.cmd_posteffect(id, ctx),
             "kick" => self.cmd_kick(ctx),
+            "op" | "deop" | "ban" | "pardon" => self.cmd_profiles(id, ctx),
+            id if id.starts_with("whitelist.") => self.cmd_whitelist(id, ctx),
             "fetchprofile" => self.cmd_fetchprofile(ctx),
             "publish" => self.cmd_publish(ctx),
             "unpublish" => self.cmd_unpublish(),
@@ -2084,7 +2101,7 @@ impl Game<'_> {
         let landed = self.world.block(pos[0], pos[1], pos[2]);
         if old != new
             && self.res.facts().get(landed).name == new
-            && let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new)
+            && let Some(entity) = self.new_block_entity(&new)
         {
             self.world.block_entities.insert(key, entity);
         }

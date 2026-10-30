@@ -2266,6 +2266,105 @@ packet!(
     /// conditional (2) and automatic (4) flags.
     SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
 );
+/// ServerboundSetStructureBlockPacket: the structure block's edit screen.
+/// `update_type` and `mode` are `StructureBlockEntity.UpdateType` and
+/// `StructureMode` ordinals, `mirror` and `rotation` the enums' ordinals.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetStructureBlock {
+    pub pos: [i32; 3],
+    pub update_type: i32,
+    pub mode: i32,
+    pub name: String,
+    pub offset: [i32; 3],
+    pub size: [i32; 3],
+    pub mirror: i32,
+    pub rotation: i32,
+    pub data: String,
+    pub ignore_entities: bool,
+    pub strict: bool,
+    pub show_air: bool,
+    pub show_bounding_box: bool,
+    pub integrity: f32,
+    pub seed: i64,
+}
+impl SetStructureBlock {
+    const FLAG_IGNORE_ENTITIES: i8 = 1;
+    const FLAG_SHOW_AIR: i8 = 2;
+    const FLAG_SHOW_BOUNDING_BOX: i8 = 4;
+    const FLAG_STRICT: i8 = 8;
+}
+impl Codec<SetStructureBlock> for SetStructureBlock {
+    /// `ServerboundSetStructureBlockPacket(FriendlyByteBuf)`: the offsets,
+    /// sizes and integrity are clamped as they are read.
+    fn read(r: &mut Reader) -> Result<Self> {
+        let pos = Pos::read(r)?;
+        let update_type = r.varint()?;
+        let mode = r.varint()?;
+        let name = r.string(32767)?;
+        let mut offset = [0; 3];
+        for v in &mut offset {
+            *v = i32::from(r.i8()?).clamp(-48, 48);
+        }
+        let mut size = [0; 3];
+        for v in &mut size {
+            *v = i32::from(r.i8()?).clamp(0, 48);
+        }
+        let mirror = r.varint()?;
+        let rotation = r.varint()?;
+        let data = r.string(128)?;
+        let integrity = r.f32()?.clamp(0.0, 1.0);
+        let seed = r.varlong()?;
+        let flags = r.i8()?;
+        Ok(Self {
+            pos,
+            update_type,
+            mode,
+            name,
+            offset,
+            size,
+            mirror,
+            rotation,
+            data,
+            ignore_entities: flags & Self::FLAG_IGNORE_ENTITIES != 0,
+            strict: flags & Self::FLAG_STRICT != 0,
+            show_air: flags & Self::FLAG_SHOW_AIR != 0,
+            show_bounding_box: flags & Self::FLAG_SHOW_BOUNDING_BOX != 0,
+            integrity,
+            seed,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        Pos::write(&v.pos, w);
+        w.varint(v.update_type);
+        w.varint(v.mode);
+        w.string(&v.name);
+        for o in v.offset {
+            w.i8(o as i8);
+        }
+        for s in v.size {
+            w.i8(s as i8);
+        }
+        w.varint(v.mirror);
+        w.varint(v.rotation);
+        w.string(&v.data);
+        w.f32(v.integrity);
+        w.varlong(v.seed);
+        let mut flags = 0;
+        if v.ignore_entities {
+            flags |= Self::FLAG_IGNORE_ENTITIES;
+        }
+        if v.show_air {
+            flags |= Self::FLAG_SHOW_AIR;
+        }
+        if v.show_bounding_box {
+            flags |= Self::FLAG_SHOW_BOUNDING_BOX;
+        }
+        if v.strict {
+            flags |= Self::FLAG_STRICT;
+        }
+        w.i8(flags);
+    }
+}
 packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
     /// the off hand), its pages and, to sign it, its title.
@@ -2441,6 +2540,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SetStructureBlock(SetStructureBlock) = SET_STRUCTURE_BLOCK,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
     UseItemOn(UseItemOn) = USE_ITEM_ON,
@@ -3547,5 +3647,48 @@ mod tests {
             Serverbound::encode,
             Serverbound::decode,
         );
+    }
+
+    #[test]
+    fn set_structure_block_round_trips_and_clamps_like_vanilla() {
+        let packet = SetStructureBlock {
+            pos: [-3, 70, 12],
+            update_type: 1,
+            mode: 0,
+            name: "minecraft:house".into(),
+            offset: [-48, 1, 48],
+            size: [0, 48, 5],
+            mirror: 2,
+            rotation: 3,
+            data: "meta".into(),
+            ignore_entities: true,
+            strict: false,
+            show_air: true,
+            show_bounding_box: true,
+            integrity: 0.5,
+            seed: -7,
+        };
+        round_trip(
+            Serverbound::SetStructureBlock(packet.clone()),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        // The flag byte: ignoreEntities 1, showAir 2, showBoundingBox 4, strict 8.
+        let mut w = Writer::new();
+        SetStructureBlock::write(&packet, &mut w);
+        assert_eq!(*w.data.last().unwrap(), 1 | 2 | 4);
+        // Offsets clamp to +-48, sizes to 0..=48 and the integrity to 0..=1.
+        let wild = SetStructureBlock {
+            offset: [-100, 100, 0],
+            size: [-5, 100, 7],
+            integrity: 4.0,
+            ..packet
+        };
+        let mut w = Writer::new();
+        SetStructureBlock::write(&wild, &mut w);
+        let read = SetStructureBlock::read(&mut Reader::new(&w.data)).unwrap();
+        assert_eq!(read.offset, [-48, 48, 0]);
+        assert_eq!(read.size, [0, 48, 7]);
+        assert_eq!(read.integrity, 1.0);
     }
 }

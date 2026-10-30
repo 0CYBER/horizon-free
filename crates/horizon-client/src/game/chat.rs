@@ -12,6 +12,7 @@ use horizon_client::{
     screen_draw::Measure,
     text::{ClickEvent, Style, Text},
 };
+use horizon_world::registry::{BlockRegistry, BlockStateId};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -162,6 +163,61 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
     ids
 }
 
+/// Every block's properties and their values, as `/setblock` completes them.
+type BlockProperties = BTreeMap<String, Vec<(String, Vec<String>)>>;
+static BLOCK_PROPERTIES: Mutex<Vec<(usize, Arc<BlockProperties>)>> = Mutex::new(Vec::new());
+
+/// `BlockProperties` of a block registry, listed once: a registry never
+/// changes once built, and walking its tens of thousands of states took
+/// about 30 ms of every world opening.
+fn block_properties(registry: &'static BlockRegistry) -> Arc<BlockProperties> {
+    let key = std::ptr::from_ref(registry) as usize;
+    let mut cache = BLOCK_PROPERTIES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, properties)) = cache.iter().find(|(cached, _)| *cached == key) {
+        return properties.clone();
+    }
+    let mut blocks: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    for id in 0..registry.len() {
+        let Some(state) = registry.state(BlockStateId(id as u32)) else {
+            continue;
+        };
+        let props = blocks.entry(state.name.clone()).or_default();
+        for (k, v) in &state.properties {
+            let values = props.entry(k.clone()).or_default();
+            if !values.contains(v) {
+                values.push(v.clone());
+            }
+        }
+    }
+    let properties: Arc<BlockProperties> = Arc::new(
+        blocks
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect(),
+    );
+    cache.push((key, properties.clone()));
+    properties
+}
+
+static COMMAND_EXPORTS: Mutex<Vec<(PathBuf, Option<Arc<serde_json::Value>>)>> =
+    Mutex::new(Vec::new());
+
+/// A folder's `command-registries.json` (vanilla's built-in registries),
+/// read once like the resource ids: parsing its 1.6 MB again took about
+/// 15 ms of every world opening.
+fn command_export(dir: &Path) -> Option<Arc<serde_json::Value>> {
+    let mut cache = COMMAND_EXPORTS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, export)) = cache.iter().find(|(cached, _)| cached == dir) {
+        return export.clone();
+    }
+    let export = std::fs::read(dir.join("command-registries.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .map(Arc::new);
+    cache.push((dir.to_owned(), export.clone()));
+    export
+}
+
 /// The `minecraft:` ids of the `extension` files under `root`, sorted.
 fn ids_under(root: &Path, extension: &str) -> Vec<String> {
     ids_in(root, extension, "minecraft")
@@ -306,25 +362,7 @@ impl Game<'_> {
             .map(|k| horizon_client::command::args::normalize(k))
             .collect();
         reg.block_tags.sort();
-        let registry = self.pack.assets.registry;
-        let mut blocks: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
-        for id in 0..registry.len() {
-            let Some(state) = registry.state(horizon_world::registry::BlockStateId(id as u32))
-            else {
-                continue;
-            };
-            let props = blocks.entry(state.name.clone()).or_default();
-            for (k, v) in &state.properties {
-                let values = props.entry(k.clone()).or_default();
-                if !values.contains(v) {
-                    values.push(v.clone());
-                }
-            }
-        }
-        reg.blocks = blocks
-            .into_iter()
-            .map(|(k, v)| (k, v.into_iter().collect()))
-            .collect();
+        reg.blocks = BlockProperties::clone(&block_properties(self.pack.assets.registry));
         let mut summonable: Vec<String> = self
             .res
             .mob_types()
@@ -438,10 +476,8 @@ impl Game<'_> {
         }
         // Vanilla's built-in registries (mob effects, components, dialogs...).
         for dir in [&self.options.resources, &self.ui.vanilla_root] {
-            if let Ok(bytes) = std::fs::read(dir.join("command-registries.json"))
-                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            {
-                self.ui.registries.fill_from_export(&v);
+            if let Some(export) = command_export(dir) {
+                self.ui.registries.fill_from_export(&export);
                 break;
             }
         }
@@ -1394,5 +1430,19 @@ mod tests {
         std::fs::write(recipe.join("c.json"), "{}").unwrap();
         assert!(Arc::ptr_eq(&first, &resource_ids(&root)));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The export is read once per folder; a folder without one stays without.
+    #[test]
+    fn command_exports_are_read_once_per_folder() {
+        let dir = std::env::temp_dir().join(format!("horizon-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("command-registries.json"), r#"{"effects":["a"]}"#).unwrap();
+        let first = command_export(&dir).unwrap();
+        assert_eq!(first["effects"][0], "a");
+        std::fs::write(dir.join("command-registries.json"), "{}").unwrap();
+        assert!(Arc::ptr_eq(&first, &command_export(&dir).unwrap()));
+        assert!(command_export(&dir.join("missing")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

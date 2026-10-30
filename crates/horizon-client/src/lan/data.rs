@@ -125,6 +125,26 @@ pub fn component_nbt(v: &Value) -> Tag {
 }
 
 impl SyncData {
+    /// No registries, tags or recipes: enough for tests of the login phase.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            builtin: Builtin::default(),
+            dynamic: Dynamic::default(),
+            registries: Vec::new(),
+            tags: UpdateTags {
+                registries: Vec::new(),
+            },
+            features: Vec::new(),
+            commands: None,
+            recipes: Vec::new(),
+            advancements: super::advancements::ServerAdvancements::load(
+                Path::new(""),
+                &horizon_world::loot::PackOverlay::NONE,
+            ),
+            content_identity: None,
+        }
+    }
     pub fn load(
         resources: &Path,
         overlay: &horizon_world::loot::PackOverlay,

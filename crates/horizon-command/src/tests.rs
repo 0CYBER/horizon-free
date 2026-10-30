@@ -704,3 +704,39 @@ fn horizon_commands_are_off_unless_the_server_turns_them_on() {
         );
     }
 }
+#[test]
+fn profile_commands_parse_like_vanilla() {
+    // OpCommand, DeOpCommands, BanPlayerCommands, PardonCommand and
+    // WhitelistCommand: GameProfileArgument targets, admins only.
+    assert_eq!(run("op Steve").unwrap().0, "op");
+    assert_eq!(run("deop @a").unwrap().0, "deop");
+    assert_eq!(run("pardon Steve").unwrap().0, "pardon");
+    assert_eq!(run("ban Steve").unwrap().0, "ban");
+    assert_eq!(
+        run("ban Steve griefing the farm").unwrap().1,
+        ["targets", "reason"]
+    );
+    for word in ["on", "off", "list", "reload"] {
+        assert_eq!(
+            run(&format!("whitelist {word}")).unwrap().0,
+            format!("whitelist.{word}")
+        );
+    }
+    assert_eq!(run("whitelist add Steve").unwrap().0, "whitelist.add");
+    assert_eq!(run("whitelist remove @p").unwrap().0, "whitelist.remove");
+    // GameProfileArgument: entity selectors are refused.
+    assert_eq!(
+        run("op @e").unwrap_err().message.plain(),
+        "argument.player.entities"
+    );
+    assert!(run("whitelist add").is_err());
+    let reg = Registries {
+        permission: 2,
+        ..reg()
+    };
+    let d = vanilla::game_dispatcher();
+    for line in ["op Steve", "ban Steve", "whitelist on"] {
+        let e = d.parse(line, &reg).executable().unwrap_err();
+        assert_eq!(e.message.plain(), "command.unknown.command", "{line}");
+    }
+}
