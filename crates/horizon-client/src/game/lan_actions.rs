@@ -1376,9 +1376,12 @@ impl Game<'_> {
                     self.lan_swing_back(host, conn, swung);
                     self.guest_use_sounds(host, conn, logged, heard);
                     // A placement that did nothing at the top or bottom of the
-                    // world says why.
+                    // world says why. Vanilla asks twice for the top (once
+                    // before the swing, once in the check that also has the
+                    // bottom), so a player there is told twice.
                     if let Some((_, false, true)) = used {
                         if p.face == 1 && p.pos[1] >= max_y {
+                            self.build_limit_message(host, conn, true, max_y);
                             self.build_limit_message(host, conn, true, max_y);
                         } else if p.face == 0 && p.pos[1] <= min_y {
                             self.build_limit_message(host, conn, false, min_y);

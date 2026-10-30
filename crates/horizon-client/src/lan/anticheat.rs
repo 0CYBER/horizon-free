@@ -161,7 +161,7 @@ impl Hub {
             let conn = self.guests[i].conn;
             self.kick(conn, text("Kicked by the server's anticheat", "white"));
         } else if v.setback && self.guests[i].awaiting_teleport.is_none() {
-            self.teleport(i, None);
+            self.resend_teleport(i, None);
         }
         v.setback || v.kick
     }

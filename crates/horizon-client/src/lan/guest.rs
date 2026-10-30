@@ -143,6 +143,10 @@ pub struct Guest {
     /// (receivedMovePacketCount, knownMovePacketCount).
     pub received_moves: i32,
     pub known_moves: i32,
+    /// The last accepted move left the player hovering over air
+    /// (`clientIsFloating`), and the ticks it has (`aboveGroundTickCount`).
+    pub client_is_floating: bool,
+    pub above_ground_ticks: i32,
     /// A position move arrived since the client's last ClientTickEnd
     /// (receivedPositionThisTick): a second one is a protocol error.
     pub position_this_tick: bool,
@@ -328,6 +332,8 @@ impl Guest {
             first_good: position,
             received_moves: 0,
             known_moves: 0,
+            client_is_floating: false,
+            above_ground_ticks: 0,
             position_this_tick: false,
             anticheat: Default::default(),
             moved: false,
