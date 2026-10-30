@@ -136,6 +136,17 @@ impl<L: LevelAccess + ?Sized> PlacementContext for LevelFeatureWorld<'_, '_, L> 
         self.sim.level.load_block_entity(pos(position), nbt);
         Ok(())
     }
+    /// `StructureTemplate` block-entity data at a just-placed block: a chest's
+    /// loot table, a spawner's entity. The live level already loads saved
+    /// block-entity data for generated chunks.
+    fn set_block_entity(
+        &mut self,
+        position: [i32; 3],
+        nbt: crate::nbt::Compound,
+    ) -> Result<(), PlacementQueryError> {
+        self.sim.level.load_block_entity(pos(position), nbt);
+        Ok(())
+    }
     /// Live levels hold no loot-table containers placed by these features.
     fn set_block_entity_loot_table(
         &mut self,
