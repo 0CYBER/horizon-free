@@ -127,6 +127,123 @@ impl Kind {
     }
 }
 
+/// `CyclingSlotBackground`: the icons an empty slot cycles through, one every
+/// 30 ticks, the next fading in over 4 (`CyclingSlotBackground.tick` in
+/// `advance`, `CyclingSlotBackground.extractRenderState` in `shown`).
+#[derive(Default)]
+struct CyclingSlot {
+    icons: Vec<&'static str>,
+    tick: u32,
+    index: usize,
+    /// The client tick it was last advanced to.
+    at: Option<u64>,
+}
+impl CyclingSlot {
+    const CHANGE_TICKS: u32 = 30;
+    const FADE_TICKS: f32 = 4.0;
+    /// `CyclingSlotBackground.tick(newIcons)` for each client tick since the last call.
+    fn advance(&mut self, now: u64, icons: &[&'static str]) {
+        let ticks = self.at.map_or(0, |at| now.saturating_sub(at).min(600));
+        self.at = Some(now);
+        if self.icons != icons {
+            self.icons = icons.to_vec();
+            self.index = 0;
+        }
+        for _ in 0..ticks {
+            if !self.icons.is_empty() {
+                self.tick += 1;
+                if self.tick.is_multiple_of(Self::CHANGE_TICKS) {
+                    self.index = (self.index + 1) % self.icons.len();
+                }
+            }
+        }
+    }
+    /// What `CyclingSlotBackground.extractRenderState` draws for an empty slot: the icon before
+    /// this one fading out while this one fades in, with their alphas.
+    fn shown(&self, partial: f32) -> Vec<(&'static str, f32)> {
+        if self.icons.is_empty() {
+            return Vec::new();
+        }
+        let fading = self.icons.len() > 1 && self.tick >= Self::CHANGE_TICKS;
+        let alpha = if fading {
+            (((self.tick % Self::CHANGE_TICKS) as f32 + partial).min(Self::FADE_TICKS))
+                / Self::FADE_TICKS
+        } else {
+            1.0
+        };
+        let mut shown = Vec::new();
+        if alpha < 1.0 {
+            let previous = (self.index + self.icons.len() - 1) % self.icons.len();
+            shown.push((self.icons[previous], 1.0 - alpha));
+        }
+        shown.push((self.icons[self.index], alpha));
+        shown
+    }
+}
+/// `SmithingScreen`'s `EMPTY_SLOT_SMITHING_TEMPLATES`.
+const EMPTY_TEMPLATE_ICONS: [&str; 2] = [
+    "smithing_template_armor_trim",
+    "smithing_template_netherite_upgrade",
+];
+/// The base and additions slot icons of the template in the smithing table:
+/// `SmithingTemplateItem.createNetheriteUpgradeTemplate` (the 11 tools and
+/// armour of `SmithingTemplateItem.createNetheriteUpgradeIconList`, then the
+/// ingot) and `SmithingTemplateItem.createArmorTrimTemplate` (the four armour
+/// pieces, then the seven trim materials), as `getBaseSlotEmptyIcons` and
+/// `getAdditionalSlotEmptyIcons` give them.
+fn smithing_slot_icons(
+    template: Option<&str>,
+) -> ([&'static str; 11], usize, [&'static str; 7], usize) {
+    let none = ([""; 11], 0, [""; 7], 0);
+    match template.map(|t| t.trim_start_matches("minecraft:")) {
+        Some("netherite_upgrade_smithing_template") => (
+            [
+                "helmet",
+                "sword",
+                "chestplate",
+                "pickaxe",
+                "leggings",
+                "axe",
+                "boots",
+                "hoe",
+                "shovel",
+                "nautilus_armor",
+                "spear",
+            ],
+            11,
+            ["ingot", "", "", "", "", "", ""],
+            1,
+        ),
+        Some(t) if t.ends_with("_armor_trim_smithing_template") => (
+            [
+                "helmet",
+                "chestplate",
+                "leggings",
+                "boots",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
+            4,
+            [
+                "ingot",
+                "redstone_dust",
+                "lapis_lazuli",
+                "quartz",
+                "diamond",
+                "emerald",
+                "amethyst_shard",
+            ],
+            7,
+        ),
+        _ => none,
+    }
+}
+
 pub(super) struct Station {
     pub(super) kind: Kind,
     pub(super) pos: [i32; 3],
@@ -144,6 +261,10 @@ pub(super) struct Station {
     pub(super) stone: horizon_client::menu::Stonecutter,
     pub(super) selected: Option<usize>,
     start: usize,
+    /// Stonecutter: the screen's `scrollOffs` (0 to 1) and `scrolling`, the
+    /// scroller held by the mouse.
+    scroll: f32,
+    scrolling: bool,
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
     /// Anvil on a server: the name last sent (the client menu's `itemName`).
@@ -157,6 +278,8 @@ pub(super) struct Station {
     pub(super) beacon_levels: Option<i32>,
     /// The loom's patterns, selection and scroller (game/loom.rs).
     pub(super) loom: super::loom::LoomState,
+    /// The smithing table's three `CyclingSlotBackground`s: the template, base and additions slots.
+    cycling: [CyclingSlot; 3],
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -173,6 +296,8 @@ impl Station {
             stone: Default::default(),
             selected: None,
             start: 0,
+            scroll: 0.0,
+            scrolling: false,
             anvil_last: None,
             anvil_sent: None,
             last_sound: 0,
@@ -180,6 +305,7 @@ impl Station {
             beacon: [None; 2],
             beacon_levels: None,
             loom: Default::default(),
+            cycling: Default::default(),
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -190,8 +316,33 @@ impl Station {
     pub(super) fn stonecutter_changed(&mut self) {
         if self.inputs[0].is_none() || self.stone.recipes.is_empty() {
             self.start = 0;
+            self.scroll = 0.0;
         }
     }
+    /// `StonecutterScreen.isScrollBarActive`.
+    fn stonecutter_scrolls(&self) -> bool {
+        self.inputs[0].is_some() && self.stone.recipes.len() > 12
+    }
+    /// Moves the stonecutter's scroller to `offs`, and its first shown
+    /// recipe (`startIndex`) with it.
+    fn stonecutter_scroll_to(&mut self, offs: f32) {
+        self.scroll = offs.clamp(0.0, 1.0);
+        self.start = stonecutter_start(self.stone.recipes.len(), self.scroll);
+    }
+}
+
+/// `StonecutterScreen.getOffscreenRows`: the recipe rows below the 4x3 grid.
+fn stonecutter_offscreen_rows(recipes: usize) -> i32 {
+    recipes.div_ceil(4) as i32 - 3
+}
+/// `startIndex` for a scroller position: the first recipe of the nearest row.
+fn stonecutter_start(recipes: usize, offs: f32) -> usize {
+    ((offs * stonecutter_offscreen_rows(recipes) as f32 + 0.5) as i32).max(0) as usize * 4
+}
+/// `StonecutterScreen.mouseDragged`: the scroller position under the cursor,
+/// `y` relative to the GUI origin (the 54-px track starts at 14).
+fn stonecutter_drag_offs(y: f32) -> f32 {
+    ((y - 14.0 - 7.5) / (54.0 - 15.0)).clamp(0.0, 1.0)
 }
 
 /// The 108x19 enchantment button `i` (relative to the GUI origin).
@@ -395,7 +546,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
-        let tags = &self.res.items().block_tags;
+        let tags = &self.items().block_tags;
         let is = |p: [i32; 3], tag: &str| {
             let name = &self
                 .res
@@ -436,8 +587,8 @@ impl Game<'_> {
             return;
         };
         let creative = self.creative;
-        let data = self.res.stations();
-        let items = self.res.items();
+        let data = self.stations();
+        let items = self.items();
         match s.kind {
             // A server's table: its data slots carry the offers, and its
             // client menu only clears them without an enchantable item.
@@ -769,8 +920,8 @@ impl Game<'_> {
             return;
         }
         let Some(enchanted) = stations::apply_enchantment(
-            &self.res.stations().enchantments,
-            self.res.items(),
+            &self.stations().enchantments,
+            self.items(),
             self.level.xp_seed,
             button,
             cost,
@@ -912,15 +1063,27 @@ impl Game<'_> {
     /// `StonecutterScreen.mouseClicked` on its recipe grid: `clickMenuButton`
     /// with the cell's index (an empty cell's too), and the select sound when
     /// the menu took it.
+    /// Beside the grid, a press on the scroller's track holds it (`scrolling`).
     fn stonecutter_click(&mut self, local: (f32, f32)) -> bool {
-        let Some(start) = self
-            .station
-            .as_ref()
-            .filter(|s| s.inputs[0].is_some() && !s.stone.recipes.is_empty())
-            .map(|s| s.start)
-        else {
+        let Some(s) = self.station.as_mut() else {
             return false;
         };
+        s.scrolling = false;
+        if s.inputs[0].is_some() && !s.stone.recipes.is_empty() {
+            let start = s.start;
+            if self.stonecutter_recipe_click(local, start) {
+                return true;
+            }
+        }
+        if inside(local, 119.0, 9.0, 12.0, 54.0)
+            && let Some(s) = self.station.as_mut()
+        {
+            s.scrolling = true;
+            return true;
+        }
+        false
+    }
+    fn stonecutter_recipe_click(&mut self, local: (f32, f32), start: usize) -> bool {
         for index in start..start + 12 {
             let p = index - start;
             let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0);
@@ -942,18 +1105,51 @@ impl Game<'_> {
         }
         false
     }
+    /// `StonecutterScreen.mouseScrolled`.
     pub(super) fn station_scroll(&mut self, d: f32) {
         self.merchant_scroll(d);
         self.loom_scroll(d);
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        if s.kind != Kind::Stonecutter || s.stone.recipes.len() <= 12 {
+        if s.kind != Kind::Stonecutter || !s.stonecutter_scrolls() {
             return;
         }
-        let rows = s.stone.recipes.len().div_ceil(4) - 3;
-        let first_row = (s.start / 4) as i32 - d.signum() as i32;
-        s.start = first_row.clamp(0, rows as i32) as usize * 4;
+        let rows = stonecutter_offscreen_rows(s.stone.recipes.len());
+        s.stonecutter_scroll_to(s.scroll - d / rows as f32);
+    }
+    /// The mouse moved with a button held on a station: the loom's,
+    /// stonecutter's and merchant's scrollers follow it.
+    pub(super) fn station_drag(&mut self) {
+        self.loom_drag();
+        self.merchant_drag();
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
+        let (_, oy) = self.inventory_origin(&HudBatch::new(size));
+        let y = self.cursor.1 - oy;
+        // `StonecutterScreen.mouseDragged`.
+        if let Some(s) = self.station.as_mut()
+            && s.kind == Kind::Stonecutter
+            && s.scrolling
+            && s.stonecutter_scrolls()
+        {
+            s.stonecutter_scroll_to(stonecutter_drag_offs(y));
+        }
+    }
+    /// A mouse button let go: no scroller is held any more.
+    pub(super) fn station_release(&mut self) {
+        self.loom_release();
+        if let Some(s) = self.station.as_mut() {
+            s.scrolling = false;
+            if let Some(m) = s.merchant.as_mut() {
+                m.dragging = false;
+            }
+        }
     }
     /// Whether keyboard text goes to the anvil rename box.
     pub(super) fn station_typing(&self) -> bool {
@@ -1144,6 +1340,21 @@ impl Game<'_> {
         let brewing = self.brewing_open();
         if self.station.is_none() && !brewing {
             return false;
+        }
+        // `SmithingScreen.containerTick`: the icons of the empty slots follow the template.
+        let (now, partial) = (self.ticks, self.clock.camera_fraction() as f32);
+        if let Some(s) = self.station.as_mut().filter(|s| s.kind == Kind::Smithing) {
+            let template = s.inputs[0].as_ref().map(|t| t.item.clone());
+            let (base, base_len, additions, additions_len) =
+                smithing_slot_icons(template.as_deref());
+            let lists: [&[&'static str]; 3] = [
+                &EMPTY_TEMPLATE_ICONS,
+                &base[..base_len],
+                &additions[..additions_len],
+            ];
+            for (cycling, icons) in s.cycling.iter_mut().zip(lists) {
+                cycling.advance(now, icons);
+            }
         }
         let (ox, oy) = self.inventory_origin(batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
@@ -1398,7 +1609,7 @@ impl Game<'_> {
                         if inside(local, bx, by, bw, 17.0)
                             && let Some((id, l)) = &offers.clues[i]
                         {
-                            let e = &self.res.stations().enchantments;
+                            let e = &self.stations().enchantments;
                             let (name, _) = e.full_name(id, *l);
                             let clue = self
                                 .translate("container.enchant.clue", "%s . . . ?")
@@ -1533,15 +1744,23 @@ impl Game<'_> {
                     }
                 }
                 Kind::Smithing => {
-                    let icons = ["smithing_template_netherite_upgrade", "", ""];
-                    for (i, icon) in icons.iter().enumerate() {
-                        if s.inputs[i].is_none() && !icon.is_empty() {
-                            let (sx, sy) = kind.input_pos(i);
-                            batch.sprite(
+                    // `CyclingSlotBackground.extractRenderState`: an empty slot shows the
+                    // icons of what the template in the table takes.
+                    for (i, cycling) in s.cycling.iter().enumerate() {
+                        if s.inputs[i].is_some() {
+                            continue;
+                        }
+                        let (sx, sy) = kind.input_pos(i);
+                        for (icon, alpha) in cycling.shown(partial) {
+                            batch.sprite_scaled(
                                 atlas,
                                 &format!("gui/sprites/container/slot/{icon}"),
                                 ox + sx,
                                 oy + sy,
+                                16.0,
+                                16.0,
+                                ((alpha.clamp(0.0, 1.0) * 255.0).round() as u32) << 24
+                                    | 0x00FF_FFFF,
                             );
                         }
                     }
@@ -1567,12 +1786,7 @@ impl Game<'_> {
                 Kind::Stonecutter => {
                     let display = s.inputs[0].is_some() && !s.stone.recipes.is_empty();
                     let active = display && s.stone.recipes.len() > 12;
-                    let rows = s.stone.recipes.len().div_ceil(4).saturating_sub(3).max(1);
-                    let offs = if active {
-                        (s.start / 4) as f32 / rows as f32
-                    } else {
-                        0.0
-                    };
+                    let offs = if active { s.scroll } else { 0.0 };
                     let scroller = if active {
                         "scroller"
                     } else {
@@ -1594,8 +1808,7 @@ impl Game<'_> {
                                     i,
                                     ItemStack {
                                         count: 1,
-                                        ..self.res.stations().recipes.stonecutting
-                                            [s.stone.recipes[i]]
+                                        ..self.stations().recipes.stonecutting[s.stone.recipes[i]]
                                             .result
                                             .clone()
                                     },
@@ -1696,11 +1909,11 @@ impl Game<'_> {
         &self,
         stack: &ItemStack,
     ) -> Vec<(horizon_client::text::Text, u32)> {
-        self.stack_tooltip_lines(stack, false)
+        self.stack_tooltip_lines(stack, false, false)
     }
     /// `ItemStack.getRarity`'s colour for the name line and a `[name]` link.
     fn rarity_color(&self, stack: &ItemStack) -> u32 {
-        let props = self.res.stations().enchantments.props(&stack.item);
+        let props = self.stations().enchantments.props(&stack.item);
         let rarity = horizon_client::item_tooltip::rarity(
             stack,
             props.map_or("common", |p| p.rarity.as_str()),
@@ -1743,25 +1956,22 @@ impl Game<'_> {
     }
     /// `ItemStack.getTooltipLines`. A `nested` stack is a crossbow's
     /// projectile: `ChargedProjectiles.addProjectileTooltip` takes its details
-    /// without the name, the player and the advanced flag.
+    /// without the name, the player and the advanced flag. `creative` is
+    /// `TooltipFlag.isCreative`: a creative tab's own slot.
     fn stack_tooltip_lines(
         &self,
         stack: &ItemStack,
         nested: bool,
+        creative: bool,
     ) -> Vec<(horizon_client::text::Text, u32)> {
-        let e: &Enchantments = &self.res.stations().enchantments;
+        let e: &Enchantments = &self.stations().enchantments;
         let color = self.rarity_color(stack);
         let advanced = !nested && self.options_advanced_tooltips();
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
         let mut lines = Vec::new();
         if !nested && display.name_visible(self.screen == Screen::Creative) {
-            // `getStyledHoverName`: a custom name is italic.
-            let name = self.stack_hover_name(stack);
-            let name = if stack.custom_name().is_some() {
-                horizon_client::text::Text::literal(name).italic()
-            } else {
-                horizon_client::text::Text::legacy(&name)
-            };
+            let name =
+                horizon_client::item_tooltip::styled_name(stack, || self.stack_hover_name(stack));
             lines.push((name, color));
         }
         let translate = |k: &str| self.pack.names.display_get(k);
@@ -1769,11 +1979,32 @@ impl Game<'_> {
             lines.push((horizon_client::text::Text::legacy(&s), c));
         };
         let gray = rgba(170, 170, 170, 255);
-        let item_info = self.res.items().get(&stack.item);
+        let item_info = self.items().get(&stack.item);
         // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
         // before the components.
         for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
             push(&mut lines, text, c);
+        }
+        // HangingEntityItem.appendHoverText: a painting's variant, its title,
+        // author and size, or in a creative tab "Random variant".
+        if &*stack.item == "minecraft:painting" && display.shows("minecraft:painting/variant") {
+            use horizon_client::text::Text;
+            if let Some(v) = self.painting_variants.of_stack(stack) {
+                for part in [&v.title, &v.author].into_iter().flatten() {
+                    let text = horizon_client::component::to_text(part, &mut |_| Text::empty());
+                    lines.push((text, u32::MAX));
+                }
+                let size = [v.width, v.height].map(|n| Text::literal(n.to_string()));
+                lines.push((Text::translate("painting.dimensions", &size), u32::MAX));
+            } else if creative
+                && stack
+                    .data()
+                    .and_then(|d| d.other("minecraft:painting/variant"))
+                    .is_none()
+            {
+                let random = Text::translate("painting.random", &[]);
+                lines.push((random.with_color(horizon_client::text::GRAY), u32::MAX));
+            }
         }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
@@ -1788,7 +2019,6 @@ impl Game<'_> {
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map(str::to_owned)
                 .or_else(|| s.item_name())
                 .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
@@ -1802,7 +2032,7 @@ impl Game<'_> {
         // BannerPatternLayers.addToTooltip: up to six layer names.
         if display.shows("minecraft:banner_patterns") {
             for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
-                let key = self.res.stations().banners.layer_key(layer);
+                let key = self.stations().banners.layer_key(layer);
                 push(
                     &mut lines,
                     self.translate(&key, &key),
@@ -1848,7 +2078,7 @@ impl Game<'_> {
                     )
                 };
                 lines.push((line, u32::MAX));
-                for (text, c) in self.stack_tooltip_lines(projectile, true) {
+                for (text, c) in self.stack_tooltip_lines(projectile, true, false) {
                     // `literal("  ").append(line).withStyle(GRAY)`: the line's
                     // own colours win over the gray.
                     let rgb = if c == u32::MAX {
@@ -2102,6 +2332,11 @@ impl Game<'_> {
                 ));
             }
         }
+        // Native mods last, once getTooltipLines has built every line; a
+        // tooltip the stack hides stays hidden.
+        if !nested && !lines.is_empty() {
+            self.native_tooltip(stack, &mut lines);
+        }
         lines
     }
     /// Menu state for the control socket.
@@ -2114,7 +2349,7 @@ impl Game<'_> {
                 _ => serde_json::Value::Null,
             };
         };
-        let recipes = &self.res.stations().recipes.stonecutting;
+        let recipes = &self.stations().recipes.stonecutting;
         serde_json::json!({
             "costs": s.offers.costs,
             "clues": s.offers.clues.iter().map(|c| c.as_ref().map(|(e, l)| format!("{e} {l}"))).collect::<Vec<_>>(),
@@ -2258,19 +2493,21 @@ impl Game<'_> {
         x: f32,
         y: f32,
     ) {
-        self.draw_stack_tooltip_with(batch, stack, x, y, Vec::new());
+        self.draw_stack_tooltip_with(batch, stack, false, x, y, Vec::new());
     }
-    /// [`Self::draw_stack_tooltip`] with `after_name` inserted from line 1,
-    /// as the creative screen adds its tab names.
+    /// [`Self::draw_stack_tooltip`] with `TooltipFlag.isCreative` set when
+    /// `creative` (a creative tab's own slot), and `after_name` inserted from
+    /// line 1, as the creative screen adds its tab names.
     pub(super) fn draw_stack_tooltip_with(
         &mut self,
         batch: &mut HudBatch,
         stack: &ItemStack,
+        creative: bool,
         x: f32,
         y: f32,
         after_name: Vec<(horizon_client::text::Text, u32)>,
     ) {
-        let mut lines = self.stack_tooltip(stack);
+        let mut lines = self.stack_tooltip_lines(stack, false, creative);
         if lines.is_empty() {
             return;
         }
@@ -2278,7 +2515,7 @@ impl Game<'_> {
         let lines = Self::resolved(&lines);
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
-        let probe = horizon_client::bundle::tooltip_layout(self.res.items(), stack, 0.0, 0.0, 96.0);
+        let probe = horizon_client::bundle::tooltip_layout(self.items(), stack, 0.0, 0.0, 96.0);
         let extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
         let atlas = &self.gui.atlas;
         let (x, y, w, h) =
@@ -2287,7 +2524,7 @@ impl Game<'_> {
         let text_h = h - extra;
         Self::tooltip_text(batch, atlas, &lines, x, y);
         let Some(layout) =
-            horizon_client::bundle::tooltip_layout(self.res.items(), stack, x, y + text_h + 2.0, w)
+            horizon_client::bundle::tooltip_layout(self.items(), stack, x, y + text_h + 2.0, w)
         else {
             return;
         };
@@ -2399,12 +2636,17 @@ impl Game<'_> {
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
-        if self.carried.is_some() {
-            return;
-        }
         let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
             return;
         };
+        // The recipe book's tooltip is drawn after the slot's own, so a ghost wins.
+        if let Some(ghost) = self.ghost_stack(slot) {
+            self.draw_stack_tooltip(batch, &ghost, self.cursor.0, self.cursor.1);
+            return;
+        }
+        if self.carried.is_some() {
+            return;
+        }
         let stack = self.slot_view(slot);
         if let Some(stack) = stack {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
@@ -2430,8 +2672,8 @@ impl Game<'_> {
             return Ok(());
         };
         let out = b.tick(
-            &self.res.stations().brewing,
-            self.res.items(),
+            &world_stations!(self).brewing,
+            world_items!(self),
             self.res.providers(),
         );
         if out != brewing::BrewTick::default() {
@@ -2472,4 +2714,84 @@ fn anvil_box() -> horizon_client::ui::EditBox {
     edit.text_color = u32::MAX;
     edit.focused = true;
     edit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stonecutter_scroller_rows() {
+        // 26 recipes = 7 rows, 4 below the grid.
+        assert_eq!(stonecutter_offscreen_rows(26), 4);
+        assert_eq!(stonecutter_start(26, 0.0), 0);
+        assert_eq!(stonecutter_start(26, 0.5), 8);
+        assert_eq!(stonecutter_start(26, 0.6), 8);
+        assert_eq!(stonecutter_start(26, 0.65), 12);
+        assert_eq!(stonecutter_start(26, 1.0), 16);
+    }
+    #[test]
+    fn stonecutter_drag_follows_the_cursor() {
+        // The scroller's middle sits under the cursor, within its track.
+        assert_eq!(stonecutter_drag_offs(0.0), 0.0);
+        assert_eq!(stonecutter_drag_offs(21.5), 0.0);
+        assert_eq!(stonecutter_drag_offs(21.5 + 39.0 / 2.0), 0.5);
+        assert_eq!(stonecutter_drag_offs(21.5 + 39.0), 1.0);
+        assert_eq!(stonecutter_drag_offs(200.0), 1.0);
+    }
+    #[test]
+    fn stonecutter_wheel_moves_one_row() {
+        let mut s = Station::new(Kind::Stonecutter, [0, 0, 0]);
+        s.inputs[0] = Some(ItemStack::new("minecraft:stone", 1));
+        s.stone.recipes = (0..26).collect();
+        assert!(s.stonecutter_scrolls());
+        s.stonecutter_scroll_to(s.scroll + 1.0 / 4.0);
+        assert_eq!(s.start, 4);
+        s.stonecutter_scroll_to(s.scroll + 5.0);
+        assert_eq!((s.scroll, s.start), (1.0, 16));
+        s.stone.recipes.truncate(12);
+        assert!(!s.stonecutter_scrolls());
+    }
+}
+
+#[cfg(test)]
+mod cycling_tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_slot_cycles_its_icons_every_30_ticks_and_fades_the_next_in_over_4() {
+        let icons = ["helmet", "sword", "chestplate"];
+        let mut slot = CyclingSlot::default();
+        slot.advance(100, &icons);
+        // The first icon, fully shown, until the 30th tick.
+        assert_eq!(slot.shown(0.5), vec![("helmet", 1.0)]);
+        slot.advance(129, &icons);
+        assert_eq!(slot.shown(0.5), vec![("helmet", 1.0)]);
+        // The 30th tick moves to the next icon, which fades in over 4 ticks while the
+        // one before fades out.
+        slot.advance(130, &icons);
+        assert_eq!(slot.shown(0.0), vec![("helmet", 1.0), ("sword", 0.0)]);
+        assert_eq!(slot.shown(2.0), vec![("helmet", 0.5), ("sword", 0.5)]);
+        assert_eq!(slot.shown(4.0), vec![("sword", 1.0)]);
+        // A new list starts again from its first icon, keeping the tick count.
+        slot.advance(131, &["ingot"]);
+        assert_eq!(slot.shown(0.0), vec![("ingot", 1.0)]);
+        // No icons, nothing shown.
+        slot.advance(132, &[]);
+        assert!(slot.shown(0.0).is_empty());
+    }
+
+    #[test]
+    fn the_icons_of_a_smithing_slot_follow_the_template() {
+        let (base, n, additions, m) =
+            smithing_slot_icons(Some("minecraft:netherite_upgrade_smithing_template"));
+        assert_eq!(base[..n].len(), 11);
+        assert_eq!(additions[..m], ["ingot"]);
+        let (base, n, additions, m) =
+            smithing_slot_icons(Some("minecraft:coast_armor_trim_smithing_template"));
+        assert_eq!(base[..n], ["helmet", "chestplate", "leggings", "boots"]);
+        assert_eq!(additions[..m].len(), 7);
+        assert_eq!(smithing_slot_icons(Some("minecraft:stick")).1, 0);
+        assert_eq!(smithing_slot_icons(None).3, 0);
+    }
 }

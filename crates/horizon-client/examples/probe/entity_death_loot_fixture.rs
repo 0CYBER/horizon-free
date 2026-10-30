@@ -4,11 +4,16 @@
 //!
 //! usage: entity_death_loot_fixture RESOURCES INPUT OUTPUT
 use horizon_client::{
-    mobs::{Mob, MobTypes, Species, cube, drops, gear, raider, render::DYE_NAMES, sulfur_cube},
+    assets::Assets,
+    blocks::BlockFacts,
+    items::Items,
+    mobs::{
+        Mob, MobTypes, Species, cube, drops, enderman, gear, raider, render::DYE_NAMES, sulfur_cube,
+    },
     random_sequences::RandomSequences,
 };
 use horizon_core::{geometry::Vec3, random::LegacyRandom};
-use horizon_world::loot::{LootDamage, LootData, LootEntity, LootStack};
+use horizon_world::loot::{LootDamage, LootData, LootEntity, LootStack, PackOverlay};
 use std::{collections::BTreeMap, fmt::Write as _, fs, path::Path, sync::Arc};
 
 /// `id[;enchantment:level...]`.
@@ -64,7 +69,14 @@ pub fn main() -> horizon_client::Result<()> {
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
     let types = MobTypes::load(root)?;
-    let loot = LootData::load(root)?;
+    let loot = LootData::load(root, &PackOverlay::NONE)?;
+    // Block loot for an enderman's carried block (BlockState.getDrops).
+    let assets = Assets::load(root)?;
+    let registry = assets.registry;
+    let facts = BlockFacts::load(root, registry)?;
+    let block_items = Items::load(root, registry, &facts, &PackOverlay::NONE)?;
+    // The stand-in level's random (RandomSource.create(0)), never reset.
+    let mut level_random = LegacyRandom::new(0);
     let mut out = String::new();
     for raw in input.lines() {
         if raw.trim().is_empty() || raw.starts_with('#') {
@@ -121,6 +133,13 @@ pub fn main() -> horizon_client::Result<()> {
                 m.extra.color = DYE_NAMES.iter().position(|d| d == color).unwrap_or(0) as u8;
             }
             m.extra.sheared = get("sheared", "0") == "1";
+            if let Some(block) = c.get("carried") {
+                m.extra.carried = Some(
+                    registry
+                        .default_state(block)
+                        .ok_or_else(|| format!("unknown block {block}"))?,
+                );
+            }
             if get("leader", "0") == "1" {
                 raider::state_mut(&mut m).patrol_leader = true;
             }
@@ -272,6 +291,23 @@ pub fn main() -> horizon_client::Result<()> {
             for d in items {
                 let _ = match d {
                     drops::Drop::Item(s) => writeln!(out, "{}", line(&s)),
+                    drops::Drop::CarriedBlock(state) => {
+                        let stacks = enderman::carried_block_drops(
+                            &block_items,
+                            registry,
+                            state,
+                            &mut level_random,
+                            Some((&mut sequences, world_seed)),
+                        );
+                        for s in stacks {
+                            let _ = write!(out, "drop {} {}", s.item, s.count);
+                            if s.damage != 0 {
+                                let _ = write!(out, " damage={}", s.damage);
+                            }
+                            let _ = writeln!(out);
+                        }
+                        Ok(())
+                    }
                     drops::Drop::Orb(v) => writeln!(out, "orb {v}"),
                 };
             }

@@ -468,7 +468,10 @@ pub fn head_skin(
     {
         let location = skin_location(&hash);
         match downloads.state(Kind::Skin, &url) {
-            Download::Ready if atlas(&location) => return location,
+            Download::Ready if atlas(&location) => {
+                downloads.drawn(&location);
+                return location;
+            }
             // Its slot was evicted: offer the image again.
             Download::Ready => {
                 downloads.again(&location);
@@ -552,6 +555,39 @@ pub fn offline_cape() -> Option<&'static [u8]> {
             .ok()
     })
     .as_deref()
+}
+
+/// The skin the launcher gives an offline name (`HORIZON_OFFLINE_SKIN`, a
+/// PNG's path, and `HORIZON_OFFLINE_SKIN_MODEL`, `classic` or `slim`;
+/// launcher/src/skins.rs): its 64x64 RGBA as `process_legacy_skin` lays it
+/// out, and whether it is slim. Read once.
+pub fn offline_skin() -> Option<&'static (Vec<u8>, bool)> {
+    static SKIN: std::sync::OnceLock<Option<(Vec<u8>, bool)>> = std::sync::OnceLock::new();
+    SKIN.get_or_init(|| {
+        let path = std::env::var_os("HORIZON_OFFLINE_SKIN").filter(|p| !p.is_empty())?;
+        let model = std::env::var("HORIZON_OFFLINE_SKIN_MODEL").unwrap_or_default();
+        read_offline_skin(std::path::Path::new(&path), &model)
+            .inspect_err(|e| eprintln!("Horizon: no offline skin ({}): {e}", path.display()))
+            .ok()
+    })
+    .as_ref()
+}
+fn read_offline_skin(path: &std::path::Path, model: &str) -> Result<(Vec<u8>, bool), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let (w, h, rgba) = crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())?;
+    let skin = process_legacy_skin(w, h, &rgba).ok_or("not a 64x64 or 64x32 skin")?;
+    Ok((skin, model == "slim"))
+}
+
+/// The signed-in account's own profile properties (`Minecraft.profileFuture`:
+/// `fetchProfile(id, true)`, so its `textures` property is signed), or empty
+/// without an answer. Blocks on the network.
+pub fn fetch_own_properties(id: u128) -> Vec<(String, String, Option<String>)> {
+    crate::auth::discovery()
+        .ok()
+        .and_then(|doc| resolve_profile(&NameOrId::Id(id), &doc))
+        .map(|p| p.properties)
+        .unwrap_or_default()
 }
 
 /// Where a texture download stands.
@@ -681,6 +717,8 @@ pub struct Downloader {
     /// atlas uploads again (`again`); the disk cache backs anything dropped.
     images: std::collections::HashMap<String, Vec<u8>>,
     image_order: std::collections::VecDeque<String>,
+    /// Skins and capes drawn from the atlas since `take_drawn`.
+    drawn: std::collections::HashSet<String>,
 }
 /// `images` is bounded only so a long session on a busy server does not grow
 /// without end; the disk cache holds everything it drops.
@@ -697,6 +735,7 @@ impl Downloader {
             queued: Default::default(),
             images: Default::default(),
             image_order: Default::default(),
+            drawn: Default::default(),
         }
     }
     /// How the download of `url` stands, starting it the first time.
@@ -801,6 +840,77 @@ impl Downloader {
         }
         std::mem::take(&mut self.ready)
     }
+    /// A skin or cape in the atlas drawn this frame: `SkinSlots` keeps its slot.
+    pub fn drawn(&mut self, location: &str) {
+        if !self.drawn.contains(location) {
+            self.drawn.insert(location.to_owned());
+        }
+    }
+    /// The skins and capes drawn since the last call.
+    pub fn take_drawn(&mut self) -> std::collections::HashSet<String> {
+        std::mem::take(&mut self.drawn)
+    }
+}
+
+/// Which downloaded skins and capes hold the atlas's skin slots
+/// (`hud::SKIN_SLOTS`). Vanilla's `SkinManager.TextureCache.getOrLoad`
+/// registers a texture per skin and keeps it. Here the slots are shared: a
+/// new skin takes a free slot, else the least recently drawn skin's, but
+/// never one drawn in the last frame. With every slot drawn, the new skin
+/// waits (its player keeps the default skin) instead of pushing out one in
+/// use, which then came back by pushing out another, so players vanished
+/// for a frame and heads swapped textures as the slots went round.
+pub struct SkinSlots {
+    capacity: usize,
+    /// Stored locations and their slot, the least recently drawn first.
+    slots: Vec<(String, usize)>,
+    /// Drawn in the last frame, or stored since: kept from eviction.
+    kept: std::collections::HashSet<String>,
+}
+impl SkinSlots {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            slots: Vec::new(),
+            kept: Default::default(),
+        }
+    }
+    /// Whether `location` is in a slot.
+    pub fn contains(&self, location: &str) -> bool {
+        self.slots.iter().any(|(l, _)| l == location)
+    }
+    /// A new frame: the skins `drawn` in the last one
+    /// (`Downloader::take_drawn`) become the most recently drawn, and keep
+    /// their slots through this frame's `place`s.
+    pub fn next_frame(&mut self, drawn: std::collections::HashSet<String>) {
+        let (recent, old): (Vec<_>, Vec<_>) = std::mem::take(&mut self.slots)
+            .into_iter()
+            .partition(|(l, _)| drawn.contains(l));
+        self.slots = old;
+        self.slots.extend(recent);
+        self.kept = drawn;
+    }
+    /// A slot for `location`: its own, a free one, else the least recently
+    /// drawn one not kept, with the location it held. `None` while every
+    /// slot is kept.
+    pub fn place(&mut self, location: String) -> Option<(usize, Option<String>)> {
+        if let Some((_, slot)) = self.slots.iter().find(|(l, _)| *l == location) {
+            return Some((*slot, None));
+        }
+        let (slot, evicted) = if self.slots.len() < self.capacity {
+            (self.slots.len(), None)
+        } else {
+            let i = self
+                .slots
+                .iter()
+                .position(|(l, _)| !self.kept.contains(l))?;
+            let (old, slot) = self.slots.remove(i);
+            (slot, Some(old))
+        };
+        self.kept.insert(location.clone());
+        self.slots.push((location, slot));
+        Some((slot, evicted))
+    }
 }
 
 /// A GET over HTTP or HTTPS (textures.minecraft.net serves both; vanilla
@@ -879,6 +989,43 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    /// The launcher's offline skin: a 64x64 or legacy 64x32 PNG laid out as
+    /// a downloaded skin, slim only for the `slim` model; anything else is
+    /// refused and the player keeps their default skin.
+    #[test]
+    fn offline_skins_read_like_downloaded_ones() {
+        let png = |w: u32, h: u32| {
+            let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i % 251) as u8).collect();
+            let mut out = Vec::new();
+            let mut encoder = png::Encoder::new(&mut out, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&rgba)
+                .unwrap();
+            (out, rgba)
+        };
+        let dir = std::env::temp_dir().join(format!("horizon-offline-skin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("steve.png");
+        for (h, model, slim) in [(64, "slim", true), (32, "classic", false), (64, "", false)] {
+            let (bytes, rgba) = png(64, h);
+            std::fs::write(&file, bytes).unwrap();
+            let (skin, is_slim) = super::read_offline_skin(&file, model).unwrap();
+            assert_eq!(skin, super::process_legacy_skin(64, h, &rgba).unwrap());
+            assert_eq!(skin.len(), 64 * 64 * 4);
+            assert_eq!(is_slim, slim);
+        }
+        std::fs::write(&file, png(32, 32).0).unwrap();
+        assert!(super::read_offline_skin(&file, "slim").is_err());
+        std::fs::write(&file, b"not a png").unwrap();
+        assert!(super::read_offline_skin(&file, "slim").is_err());
+        assert!(super::read_offline_skin(&dir.join("missing.png"), "").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `MinecraftProfileTexture.getMetadata("model")`: `slim` marks a slim
     /// skin; no metadata is the wide (classic) model.
     #[test]
@@ -997,6 +1144,63 @@ mod tests {
             "session": {"endpoints": {"getProfileById": {"uri": format!("{base}/session/minecraft/profile/{{profileId}}")}}},
         }});
         assert!(super::resolve_profile(&super::NameOrId::Name("Notch".into()), &doc).is_none());
+    }
+
+    /// More skins drawn every frame than there are slots (#3829): a frame's
+    /// uploads used to push out skins drawn the frame before, which then
+    /// uploaded again and pushed out others, so the drawn skins went missing
+    /// in turn. Those drawn keep their slots; the rest wait.
+    #[test]
+    fn skins_drawn_last_frame_keep_their_slots() {
+        let mut d = super::Downloader::new(std::env::temp_dir().join("horizon-test-skin-slots"));
+        let skins: Vec<String> = (0..6).map(|i| format!("skins/{i}")).collect();
+        for (i, s) in skins.iter().enumerate() {
+            d.remember(s.clone(), vec![i as u8]);
+        }
+        let mut slots = super::SkinSlots::new(4);
+        let mut last: Option<Vec<String>> = None;
+        for frame in 0..8 {
+            // draw_tab_list: the downloads that finished go to the atlas.
+            slots.next_frame(d.take_drawn());
+            let mut uploads = 0;
+            for (location, _) in d.take_ready() {
+                if slots.place(location).is_some() {
+                    uploads += 1;
+                }
+            }
+            // update_remote_skins: every skin is drawn, from its slot, or
+            // asked for again while it has none.
+            let mut shown = Vec::new();
+            for s in &skins {
+                if slots.contains(s) {
+                    d.drawn(s);
+                    shown.push(s.clone());
+                } else {
+                    d.again(s);
+                }
+            }
+            if frame >= 2 {
+                assert_eq!(uploads, 0, "frame {frame} uploaded again");
+                assert_eq!(Some(&shown), last.as_ref(), "frame {frame} lost a skin");
+            }
+            // The first frame asks for the skins; from the next, four show.
+            assert_eq!(shown.len(), if frame == 0 { 0 } else { 4 });
+            last = Some(shown);
+        }
+        // A skin no longer drawn gives up its slot to a waiting one.
+        let mut slots = super::SkinSlots::new(2);
+        slots.next_frame(Default::default());
+        assert_eq!(slots.place("skins/a".into()), Some((0, None)));
+        assert_eq!(slots.place("skins/b".into()), Some((1, None)));
+        assert_eq!(slots.place("skins/c".into()), None);
+        slots.next_frame(["skins/b".to_owned()].into());
+        assert_eq!(
+            slots.place("skins/c".into()),
+            Some((0, Some("skins/a".into())))
+        );
+        // Stored this frame, kept through it.
+        assert_eq!(slots.place("skins/d".into()), None);
+        assert!(slots.contains("skins/b") && slots.contains("skins/c"));
     }
 
     /// A skin evicted from the atlas re-uploads (`again`), once per ask.

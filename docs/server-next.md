@@ -431,10 +431,12 @@ the supervisor (a missing feature, or no need), so that the supervisor covers wh
   TPS, a `--pre-generated` world copy, and a Markdown table from the JSON.
 - **S-3 (#3973) bench: bots on another machine**, with the report recording where they ran.
 - **S-4 (#3974) the download repo's release workflow** (W8), now that no code lives there.
-- **S-5 (#3975) docs: an owner's page** comparing `server.properties` to `server.toml`.
+- **S-5 (#3975) docs: an owner's page** comparing `server.properties` to `server.toml`: done, [owners.md](owners.md).
 - **S-6 (#3976) bots: report bytes and join time**, so the bench doesn't need `nettop`.
 
 ## Appendix A. Open horizon PRs on the server's theme (2026-10-29)
+
+A snapshot of that day, not kept up to date: a PR's state now is on GitHub.
 
 Each one is **use** (what the server takes from it), **covered** (by what), or **not for the server**. ★ marks
 the ones that should land in horizon first: the server builds on them, so triage should prove them first.
