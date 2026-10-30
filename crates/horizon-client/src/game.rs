@@ -1402,6 +1402,14 @@ struct DragView {
     slots: HashMap<usize, Option<(u32, bool)>>,
     left: Option<u32>,
 }
+/// Whether an item modifier of slot `group` applies in the worn or held `slot`
+/// (`EquipmentSlotGroup.test`).
+fn equipment_modifier_applies(group: &str, slot: &str) -> bool {
+    group == slot
+        || group == "any"
+        || (group == "armor" && slot != "mainhand")
+        || (group == "hand" && slot == "mainhand")
+}
 /// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
 /// A chunk whose ticking future can complete (`ChunkMap.prepareTickingChunk`):
 /// lit, with its neighbours loaded, as `postprocess_chunks` waits for.
@@ -9920,12 +9928,9 @@ impl Game<'_> {
                 continue;
             };
             for (attribute, id, amount, op, group) in &info.modifiers {
-                let matches = group == slot
-                    || group == "any"
-                    || (group == "armor" && slot != "mainhand")
-                    || (group == "hand" && slot == "mainhand");
-                // Main-hand attack modifiers are read by the attack code directly.
-                if !matches || slot == "mainhand" {
+                // The attack code still reads the held item's attack damage and
+                // speed directly; the map copy is what `/attribute` reports.
+                if !equipment_modifier_applies(group, slot) {
                     continue;
                 }
                 if player
@@ -16356,6 +16361,18 @@ mod entity_model_loading_tests;
 mod tests {
     use super::*;
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
+
+    /// Held items apply their main-hand modifiers to the player (#4118).
+    #[test]
+    fn equipment_modifiers_follow_their_slot_group() {
+        assert!(equipment_modifier_applies("mainhand", "mainhand"));
+        assert!(equipment_modifier_applies("hand", "mainhand"));
+        assert!(equipment_modifier_applies("any", "mainhand"));
+        assert!(!equipment_modifier_applies("armor", "mainhand"));
+        assert!(!equipment_modifier_applies("mainhand", "head"));
+        assert!(equipment_modifier_applies("armor", "chest"));
+        assert!(!equipment_modifier_applies("hand", "feet"));
+    }
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
 
     /// A key bound to key.attack keeps attacking while it is held: each
