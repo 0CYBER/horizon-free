@@ -1642,6 +1642,8 @@ pub struct Seen {
     pub opened_chest: Option<[i32; 3]>,
     /// `isPassenger`.
     pub passenger: bool,
+    /// The vehicle it rides (`getVehicle`): a mob's or a boat's id.
+    pub vehicle: Option<u32>,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
@@ -1767,6 +1769,7 @@ impl Mob {
             active_raid: raider::has_active_raid(m),
             opened_chest: m.extra.opened_chest,
             passenger: m.extra.mount.is_some(),
+            vehicle: m.extra.mount,
             player_rep: match (villager, player) {
                 (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
                 _ => 0,
