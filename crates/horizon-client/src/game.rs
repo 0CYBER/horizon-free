@@ -4058,22 +4058,7 @@ impl Game<'_> {
             ];
             return Ok(FallStep::Landed(pos));
         }
-        // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
-        // (Entity.makeStuckInBlock, which forgets the fall). Entity.move
-        // records the move unless it was blocked short of a tiny one.
-        let moved = movement.length_squared();
-        let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
-        let world = &self.world;
-        let facts = self.res.facts();
-        if horizon_client::falling_block::passes_cobweb(
-            from,
-            f.position,
-            recorded.then_some(wanted),
-            |p| &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb",
-        ) {
-            f.fall_distance = 0.0;
-            f.stuck = horizon_client::falling_block::web_multiplier();
-        }
+        // Entity.move stops it on the axes it collided on.
         if movement.x != wanted.x {
             f.velocity.x = 0.0;
         }
@@ -4082,6 +4067,37 @@ impl Game<'_> {
         }
         if movement.z != wanted.z {
             f.velocity.z = 0.0;
+        }
+        // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
+        // (Entity.makeStuckInBlock), BubbleColumnBlock.entityInside lifts or
+        // drags it. Entity.move records the move unless it was blocked short
+        // of a tiny one.
+        let moved = movement.length_squared();
+        let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
+        let world = &self.world;
+        let facts = self.res.facts();
+        let (registry, collision) = (self.pack.assets.registry, self.collision);
+        let stuck = horizon_client::falling_block::apply_effects_from_blocks(
+            from,
+            f.position,
+            recorded.then_some(wanted),
+            &mut f.velocity,
+            &mut f.fall_distance,
+            |p| {
+                use horizon_client::falling_block::Inside;
+                if &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb" {
+                    Inside::Cobweb
+                } else if let Some(column) =
+                    horizon_client::motion::bubble_column_at(world, registry, facts, collision, p)
+                {
+                    Inside::BubbleColumn(column)
+                } else {
+                    Inside::Nothing
+                }
+            },
+        );
+        if stuck {
+            f.stuck = horizon_client::falling_block::web_multiplier();
         }
         f.velocity = Vec3::new(
             f.velocity.x * 0.98,
