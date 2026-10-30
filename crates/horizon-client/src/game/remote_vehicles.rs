@@ -167,9 +167,11 @@ impl Game<'_> {
             Some(c.seat())
         } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             // AbstractBoat.tick on the controlling client: steer and move.
-            let mut b = self.boats[i].clone();
+            // It steers with the input `LocalPlayer.rideTick` latched on the
+            // previous tick, so the paddle packet describes the motion the
+            // server is sent; this tick's keys are latched after it ticked.
+            let mut b = self.tick_boat(self.boats[i].clone(), true);
             b.input = [keys.left, keys.right, keys.forward, keys.backward];
-            let b = self.tick_boat(b, true);
             // positionRider: the seat turns with the boat; clampRotation.
             self.yaw += b.delta_rotation;
             let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;

@@ -262,6 +262,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
              client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
              sends each target its packet).
+- boat_input_latch: a boat on land paddled from rest moves one tick after W goes down, not in that tick:
+             it steers with the input latched on the previous tick, as the paddle packet it sends says (#3789).
 - popped_break_effects: a torch on the side of a block and sugar cane above one play their break sound once
              for the miner and for the player around when the support is mined (#3747).
 - wind_burst_player: a mace smash with Wind Burst on another player launches the attacker up, for the host and for a guest (#3830).
@@ -6703,6 +6705,59 @@ def check_wind_burst_player(host, guest, out):
 
 CHECKS += ['wind_burst_player']
 CHECK_FNS['wind_burst_player'] = check_wind_burst_player
+
+def check_boat_input_latch(host, guest, out):
+    """AbstractBoat.tick steers with the input LocalPlayer.rideTick latched on the previous tick, so the
+    paddle packet describes the motion the boat just made. A boat on land that starts being paddled moves
+    one tick after the key goes down, not in the same tick (GrimAC's Simulation flagged the early move)."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        player('command', command='gamemode survival')
+        player('command', command=f'summon minecraft:oak_boat {x + 0.5} {y} {z + 3.5}')
+        player.wait(20)
+        try:
+            boat = board(player, 'oak_boat', (x + 0.5, y, z + 3.5))
+            player.wait(10)
+
+            def at():
+                return next(o for o in player('status')['objects'] if o['id'] == boat['id'])['position']
+
+            steps = []
+            for n in range(6):
+                player.wait(1 + n % 3)  # vary the tick of the frame the key goes down in
+                # One ctl process: W goes down and the ticks that follow are counted exactly.
+                replies = player.script(['key w down', 'wait 0', 'status', 'wait 1', 'status', 'wait 1', 'status', 'key w up'],
+                                        every=True)
+                marks = [r for r in replies if 'objects' in r]
+                ticks = [r['ticks'] for r in replies if 'ticks' in r]
+                spots_now = [next(o for o in r['objects'] if o['id'] == boat['id'])['position'] for r in marks]
+                distances = [math.dist((a[0], a[2]), (spots_now[0][0], spots_now[0][2])) for a in spots_now]
+                steps.append({'ticks': ticks, 'moved': [round(d, 4) for d in distances]})
+                player.wait(40)
+                # W is read in the first tick after it goes down and steers the boat from the second on: a
+                # boat at rest on land moves 0.04, then 0.064 (land friction 0.6, +0.04 each tick). A boat
+                # steering in the tick W is read in would be a tick ahead.
+                def travelled(n):
+                    v, total = 0.0, 0.0
+                    for _ in range(max(0, n - 1)):
+                        v = v * 0.6 + 0.04
+                        total += v
+                    return total
+                want = [round(travelled(t - ticks[0]), 4) for t in (ticks[0], ticks[2], ticks[4])]
+                assert all(abs(d - w) < 0.002 for d, w in zip(distances, want)), f'{label}: {steps} want {want}'
+            result[label] = steps
+        finally:
+            player.raw('key', 'w', 'up')
+            player.raw('key', 'shift', 'tap')
+            player.wait(5)
+    return result
+
+
+CHECKS += ['boat_input_latch']
+CHECK_FNS['boat_input_latch'] = check_boat_input_latch
+
 
 def check_hook_smooth(host, guest, out):
     """FishingHook.tick runs on a client between the tracker's updates (every 5 ticks): a cast hook moves
