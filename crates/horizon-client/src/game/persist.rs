@@ -255,6 +255,8 @@ impl Game<'_> {
                         | "minecraft:arrow"
                         | "minecraft:fireball"
                         | "minecraft:small_fireball"
+                        | "minecraft:wind_charge"
+                        | "minecraft:breeze_wind_charge"
                         | "minecraft:falling_block"
                         | "minecraft:end_crystal"
                         | "minecraft:ender_dragon"
@@ -294,7 +296,10 @@ impl Game<'_> {
                             self.add_projectile(p);
                         }
                     }
-                    "minecraft:fireball" | "minecraft:small_fireball" => {
+                    "minecraft:fireball"
+                    | "minecraft:small_fireball"
+                    | "minecraft:wind_charge"
+                    | "minecraft:breeze_wind_charge" => {
                         if let Some(p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
                             self.add_projectile(p);
                         }

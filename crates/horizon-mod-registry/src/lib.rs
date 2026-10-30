@@ -10,7 +10,11 @@ pub mod ratings;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Path as UrlPath, Query, State},
+    body::Body,
+    extract::{
+        DefaultBodyLimit, FromRequest, Multipart, Path as UrlPath, Query, Request, State,
+        multipart::MultipartError,
+    },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -40,6 +44,8 @@ const PER_ACCOUNT: usize = 6;
 const PER_HOUR: usize = 60;
 /// The page's JSON.
 const MAX_FORM: usize = 64 << 10;
+/// A submission's whole body: the file, the page and the form's framing.
+const MAX_BODY: usize = index::MAX_FILE as usize + MAX_FORM * 2;
 /// Ratings set per account per hour, and by everyone.
 const RATINGS_PER_ACCOUNT: usize = 30;
 const RATINGS_PER_HOUR: usize = 600;
@@ -134,9 +140,7 @@ pub fn router(app: App) -> Router {
         .route("/api/mods/{id}/rating", get(my_rating).post(rate))
         .route(
             "/api/mods/submit",
-            post(submit).layer(DefaultBodyLimit::max(
-                index::MAX_FILE as usize + MAX_FORM * 2,
-            )),
+            post(submit).layer(DefaultBodyLimit::max(MAX_BODY)),
         )
         .with_state(app)
 }
@@ -163,6 +167,12 @@ fn bad(message: impl Into<String>) -> Refusal {
 
 fn github_down(e: github::Failure) -> Refusal {
     eprintln!("horizon-mod-registry: GitHub {}: {}", e.status, e.message);
+    if e.timed_out {
+        return Refusal::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "GitHub is slow right now: try again in a few minutes",
+        );
+    }
     Refusal::new(
         StatusCode::BAD_GATEWAY,
         "GitHub didn't answer as expected: try again in a minute",
@@ -539,23 +549,83 @@ fn allow(windows: &Windows, login: &str, per_account: usize, per_hour: usize) ->
     ok
 }
 
+/// The answer to a file that is too big.
+fn too_big() -> Refusal {
+    Refusal::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!("the file is over {} MiB", index::MAX_FILE >> 20),
+    )
+}
+
+/// A form that broke off: over the body's limit, or not a form.
+fn torn(e: MultipartError) -> Refusal {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        too_big()
+    } else {
+        bad(e.body_text())
+    }
+}
+
+/// Reads and drops the rest of a refused submission, up to its limit. A
+/// browser still sending the file when the answer comes reports a network
+/// error instead of the answer, so the answer waits for the upload's end.
+async fn drain(body: Body) {
+    use http_body_util::BodyExt;
+    let mut body = http_body_util::Limited::new(body, MAX_BODY);
+    while let Some(Ok(_)) = body.frame().await {}
+}
+
+/// The rest of a form, past a part that was refused.
+async fn drain_form(multipart: &mut Multipart) {
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        while let Ok(Some(_)) = field.chunk().await {}
+    }
+}
+
 async fn submit(
     State(app): State<App>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
+    request: Request,
 ) -> Result<Json<serde_json::Value>, Refusal> {
     let inner = app.0.clone();
-    let (login, user_id) = signed_in_here(&inner, &headers)?;
-    if !allow(&inner.recent, &login, PER_ACCOUNT, PER_HOUR) {
+    let (parts, body) = request.into_parts();
+    let checked = signed_in_here(&inner, &parts.headers).and_then(|account| {
+        let length = parts.headers.get(header::CONTENT_LENGTH);
+        if length.and_then(|l| l.to_str().ok()?.parse::<usize>().ok()) > Some(MAX_BODY) {
+            return Err(too_big());
+        }
+        if !allow(&inner.recent, &account.0, PER_ACCOUNT, PER_HOUR) {
+            return Err(Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many submissions this hour: try again later",
+            ));
+        }
+        Ok(account)
+    });
+    let (login, user_id) = match checked {
+        Ok(account) => account,
+        Err(refusal) => {
+            // Too big: what's past the limit would be cut anyway.
+            if refusal.0 != StatusCode::PAYLOAD_TOO_LARGE {
+                drain(body).await;
+            }
+            return Err(refusal);
+        }
+    };
+    let mut multipart = Multipart::from_request(Request::from_parts(parts, body), &())
+        .await
+        .map_err(|e| bad(e.body_text()))?;
+    let dir = inner.config.scratch.join(random_hex());
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        drain_form(&mut multipart).await;
         return Err(Refusal::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many submissions this hour: try again later",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
         ));
     }
-    let dir = inner.config.scratch.join(random_hex());
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let result = receive(&mut multipart, &dir).await;
+    if result.is_err() {
+        drain_form(&mut multipart).await;
+    }
     let result = match result {
         Ok((form, file)) => {
             let inner = inner.clone();
@@ -580,14 +650,10 @@ async fn submit(
 async fn receive(multipart: &mut Multipart, dir: &Path) -> Result<(Form, PathBuf), Refusal> {
     use tokio::io::AsyncWriteExt;
     let (mut form, mut file) = (None, None);
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| bad(e.body_text()))?
-    {
+    while let Some(mut field) = multipart.next_field().await.map_err(torn)? {
         match field.name() {
             Some("entry") => {
-                let text = field.text().await.map_err(|e| bad(e.body_text()))?;
+                let text = field.text().await.map_err(torn)?;
                 if text.len() > MAX_FORM {
                     return Err(bad("the page's text is too long"));
                 }
@@ -599,13 +665,10 @@ async fn receive(multipart: &mut Multipart, dir: &Path) -> Result<(Form, PathBuf
                     .await
                     .map_err(|e| Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let mut size = 0u64;
-                while let Some(chunk) = field.chunk().await.map_err(|e| bad(e.body_text()))? {
+                while let Some(chunk) = field.chunk().await.map_err(torn)? {
                     size += chunk.len() as u64;
                     if size > index::MAX_FILE {
-                        return Err(bad(format!(
-                            "the file is over {} MiB",
-                            index::MAX_FILE >> 20
-                        )));
+                        return Err(too_big());
                     }
                     out.write_all(&chunk).await.map_err(|e| {
                         Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())

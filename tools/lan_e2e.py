@@ -328,7 +328,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
-          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'rocket-ceilings']
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'rocket-ceilings', 'tag-query']
 
 
 class Game:
@@ -3499,6 +3499,44 @@ def sparked(player, other, kinds, act, ticks=20):
     return seen
 
 
+def copy_recreate_command(game, check):
+    """F3+I (KeyboardHandler.copyRecreateCommand): what it copied once `check` accepts it."""
+    game.raw('key', 'f3', 'down')
+    game.raw('key', 'i', 'tap')
+    game.raw('key', 'f3', 'up')
+    return game.until(lambda: game('status')['debug']['clipboard'], lambda c: bool(c) and check(c), ticks=40)
+
+
+def check_tag_query(host, guest, out):
+    """An operator guest's F3+I copies the server's data (#3518): DebugQueryHandler's tag queries,
+    answered by ServerGamePacketListenerImpl.handleBlockEntityTagQuery and handleEntityTagQuery.
+    A chest's items and an entity's tags never reach the client, so only the server's answer has them."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest = (x, y, z + 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} '
+                             'minecraft:chest{Items:[{Slot:0b,id:"minecraft:diamond",count:5}]}')
+    guest.wait(10)
+    guest.raw('look-at-block', *chest)
+    guest.wait(2)
+    block = copy_recreate_command(guest, lambda c: c.startswith(f'/setblock {chest[0]} {chest[1]} {chest[2]} '))
+    block_said = guest.raw('messages', 1)['chat']
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
+    guest('command', command=f'summon minecraft:pig {x + 0.5} {y} {z + 2.5} {{NoAI:1b,Tags:["tag_query"]}}')
+    guest.wait(20)
+    pig = guest.raw('entities', 6, 'pig')['entities'][0]
+    guest.raw('look-at-entity', pig['id'])
+    guest.wait(2)
+    entity = copy_recreate_command(guest, lambda c: c.startswith('/summon minecraft:pig '))
+    entity_said = guest.raw('messages', 1)['chat']
+    guest.shot(out, 'tag-query')
+    guest('command', command='kill @e[type=minecraft:pig,tag=tag_query]')
+    assert 'id:"minecraft:diamond"' in block, f"the chest's items are missing: {block}"
+    assert block_said == ['[Debug]: Copied server-side block data to clipboard'], block_said
+    assert 'Tags: ["tag_query"]' in entity, f"the pig's tags are missing: {entity}"
+    assert entity_said == ['[Debug]: Copied server-side entity data to clipboard'], entity_said
+    return {'block': block, 'entity': entity}
+
+
 def check_fireworks(host, guest, out):
     """Event 17 must arrive before removal, with the item's colored, trailing explosion (#1478).
 
@@ -5478,7 +5516,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'sidebar': check_sidebar,
              'border': check_border,
              'particles': check_particles, 'fireworks': check_fireworks,
-             'rocket-walls': check_rocket_walls, 'rocket-ceilings': check_rocket_ceilings}
+             'rocket-walls': check_rocket_walls, 'rocket-ceilings': check_rocket_ceilings,
+             'tag-query': check_tag_query}
 
 
 def run(ctl, out, resources, checks):

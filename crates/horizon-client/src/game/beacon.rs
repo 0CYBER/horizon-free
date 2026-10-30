@@ -177,7 +177,7 @@ impl Game<'_> {
             }
         }
         if b.last_check_y >= surface {
-            b.last_check_y = super::MIN_Y - 1;
+            b.last_check_y = self.world.bottom_y() - 1;
             b.sections = std::mem::take(&mut b.checking);
             let (was, is) = (previous > 0, b.levels > 0);
             if !was && is {
@@ -231,7 +231,7 @@ impl Game<'_> {
         let mut levels = 0;
         for step in 1..=4 {
             let ly = y - step;
-            if ly < super::MIN_Y {
+            if ly < self.world.bottom_y() {
                 break;
             }
             let ok = (x - step..=x + step).all(|lx| {

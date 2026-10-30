@@ -17,7 +17,7 @@ use crate::{
     Result,
     beehive::BeehiveExt,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, MIN_Y, Section, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy},
     mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
     streaming::ChunkGenerator,
 };
@@ -1018,10 +1018,11 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
         )
     }))
 }
-/// The client heightmaps of a column's sections, in a level from `min_y`,
-/// `height` blocks high.
+/// The client heightmaps of a column's sections (from `column_min_y`), in a
+/// level from `min_y`, `height` blocks high.
 pub fn client_heightmaps_in(
     sections: &[Arc<Section>],
+    column_min_y: i32,
     tables: &SaveTables,
     min_y: i32,
     height: i32,
@@ -1037,7 +1038,7 @@ pub fn client_heightmaps_in(
         .collect();
     let view = HeightmapView {
         sections,
-        column_min_y: MIN_Y,
+        column_min_y,
         tables,
         min_y,
         height,
@@ -2373,12 +2374,58 @@ impl Drop for SaveDir {
 }
 
 pub fn read_dat(path: &Path) -> Option<Tag> {
-    let bytes = fs::read(path).ok()?;
+    try_read_dat(path).ok()
+}
+/// `read_dat`, with why the file did not read.
+fn try_read_dat(path: &Path) -> std::result::Result<Tag, DatIssue> {
+    let bytes = fs::read(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => DatIssue::Missing,
+        _ => DatIssue::Unreadable(e.to_string()),
+    })?;
     let raw = match Compression::Gzip.decode(&bytes, Limits::saved().max_bytes) {
         Ok(raw) => raw,
         Err(_) => bytes,
     };
-    Some(nbt::read_named(&raw, Limits::saved()).ok()?.0.tag)
+    nbt::read_named(&raw, Limits::saved())
+        .map(|(named, _)| named.tag)
+        .map_err(|e| DatIssue::Unreadable(e.to_string()))
+}
+/// What `LevelStorageAccess.collectIssues` finds wrong with a level.dat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DatIssue {
+    /// No such file (`FileNotFoundException`).
+    Missing,
+    /// It exists but does not read as a level: why.
+    Unreadable(String),
+}
+/// `LevelStorageAccess.collectIssues`: why level.dat (level.dat_old with
+/// `old`) can't be read as the world's level data, `None` when it can.
+pub fn level_dat_issue(dir: &Path, old: bool) -> Option<DatIssue> {
+    let file = if old { "level.dat_old" } else { "level.dat" };
+    match try_read_dat(&dir.join(file)) {
+        Ok(root) if matches!(root.get("Data"), Some(Tag::Compound(_))) => None,
+        Ok(_) => Some(DatIssue::Unreadable("Invalid root tag".into())),
+        Err(issue) => Some(issue),
+    }
+}
+/// `LevelStorageAccess.restoreLevelDataFromOld` (`Util.safeReplaceOrMoveFile`):
+/// level.dat moves aside to `level.dat_corrupted_<time>` and level.dat_old
+/// takes its place. Whether it worked. Vanilla passes `noRollback` and reports
+/// success even when level.dat_old could not be moved in; here the broken
+/// level.dat goes back and the failure is reported.
+pub fn restore_level_data_from_old(dir: &Path) -> bool {
+    let (current, latest) = (dir.join("level.dat"), dir.join("level.dat_old"));
+    let backup = dir.join(format!("level.dat_corrupted_{}", backup_stamp()));
+    if current.exists() && fs::rename(&current, &backup).is_err() {
+        return false;
+    }
+    if fs::rename(&latest, &current).is_err() {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &current);
+        }
+        return false;
+    }
+    true
 }
 /// `FileNameDateFormatter`: the time in the names of backed-up unreadable files.
 fn backup_stamp() -> String {
@@ -2982,7 +3029,14 @@ impl Level {
         }
     }
     pub fn read(dir: &Path) -> Option<Self> {
-        let root = read_level_dat(dir)?;
+        Self::read_root(dir, read_level_dat(dir)?)
+    }
+    /// `read` from level.dat alone, without the level.dat_old fallback: what
+    /// `LevelStorageSource.readLevelSummary` reads for the world list.
+    pub fn read_summary(dir: &Path) -> Option<Self> {
+        Self::read_root(dir, read_dat(&dir.join("level.dat"))?)
+    }
+    fn read_root(dir: &Path, root: Tag) -> Option<Self> {
         let data = root.get("Data")?;
         let n = |t: Option<&Tag>| number(t).unwrap_or(0);
         let mut level = Self {
@@ -4102,6 +4156,12 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
         self.inner.light_view(proto)
     }
+    fn non_air_sections(
+        &self,
+        proto: &crate::streaming::Proto,
+    ) -> Option<crate::section_mask::SectionMask> {
+        self.inner.non_air_sections(proto)
+    }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save
             .tables
@@ -5009,7 +5069,7 @@ mod tests {
         assert_eq!(back.components, banner.components);
     }
     use super::*;
-    use crate::chunk::SECTIONS;
+    use crate::chunk::{MIN_Y, SECTIONS};
 
     #[test]
     fn end_gateway_block_entity_round_trips() {
