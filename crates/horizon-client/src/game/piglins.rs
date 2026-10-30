@@ -223,10 +223,26 @@ impl Game<'_> {
             // Nuggets come whole, anything else one at a time.
             let (taken_item, id) = (e.clone(), self.mobs[i].id);
             let item = e.stack.item.clone();
+            let carried = e.stack.clone();
+            let owner = e.thrower;
             self.add_pickup(
                 super::pickups::Taken::Item(Box::new(taken_item)),
                 super::pickups::Collector::Mob(id),
             );
+            // LivingEntity.onItemPickup, before PiglinAi.pickUpItem splits the stack.
+            // The owner is the host or a guest: whoever it is gets the trigger.
+            if let Some(owner) = owner {
+                let target = self.mob_entity(&self.mobs[i]);
+                self.for_each_player(|g| {
+                    if g.acting_uuid() == owner {
+                        g.trigger_item_entity(
+                            "minecraft:thrown_item_picked_up_by_entity",
+                            &carried,
+                            &target,
+                        );
+                    }
+                });
+            }
             let stack = if &*item == "minecraft:gold_nugget" {
                 self.dropped.remove(j).stack
             } else {

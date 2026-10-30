@@ -480,6 +480,15 @@ impl Game<'_> {
                     .is_some_and(|i| s.damage >= i.max_damage)
                 {
                     self.armor[slot] = None;
+                    if let Some(eye) = self.eye_position() {
+                        self.audio.play(
+                            "minecraft:entity.item.break",
+                            Some(eye),
+                            0.8,
+                            0.8 + self.world.random.next_float() * 0.4,
+                        );
+                    }
+                    self.apply_equipment();
                 }
             }
         }

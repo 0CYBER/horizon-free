@@ -150,6 +150,123 @@ fn player_uuid() -> [i32; 4] {
         u as u32 as i32,
     ]
 }
+/// `ResolvableProfile.CODEC`: the name, id and properties of a profile, then the
+/// skin's texture ids and model (`PlayerSkin.Patch`: "texture", "cape", "elytra", "model").
+fn profile_nbt(p: &horizon_protocol::entity_data::Profile) -> Tag {
+    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
+    if let Some(name) = &p.name {
+        entries.push(("name", string(name)));
+    }
+    if let Some(id) = p.uuid {
+        entries.push((
+            "id",
+            Tag::IntArray(vec![
+                (id >> 96) as i32,
+                (id >> 64) as i32,
+                (id >> 32) as i32,
+                id as i32,
+            ]),
+        ));
+    }
+    if !p.properties.is_empty() {
+        let properties = p
+            .properties
+            .iter()
+            .map(|property| {
+                let mut entries: Vec<(&'static str, Tag)> = vec![
+                    ("name", string(&property.name)),
+                    ("value", string(&property.value)),
+                ];
+                if let Some(signature) = &property.signature {
+                    entries.push(("signature", string(signature)));
+                }
+                Tag::compound(entries)
+            })
+            .collect();
+        entries.push(("properties", Tag::List(properties)));
+    }
+    for (key, texture) in [
+        ("texture", &p.body),
+        ("cape", &p.cape),
+        ("elytra", &p.elytra),
+    ] {
+        if let Some(texture) = texture {
+            entries.push((key, string(texture)));
+        }
+    }
+    if let Some(slim) = p.slim {
+        entries.push(("model", string(if slim { "slim" } else { "wide" })));
+    }
+    Tag::compound(entries)
+}
+/// `ResolvableProfile.CODEC` read back: the compound `profile_nbt` writes, or a
+/// bare player name (`Codec.withAlternative(FULL_CODEC, PLAYER_NAME, ...)`).
+fn profile_from_nbt(tag: &Tag) -> Option<horizon_protocol::entity_data::Profile> {
+    if let Tag::String(name) = tag {
+        return Some(horizon_protocol::entity_data::Profile {
+            name: Some(name.to_string_lossy()),
+            uuid: None,
+            properties: Vec::new(),
+            body: None,
+            cape: None,
+            elytra: None,
+            slim: None,
+        });
+    }
+    let property = |name: String, value: &Tag, signature: Option<String>| match value {
+        Tag::String(v) => Some(horizon_protocol::packets::login::Property {
+            name,
+            value: v.to_string_lossy(),
+            signature,
+        }),
+        _ => None,
+    };
+    let properties: Vec<horizon_protocol::packets::login::Property> = match tag.get("properties") {
+        // `ExtraCodecs.PROPERTY_MAP`: a list of properties ...
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|p| {
+                let name = match p.get("name")? {
+                    Tag::String(s) => s.to_string_lossy(),
+                    _ => return None,
+                };
+                let signature = match p.get("signature") {
+                    Some(Tag::String(s)) => Some(s.to_string_lossy()),
+                    _ => None,
+                };
+                property(name, p.get("value")?, signature)
+            })
+            .collect(),
+        // ... or a map from a name to its values.
+        Some(Tag::Compound(map)) => map
+            .iter()
+            .flat_map(|(name, values)| match values {
+                Tag::List(values) => values
+                    .iter()
+                    .filter_map(|v| property(name.to_string_lossy(), v, None))
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let text = |key: &str| match tag.get(key) {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()),
+        _ => None,
+    };
+    Some(horizon_protocol::entity_data::Profile {
+        name: text("name"),
+        uuid: uuid_from_tag(tag.get("id")).map(|a| {
+            a.iter()
+                .fold(0u128, |u, &x| (u << 32) | u128::from(x as u32))
+        }),
+        properties,
+        body: text("texture"),
+        cape: text("cape"),
+        elytra: text("elytra"),
+        slim: text("model").map(|model| model == "slim"),
+    })
+}
 pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let base = Base {
         id: &m.kind.id,
@@ -195,6 +312,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         if m.extra.angry_at == Some(crate::mobs::Who::Player) {
             put(&mut tag, "angry_at", Tag::IntArray(player_uuid().to_vec()));
         }
+    }
+    // `Mannequin.addAdditionalSaveData`: the profile whose skin it wears.
+    if m.species() == crate::mobs::Species::Mannequin
+        && let Some(profile) = &m.profile
+    {
+        put(&mut tag, "profile", profile_nbt(profile));
     }
     // `Entity.saveWithoutId` writes the flag only when set.
     if m.name_visible {
@@ -340,6 +463,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                     Tag::Byte(i8::from(crate::mobs::fox::flag(m, bit))),
                 );
             }
+        }
+        // MushroomCow.addAdditionalSaveData: the Variant codec's name (stew
+        // effects are not modelled).
+        "minecraft:mooshroom" => {
+            let kind = if m.extra.variant == 1 { "brown" } else { "red" };
+            map.insert("Type".into(), string(kind));
         }
         // Rabbit.addAdditionalSaveData (the legacy id; 99 is the killer bunny).
         "minecraft:rabbit" => {
@@ -609,11 +738,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
         }
         "minecraft:camel" | "minecraft:camel_husk" => {
-            // LastPoseTick: negative while sitting.
-            let sitting = crate::mobs::camel::sitting(m);
+            // LastPoseTick: the pose change time, negative while sitting. The
+            // game time is not known here; the world's save overwrites it
+            // with the real one (`camel::synced_pose_tick`).
             map.insert(
                 "LastPoseTick".into(),
-                Tag::Long(if sitting { -1 } else { 0 }),
+                Tag::Long(crate::mobs::camel::synced_pose_tick(m, 0)),
             );
             if let Some(saddle) = m.saddle_item() {
                 map.insert(
@@ -670,6 +800,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.insert("AttachFace".into(), Tag::Byte(m.extra.variant3 as i8));
             map.insert("Peek".into(), Tag::Byte(m.extra.counter as i8));
             map.insert("Color".into(), Tag::Byte(m.extra.color as i8));
+        }
+        // GlowSquid.addAdditionalSaveData.
+        "minecraft:glow_squid" => {
+            map.insert(
+                "DarkTicksRemaining".into(),
+                Tag::Int(crate::mobs::aquatic::dark_ticks(m)),
+            );
         }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
@@ -1050,6 +1187,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.angry_at = Some(crate::mobs::Who::Player);
         }
     }
+    // `Mannequin.readAdditionalSaveData`: the profile comes back with the skin.
+    if m.species() == crate::mobs::Species::Mannequin {
+        m.profile = tag.get("profile").and_then(profile_from_nbt);
+    }
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
     m.custom_name_text = tag.get("CustomName").map(name_text);
@@ -1196,6 +1337,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 }
             }
         }
+        // MushroomCow.readAdditionalSaveData: a missing or unknown name is
+        // Variant.DEFAULT, red.
+        crate::mobs::Species::Mooshroom => {
+            m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("brown"));
+        }
         crate::mobs::Species::Rabbit => {
             // Rabbit.Variant.byId: an unknown id is brown.
             m.extra.variant = match number(tag.get("RabbitType")).unwrap_or(0) {
@@ -1280,11 +1426,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .and_then(|v| crate::save::uuid_from_tag(Some(v)));
     }
     if crate::mobs::camel::is_camel(m.species()) {
-        let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
+        // The tick is a game time: `camel::finish_load` puts it on the mob's
+        // clock once the world's time is known.
+        let tick = match tag.get("LastPoseTick") {
+            Some(Tag::Long(v)) => *v,
+            _ => 0,
+        };
         crate::mobs::camel::stand_up_instantly(&mut m);
-        if sitting {
-            m.extra.egg_time = -1 - 400;
-        }
+        m.extra.pose_change_tick = tick;
+        m.extra.camel_sitting = tick < 0;
         // Camels are always tame (`Camel.register` in Horizon).
         m.extra.tame = true;
     }
@@ -1370,6 +1520,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Sheep {
         m.extra.color = number(tag.get("Color")).map_or(0, |c| (c as u8) & 15);
         m.extra.sheared = flag(tag, "Sheared");
+    }
+    // GlowSquid.readAdditionalSaveData: not dimmed when absent.
+    if m.species() == crate::mobs::Species::GlowSquid {
+        crate::mobs::aquatic::set_dark_ticks(
+            &mut m,
+            number(tag.get("DarkTicksRemaining")).unwrap_or(0) as i32,
+        );
     }
     // IronGolem.readAdditionalSaveData: not player created when absent.
     if m.species() == crate::mobs::Species::IronGolem {
@@ -2629,7 +2786,10 @@ pub fn bucket_data(m: &Mob) -> Tag {
 }
 pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
     let mut data = crate::item_data::StackData {
-        custom_name: m.custom_name.clone(),
+        custom_name: m
+            .custom_name
+            .as_ref()
+            .map(|name| Tag::String(name.as_str().into())),
         ..Default::default()
     };
     data.set_other("minecraft:bucket_entity_data", Some(bucket_data(m)));
@@ -2668,8 +2828,8 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
     let Some(components) = stack.data() else {
         return;
     };
-    if let Some(name) = &components.custom_name {
-        m.custom_name = Some(name.clone());
+    if let Some(name) = stack.custom_name() {
+        m.custom_name = Some(name);
     }
     if let Some(data) = components.other("minecraft:bucket_entity_data") {
         if let Some(v) = number(data.get("Age")) {
@@ -2841,7 +3001,7 @@ mod axolotl_nbt_tests {
         assert_eq!(restored.health, 5.0);
         m.glowing = false;
         m.add_effect("glowing", 200, 0);
-        assert!(m.has_effect("glowing"));
+        assert!(m.has_effect("minecraft:glowing"));
         assert!(bucket_data(&m).get("Glowing").is_none());
         m.glowing = true;
         assert_eq!(number(bucket_data(&m).get("Glowing")), Some(1));
@@ -3025,7 +3185,7 @@ mod sheep_nbt_tests {
     }
 
     #[test]
-    fn foxes_rabbits_and_goats_keep_their_kind() {
+    fn foxes_mooshrooms_rabbits_and_goats_keep_their_kind() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
@@ -3049,6 +3209,17 @@ mod sheep_nbt_tests {
         assert_eq!(text(tag.get("Type")).as_deref(), Some("snow"));
         assert_eq!(number(tag.get("Sleeping")), Some(0));
         assert_eq!(back.extra.variant, 1);
+        // MushroomCow: a brown mooshroom stays brown, and a save without (or
+        // with an unknown) Type reads as red.
+        let mut mooshroom = new("minecraft:mooshroom");
+        mooshroom.extra.variant = 1;
+        let (back, tag) = round_trip(&mooshroom);
+        assert_eq!(text(tag.get("Type")).as_deref(), Some("brown"));
+        assert_eq!(back.extra.variant, 1);
+        mooshroom.extra.variant = 0;
+        let (back, tag) = round_trip(&mooshroom);
+        assert_eq!(text(tag.get("Type")).as_deref(), Some("red"));
+        assert_eq!(back.extra.variant, 0);
         let mut rabbit = new("minecraft:rabbit");
         rabbit.extra.variant = 4;
         let (back, tag) = round_trip(&rabbit);
@@ -3178,12 +3349,17 @@ mod held_item_name_tests {
             .collect();
         let mut mob = Mob::new(1, Arc::clone(&types["minecraft:zombie"]), Vec3::ZERO, 0.0);
         let mut sword = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
-        sword.data_mut().custom_name = Some("Old Sword".into());
+        sword.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
         mob.extra.set_main_hand_stack(Some(sword));
         let raw = mob_to_nbt(&mob, [1, 2, 3, 4], None);
         let mut loaded = mob_from_nbt(&raw, &types, 2).unwrap();
         assert_eq!(
-            loaded.extra.main_hand_stack().unwrap().custom_name(),
+            loaded
+                .extra
+                .main_hand_stack()
+                .unwrap()
+                .custom_name()
+                .as_deref(),
             Some("Old Sword")
         );
         loaded

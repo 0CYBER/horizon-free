@@ -60,6 +60,31 @@ pub fn resets_x_rot(m: &Mob) -> bool {
     !flag(m, POUNCING | CROUCHING | INTERESTED | FACEPLANTED)
 }
 
+/// `Fox.populateDefaultEquipmentSlots`: one fox in five holds an emerald, an
+/// egg, rabbit feet or hide, wheat, leather or a feather in its mouth.
+pub fn populate_default_equipment(m: &mut Mob) {
+    if m.random.next_float() < 0.2 {
+        let odds = m.random.next_float();
+        let held = if odds < 0.05 {
+            "minecraft:emerald"
+        } else if odds < 0.2 {
+            "minecraft:egg"
+        } else if odds < 0.4 {
+            if m.random.next_boolean() {
+                "minecraft:rabbit_foot"
+            } else {
+                "minecraft:rabbit_hide"
+            }
+        } else if odds < 0.6 {
+            "minecraft:wheat"
+        } else if odds < 0.8 {
+            "minecraft:leather"
+        } else {
+            "minecraft:feather"
+        };
+        m.extra.main_hand = Some(held.into());
+    }
+}
 /// `Fox.registerGoals` and `setTargetGoals` (the targets wait for the variant:
 /// red foxes prefer chickens and rabbits, snow foxes fish).
 pub fn register(m: &mut Mob) {
