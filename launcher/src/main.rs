@@ -2505,10 +2505,18 @@ impl Launcher {
                     .into_any_element()
             },
         );
+        // "Ready to play" only when Play would start the game now: not while it needs preparing,
+        // prepares, waits for an account that owns it, or runs.
+        let running = self.client.is_some() || self.starting_client.is_some();
+        let ready = play_press(
+            prepared || java.is_some(),
+            self.owner,
+            self.preparing || running,
+        ) == PlayPress::Play;
         let mut rows = div()
             .flex()
             .flex_col()
-            .child(section_title("Ready to play", "check", &t).mb(px(12.)))
+            .children(ready.then(|| section_title("Ready to play", "check", &t).mb(px(12.))))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
             .children(self.launch_panel(cx));
