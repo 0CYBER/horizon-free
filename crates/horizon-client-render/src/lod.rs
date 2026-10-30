@@ -161,8 +161,40 @@ impl Column {
             self.spans.push(span);
         }
     }
-    /// `kinds`: `state_kinds`, per block state.
-    fn from_chunk(chunk: &Chunk, kinds: &[u8], x: i32, z: i32) -> Self {
+    /// Open water and its floor lit as open sky, as the seed's far columns
+    /// are: a chunk's own light fades a level per block of water, so the
+    /// chunks a player passed drew a darker band through the seed's sea.
+    /// The water is one span again.
+    fn light_open_water(&mut self, kinds: &[u8]) {
+        // Water; lava glows.
+        let water = |span: &Span| {
+            let kind = kinds.get(span.state.0 as usize).copied().unwrap_or(0);
+            kind & FLUID != 0 && kind >> 4 == 0
+        };
+        if !self.spans.last().is_some_and(water) {
+            return;
+        }
+        let floor = self
+            .spans
+            .iter()
+            .rposition(|span| !water(span))
+            .unwrap_or(0);
+        for (i, mut span) in std::mem::take(&mut self.spans).into_iter().enumerate() {
+            if i >= floor {
+                span.light |= 0xf0;
+            }
+            self.push(span);
+        }
+    }
+    /// `kinds`: `state_kinds`, per block state; `water`: `water_source(kinds)`,
+    /// what blocks holding water (kelp, seagrass, waterlogged ones) are drawn as.
+    fn from_chunk(
+        chunk: &Chunk,
+        kinds: &[u8],
+        water: Option<BlockStateId>,
+        x: i32,
+        z: i32,
+    ) -> Self {
         let kind = |state: BlockStateId| kinds.get(state.0 as usize).copied().unwrap_or(0);
         let face_light = |y: i32| {
             let mut sky = 0;
@@ -187,7 +219,7 @@ impl Column {
         };
         let mut column = Self::default();
         for (sy, section) in chunk.sections.iter().enumerate() {
-            let min = MIN_Y + sy as i32 * 16;
+            let min = chunk.min_y() + sy as i32 * 16;
             let uniform = section.blocks.bits() == 0
                 && section.biomes.bits() == 0
                 && matches!(section.light, crate::chunk::Light::Uniform(_));
@@ -197,10 +229,16 @@ impl Column {
             let step = if uniform { 16 } else { 1 };
             for offset in (0..16).step_by(step) {
                 let y = min + offset;
-                let state = BlockStateId(chunk.get(x, y, z));
-                let kind = kind(state);
+                let mut state = BlockStateId(chunk.get(x, y, z));
+                let mut kind = kind(state);
                 if kind & KEPT == 0 {
                     continue;
+                }
+                if kind & WATERY != 0
+                    && let Some(water) = water
+                {
+                    state = water;
+                    kind = kinds[water.0 as usize];
                 }
                 let light = face_light(y);
                 column.push(Span {
@@ -212,6 +250,7 @@ impl Column {
                 });
             }
         }
+        column.light_open_water(kinds);
         let mut water = None;
         for span in column.spans.iter().rev() {
             if kind(span.state) & FLUID != 0 {
@@ -230,7 +269,7 @@ impl Column {
             && let Some((height, state)) = water
         {
             column.surface = Some(Surface {
-                height: MIN_Y,
+                height: chunk.min_y(),
                 state: BlockStateId(
                     kinds.iter().position(|&kind| kind & AIR != 0).unwrap_or(0) as u32
                 ),
@@ -243,15 +282,28 @@ impl Column {
 }
 /// A chunk's 256 columns (`Column::from_chunk`), on the far-terrain worker.
 fn summarize(chunk: &Chunk, kinds: &[u8]) -> Arc<[Column; 256]> {
+    let water = water_source(kinds);
     Arc::new(std::array::from_fn(|i| {
-        Column::from_chunk(chunk, kinds, (i & 15) as i32, (i >> 4) as i32)
+        Column::from_chunk(chunk, kinds, water, (i & 15) as i32, (i >> 4) as i32)
     }))
 }
-/// `state_kinds` bits: kept in columns, a fluid, the air state; the light
-/// emission is in the high nibble.
+/// The water source state: the first plain kept fluid without light
+/// (`minecraft:water` comes before lava, and its level 0 first).
+fn water_source(kinds: &[u8]) -> Option<BlockStateId> {
+    kinds
+        .iter()
+        .position(|&kind| kind == KEPT | FLUID)
+        .map(|i| BlockStateId(i as u32))
+}
+/// `state_kinds` bits: kept in columns, a fluid, the air state, a block
+/// holding water; the light emission is in the high nibble.
 const KEPT: u8 = 1;
 const FLUID: u8 = 2;
 const AIR: u8 = 4;
+/// A block holding water that draws as none (kelp, seagrass, bubble columns,
+/// waterlogged blocks that aren't kept): far terrain draws water there, or
+/// kelp reaching the surface leaves holes in the sea.
+const WATERY: u8 = 8;
 /// What `Column::from_chunk` needs of each block state, read from the facts
 /// once: matching their names for every block made observing a chunk slow.
 fn state_kinds(facts: &BlockFacts) -> Vec<u8> {
@@ -270,13 +322,28 @@ fn state_kinds(facts: &BlockFacts) -> Vec<u8> {
                     || f.full_collision
                     || f.name.ends_with("_leaves")
                     || chorus
-                    || fluid);
-            (u8::from(kept) * KEPT)
-                | (u8::from(fluid) * FLUID)
+                    || fluid
+                    || nearly_full(&f.name));
+            let watery = !kept && !facts.is_air(state) && f.fluid == crate::blocks::Fluid::Water;
+            (u8::from(kept || watery) * KEPT)
+                | (u8::from(fluid || watery) * FLUID)
+                | (u8::from(watery) * WATERY)
                 | (u8::from(state == facts.air) * AIR)
                 | (f.emission.min(15) << 4)
         })
         .collect()
+}
+/// Blocks that fill their cell but neither draw solid nor collide as a full
+/// block: far terrain draws them as blocks, or patches of powder snow leave
+/// holes in mountains (and paths and fields dips).
+fn nearly_full(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:powder_snow"
+            | "minecraft:dirt_path"
+            | "minecraft:farmland"
+            | "minecraft:honey_block"
+    ) || name.ends_with("_stairs")
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileKey {
@@ -1059,6 +1126,16 @@ impl Lod {
             })
             .copied()
             .collect();
+        // Retiring fine columns are empty stand-ins, excluded from `active`
+        // while their normal meshes still cover the gap. Request their detail
+        // explicitly: neither the active-tile requests nor sampling an already
+        // ready stand-in can fill it, so its GPU sections would never retire.
+        keys.extend(retiring_detail(
+            &self.plan,
+            &self.retiring,
+            &self.saved,
+            &self.detail_masks,
+        ));
         keys.sort_unstable_by_key(|key| (key.distance(camera), *key));
         let mut chunks = FxHashSet::default();
         for key in keys {
@@ -1563,10 +1640,83 @@ impl Drop for Lod {
         }
     }
 }
+/// Fine retiring stand-ins need actual column detail before `Plan::replaces`
+/// can release their normal meshes. The caller keeps the usual 32-column
+/// request budget and waits for the replacement mesh before changing cutout.
+fn retiring_detail<'a>(
+    plan: &'a Plan,
+    retiring: &'a FxHashSet<(i32, i32)>,
+    saved: &'a Saved,
+    masks: &'a FxHashMap<TileKey, [u64; 4]>,
+) -> impl Iterator<Item = TileKey> + 'a {
+    retiring.iter().filter_map(move |&(x, z)| {
+        let key = TileKey { x, z, level: 0 };
+        (plan.nodes.contains(&key)
+            && !saved.contains_key(&(x, z))
+            && masks.get(&key) != Some(&[u64::MAX; 4]))
+        .then_some(key)
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
+    #[test]
+    fn retiring_fine_stand_ins_request_detail_before_their_gpu_meshes_can_retire() {
+        let column = (12, 0);
+        let fine = TileKey {
+            x: 12,
+            z: 0,
+            level: 0,
+        };
+        let mut plan = Plan::default();
+        plan.nodes.insert(fine);
+        let ready: FxHashMap<TileKey, ()> = [(fine, ())].into_iter().collect();
+        let retiring = [column].into_iter().collect();
+        let saved = Saved::default();
+        let mut masks = FxHashMap::default();
+        // A covered stand-in is ready, but empty: ordinary sampling skips it,
+        // and selection leaves it out of `active`. It cannot yet replace the
+        // old full-detail column, even though the near world has unloaded it.
+        assert!(!plan.replaces(column, &ready, |key| masks.get(&key)
+            == Some(&[u64::MAX; 4])));
+        assert_eq!(
+            retiring_detail(&plan, &retiring, &saved, &masks).collect::<Vec<_>>(),
+            [fine]
+        );
+        // The existing RequestDetail -> apply_fine path marks complete detail;
+        // only then may selection retire it and publish the new mesh cutout.
+        masks.insert(fine, [u64::MAX; 4]);
+        assert!(
+            retiring_detail(&plan, &retiring, &saved, &masks)
+                .next()
+                .is_none()
+        );
+        assert!(plan.replaces(column, &ready, |key| masks.get(&key)
+            == Some(&[u64::MAX; 4])));
+    }
+    #[test]
+    fn retiring_detail_requests_only_planned_columns_still_missing_detail() {
+        let fine = |x| TileKey { x, z: 0, level: 0 };
+        let mut plan = Plan::default();
+        plan.nodes.extend((0..4).map(fine));
+        plan.nodes.insert(fine(5));
+        let retiring = (0..5).map(|x| (x, 0)).collect();
+        let saved = [((1, 0), Arc::new(std::array::from_fn(|_| Column::default())))]
+            .into_iter()
+            .collect();
+        let masks = [
+            (fine(2), [u64::MAX; 4]),
+            (fine(3), [u64::MAX, u64::MAX, u64::MAX, u64::MAX - 1]),
+        ]
+        .into_iter()
+        .collect();
+        let mut requested: Vec<_> = retiring_detail(&plan, &retiring, &saved, &masks).collect();
+        requested.sort_unstable();
+        // Saved or complete detail needs no request; an unplanned retiree and
+        // a planned column that is not retiring must not consume the budget.
+        assert_eq!(requested, [fine(0), fine(3)]);
+    }
     #[test]
     fn reduced_far_detail_only_merges_tiles_away_from_the_near_terrain() {
         let leaves = |plan: &Plan| {
@@ -1772,6 +1922,82 @@ mod tests {
         );
     }
     #[test]
+    fn open_water_and_its_floor_are_lit_as_the_seed_lights_them() {
+        let span = |min, max, state, light| Span {
+            min,
+            max,
+            state: BlockStateId(state),
+            biome: 0,
+            light,
+        };
+        // 0 air, 1 stone, 2 water, 3 lava.
+        let kinds = [AIR, KEPT, KEPT | FLUID, KEPT | FLUID | 15 << 4];
+        // A chunk's own light: a cave, the floor, water fading a level a block.
+        let mut sea = Column {
+            surface: None,
+            spans: vec![
+                span(30, 40, 1, 0),
+                span(40, 48, 1, 0x10 | 2 << 12),
+                span(48, 61, 2, 0x20),
+                span(61, 62, 2, 0xe0),
+                span(62, 63, 2, 0xf0),
+            ],
+        };
+        sea.light_open_water(&kinds);
+        assert_eq!(
+            sea.spans,
+            [
+                span(30, 40, 1, 0),
+                span(40, 48, 1, 0xf0 | 2 << 12),
+                span(48, 63, 2, 0xf0)
+            ]
+        );
+        // Land, and lava, keep their light.
+        for top in [1, 3] {
+            let mut column = Column {
+                surface: None,
+                spans: vec![span(40, 50, 2, 0x20), span(50, 63, top, 0x80)],
+            };
+            let before = column.spans.clone();
+            column.light_open_water(&kinds);
+            assert_eq!(column.spans, before);
+        }
+    }
+    #[test]
+    fn nearly_full_blocks_are_kept() {
+        assert!(nearly_full("minecraft:powder_snow"));
+        assert!(nearly_full("minecraft:dirt_path"));
+        assert!(nearly_full("minecraft:oak_stairs"));
+        assert!(!nearly_full("minecraft:oak_fence"));
+        assert!(!nearly_full("minecraft:wheat"));
+    }
+    #[test]
+    fn kelp_to_the_surface_is_drawn_as_water() {
+        // 0 air, 1 stone, 2 water, 3 kelp (holds water, draws as none).
+        let kinds = [AIR, KEPT, KEPT | FLUID, KEPT | FLUID | WATERY];
+        let mut chunk = Chunk::empty(0, 0);
+        for x in [3, 4] {
+            for y in MIN_Y..40 {
+                chunk.set(x, y, 3, 1);
+            }
+        }
+        for y in 40..63 {
+            chunk.set(3, y, 3, 3);
+            chunk.set(4, y, 3, 2);
+        }
+        let water = water_source(&kinds);
+        assert_eq!(water, Some(BlockStateId(2)));
+        let kelp = Column::from_chunk(&chunk, &kinds, water, 3, 3);
+        let sea = Column::from_chunk(&chunk, &kinds, water, 4, 3);
+        assert_eq!(kelp.spans, sea.spans);
+        assert_eq!(
+            kelp.spans.last().map(|s| (s.min, s.max, s.state)),
+            Some((40, 63, BlockStateId(2)))
+        );
+        assert_eq!(kelp.surface.unwrap().water, Some((63, BlockStateId(2))));
+        assert_eq!(kelp.surface.unwrap().height, 40);
+    }
+    #[test]
     fn coarse_voxels_reduce_the_area_instead_of_inflating_one_leaf() {
         let span = |min, max, state| Span {
             min,
@@ -1967,6 +2193,24 @@ mod tests {
         chunk.set(8, 71, 8, chorus.0);
         chunk.set(8, 72, 8, chorus.0);
         chunk.set(8, 73, 8, flower.0);
+        // Kelp to the surface is water; powder snow and a waterlogged stair
+        // are kept as themselves.
+        let state = |name: &str| assets.registry.default_state(name).unwrap();
+        let (kelp, powder_snow) = (state("minecraft:kelp"), state("minecraft:powder_snow"));
+        let stair = facts
+            .states
+            .iter()
+            .position(|f| &*f.name == "minecraft:oak_stairs" && f.waterlogged)
+            .map(|i| BlockStateId(i as u32))
+            .unwrap();
+        chunk.set(2, 54, 2, stone.0);
+        for y in 55..64 {
+            chunk.set(2, y, 2, kelp.0);
+        }
+        chunk.set(6, 90, 6, stone.0);
+        chunk.set(6, 91, 6, powder_snow.0);
+        chunk.set(10, 54, 10, stone.0);
+        chunk.set(10, 55, 10, stair.0);
         lod.observe(Arc::new(chunk.clone()), &facts);
         receive_observed(&mut lod);
         let observed = &lod.saved[&(-1, -1)];
@@ -1984,6 +2228,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(70, 71, end_stone), (71, 73, chorus), (73, 74, flower)]
         );
+        let kelp_column = &observed[2 * 16 + 2];
+        assert_eq!(kelp_column.surface.unwrap().height, 55);
+        assert_eq!(kelp_column.surface.unwrap().water, Some((64, water)));
+        assert_eq!(observed[6 * 16 + 6].surface.unwrap().state, powder_snow);
+        assert_eq!(observed[6 * 16 + 6].surface.unwrap().height, 92);
+        assert_eq!(observed[10 * 16 + 10].surface.unwrap().state, stair);
 
         let fine = TileKey {
             x: -1,

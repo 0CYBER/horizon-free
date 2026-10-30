@@ -389,6 +389,10 @@ pub struct Ctx<'a, L: FinalizeLevel + ?Sized, R: RandomSource> {
     /// Jockeys and mounts made along the way, finalized, with their riding
     /// links set (`Extra::mount` / `Extra::rider`).
     pub created: Vec<Mob>,
+    /// The rider as it was when its new chicken was added to the level, before
+    /// its equipment and attributes: what a generated chunk keeps of it
+    /// (`ProtoChunk.addEntity` saves the chicken with its passenger then).
+    pub jockey_rider: Option<Mob>,
 }
 
 // ---- attributes -----------------------------------------------------------
@@ -497,22 +501,28 @@ pub fn transient(m: &Mob, a: Attr) -> Option<(f64, Op)> {
         _ => None,
     }
 }
-/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`,
-/// scaled by the amplifier plus one): strength and speed.
+/// The attribute modifier one status effect grants (`MobEffect.addAttributeModifier`),
+/// scaled by the amplifier plus one; `None` when the effect does not touch `a`.
+fn effect_modifier(effect: &str, amplifier: i32, a: Attr) -> Option<(f64, Op)> {
+    let level = f64::from(amplifier + 1);
+    match (effect.trim_start_matches("minecraft:"), a) {
+        ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
+        ("weakness", Attr::AttackDamage) => Some((-4.0 * level, Op::AddValue)),
+        ("speed", Attr::MovementSpeed) => Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal)),
+        ("slowness", Attr::MovementSpeed) => {
+            Some((f64::from(-0.15f32) * level, Op::AddMultipliedTotal))
+        }
+        ("health_boost", Attr::MaxHealth) => Some((4.0 * level, Op::AddValue)),
+        _ => None,
+    }
+}
+/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`),
+/// scaled by the amplifier plus one.
 fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
     m.extra
         .effects
         .iter()
-        .filter_map(move |&(effect, _, amplifier)| {
-            let level = f64::from(amplifier + 1);
-            match (effect.trim_start_matches("minecraft:"), a) {
-                ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
-                ("speed", Attr::MovementSpeed) => {
-                    Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal))
-                }
-                _ => None,
-            }
-        })
+        .filter_map(move |&(effect, _, amplifier)| effect_modifier(effect, amplifier, a))
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
@@ -617,6 +627,29 @@ pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op)
         None => s.modifiers.push(new),
     }
     refresh(m, a);
+}
+/// `AttributeInstance.removeModifier`.
+pub fn remove_modifier(m: &mut Mob, a: Attr, id: &str) {
+    if let Some(s) = m.extra.attributes.as_mut() {
+        s.modifiers.retain(|x| x.attr != a || x.id != id);
+    }
+    refresh(m, a);
+}
+/// `Mob.finalizeSpawn`, which every mob's own `finalizeSpawn` reaches
+/// through `super`: the `random_spawn_bonus` follow range modifier (once)
+/// and `setLeftHanded(nextFloat() < 0.05F)`.
+pub fn mob_spawn(m: &mut Mob, random: &mut impl RandomSource) {
+    if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
+        let bonus = random.triangle(0.0, 0.114_850_000_000_000_01);
+        add_modifier(
+            m,
+            Attr::FollowRange,
+            "minecraft:random_spawn_bonus",
+            bonus,
+            Op::AddMultipliedBase,
+        );
+    }
+    m.extra.left_handed = random.next_float() < 0.05;
 }
 /// `Zombie.handleAttributes`, from the zombie's own random.
 pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
@@ -793,8 +826,8 @@ pub fn allowed_in_peaceful(kind: &str) -> bool {
             | "zombified_piglin"
     )
 }
-/// `getBabyStartAge`.
-fn baby_start_age(s: Species) -> i32 {
+/// `AgeableMob.getBabyStartAge` (a sniffer's is -48000).
+pub fn baby_start_age(s: Species) -> i32 {
     if s == Species::Sniffer {
         super::sniffer::BABY_START_AGE
     } else {
@@ -821,6 +854,27 @@ fn age_boundary_reached(m: &mut Mob) {
         _ => {}
     }
 }
+/// `Goat.finalizeSpawn` on a natural spawn (the spawn path in spawning.rs): the ram
+/// cooldowns (`GoatAi.initMemories`), screaming 2 percent of the time and a
+/// horn lost 10 percent of the time, adults only.
+pub fn goat_spawn(m: &mut Mob) {
+    let jump = m
+        .random
+        .next_int_between_inclusive(600, 1200)
+        .unwrap_or(600);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
+    let ram = m
+        .random
+        .next_int_between_inclusive(600, 6000)
+        .unwrap_or(600);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
+    m.extra.screaming = m.random.next_double() < 0.02;
+    age_boundary_reached(m);
+    if !m.is_baby() && m.random.next_float() < 0.1 {
+        let left = m.random.next_boolean();
+        m.extra.lost_horns[usize::from(!left)] = true;
+    }
+}
 /// `SpawnEggItem.spawnsEntity`: the spawn egg is for the mob's own kind, so
 /// it is used on it (`Mob.checkAndHandleImportantInteractions`).
 pub fn spawn_egg_is_for(egg: &str, kind: &str) -> bool {
@@ -835,6 +889,10 @@ pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color
     child.extra.variant = variant;
     if species == Species::Sheep {
         child.extra.color = color;
+    }
+    // `SulfurCube.getBreedOffspring`: `setSize(1, true)`.
+    if species == Species::SulfurCube {
+        sulfur_size(child, 1);
     }
 }
 /// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
@@ -989,17 +1047,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
 
     /// `Mob.finalizeSpawn`: the follow range spawn bonus and left-handedness.
     fn mob(&mut self, m: &mut Mob, g: Option<Group>) -> Option<Group> {
-        if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
-            let bonus = self.random.triangle(0.0, 0.114_850_000_000_000_01);
-            add_modifier(
-                m,
-                Attr::FollowRange,
-                "minecraft:random_spawn_bonus",
-                bonus,
-                Op::AddMultipliedBase,
-            );
-        }
-        m.extra.left_handed = self.float() < 0.05;
+        mob_spawn(m, self.random);
         g
     }
     /// `AgeableMob.finalizeSpawn`.
@@ -1263,6 +1311,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                         self.finalize(&mut chicken, Reason::Jockey, None);
                         chicken.extra.jockey = true;
                         self.ride(m, &mut chicken);
+                        self.jockey_rider = Some(m.clone());
                         self.created.push(chicken);
                     }
                 }
@@ -1614,7 +1663,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Frog => {
                 self.variant(m, |r| &r.frog);
                 let jump = self.uniform(100, 140);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 self.ageable(m, g)
             }
             S::ZombieNautilus => {
@@ -1728,10 +1777,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 self.horse(m, g)
             }
             S::Goat => {
-                let jump = self.uniform(600, 1200);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
-                let ram = self.uniform(600, 6000);
-                set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+                goat_init_memories(m, self.random);
                 m.extra.screaming = self.random.next_double() < 0.02;
                 age_boundary_reached(m);
                 if !m.is_baby() && self.float() < 0.1 {
@@ -1996,6 +2042,14 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
         None => m.extra.memories.push((name, value, ttl)),
     }
 }
+/// `GoatAi.initMemories`: a long jump cooldown (600 to 1200 ticks) and a ram
+/// cooldown (600 to 6000), drawn from `random`.
+pub fn goat_init_memories(m: &mut Mob, random: &mut impl RandomSource) {
+    let jump = random.next_int_between_inclusive(600, 1200).unwrap_or(600);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
+    let ram = random.next_int_between_inclusive(600, 6000).unwrap_or(600);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
+}
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
 pub fn panda_gene(roll: i32) -> u8 {
@@ -2197,6 +2251,41 @@ mod tests {
             "minecraft:cow"
         ));
         assert!(!spawn_egg_is_for("minecraft:stick", "minecraft:cow"));
+    }
+    /// #3887: Weakness and Slowness (and Health Boost) carry attribute
+    /// modifiers in vanilla (`MobEffects`), and every effect's amount is
+    /// scaled by the amplifier plus one (`MobEffect.addAttributeModifier`);
+    /// before this only strength and speed were mapped.
+    #[test]
+    fn weakness_slowness_and_health_boost_carry_attribute_modifiers() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let modifier = |effect: &str, amplifier: i32, attr: Attr| {
+            effect_modifier(effect, amplifier, attr).expect("the effect should carry a modifier")
+        };
+        // MobEffects.WEAKNESS: attack damage -4 per level, ADD_VALUE.
+        let (amount, op) = modifier("minecraft:weakness", 0, Attr::AttackDamage);
+        assert!(close(amount, -4.0));
+        assert_eq!(op, Op::AddValue);
+        let (amount, _) = modifier("weakness", 1, Attr::AttackDamage);
+        assert!(close(amount, -8.0));
+        // MobEffects.SLOWNESS: movement speed -0.15F per level, ADD_MULTIPLIED_TOTAL.
+        let (amount, op) = modifier("minecraft:slowness", 0, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(-0.15f32)));
+        assert_eq!(op, Op::AddMultipliedTotal);
+        let (amount, _) = modifier("slowness", 1, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(-0.15f32) * 2.0));
+        // MobEffects.HEALTH_BOOST: max health +4 per level, ADD_VALUE.
+        let (amount, op) = modifier("minecraft:health_boost", 0, Attr::MaxHealth);
+        assert!(close(amount, 4.0));
+        assert_eq!(op, Op::AddValue);
+        // The effects that already worked keep their vanilla amounts.
+        let (amount, _) = modifier("strength", 0, Attr::AttackDamage);
+        assert!(close(amount, 3.0));
+        let (amount, _) = modifier("speed", 0, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(0.2f32)));
+        // An effect does not touch attributes it does not modify.
+        assert!(effect_modifier("weakness", 0, Attr::MovementSpeed).is_none());
+        assert!(effect_modifier("poison", 0, Attr::AttackDamage).is_none());
     }
     #[test]
     fn reasons_round_trip() {

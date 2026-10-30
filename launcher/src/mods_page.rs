@@ -73,8 +73,10 @@ pub(super) struct Mods {
     pub(super) report_list: cull::Cull,
     more: bool,
     error: Option<String>,
-    installed: Vec<installed::Entry>,
+    pub(super) installed: Vec<installed::Entry>,
     loaded: bool,
+    /// Whether the page searched for the instance as it is (its version and loader).
+    asked: bool,
     /// The game folder the browser installs into and lists: the selected instance's.
     home: Option<PathBuf>,
     /// The selected Java instance's version and loader: its mods and resource packs are the
@@ -85,8 +87,8 @@ pub(super) struct Mods {
     world: Option<PathBuf>,
     /// The project being installed, and the line and fraction of its download.
     pub(super) busy: Option<(String, String, f32)>,
-    message: Option<Result<String, String>>,
-    updates: HashMap<(SourceId, String), String>,
+    pub(super) message: Option<Result<String, String>>,
+    pub(super) updates: HashMap<(SourceId, String), String>,
     confirm_remove: Option<String>,
     /// A native mod's Install waiting for the one-time notice (`native_mods::needs_notice`).
     native_notice: Option<(SourceId, String, Option<Project>)>,
@@ -166,6 +168,7 @@ impl Mods {
             error: None,
             installed: Vec::new(),
             loaded: false,
+            asked: false,
             home: None,
             java: None,
             worlds: Vec::new(),
@@ -465,7 +468,7 @@ impl Launcher {
 
     /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does;
     /// in a Java instance, renames its file.
-    fn mods_switch(&mut self, e: &installed::Entry) {
+    pub(super) fn mods_switch(&mut self, e: &installed::Entry) {
         let home = self.mods.home();
         if self.mods.java.is_some() {
             let on = !java_instance::is_on(&home, e);
@@ -580,7 +583,7 @@ impl Launcher {
 
     /// Updates every installed pack a newer version was found for, one after the other on a
     /// thread, each checked as an install is. One failing doesn't stop the others.
-    fn mods_update_all(&mut self) {
+    pub(super) fn mods_update_all(&mut self) {
         if self.mods.busy.is_some() || self.mods.updates.is_empty() {
             return;
         }
@@ -827,18 +830,18 @@ impl Launcher {
         line_edit::mouse(field, cx, |this| &mut this.mods.text)
     }
 
-    pub(super) fn mods_page(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        // Packs and mods go into the selected instance: picking another reads its list.
+    /// Reads what the browser installed in the selected instance (once per instance) and looks
+    /// for updates: the Mods page and Home's Mods tab (`instance_mods.rs`) show it. Packs and mods
+    /// go into the selected instance: picking another reads its list.
+    pub(super) fn mods_load(&mut self) {
         let home = self.selected_instance().map(|i| i.home.clone());
         let java = self
             .selected_instance()
             .and_then(|i| i.java.as_ref())
             .map(|j| j.target());
-        // Another version or loader: other results.
-        if self.mods.loaded && java != self.mods.java {
-            self.mods.java = java.clone();
-            self.mods_search(0);
+        // Another version or loader: other results, on the page's next draw.
+        if java != self.mods.java {
+            self.mods.asked = false;
         }
         self.mods.java = java;
         if !self.mods.loaded || (home.is_some() && self.mods.home != home) {
@@ -850,10 +853,16 @@ impl Launcher {
             self.mods.read_worlds();
             self.mods_check_updates();
             self.mods_taken_down();
-            if !self.mods.loaded {
-                self.mods_search(0);
-            }
             self.mods.loaded = true;
+        }
+    }
+
+    pub(super) fn mods_page(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        self.mods_load();
+        if !self.mods.asked {
+            self.mods.asked = true;
+            self.mods_search(0);
         }
         let header = page_header(
             "Mods",

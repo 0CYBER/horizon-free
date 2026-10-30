@@ -380,6 +380,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, amount: f32) -> bool {
             | DamageKind::Cactus
             | DamageKind::Freeze
             | DamageKind::SweetBerryBush
+            | DamageKind::HotFloor
     );
     if immune {
         if let Some(from) = source.from {

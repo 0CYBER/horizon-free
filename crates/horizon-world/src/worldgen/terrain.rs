@@ -251,6 +251,11 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
     pub(crate) fn registry(&self) -> &BlockRegistry {
         self.blocks.registry
     }
+    /// The indexes of the sections holding a block other than air
+    /// (`LevelChunkSection.hasOnlyAir`, negated).
+    pub fn filled_sections(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.blocks.non_air.len()).filter(|&i| self.blocks.non_air[i] != 0)
+    }
     pub fn highest_filled_section_index(&self) -> Option<usize> {
         self.blocks.non_air.iter().rposition(|&count| count != 0)
     }

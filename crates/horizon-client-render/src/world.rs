@@ -1,7 +1,10 @@
 //! Resident client world: streamed chunk columns plus the bookkeeping the game
 //! loop needs to relight and remesh after edits.
-use crate::chunk::{Chunk, MIN_Y, SECTIONS};
-use crate::fast_hash::{FxHashMap, FxHashSet};
+use crate::{
+    chunk::{Chunk, ColumnLayout, LevelShape},
+    fast_hash::{FxHashMap, FxHashSet},
+    section_mask::SectionMask,
+};
 use horizon_core::random::LegacyRandom;
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
@@ -11,28 +14,30 @@ use std::sync::Arc;
 /// rather than at every section of it.
 #[derive(Clone, Debug, Default)]
 pub struct DirtySections {
-    columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
+    columns: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
 }
-const _: () = assert!(SECTIONS <= 32);
 impl DirtySections {
     pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
-        debug_assert!((0..SECTIONS as i32).contains(&sy));
-        *self.columns.entry((x, z)).or_default() |= 1 << sy;
+        debug_assert!((0..SectionMask::CAPACITY as i32).contains(&sy));
+        self.columns.entry((x, z)).or_default().insert(sy as usize);
     }
     pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
-        (0..SECTIONS as i32).contains(&sy)
-            && self.columns.get(&(x, z)).is_some_and(|m| m & 1 << sy != 0)
+        (0..SectionMask::CAPACITY as i32).contains(&sy)
+            && self
+                .columns
+                .get(&(x, z))
+                .is_some_and(|m| m.contains(sy as usize))
     }
-    /// The dirty section indexes of column (x, z), as bits, removed.
-    pub fn take_column(&mut self, x: i32, z: i32) -> u32 {
-        self.columns.remove(&(x, z)).unwrap_or(0)
+    /// The dirty section indexes of column (x, z), removed.
+    pub fn take_column(&mut self, x: i32, z: i32) -> SectionMask {
+        self.columns.remove(&(x, z)).unwrap_or_default()
     }
     /// Keep the columns `keep` accepts.
     pub fn retain_columns(&mut self, mut keep: impl FnMut(i32, i32) -> bool) {
         self.columns.retain(|&(x, z), _| keep(x, z));
     }
-    /// The columns holding dirty sections, with their section bits.
-    pub fn columns(&self) -> impl Iterator<Item = ((i32, i32), u32)> + '_ {
+    /// The columns holding dirty sections, with their section indexes.
+    pub fn columns(&self) -> impl Iterator<Item = ((i32, i32), SectionMask)> + '_ {
         self.columns.iter().map(|(&c, &m)| (c, m))
     }
     pub fn clear(&mut self) {
@@ -43,10 +48,13 @@ impl DirtySections {
     }
     /// How many sections are dirty.
     pub fn len(&self) -> usize {
-        self.columns.values().map(|m| m.count_ones() as usize).sum()
+        self.columns.values().map(SectionMask::len).sum()
     }
 }
 pub struct World {
+    /// The level's build range and skylight (its dimension type); its
+    /// chunks hold `shape.column()`.
+    pub shape: LevelShape,
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
     pub random: LegacyRandom,
@@ -88,7 +96,7 @@ pub struct World {
     /// The sections whose light changed since the log was last drained, as
     /// a bit per section of each column, kept while `block_log` is
     /// (`ChunkHolder.sectionLightChanged`).
-    pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), u32>>,
+    pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), SectionMask>>,
     /// The villager POIs of each section (`PoiManager`'s sections).
     pub pois: crate::poi_sections::PoiSections<crate::poi_sections::Poi>,
     /// Moving-piston states removed during the last tick; retained until the
@@ -165,6 +173,7 @@ impl Weather {
 impl World {
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
+            shape: LevelShape::OVERWORLD,
             chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,
@@ -249,6 +258,18 @@ impl World {
         world.revision = 0;
         Ok(world)
     }
+    /// The column the level's chunks hold.
+    pub fn layout(&self) -> ColumnLayout {
+        self.shape.column()
+    }
+    /// The lowest block Y the level's chunks hold.
+    pub fn bottom_y(&self) -> i32 {
+        self.layout().min_y()
+    }
+    /// One above the highest block Y the level's chunks hold.
+    pub fn top_y(&self) -> i32 {
+        self.layout().max_y()
+    }
     /// Resident storage write; marks the touched sections (and neighbours on
     /// section borders) for remeshing and the surrounding chunks for relighting.
     /// Neighbour updates, drops and block entities belong to the gameplay layer.
@@ -256,7 +277,8 @@ impl World {
         let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
             return Err("write outside resident chunks".into());
         };
-        if y < MIN_Y || y >= MIN_Y + (SECTIONS as i32) * 16 {
+        let (min_y, sections) = (chunk.min_y(), chunk.sections.len() as i32);
+        if chunk.section_index(y).is_none() {
             return Err("write outside world height".into());
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
@@ -276,14 +298,14 @@ impl World {
             // the sections it can reach: this section, the one above/below
             // only on a section face, and a neighbour column only on a chunk
             // border (the diagonal only where both borders meet).
-            let sy = (y - MIN_Y) >> 4;
+            let sy = (y - min_y) >> 4;
             let local_y = y & 15;
             let mark = |dirty: &mut DirtySections, bx: i32, bz: i32| {
                 dirty.insert((bx >> 4, sy, bz >> 4));
                 if local_y == 0 && sy > 0 {
                     dirty.insert((bx >> 4, sy - 1, bz >> 4));
                 }
-                if local_y == 15 && sy + 1 < SECTIONS as i32 {
+                if local_y == 15 && sy + 1 < sections {
                     dirty.insert((bx >> 4, sy + 1, bz >> 4));
                 }
             };
@@ -319,17 +341,20 @@ impl World {
         Ok(())
     }
     /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
-    /// block that isn't `air`, or `MIN_Y` (also where the chunk isn't loaded).
+    /// block that isn't `air`, or the column's minimum Y (also where the chunk
+    /// isn't loaded).
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+        let bottom = self.layout().min_y();
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
             chunk.world_surface(x, z, |v| air(BlockStateId(v)))
         })
     }
     /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
     /// highest block where `blocks` (motion blocking or holding a fluid),
-    /// or `MIN_Y` (also where the chunk isn't loaded).
+    /// or the column's minimum Y (also where the chunk isn't loaded).
     pub fn motion_blocking(&self, x: i32, z: i32, blocks: impl Fn(BlockStateId) -> bool) -> i32 {
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+        let bottom = self.layout().min_y();
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
             chunk.motion_blocking(x & 15, z & 15, |v| blocks(BlockStateId(v)))
         })
     }
@@ -348,12 +373,13 @@ impl World {
         hi: [i32; 3],
         mut matches: impl FnMut(BlockStateId) -> bool,
     ) -> bool {
-        let top = MIN_Y + SECTIONS as i32 * 16 - 1;
+        let layout = self.layout();
+        let (bottom, top) = (layout.min_y(), layout.max_y() - 1);
         // Heights outside the sections read as state 0.
-        if (lo[1] < MIN_Y || hi[1] > top) && matches(BlockStateId(0)) {
+        if (lo[1] < bottom || hi[1] > top) && matches(BlockStateId(0)) {
             return true;
         }
-        let sections = (lo[1].max(MIN_Y) - MIN_Y) >> 4..=(hi[1].min(top) - MIN_Y) >> 4;
+        let sections = (lo[1].max(bottom) - bottom) >> 4..=(hi[1].min(top) - bottom) >> 4;
         for cx in lo[0] >> 4..=hi[0] >> 4 {
             for cz in lo[2] >> 4..=hi[2] >> 4 {
                 let Some(chunk) = self.chunks.get(&(cx, cz)) else {
@@ -465,8 +491,8 @@ mod tests {
             }
             let mut got: Vec<_> = world.dirty_sections.columns().collect();
             let mut want: Vec<_> = expected.columns().collect();
-            got.sort_unstable();
-            want.sort_unstable();
+            got.sort_unstable_by_key(|&(column, _)| column);
+            want.sort_unstable_by_key(|&(column, _)| column);
             assert_eq!(got, want, "write at {x} {y} {z}");
             if (x & 15, z & 15) == (3, 3) {
                 assert_eq!(world.dirty_sections.len(), 1);

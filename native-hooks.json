@@ -11,6 +11,26 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_tick"
     },
     {
+      "name": "world_lifecycle",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle"
+    },
+    {
+      "name": "server_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
+    },
+    {
+      "name": "block_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_changed"
+    },
+    {
+      "name": "neighbor_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"
+    },
+    {
       "name": "hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"
@@ -59,6 +79,26 @@
       "name": "panel_event",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
+    },
+    {
+      "name": "register_commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
+    },
+    {
+      "name": "perform_command",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_perform_command"
+    },
+    {
+      "name": "menu_clicked",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_clicked"
+    },
+    {
+      "name": "menu_closed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"
     }
   ]
 }

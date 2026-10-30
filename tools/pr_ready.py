@@ -270,22 +270,15 @@ def parity_summary(output):
 
 
 # CI's verify job (.github/workflows/ci.yml): clippy over the whole workspace, and over the server build (the game
-# without sound or controllers); tests with mod packaging.
+# without sound or controllers).
 CI_CLIPPY = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 CI_CLIPPY_SERVER = "cargo clippy -p horizon-client --all-targets --locked --no-default-features -- -D warnings"
-CI_TEST_FEATURES = "horizon-mods/pack"
 
 
 def mod_features(crates):
     """The features CI's workspace-wide test run gives these crates. Cargo unifies features over the packages it
-    builds, so a crate tested alone needs the ones the workspace would have turned on for it: horizon-mods' runtime,
-    packaging and index."""
-    if crates is None:
-        return f" --features {CI_TEST_FEATURES}"
-    features = []
-    if "horizon-mods" in crates:
-        features += ["horizon-mods/runtime", "horizon-mods/pack", "horizon-mods/index"]
-    return f" --features {','.join(features)}" if features else ""
+    builds, so a crate tested alone needs the ones the workspace would have turned on for it: horizon-mods' index."""
+    return " --features horizon-mods/index" if crates is not None and "horizon-mods" in crates else ""
 
 
 # What horizon-client's full content-root tests load (mod_content_tests.rs). They take minutes on prepared data, so

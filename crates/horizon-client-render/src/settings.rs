@@ -50,6 +50,9 @@ pub fn sound_source(event: &str) -> usize {
         index("ambient")
     } else if e.starts_with("music_disc.") {
         index("record")
+    } else if e.starts_with("item.goat_horn.") {
+        // InstrumentItem.play: SoundSource.RECORDS.
+        index("record")
     } else if e.starts_with("music.") {
         index("music")
     } else if e.starts_with("weather.") || e.starts_with("entity.lightning_bolt") {
@@ -150,6 +153,8 @@ pub struct Settings {
     pub chat_links: bool,
     pub chat_links_prompt: bool,
     pub chat_opacity: f32,
+    /// Chat Delay in seconds (`chatDelay`): player chat shows this far apart.
+    pub chat_delay: f64,
     pub text_background_opacity: f32,
     pub chat_scale: f32,
     pub chat_width: f32,
@@ -246,6 +251,7 @@ impl Default for Settings {
             chat_links: true,
             chat_links_prompt: true,
             chat_opacity: 1.0,
+            chat_delay: 0.0,
             text_background_opacity: 0.5,
             chat_scale: 1.0,
             chat_width: 1.0,
@@ -448,6 +454,7 @@ impl Settings {
             chat_links: f.bool("chatLinks"),
             chat_links_prompt: f.bool("chatLinksPrompt"),
             chat_opacity: f.double("chatOpacity") as f32,
+            chat_delay: f.double("chatDelay"),
             text_background_opacity: f.double("textBackgroundOpacity") as f32,
             chat_scale: f.double("chatScale") as f32,
             chat_width: f.double("chatWidth") as f32,
@@ -551,6 +558,9 @@ impl Settings {
         put_b(&mut f, "chatLinks", self.chat_links);
         put_b(&mut f, "chatLinksPrompt", self.chat_links_prompt);
         put_f(&mut f, "chatOpacity", self.chat_opacity);
+        if self.chat_delay != f.double("chatDelay") {
+            f.set("chatDelay", V::Double(self.chat_delay));
+        }
         put_f(
             &mut f,
             "textBackgroundOpacity",
