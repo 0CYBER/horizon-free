@@ -41,7 +41,8 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
-use horizon_world::nbt::Compound;
+use horizon_core::position::BlockPos;
+use horizon_world::{level::flags, nbt::Compound};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -400,14 +401,10 @@ impl Game<'_> {
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
     }
-    /// The mod block entity at `pos`, to read or change from a tick (a
-    /// generator charging the machine beside it); none for any other block
-    /// entity, and for the one ticking now, which is out of the world. As
-    /// its `setChanged` would, its chunk is saved next time and comparators
-    /// read it again. API 3.
     /// Sets property `key` of the block at `pos` to `value`, as a furnace's
-    /// tick sets its `lit` (`Level.setBlock`); false when the block has no
-    /// such property or value. The block entity stays. API 3.
+    /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
+    /// and clients are told); false when the block has no such property or
+    /// value. The block entity stays. API 7.
     pub(super) fn native_set_block_property(
         &mut self,
         pos: [i32; 3],
@@ -428,23 +425,34 @@ impl Game<'_> {
         let Ok(id) = registry.resolve(&s) else {
             return false;
         };
-        self.world.set(pos[0], pos[1], pos[2], id).is_ok()
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags::UPDATE_ALL))
     }
-    pub(super) fn native_mod_block_entity_at(
+    /// Runs `change` on the mod block entity at `pos` (a generator charging
+    /// the machine beside it) and returns what it returns; none for any
+    /// other block entity, and for the one ticking now, which is out of the
+    /// world. Afterwards, as its `setChanged` would, its chunk is saved next
+    /// time and, when its items changed, comparators read it again. API 7.
+    pub(super) fn native_with_mod_block_entity<R>(
         &mut self,
         pos: [i32; 3],
-    ) -> Option<&mut ModBlockEntity> {
+        change: impl FnOnce(&mut ModBlockEntity) -> R,
+    ) -> Option<R> {
         let key = (pos[0], pos[1], pos[2]);
-        match self.world.block_entities.get(&key) {
-            Some(BlockEntity::Mod(m)) if !m.id.is_empty() => {}
-            _ => return None,
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
+            return None;
+        };
+        if m.id.is_empty() {
+            return None;
         }
+        let items = m.items.clone();
+        let out = change(m);
+        let moved = m.items != items;
         self.world.modified.insert((key.0 >> 4, key.2 >> 4));
-        self.container_changed(key);
-        match self.world.block_entities.get_mut(&key) {
-            Some(BlockEntity::Mod(m)) => Some(m),
-            _ => None,
+        if moved {
+            self.container_changed(key);
         }
+        Some(out)
     }
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(super) fn native_playing(&self) -> bool {
