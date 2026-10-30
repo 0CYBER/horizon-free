@@ -12,6 +12,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - nametags:  each side draws the other player's name above them;
 - chest:     a chest the guest opens opens on the guest's screen, its lid opens on both sides and
              closes on both when the guest closes it; the host keeps playing with its mouse look (#687);
+- menu-transfer: a chest the guest has open closes when the server replaces the guest's player (a
+             dimension change, a death and respawn); the inventory opens as its own menu, items kept;
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
              leaves the host's screen and mouse look alone;
 - spawned:   the host and a guest new to the world join on different spots (PlayerSpawnFinder), and the
