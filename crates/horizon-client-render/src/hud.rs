@@ -935,7 +935,11 @@ impl HudBatch {
     pub fn clip_since(&mut self, start: usize, x0: f32, y0: f32, x1: f32, y1: f32) {
         let quads: Vec<[HudVertex; 6]> = self.vertices[start..].as_chunks::<6>().0.to_vec();
         self.vertices.truncate(start);
+        // Where each source quad now begins, to move the blend ranges (foil
+        // items are an additive run) along with their vertices.
+        let mut moved = Vec::with_capacity(quads.len() + 1);
         for q in quads {
+            moved.push(self.vertices.len() as u32);
             let corners = [q[0], q[1], q[2], q[5]];
             let (mut x_lo, mut x_hi) = (f32::INFINITY, f32::NEG_INFINITY);
             let (mut y_lo, mut y_hi) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -997,6 +1001,14 @@ impl HudBatch {
                 tl.color,
             );
         }
+        moved.push(self.vertices.len() as u32);
+        let at = |v: u32| moved[((v as usize).saturating_sub(start) / 6).min(moved.len() - 1)];
+        for (range, _) in &mut self.blends {
+            if range.start as usize >= start {
+                *range = at(range.start)..at(range.end);
+            }
+        }
+        self.blends.retain(|(range, _)| !range.is_empty());
     }
     /// `blit` of the top-left `w x h` texels of a `tw x th` texture.
     pub fn sprite_region(
@@ -1898,6 +1910,28 @@ mod tests {
             .sum();
         // Rows 0..4 of the triangle: 16 * 16 / 2 - 12 * 12 / 2.
         assert!((area - 56.0).abs() < 1e-3, "{area}");
+    }
+
+    #[test]
+    fn clip_since_moves_blend_ranges_with_their_vertices() {
+        let mut batch = HudBatch::new([320, 240]);
+        let start = batch.vertices.len();
+        let tri = |batch: &mut HudBatch, y: f32| {
+            batch.quad(
+                [[0.0, y], [8.0, y], [0.0, y + 8.0], [0.0, y + 8.0]],
+                [[0.0; 2]; 4],
+                u32::MAX,
+            );
+        };
+        tri(&mut batch, 100.0); // outside, dropped
+        let foil = batch.vertices.len();
+        tri(&mut batch, 0.0); // straddles the bottom edge
+        batch.blend_since(foil, Blend::Additive);
+        batch.clip_since(start, 0.0, 0.0, 16.0, 4.0);
+        assert_eq!(
+            batch.blends,
+            [(0..batch.vertices.len() as u32, Blend::Additive)]
+        );
     }
 
     /// Write a PNG `width x height` whose `frames` stacked rows are solid
