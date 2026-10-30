@@ -47,6 +47,7 @@ impl WorldRequest {
         pack: &PackResources,
         options: &Options,
         settings: &Settings,
+        upgrade: &horizon_world::datafix::progress::UpgradeProgress,
     ) -> Result<PreparedWorld> {
         // Before any chunk is read: a loaded container with a loot table is rolled as its chunk
         // is decoded (`save::roll_loaded_loot`), and the spawn chunks are read while the world
@@ -65,7 +66,7 @@ impl WorldRequest {
         } = self;
         let name = name.as_deref();
         let create = create.as_ref();
-        horizon_client::save::upgrade_older_world(&save_root)?;
+        horizon_client::save::upgrade_older_world_with(&save_root, upgrade)?;
         horizon_client::save::migrate_legacy(&save_root)?;
         let session_lock = horizon_client::save::SessionLock::acquire(&save_root)?;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
@@ -165,6 +166,9 @@ impl WorldRequest {
 
 pub(super) struct WorldLoader {
     pub cancelled: bool,
+    /// What the world's upgrade has done (`UpgradeProgress`), which
+    /// `FileFixerProgressScreen` shows while the file fixers run.
+    pub upgrade: Arc<horizon_world::datafix::progress::UpgradeProgress>,
     handle: JoinHandle<std::result::Result<PreparedWorld, String>>,
 }
 
@@ -176,15 +180,18 @@ impl WorldLoader {
         options: Options,
         settings: Settings,
     ) -> Result<Self> {
+        let upgrade = Arc::new(horizon_world::datafix::progress::UpgradeProgress::new());
+        let worker_upgrade = upgrade.clone();
         let handle = std::thread::Builder::new()
             .name("World initialization".into())
             .spawn(move || {
                 request
-                    .prepare(&res, &pack, &options, &settings)
+                    .prepare(&res, &pack, &options, &settings, &worker_upgrade)
                     .map_err(|e| e.to_string())
             })?;
         Ok(Self {
             cancelled: false,
+            upgrade,
             handle,
         })
     }
@@ -194,6 +201,7 @@ impl WorldLoader {
     pub fn cancel(self) -> Self {
         Self {
             cancelled: true,
+            upgrade: self.upgrade.clone(),
             handle: std::thread::spawn(move || {
                 drop(self.finish());
                 Err("world initialization cancelled".into())
@@ -483,6 +491,7 @@ mod tests {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldLoader {
             cancelled: false,
+            upgrade: Default::default(),
             handle: std::thread::spawn(move || {
                 wait.recv().unwrap();
                 Err("test world failure".into())
@@ -501,6 +510,7 @@ mod tests {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldLoader {
             cancelled: false,
+            upgrade: Default::default(),
             handle: std::thread::spawn(move || {
                 wait.recv().unwrap();
                 Err("cancelled test world".into())
@@ -520,6 +530,7 @@ mod tests {
     fn worker_panics_reach_the_client() {
         let loader = WorldLoader {
             cancelled: false,
+            upgrade: Default::default(),
             handle: std::thread::spawn(|| panic!("broken world initialization")),
         };
         assert_eq!(
