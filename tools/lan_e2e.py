@@ -274,6 +274,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - merchant-close: the host and the guest each open a trade screen with the payment in its slot; the screen
              closes and the payment returns when they walk out of reach (7 blocks in survival, 9 in
              creative) or the villager dies, and stays open in range.
+- sulfur_cube_power: an explosive sulfur cube (TNT inside) stays calm on stone, lights its fuse when a redstone
+             block is put beside it, and blows up when the fuse runs out; the guest sees it flash.
 - riptide_rain: the host and the guest each launch with a Riptide trident in rain, with an elytra worn or not (#3458).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
@@ -7288,6 +7290,48 @@ def check_riptide_rain(host, guest, out):
 
 CHECKS += ['riptide_rain']
 CHECK_FNS['riptide_rain'] = check_riptide_rain
+
+
+def check_sulfur_cube_power(host, guest, out):
+    """SulfurCube.primeWhenOnPoweredPosition: an explosive cube standing in or beside redstone power lights
+    its fuse (getBestOwnOrNeighbourSignal), then explodes when the fuse is out."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'power_cube'
+    result = {}
+    host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 3} {y + 3} {z + 3} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z - 2} {x + 2} {y + 2} {z + 2} minecraft:air')
+    host('command', command=f'fill {x - 2} {y + 3} {z - 2} {x + 2} {y + 3} {z + 2} minecraft:glowstone')
+    guest('command', command=f'tp @s {x + 0.5} {y} {z + 1.5} 180 25')
+    host('command', command=f'tp @s {x + 40} {y} {z + 40}')
+    guest.raw('key', 'f1', 'tap')
+    host('command', command='gamerule minecraft:mob_griefing false')
+    host('command', command=f'summon minecraft:sulfur_cube {x + 0.5} {y} {z - 1.5} '
+         f'{{Tags:["{tag}"],Size:1,PersistenceRequired:1b,equipment:{{body:{{id:"minecraft:tnt",count:1}}}}}}')
+    host.wait(40)
+    calm = guest('entities', radius=12, type='sulfur_cube')['entities']
+    result['calm'] = calm
+    assert len(calm) == 1, f'the cube is missing: {result}'
+    guest.shot(out, 'sulfur-cube-calm')
+    host('command', command=f'setblock {x} {y - 1} {z - 1} minecraft:redstone_block')
+    host('command', command=f'setblock {x} {y - 1} {z - 2} minecraft:redstone_block')
+    host('command', command=f'setblock {x + 1} {y - 1} {z - 1} minecraft:redstone_block')
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 2} {y - 1} {z + 2} minecraft:redstone_block')
+    host.wait(8)
+    guest.shot(out, 'sulfur-cube-primed')
+    data = host('command', command=f'data get entity @e[tag={tag},limit=1]')['chat'][0]
+    result['fuse'] = data.split('fuse: ')[1].split(',')[0]
+    assert int(result['fuse']) > 0 and 'Invulnerable: 1b' in data, f'the powered cube is not primed: {result}'
+    host.wait(100)
+    guest.shot(out, 'sulfur-cube-flash')
+    host.wait(40)
+    gone = guest('entities', radius=12, type='sulfur_cube')['entities']
+    result['after'] = gone
+    assert not gone, f'the powered cube did not explode: {result}'
+    return result
+
+
+CHECKS += ['sulfur_cube_power']
+CHECK_FNS['sulfur_cube_power'] = check_sulfur_cube_power
 
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})

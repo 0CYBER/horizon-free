@@ -159,9 +159,11 @@ mod music;
 mod names;
 mod native_hooks;
 mod native_lifecycle;
+mod native_menus;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
+mod native_server;
 mod native_shaders;
 mod native_world_read;
 mod natural_spawning;
@@ -5785,10 +5787,10 @@ impl Game<'_> {
         self.ticks += 1;
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
-        let running = self.clock.world_runs();
-        if self.serving.is_some() || self.options.dedicated.is_some() {
-            self.native_lifecycle_server_tick_start(running);
-        }
+        let running = match self.level_pass.running {
+            Some(running) => running,
+            None => self.clock.world_runs(),
+        };
         // GameRenderer.tick: a wither's bar darkens the world, then fades;
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
@@ -8871,6 +8873,15 @@ impl Game<'_> {
                 horizon_client::shadows::shadow(
                     &self.world,
                     self.res.facts(),
+                    &|state| {
+                        self.res
+                            .collision()
+                            .cached_shapes()
+                            .cached_shape(state)
+                            .ok()
+                            .flatten()
+                            .and_then(|shape| shape.bounds())
+                    },
                     sprite,
                     camera,
                     pos,

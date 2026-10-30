@@ -954,6 +954,8 @@ impl Game<'_> {
                 };
                 horizon_client::containers::display_name(custom(k), key)
             }
+            // Opened by a mod (`native_open_menu`), never here.
+            Slots::Native => return false,
         };
         let Some(items) = host
             .hub
@@ -2025,11 +2027,26 @@ impl Game<'_> {
             );
             return;
         }
+        // A native mod's command, for every player its level allows,
+        // whether the world allows commands or not (game/native_server.rs).
+        let integrated = host.hub.config.integrated;
+        if let Some(level) = Self::native_command_level(host, command.trim_start_matches('/'))
+            && let Some(permission) = host.hub.guest(conn).map(|g| g.permission)
+            && permission >= level
+        {
+            host.commands.push(GuestCommand {
+                conn,
+                command: command.trim_start_matches('/').to_owned(),
+                permission,
+                integrated,
+                quiet: false,
+            });
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
         // the ops list (the guest's permission level).
-        let integrated = host.hub.config.integrated;
         let allowed = self.options.dedicated.is_some() || self.allow_commands();
         if !integrated && (!host.settings.guest_commands || !allowed) {
             host.hub.send_to(
@@ -2083,7 +2100,9 @@ impl Game<'_> {
         self.lan = Some(host);
         self.chat_capture = Some(Vec::new());
         let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-        let ok = if c.quiet {
+        let ok = if self.perform_native_command(c.conn, c.permission, &c.command) {
+            true
+        } else if c.quiet {
             self.run_command_quietly(&c.command)
         } else {
             self.run_command(&c.command)

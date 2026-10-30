@@ -6,6 +6,16 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
+//! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
+//!
+//! API 9 adds the acting player's plain items (`native_held`,
+//! `native_count_items`, `native_take_items`, `native_give_items`... in
+//! `native_server.rs`).
+//!
+//! API 8 adds server commands and players (`native_register_commands`,
+//! `native_perform_command`, and the helpers in `native_server.rs`).
+//!
 //! API 7 adds block-change observations (`native_block_changed`).
 //!
 //! API 6 adds neighbour-change observations (`native_neighbor_changed`).
@@ -31,8 +41,10 @@
 //! either (`tests::hook_points_stay_hookable`).
 use super::native_lifecycle::{NativeLifecycleContext, ServerTickPhase, WorldPhase};
 use super::{
-    Game, GameLevel, LevelDimension, Screen, execution_role::ExecutionRole,
+    Game, GameLevel, LevelDimension, Screen,
+    execution_role::ExecutionRole,
     native_panel_recipes::RecipePage,
+    native_server::{NativeCommand, NativeServerPlayer},
 };
 use horizon_client::{
     chat::ChatSource,
@@ -51,7 +63,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 7;
+pub(crate) const NATIVE_HOOKS_API: u32 = 10;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -326,8 +338,11 @@ impl Game<'_> {
     ) {
         let _ = (context, phase, error_text);
     }
-    /// The authoritative server tick's phases, read-only. A paused pass
-    /// fires nothing; a frozen world carries `world_running` false except
+    /// The authoritative server tick's phases: `ServerTickStart` before any
+    /// level is ticked (NeoForge's `ServerTickEvent.Pre`), `ServerTickEnd`
+    /// after the last (`.Post`). Read blocks with `native_server_block`, by
+    /// dimension: which level `self.world` holds here is not defined. A paused
+    /// pass fires nothing; a frozen world carries `world_running` false except
     /// during a requested step.
     pub(super) fn native_server_tick(
         &mut self,
@@ -385,6 +400,48 @@ impl Game<'_> {
     /// act on it when it is yours. API 2.
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
+    }
+    /// The commands native mods add to the server's command tree: push
+    /// yours. Asked once when a world opens to players (a dedicated
+    /// server, a LAN host, single player's server thread); every player's
+    /// chat box then completes them as vanilla's, within their level. A
+    /// name vanilla has is left out. API 8.
+    pub(super) fn native_register_commands(&mut self, commands: &mut Vec<NativeCommand>) {
+        let _ = commands;
+    }
+    /// A player's command on the server (`Commands.performCommand`),
+    /// without its slash, for a command a mod registered and the player's
+    /// level allows: set `ran` when it is yours. The player's state is
+    /// swapped in for the call, so `native_player` and the other helpers
+    /// read that player; `native_feedback` answers them. API 8.
+    pub(super) fn native_perform_command(
+        &mut self,
+        player: &NativeServerPlayer,
+        command: &str,
+        ran: &mut bool,
+    ) {
+        let _ = (player, command, ran);
+    }
+    /// A click in a menu a mod opened (`native_open_menu`), which moved
+    /// nothing: the menu's `slot` (its own first, then the player's
+    /// inventory, `native_menu_inventory_slot`; -999 outside), the `button`
+    /// and the click's `mode` (`ClickType`'s id) of the player `uuid`.
+    /// No player's state is swapped in: the menu helpers take the player's
+    /// UUID. API 10.
+    pub(super) fn native_menu_clicked(
+        &mut self,
+        uuid: u128,
+        window: i32,
+        slot: i32,
+        button: i32,
+        mode: i32,
+    ) {
+        let _ = (uuid, window, slot, button, mode);
+    }
+    /// A menu a mod opened closed: the player closed it, the server or a mod
+    /// opened another, or the player left. API 10.
+    pub(super) fn native_menu_closed(&mut self, uuid: u128, window: i32) {
+        let _ = (uuid, window);
     }
 }
 
