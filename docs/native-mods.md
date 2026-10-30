@@ -51,6 +51,11 @@ block once the block let it through (`ItemStack.useOn`), and `native_use_item` h
 after `native_use_item_on` let it through (`Item.use`). Each hears a click once. A mod that claims one swings the hand
 instead of the item's use. Bundles that use them need `"hooks": 5`.
 
+API 6 adds breaking and placing a block, on the server for every player: `native_destroy_block` hears a player break a
+block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may cancel it, which keeps the block and its
+drops; `native_place_block` hears a block placed from an item (`BlockItem.place`). To stop a placement, a mod claims
+`native_use_item_on`, which runs before it. Bundles that use them need `"hooks": 6`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

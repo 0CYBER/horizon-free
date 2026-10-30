@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 6 adds breaking and placing a block (`native_destroy_block`,
+//! `native_place_block`).
+//!
 //! API 5 adds using an item (`native_use_item_on`, `native_use_item`).
 //!
 //! API 4 adds item tooltips (`native_tooltip`).
@@ -37,13 +40,14 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_world::registry::BlockStateId;
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 5;
+pub(crate) const NATIVE_HOOKS_API: u32 = 6;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -372,6 +376,32 @@ impl Game<'_> {
     /// player of the world; an item on cooldown is never used. API 5.
     pub(super) fn native_use_item(&mut self, stack: &ItemStack, claimed: &mut bool) {
         let _ = (stack, claimed);
+    }
+    /// A player breaks the block `state` at `pos`, once the game allowed it
+    /// (the held item can break blocks, the debug stick didn't take the
+    /// click): where `ServerPlayerGameMode.destroyBlock` starts. Set
+    /// `canceled` to keep the block: nothing is destroyed or dropped, and a
+    /// guest sees it back. Server-side, for every player of the world (the
+    /// helpers read the acting one). API 6.
+    pub(super) fn native_destroy_block(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, state, canceled);
+    }
+    /// A player placed `stack` as the block `state` at `pos`: where
+    /// `BlockItem.place` set it, before the stack shrinks. It only hears; a
+    /// mod stops a placement by claiming `native_use_item_on`, which runs
+    /// before it. Server-side, for every player of the world. API 6.
+    pub(super) fn native_place_block(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        state: BlockStateId,
+    ) {
+        let _ = (stack, pos, state);
     }
 }
 
