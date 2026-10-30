@@ -13983,6 +13983,14 @@ impl ApplicationHandler for Game<'_> {
         if self.pending_save.is_some() {
             match event {
                 WindowEvent::CloseRequested => {
+                    if !self.settings.quit_shortcuts
+                        && horizon_client::input::is_quit_shortcut_down(
+                            self.modifiers,
+                            &self.physical_keys,
+                        )
+                    {
+                        return;
+                    }
                     self.pending_save.as_mut().unwrap().quit = true;
                 }
                 WindowEvent::Focused(focused) => {
@@ -14009,6 +14017,14 @@ impl ApplicationHandler for Game<'_> {
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
+                    if !self.settings.quit_shortcuts
+                        && horizon_client::input::is_quit_shortcut_down(
+                            self.modifiers,
+                            &self.physical_keys,
+                        )
+                    {
+                        return Ok(());
+                    }
                     self.begin_closing_save(true)?;
                 }
                 WindowEvent::Resized(size) => {
@@ -17425,5 +17441,46 @@ mod tests {
                 assert_eq!(toggles.is_down(SPRINT), sprint);
             }
         }
+    }
+
+    #[test]
+    fn quit_shortcut_blocks_window_close_when_option_disabled() {
+        use winit::keyboard::ModifiersState;
+
+        let mut keys = HashSet::new();
+        let alt = ModifiersState::ALT;
+        let super_key = ModifiersState::SUPER;
+
+        let quit_shortcuts_enabled = true;
+        let quit_shortcuts_disabled = false;
+
+        keys.insert(if cfg!(target_os = "macos") {
+            KeyCode::KeyQ
+        } else {
+            KeyCode::F4
+        });
+        let mods = if cfg!(target_os = "macos") {
+            super_key
+        } else {
+            alt
+        };
+
+        let should_ignore =
+            |quit_shortcuts: bool, modifiers: ModifiersState, keys: &HashSet<KeyCode>| {
+                !quit_shortcuts && horizon_client::input::is_quit_shortcut_down(modifiers, keys)
+            };
+
+        // When enabled, close requests from shortcuts proceed normally.
+        assert!(!should_ignore(quit_shortcuts_enabled, mods, &keys));
+
+        // When disabled and the quit shortcut is held, close requests are ignored.
+        assert!(should_ignore(quit_shortcuts_disabled, mods, &keys));
+
+        // When disabled but shortcut NOT held (e.g. 'X' button clicked), close request proceeds.
+        assert!(!should_ignore(
+            quit_shortcuts_disabled,
+            ModifiersState::empty(),
+            &HashSet::new()
+        ));
     }
 }
