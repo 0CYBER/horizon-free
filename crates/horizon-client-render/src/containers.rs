@@ -316,6 +316,9 @@ impl BlockEntity {
                 ),
             )));
         }
+        if name == "minecraft:jigsaw" {
+            return Some(Self::JigsawBlock(Box::default()));
+        }
         if name == "minecraft:potent_sulfur" {
             return Some(Self::PotentSulfur(PotentSulfur::default()));
         }
@@ -365,6 +368,7 @@ impl BlockEntity {
             Self::Mod(m) => &m.id,
             Self::PotentSulfur(_) => "minecraft:potent_sulfur",
             Self::StructureBlock(_) => "minecraft:structure_block",
+            Self::JigsawBlock(_) => "minecraft:jigsaw",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -385,6 +389,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::PotentSulfur(_)
             | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => Vec::new(),
             Self::Mod(m) => m.items.iter().flatten().cloned().collect(),
@@ -412,6 +417,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::PotentSulfur(_)
             | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &[],
             Self::Crafter(c) => &c.items,
@@ -443,6 +449,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::PotentSulfur(_)
             | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &mut [],
             Self::Crafter(c) => &mut c.items,

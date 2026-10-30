@@ -24,12 +24,13 @@ impl Behaviours {
     /// `JigsawPlacement.generateJigsaw`: `assemble` builds the pieces (from
     /// the generation context's own random), then each piece is placed into
     /// the level with the level random, an unbounded box and `reference` as
-    /// the origin. Returns whether pieces were assembled.
+    /// the origin; `keep_jigsaws` skips the jigsaw replacement. Returns whether pieces were assembled.
     pub fn place_jigsaw<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut super::Ticks,
         reference: [i32; 3],
+        keep_jigsaws: bool,
         assemble: impl FnOnce() -> Option<crate::worldgen::generator::JigsawPieces>,
     ) -> bool {
         let Some(features) = self.live_features() else {
@@ -60,6 +61,7 @@ impl Behaviours {
                     &mut random,
                     unbounded,
                     reference,
+                    keep_jigsaws,
                     &mut place_feature,
                 ) {
                     eprintln!("Horizon: placing a jigsaw piece failed: {e}");

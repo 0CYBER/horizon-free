@@ -49,6 +49,15 @@ pub(super) enum Item {
         label: Text,
         active: bool,
     },
+    /// An `AbstractSliderButton`: `value` is 0..1.
+    Slider {
+        id: u8,
+        x: f32,
+        y: f32,
+        w: f32,
+        label: Text,
+        value: f32,
+    },
 }
 
 /// What a press on a button does to the screen.
@@ -56,6 +65,8 @@ pub(super) enum Outcome {
     Stay,
     /// Send the packet and close.
     Send(S),
+    /// Send the packets in order and close.
+    SendAll(Vec<S>),
     /// Close, after the editor reverted what it changed.
     Cancel,
 }
@@ -75,6 +86,8 @@ pub(super) trait Editor {
         shift: bool,
         alt: bool,
     ) -> Outcome;
+    /// A slider moved to `value` (0..1).
+    fn slide(&mut self, _id: u8, _value: f32) {}
     /// Done: the packet that carries the screen's values.
     fn done(&mut self, entity: &mut BlockEntity, pos: Pos) -> Outcome;
     /// Cancel: put the block entity back.
@@ -95,12 +108,19 @@ pub(super) struct BlockEditScreen {
     pub(super) editor: Box<dyn Editor>,
     /// The text box with the focus, and which of them show.
     focus: Option<usize>,
+    /// The slider being dragged: its id and the x and width it is drawn at.
+    dragging: Option<(u8, f32, f32)>,
 }
 
 impl BlockEditScreen {
     pub(super) fn new(pos: Pos, editor: Box<dyn Editor>) -> Self {
         let focus = Some(editor.initial_focus());
-        Self { pos, editor, focus }
+        Self {
+            pos,
+            editor,
+            focus,
+            dragging: None,
+        }
     }
 }
 
@@ -120,8 +140,10 @@ impl Game<'_> {
         if !self.can_use_game_master_blocks() {
             return;
         }
-        if let Some(BlockEntity::StructureBlock(_)) = self.world.block_entities.get(&pos) {
-            self.open_structure_block(pos);
+        match self.world.block_entities.get(&pos) {
+            Some(BlockEntity::StructureBlock(_)) => self.open_structure_block(pos),
+            Some(BlockEntity::JigsawBlock(_)) => self.open_jigsaw_block(pos),
+            _ => {}
         }
     }
 
@@ -157,6 +179,12 @@ impl Game<'_> {
             Outcome::Stay => {}
             Outcome::Send(packet) => {
                 self.send(packet);
+                self.close_block_editor();
+            }
+            Outcome::SendAll(packets) => {
+                for packet in packets {
+                    self.send(packet);
+                }
                 self.close_block_editor();
             }
             Outcome::Cancel => self.close_block_editor(),
@@ -229,6 +257,20 @@ impl Game<'_> {
                     }
                 }
                 Item::Button { .. } => {}
+                Item::Slider {
+                    id,
+                    x,
+                    y,
+                    w: sw,
+                    label,
+                    value,
+                } => {
+                    let hover = ui::hovered(cursor, *x, *y, *sw, 20.0);
+                    let dragging = screen.dragging.is_some_and(|(d, _, _)| d == *id);
+                    ui::slider(
+                        batch, atlas, *x, *y, *sw, label, *value, hover, true, dragging,
+                    );
+                }
             }
         }
         self.block_editor = Some(screen);
@@ -271,6 +313,16 @@ impl Game<'_> {
                     }
                     return;
                 }
+                Item::Slider { id, x, y, w, .. } if ui::hovered(cursor, *x, *y, *w, 20.0) => {
+                    let (id, x, w) = (*id, *x, *w);
+                    let value = ui::slider_value(x, w, cursor.0);
+                    if let Some(mut screen) = self.block_editor.take() {
+                        screen.dragging = Some((id, x, w));
+                        screen.editor.slide(id, value);
+                        self.block_editor = Some(screen);
+                    }
+                    return;
+                }
                 Item::Edit { index, x, y, w } if ui::hovered(cursor, *x, *y, *w, 20.0) => {
                     let index = *index;
                     if let Some(mut screen) = self.block_editor.take() {
@@ -285,6 +337,23 @@ impl Game<'_> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// The cursor moved with a slider held (`AbstractSliderButton.onDrag`).
+    pub(super) fn block_editor_drag(&mut self) {
+        let x = self.cursor.0;
+        if let Some(screen) = self.block_editor.as_mut()
+            && let Some((id, sx, sw)) = screen.dragging
+        {
+            screen.editor.slide(id, ui::slider_value(sx, sw, x));
+        }
+    }
+
+    /// The left button released: a held slider lets go.
+    pub(super) fn block_editor_release(&mut self) {
+        if let Some(screen) = self.block_editor.as_mut() {
+            screen.dragging = None;
         }
     }
 

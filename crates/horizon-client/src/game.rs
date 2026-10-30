@@ -121,6 +121,8 @@ mod integrated;
 mod interactions;
 mod item_draw;
 mod item_particles;
+mod jigsaw_blocks;
+mod jigsaw_edit;
 mod jukebox;
 mod lan;
 mod lan_actions;
@@ -4284,7 +4286,7 @@ impl Game<'_> {
         }
         // The game master blocks' screens open on the player's own client
         // (`BlockEntity.usedBy`); the server has nothing to open.
-        if &*name == "minecraft:structure_block" {
+        if matches!(&*name, "minecraft:structure_block" | "minecraft:jigsaw") {
             return;
         }
         // SignBlock.useWithoutItem: the text editor, not a container.
@@ -5265,6 +5267,7 @@ impl Game<'_> {
                     self.command_block_placed(key, !data);
                 }
                 Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
+                Some(BlockEntity::JigsawBlock(_)) => self.jigsaw_block_placed(key),
                 Some(BlockEntity::Sign(sign)) if !sign.waxed => self.open_sign_editor(key, true),
                 _ => {}
             }
@@ -7211,7 +7214,8 @@ impl Game<'_> {
                 | BlockEntity::Shelf(_)
                 | BlockEntity::Mod(_)
                 | BlockEntity::PotentSulfur(_)
-                | BlockEntity::StructureBlock(_),
+                | BlockEntity::StructureBlock(_)
+                | BlockEntity::JigsawBlock(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -7506,7 +7510,8 @@ impl Game<'_> {
                     | BlockEntity::Shelf(_)
                     | BlockEntity::Mod(_)
                     | BlockEntity::PotentSulfur(_)
-                    | BlockEntity::StructureBlock(_),
+                    | BlockEntity::StructureBlock(_)
+                    | BlockEntity::JigsawBlock(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -14105,6 +14110,9 @@ impl ApplicationHandler for Game<'_> {
                         if self.dialog_open() {
                             self.dialog_drag();
                         }
+                        if self.screen == Screen::BlockEditor {
+                            self.block_editor_drag();
+                        }
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
                         }
@@ -14441,6 +14449,9 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::BlockEditor if pressed && button == MouseButton::Left => {
                             self.block_editor_click()
+                        }
+                        Screen::BlockEditor if button == MouseButton::Left => {
+                            self.block_editor_release()
                         }
                         Screen::Dead if pressed && button == MouseButton::Left => {
                             self.death_click()?

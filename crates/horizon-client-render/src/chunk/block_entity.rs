@@ -87,6 +87,8 @@ pub enum BlockEntity {
     PotentSulfur(PotentSulfur),
     /// `StructureBlockEntity` (`structure_block.rs`).
     StructureBlock(Box<crate::structure_block::StructureBlock>),
+    /// `JigsawBlockEntity` (`jigsaw_block.rs`).
+    JigsawBlock(Box<crate::jigsaw_block::JigsawBlock>),
 }
 /// A mod's block entity: its type id (`mymod:machine`), its saved
 /// compound without `id`, `x`, `y`, `z` and `Items`, its item slots
