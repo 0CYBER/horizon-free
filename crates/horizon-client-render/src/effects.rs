@@ -148,6 +148,15 @@ pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
         _ => None,
     }
 }
+/// `MobEffectInstance.withScaledDuration`: max(floor(d * scale), 1), leaving
+/// an infinite (-1) or zero duration alone.
+pub fn scaled_duration(duration: i32, scale: f32) -> i32 {
+    if duration == -1 || duration == 0 {
+        duration
+    } else {
+        ((duration as f32 * scale).floor() as i32).max(1)
+    }
+}
 /// What an omen's `applyEffectTick` decided.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OmenTick {
@@ -309,18 +318,28 @@ impl PlayerEffects {
         potion: Option<&str>,
         scale: f32,
     ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
+        let effects = potion
+            .and_then(potions::potion)
+            .map_or(&[][..], |d| d.effects);
+        Self::contents_effects(effects, scale)
+    }
+    /// `PotionContents.forEachEffect`'s effects, as `potion_effects`.
+    pub fn contents_effects(
+        effects: &[(&'static str, i32, i32)],
+        scale: f32,
+    ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
         let mut lasting = Vec::new();
         let mut now = Vec::new();
-        if let Some(def) = potion.and_then(potions::potion) {
-            for (id, duration, amp) in def.effects {
-                let id = potions::effect(id).map_or("speed", |e| e.id);
-                if potions::effect(id).is_some_and(|e| e.instant) {
-                    now.extend(instant(id, *amp, 1.0));
-                } else {
-                    // withScaledDuration: max(floor(d * scale), 1).
-                    let d = ((*duration as f32) * scale).floor() as i32;
-                    lasting.push(EffectInstance::new(id, d.max(1), *amp));
-                }
+        for (id, duration, amp) in effects {
+            let id = potions::effect(id).map_or("speed", |e| e.id);
+            if potions::effect(id).is_some_and(|e| e.instant) {
+                now.extend(instant(id, *amp, 1.0));
+            } else {
+                lasting.push(EffectInstance::new(
+                    id,
+                    scaled_duration(*duration, scale),
+                    *amp,
+                ));
             }
         }
         (lasting, now)

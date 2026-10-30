@@ -100,6 +100,23 @@ pub fn sheep_wool_rgb(color: u8) -> u32 {
     let f = |c: u32| ((c as f32 * 0.75).floor() as u32).min(255);
     f(src >> 16 & 255) << 16 | f(src >> 8 & 255) << 8 | f(src & 255)
 }
+/// `ColorLerper.getLerpedColor(ColorLerper.Type.SHEEP, ageInTicks)`: the 16
+/// wool colours in DyeColor order, one per 25 ticks, lerped in between. The
+/// colour a `jeb_` sheep's wool takes.
+pub fn jeb_wool_rgb(age: f32) -> u32 {
+    // ageInTicks is the tick count plus the partial tick: never negative.
+    let i = age.floor();
+    let ticks = i as u64;
+    let j = ticks / 25;
+    let f = ((ticks % 25) as f32 + (age - i)) / 25.0;
+    let lo = sheep_wool_rgb((j % 16) as u8);
+    let hi = sheep_wool_rgb(((j + 1) % 16) as u8);
+    let mix = |shift: u32| {
+        let (lo, hi) = ((lo >> shift & 255) as f32, (hi >> shift & 255) as f32);
+        ((lo + (hi - lo) * f) as u32) << shift
+    };
+    mix(16) | mix(8) | mix(0)
+}
 pub const VILLAGER_TYPES: [&str; 7] = [
     "plains", "desert", "jungle", "savanna", "snow", "swamp", "taiga",
 ];
@@ -459,8 +476,9 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
         _ => 0xFFFF_FFFF,
     }
 }
-/// Extra render layers drawn over the body with the same pose.
-pub fn layers(m: &Mob) -> Vec<Layer> {
+/// Extra render layers drawn over the body with the same pose. `age` is the
+/// render state's `ageInTicks` (`Mob.age` plus the partial tick).
+pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
     if avatar(m) {
@@ -657,8 +675,14 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {
-            let color = abgr(sheep_wool_rgb(m.extra.color));
-            if !m.is_baby() && m.extra.color != 0 {
+            // MobRenderer.checkMagicName(entity, "jeb_"): an exact custom name.
+            let jeb = m.custom_name.as_deref() == Some("jeb_");
+            let color = abgr(if jeb {
+                jeb_wool_rgb(age)
+            } else {
+                sheep_wool_rgb(m.extra.color)
+            });
+            if !m.is_baby() && (jeb || m.extra.color != 0) {
                 push(
                     &mut v,
                     "sheep#wool_undercoat",
@@ -945,6 +969,16 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         // isEntityUpsideDown
         base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
             * glam::Mat4::from_rotation_z(PI);
+    }
+    // IronGolemRenderer.setupRotations, after LivingEntityRenderer's: the body
+    // tilts side to side while it walks.
+    if m.species() == Species::IronGolem {
+        let s = anim::state(m, alpha);
+        if s.speed >= 0.01 {
+            let wp = s.pos + 6.0;
+            let triangle_wave = ((wp % 13.0 - 6.5).abs() - 3.25) / 3.25;
+            base *= glam::Mat4::from_rotation_z((6.5 * triangle_wave).to_radians());
+        }
     }
     // AvatarRenderer.setupRotations, after LivingEntityRenderer's.
     if m.extra.fall_flying {
@@ -1370,7 +1404,7 @@ fn render_visible(
     for (part, uv, color, layer_overlay) in extra {
         draw(part, base, &poses, *uv, *color, light, *layer_overlay, out);
     }
-    let mut all_layers = layers(m);
+    let mut all_layers = layers(m, s.age);
     // WardenRenderer: the translucent emissive layers fade with the animations.
     if m.species() == Species::Warden {
         for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
@@ -1539,6 +1573,24 @@ pub fn part_matrix(
         .iter()
         .find_map(|c| part_matrix(c, m, poses, name, x_offset))
 }
+fn find_part<'a>(part: &'a Part, name: &str) -> Option<&'a Part> {
+    if part.name == name {
+        return Some(part);
+    }
+    part.children.iter().find_map(|c| find_part(c, name))
+}
+/// `AllayModel.translateToHand`: the root and body, then the right arm's
+/// pitch, a 0.7 scale and a shift. Both hands use the right arm's pitch.
+fn allay_hand(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat4> {
+    let body = part_matrix(model, base, poses, "body", 0.0)?;
+    let x_rot = poses.pose(find_part(model, "right_arm")?)[3];
+    Some(
+        body * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0625, 0.1875))
+            * glam::Mat4::from_rotation_x(x_rot)
+            * glam::Mat4::from_scale(glam::Vec3::splat(0.7))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.0, 0.0)),
+    )
+}
 /// The hand of a mob in model space, up to the item's own transform
 /// (`ItemInHandLayer.submitArmWithItem`).
 fn hand_base(
@@ -1566,7 +1618,11 @@ fn hand_base(
     } else {
         0.0
     };
-    let mut t = part_matrix(model, base, poses, arm, offset)?;
+    let mut t = if m.species() == Species::Allay {
+        allay_hand(model, base, poses)?
+    } else {
+        part_matrix(model, base, poses, arm, offset)?
+    };
     if m.species() == Species::Vex {
         // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
         t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
@@ -1609,6 +1665,39 @@ pub fn part_transform(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     part_matrix(&model, base, &poses, part, 0.0)
+}
+/// `PlayerItemInHandLayer.renderItemHeldToEye` up to the item: the root and
+/// the head with its pitch clamped to -30 to 90 degrees, `translateToHead`
+/// (`CustomHeadLayer.translateToHead`), then the hand's side of the eye.
+pub fn held_to_eye_matrix(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    left: bool,
+) -> Option<glam::Mat4> {
+    use glam::{Mat4, Vec3};
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let pitch =
+        poses.get("head")[3].clamp(-std::f32::consts::FRAC_PI_6, std::f32::consts::FRAC_PI_2);
+    poses.xrot("head", pitch);
+    let head = part_matrix(&model, base, &poses, "head", 0.0)?;
+    let side = if left { -2.5 / 16.0 } else { 2.5 / 16.0 };
+    Some(
+        head * Mat4::from_translation(Vec3::new(0.0, -0.25, 0.0))
+            * Mat4::from_rotation_y(std::f32::consts::PI)
+            * Mat4::from_scale(Vec3::new(0.625, -0.625, -0.625))
+            * Mat4::from_translation(Vec3::new(side, -0.0625, 0.0)),
+    )
 }
 /// `FoxHeldItemLayer`: the item sits at the head's position under the render
 /// state's head roll, yaw and pitch (not the posed head's, which differ while
@@ -1680,6 +1769,32 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
+    // WitchItemLayer.applyTranslation: a potion is held at the nose, any other
+    // item as CrossedArmsItemLayer holds it; only the main hand's item is drawn.
+    if m.species() == Species::Witch {
+        let item = m.extra.main_hand.as_deref()?;
+        if left != m.main_arm_left() {
+            return None;
+        }
+        if super::witch::holds_potion(item) {
+            let nose = part_matrix(&model, base, &poses, "nose", 0.0)?;
+            return Some(
+                nose * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.25, 0.0))
+                    * glam::Mat4::from_rotation_z(180.0f32.to_radians())
+                    * glam::Mat4::from_rotation_x(140.0f32.to_radians())
+                    * glam::Mat4::from_rotation_z(10.0f32.to_radians())
+                    * glam::Mat4::from_rotation_x(180.0f32.to_radians()),
+            );
+        }
+        // CrossedArmsItemLayer.applyTranslation: translateToArms, then this.
+        let arms = part_matrix(&model, base, &poses, "arms", 0.0)?;
+        return Some(
+            arms * glam::Mat4::from_rotation_x(0.75)
+                * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
+                * glam::Mat4::from_rotation_x(std::f32::consts::PI),
+        );
+    }
     let mut t = hand_base(m, &model, base, &poses, left)?;
     // ItemInHandLayer: a STAB swing of this arm thrusts its item out
     // (SpearAnimations.thirdPersonAttackItem, the main hand's forward
@@ -1737,7 +1852,7 @@ mod tests {
                         m.extra.age = if baby { -24000 } else { 0 };
                         (m.extra.variant, m.extra.variant2, m.extra.variant3) =
                             (t as u8, p as u8, 5);
-                        let layers = layers(&m);
+                        let layers = layers(&m, m.age as f32);
                         let group = if baby { "/baby/" } else { "/type/" };
                         assert!(
                             layers.iter().any(|l| l.texture.contains(group)),
@@ -2051,6 +2166,86 @@ mod tests {
         assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
         // A layer that is not dyeable is not tinted.
         assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
+    }
+
+    /// `ColorLerper.getLerpedColor(Type.SHEEP, ageInTicks)`: the points the
+    /// 26.3 jar gave — 0, half a step, one whole step, a step boundary, the
+    /// last step back into white, and the 400-tick (16-step) wrap.
+    #[test]
+    fn jeb_wool_lerps_through_the_sixteen_dye_colours() {
+        assert_eq!(jeb_wool_rgb(0.0), 0xE6E6E6);
+        assert_eq!(jeb_wool_rgb(12.5), 0xD0A37D);
+        assert_eq!(jeb_wool_rgb(25.0), 0xBA6015);
+        assert_eq!(jeb_wool_rgb(25.0), sheep_wool_rgb(1));
+        assert_eq!(jeb_wool_rgb(50.0), 0x953A8D);
+        assert_eq!(jeb_wool_rgb(399.0), 0xDDDDDD);
+        assert_eq!(jeb_wool_rgb(400.0), 0xE6E6E6);
+    }
+
+    fn sheep_layer(m: &Mob, model: &str, age: f32) -> Option<Layer> {
+        layers(m, age).into_iter().find(|l| l.model == model)
+    }
+
+    /// SheepRenderer.extractRenderState's `jeb_` magic name: the wool layer
+    /// takes the lerped colour and cycles with the age, a white `jeb_` sheep
+    /// keeps its undercoat (SheepWoolUndercoatLayer draws for it too), and
+    /// the dye colour, the baby model and the shears still win.
+    #[test]
+    fn a_jeb_sheep_cycles_its_wool_colour_and_keeps_the_undercoat() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:sheep"].clone());
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        mob.custom_name = Some("jeb_".into());
+        let young = sheep_layer(&mob, "sheep#wool", 0.0)
+            .expect("an unsheared sheep draws its wool")
+            .color;
+        assert_eq!(young, abgr(0xE6E6E6));
+        let older = sheep_layer(&mob, "sheep#wool", 100.0)
+            .expect("an unsheared sheep draws its wool")
+            .color;
+        assert_ne!(young, older, "the colour cycles with the age");
+        let undercoat = sheep_layer(&mob, "sheep#wool_undercoat", 0.0)
+            .expect("a jeb_ sheep keeps its undercoat");
+        assert_eq!(undercoat.color, abgr(0xE6E6E6));
+        // A name that is not exactly "jeb_" leaves a dyed sheep's colour, and
+        // a non-white sheep has its undercoat too.
+        mob.custom_name = Some("jeb".into());
+        mob.extra.color = 14;
+        let dyed = abgr(sheep_wool_rgb(14));
+        assert_eq!(
+            sheep_layer(&mob, "sheep#wool", 0.0)
+                .expect("an unsheared sheep draws its wool")
+                .color,
+            dyed
+        );
+        assert_eq!(
+            sheep_layer(&mob, "sheep#wool_undercoat", 0.0)
+                .expect("a dyed sheep keeps its undercoat")
+                .color,
+            dyed
+        );
+        // A baby `jeb_` sheep gets the lerped colour on the baby wool and
+        // never an undercoat.
+        mob.custom_name = Some("jeb_".into());
+        mob.extra.color = 0;
+        mob.extra.age = -24000;
+        assert!(mob.is_baby());
+        assert_eq!(
+            sheep_layer(&mob, "sheep_baby#wool", 50.0)
+                .expect("a baby sheep draws its wool")
+                .color,
+            abgr(0x953A8D)
+        );
+        assert!(sheep_layer(&mob, "sheep#wool_undercoat", 50.0).is_none());
+        // Sheared: no wool layer at all.
+        mob.extra.age = 0;
+        mob.extra.sheared = true;
+        assert!(sheep_layer(&mob, "sheep#wool", 0.0).is_none());
     }
 }
 
