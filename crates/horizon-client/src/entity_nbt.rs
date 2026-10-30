@@ -605,11 +605,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
         }
         "minecraft:camel" | "minecraft:camel_husk" => {
-            // LastPoseTick: negative while sitting.
-            let sitting = crate::mobs::camel::sitting(m);
+            // LastPoseTick: the pose change time, negative while sitting. The
+            // game time is not known here; the world's save overwrites it
+            // with the real one (`camel::synced_pose_tick`).
             map.insert(
                 "LastPoseTick".into(),
-                Tag::Long(if sitting { -1 } else { 0 }),
+                Tag::Long(crate::mobs::camel::synced_pose_tick(m, 0)),
             );
             if let Some(saddle) = m.saddle_item() {
                 map.insert(
@@ -1266,11 +1267,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .and_then(|v| crate::save::uuid_from_tag(Some(v)));
     }
     if crate::mobs::camel::is_camel(m.species()) {
-        let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
+        // The tick is a game time: `camel::finish_load` puts it on the mob's
+        // clock once the world's time is known.
+        let tick = match tag.get("LastPoseTick") {
+            Some(Tag::Long(v)) => *v,
+            _ => 0,
+        };
         crate::mobs::camel::stand_up_instantly(&mut m);
-        if sitting {
-            m.extra.egg_time = -1 - 400;
-        }
+        m.extra.pose_change_tick = tick;
+        m.extra.camel_sitting = tick < 0;
         // Camels are always tame (`Camel.register` in Horizon).
         m.extra.tame = true;
     }
@@ -2615,7 +2620,10 @@ pub fn bucket_data(m: &Mob) -> Tag {
 }
 pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
     let mut data = crate::item_data::StackData {
-        custom_name: m.custom_name.clone(),
+        custom_name: m
+            .custom_name
+            .as_ref()
+            .map(|name| Tag::String(name.as_str().into())),
         ..Default::default()
     };
     data.set_other("minecraft:bucket_entity_data", Some(bucket_data(m)));
@@ -2654,8 +2662,8 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
     let Some(components) = stack.data() else {
         return;
     };
-    if let Some(name) = &components.custom_name {
-        m.custom_name = Some(name.clone());
+    if let Some(name) = stack.custom_name() {
+        m.custom_name = Some(name);
     }
     if let Some(data) = components.other("minecraft:bucket_entity_data") {
         if let Some(v) = number(data.get("Age")) {
@@ -2827,7 +2835,7 @@ mod axolotl_nbt_tests {
         assert_eq!(restored.health, 5.0);
         m.glowing = false;
         m.add_effect("glowing", 200, 0);
-        assert!(m.has_effect("glowing"));
+        assert!(m.has_effect("minecraft:glowing"));
         assert!(bucket_data(&m).get("Glowing").is_none());
         m.glowing = true;
         assert_eq!(number(bucket_data(&m).get("Glowing")), Some(1));
@@ -3164,12 +3172,17 @@ mod held_item_name_tests {
             .collect();
         let mut mob = Mob::new(1, Arc::clone(&types["minecraft:zombie"]), Vec3::ZERO, 0.0);
         let mut sword = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
-        sword.data_mut().custom_name = Some("Old Sword".into());
+        sword.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
         mob.extra.set_main_hand_stack(Some(sword));
         let raw = mob_to_nbt(&mob, [1, 2, 3, 4], None);
         let mut loaded = mob_from_nbt(&raw, &types, 2).unwrap();
         assert_eq!(
-            loaded.extra.main_hand_stack().unwrap().custom_name(),
+            loaded
+                .extra
+                .main_hand_stack()
+                .unwrap()
+                .custom_name()
+                .as_deref(),
             Some("Old Sword")
         );
         loaded

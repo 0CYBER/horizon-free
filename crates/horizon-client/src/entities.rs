@@ -872,15 +872,48 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// LivingEntity.travelInAir (armor stands have no other movement): move
-    /// by the velocity (a landing stops the fall,
-    /// `Block.updateEntityMovementAfterFallOn`), then gravity 0.08 and the
-    /// 0.98 drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
-    pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
+    /// `isInWater`: some water block of the stand's box has its surface
+    /// (`FluidState.getHeight`, a full block under more water) at or above the
+    /// box's bottom, as `Entity.updateFluidHeightAndDoFluidPushing` counts it.
+    pub fn in_water(&self, world: &World, fluids: &crate::motion::FluidResources) -> bool {
+        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        let water = |x: i32, y: i32, z: i32| {
+            let state = fluids.fluid(world.block(x, y, z));
+            (state.kind() == horizon_world::fluid::FluidKind::Water).then_some(state)
+        };
+        (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
+            (lo.y.floor() as i32..hi.y.ceil() as i32).any(|y| {
+                (lo.z.floor() as i32..=hi.z.floor() as i32).any(|z| {
+                    water(x, y, z).is_some_and(|state| {
+                        let height = if water(x, y + 1, z).is_some() {
+                            1.0
+                        } else {
+                            state.own_height()
+                        };
+                        f64::from(y) + f64::from(height) >= lo.y
+                    })
+                })
+            })
+        })
+    }
+    /// LivingEntity.travel (armor stands have no other movement): move by
+    /// the velocity (a landing stops the fall,
+    /// `Block.updateEntityMovementAfterFallOn`), let the blocks it is inside
+    /// push it (`push`: a bubble column), then in water the 0.8 slowdown and
+    /// `getFluidFallingAdjustedMovement`, in air gravity 0.08 and the 0.98
+    /// drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
+    pub fn tick(
+        &mut self,
+        scene: &mut crate::collisions::SceneCollisions,
+        in_water: bool,
+        push: &mut dyn FnMut(Aabb, &mut Vec3),
+    ) {
         if self.marker {
             return;
         }
         let wanted = self.velocity;
+        // `travelInFluid` reads `isFalling` before the move and any push.
+        let falling = wanted.y <= 0.0;
         let mut y = wanted.y;
         if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
             self.position = Vec3::new(
@@ -893,7 +926,23 @@ impl ArmorStand {
                 y = 0.0;
             }
         }
-        self.velocity = Vec3::new(0.0, (y - 0.08) * f64::from(0.98f32), 0.0);
+        let mut velocity = Vec3::new(0.0, y, 0.0);
+        push(self.bounds(), &mut velocity);
+        self.velocity = if in_water {
+            // travelInWater: slowDown 0.8, then `getFluidFallingAdjustedMovement`
+            // with gravity / 16 (the stand is falling while its fall is not
+            // already nearly stopped).
+            let y = velocity.y * f64::from(0.8f32);
+            let adjusted =
+                if falling && (y - 0.005).abs() >= 0.003 && (y - 0.08 / 16.0).abs() < 0.003 {
+                    -0.003
+                } else {
+                    y - 0.08 / 16.0
+                };
+            Vec3::new(0.0, adjusted, 0.0)
+        } else {
+            Vec3::new(0.0, (velocity.y - 0.08) * f64::from(0.98f32), 0.0)
+        };
     }
 }
 
