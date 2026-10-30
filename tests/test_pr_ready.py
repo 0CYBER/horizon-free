@@ -9,7 +9,7 @@ PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/hor
             "horizon-theme": "crates/horizon-theme", "xtask": "xtask"}
 LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"horizon-client": {"horizon-core"}}
-MODS = " --features horizon-client/mods,horizon-mods/pack"
+MODS = ""
 CLIPPY = pr_ready.CI_CLIPPY + " && " + pr_ready.CI_CLIPPY_SERVER
 
 
@@ -52,9 +52,22 @@ class PrReadyTests(unittest.TestCase):
         by_name = {step.name: step for step in steps}
         self.assertEqual(by_name["clippy"].command, CLIPPY)
         self.assertEqual(by_name["tests: horizon-client"].command,
-                         "cargo test --locked -p horizon-client --features horizon-client/mods --tests")
+                         "cargo test --locked -p horizon-client --tests")
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-client --doc")
         self.assertIsNone(by_name["doc tests"].status)
+
+    def test_content_root_tests_run_only_when_what_they_load_changes(self):
+        def content_step(path):
+            with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+            return {step.name: step for step in steps}["content root tests"]
+        self.assertEqual(content_step("crates/horizon-client/src/game.rs").skip, "content root untouched")
+        for path in ["crates/horizon-client/src/mod_content.rs", "crates/horizon-client/src/mod_content_tests.rs",
+                     "crates/horizon-mods/src/content.rs", "crates/horizon-assets/src/lib.rs", "Cargo.lock"]:
+            with self.subTest(path=path):
+                step = content_step(path)
+                self.assertIsNone(step.skip)
+                self.assertEqual(step.command, pr_ready.CONTENT_ROOT_TESTS)
 
     def test_shared_rust_configuration_keeps_workspace_coverage(self):
         for path in sorted(pr_ready.ROOT_RUST | {".cargo/config.toml", "crates/unknown/src/lib.rs"}):
@@ -68,9 +81,9 @@ class PrReadyTests(unittest.TestCase):
 
     def test_tests_get_the_features_ci_s_workspace_run_gives_them(self):
         self.assertEqual(pr_ready.mod_features(["horizon-world"]), "")
-        self.assertEqual(pr_ready.mod_features(["horizon-client"]), " --features horizon-client/mods")
+        self.assertEqual(pr_ready.mod_features(["horizon-client"]), "")
         self.assertEqual(pr_ready.mod_features(["horizon-mods"]),
-                         " --features horizon-mods/runtime,horizon-mods/pack,horizon-mods/index")
+                         " --features horizon-mods/index")
         self.assertEqual(pr_ready.mod_features(None), MODS)
 
     def test_python_tests_always_run(self):

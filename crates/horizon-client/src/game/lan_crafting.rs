@@ -7,6 +7,7 @@
 use super::{Game, lan::LanHost};
 use horizon_client::{
     containers::BlockEntity,
+    furnace::FurnaceCooking,
     items::ItemStack,
     lan::{guest::Guest, menu::Slots},
     menu::{Env, Input, Kind, Menu},
@@ -127,9 +128,26 @@ impl Game<'_> {
         }
         let dropped = std::mem::take(&mut menu.dropped);
         let equipped = std::mem::take(&mut menu.equipped);
+        let brewed = std::mem::take(&mut menu.brewed);
+        let crafted = std::mem::take(&mut menu.crafted);
         menu.drops.clear();
-        menu.crafted.clear();
         store_player(menu, &mut host.hub.guests[gi]);
+        if !brewed.is_empty() {
+            let conn = host.hub.guests[gi].conn;
+            self.as_guest(host, conn, |g| {
+                for stack in &brewed {
+                    g.trigger_brewed_potion(stack);
+                }
+            });
+        }
+        if !crafted.is_empty() {
+            let conn = host.hub.guests[gi].conn;
+            self.as_guest(host, conn, |g| {
+                for (recipe, ingredients) in &crafted {
+                    g.trigger_recipe_crafted(recipe, ingredients);
+                }
+            });
+        }
         if !equipped.is_empty() {
             let conn = host.hub.guests[gi].conn;
             self.as_guest(host, conn, |g| {
@@ -232,6 +250,9 @@ impl Game<'_> {
             _ => None,
         };
         if host.hub.guests[gi].spectator() {
+            // handleContainerClick: nothing changes, and sendAllDataToRemote
+            // takes back what the client predicted.
+            host.hub.resend_menu(conn, p.container, &self.world);
             return true;
         }
         let mut menu = host
@@ -576,16 +597,18 @@ impl Game<'_> {
     /// A guest left: what their crafting grids and workstation held goes back into their
     /// inventory before it is saved (dropped where they stood if full).
     pub(super) fn lan_crafting_left(&mut self, host: &mut LanHost, g: &mut Guest) {
-        let play = host.play.remove(&g.conn);
+        // The guest's play state stays: their statistics are awarded and saved
+        // after this (`HostEvent::Left`), which removes it.
+        let play = host.play.get_mut(&g.conn);
         let mut grid: Vec<ItemStack> = g.craft_grid.iter_mut().filter_map(Option::take).collect();
         g.craft_result = None;
         if let Some(play) = play {
-            if let Some((_, _, menu, _)) = play.crafting.table {
+            if let Some((_, _, menu, _)) = play.crafting.table.take() {
                 grid.extend((1..10).filter_map(|s| menu.slot(s).cloned()));
             }
             // A workstation's inputs too.
-            if let Some(station) = &play.station {
-                grid.extend(super::lan_stations::station_inputs(station));
+            if let Some(station) = play.station.take() {
+                grid.extend(super::lan_stations::station_inputs(&station));
             }
         }
         if grid.is_empty() {

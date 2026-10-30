@@ -24,6 +24,8 @@ fn stack(spec: &str) -> LootStack {
         exploration: None,
         ominous_amplifier: None,
         stew_effects: Vec::new(),
+        names: Vec::new(),
+        components: Vec::new(),
     };
     for e in parts {
         let (name, level) = e.rsplit_once(':').unwrap_or((e, "1"));
@@ -132,7 +134,7 @@ pub fn main() -> horizon_client::Result<()> {
                     let item: Option<Arc<str>> = Some(Arc::from(s.item.as_str()));
                     let index = match *slot {
                         "mainhand" => {
-                            m.extra.main_hand = item;
+                            m.extra.set_main_hand(item);
                             Some(gear::MAIN)
                         }
                         "offhand" => {

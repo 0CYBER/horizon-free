@@ -19,6 +19,8 @@ pub struct ItemEntity {
     pub id: u32,
     pub stack: ItemStack,
     pub thrower: Option<[i32; 4]>,
+    /// `ItemEntity.target`: the only player who may pick the item up.
+    pub target: Option<[i32; 4]>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -355,7 +357,10 @@ pub fn merge_with_neighbours(
         }
         // ItemEntity.areMergable: both fit one stack of the same item and components.
         let (this, other) = (&items[i].stack, &items[j].stack);
-        if this.count + other.count > max_stack(other) || !this.same_item_same_components(other) {
+        if items[i].target != items[j].target
+            || this.count + other.count > max_stack(other)
+            || !this.same_item_same_components(other)
+        {
             continue;
         }
         let (to, from) = if other.count < this.count {
@@ -582,17 +587,21 @@ impl Experience {
             7 + level * 2
         }
     }
-    /// Returns true when a level was gained.
-    pub fn give(&mut self, points: i32) -> bool {
-        let start = self.level;
+    /// Returns the first multiple of 5 the player reached, where each level
+    /// gained would play the level-up sound (`Player.giveExperienceLevels`).
+    pub fn give(&mut self, points: i32) -> Option<i32> {
+        let mut sound_level = None;
         self.progress += points as f32 / Self::needed(self.level) as f32;
         self.total = self.total.saturating_add(points).max(0);
         while self.progress >= 1.0 {
             self.progress = (self.progress - 1.0) * Self::needed(self.level) as f32;
             self.level += 1;
+            if self.level % 5 == 0 {
+                sound_level.get_or_insert(self.level);
+            }
             self.progress /= Self::needed(self.level) as f32;
         }
-        self.level > start
+        sound_level
     }
 }
 /// A painting (`Painting`, a `HangingEntity`): the block it hangs in, the
@@ -767,9 +776,24 @@ pub struct ArmorStand {
     pub name_visible: bool,
     /// Game time of the last hit (the wobble and the second-hit window).
     pub last_hit: i64,
+    /// `DATA_HEAD_POSE` to `DATA_RIGHT_LEG_POSE`: head, body, left arm, right
+    /// arm, left leg, right leg, in degrees (`POSE_KEYS` order).
+    pub pose: [[f32; 3]; 6],
 }
 impl ArmorStand {
     pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
+    /// The `Pose` compound's keys.
+    pub const POSE_KEYS: [&'static str; 6] =
+        ["Head", "Body", "LeftArm", "RightArm", "LeftLeg", "RightLeg"];
+    /// `ArmorStand.DEFAULT_*_POSE`.
+    pub const DEFAULT_POSE: [[f32; 3]; 6] = [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [-10.0, 0.0, -10.0],
+        [-15.0, 0.0, 10.0],
+        [-1.0, 0.0, -1.0],
+        [1.0, 0.0, 1.0],
+    ];
     pub fn new(id: u32, position: Vec3, yaw: f32) -> Self {
         Self {
             fire_ticks: 0,
@@ -788,6 +812,7 @@ impl ArmorStand {
             custom_name: None,
             name_visible: false,
             last_hit: i64::MIN / 2,
+            pose: Self::DEFAULT_POSE,
         }
     }
     pub fn environment_tick(
@@ -847,15 +872,48 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// LivingEntity.travelInAir (armor stands have no other movement): move
-    /// by the velocity (a landing stops the fall,
-    /// `Block.updateEntityMovementAfterFallOn`), then gravity 0.08 and the
-    /// 0.98 drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
-    pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
+    /// `isInWater`: some water block of the stand's box has its surface
+    /// (`FluidState.getHeight`, a full block under more water) at or above the
+    /// box's bottom, as `Entity.updateFluidHeightAndDoFluidPushing` counts it.
+    pub fn in_water(&self, world: &World, fluids: &crate::motion::FluidResources) -> bool {
+        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        let water = |x: i32, y: i32, z: i32| {
+            let state = fluids.fluid(world.block(x, y, z));
+            (state.kind() == horizon_world::fluid::FluidKind::Water).then_some(state)
+        };
+        (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
+            (lo.y.floor() as i32..hi.y.ceil() as i32).any(|y| {
+                (lo.z.floor() as i32..=hi.z.floor() as i32).any(|z| {
+                    water(x, y, z).is_some_and(|state| {
+                        let height = if water(x, y + 1, z).is_some() {
+                            1.0
+                        } else {
+                            state.own_height()
+                        };
+                        f64::from(y) + f64::from(height) >= lo.y
+                    })
+                })
+            })
+        })
+    }
+    /// LivingEntity.travel (armor stands have no other movement): move by
+    /// the velocity (a landing stops the fall,
+    /// `Block.updateEntityMovementAfterFallOn`), let the blocks it is inside
+    /// push it (`push`: a bubble column), then in water the 0.8 slowdown and
+    /// `getFluidFallingAdjustedMovement`, in air gravity 0.08 and the 0.98
+    /// drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
+    pub fn tick(
+        &mut self,
+        scene: &mut crate::collisions::SceneCollisions,
+        in_water: bool,
+        push: &mut dyn FnMut(Aabb, &mut Vec3),
+    ) {
         if self.marker {
             return;
         }
         let wanted = self.velocity;
+        // `travelInFluid` reads `isFalling` before the move and any push.
+        let falling = wanted.y <= 0.0;
         let mut y = wanted.y;
         if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
             self.position = Vec3::new(
@@ -868,7 +926,23 @@ impl ArmorStand {
                 y = 0.0;
             }
         }
-        self.velocity = Vec3::new(0.0, (y - 0.08) * f64::from(0.98f32), 0.0);
+        let mut velocity = Vec3::new(0.0, y, 0.0);
+        push(self.bounds(), &mut velocity);
+        self.velocity = if in_water {
+            // travelInWater: slowDown 0.8, then `getFluidFallingAdjustedMovement`
+            // with gravity / 16 (the stand is falling while its fall is not
+            // already nearly stopped).
+            let y = velocity.y * f64::from(0.8f32);
+            let adjusted =
+                if falling && (y - 0.005).abs() >= 0.003 && (y - 0.08 / 16.0).abs() < 0.003 {
+                    -0.003
+                } else {
+                    y - 0.08 / 16.0
+                };
+            Vec3::new(0.0, adjusted, 0.0)
+        } else {
+            Vec3::new(0.0, (velocity.y - 0.08) * f64::from(0.98f32), 0.0)
+        };
     }
 }
 
@@ -931,6 +1005,7 @@ mod fire_environment_tests {
         let make = |id: &str| ItemEntity {
             id: 1,
             thrower: None,
+            target: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count: 1,
@@ -1027,6 +1102,7 @@ mod merge_tests {
         ItemEntity {
             id: 0,
             thrower: None,
+            target: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count,

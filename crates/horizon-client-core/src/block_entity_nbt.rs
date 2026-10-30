@@ -61,6 +61,16 @@ fn f32_tag(v: f32) -> Tag {
     Tag::Float(v.to_bits())
 }
 
+/// `TheEndGatewayBlockEntity.loadAdditional`: BlockPos.CODEC and Level.isInSpawnableBounds.
+pub fn gateway_exit(tag: &Tag) -> Option<[i32; 3]> {
+    let Tag::IntArray(v) = tag else { return None };
+    let p: [i32; 3] = v.as_slice().try_into().ok()?;
+    ((-30_000_000..30_000_000).contains(&p[0])
+        && (-20_000_000..20_000_000).contains(&p[1])
+        && (-30_000_000..30_000_000).contains(&p[2]))
+    .then_some(p)
+}
+
 /// What a block entity reads and writes, in `saveAdditional` order.
 struct Fields<'a> {
     input: &'a Tag,
@@ -424,10 +434,7 @@ pub fn canonical(tag: &Tag) -> Option<Tag> {
         }
         "minecraft:end_gateway" => {
             f.long("Age", 0);
-            f.keep("exit_portal", |t| {
-                is_pos(t)
-                    && matches!(t, Tag::IntArray(v) if v[1].abs() <= 30_000_000 && v[0].abs() <= 30_000_000 && v[2].abs() <= 30_000_000)
-            });
+            f.keep("exit_portal", |t| gateway_exit(t).is_some());
             if flag(tag.get("ExactTeleport")) == Some(true) {
                 f.put("ExactTeleport", boolean(true));
             }
@@ -487,7 +494,11 @@ pub fn canonical(tag: &Tag) -> Option<Tag> {
                     _ => string("minecraft:air"),
                 },
             );
-            f.put("facing", Tag::Int(int(tag.get("facing")).unwrap_or(0)));
+            // Direction.LEGACY_ID_CODEC: the 3D data value as a byte.
+            f.put(
+                "facing",
+                Tag::Byte(int(tag.get("facing")).unwrap_or(0) as i8),
+            );
             f.float("progress", 0.0);
             f.flag("extending", false);
             f.flag("source", false);
@@ -864,6 +875,23 @@ mod tests {
             out.get("RecipesUsed"),
             Some(&Tag::Compound(Compound::new()))
         );
+    }
+
+    /// `PistonMovingBlockEntity.saveAdditional`: `facing` through
+    /// `Direction.LEGACY_ID_CODEC` (a byte), `progress` a float.
+    #[test]
+    fn moving_piston_fields_match_vanilla() {
+        let out = canon(
+            "{id:\"minecraft:piston\",x:1,y:2,z:3,blockState:{Name:\"minecraft:stone\"},\
+             facing:5,progress:0.5f,extending:1b,source:0b}",
+        );
+        assert_eq!(out.get("facing"), Some(&Tag::Byte(5)));
+        assert_eq!(out.get("progress"), Some(&f32_tag(0.5)));
+        assert_eq!(out.get("extending"), Some(&Tag::Byte(1)));
+        assert_eq!(out.get("source"), Some(&Tag::Byte(0)));
+        let fresh = canon("{id:\"minecraft:piston\",x:1,y:2,z:3}");
+        assert_eq!(fresh.get("facing"), Some(&Tag::Byte(0)));
+        assert_eq!(fresh.get("blockState"), Some(&string("minecraft:air")));
     }
 
     #[test]

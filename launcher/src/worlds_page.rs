@@ -32,9 +32,9 @@ pub(super) fn ago(when: std::time::SystemTime) -> String {
     let when: chrono::DateTime<chrono::Local> = when.into();
     let days = (chrono::Local::now().date_naive() - when.date_naive()).num_days();
     match days {
-        ..=0 => "today".into(),
-        1 => "yesterday".into(),
-        2..=13 => format!("{days} days ago"),
+        ..=0 => tr("today").into(),
+        1 => tr("yesterday").into(),
+        2..=13 => trf("{days} days ago", &[("days", &days.to_string())]),
         _ => when.format("%Y-%m-%d").to_string(),
     }
 }
@@ -239,9 +239,8 @@ impl Launcher {
         } else {
             let (backup, copy, folder) = (w.clone(), w.clone(), w.path.clone());
             let (delete, play) = (w.folder.clone(), w.folder.clone());
-            let running = self.client.is_some() || self.starting_client.is_some();
             let play_button = act("world-play", "Play", Kind::Secondary);
-            let play_button = if running {
+            let play_button = if !self.can_start_selected() {
                 disabled(play_button)
             } else {
                 play_button

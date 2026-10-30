@@ -5,7 +5,7 @@
 //! (hits, pushes, fire, its projectiles) runs with that guest swapped in.
 use super::{Game, lan::LanHost};
 use horizon_client::{
-    mobs::{Mob, MobEvent, PlayerView, Who},
+    mobs::{Mob, MobEvent, PlayerView, Species, Who},
     projectiles::{Hit, Projectile},
 };
 use horizon_core::geometry::{Aabb, Vec3};
@@ -26,8 +26,38 @@ pub(super) fn player_for(
     guests: &GuestViews,
     bound: Option<u32>,
 ) -> Option<u32> {
+    // A tame cat reads its owner wherever they are while they sleep, or just
+    // woke up (`CatRelaxOnOwnerGoal` uses `getOwner`, not the nearest player).
+    if m.species() == Species::Cat
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        let asleep = |v: &PlayerView| v.uuid == owner && (v.sleeping || v.sleep_timer > 0);
+        if host.is_some_and(asleep) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| asleep(v)) {
+            return Some(*conn);
+        }
+    }
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    // A tame wolf, cat or parrot sees its owner (`TamableAnimal.getOwner`), while they
+    // are in play, whoever is nearer. Not while it targets or was just hurt by
+    // a player: then `Who::Player` is that attacker, whoever it is, and the
+    // owner goals ignore it until the wolf lets go.
+    if !targeting
+        && matches!(m.species(), Species::Wolf | Species::Cat | Species::Parrot)
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        if host.is_some_and(|v| v.alive && v.uuid == owner) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| v.alive && v.uuid == owner) {
+            return Some(*conn);
+        }
+    }
     choose(m.position, targeting, host, guests, bound)
 }
 
@@ -65,8 +95,17 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
     matches!(
         e,
         MobEvent::AttackPlayer(..)
+            | MobEvent::AttackPlayerWithEffect { .. }
             | MobEvent::DamagePlayer { .. }
+            | MobEvent::SonicBoom {
+                target: Who::Player,
+                ..
+            }
             | MobEvent::Push {
+                target: Who::Player,
+                ..
+            }
+            | MobEvent::Knockback {
                 target: Who::Player,
                 ..
             }
@@ -79,7 +118,8 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
                 ..
             }
             | MobEvent::EffectPlayer { .. }
-            | MobEvent::AxolotlSupportPlayer
+            | MobEvent::AxolotlSupportPlayer { .. }
+            | MobEvent::ParrotToShoulder { .. }
     )
 }
 
@@ -175,9 +215,9 @@ impl Game<'_> {
             .iter()
             .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .map(|g| {
-                let [x, y, z] = g.position;
-                let height = if g.sneaking { 1.5 } else { 1.8 };
-                ([x - 0.3, y, z - 0.3], [x + 0.3, y + height, z + 0.3])
+                let b = g.bounds();
+                let (lo, hi) = (b.min_position(), b.max_position());
+                ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
             })
             .collect()
     }
@@ -319,7 +359,7 @@ impl Game<'_> {
                     uuid: horizon_client::lan::playerdata::uuid_ints(g.uuid),
                     position: g.position,
                     eye: [x, y + g.eye_height(), z],
-                    height: if g.sneaking { 1.5 } else { 1.8 },
+                    height: g.dimensions().height,
                     creative: g.creative(),
                     spectator: g.spectator(),
                     alive: !g.dead,
@@ -336,14 +376,9 @@ impl Game<'_> {
     }
 }
 
-/// A guest's bounding box (0.6 wide, 1.8 tall, 1.5 crouching).
+/// A guest's bounding box, by its pose (`Avatar.POSES`).
 pub(super) fn guest_bounds(g: &horizon_client::lan::guest::Guest) -> Aabb {
-    let [x, y, z] = g.position;
-    let height = if g.sneaking { 1.5 } else { 1.8 };
-    Aabb::new(
-        Vec3::new(x - 0.3, y, z - 0.3),
-        Vec3::new(x + 0.3, y + height, z + 0.3),
-    )
+    g.bounds()
 }
 
 #[cfg(test)]
@@ -358,22 +393,29 @@ mod tests {
             alive: true,
             creative,
             sneaking: false,
+            swimming: false,
             look: [0.0; 3],
             main_hand: None,
             off_hand: None,
             head: None,
             armor_cover: 0.0,
+            invisible: false,
             spectator: false,
             gold_armor: false,
             hurt_by: None,
             last_hurt: None,
             velocity: Vec3::ZERO,
             yaw: 0.0,
+            sprinting: false,
+            riding: false,
             hero: false,
             effects: Vec::new(),
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            sleeping: false,
+            sleep_timer: 0,
+            passenger: false,
         }
     }
 

@@ -66,6 +66,23 @@ pub enum ProjectileKind {
     },
 }
 impl ProjectileKind {
+    /// The width and height of its entity type's `sized(...)`.
+    pub fn size(&self) -> f64 {
+        match self {
+            Self::Arrow { .. } | Self::Trident => 0.5,
+            Self::Snowball
+            | Self::Egg
+            | Self::EnderPearl
+            | Self::LlamaSpit
+            | Self::Potion { .. } => 0.25,
+            Self::SmallFireball
+            | Self::WindCharge
+            | Self::BreezeWindCharge
+            | Self::ShulkerBullet { .. }
+            | Self::WitherSkull { .. } => 0.3125,
+            Self::LargeFireball { .. } => 1.0,
+        }
+    }
     /// Its entity type.
     pub fn id(&self) -> &'static str {
         match self {
@@ -109,6 +126,9 @@ pub struct Projectile {
     pub arrow: Option<Box<crate::arrows::ArrowState>>,
     /// `AbstractHurtingProjectile.accelerationPower`.
     pub acceleration: f64,
+    /// `Entity.needsSync`: a server tells its clients about the change this
+    /// tick instead of at the next update interval.
+    pub needs_sync: bool,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,6 +193,7 @@ impl Projectile {
             left_owner: false,
             bonus: Default::default(),
             acceleration: 0.1,
+            needs_sync: false,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
                 Box::new(crate::arrows::ArrowState::new(
@@ -247,6 +268,38 @@ impl Projectile {
     }
     pub fn is_arrow(&self) -> bool {
         matches!(self.kind, ProjectileKind::Arrow { .. })
+    }
+    /// Whether it is a `SpectralArrow` (its own entity type): a spectral
+    /// arrow's pickup item, or the glowing effect a dispenser shoots with.
+    pub fn is_spectral_arrow(&self) -> bool {
+        let ProjectileKind::Arrow { effect, .. } = &self.kind else {
+            return false;
+        };
+        effect.is_some_and(|(id, _)| id == "minecraft:glowing")
+            || self
+                .arrow
+                .as_ref()
+                .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+    }
+    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): the opaque colour of the
+    /// potion the arrow carries, from its tipped pickup item or the effect a
+    /// stray, bogged or parched adds; -1 for none.
+    pub fn arrow_effect_color(&self) -> i32 {
+        let ProjectileKind::Arrow { effect, .. } = &self.kind else {
+            return -1;
+        };
+        if self.is_spectral_arrow() {
+            return -1;
+        }
+        let rgb = match (effect, &self.arrow) {
+            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.color),
+            (None, Some(a)) if &*a.pickup_item.item == "minecraft:tipped_arrow" => a
+                .pickup_item
+                .potion()
+                .map(|p| crate::brewing::potion_color(Some(p))),
+            _ => None,
+        };
+        rgb.map_or(-1, |rgb| (rgb | 0xFF00_0000) as i32)
     }
     pub fn is_fireball(&self) -> bool {
         matches!(
@@ -746,9 +799,10 @@ impl Projectile {
             }
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
-            ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
-            // Drawn as `WindChargeModel` by the game.
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
+            // Drawn as `WindChargeModel` and `ShulkerBulletModel` by the game.
+            ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge
+            | ProjectileKind::ShulkerBullet { .. } => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
             // Drawn as their models by the game.

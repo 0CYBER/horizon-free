@@ -128,6 +128,9 @@ impl States {
     pub fn as_slice(&self) -> &[EntityState] {
         &self.list[..self.len]
     }
+    pub fn as_mut_slice(&mut self) -> &mut [EntityState] {
+        &mut self.list[..self.len]
+    }
 }
 
 impl Extend<EntityState> for States {
@@ -742,6 +745,24 @@ impl Entities {
                 chunk,
             });
         }
+        // TrackedEntity.getEffectiveRange: a vehicle is tracked as far as its
+        // widest indirect passenger, so a rider never leaves before its mount.
+        for (&vehicle, passengers) in &riding.passengers {
+            let Some(own) = self.states.get(&vehicle).filter(|s| s.seen == now) else {
+                continue;
+            };
+            let (index, mut range) = (own.index, own.range);
+            let mut pending = passengers.clone();
+            while let Some(id) = pending.pop() {
+                if let Some(s) = self.states.get(&id).filter(|s| s.seen == now) {
+                    range = range.max(s.range);
+                }
+                pending.extend_from_slice(riding.passengers(id));
+            }
+            self.probes[index].range = self
+                .range_percent
+                .map_or(range * 16, |p| p * (range * 16) / 100);
+        }
         self.flags.resize_with(viewers.len(), Vec::new);
         self.pairs.clear();
         self.pairs.resize(entities.len(), false);
@@ -936,6 +957,27 @@ mod tests {
         let mut out = Vec::new();
         s.send_changes(e, &Riding::default(), &mut out);
         out
+    }
+
+    #[test]
+    fn furnace_cart_sends_unpowered_metadata_when_fuel_runs_out() {
+        let mut powered = state(0.0);
+        powered.kind = "minecraft:furnace_minecart".into();
+        powered
+            .defaults
+            .push((13, serializer::BOOLEAN, Value::Bool(false)));
+        powered
+            .meta
+            .push((13, serializer::BOOLEAN, Value::Bool(true)));
+        let mut tracker = added(&powered);
+        let mut empty = powered.clone();
+        empty.meta.clear();
+        let mut packets = Vec::new();
+        tracker.send_dirty(&empty, true, &mut packets);
+        assert!(packets.iter().any(|packet| matches!(packet,
+            play::Clientbound::SetEntityData(data)
+                if data.values.contains(&(13, serializer::BOOLEAN, Value::Bool(false)))
+        )));
     }
 
     #[test]

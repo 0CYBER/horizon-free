@@ -7,11 +7,13 @@ use clap::{ArgAction, Command};
 use serde_json::{json, Map, Value};
 
 /// CLI commands that are not generated tools: the MCP server itself; No AI, the player's switch
-/// and never an agent's; and the ones mcp.rs runs in the session.
+/// and never an agent's; trusting native mods' code, the player's decision too; and the ones
+/// mcp.rs runs in the session.
 const NOT_TOOLS: &[&str] = &[
     "mcp",
     "agent-config",
     "no-ai",
+    "native-build",
     "play",
     "server",
     "account sign-in",
@@ -32,6 +34,8 @@ pub const DESTRUCTIVE: &[&str] = &[
     "packs remove",
     "worlds datapack-remove",
     "unshare-log",
+    // It sets shell commands the next Play runs: the player says yes first.
+    "instance launch",
 ];
 
 /// Commands that send something or reach other people: only when the player asks.

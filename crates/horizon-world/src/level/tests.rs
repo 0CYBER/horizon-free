@@ -639,6 +639,55 @@ impl World<'_> {
             player,
         )
     }
+    /// Right-click the north face of `pos` holding `item` in the main hand.
+    fn use_item(&mut self, pos: BlockPos, item: &str) -> InteractionResult {
+        let player = PlayerContext {
+            yaw: 0.0,
+            pitch: 0.0,
+            may_build: true,
+            can_eat: true,
+            game_master: false,
+        };
+        let hit = horizon_core::geometry::Vec3::new(
+            f64::from(pos.x) + 0.5,
+            f64::from(pos.y) + 0.5,
+            f64::from(pos.z),
+        );
+        self.f.behaviours.use_item_on(
+            &mut self.level,
+            &mut self.ticks,
+            pos,
+            Direction::North,
+            hit,
+            player,
+            Some(item),
+        )
+    }
+}
+
+#[test]
+fn glowstone_charges_a_respawn_anchor_up_to_four() {
+    // RespawnAnchorBlock.useItemOn: glowstone on an anchor below 4 charges
+    // charges it and the click ends (SUCCESS), so no glowstone is placed (#3034).
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let empty = w.id("respawn_anchor", &[("charges", "0")]);
+    w.put(pos, empty);
+    for charges in 1..=4 {
+        assert_eq!(
+            w.use_item(pos, "minecraft:glowstone"),
+            InteractionResult::Success
+        );
+        assert_eq!(w.prop(pos, "charges"), charges.to_string());
+    }
+    // A full anchor can't be charged: TRY_WITH_EMPTY_HAND, then useWithoutItem
+    // (the respawn point), which leaves the charges alone.
+    w.use_item(pos, "minecraft:glowstone");
+    assert_eq!(w.prop(pos, "charges"), "4");
+    // Anything else on an empty anchor passes, so the item is used instead.
+    w.put(pos, empty);
+    assert_eq!(w.use_item(pos, "minecraft:stone"), InteractionResult::Pass);
+    assert_eq!(w.prop(pos, "charges"), "0");
 }
 
 #[test]
@@ -1361,7 +1410,7 @@ fn player_breaks_fire_with_extinguish_not_generic_break_event() {
         w.level.events.clear();
         assert!(
             w.f.behaviours
-                .player_destroy_block(&mut w.level, &mut w.ticks, pos, false)
+                .player_destroy_block(&mut w.level, &mut w.ticks, pos, false, true)
         );
         let is_fire = name != "white_wool";
         assert_eq!(
@@ -1423,4 +1472,153 @@ fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
     w.put(BlockPos::new(1, 1, 0), power);
     stand(&mut w, true, 1.9375);
     assert_eq!(w.prop(pos, "tilt"), "none");
+}
+
+#[test]
+fn using_storage_and_interactable_blocks_succeeds() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        ("chest", &[("facing", "north"), ("type", "single")]),
+        ("trapped_chest", &[("facing", "north"), ("type", "single")]),
+        ("barrel", &[("facing", "up")]),
+        ("ender_chest", &[("facing", "north")]),
+        ("shulker_box", &[("facing", "up")]),
+        ("dispenser", &[("facing", "north")]),
+        ("dropper", &[("facing", "north")]),
+        ("hopper", &[("facing", "down")]),
+        ("crafter", &[("orientation", "north_up")]),
+        ("furnace", &[("facing", "north")]),
+        ("blast_furnace", &[("facing", "north")]),
+        ("smoker", &[("facing", "north")]),
+        ("brewing_stand", &[]),
+        ("beacon", &[]),
+        ("decorated_pot", &[]),
+        ("jukebox", &[("has_record", "true")]),
+    ];
+    for &(name, props) in cases {
+        w.put(pos, w.id(name, props));
+        assert_eq!(
+            w.use_block(pos),
+            InteractionResult::Success,
+            "{name} should succeed (client swing)"
+        );
+    }
+    w.put(pos, w.id("jukebox", &[("has_record", "false")]));
+    assert_eq!(
+        w.use_block(pos),
+        InteractionResult::Pass,
+        "an empty jukebox passes"
+    );
+}
+
+#[test]
+fn creative_breaking_piston_head_does_not_drop_piston() {
+    for (piston_name, head_type) in [("piston", "normal"), ("sticky_piston", "sticky")] {
+        let mut w = world!();
+        let base_pos = BlockPos::new(0, 1, 0);
+        let head_pos = BlockPos::new(1, 1, 0);
+        let base = w.id(piston_name, &[("extended", "true"), ("facing", "east")]);
+        let head = w.id(
+            "piston_head",
+            &[("type", head_type), ("facing", "east"), ("short", "false")],
+        );
+        w.put(base_pos, base);
+        w.put(head_pos, head);
+        w.level.events.clear();
+
+        // Breaking the head in creative mode. Destroying the base first makes the
+        // head's shape update remove it, so its own removeBlock finds air.
+        w.f.behaviours
+            .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, true, true);
+
+        // Both head and base must be removed:
+        assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
+        assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
+
+        // Must NOT drop the base: the head's own removal (its shape update) drops
+        // its empty loot, as vanilla's updateOrDestroy does.
+        assert!(
+            !w.level
+                .events
+                .iter()
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "creative mode breaking {head_type} piston head must not drop the base piston"
+        );
+    }
+}
+
+#[test]
+fn survival_breaking_piston_head_drops_piston() {
+    for (piston_name, head_type) in [("piston", "normal"), ("sticky_piston", "sticky")] {
+        let mut w = world!();
+        let base_pos = BlockPos::new(0, 1, 0);
+        let head_pos = BlockPos::new(1, 1, 0);
+        let base = w.id(piston_name, &[("extended", "true"), ("facing", "east")]);
+        let head = w.id(
+            "piston_head",
+            &[("type", head_type), ("facing", "east"), ("short", "false")],
+        );
+        w.put(base_pos, base);
+        w.put(head_pos, head);
+        w.level.events.clear();
+
+        // Breaking the head in survival mode:
+        assert!(
+            w.f.behaviours
+                .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, false, true),
+            "head should be destroyed"
+        );
+
+        // Both head and base must be removed:
+        assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
+        assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
+
+        // Must drop the base piston at base_pos:
+        assert!(
+            w.level
+                .events
+                .iter()
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "survival mode breaking {head_type} piston head must drop base piston"
+        );
+    }
+}
+
+/// A lever on the back of a piston stays through extend and retract.
+#[test]
+fn lever_on_piston_back_survives_extend_and_retract() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    for kind in ["piston", "sticky_piston"] {
+        let piston = w.id(kind, &[("facing", "east")]);
+        let lever = w.id("lever", &[("face", "wall"), ("facing", "west")]);
+        w.set(BlockPos::new(0, 1, 0), piston);
+        w.set(BlockPos::new(-1, 1, 0), lever);
+        let on = w.b().table.set_bool(lever, w.b().props.powered, true);
+        w.set(BlockPos::new(-1, 1, 0), on);
+        for _ in 0..4 {
+            w.full_tick();
+        }
+        assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "true", "{kind}");
+        assert_eq!(
+            w.name(BlockPos::new(-1, 1, 0)),
+            "lever[face=wall,facing=west,powered=true]",
+            "{kind}"
+        );
+        w.set(BlockPos::new(-1, 1, 0), lever);
+        for _ in 0..4 {
+            w.full_tick();
+        }
+        assert_eq!(
+            w.prop(BlockPos::new(0, 1, 0), "extended"),
+            "false",
+            "{kind}"
+        );
+        assert_eq!(
+            w.name(BlockPos::new(-1, 1, 0)),
+            "lever[face=wall,facing=west,powered=false]",
+            "{kind}"
+        );
+    }
 }

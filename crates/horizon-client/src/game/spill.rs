@@ -5,9 +5,12 @@
 //! world as soon as the behaviour returns, within the same tick.
 use super::{Game, GameLevel, Screen, dispenser::new_item_motion, storage::is_shulker_box};
 use horizon_client::{
+    block_entity_item, block_entity_nbt,
     containers::{Banner, BlockEntity},
+    furnace::FurnaceCooking,
     item_data,
     items::ItemStack,
+    save,
 };
 use horizon_core::position::BlockPos;
 use horizon_core::random::RandomSource;
@@ -16,7 +19,7 @@ use horizon_world::{
         LevelEvent,
         removal::{self, PreRemove},
     },
-    nbt::{JavaString, Tag},
+    nbt::{Compound, JavaString, Tag},
     registry::BlockStateId,
 };
 use std::collections::HashMap;
@@ -32,6 +35,9 @@ pub(super) struct Pending {
     pub(super) names: HashMap<[i32; 3], (String, String)>,
     /// A decorated pot's sherds (back, left, right, front).
     pub(super) pot: HashMap<[i32; 3], [Option<ItemStack>; 4]>,
+    /// A head's profile, note block sound and name, or a hive's bees: the
+    /// dropped item and the component patch it takes.
+    pub(super) copied: HashMap<[i32; 3], (String, Compound)>,
 }
 impl Pending {
     /// Remember what the block entity at `pos` copies into the drops of `block`.
@@ -48,6 +54,31 @@ impl Pending {
         }
         if let Some(name) = name {
             self.names.insert(pos, (block.to_owned(), name));
+        }
+        // `copy_components` from the block entity: the head tables copy the
+        // profile (player heads), note block sound and name, the hive tables
+        // the bees.
+        let include: &[&str] = match entity {
+            BlockEntity::Skull(_) if block.starts_with("minecraft:player_") => &[
+                "minecraft:profile",
+                "minecraft:note_block_sound",
+                "minecraft:custom_name",
+            ],
+            BlockEntity::Skull(_) => &["minecraft:custom_name"],
+            BlockEntity::Beehive(_) => &["minecraft:bees"],
+            _ => &[],
+        };
+        if !include.is_empty() {
+            let saved = save::encode_block_entity((pos[0], pos[1], pos[2]), entity, block);
+            let mut patch = block_entity_nbt::canonical(&saved)
+                .map(|saved| block_entity_item::pick(&saved))
+                .unwrap_or_default();
+            patch.retain(|k, _| include.contains(&k.to_string_lossy().as_str()));
+            if !patch.is_empty() {
+                // `Blocks.wallVariant`: a wall head drops the standing item.
+                let item = block.replacen("_wall_", "_", 1);
+                self.copied.insert(pos, (item, patch));
+            }
         }
         if is_shulker_box(block)
             && let BlockEntity::Chest(items) = entity
@@ -74,7 +105,21 @@ impl Pending {
             .is_some_and(|(item, _)| **item == *stack.item)
             && let Some((_, name)) = self.names.remove(&pos)
         {
-            stack.data_mut().custom_name = Some(name);
+            stack.data_mut().custom_name =
+                Some(horizon_world::nbt::Tag::String(name.as_str().into()));
+        }
+        if self
+            .copied
+            .get(&pos)
+            .is_some_and(|(item, _)| **item == *stack.item)
+            && let Some((_, copied)) = self.copied.remove(&pos)
+        {
+            let mut patch = match item_data::encode_components(stack) {
+                Some(Tag::Compound(c)) => c,
+                _ => Default::default(),
+            };
+            patch.extend(copied);
+            (stack.damage, stack.extra) = item_data::decode_components(Some(&Tag::Compound(patch)));
         }
         if &*stack.item == "minecraft:decorated_pot" {
             // The pot's block entity always copies its decorations, empty or not.
@@ -155,6 +200,7 @@ impl Pending {
         self.shulker.remove(&pos);
         self.banner.remove(&pos);
         self.names.remove(&pos);
+        self.copied.remove(&pos);
     }
 }
 
@@ -176,6 +222,12 @@ pub(super) struct Spill {
     /// Block entities the behaviour removed, for the game's own follow-ups
     /// (open screens, playing songs).
     pub(super) removed: Vec<([i32; 3], BlockEntity)>,
+}
+
+impl Spill {
+    pub(super) fn is_empty(&self) -> bool {
+        self.spawns.is_empty() && self.orbs.is_empty() && self.removed.is_empty()
+    }
 }
 
 /// `Block.popResource`: a spot around the block's centre from the level random.
@@ -572,10 +624,7 @@ impl Game<'_> {
     /// Add the item entities the block behaviour spawned and follow up on the
     /// block entities it removed.
     pub(super) fn flush_spill(&mut self) {
-        if self.spill.spawns.is_empty()
-            && self.spill.removed.is_empty()
-            && self.spill.orbs.is_empty()
-        {
+        if self.spill.is_empty() {
             return;
         }
         let spill = std::mem::take(&mut self.spill);

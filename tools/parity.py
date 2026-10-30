@@ -564,7 +564,7 @@ def dependencies(trace, scope=None):
         path = Path(path) if os.path.isabs(path) else ROOT / path
         if inside(path, ROOT) and not inside(path, LOCAL) and not inside(path, ROOT / "target") and path.is_file() \
                 and "__pycache__" not in path.parts:  # bytecode caches vary; their sources are dependencies already
-            kept.add(str(path.resolve().relative_to(ROOT)))
+            kept.add(path.resolve().relative_to(ROOT).as_posix())
     unique = []
     for artifact in artifacts:
         if artifact not in unique:
@@ -800,16 +800,21 @@ class LocalExecutor:
         self.name, self.jobs, self.memory_budget, self.timeout = HOST, jobs, memory_budget, timeout
         self.max_peak = max_peak  # set while other machines can take heavier harnesses
         self.running = {}
+        self.solo = set()  # harnesses that run alone here (solo_harnesses)
         self.dead = False  # this machine never drops out, unlike a remote host
         self.available, self.measured = 0, 0.0
         (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
         (STATE_DIR / "traces").mkdir(parents=True, exist_ok=True)
 
     def free(self):
+        if any(harness_of(label) in self.solo for label in self.running):
+            return 0
         return self.jobs - len(self.running)
 
     def accepts(self, name):
-        return True
+        # A solo harness waits until nothing else runs here; the others fill the slots meanwhile, so solo ones
+        # run last, alone.
+        return name not in self.solo or not self.running
 
     def fits(self, expected, only_here=True):
         """Admission by recorded peak, within the budget and leaving MEMORY_RESERVE of what is free now.
@@ -1138,9 +1143,10 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles, r
 def exit_on_termination():
     """SIGTERM and SIGHUP (a cancelled CI job, a dropped ssh) end this process through its finally blocks, which stop
     the running harnesses. Each runs in its own session, so without that they, and the vanilla servers they started,
-    outlive it (orphans of days were found on the Mac mini's runners, 2026-10-26)."""
-    for number in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(number, lambda received, _frame: sys.exit(128 + received))
+    outlive it (orphans of days were found on the Mac mini's runners, 2026-10-26). Windows has no SIGHUP."""
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), lambda received, _frame: sys.exit(128 + received))
 
 
 def worker_main(shared_local):
@@ -1371,6 +1377,12 @@ def changed_files(ref):
         set(filter(None, git("ls-files", "--others", "--exclude-standard") or []))
 
 
+def canonical_dependency_path(path: str) -> str:
+    """Normalize legacy Windows paths without changing their narrowed-root annotation."""
+    prefix, separator, suffix = path.partition(KEEP)
+    return prefix.replace("\\", "/") + separator + suffix
+
+
 def changed_harnesses(found, records, ref):
     """Harnesses new or changed since the merge base of HEAD and ref: their script, or a dependency of theirs that is
     an oracle (Java under mods/horizon/src/test) or a probe (a crate's example or binary), changed or was added."""
@@ -1380,7 +1392,8 @@ def changed_harnesses(found, records, ref):
         return set()
     found_changed = set()
     for name, script in found.items():
-        specific = [path for path in records.get(name, {}).get("dependencies", [])
+        dependencies = map(canonical_dependency_path, records.get(name, {}).get("dependencies", []))
+        specific = [path.split(KEEP)[0] for path in dependencies
                     if path.startswith("mods/horizon/src/test/") or "/examples/" in path or "/src/bin/" in path]
         if Path(script).relative_to(ROOT).as_posix() in changed or any(path in changed for path in specific):
             found_changed.add(name)
@@ -1420,6 +1433,7 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
         if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed:
             affected.add(name)
             continue
+        dependencies = [canonical_dependency_path(path) for path in dependencies]
         plain = {path.split(KEEP)[0] for path in dependencies}
         hit = (plain & changed) | parity_reach.unrecorded(ROOT, plain, changed)
         if not hit:
@@ -1434,7 +1448,8 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
         if over:
             affected.add(name)
             continue
-        narrowed = parity_reach.narrow(dependencies, recorded_artifacts(record), graph, changed, stop)
+        narrowed = parity_reach.narrow(dependencies, recorded_artifacts(dict(record, dependencies=dependencies)),
+                                      graph, changed, stop)
         if any(path.split(KEEP)[0] in changed and (children is None or parity_reach.declarations_changed(
                 ROOT, path.split(KEEP)[0], children, base, whole)) for path, (whole, children) in narrowed.items()):
             affected.add(name)
@@ -1449,17 +1464,34 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
     return affected
 
 
-def platform_skips(config):
-    """Harnesses tools/parity_hosts.json marks as giving different results on this platform: {name: reason}."""
-    if sys.platform == "linux":
-        return {}
-    return dict(config.get("linux_only", {}))
+def platform_skips(config, host=None):
+    """Harnesses tools/parity_hosts.json marks as giving different results on this platform, and those this host's
+    entry excludes (playhorizon's CI runner runs its own pull request jobs here, not only workers sent to it):
+    {name: reason}."""
+    skips = {} if sys.platform == "linux" else dict(config.get("linux_only", {}))
+    skips.update(config.get("hosts", {}).get(HOST if host is None else host, {}).get("exclude", {}))
+    return skips
 
 
 def known_flaky(config):
     """Harnesses tools/parity_hosts.json lists as failing now and then for a cause not fixed yet: one that fails runs
     once more, and passing then counts, reported as RETRIED. {name: reason}"""
     return dict(config.get("known_flaky", {}))
+
+
+def solo_harnesses(config):
+    """Harnesses tools/parity_hosts.json's "solo" lists ({name: reason}: those driving game windows, whose frames
+    are drawn on the CPU on Linux runners) run alone on a machine with SOLO_CPUS CPUs or fewer for this process
+    (playhorizon's runner has 4): beside other harnesses there they lose ticks between control requests. The set,
+    or an empty one on a bigger machine. PARITY_SOLO=1 or 0 forces it on or off."""
+    forced = os.environ.get("PARITY_SOLO")
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+    if forced == "0" or forced != "1" and cpus > SOLO_CPUS:
+        return set()
+    return set(config.get("solo", {}))
+
+
+SOLO_CPUS = 4
 
 
 def named_only(config):
@@ -1573,7 +1605,7 @@ def main():
         chosen = [name for name in found if stale(name, state, hasher, environment)]
     skips = platform_skips(host_config())
     for name in [name for name in chosen if base_name(name) in skips and not args.names]:
-        print(f"skipped on {sys.platform}: {name}: {skips[base_name(name)]}", flush=True)
+        print(f"skipped on {HOST} ({sys.platform}): {name}: {skips[base_name(name)]}", flush=True)
         chosen.remove(name)
     manual = {} if args.names or args.all else named_only(host_config())
     for name in [name for name in chosen if base_name(name) in manual]:
@@ -1640,6 +1672,10 @@ def main():
         reuse_oracles = not (args.fresh or args.all)
         local = LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
                               REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)
+        local.solo = solo_harnesses(config)
+        if local.solo & {harness_of(name) for name in selected}:
+            print(f"Alone on this machine ({SOLO_CPUS} CPUs or fewer), after the others: "
+                  f"{', '.join(sorted(local.solo & {harness_of(name) for name in selected}))}", flush=True)
         results, elapsed = run(selected, state, hasher, environment_key(hasher), [*remotes, local], reuse_oracles,
                                rounds, known_flaky(config))
     finally:

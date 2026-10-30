@@ -115,6 +115,37 @@ impl Game<'_> {
                 m.ai.nav.stop();
             }
         }
+        // Text displays riding a mob, as NPC plugins put a name over a head:
+        // `LivingEntity.getPassengerRidingPosition`, the vehicle's passenger
+        // attachment (the top of its box in its pose), less the display's own
+        // vehicle attachment, which is 0 (Display's dimensions are 0 by 0).
+        // On the local player, the top of its box in its pose and scale (`Avatar.POSES`).
+        let me = self.remote.as_ref().map(|r| r.entity_id as u32);
+        let own_seat = self.player.as_ref().map(|p| {
+            p.position
+                .add_vector(Vec3::new(0.0, f64::from(p.dimensions.height), 0.0))
+        });
+        for display in self.text_displays.values_mut() {
+            let Some(vehicle) = display.vehicle else {
+                continue;
+            };
+            let at = if Some(vehicle) == me {
+                let Some(at) = own_seat else { continue };
+                at
+            } else {
+                let Some(&j) = index.get(&vehicle) else {
+                    continue;
+                };
+                let vehicle = &self.mobs[j];
+                riders::seat(
+                    riders::passenger_attachment(vehicle),
+                    0.0,
+                    vehicle.position,
+                    vehicle.yaw,
+                )
+            };
+            display.ride(glam::DVec3::new(at.x, at.y, at.z));
+        }
     }
 
     /// `finalizeSpawn` jockeys of a naturally spawned mob: baby zombies on
@@ -159,7 +190,7 @@ impl Game<'_> {
             {
                 if let Some(zombie) = self.spawn_mob("minecraft:zombie", at, false) {
                     if let Some(z) = self.mobs.iter_mut().find(|m| m.id == zombie) {
-                        z.extra.main_hand = Some("minecraft:iron_spear".into());
+                        z.extra.set_main_hand(Some("minecraft:iron_spear".into()));
                     }
                     self.mount_mob(zombie, id);
                 }
@@ -189,7 +220,7 @@ impl Game<'_> {
             return;
         }
         if let Some(h) = self.mobs.iter_mut().find(|m| m.id == id) {
-            h.extra.main_hand = Some("minecraft:iron_spear".into());
+            h.extra.set_main_hand(Some("minecraft:iron_spear".into()));
         }
         let Some(camel) = self.spawn_mob("minecraft:camel_husk", at, false) else {
             return;
@@ -257,7 +288,8 @@ impl Game<'_> {
             if let Some(piglin) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
                 let baby = self.world.random.next_float() < CHICKEN_JOCKEY_ODDS;
                 if let Some(p) = self.mobs.iter_mut().find(|m| m.id == piglin) {
-                    p.extra.main_hand = Some("minecraft:warped_fungus_on_a_stick".into());
+                    p.extra
+                        .set_main_hand(Some("minecraft:warped_fungus_on_a_stick".into()));
                     p.extra.age = if baby { i32::MIN / 2 } else { 0 };
                 }
                 if let Some(s) = self.mobs.iter_mut().find(|m| m.id == id) {
@@ -279,11 +311,13 @@ impl Game<'_> {
     /// horse is a trap for fifteen minutes; a player within ten blocks springs
     /// it.
     pub(super) fn tick_skeleton_traps(&mut self) {
-        let player = self
-            .player
-            .as_ref()
-            .filter(|p| !p.health.dead_or_dying())
-            .map(|p| p.position);
+        // `Level.hasNearbyAlivePlayer`: alive, not a spectator, in the level.
+        let players: Vec<_> = self
+            .level_players()
+            .into_iter()
+            .filter(|p| p.alive && !p.spectator)
+            .map(|p| p.position)
+            .collect();
         let mut sprung = Vec::new();
         for m in &mut self.mobs {
             if m.species() != Species::SkeletonHorse || !m.extra.trap || !m.alive() {
@@ -296,7 +330,10 @@ impl Game<'_> {
                     continue;
                 }
             }
-            if player.is_some_and(|p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE) {
+            if players
+                .iter()
+                .any(|&p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE)
+            {
                 sprung.push(m.id);
             }
         }

@@ -5,14 +5,10 @@
 //! forcing the game mode. Its difficulty lock asks first (PopupScreen), and
 //! Restrictions opens RestrictionsScreen.
 //! Parity reference: https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/WorldOptionsScreen
-use super::{
-    Game, Screen,
-    game_rules_screen::{Exit, RulesScreen},
-    integrated::ServerOptions,
-    lan::LanSettings,
-};
+use super::{Game, Screen, integrated::ServerOptions, lan::LanSettings};
 use horizon_client::{
     font::Font,
+    game_rules_screen::{Exit, RulesScreen},
     hud::{HudBatch, rgba},
     text::{Text, named_color},
     ui::{self, EditBox},
@@ -963,6 +959,7 @@ impl Game<'_> {
         };
         let ctrl = self.keys.contains(&winit::keyboard::KeyCode::ControlLeft);
         let shortcut = self.edit_shortcut(event);
+        let types_text = self.types_text();
         let Some(o) = self.world_options.as_mut() else {
             return;
         };
@@ -974,7 +971,7 @@ impl Game<'_> {
                 None => {
                     let mut handled = false;
                     rules.edit(|b| handled = b.key(key, ctrl, false));
-                    if !handled && !ctrl {
+                    if !handled && types_text {
                         self.world_options_text(event.text.as_deref());
                     }
                 }
@@ -988,7 +985,7 @@ impl Game<'_> {
             o.port.shortcut(shortcut, &mut self.clipboard);
             return;
         }
-        if !o.port.key(key, ctrl, false) && !ctrl {
+        if !o.port.key(key, ctrl, false) && types_text {
             self.world_options_text(event.text.as_deref());
         }
     }

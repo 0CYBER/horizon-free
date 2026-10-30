@@ -450,7 +450,6 @@ mod tests {
             &biomes,
             seed,
             dimension,
-            "minecraft:normal",
         )
         .unwrap();
         let mut worker = terrain.worker();

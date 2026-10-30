@@ -296,7 +296,7 @@ pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
     let item: Arc<str> = stack.item.clone();
     let x = &mut m.extra;
     match slot {
-        Slot::MainHand => x.main_hand = Some(item),
+        Slot::MainHand => x.set_main_hand(Some(item)),
         Slot::OffHand => x.off_hand = Some(item),
         Slot::Feet => x.feet = Some(item),
         Slot::Legs => x.legs = Some(item),
@@ -987,7 +987,7 @@ impl Game<'_> {
             "minecraft:firework_rocket" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.launch_angled_rocket(at, shot.velocity, &one);
+                self.launch_angled_rocket(at, shot.velocity, &one, None);
             }
             _ => {
                 let kind = match item.as_str() {
@@ -1034,7 +1034,7 @@ impl Game<'_> {
                     a.pickup = horizon_client::arrows::Pickup::Allowed;
                 }
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.creatures.projectiles.push(shot);
+                self.add_projectile(shot);
             }
         }
     }
@@ -1456,30 +1456,14 @@ impl Game<'_> {
             if equipped { CLICK } else { FAIL },
         ))
     }
-    /// `WitherSkullBlock.getOrCreateWitherBase().find(level, pos)`: the soul
-    /// sand T below the row `head` is in.
+    /// `WitherSkullBlock.getOrCreateWitherBase().find(level, pos)`: a soul
+    /// sand T for the skull row, in any orientation.
     fn can_build_wither(&self, head: Pos) -> bool {
-        let soul = |p: Pos| {
-            matches!(
-                &*self.dispenser_block_name(p),
-                "minecraft:soul_sand" | "minecraft:soul_soil"
-            )
-        };
-        let air = |p: Pos| self.res.facts().is_air(self.block_at(p));
-        for (ax, az) in [(1, 0), (0, 1)] {
-            for col in 0..3 {
-                let left = (head.0 - ax * col, head.1, head.2 - az * col);
-                let at = |c: i32, row: i32| (left.0 + ax * c, left.1 - row, left.2 + az * c);
-                if (0..3).all(|c| soul(at(c, 1)))
-                    && soul(at(1, 2))
-                    && air(at(0, 2))
-                    && air(at(2, 2))
-                {
-                    return true;
-                }
-            }
-        }
-        false
+        self.find_wither_pattern(
+            horizon_client::block_pattern::WITHER_BASE,
+            [head.0, head.1, head.2],
+        )
+        .is_some()
     }
     fn dispense_carved_pumpkin(
         &mut self,
@@ -1548,6 +1532,7 @@ impl Game<'_> {
             return Ok((Some(stack), FAIL));
         };
         let target = (placed.x, placed.y, placed.z);
+        let state = self.apply_item_block_state([target.0, target.1, target.2], state, &stack)?;
         if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             self.world.block_entities.insert(target, entity);
             self.apply_placed_item([target.0, target.1, target.2], &stack, false);
@@ -2139,6 +2124,11 @@ pub(super) fn tipped_effect(stack: &ItemStack) -> Option<(&'static str, i32)> {
             def.effects
                 .iter()
                 .find(|(id, _, _)| !horizon_client::brewing::effect(id).is_some_and(|e| e.instant))
-                .map(|(id, duration, _)| (*id, (duration / 8).max(1)))
+                .map(|(id, duration, _)| {
+                    (
+                        horizon_client::brewing::namespaced(id),
+                        (duration / 8).max(1),
+                    )
+                })
         })
 }

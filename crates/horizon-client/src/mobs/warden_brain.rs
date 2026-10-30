@@ -937,6 +937,11 @@ impl B {
                 mm.sonic_boom_sound_delay.set_ttl((), SONIC_SOUND_DELAY);
                 // Entity event 62: the sonic boom keyframes start.
                 m.anim.states[warden::SONIC_BOOM].start(m.age as f32);
+                cx.events.push(MobEvent::EntityEvent {
+                    mob: m.id,
+                    event: 62,
+                    at: [m.position.x, m.position.y, m.position.z],
+                });
                 sound(m, "entity.warden.sonic_charge", 3.0, 1.0, cx.events);
                 true
             }
@@ -957,7 +962,7 @@ impl B {
                 }
                 mem(m).look_target.set(Tracker::Entity(target, true));
                 m.swing();
-                warden::do_hurt_target(m, target, w, cx.events);
+                warden::do_hurt_target(m, target, w, cx.lr, cx.events);
                 mem(m)
                     .attack_cooling_down
                     .set_ttl(true, MELEE_ATTACK_COOLDOWN);
@@ -1183,8 +1188,12 @@ fn swim_condition(m: &Mob) -> bool {
     m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
 }
 /// The `Cx` the mob library's attacks take.
-pub(super) fn cx<'a, 'w>(w: &'a MobWorld<'w>, events: &'a mut Vec<MobEvent>) -> Cx<'a, 'w> {
-    Cx { w, events }
+pub(super) fn cx<'a, 'w>(
+    w: &'a MobWorld<'w>,
+    lr: &'a mut LegacyRandom,
+    events: &'a mut Vec<MobEvent>,
+) -> Cx<'a, 'w> {
+    Cx { w, lr, events }
 }
 
 // ---- Printing ---------------------------------------------------------------

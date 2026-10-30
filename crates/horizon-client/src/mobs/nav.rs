@@ -232,7 +232,7 @@ impl Mob {
         }
         q
     }
-    fn create_path_raw(
+    pub(super) fn create_path_raw(
         &mut self,
         w: &MobWorld,
         targets: &[[i32; 3]],
@@ -579,6 +579,11 @@ impl Mob {
     pub fn stable_destination(&self, w: &MobWorld, p: [i32; 3]) -> bool {
         if self.species() == super::Species::Bee {
             return super::bee::stable_destination(w, p);
+        }
+        if self.species() == super::Species::Turtle
+            && let Some(stable) = super::turtle::stable_destination(self, w, p)
+        {
+            return stable;
         }
         // StriderPathNavigation: lava too.
         if self.kind.flags.lava_walker && w.block_name(p[0], p[1], p[2]) == "minecraft:lava" {
