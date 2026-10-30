@@ -328,7 +328,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
-          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks']
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'tag-query']
 
 
 class Game:
@@ -3499,6 +3499,44 @@ def sparked(player, other, kinds, act, ticks=20):
     return seen
 
 
+def copy_recreate_command(game, check):
+    """F3+I (KeyboardHandler.copyRecreateCommand): what it copied once `check` accepts it."""
+    game.raw('key', 'f3', 'down')
+    game.raw('key', 'i', 'tap')
+    game.raw('key', 'f3', 'up')
+    return game.until(lambda: game('status')['debug']['clipboard'], lambda c: bool(c) and check(c), ticks=40)
+
+
+def check_tag_query(host, guest, out):
+    """An operator guest's F3+I copies the server's data (#3518): DebugQueryHandler's tag queries,
+    answered by ServerGamePacketListenerImpl.handleBlockEntityTagQuery and handleEntityTagQuery.
+    A chest's items and an entity's tags never reach the client, so only the server's answer has them."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest = (x, y, z + 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} '
+                             'minecraft:chest{Items:[{Slot:0b,id:"minecraft:diamond",count:5}]}')
+    guest.wait(10)
+    guest.raw('look-at-block', *chest)
+    guest.wait(2)
+    block = copy_recreate_command(guest, lambda c: c.startswith(f'/setblock {chest[0]} {chest[1]} {chest[2]} '))
+    block_said = guest.raw('messages', 1)['chat']
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
+    guest('command', command=f'summon minecraft:pig {x + 0.5} {y} {z + 2.5} {{NoAI:1b,Tags:["tag_query"]}}')
+    guest.wait(20)
+    pig = guest.raw('entities', 6, 'pig')['entities'][0]
+    guest.raw('look-at-entity', pig['id'])
+    guest.wait(2)
+    entity = copy_recreate_command(guest, lambda c: c.startswith('/summon minecraft:pig '))
+    entity_said = guest.raw('messages', 1)['chat']
+    guest.shot(out, 'tag-query')
+    guest('command', command='kill @e[type=minecraft:pig,tag=tag_query]')
+    assert 'id:"minecraft:diamond"' in block, f"the chest's items are missing: {block}"
+    assert block_said == ['[Debug]: Copied server-side block data to clipboard'], block_said
+    assert 'Tags: ["tag_query"]' in entity, f"the pig's tags are missing: {entity}"
+    assert entity_said == ['[Debug]: Copied server-side entity data to clipboard'], entity_said
+    return {'block': block, 'entity': entity}
+
+
 def check_fireworks(host, guest, out):
     """Event 17 must arrive before removal, with the item's colored, trailing explosion (#1478).
 
@@ -3550,6 +3588,42 @@ def check_fireworks(host, guest, out):
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
     assert all(n > 20 for n in trails.values()), f'no later red trail/fade: {trails}'
     return {'flashes': flashes, 'red_burst': burst, 'red_trail_fade': trails, 'rockets': rockets}
+
+
+def check_rocket_walls(host, guest, out):
+    """A rocket shot at an angle explodes on a block only with explosions (#4281).
+
+    FireworkRocketEntity.onHitBlock: `hasExplosion()`; a plain one flies on to its lifetime (20-31 ticks). A
+    dispenser shoots at an angle as a crossbow does, at a wall three blocks away (about 7 ticks of flight). The
+    host samples its status in one ctl process; a rocket's span is the client ticks between the first and the
+    last sample that saw it, never more than it lived, and short of it by at most two gaps between samples.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    y += 3
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 2} {y + 2} {z + 6} minecraft:air')
+    host('command', command=f'fill {x - 2} {y - 1} {z + 5} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    plain = 'minecraft:firework_rocket'
+    star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
+    result = {}
+    for label, item in (('plain', plain), ('star', star)):
+        host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:dispenser[facing=south]')
+        host('command', command=f'item replace block {x} {y} {z} container.0 with {item}')
+        host.wait(5)
+        replies = host.script([f'command setblock {x} {y + 1} {z} minecraft:redstone_block']
+                              + ['wait 1', 'status'] * 45, every=True)
+        samples = [(r['ticks'], r['rockets']) for r in replies if 'rockets' in r]
+        seen = [tick for tick, n in samples if n]
+        result[label] = {'span': seen[-1] - seen[0] if seen else None, 'samples': len(samples),
+                         'last': samples[-1][1], 'guest_last': guest('status')['rockets']}
+    host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
+        f'a rocket outlived its lifetime: {result}')
+    # A plain rocket lives 20-31 ticks; one with explosions is gone at the wall.
+    assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the wall: {result}'
+    assert result['star']['span'] is not None and result['star']['span'] < 14, (
+        f'star rocket did not explode on the wall: {result}')
+    return result
 
 
 def check_sparks(host, guest, out):
@@ -5407,7 +5481,9 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'hud': check_hud,
              'sidebar': check_sidebar,
              'border': check_border,
-             'particles': check_particles, 'fireworks': check_fireworks}
+             'particles': check_particles, 'fireworks': check_fireworks,
+             'rocket-walls': check_rocket_walls,
+             'tag-query': check_tag_query}
 
 
 def run(ctl, out, resources, checks):

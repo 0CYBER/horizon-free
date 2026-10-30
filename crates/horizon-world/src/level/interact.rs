@@ -774,6 +774,52 @@ impl Behaviours {
         {
             return InteractionResult::Pass;
         }
+        // WallHangingSignBlock.useItemOn: a hanging sign aimed at the sign's side
+        // (not its editable faces, `isHittingEditableSide`) chains onto it. Sign
+        // text has no click commands here, so `canExecuteClickCommands` is false.
+        if self.data(state).is(Class::WallHangingSign)
+            && item
+                .and_then(|i| self.item_binding(i))
+                .is_some_and(|binding| binding.kind == super::data::ItemKind::HangingSign)
+            && face != self.facing(state)
+            && face != self.facing(state).opposite()
+        {
+            return InteractionResult::Pass;
+        }
+        // CandleCakeBlock.useItemOn: an empty hand on the lit candle (`candleHit`:
+        // above half a block) snuffs it, as `AbstractCandleBlock.extinguish`.
+        if item.is_none()
+            && self.data(state).chain.contains(&Class::CandleCake)
+            && hit.y - f64::from(pos.y) > 0.5
+            && self.table.bool(state, self.props.lit)
+        {
+            let mut sim = self.sim(level, ticks);
+            let next = self.table.set_bool(state, self.props.lit, false);
+            sim.set_block(pos, next, 11);
+            sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+            sim.game_event(pos, "minecraft:block_change");
+            return InteractionResult::Success;
+        }
+        // CandleBlock.useItemOn: an empty hand snuffs a lit candle (`mayBuild`).
+        if item.is_none()
+            && player.may_build
+            && self.data(state).chain.contains(&Class::Candle)
+            && self.table.bool(state, self.props.lit)
+        {
+            // AbstractCandleBlock.extinguish: unlit, the wick smoke, the
+            // extinguish sound, then the block-change game event.
+            let next = self.table.set_bool(state, self.props.lit, false);
+            let mut sim = self.sim(level, ticks);
+            sim.set_block_and_update(pos, next);
+            sim.emit(LevelEvent::BlockEvent {
+                pos,
+                state: next,
+                kind: "candle_smoke",
+            });
+            sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+            sim.game_event_state(pos, "minecraft:block_change", next);
+            return InteractionResult::Success;
+        }
         self.use_without_item(level, ticks, pos, face, hit, player)
     }
 

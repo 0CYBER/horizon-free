@@ -77,7 +77,7 @@ impl Game<'_> {
             || self.camera_type.first_person()
             || self.sleeping.is_some()
             || self.spectator()
-            || self.potions.effects.get("invisibility").is_some()
+            || self.own_invisible()
         {
             return None;
         }
