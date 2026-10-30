@@ -385,6 +385,7 @@ impl Game<'_> {
         }
         let id = mob.id;
         self.mobs.push(mob);
+        self.native_mobs_joined(self.mobs.len() - 1, false);
         self.enchant_spawn_equipment(id);
         if !persistent && !scripted {
             self.spawn_jockeys(id, true);
@@ -424,6 +425,7 @@ impl Game<'_> {
             }
         }
         self.mobs.push(mob);
+        self.native_mobs_joined(self.mobs.len() - 1, false);
         Some(id)
     }
     /// The `summon` command: spawn a mob in front of the player or at a position.
@@ -1676,6 +1678,7 @@ impl Game<'_> {
                     self.next_entity += 1;
                     m.id = self.next_entity;
                     self.mobs.push(*m);
+                    self.native_mobs_joined(self.mobs.len() - 1, false);
                 }
                 MobEvent::SpawnKind { kind, at, setup } => {
                     if let Some(id) = self.spawn_mob(&kind, at, setup.persistent) {

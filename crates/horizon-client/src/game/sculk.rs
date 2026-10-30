@@ -1139,6 +1139,7 @@ impl Game<'_> {
                 continue;
             }
             self.mobs.push(mob);
+            self.native_mobs_joined(self.mobs.len() - 1, false);
             return true;
         }
         false

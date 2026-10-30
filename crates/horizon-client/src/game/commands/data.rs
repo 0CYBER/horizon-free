@@ -785,6 +785,9 @@ impl Game<'_> {
             }
         }
         place(&mut tag, pos);
-        Ok(self.spawn_entity_from_nbt(tag))
+        let from = self.mobs.len();
+        let target = self.spawn_entity_from_nbt(tag);
+        self.native_mobs_joined(from, false);
+        Ok(target)
     }
 }

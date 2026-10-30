@@ -161,6 +161,7 @@ mod names;
 mod native_hooks;
 mod native_lifecycle;
 mod native_menus;
+mod native_net;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
@@ -2147,6 +2148,8 @@ struct Game<'a> {
     native_shaders: native_shaders::NativeShaders,
     /// The native lifecycle bookkeeping.
     native_lifecycle: native_lifecycle::NativeLifecycle,
+    /// Native mods' messages waiting (`game/native_net.rs`).
+    native_net: native_net::NativeNet,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -3001,6 +3004,8 @@ impl Game<'_> {
         // Player.drop: the drop statistics.
         self.stats.add("dropped", &thrown.item, thrown.count as i32);
         self.stats.custom("drop", 1);
+        let player = self.native_acting_id();
+        self.native_item_dropped(player, &thrown.item, thrown.count);
         self.throw_from_eyes(thrown, eye, true);
     }
     /// `Player.createItemStackToDrop`: an item entity thrown from the eyes
@@ -3162,6 +3167,11 @@ impl Game<'_> {
                 && b.max_position().z > min[2];
             // ItemEntity.playerTouch: no pickup delay, and the target (if any) is this player.
             if touching && item.pickup_delay == 0 && item.target.is_none_or(|t| t == own) {
+                if self.native_pickup_refused(&item.stack) {
+                    item.pickup_delay = 10;
+                    kept.push(item);
+                    continue;
+                }
                 let before = item.stack.count;
                 let kind = item.stack.item.clone();
                 let thrower = item.thrower;
@@ -9651,6 +9661,9 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed && old_health > 0.0 && !self.mobs[index].alive() {
+            self.native_kill_event(index);
+        }
         if landed {
             let victim = self.mob_entity(&self.mobs[index]);
             self.player_hit(
@@ -15356,6 +15369,7 @@ impl<'a> Game<'a> {
             panel: Default::default(),
             native_shaders: Default::default(),
             native_lifecycle: Default::default(),
+            native_net: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,

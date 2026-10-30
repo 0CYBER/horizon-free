@@ -6,6 +6,13 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 21 adds mod messages between a mod's server and client halves
+//! (`native_net_from_client`, `native_net_from_server`, and
+//! `native_net_send_to_player`, `native_net_send_to_server` in
+//! `native_net.rs`), and hearing players and mobs: `native_player_died`,
+//! `native_mob_spawned`, `native_mob_killed`, `native_item_dropped`,
+//! `native_item_picked_up`.
+//!
 //! API 20 adds buttons, tooltips and item icons on mod screens
 //! (`native_screen_click`, `native_screen_tooltip`, `native_menu_button`,
 //! and `native_item`, `native_screen_title`, `native_data`, `native_block`,
@@ -106,7 +113,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 20;
+pub(crate) const NATIVE_HOOKS_API: u32 = 21;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -701,6 +708,63 @@ impl Game<'_> {
     ) {
         let _ = (stack, pos, state);
     }
+    /// A message from `player`'s client on `channel` (`mod_id:name`), within
+    /// the caps (`native_net.rs`): check `channel`, and treat `data` as the
+    /// player's own bytes, checked by nothing. Runs in the tick after it
+    /// arrives, with no player's state swapped in. Server-side. API 21.
+    pub(super) fn native_net_from_client(&mut self, player: u128, channel: &str, data: &[u8]) {
+        let _ = (player, channel, data);
+    }
+    /// A message from the server on `channel` (`mod_id:name`), whose `data`
+    /// is the sender's own bytes. The window's game only. API 21.
+    pub(super) fn native_net_from_server(&mut self, channel: &str, data: &[u8]) {
+        let _ = (channel, data);
+    }
+    /// `player` died: where `ServerPlayer.die` starts, with the death
+    /// message's key when the game knows it (`death.attack.lava`; none for a
+    /// message it builds from the combat). It only hears. Server-side, for
+    /// every player of the world, whether death messages are shown or not.
+    /// API 21.
+    pub(super) fn native_player_died(&mut self, player: u128, cause: Option<&str>) {
+        let _ = (player, cause);
+    }
+    /// A new mob of `kind` joined `dimension` at `pos`: `natural` when the
+    /// world's spawning made it, false when something else did (a breed, a
+    /// raid, a spawner, a conversion, `/summon`). Not told of a mob loaded
+    /// with its chunk, leaving a hive or changing level. It only hears; the
+    /// mob is already among the game's mobs. Server-side. API 21.
+    pub(super) fn native_mob_spawned(
+        &mut self,
+        dimension: &str,
+        kind: &str,
+        pos: [f64; 3],
+        natural: bool,
+    ) {
+        let _ = (dimension, kind, pos, natural);
+    }
+    /// `player`'s melee blow killed the mob `entity` of `kind` (other deaths
+    /// aren't told yet). It only hears, after the blow landed. Server-side.
+    /// API 21.
+    pub(super) fn native_mob_killed(&mut self, player: u128, entity: u32, kind: &str) {
+        let _ = (player, entity, kind);
+    }
+    /// `player` threw `count` of `item` (`Player.drop`: the drop key, a
+    /// menu's throw...). It only hears. Server-side. API 21.
+    pub(super) fn native_item_dropped(&mut self, player: u128, item: &str, count: u32) {
+        let _ = (player, item, count);
+    }
+    /// `player` is about to take `count` of `item` from the ground
+    /// (`ItemEntity.playerTouch`). Set `canceled` to leave it there: the
+    /// stack isn't offered again for 10 ticks. Server-side. API 21.
+    pub(super) fn native_item_picked_up(
+        &mut self,
+        player: u128,
+        item: &str,
+        count: u32,
+        canceled: &mut bool,
+    ) {
+        let _ = (player, item, count, canceled);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -1080,8 +1144,39 @@ impl Game<'_> {
     }
 }
 
+/// A mob's kind as the hook points name it (`minecraft:zombie`).
+pub(super) fn mob_kind(mob: &horizon_client::mobs::Mob) -> String {
+    ["minecraft:", mob.kind.id.trim_start_matches("minecraft:")].concat()
+}
+
 /// Where the game calls the hook points.
 impl Game<'_> {
+    /// The acting player as the hook points name one: the guest whose turn
+    /// it is, else the host.
+    pub(super) fn native_acting_id(&mut self) -> u128 {
+        horizon_client::lan::playerdata::ints_uuid(self.acting_player_uuid())
+    }
+    /// Whether a native mod keeps the acting player from taking `stack`.
+    pub(super) fn native_pickup_refused(&mut self, stack: &ItemStack) -> bool {
+        let player = self.native_acting_id();
+        let mut canceled = false;
+        self.native_item_picked_up(player, &stack.item, stack.count, &mut canceled);
+        canceled
+    }
+    /// The mobs from index `from` on are new in the world.
+    pub(super) fn native_mobs_joined(&mut self, from: usize, natural: bool) {
+        for i in from..self.mobs.len() {
+            let m = &self.mobs[i];
+            let (kind, pos) = (mob_kind(m), [m.position.x, m.position.y, m.position.z]);
+            self.native_mob_spawned(self.dim.id(), &kind, pos, natural);
+        }
+    }
+    /// The acting player's blow killed mob `index`.
+    pub(super) fn native_kill_event(&mut self, index: usize) {
+        let (entity, kind) = (self.mobs[index].id, mob_kind(&self.mobs[index]));
+        let player = self.native_acting_id();
+        self.native_mob_killed(player, entity, &kind);
+    }
     /// `EntityBlock.newBlockEntity` of block `name`: Horizon's own, else a
     /// native mod's.
     pub(super) fn new_block_entity(&mut self, name: &str) -> Option<BlockEntity> {

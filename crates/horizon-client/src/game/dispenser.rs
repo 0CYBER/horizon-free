@@ -1755,6 +1755,7 @@ impl Game<'_> {
         let id = mob.id;
         self.mobs[index].removed = true;
         self.mobs.push(mob);
+        self.native_mobs_joined(self.mobs.len() - 1, false);
         Some(id)
     }
     /// `ShearsDispenseItemBehavior.tryShearEntity`: the first live, ready

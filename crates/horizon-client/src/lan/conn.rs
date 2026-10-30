@@ -887,6 +887,14 @@ fn login_and_configure(
                 data: Vec::new(),
             }),
         )?;
+        // And that it carries native mods' messages (horizon_protocol::mod_net).
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: horizon_protocol::mod_net::CHANNEL.into(),
+                data: Vec::new(),
+            }),
+        )?;
     }
     if brand == "horizon"
         && let Some(hash) = sync.content_identity

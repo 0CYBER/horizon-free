@@ -169,6 +169,41 @@
       "name": "place_block",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
+    },
+    {
+      "name": "net_from_client",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_net_from_client"
+    },
+    {
+      "name": "net_from_server",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_net_from_server"
+    },
+    {
+      "name": "player_died",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_died"
+    },
+    {
+      "name": "mob_spawned",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_spawned"
+    },
+    {
+      "name": "mob_killed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_killed"
+    },
+    {
+      "name": "item_dropped",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_dropped"
+    },
+    {
+      "name": "item_picked_up",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_picked_up"
     }
   ]
 }
