@@ -49,7 +49,10 @@ impl WorldRequest {
         // Before any chunk is read: a loaded container with a loot table is rolled as its chunk
         // is decoded (`save::roll_loaded_loot`), and the spawn chunks are read while the world
         // opens. Every world opens here: in-frame, on the server thread, on a dedicated server.
-        horizon_client::structure_blocks::loot_data(&options.resources);
+        horizon_client::structure_blocks::loot_data(
+            &options.resources,
+            &horizon_world::loot::PackOverlay::NONE,
+        );
         let Self {
             save_root,
             folder,
@@ -116,6 +119,7 @@ impl WorldRequest {
             make_streaming(res, pack, options, settings, &save_root, dim, level.seed)?;
         streaming.radius = settings.render_distance;
         let mut world = World::new(res.facts().air, level.seed);
+        world.shape = dim.shape();
         world.fast_lava = dim == Dim::Nether;
         world.game_time = level.time;
         world.day_time = options.time.unwrap_or(level.day_time);
@@ -254,8 +258,14 @@ pub(super) fn preload_world_data(
                         // seed shares: about 140 ms off opening the world.
                         let _ = data.prepare_decoration("minecraft:normal", "minecraft:overworld");
                     }
-                    let _ = horizon_client::structure_blocks::loot_data(&resources);
-                    let _ = super::lan::sync_data(&resources);
+                    // The preload is the game's own data; the world's packs'
+                    // tables are built when it opens (finish_open_world).
+                    let _ = horizon_client::structure_blocks::loot_data(
+                        &resources,
+                        &horizon_world::loot::PackOverlay::NONE,
+                    );
+                    let _ =
+                        super::lan::sync_data(&resources, &horizon_world::loot::PackOverlay::NONE);
                 });
             match spawned {
                 Ok(thread) => *preload = Preload::Started { thread, left: None },
@@ -297,11 +307,34 @@ pub(super) fn preload_server_loot(resources: &std::path::Path) {
         .name("Loot preload".into())
         .spawn(move || {
             horizon_threads::behind_server();
-            let _ = horizon_client::structure_blocks::loot_data(&resources);
+            let _ = horizon_client::structure_blocks::loot_data(
+                &resources,
+                &horizon_world::loot::PackOverlay::NONE,
+            );
         });
     if let Err(e) = spawned {
         log::warn!("Horizon: loot preload: {e}");
     }
+}
+
+/// The worldgen entries of the world's enabled data packs, logging what
+/// the generator leaves out of them.
+fn world_worldgen_overrides(
+    world_root: &std::path::Path,
+    biomes: &horizon_client::biome::Biomes,
+) -> horizon_world::worldgen::overrides::WorldgenOverrides {
+    let packs = horizon_client::datapack::discover(world_root);
+    let enabled = horizon_client::datapack::enabled_ids(world_root, &packs);
+    let enabled: Vec<_> = enabled
+        .iter()
+        .filter_map(|id| packs.iter().find(|p| &p.id == id))
+        .collect();
+    let (overrides, warnings) =
+        horizon_client::datapack::worldgen_overrides(&enabled, |b| biomes.contains(b));
+    for warning in warnings {
+        log::warn!("Horizon: data pack worldgen: {warning}");
+    }
+    overrides
 }
 
 pub(super) fn make_streaming(
@@ -313,10 +346,10 @@ pub(super) fn make_streaming(
     dim: Dim,
     seed: i64,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
-    let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(
-        world_root,
-        dim.id(),
-    )));
+    let save = Arc::new(SaveDir::new(
+        horizon_client::save::dimension_dir(world_root, dim.id()),
+        dim.shape(),
+    ));
     let mut locator = None;
     let flat = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))
@@ -326,6 +359,7 @@ pub(super) fn make_streaming(
                 &s,
                 pack.assets.registry,
                 res.biomes(),
+                dim.shape(),
             )
         });
     let mut streaming = if let Some(inner) = flat {
@@ -356,8 +390,13 @@ pub(super) fn make_streaming(
         let structures =
             horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
         let preset = horizon_client::save::WorldGen::preset(world_root);
-        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, preset, dim.id(), structures).map_err(|e| {
-                format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
+        let overrides = world_worldgen_overrides(world_root, res.biomes());
+        let inner = Arc::new(VanillaTerrain::for_world_with(&options.resources.join("worldgen"), &overrides, pack.assets.registry, res.biomes(), seed, preset, dim.id(), structures).map_err(|e| {
+                if overrides.is_empty() {
+                    format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
+                } else {
+                    format!("{e}\nThe world's data packs change its world generation: one of them may not be made for this version")
+                }
             })?);
         if dim == Dim::Overworld && structures {
             inner.search_rings_behind();

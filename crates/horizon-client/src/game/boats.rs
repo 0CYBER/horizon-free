@@ -601,9 +601,10 @@ impl Game<'_> {
             self.dismount(i);
             return Ok(());
         }
-        let mut b = self.boats[i].clone();
+        // The boat steers with the input `LocalPlayer.rideTick` latched on the
+        // previous tick; this tick's keys are latched after it ticked.
+        let mut b = self.tick_boat(self.boats[i].clone(), true);
         b.input = [keys.left, keys.right, keys.forward, keys.backward];
-        let b = self.tick_boat(b, true);
         // positionRider: the seat, turned with the boat; clampRotation to 105 degrees.
         self.yaw += b.delta_rotation;
         let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
@@ -658,15 +659,30 @@ impl Game<'_> {
     }
     /// `BoatItem.use`: aim at a block or the water surface.
     pub(super) fn place_boat(&mut self, stack: &ItemStack) -> bool {
-        let Some((wood, chest)) = any_boat_wood(&stack.item) else {
+        let Some(boat) = self.boat_to_place(stack) else {
             return false;
         };
-        if !self.boat_models.has(wood, chest) {
-            return false;
+        self.next_entity += 1;
+        let key = (
+            boat.position.x.floor() as i32 >> 4,
+            boat.position.z.floor() as i32 >> 4,
+        );
+        self.world.modified.insert(key);
+        self.boats.push(boat);
+        if !self.creative {
+            self.consume_held();
         }
-        let Some((eye, dir)) = self.aim() else {
-            return false;
-        };
+        self.swing_arm();
+        true
+    }
+    /// The boat `BoatItem.use` would place for `stack` (its SUCCESS), or
+    /// None when it aims at nothing (PASS) or the spot is taken (FAIL).
+    pub(super) fn boat_to_place(&self, stack: &ItemStack) -> Option<Boat> {
+        let (wood, chest) = any_boat_wood(&stack.item)?;
+        if !self.boat_models.has(wood, chest) {
+            return None;
+        }
+        let (eye, dir) = self.aim()?;
         let reach = self.reach();
         // ClipContext.Fluid.ANY: the first fluid surface (water or lava) or
         // block along the ray.
@@ -706,7 +722,7 @@ impl Game<'_> {
             }
             (Some(b), None) => b.0,
             (None, Some(w)) => w.0,
-            (None, None) => return false,
+            (None, None) => return None,
         };
         let mut boat = Boat::new(
             self.next_entity + 1,
@@ -730,17 +746,9 @@ impl Game<'_> {
             subject: None,
         };
         if !scene.unobstructed(inner).unwrap_or(false) || self.boat_entity_collision(bb) {
-            return false;
+            return None;
         }
-        self.next_entity += 1;
-        let key = (hit[0].floor() as i32 >> 4, hit[2].floor() as i32 >> 4);
-        self.world.modified.insert(key);
-        self.boats.push(boat);
-        if !self.creative {
-            self.consume_held();
-        }
-        self.swing_arm();
-        true
+        Some(boat)
     }
     pub(super) fn boat_hit(&self) -> Option<(usize, f64)> {
         let (eye, dir) = self.aim()?;
@@ -794,6 +802,7 @@ impl Game<'_> {
             self.screen = super::Screen::Inventory;
             self.capture(false);
             self.right = false;
+            self.swing_arm();
             return true;
         }
         if sneaking

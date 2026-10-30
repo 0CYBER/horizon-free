@@ -115,9 +115,17 @@ pub(super) struct AdvState {
     pub(super) announced: Vec<Text>,
     /// The tree being read on another thread since the world opened
     /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
-    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
+    pub(super) pending_tree: Option<std::thread::JoinHandle<Arc<Tree>>>,
     /// `inventory_changed`'s criteria by item, built for `tree`.
     inventory_index: Option<(Arc<Tree>, Arc<adv::InventoryIndex>)>,
+}
+impl AdvState {
+    /// Drop the prefetched tree and the index built for the old one (a
+    /// `/reload` rebuilt the tree).
+    pub(super) fn reset_tree(&mut self) {
+        self.pending_tree = None;
+        self.inventory_index = None;
+    }
 }
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
@@ -261,9 +269,12 @@ impl Game<'_> {
         if self.adv.tree.list.is_empty() {
             let tree = match self.adv.pending_tree.take().map(|h| h.join()) {
                 Some(Ok(tree)) => tree,
-                _ => Tree::load(&self.options.resources.join("data")),
+                _ => {
+                    let overlay = self.pack_files();
+                    Tree::shared(&self.options.resources.join("data"), &overlay)
+                }
             };
-            self.adv.tree = Arc::new(tree);
+            self.adv.tree = tree;
             // With the tree, while the world loads: built on the first
             // inventory change it cost that tick ~10 ms.
             self.inventory_index();
@@ -278,7 +289,7 @@ impl Game<'_> {
         {
             return index.clone();
         }
-        let items = self.res.items();
+        let items = self.items();
         let index = Arc::new(adv::InventoryIndex::build(&tree, |tag| {
             items
                 .item_tags
@@ -297,9 +308,15 @@ impl Game<'_> {
             return;
         }
         let data = self.options.resources.join("data");
+        // The world's packs' advancements go over the game's own.
+        let files = super::functions::content_overlay(
+            &self.world_root,
+            &self.options.resources,
+            self.cmds.vanilla_disabled,
+        );
         self.adv.pending_tree = std::thread::Builder::new()
             .name("horizon-advancements".into())
-            .spawn(move || Tree::load(&data))
+            .spawn(move || Tree::shared(&data, &horizon_world::loot::PackOverlay { files: &files }))
             .ok();
     }
     pub(super) fn load_advancements(&mut self) {
@@ -537,13 +554,13 @@ impl Game<'_> {
             .rewards
             .recipes
             .iter()
-            .filter(|r| self.res.stations().recipe_index.contains(r))
+            .filter(|r| world_stations!(self).recipe_index.contains(r))
             .cloned()
             .collect();
         let (_, unlocked) = self
             .level
             .recipe_book
-            .add_recipes(&self.res.stations().recipe_index, &rewards);
+            .add_recipes(&world_stations!(self).recipe_index, &rewards);
         for table in &a.rewards.loot {
             let items = self
                 .res
@@ -588,10 +605,17 @@ impl Game<'_> {
                             .announced
                             .push(Text::translate(key, &[player, name]));
                     }
-                    None => self.system_message(Text::translate(
-                        key,
-                        &[Text::literal(super::chat::PLAYER_NAME), name],
-                    )),
+                    None => {
+                        let text = Text::translate(key, &[self.player_display_text(), name]);
+                        // The guests hear of the host's advancement too.
+                        if let Some(host) = &self.lan {
+                            host.hub
+                                .system_message(horizon_client::lan::data::component_nbt(
+                                    &text.component(),
+                                ));
+                        }
+                        self.system_message(text);
+                    }
                 }
             }
         }
@@ -1082,6 +1106,31 @@ impl Game<'_> {
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
+    /// `ServerPlayer.onItemPickup`: the player in place (the host, or the
+    /// guest `as_guest` runs) picked up an item entity whose owner
+    /// (`ItemEntity.getOwner`, the thrower) is `thrower`: the whole stack, or
+    /// what is left after a partial take. An owner that is that player also
+    /// fires `LivingEntity.onItemPickup` (the by-entity trigger); one that is
+    /// gone, or another player, fires nothing here.
+    pub(super) fn trigger_thrown_picked_up_by_player(
+        &mut self,
+        stack: &ItemStack,
+        thrower: [i32; 4],
+    ) {
+        let target = if thrower == self.acting_uuid() {
+            let me = self.player_entity();
+            self.trigger_item_entity("minecraft:thrown_item_picked_up_by_entity", stack, &me);
+            me
+        } else if let Some(id) = self.mob_by_uuid(thrower) {
+            let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+                return;
+            };
+            self.mob_entity(m)
+        } else {
+            return;
+        };
+        self.trigger_item_entity("minecraft:thrown_item_picked_up_by_player", stack, &target);
+    }
     /// `ConstructBeaconTrigger`: the pyramid levels of the new beacon.
     pub(super) fn trigger_construct_beacon(&mut self, levels: i32) {
         let me = self.player_entity();
@@ -1366,6 +1415,55 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
         });
     }
+    /// `RecipeCraftedTrigger`: the recipe and the stacks that went into it
+    /// (`ServerPlayer.triggerRecipeCrafted`); an empty slot is air.
+    pub(super) fn trigger_recipe_crafted(
+        &mut self,
+        recipe: &str,
+        ingredients: &[Option<ItemStack>],
+    ) {
+        let me = self.player_entity();
+        let used: Vec<ItemView> = ingredients
+            .iter()
+            .map(|s| {
+                s.as_ref().map_or_else(
+                    || ItemView {
+                        id: "minecraft:air".to_owned(),
+                        ..Default::default()
+                    },
+                    item_view,
+                )
+            })
+            .collect();
+        let recipe = recipe.to_owned();
+        self.trigger("minecraft:recipe_crafted", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::id_matches(&c["recipes"], "recipe", &recipe, w)
+                && adv::recipe_ingredients(&c["ingredients"], &used, w)
+        });
+    }
+    /// `LootTableTrigger`: a container's loot table unpacked for this player
+    /// (`RandomizableContainer.unpackLootTable`).
+    pub(super) fn trigger_loot_table(&mut self, table: &str) {
+        let me = self.player_entity();
+        let table = table.to_owned();
+        self.trigger("minecraft:player_generates_container_loot", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::id_matches(&c["loot_tables"], "loot_table", &table, w)
+        });
+    }
     /// `BredAnimalsTrigger`.
     pub(super) fn trigger_bred(
         &mut self,
@@ -1493,7 +1591,7 @@ impl Game<'_> {
             .iter()
             .filter_map(|t| t.slot)
             .chain(packs)
-            .fold(0, |used, slot| used | 1 << slot)
+            .fold(self.tutorial_toast_slots(), |used, slot| used | 1 << slot)
     }
     /// The `AdvancementToast` or `RecipeToast` at `index` in its slot at `y`.
     fn draw_toast(&mut self, batch: &mut HudBatch, index: usize, y: f32, multiplier: f64) {

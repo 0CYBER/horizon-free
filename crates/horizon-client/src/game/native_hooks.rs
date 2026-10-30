@@ -1,10 +1,20 @@
-//! Hook points for native mods (docs/native-mods.md, "Hook points"): empty
+//! Hook points for native mods (docs/native-mods.md, "Mods on the hook points"): empty
 //! functions the game calls at fixed places, for horizon-mixins bundles to
 //! hook with HEAD. Hooks that answer take an out parameter (`claimed`,
 //! `zoom`…) so several mods can hook the same point. A native mod keeps its
 //! own state in a module of its bundle; the helpers below read and draw what
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
+//!
+//! API 7 adds block-change observations (`native_block_changed`).
+//!
+//! API 6 adds neighbour-change observations (`native_neighbor_changed`).
+//!
+//! API 5 adds read-only server block queries (`native_server_block`).
+//!
+//! API 4 adds authoritative server tick hooks (`native_server_tick`).
+//!
+//! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
 //! (`native_panel_items`, `native_panel_recipes`, `native_panel_event`),
@@ -19,7 +29,11 @@
 //! that would break such a bundle is not made.
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
-use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use super::native_lifecycle::{NativeLifecycleContext, ServerTickPhase, WorldPhase};
+use super::{
+    Game, GameLevel, LevelDimension, Screen, execution_role::ExecutionRole,
+    native_panel_recipes::RecipePage,
+};
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -29,13 +43,44 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_core::position::BlockPos;
+use horizon_world::{level::BlockId, registry::BlockStateId};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 2;
+pub(crate) const NATIVE_HOOKS_API: u32 = 7;
+
+impl GameLevel<'_> {
+    /// An authoritative server committed a changed state through `Level.setBlock`.
+    /// The world contains `new`; block side effects and neighbour updates follow.
+    #[inline(always)]
+    pub(super) fn native_block_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (dimension, pos, old, new);
+    }
+
+    /// An authoritative server is about to deliver `neighborChanged`.
+    /// State and block IDs are valid in this level's registries for this call.
+    #[inline(always)]
+    pub(super) fn native_neighbor_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+        moved: bool,
+    ) {
+        let _ = (dimension, pos, state, changed, moved);
+    }
+}
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -269,6 +314,28 @@ impl Game<'_> {
     /// and on servers), and the server's own (`native_window` is false
     /// there: the single player server thread, a dedicated server).
     pub(super) fn native_tick(&mut self) {}
+    /// The world's phases, read-only; `error_text` carries the engine's
+    /// own open-failure text, empty otherwise. Server-side; the deprecated
+    /// in-frame path delivers no lifecycle events. A server loop or final
+    /// save failure fires `WorldCloseFailed` with the error text.
+    pub(super) fn native_world_lifecycle(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: WorldPhase,
+        error_text: &str,
+    ) {
+        let _ = (context, phase, error_text);
+    }
+    /// The authoritative server tick's phases, read-only. A paused pass
+    /// fires nothing; a frozen world carries `world_running` false except
+    /// during a requested step.
+    pub(super) fn native_server_tick(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: ServerTickPhase,
+    ) {
+        let _ = (context, phase);
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -305,7 +372,8 @@ impl Game<'_> {
         let _ = mods;
     }
     /// The buttons of mod `mod_id`'s settings page, under its keys: push
-    /// their labels when it is yours. Asked again after each click.
+    /// their labels when it is yours. Asked again each time the page opens
+    /// and after each click.
     pub(super) fn native_settings(&mut self, mod_id: &str, buttons: &mut Vec<String>) {
         let _ = (mod_id, buttons);
     }
@@ -341,9 +409,12 @@ impl Game<'_> {
     pub(super) fn native_window(&self) -> bool {
         self.options.execution_role == ExecutionRole::Client
     }
-    /// Whether a box in `corner` shows: F3's debug screen takes the top left.
+    /// Whether a box in `corner` shows: F3's debug screen takes both top
+    /// corners (its left and right columns), and a bottom corner while one
+    /// of its charts is drawn there.
     pub(super) fn native_corner_shown(&self, corner: Corner) -> bool {
-        !self.debug || corner != Corner::TopLeft
+        let charts = self.debug_charts.corners(!self.has_singleplayer_server());
+        !debug_takes(corner, self.debug, charts)
     }
     /// The width of `text` in GUI pixels.
     pub(super) fn native_text_width(&self, text: &str) -> f32 {
@@ -502,8 +573,8 @@ impl Game<'_> {
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
         self.native_mods(&mut mods);
-        // A WebAssembly mod of the same id doesn't run (`start_mods`): the
-        // native row stands for it, and alone toggles its `mod.<id>` line.
+        // A WebAssembly mod of the same id: the native row stands for it,
+        // and alone toggles its `mod.<id>` line.
         self.settings
             .mods
             .installed
@@ -521,7 +592,6 @@ impl Game<'_> {
                 description: m.description,
                 problem: None,
                 dev: false,
-                has_settings: false,
                 native: Some(page),
             });
         }
@@ -533,6 +603,14 @@ impl Game<'_> {
             return;
         };
         self.native_settings_click(&id, button);
+        self.native_settings_refresh(i);
+    }
+    /// Native mod `i`'s page opened: its labels asked again, so that they
+    /// follow the language (and the mod's state) since the list was made.
+    pub(super) fn native_settings_refresh(&mut self, i: usize) {
+        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+            return;
+        };
         let mut buttons = Vec::new();
         self.native_settings(&id, &mut buttons);
         let row = self.settings.mods.installed.get_mut(i);
@@ -563,11 +641,11 @@ impl Game<'_> {
         self.native_wheel(steps, &mut claimed);
         claimed
     }
-    /// A client mod's command: a native mod's first, then a WebAssembly mod's.
+    /// A native mod's command.
     pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
         let mut ran = false;
         self.native_command(command, &mut ran);
-        ran || self.mod_command(command)
+        ran
     }
     /// The zoom in effect while playing (a native mod's); the spyglass's own
     /// view wins.
@@ -602,6 +680,19 @@ impl Game<'_> {
     }
 }
 
+/// Whether F3's debug screen, open when `debug`, covers `corner`
+/// (`DebugScreenOverlay.extractRenderState`): its left and right columns
+/// the top corners, and its charts the bottom corners `charts` (bottom left,
+/// bottom right) says they are drawn in.
+fn debug_takes(corner: Corner, debug: bool, charts: [bool; 2]) -> bool {
+    debug
+        && match corner {
+            Corner::TopLeft | Corner::TopRight => true,
+            Corner::BottomLeft => charts[0],
+            Corner::BottomRight => charts[1],
+        }
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -624,5 +715,98 @@ mod tests {
                 assert!(!line.contains(mac), "a macro in the hook points: {line}");
             }
         }
+    }
+
+    #[test]
+    fn lifecycle_source_stays_hookable() {
+        let source = include_str!("native_lifecycle.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+        for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!line.contains("cfg"), "a cfg in lifecycle source: {line}");
+            for mac in ["!(", "![", "! {", "!{"] {
+                assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_matches_hook_points() {
+        use std::collections::BTreeSet;
+
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../native-hooks.json")).unwrap();
+        let hooks = catalog["hooks"].as_array().unwrap();
+        let source = include_str!("native_hooks.rs");
+        let section = source
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        let level_section = source
+            .split("impl GameLevel<'_> {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        let level_hooks: BTreeSet<_> = level_section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let declared: BTreeSet<_> = section
+            .lines()
+            .chain(level_section.lines())
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let mut names = BTreeSet::new();
+        let mut contracts = BTreeSet::new();
+        for hook in hooks {
+            let name = hook["name"].as_str().unwrap();
+            let version = hook["version"].as_u64().unwrap();
+            assert!(
+                version > 0 && contracts.insert((name, version)),
+                "invalid or duplicate hook: {name} v{version}"
+            );
+            names.insert(name);
+            let owner = if level_hooks.contains(name) {
+                "GameLevel"
+            } else {
+                "Game"
+            };
+            assert_eq!(
+                hook["target"].as_str().unwrap(),
+                format!("horizon_client::game::native_hooks::{owner}<'_>::native_{name}")
+            );
+        }
+        assert_eq!(names, declared);
+    }
+
+    /// Vanilla's F3 draws a column in each top corner (`extractLines`, left
+    /// and right aligned), and its charts along the bottom.
+    #[test]
+    fn the_debug_screen_takes_both_top_corners_and_its_charts_corners() {
+        use super::{Corner, debug_takes};
+        for corner in Corner::ALL {
+            assert!(!debug_takes(corner, false, [true, true]), "{corner:?}");
+        }
+        assert!(debug_takes(Corner::TopLeft, true, [false, false]));
+        assert!(debug_takes(Corner::TopRight, true, [false, false]));
+        assert!(!debug_takes(Corner::BottomLeft, true, [false, false]));
+        assert!(!debug_takes(Corner::BottomRight, true, [false, false]));
+        assert!(debug_takes(Corner::BottomLeft, true, [true, false]));
+        assert!(!debug_takes(Corner::BottomRight, true, [true, false]));
+        assert!(debug_takes(Corner::BottomRight, true, [false, true]));
     }
 }
