@@ -217,6 +217,23 @@ properties and shapes the new block takes, and overrides what differs:
 }
 ```
 
+A block may define `shapes` to replace both its selection outline and collision
+shape. It selects a list of boxes by one template state property:
+
+```json
+"shapes": { "property": "axis", "values": {
+  "x": [[0, 0.25, 0.25, 1, 0.75, 0.75]],
+  "y": [[0.25, 0, 0.25, 0.75, 1, 0.75]],
+  "z": [[0.25, 0.25, 0, 0.75, 0.75, 1]]
+} }
+```
+
+Each box is `[min_x, min_y, min_z, max_x, max_y, max_z]` in block units.
+Each value of the template property needs an entry. Up to 16 boxes form a union;
+an empty list is an empty shape. Invalid bounds or values reject the content root.
+Without `shapes`, both shapes remain the template's. Other properties such as
+occlusion, light, and support still come from the template.
+
 A declaration may also set `"default_state": {"facing": "north"}`. The map
 changes only those state properties on the template's default; omitted properties keep
 their template values. Names and values must identify exactly one template state, or
