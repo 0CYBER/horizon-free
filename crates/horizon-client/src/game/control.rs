@@ -345,6 +345,11 @@ impl Game<'_> {
                 if action == "tap" {
                     self.native_key_event(physical, false, false);
                 }
+                // The merchant's focused offer takes Enter and Space, as the window's.
+                if action != "up" && self.screen == Screen::Inventory && self.merchant_key(physical)
+                {
+                    return ok();
+                }
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(
                     self.screen,

@@ -14449,6 +14449,13 @@ impl ApplicationHandler for Game<'_> {
                         return Ok(());
                     };
                     self.native_key_event(key, event.state == ElementState::Pressed, event.repeat);
+                    // Screen.keyPressed sees the physical key, repeats included.
+                    if event.state == ElementState::Pressed
+                        && self.screen == Screen::Inventory
+                        && self.merchant_key(key)
+                    {
+                        return Ok(());
+                    }
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
