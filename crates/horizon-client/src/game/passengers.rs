@@ -50,7 +50,7 @@ impl Game<'_> {
             let Some(v) = self.mobs[i].extra.mount else {
                 continue;
             };
-            // Only a mob or a boat: a server's display mounts come through
+            // Not a text display: a server's display mounts come through
             // `remote_set_passengers`, which seats them in `position_riders`.
             let valid = self.mobs[i].alive()
                 && !self.mobs[i].removed
