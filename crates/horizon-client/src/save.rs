@@ -1687,7 +1687,47 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
     chunk.light_loaded = true;
 }
 
-type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
+type RegionCache = Mutex<RegionFiles>;
+/// `RegionFileStorage.MAX_CACHE_SIZE`: the region files of a folder kept
+/// open. Each holds a file descriptor: kept for every region ever visited,
+/// a server whose players travel runs out of them (`Too many open files`).
+const MAX_OPEN_REGIONS: usize = 256;
+/// A folder's region files, and the ones known to be missing, by region,
+/// with when each was last asked for.
+#[derive(Default)]
+struct RegionFiles {
+    regions: HashMap<(i32, i32), (Option<Arc<Mutex<RegionFile>>>, u64)>,
+    clock: u64,
+}
+impl RegionFiles {
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+    /// The open region files.
+    #[cfg(test)]
+    fn open(&self) -> usize {
+        self.regions.values().filter(|(r, _)| r.is_some()).count()
+    }
+    /// Close the least recently used regions until there is room for one
+    /// more, as `RegionFileStorage.getRegionFile` does. A region a reader or
+    /// the writer still holds stays: closing it under them would let a
+    /// second handle read a header older than its sectors.
+    fn make_room(&mut self) {
+        while self.regions.len() >= MAX_OPEN_REGIONS {
+            let oldest = self
+                .regions
+                .iter()
+                .filter(|(_, (r, _))| r.as_ref().is_none_or(|r| Arc::strong_count(r) == 1))
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| *key);
+            let Some(key) = oldest else {
+                return;
+            };
+            self.regions.remove(&key);
+        }
+    }
+}
 /// The region file at `path` through the cache, which readers and the writer
 /// share, so a read never sees a header older than the sectors it points to.
 /// `create` makes a missing file (for a write); otherwise a missing file is
@@ -1698,13 +1738,16 @@ fn cached_region(
     path: &Path,
     create: bool,
 ) -> Result<Option<Arc<Mutex<RegionFile>>>> {
-    let mut regions = cache.lock().map_err(|_| "region cache poisoned")?;
-    if let Some(Some(region)) = regions.get(&key) {
-        return Ok(Some(region.clone()));
+    let mut cache = cache.lock().map_err(|_| "region cache poisoned")?;
+    cache.clock += 1;
+    let now = cache.clock;
+    if let Some((cached, used)) = cache.regions.get_mut(&key)
+        && (cached.is_some() || !create)
+    {
+        *used = now;
+        return Ok(cached.clone());
     }
-    if !create && regions.contains_key(&key) {
-        return Ok(None);
-    }
+    cache.make_room();
     if create && let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1720,7 +1763,7 @@ fn cached_region(
         Err(_) if !create => None,
         Err(e) => return Err(e.into()),
     };
-    regions.insert(key, region.clone());
+    cache.regions.insert(key, (region.clone(), now));
     Ok(region)
 }
 /// Write `records` into the region files of `folder` in place, as vanilla's
@@ -4933,6 +4976,61 @@ mod tests {
         super::upgrade_older_world(&dir).unwrap();
         assert_eq!(version(&dir), Some(i64::from(super::DATA_VERSION)));
         super::upgrade_older_world(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn region_files_kept_open_stay_under_vanillas_cache_size() {
+        let open_fds = || std::fs::read_dir("/dev/fd").map_or(0, |d| d.count());
+        let dir = std::env::temp_dir().join(format!("horizon-save-fds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let save = super::SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
+        let before = open_fds();
+        let held = super::cached_region(
+            &save.regions,
+            (0, 0),
+            &save.region_path("region", 0, 0),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        for x in 1..=600 {
+            super::cached_region(
+                &save.regions,
+                (x, 0),
+                &save.region_path("region", x, 0),
+                true,
+            )
+            .unwrap()
+            .unwrap();
+        }
+        // Other tests open files at the same time: a margin, far below 600.
+        let grown = open_fds().saturating_sub(before);
+        assert!(
+            grown <= super::MAX_OPEN_REGIONS + 32,
+            "{grown} descriptors more"
+        );
+        let cache = save.regions.lock().unwrap();
+        assert!(
+            cache.open() <= super::MAX_OPEN_REGIONS,
+            "{} open",
+            cache.open()
+        );
+        // The one still held is never closed under its holder.
+        assert!(Arc::ptr_eq(
+            &cache.regions[&(0, 0)].0.clone().unwrap(),
+            &held
+        ));
+        drop(cache);
+        // What was written to regions since closed reads back from the disk.
+        let entity = |x: i32| Tag::compound([("x", Tag::Int(x))]);
+        save.save_entities_later((0..300).map(|i| ((i * 32, 0), vec![entity(i)])).collect())
+            .unwrap();
+        save.flush().unwrap();
+        assert!(save.entity_regions.lock().unwrap().open() <= super::MAX_OPEN_REGIONS);
+        for i in [0, 1, 150, 299] {
+            assert_eq!(save.load_entities(i * 32, 0), vec![entity(i)]);
+        }
+        drop(held);
         let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
