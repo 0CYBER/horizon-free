@@ -1198,6 +1198,37 @@ fn refused_piston_move_leaves_the_piston_retracted() {
     assert!(w.ticks.moving_pistons.is_empty());
 }
 
+#[test]
+fn refused_sticky_pull_keeps_the_block_and_sends_no_event() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("sticky_piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    let dirt = w.id("dirt", &[]);
+    let air = w.b().air();
+    w.set(BlockPos::new(0, 1, 0), piston);
+    w.set(BlockPos::new(1, 1, 0), dirt);
+    w.set(BlockPos::new(-1, 1, 0), block);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), dirt);
+    w.level.guarded.insert(BlockPos::new(2, 1, 0));
+    w.level.events.clear();
+    w.set(BlockPos::new(-1, 1, 0), air);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "false");
+    assert_eq!(w.get(BlockPos::new(1, 1, 0)), air);
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), dirt, "the pull was refused");
+    // Clients would replay a retraction event and pull the block anyway.
+    let sent = w.level.events.iter().any(
+        |e| matches!(e, LevelEvent::BlockEntityEvent { pos, .. } if *pos == BlockPos::new(0, 1, 0)),
+    );
+    assert!(!sent, "no retraction event for a refused pull");
+}
+
 /// TntBlock.prime returns false on a client: neither the entity, the removal,
 /// nor its random push may be predicted while replaying a piston update.
 #[test]
