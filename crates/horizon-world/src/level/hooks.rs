@@ -536,6 +536,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
 
+    /// `LilyPadBlock.entityInside` for a boat: the lily pad at `pos` is
+    /// destroyed with its drops (`Level.destroyBlock(pos, true, entity)`).
+    pub(crate) fn boat_inside(&mut self, pos: BlockPos) {
+        let b = self.b;
+        let state = self.state(pos);
+        if b.data(state).is(Class::LilyPad) {
+            self.destroy_block(pos, true, super::flags::UPDATE_LIMIT);
+        }
+    }
+
     // ---- misc helpers ----
 
     /// `BaseFireBlock.onPlace`: a fire inside an empty obsidian frame (in the

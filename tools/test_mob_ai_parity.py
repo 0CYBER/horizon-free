@@ -313,6 +313,10 @@ def scenarios():
     # NeutralMob.updatePersistentAnger in Wolf.aiStep restarts the 20-39 s timer, one random draw,
     # every tick it has one, not once when hurt.
     add('wolf_hurt', 200, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 181 persistent', 'hurt 20 0'])
+    # A wet wolf (#2885): Wolf.aiStep starts the shake of a wet wolf standing still on the ground,
+    # Wolf.tick plays its sound (two draws) the same tick and cancels it again in water or rain.
+    add('wolf_shake', 200, ['fill 0 -61 0 0 -61 0 minecraft:water', 'mob minecraft:wolf 0.5 -61 0.5 0 183 persistent'])
+    add('wolf_rain', 100, ['mob minecraft:wolf 0.5 -60 0.5 0 184 persistent'], 'rain')
     # Mobs dropped into deep water (#542): FloatGoal users float at the surface (their navigation
     # can float, so Mob.jumpInLiquid adds 0.04 a tick), zombies sink.
     for species, seed in [('pig', 171), ('cow', 172), ('wolf', 173), ('cat', 174), ('horse', 175),

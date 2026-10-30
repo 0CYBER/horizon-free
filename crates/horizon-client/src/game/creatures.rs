@@ -21,7 +21,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::{
-    geometry::{Aabb, Direction, Vec3, traverse_blocks},
+    geometry::{Aabb, Direction, Vec3, traverse_blocks, trig::Mth},
     position::BlockPos,
     random::RandomSource,
 };
@@ -1321,7 +1321,7 @@ impl Game<'_> {
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
                         self.particles
                             .send_particles(&options, at, spread, speed, count);
-                        self.lan_level_particles(&options, at, spread, speed, count);
+                        self.lan_level_particles(&options, at, spread, speed, count, None);
                     }
                 }
                 MobEvent::Sound(name, at, volume, pitch)
@@ -1994,6 +1994,11 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::PandaSneezed { mob } => self.panda_sneezed(mob),
+                MobEvent::FallToPassengers {
+                    mob,
+                    distance,
+                    modifier,
+                } => self.fall_to_passengers(mob, distance, modifier),
                 MobEvent::ShedScute { mob, at, pitch } => {
                     // The mob already checked `shouldDropLoot` (a baby, `mob_drops`).
                     let table = "minecraft:gameplay/armadillo_shed";
@@ -2227,7 +2232,9 @@ impl Game<'_> {
             }
             return;
         }
-        let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
+        // (Mooshroom draws its own coin in getOffspringVariant.)
+        let coin = p.species() != Species::Mooshroom
+            && self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         // Axolotl.getBreedOffspring: useRareVariant (one in 1200) makes it blue,
         // else either parent's variant. The draws come from the mother's random.
         let axolotl = if p.species() == Species::Axolotl {
@@ -2241,6 +2248,24 @@ impl Game<'_> {
                     p.extra.variant
                 } else {
                     other
+                }
+            })
+        } else {
+            None
+        };
+        // MushroomCow.getOffspringVariant, from the mother's random: the other
+        // colour 1 time in 1024 when both parents share one, otherwise either
+        // parent's colour by a coin flip.
+        let mooshroom = if p.species() == Species::Mooshroom {
+            let mate = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            let own = p.extra.variant;
+            self.mobs.iter_mut().find(|m| m.id == parent).map(|m| {
+                if own == mate && m.random.next_int_bound(1024).unwrap_or(1) == 0 {
+                    if own == 1 { 0 } else { 1 }
+                } else if m.random.next_boolean() {
+                    own
+                } else {
+                    mate
                 }
             })
         } else {
@@ -2392,6 +2417,9 @@ impl Game<'_> {
             ) && !coin
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            }
+            if let Some(variant) = mooshroom {
+                child.extra.variant = variant;
             }
             // Sheep.getBreedOffspring: the lamb's wool mixes both parents' dyes.
             if p.species() == Species::Sheep {
@@ -3019,6 +3047,23 @@ impl Game<'_> {
             }
         }
     }
+    /// `AmethystBlock.onProjectileHit`: a projectile that strikes an amethyst
+    /// block rings `block.amethyst_block.chime` there, pitched by the level random.
+    fn amethyst_projectile_hit(&mut self, pos: [i32; 3]) {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if &*self.res.facts().get(state).name != "minecraft:amethyst_block" {
+            return;
+        }
+        let pitch = 0.5 + self.world.random.next_float() * 1.2;
+        self.level_events
+            .push(horizon_world::level::LevelEvent::Sound {
+                pos: BlockPos::new(pos[0], pos[1], pos[2]),
+                sound: "minecraft:block.amethyst_block.chime".into(),
+                volume: 1.0,
+                pitch,
+            });
+        let _ = self.process_level_events();
+    }
     /// `onProjectileHit` of chorus flowers, decorated pots and speleothems
     /// (pointed dripstone, sulfur spikes): an impact projectile
     /// (`#impact_projectiles`) breaks the block when `Projectile.mayInteract`
@@ -3091,6 +3136,11 @@ impl Game<'_> {
                 [position.x, position.y, position.z],
                 [velocity.x, velocity.y, velocity.z],
             ),
+            // Arrow.tick: `broadcastEntityEvent(this, 0)`. The window and the
+            // guests burst the particles themselves (`remote_arrow_puff`).
+            ArrowEvent::PotionPuff { id, .. } => {
+                self.lan_entity_event(id as i32, 0, [at.x, at.y, at.z]);
+            }
             ArrowEvent::Sound {
                 sound,
                 volume,
@@ -3236,6 +3286,7 @@ impl Game<'_> {
             && face != [0; 3]
         {
             self.bell_projectile_hit(p, pos, at, face);
+            self.amethyst_projectile_hit(pos);
             self.projectile_breaks_block(p, pos);
         }
         self.combat.projectile_owner = match p.owner {
@@ -4855,8 +4906,14 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob_spawned(&kind, at).is_none() {
+        let Some(mob_id) = self.spawn_mob_spawned(&kind, at) else {
             return Ok(false);
+        };
+        // Entity.applyImplicitComponents: a name from an anvil names the mob.
+        if let Some(name) = stack.custom_name()
+            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id)
+        {
+            m.custom_name = Some(name.to_owned());
         }
         self.swing_arm();
         if !self.creative
@@ -5136,10 +5193,28 @@ impl Game<'_> {
                 let m = glam::Mat4::from_translation(c)
                     * glam::Mat4::from_rotation_y((a.yaw - 90.0).to_radians())
                     * glam::Mat4::from_rotation_z(a.pitch.to_radians());
+                // ArrowRenderer: `state.shake = shakeTime - partialTicks`; ArrowModel.setupAnim
+                // rolls the root while the shake timer runs.
+                let shake = a
+                    .arrow
+                    .as_ref()
+                    .map_or(0.0, |s| s.shake as f32 - alpha as f32);
+                let roll = if shake > 0.0 {
+                    -(shake * 3.0).msin() * shake * (std::f32::consts::PI / 180.0)
+                } else {
+                    0.0
+                };
+                let pose_for = |part: &horizon_client::mobs::Part| {
+                    let mut pose = part.pose;
+                    if std::ptr::eq(part, model) {
+                        pose[5] += roll;
+                    }
+                    pose
+                };
                 horizon_client::mobs::render_model(
                     model,
                     m,
-                    &|part| part.pose,
+                    &pose_for,
                     [r.u0, r.v0, r.u1, r.v1],
                     packed,
                     0,

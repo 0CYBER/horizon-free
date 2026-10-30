@@ -7,6 +7,7 @@ use horizon_client::{
     hud::HudBatch,
     items::ItemStack,
     mobs::{MobEvent, Species, Who, equine},
+    motion::MotionWorld,
     sprint::Keys,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -364,12 +365,10 @@ impl Game<'_> {
         let jump = self.charge_mount_jump(i, keys);
         let m = &mut self.mobs[i];
         if jump > 0.0 {
-            // onPlayerJump: rear while jumping (horses).
-            if matches!(
-                m.species(),
-                Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
-            ) {
-                m.extra.counter = 20;
+            // AbstractHorse.onPlayerJump: slide on the keys and rear (horses,
+            // donkeys and mules).
+            if equine::is_equine(m.species()) {
+                equine::on_player_jump(m);
             }
             // The nautilus plays its dash sound itself.
             if equine::is_equine(m.species()) {
@@ -413,18 +412,15 @@ impl Game<'_> {
         let mut at = Vec3::new(m.position.x, m.position.y + seat(m.species()), m.position.z);
         if horizon_client::mobs::camel::is_camel(m.species()) {
             // Camel.getPassengerAttachmentPoint: the driver half a block
-            // forward, at the body anchor (lower while sitting).
-            let scale = if m.is_baby() { 0.6 } else { 1.0 };
-            let anchor = if horizon_client::mobs::camel::sitting(m) {
-                (2.375 - 1.43) * scale - if m.is_baby() { 0.09375 } else { 0.375 } + 0.2 * scale
-            } else {
-                2.375 * scale - if m.is_baby() { 0.09375 } else { 0.375 }
-            };
-            let yaw = m.yaw.to_radians();
+            // forward, at the body anchor (lower while sitting), turned with
+            // the camel.
+            let a = horizon_client::mobs::camel::passenger_attachment(m);
+            let turned = Vec3::new(a[0], a[1], a[2])
+                .rotate_y(-m.yaw * (std::f64::consts::PI / 180.0) as f32);
             at = Vec3::new(
-                m.position.x - f64::from(0.5 * scale * yaw.sin()),
-                m.position.y + f64::from(anchor) - 0.6,
-                m.position.z + f64::from(0.5 * scale * yaw.cos()),
+                m.position.x + turned.x,
+                m.position.y + turned.y - 0.6,
+                m.position.z + turned.z,
             );
         }
         if m.species() == Species::HappyGhast {
@@ -450,6 +446,12 @@ impl Game<'_> {
                 m.position.z + z * yaw.cos(),
             );
         }
+        // AbstractHorse.getPassengerAttachmentPoint: the rider slides back and
+        // up while the horse rears.
+        let rear = equine::rear_offset(m);
+        let rear = Vec3::new(rear[0], rear[1], rear[2])
+            .rotate_y(-m.yaw * (std::f64::consts::PI / 180.0) as f32);
+        at = Vec3::new(at.x + rear.x, at.y + rear.y, at.z + rear.z);
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;
@@ -550,6 +552,62 @@ impl Game<'_> {
             },
             _ => {}
         }
+    }
+    /// `Entity.propagateFallToPassengers`: whoever rides the mob `mob` takes
+    /// `causeFallDamage` of its fall, as the mount's own damage does. The local
+    /// player, the server players and the mob on its back each get it, with
+    /// their own safe distance and armour.
+    pub(super) fn fall_to_passengers(&mut self, mob: u32, distance: f64, modifier: f32) {
+        if self.riding == Some(mob) {
+            self.rider_fall_damage(distance, modifier);
+        }
+        let guests: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+            h.hub
+                .guests
+                .iter()
+                .filter(|g| g.vehicle == Some(mob) && Some(g.conn) != self.lan_acting)
+                .map(|g| g.conn)
+                .collect()
+        });
+        if !guests.is_empty()
+            && let Some(mut host) = self.lan.take()
+        {
+            for conn in guests {
+                self.guest_hit_by(&mut host, conn, |g| g.rider_fall_damage(distance, modifier));
+            }
+            self.lan = Some(host);
+        }
+        let rider = self
+            .mobs
+            .iter()
+            .find(|m| m.id == mob)
+            .and_then(|m| m.extra.rider);
+        if let Some(rider) = rider
+            && let Some(r) = self.mobs.iter_mut().find(|m| m.id == rider)
+        {
+            let mut events = Vec::new();
+            r.cause_fall_damage_from(distance, modifier, &mut events);
+            let _ = self.handle_mob_events(events);
+        }
+    }
+    /// The player this game runs (the local one, or the server player it acts
+    /// as) takes the fall of the mount under it. `cause_mount_fall` runs the
+    /// landing code's own fall damage for the player: creative flight is
+    /// exempt, and the statistic, the sounds and the damage records wait in the
+    /// player's events for its next tick, as a landing of its own leaves them.
+    fn rider_fall_damage(&mut self, distance: f64, modifier: f32) {
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        let _ = MotionWorld {
+            entities: &[],
+            player,
+            scene: &mut self.world,
+            assets: &self.pack.assets,
+            collision_binding: self.collision,
+            resources: self.motion,
+        }
+        .cause_mount_fall(distance, modifier);
     }
     /// `PlayerRideableJumping`: horses, camels and nautili (the dash).
     fn jumps(species: Species) -> bool {

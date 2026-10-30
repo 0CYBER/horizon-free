@@ -744,6 +744,43 @@ impl Goal for Float {
         }
     }
 }
+/// `ClimbOnTopOfPowderSnowGoal`: a powder-snow walker standing in powder snow
+/// jumps while the block above is powder snow or has no collision.
+#[derive(Clone, Debug)]
+pub struct ClimbOnTopOfPowderSnow;
+impl Goal for ClimbOnTopOfPowderSnow {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // wasInPowderSnow || isInPowderSnow: the freeze tick has read the
+        // powder snow the mob's box touches before the goals run.
+        if !super::ai::in_powder_snow(m, cx.w)
+            || !cx
+                .w
+                .data
+                .entity_has("minecraft:powder_snow_walkable_mobs", &m.kind.id)
+        {
+            return false;
+        }
+        // Mob.blockPosition().above()
+        let above = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32 + 1,
+            m.position.z.floor() as i32,
+        ];
+        cx.w.block_name(above[0], above[1], above[2]) == "minecraft:powder_snow"
+            || cx.w.collision_bounds(above).is_none()
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    /// `ClimbOnTopOfPowderSnowGoal.tick`: ask the mob to jump.
+    fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.jump = true;
+    }
+}
 /// PanicGoal: flee to a random position after panic-causing damage (or
 /// towards water while burning).
 #[derive(Clone, Debug)]

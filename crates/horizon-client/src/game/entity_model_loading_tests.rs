@@ -219,7 +219,7 @@ fn armor_equipment_loads_without_an_entity_model_document() {
     assert!(assets.layers.is_empty());
     assert_eq!(
         assets.equipment["minecraft:leather"]["humanoid"],
-        ("entity/equipment/humanoid/leather".into(), Some(0x123456))
+        vec![("entity/equipment/humanoid/leather".into(), Some(0x123456))]
     );
     assert!(!assets.equipment.contains_key("minecraft:invalid"));
 }
