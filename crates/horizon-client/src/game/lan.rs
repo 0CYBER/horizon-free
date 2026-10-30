@@ -847,6 +847,14 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // Bogged.DATA_SHEARED (the first entry after Mob's): the mushrooms
+        // on its head are gone.
+        "minecraft:bogged" => {
+            if e.sheared {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
         "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
         // Hoglin.DATA_IMMUNE_TO_ZOMBIFICATION (after AgeableMob's two) and
@@ -2017,6 +2025,11 @@ impl Game<'_> {
         // client, and hears the guardian's hum too.
         if event == 21 && self.options.execution_role.is_client() {
             self.start_guardian_sound(id as u32);
+        }
+        // Event 53: a mob sliding down a honey block sheds honey particles
+        // (HoneyBlock.showSlideParticles), drawn by the client that runs the world.
+        if event == 53 && self.options.execution_role.is_client() {
+            self.honey_slide_particles(at);
         }
         // Event 2: a mob's spear hit felt; the same window hears its own mob's hit.
         if event == 2 && self.options.execution_role.is_client() {

@@ -829,6 +829,15 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).entity_inside(pos);
     }
+    /// `LilyPadBlock.entityInside` for a boat whose box is inside `pos`.
+    pub fn boat_inside<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        self.sim(level, ticks).boat_inside(pos);
+    }
     /// `DaylightDetectorBlock.tickEntity` of the daylight detector at `pos`:
     /// its signal follows the sky every 20 game ticks. The detector's ticker
     /// exists only where the dimension has sky light.

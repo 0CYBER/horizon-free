@@ -5459,7 +5459,9 @@ impl Game<'_> {
             let stand_fits = held
                 .as_ref()
                 .is_some_and(|s| &*s.item == "minecraft:armor_stand")
-                && self.armor_stand_spawn(&hit).is_some();
+                && held
+                    .as_ref()
+                    .is_some_and(|s| self.armor_stand_spawn(&hit, s).is_some());
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,

@@ -350,7 +350,11 @@ impl Game<'_> {
     /// `ArmorStandItem.useOn` up to its `FAIL`s, which a client checks too:
     /// not on a bottom face, and nothing in the new stand's box. The block it
     /// stands in and the stand.
-    pub(super) fn armor_stand_spawn(&self, hit: &super::Hit) -> Option<([i32; 3], ArmorStand)> {
+    pub(super) fn armor_stand_spawn(
+        &self,
+        hit: &super::Hit,
+        stack: &ItemStack,
+    ) -> Option<([i32; 3], ArmorStand)> {
         if hit.face == [0, -1, 0] {
             return None;
         }
@@ -371,7 +375,11 @@ impl Game<'_> {
         );
         let yaw =
             (((self.yaw - 180.0 + 180.0).rem_euclid(360.0) - 180.0 + 22.5) / 45.0).floor() * 45.0;
-        let stand = ArmorStand::new(self.next_entity + 1, foot, yaw);
+        let mut stand = ArmorStand::new(self.next_entity + 1, foot, yaw);
+        // Entity.applyImplicitComponents: a name from an anvil names the stand.
+        if let Some(name) = stack.custom_name() {
+            stand.custom_name = Some(horizon_client::text::Text::literal(name));
+        }
         let b = stand.bounds();
         // Touching the floor is not a collision.
         let (lo, hi) = (b.min_position(), b.max_position());
@@ -399,7 +407,7 @@ impl Game<'_> {
         if &*stack.item != "minecraft:armor_stand" {
             return false;
         }
-        let Some((pos, stand)) = self.armor_stand_spawn(hit) else {
+        let Some((pos, stand)) = self.armor_stand_spawn(hit, stack) else {
             return false;
         };
         let foot = stand.position;

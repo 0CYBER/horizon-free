@@ -127,6 +127,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
             (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // Bogged.DATA_SHEARED: the mushrooms on its head are gone.
+            (Species::Bogged, 16, Value::Bool(sheared)) => m.extra.sheared = *sheared,
             // Tadpole.AGE_LOCKED (after AbstractFish's FROM_BUCKET).
             (Species::Tadpole, 17, Value::Bool(locked)) => m.extra.age_locked = *locked,
             // MushroomCow.DATA_TYPE (after AgeableMob's DATA_BABY_ID and

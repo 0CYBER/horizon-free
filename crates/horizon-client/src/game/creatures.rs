@@ -3047,6 +3047,23 @@ impl Game<'_> {
             }
         }
     }
+    /// `AmethystBlock.onProjectileHit`: a projectile that strikes an amethyst
+    /// block rings `block.amethyst_block.chime` there, pitched by the level random.
+    fn amethyst_projectile_hit(&mut self, pos: [i32; 3]) {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if &*self.res.facts().get(state).name != "minecraft:amethyst_block" {
+            return;
+        }
+        let pitch = 0.5 + self.world.random.next_float() * 1.2;
+        self.level_events
+            .push(horizon_world::level::LevelEvent::Sound {
+                pos: BlockPos::new(pos[0], pos[1], pos[2]),
+                sound: "minecraft:block.amethyst_block.chime".into(),
+                volume: 1.0,
+                pitch,
+            });
+        let _ = self.process_level_events();
+    }
     /// `onProjectileHit` of chorus flowers, decorated pots and speleothems
     /// (pointed dripstone, sulfur spikes): an impact projectile
     /// (`#impact_projectiles`) breaks the block when `Projectile.mayInteract`
@@ -3269,6 +3286,7 @@ impl Game<'_> {
             && face != [0; 3]
         {
             self.bell_projectile_hit(p, pos, at, face);
+            self.amethyst_projectile_hit(pos);
             self.projectile_breaks_block(p, pos);
         }
         self.combat.projectile_owner = match p.owner {
@@ -4891,8 +4909,14 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob_spawned(&kind, at).is_none() {
+        let Some(mob_id) = self.spawn_mob_spawned(&kind, at) else {
             return Ok(false);
+        };
+        // Entity.applyImplicitComponents: a name from an anvil names the mob.
+        if let Some(name) = stack.custom_name()
+            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id)
+        {
+            m.custom_name = Some(name.to_owned());
         }
         self.swing_arm();
         if !self.creative

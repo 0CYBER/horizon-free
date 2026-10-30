@@ -3,8 +3,8 @@
 use super::{
     Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     goals::{
-        Avoid, AvoidEntity, Cx, Float, Goal, HurtByTarget, LeapAtTarget, LookAtPlayer, MOVE,
-        MeleeAttack, NearestTarget, RandomLookAround, Stroll, goal_clone,
+        Avoid, AvoidEntity, ClimbOnTopOfPowderSnow, Cx, Float, Goal, HurtByTarget, LeapAtTarget,
+        LookAtPlayer, MOVE, MeleeAttack, NearestTarget, RandomLookAround, Stroll, goal_clone,
     },
 };
 use horizon_core::random::RandomSource;
@@ -57,6 +57,7 @@ pub fn register(m: &mut Mob) {
         S::Silverfish => {
             let g = &mut m.ai.goals;
             g.add(1, Float);
+            g.add(1, ClimbOnTopOfPowderSnow);
             g.add(3, SilverfishWakeUpFriends);
             g.add(4, MeleeAttack::new(1.0, false));
             g.add(5, SilverfishMergeWithStone::default());
