@@ -16,6 +16,7 @@ mod datapacks_page;
 mod dev_options;
 mod export_page;
 mod game_tools;
+mod home;
 mod import_page;
 mod instances_page;
 mod internet;
@@ -2226,43 +2227,39 @@ impl Launcher {
 
     fn picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let label = self
-            .selected()
-            .cloned()
-            .unwrap_or_else(|| "No version".into());
-        // A block as tall as Play: "VERSION" over the tag, and a chevron.
+        // "Nightly · ba6344a", a release's tag: the menu lists the full tags.
+        let label = self.selected().map_or_else(
+            || "No version".into(),
+            |tag| horizon_launcher::nightly::label(tag).unwrap_or_else(|| tag.clone()),
+        );
+        // As tall as Play: "Version" over the tag, and a chevron.
+        let n = t.night;
         let mut wrap = div().relative().child(
             keyboard(div().id("picker"), &t)
                 .relative()
                 .flex()
                 .items_center()
-                .gap(px(16.))
-                .h(px(60.))
+                .gap(px(14.))
+                .h(px(theme::night::PLAY))
                 .pl(px(14.))
                 .pr(px(12.))
-                .bg(t.panel)
-                .border_2()
-                .border_color(t.outline)
-                .children(blocks::edges(t.bevel, t.lip, theme::BEVEL))
+                .rounded(px(theme::night::RADIUS_CONTROL))
+                .bg(plate::alpha(n.card_hi, n.card_hi_alpha))
+                .border_1()
+                .border_color(plate::alpha(n.stroke, n.stroke_alpha))
                 .cursor_pointer()
-                .hover(move |s| s.bg(t.raised))
+                .hover(move |s| s.border_color(plate::alpha(n.stroke, 3. * n.stroke_alpha)))
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(4.))
+                        .gap(px(2.))
                         .child(
-                            blocks::pixel(11., FontWeight::MEDIUM)
-                                .text_color(t.muted)
-                                .child("VERSION"),
+                            shell::text(theme::night::CAPTION, t.muted)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(tr("Version").to_string()),
                         )
-                        .child(
-                            div()
-                                .font_family(theme::MONO)
-                                .text_size(px(15.))
-                                .text_color(t.ink)
-                                .child(label),
-                        ),
+                        .child(shell::text(theme::night::UI, t.ink).child(label)),
                 )
                 .child(blocks::icon("chevron-down", 20., t.muted))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -2273,12 +2270,13 @@ impl Launcher {
         if self.picker_open {
             let mut menu = div()
                 .absolute()
-                .top(px(66.))
-                .right_0()
+                .top(px(theme::night::PLAY + 6.))
+                .left_0()
                 .w(px(300.))
                 .p(px(6.))
-                .border_2()
-                .border_color(t.outline)
+                .rounded(px(theme::night::RADIUS_CONTROL))
+                .border_1()
+                .border_color(plate::alpha(n.stroke, 2. * n.stroke_alpha))
                 .bg(t.surface)
                 .flex()
                 .flex_col();
@@ -2393,66 +2391,7 @@ impl Launcher {
             }
             None => self.hero(&tag, &version, prepared, cx),
         };
-        let running = self.client.is_some() || self.starting_client.is_some();
-        let play_label = if running { "Running" } else { "Play" };
-        // The label clears the icon in every language ("Играть" is wider than "Play").
-        let mut play = button("play", play_label, Kind::Primary, &t)
-            .min_w(px(200.))
-            .h(px(60.))
-            .pl(px(60.))
-            .pr(px(28.))
-            .text_size(px(28.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(
-                div()
-                    .absolute()
-                    .left(px(26.))
-                    .top(px(17.))
-                    .child(blocks::icon("play", 22., t.on_face)),
-            );
-        match play_press(
-            prepared || java.is_some(),
-            self.owner,
-            self.preparing || running,
-        ) {
-            PlayPress::Nothing => play = disabled(play),
-            PlayPress::Play => {
-                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.picker_open = false;
-                    this.play();
-                    cx.notify();
-                }))
-            }
-            PlayPress::PrepareThenPlay => {
-                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.picker_open = false;
-                    this.play_when_prepared = this.selected().cloned();
-                    this.prepare(backend::MinecraftFrom::Install);
-                    cx.notify();
-                }))
-            }
-        }
-        let actions = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .child(
-                button("host", "Host a server", Kind::Ghost, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.go(Page::Servers);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    // Horizon's versions don't apply to a Java instance.
-                    .children(java.is_none().then(|| self.picker(cx)))
-                    .child(play),
-            );
+        let actions = self.home_actions(prepared || java.is_some(), java.is_some(), cx);
 
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
         // owner there is nothing to play, so signing in comes first.
@@ -2559,10 +2498,18 @@ impl Launcher {
                     .into_any_element()
             },
         );
+        // "Ready to play" only when Play would start the game now: not while it needs preparing,
+        // prepares, waits for an account that owns it, or runs.
+        let running = self.client.is_some() || self.starting_client.is_some();
+        let ready = play_press(
+            prepared || java.is_some(),
+            self.owner,
+            self.preparing || running,
+        ) == PlayPress::Play;
         let mut rows = div()
             .flex()
             .flex_col()
-            .child(section_title("Ready to play", "check", &t).mb(px(12.)))
+            .children(ready.then(|| section_title("Ready to play", "check", &t).mb(px(12.))))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
             .children(self.launch_panel(cx));
@@ -2602,9 +2549,6 @@ impl Launcher {
             )),
         };
         {
-            if java.is_none() {
-                rows = rows.child(self.join_friend_row(self.can_start(&tag), cx));
-            }
             // The top bar shows who plays; a row only when there is something to do about it:
             // no account that owns the game (Play needs one), or offline.
             if self.owner_shown() == Some(false) {
@@ -2688,8 +2632,25 @@ impl Launcher {
             .gap(px(24.))
             .overflow_hidden()
             .children(picture.into_iter().flatten())
-            .child(div().relative().child(hero))
-            .child(div().relative().child(actions));
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .items_end()
+                    .gap(px(32.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(28.))
+                            .child(hero)
+                            .child(actions),
+                    )
+                    // Notes and friends are Horizon's.
+                    .children(java.is_none().then(|| self.home_card(&tag, cx))),
+            );
         let mut page = div().flex().flex_col().gap(px(28.)).child(banner);
         // The preparation's progress and error right under the buttons, where the player
         // looks after pressing Prepare, not below the fold (#666).
@@ -2874,155 +2835,6 @@ impl Launcher {
                     .bg(t.danger),
             )
             .child(body)
-    }
-
-    /// The Play page's focal point: what will start, and a line from its notes. No `tag`: a Java
-    /// instance's Minecraft.
-    fn hero(&self, tag: &str, version: &str, prepared: bool, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let summary = match &self.releases {
-            Load::Ready(list) => list
-                .iter()
-                .find(|r| r.tag == tag)
-                .and_then(|r| backend::notes_summary(&r.body)),
-            _ => None,
-        };
-        let title = if tag.is_empty() {
-            "Minecraft"
-        } else {
-            "Horizon"
-        };
-        // Never squeezed by the rows below: the ping notice can make it tall.
-        let mut hero = div()
-            .flex()
-            .flex_none()
-            .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .gap(px(10.))
-                            .px(px(10.))
-                            .py(px(5.))
-                            .bg(t.side.opacity(0.85))
-                            .border_2()
-                            .border_color(t.outline)
-                            .child(
-                                div()
-                                    .size(px(8.))
-                                    .bg(if prepared { t.success } else { t.warn }),
-                            )
-                            .child(caps(format!("Minecraft {version}")).text_color(t.ink_soft))
-                            .child(div().size(px(4.)).bg(t.muted))
-                            .child(
-                                caps(tr(if prepared { "Ready" } else { "Needs preparing" }))
-                                    .text_color(if prepared { t.success } else { t.warn }),
-                            ),
-                    )
-                    .children(self.playing.map(|n| {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(div().size(px(4.)).rounded_full().bg(t.rule))
-                            .child(
-                                caps(format!("{} playing now", thousands(n))).text_color(t.muted),
-                            )
-                    })),
-            )
-            .child(
-                blocks::pixel(60., FontWeight::BOLD)
-                    .line_height(px(62.))
-                    .text_color(t.ink)
-                    .child(title),
-            )
-            // The version is in the picker beside Play: here only what it brings.
-            .children(summary.map(|line| {
-                text(theme::BODY)
-                    .max_w(px(560.))
-                    .text_color(t.ink_soft)
-                    .child(line)
-            }));
-        // A Java instance (no Horizon tag) isn't offered Horizon's updates.
-        if let Some(release) = self.updates.horizon.as_ref().filter(|_| !tag.is_empty()) {
-            let installing = self.installing.as_ref().filter(|(t, _)| *t == release.tag);
-            let line = div()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .text_size(px(theme::CAPTION.px))
-                .text_color(t.muted)
-                .child(div().size(px(6.)).rounded_full().bg(t.accent))
-                .child(format!("{} available", update_name(release)));
-            hero = hero.child(match installing {
-                Some((_, p)) => line
-                    .child(
-                        div()
-                            .w(px(120.))
-                            .flex()
-                            .child(progress_bar(Some(self.bar), &t)),
-                    )
-                    .child(format!("{:.0}%", p * 100.)),
-                None => line.child(
-                    div()
-                        .id("install-update")
-                        .text_color(t.accent)
-                        .font_weight(FontWeight::MEDIUM)
-                        .cursor_pointer()
-                        .hover(|s| s.opacity(0.8))
-                        .child("Install")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.install_update();
-                            cx.notify();
-                        })),
-                ),
-            });
-        }
-        // Players who answered the first-run question before the ping existed read about it
-        // once here.
-        if !self.settings.ping_notice_seen && !self.collection.consent.needs_asking() {
-            hero = hero.child(
-                plate(&t)
-                    .flex()
-                    .flex_none()
-                    .flex_col()
-                    .gap(px(8.))
-                    .p(px(16.))
-                    .w_full()
-                    .max_w(px(640.))
-                    .child(
-                        text(theme::UI)
-                            .text_color(t.ink)
-                            .child(telemetry::PING_NAME),
-                    )
-                    .child(
-                        text(theme::CAPTION)
-                            .text_color(t.muted)
-                            .child(telemetry::PING),
-                    )
-                    .child(
-                        div()
-                            .id("ping-notice-ok")
-                            .text_size(px(theme::UI.px))
-                            .text_color(t.accent)
-                            .font_weight(FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .hover(|s| s.opacity(0.8))
-                            .child("Got it")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.settings.ping_notice_seen = true;
-                                this.settings.save();
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
-        hero
     }
 
     fn settings_page(&mut self, cx: &mut Context<Self>) -> Div {
@@ -3690,78 +3502,6 @@ impl Launcher {
 
     /// Join a friend: a code field and Join, which starts the game straight
     /// into the friend's world (errors show in the game).
-    fn join_friend_row(&self, can_play: bool, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let focused = self.friend_focused;
-        let field = div()
-            .id("friend-code")
-            .track_focus(&self.friend_focus)
-            .flex()
-            .items_center()
-            .w(px(260.))
-            .h(px(30.))
-            .px(px(12.))
-            .overflow_hidden()
-            .border_2()
-            .border_color(if focused { t.accent } else { t.outline })
-            .bg(t.well)
-            .font_family(theme::MONO)
-            .text_size(px(12.))
-            .cursor_text()
-            .child(line_edit::content(
-                &self.friend_code,
-                &t,
-                focused,
-                false,
-                false,
-                "Paste an invite code",
-            ))
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                window.focus(&this.friend_focus);
-                cx.notify();
-            }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                match line_edit::handle(&mut this.friend_code, ev, cx) {
-                    line_edit::Key::Pass => return,
-                    line_edit::Key::Enter => this.join_friend(),
-                    line_edit::Key::Escape => window.blur(),
-                    _ => {}
-                }
-                cx.stop_propagation();
-                cx.notify();
-            }));
-        let field = line_edit::mouse(field, cx, |this| &mut this.friend_code);
-        let valid = horizon_friends::invite::parse(self.friend_code.text()).is_some();
-        let mut join = button("join-friend", "Join", Kind::Secondary, &t);
-        if can_play && valid {
-            join = join.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.join_friend();
-                cx.notify();
-            }));
-        } else {
-            join = disabled(join);
-        }
-        index_row(
-            4,
-            tr("Join a friend"),
-            Some(
-                div()
-                    .child(tr("Paste the code a friend shows when they invite you."))
-                    .into_any_element(),
-            ),
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(field)
-                    .child(join)
-                    .into_any_element(),
-            ),
-            &t,
-        )
-    }
-
     /// Plays the selected instance straight into a world (`--world`) or a server (`--server`):
     /// flags every Horizon release takes.
     pub(crate) fn quick_play(&mut self, flag: &'static str, value: String) {

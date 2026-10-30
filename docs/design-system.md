@@ -252,6 +252,11 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   pages has no plate, only a rule. A selected row or tab sits on `card_hi` cut in steps (two for
   rows, one for tabs and icon buttons); a hovered one gets the same shape at half its opacity,
   eased in. A row's second line is its state, after a small square in the state's colour.
+- **Home** (`launcher/src/home.rs`): the selected instance's name in the display cut over the bare
+  sky, a caption above it naming what it plays and its state (the same square), and when it was
+  played below. Play is the main action (`night::PLAY` tall, cut in one step); the version picker
+  is a raised control of the same height; Mods and Folder are quiet buttons. A Horizon instance
+  gets a plate on the right: a release's notes in one line (not a Nightly's) and Join a friend.
 
 ## The mark
 

@@ -717,7 +717,7 @@ impl Launcher {
 }
 
 /// "3 h 05 min in total · last played today", or "Not played yet".
-fn played_line(instance: &Instance) -> String {
+pub(super) fn played_line(instance: &Instance) -> String {
     match instance.last_played {
         Some(when) => trf(
             "{time} in total · last played {when}",
