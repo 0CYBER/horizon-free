@@ -177,6 +177,10 @@ pub(super) struct Remote {
     pub chat: Vec<(String, Instant)>,
     /// Lines received since joining, for the control socket's events.
     pub chat_received: u64,
+    /// `ChatListener.delayedMessageQueue`: player chat held back by Chat Delay.
+    chat_queue: VecDeque<(horizon_client::text::Text, horizon_client::chat::ChatSource)>,
+    /// `ChatListener.previousMessageTime`: when a message last showed, if one has.
+    chat_previous: Option<Instant>,
     /// The server's command tree (ClientboundCommandsPacket).
     pub commands: Option<horizon_client::command::Dispatcher>,
     players: HashMap<u128, String>,
@@ -511,6 +515,8 @@ impl Game<'_> {
             game_mode: 0,
             chat: Vec::new(),
             chat_received: 0,
+            chat_queue: VecDeque::new(),
+            chat_previous: None,
             commands: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
@@ -762,9 +768,9 @@ impl Game<'_> {
         &mut self,
         content: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
-    ) {
+    ) -> bool {
         if !self.ui.chat.shows(source) {
-            return;
+            return false;
         }
         let text = content.plain();
         // addServerSystemMessage and addClientSystemMessage both carry
@@ -785,6 +791,98 @@ impl Game<'_> {
             if r.chat.len() > 100 {
                 r.chat.remove(0);
             }
+        }
+        true
+    }
+
+    /// `ChatListener.handleMessage` for player and disguised chat: held in the
+    /// queue while Chat Delay is set, shown at once otherwise.
+    pub(super) fn handle_player_chat(&mut self, line: horizon_client::text::Text) {
+        let source = horizon_client::chat::ChatSource::Player;
+        if self.chat_delay_ms() > 0 {
+            if let Some(r) = self.remote.as_mut() {
+                r.chat_queue.push_back((line, source));
+            }
+        } else {
+            self.accept_chat(line, source);
+        }
+    }
+
+    /// A message's `accept`: shown, it starts the Chat Delay wait again.
+    fn accept_chat(
+        &mut self,
+        line: horizon_client::text::Text,
+        source: horizon_client::chat::ChatSource,
+    ) -> bool {
+        let shown = self.chat_line(line, source);
+        if shown && let Some(r) = self.remote.as_mut() {
+            r.chat_previous = Some(Instant::now());
+        }
+        shown
+    }
+
+    /// `ChatListener.messageDelay`: Chat Delay in milliseconds, as Java
+    /// truncates it.
+    fn chat_delay_ms(&self) -> i64 {
+        (self.settings.chat_delay * 1000.0) as i64
+    }
+
+    /// `ChatListener.tick`: while paused the wait does not run down; with no
+    /// Chat Delay the queue flushes; otherwise the next message the chat takes
+    /// shows once the delay has passed since the last shown one.
+    pub(super) fn tick_chat_queue(&mut self) {
+        let delay = self.chat_delay_ms();
+        // Minecraft.isPaused: a single-player pausing screen, not every pause menu.
+        if self.pause {
+            if delay > 0
+                && let Some(r) = self.remote.as_mut()
+            {
+                r.chat_previous = r.chat_previous.map(|t| t + Duration::from_millis(50));
+            }
+            return;
+        }
+        if delay == 0 {
+            if self
+                .remote
+                .as_ref()
+                .is_some_and(|r| !r.chat_queue.is_empty())
+            {
+                self.flush_chat_queue();
+            }
+            return;
+        }
+        let ready = self.remote.as_ref().is_some_and(|r| {
+            r.chat_previous
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(delay as u64))
+        });
+        if !ready {
+            return;
+        }
+        // A message the Chat option hides is dropped and the next one is tried,
+        // until one shows.
+        while let Some((line, source)) = self.remote.as_mut().and_then(|r| r.chat_queue.pop_front())
+        {
+            if self.accept_chat(line, source) {
+                break;
+            }
+        }
+    }
+
+    /// `ChatListener.flushQueue`: every held-back message shows now, and the
+    /// delay starts over.
+    fn flush_chat_queue(&mut self) {
+        let Some(queue) = self
+            .remote
+            .as_mut()
+            .map(|r| std::mem::take(&mut r.chat_queue))
+        else {
+            return;
+        };
+        for (line, source) in queue {
+            self.chat_line(line, source);
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.chat_previous = None;
         }
     }
 
@@ -1598,6 +1696,18 @@ impl Game<'_> {
             {
                 return;
             }
+            // A fishing hook keeps a LinearInterpolationHandler: eased towards the
+            // update over three ticks, on top of its own movement (`tick_remote_hooks`).
+            if path.is_some() {
+                if let Some(h) = self.hook.as_mut().filter(|h| h.id() == id as u32) {
+                    h.move_to(position, on_ground);
+                    return;
+                }
+                if let Some(h) = self.remote_hooks.iter_mut().find(|h| h.id() == id as u32) {
+                    h.move_to(position, on_ground);
+                    return;
+                }
+            }
             // A thrown trident is an arrow: placed at once, flown on by its tick.
             if let Some(t) = self.tridents.iter_mut().find(|t| t.id == id as u32) {
                 if path.is_some() {
@@ -1927,6 +2037,7 @@ impl Game<'_> {
                 })
                 .clamp(-90.0, 90.0);
             }
+            C::PlayerLookAt(p) => self.remote_look_at(&p),
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
             C::ForgetLevelChunk(p) => {
@@ -2953,12 +3064,12 @@ impl Game<'_> {
                     .as_ref()
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line, horizon_client::chat::ChatSource::Player);
+                self.handle_player_chat(line);
             }
             C::DisguisedChat(p) => {
                 let content = horizon_client::scoreboard::tag_to_json(&p.message);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line, horizon_client::chat::ChatSource::Player);
+                self.handle_player_chat(line);
             }
             C::PlayerInfoUpdate(p) => {
                 if let Some(r) = self.remote.as_mut() {
@@ -3710,6 +3821,7 @@ impl Game<'_> {
             t.velocity = v;
         } else if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id as u32) {
             r.velocity = v;
+        } else if self.remote_hook_motion(id as u32, v) {
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3762,6 +3874,34 @@ impl Game<'_> {
         {
             handler.cancel();
         }
+    }
+    /// `ClientPacketListener.handleLookAt`: `Entity.lookAt` from this
+    /// player's feet or eyes, towards the packet's entity (its feet or eyes)
+    /// when this client tracks it, else towards the packet's point.
+    fn remote_look_at(&mut self, p: &play::PlayerLookAt) {
+        // `EntityAnchorArgument.Anchor`: 0 feet, 1 eyes.
+        const EYES: i32 = 1;
+        let Some(player) = self.player.as_ref() else {
+            return;
+        };
+        let mut from = [player.position.x, player.position.y, player.position.z];
+        if p.from == EYES {
+            from[1] += f64::from(player.dimensions.eye_height);
+        }
+        let to = p
+            .entity
+            .as_ref()
+            .and_then(|e| {
+                let m = self.mobs.iter().find(|m| m.id == e.id as u32)?;
+                let y = if e.anchor == EYES {
+                    m.eye_y()
+                } else {
+                    m.position.y
+                };
+                Some([m.position.x, y, m.position.z])
+            })
+            .unwrap_or(p.target);
+        (self.yaw, self.pitch) = look_at_rotation(from, to);
     }
     /// ClientPacketListener.handleMovePlayer.
     fn remote_teleport(&mut self, p: &play::PlayerPosition) -> Result<()> {
@@ -3925,6 +4065,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_remote_spawners();
         self.client_tick_beacons();
+        self.tick_remote_potent_sulfur();
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
         });
@@ -4138,6 +4279,21 @@ impl Game<'_> {
                 horizon_client::motion::MotionEvent::HoneySlide { sound: true, .. } => {
                     self.audio
                         .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
+                }
+                // LivingEntity.causeFallDamage on the client's own level: the
+                // fall sound is heard here (LocalPlayer.playSound); the
+                // server's copy skips this player (Player.playSound).
+                horizon_client::motion::MotionEvent::Fall(
+                    horizon_client::landing::FallEvent::Sound {
+                        sound,
+                        volume,
+                        pitch,
+                        ..
+                    },
+                ) => {
+                    if let Some(name) = sound.player_fall_sound() {
+                        self.audio.play(name, Some(feet), volume, pitch);
+                    }
                 }
                 _ => {}
             }
@@ -4461,6 +4617,12 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Chicken {
                 horizon_client::mobs::farm::chicken_flap(m);
             }
+            // Parrot.calculateFlapping: the wings follow the server's
+            // on-ground flag and the shoulder it sits on (the glide is the
+            // server's).
+            if m.species() == horizon_client::mobs::Species::Parrot {
+                horizon_client::mobs::parrot::flap(m);
+            }
             // LivingEntity.updatingUsingItem: the ticks the item has been
             // used before this one. Another player's use particles; a mob's
             // drawn bow only needs the count (its pull follows it).
@@ -4510,7 +4672,7 @@ impl Game<'_> {
                 m.body_rotation_tick();
             }
             // Squid.aiStep follows LivingEntity's interpolation and head turn.
-            horizon_client::mobs::aquatic::squid_client_step(m);
+            horizon_client::mobs::aquatic::squid_client_step(m, &mut mob_fx);
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
@@ -4977,16 +5139,31 @@ impl Game<'_> {
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
-            // The main hand's turn takes it; there is no off hand turn.
-            if hand == Hand::Off {
+            // A cart whose interact passes (a TNT minecart) leaves each hand's
+            // turn to its item: a crossbow aimed at it shoots.
+            let passes = self
+                .carts
+                .iter()
+                .find(|c| c.id as i32 == hit.id)
+                .is_some_and(|c| {
+                    let ridden = self.riding == Some(c.id)
+                        || self.mobs.iter().any(|m| m.extra.mount == Some(c.id));
+                    c.kind
+                        .interact_passes(sneaking, ridden, self.can_use_game_master_blocks())
+                });
+            // Otherwise the main hand's turn takes it; there is no off hand turn.
+            if hand == Hand::Off && !passes {
                 return false;
             }
             self.send(S::Interact(play::Interact {
                 id: hit.id,
-                hand: 0,
+                hand: hand_id(hand),
                 location: hit.location,
                 secondary: sneaking,
             }));
+            if passes {
+                return false;
+            }
             self.swing_arm();
             return true;
         }
@@ -5910,7 +6087,7 @@ impl Game<'_> {
         match key {
             KeyCode::KeyT | KeyCode::Slash | KeyCode::Enter => {
                 // ChatScreen, over the server's command tree.
-                self.open_chat(if key == KeyCode::Slash { "/" } else { "" });
+                self.open_chat_method(if key == KeyCode::Slash { "/" } else { "" });
                 Ok(true)
             }
             KeyCode::KeyQ => {
@@ -5940,6 +6117,7 @@ impl Game<'_> {
                 if self.creative {
                     self.screen = Screen::Creative;
                     self.creative_screen.reopen();
+                    self.refresh_saved_hotbars();
                 } else {
                     self.screen = Screen::Inventory;
                 }
@@ -6648,6 +6826,18 @@ impl Game<'_> {
     }
 }
 
+/// `Entity.lookAt`'s rotation from `from` towards `to`, as (yaw, pitch).
+fn look_at_rotation(from: [f64; 3], to: [f64; 3]) -> (f32, f32) {
+    use horizon_core::geometry::trig::atan2;
+    let (dx, dy, dz) = (to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    let horizontal = (dx * dx + dz * dz).sqrt();
+    // `* 180.0F / (float)Math.PI` on the double.
+    let degrees = |r: f64| r * 180.0 / f64::from(std::f32::consts::PI);
+    let pitch = wrap_degrees((-degrees(atan2(dy, horizontal))) as f32);
+    let yaw = wrap_degrees(degrees(atan2(dz, dx)) as f32 - 90.0);
+    (yaw, pitch)
+}
+
 /// `Mth.wrapDegrees`.
 fn wrap_degrees(a: f32) -> f32 {
     let a = a % 360.0;
@@ -7172,6 +7362,43 @@ mod tests {
     }
 
     use super::Game;
+
+    /// `Entity.lookAt`: yaw 0 faces +Z, -90 faces +X; pitch -90 looks up.
+    #[test]
+    fn look_at_turns_towards_the_target() {
+        let close = |(yaw, pitch): (f32, f32), want: (f32, f32)| {
+            assert!(
+                (yaw - want.0).abs() < 1e-3 && (pitch - want.1).abs() < 1e-3,
+                "{yaw} {pitch}, want {want:?}"
+            );
+        };
+        let at = [10.0, 64.0, -5.0];
+        let off = |d: [f64; 3]| [at[0] + d[0], at[1] + d[1], at[2] + d[2]];
+        close(
+            super::look_at_rotation(at, off([0.0, 0.0, 3.0])),
+            (0.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([3.0, 0.0, 0.0])),
+            (-90.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([-3.0, 0.0, 0.0])),
+            (90.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([0.0, 0.0, -3.0])),
+            (-180.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([0.0, 2.0, 2.0])),
+            (0.0, -45.0),
+        );
+        close(
+            super::look_at_rotation(at, off([0.0, -4.0, 4.0])),
+            (0.0, 45.0),
+        );
+    }
 
     /// Q over a slot of the inventory on a server (#3357): the predicted THROW
     /// drops the stack, so the player's hand swings, as `LivingEntity.drop`

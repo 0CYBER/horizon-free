@@ -264,6 +264,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              sends each target its packet).
 - boat_input_latch: a boat on land paddled from rest moves one tick after W goes down, not in that tick:
              it steers with the input latched on the previous tick, as the paddle packet it sends says (#3789).
+- hook_smooth: a cast fishing hook moves every tick of its flight on the client, between the tracker's updates (#3781).
 - merchant-close: the host and the guest each open a trade screen with the payment in its slot; the screen
              closes and the payment returns when they walk out of reach (7 blocks in survival, 9 in
              creative) or the villager dies, and stays open in range.
@@ -1069,7 +1070,16 @@ def check_damage(host, guest, out):
     guest.wait(50)
     water = remote(guest)['health']
     assert water >= after, f'health {after} -> {water} after falling into water'
-    return {'before': before, 'after': after, 'water': water}
+    # The host's /damage on the guest by name hurts it (not "Target is invulnerable").
+    guest('command', command='effect give @s minecraft:instant_health 1 4')
+    guest.wait(10)
+    healed = remote(guest)['health']
+    said = host('command', command=f'damage {GUEST_NAME} 4 minecraft:generic')
+    guest.wait(20)
+    hit = remote(guest)['health']
+    applied = any('Applied' in line for line in said.get('chat', []))
+    assert applied and hit < healed, f'/damage {GUEST_NAME} 4: health {healed} -> {hit} ({said})'
+    return {'before': before, 'after': after, 'water': water, 'damage_command': [healed, hit]}
 
 
 def first_hurt(guest, before, ticks):
@@ -6714,6 +6724,42 @@ CHECKS += ['boat_input_latch']
 CHECK_FNS['boat_input_latch'] = check_boat_input_latch
 
 
+def check_hook_smooth(host, guest, out):
+    """FishingHook.tick runs on a client between the tracker's updates (every 5 ticks): a cast hook moves
+    every tick of its flight, not in jumps with two still ticks between them (#3781)."""
+    result = {}
+    apart(host, guest)
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='weather clear')
+    for game, dz in ((host, -5), (guest, 5)):
+        x, z = hx, hz + dz
+        host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 14} {hy - 1} {z + 1} minecraft:stone')
+        host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 14} {hy + 4} {z + 1} minecraft:air')
+        game('command', command='gamemode survival')
+        game('command', command='clear @s')
+        game('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod')
+        game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+        game.wait(10)
+        game.raw('look-at', f'{x + 8.5:.2f}', f'{hy + 1:.2f}', f'{z + 0.5:.2f}')
+        replies = game.script(['use-item'] + ['status', 'wait 1'] * 30, every=True)
+        seq = []
+        for r in replies:
+            hooks = [o for o in r.get('projectiles', []) if o.get('kind') == 'minecraft:fishing_bobber' and o.get('owner') == 0]
+            if hooks:
+                seq.append(hooks[0]['position'])
+        steps = [round(math.dist(a, b), 3) for a, b in zip(seq, seq[1:])]
+        result[game.name] = steps
+        game.raw('use-item')
+        game.wait(5)
+        # In flight every tick moves it (a hook eased between updates stood still two ticks of five).
+        assert all(d > 0.05 for d in steps[:6]), f'{game.name}: the hook moved in jumps: {steps}'
+    return result
+
+
+CHECKS += ['hook_smooth']
+CHECK_FNS['hook_smooth'] = check_hook_smooth
+
+
 def check_merchant_close(host, guest, out):
     """AbstractVillager.stillValid: a trade screen closes when its villager is out of reach or dead, and
     the payment slots go back to the player as on a normal close; in range it stays open."""
@@ -8624,6 +8670,52 @@ def check_dig_sounds(host, guest, out):
 
 CHECKS += ['dig_sounds']
 CHECK_FNS['dig_sounds'] = check_dig_sounds
+
+
+def mooshroom_types(game, centre):
+    """The colour (0 red, 1 brown) this side draws for each mooshroom around `centre`, by column."""
+    return {round(m['pos'][0] - centre[0]): m['variant'] for m in game.raw('mobs', 32).get('near', [])
+            if m['kind'] == 'minecraft:mooshroom' and abs(m['pos'][2] - centre[2] - 6) < 2}
+
+
+def check_mooshroom(host, guest, out):
+    """MushroomCow.DATA_TYPE, entry 18 after AgeableMob's DATA_BABY_ID and AGE_LOCKED, reaches both
+    clients (#3236): a mooshroom summoned brown is drawn brown, and a red one a bolt strikes
+    (MushroomCow.thunderHit) turns brown on the guest's screen too."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    centre = (x + 0.5, y, z + 0.5)
+    sides = {'host': host, 'guest': guest}
+    seen = {}
+    # 12 blocks apart, so one bolt (3 blocks of reach) strikes only the red one, on stone with
+    # nothing around (no fire).
+    host('command', command=f'fill {x - 8} {y - 1} {z + 3} {x + 8} {y - 1} {z + 9} minecraft:stone')
+    host('command', command=f'fill {x - 8} {y} {z + 3} {x + 8} {y + 4} {z + 9} minecraft:air')
+    try:
+        host('command', command=f'summon minecraft:mooshroom {x - 5.5} {y} {z + 6.5} {{NoAI:1b,Type:"brown"}}')
+        host('command', command=f'summon minecraft:mooshroom {x + 6.5} {y} {z + 6.5} {{NoAI:1b,Type:"red"}}')
+        host.wait(20)
+        for g in sides.values():
+            g.raw('look-at', centre[0], y + 1, z + 6.5)
+        seen['spawned'] = {name: mooshroom_types(g, centre) for name, g in sides.items()}
+        host('command', command=f'summon minecraft:lightning_bolt {x + 6.5} {y} {z + 6.5}')
+        guest.until(lambda: mooshroom_types(guest, centre), lambda t: t.get(6) == 1, ticks=40)
+        host.wait(5)
+        seen['struck'] = {name: mooshroom_types(g, centre) for name, g in sides.items()}
+        seen['server'] = host('command', command=f'data get entity @e[type=minecraft:mooshroom,x={x + 6.5},'
+                                                  f'y={y},z={z + 6.5},distance=..1,limit=1] Type')['chat'][-1]
+        guest.shot(out, 'mooshroom')
+    finally:
+        host('command', command=f'kill @e[type=minecraft:mooshroom,x={x - 8},y={y - 1},z={z + 3},dx=16,dy=6,dz=6]')
+        host('command', command=f'fill {x - 8} {y} {z + 3} {x + 8} {y + 4} {z + 9} minecraft:air')
+    for name in sides:
+        assert seen['spawned'][name] == {-6: 1, 6: 0}, f'{name}: brown and red at the summon: {seen}'
+        assert seen['struck'][name] == {-6: 1, 6: 1}, f'{name}: the struck one turned brown: {seen}'
+    assert '"brown"' in seen['server'], f'the server has the struck one brown: {seen}'
+    return seen
+
+
+CHECKS += ['mooshroom']
+CHECK_FNS['mooshroom'] = check_mooshroom
 
 
 def check_shulker_menu(host, guest, out):
