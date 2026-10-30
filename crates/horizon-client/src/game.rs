@@ -1422,7 +1422,8 @@ pub struct PackResources {
 }
 impl PackResources {
     /// Everything a pack overlay at `root` provides, over `assets` and `render`
-    /// loaded from it.
+    /// loaded from it. A dedicated server (`draws` false) skips the faces the
+    /// mesher and the block entity renderer cull with (19 MB).
     fn load(
         root: &std::path::Path,
         assets: Arc<Assets>,
@@ -1430,8 +1431,13 @@ impl PackResources {
         facts: &BlockFacts,
         biomes: Arc<Biomes>,
         light: Arc<LightTables>,
+        draws: bool,
     ) -> Result<Self> {
-        let visibility = models::load_visibility(root, assets.registry)?;
+        let visibility = if draws {
+            models::load_visibility(root, assets.registry)?
+        } else {
+            horizon_world::block_render::FaceVisibility::empty()
+        };
         let tables = Arc::new(MeshTables::new(&assets, &render, facts, visibility)?);
         let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
             root,
@@ -15344,7 +15350,15 @@ fn load_resources(
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(3);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
-    let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
+    let pack = PackResources::load(
+        &root,
+        assets.clone(),
+        render,
+        &facts,
+        biomes.clone(),
+        light,
+        !headless,
+    )?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(4);
     if !menu {

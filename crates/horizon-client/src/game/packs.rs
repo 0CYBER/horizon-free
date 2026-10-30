@@ -301,6 +301,7 @@ pub(super) fn stage_pack(
         res.facts(),
         context.biomes.clone(),
         context.light.clone(),
+        true,
     )?;
     let textures = prepare_renderer_textures(&pack);
     progress.set(3);
