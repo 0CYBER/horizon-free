@@ -5,6 +5,7 @@
 //! ever exchanges decoded packets with these threads through channels, so a
 //! world that is not open to the network pays nothing.
 mod advancements;
+pub mod anticheat;
 pub mod attributes;
 pub mod border;
 pub mod chunks;
