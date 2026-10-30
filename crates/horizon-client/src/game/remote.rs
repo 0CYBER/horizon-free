@@ -195,6 +195,10 @@ pub(super) struct Remote {
     /// The profile name each player entity was created with (`RemotePlayer.getGameProfile`): it outlives the
     /// player-list entry, which servers remove to hide their NPCs from the list.
     level_player_names: HashMap<i32, String>,
+    /// The `textures` each player entity found in the player list first
+    /// (`AbstractClientPlayer.getPlayerInfo` keeps that `PlayerInfo`): its skin
+    /// outlives the entry, which NPC plugins remove a moment after spawning.
+    level_player_textures: HashMap<i32, horizon_client::skins::Textures>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
@@ -516,6 +520,7 @@ impl Game<'_> {
             online_mode: false,
             level_players: HashMap::new(),
             level_player_names: HashMap::new(),
+            level_player_textures: HashMap::new(),
             glowing: Default::default(),
             profile: 0,
             profile_name: String::new(),
@@ -1158,6 +1163,7 @@ impl Game<'_> {
                 // player entities re-map to their profiles on AddEntity.
                 r.level_players.clear();
                 r.level_player_names.clear();
+                r.level_player_textures.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -2029,6 +2035,8 @@ impl Game<'_> {
                 let rotation =
                     [p.yaw, p.pitch, p.head_yaw].map(horizon_protocol::buf::unpack_degrees);
                 if let Some(r) = self.remote.as_mut() {
+                    // A new entity looks its PlayerInfo up afresh.
+                    r.level_player_textures.remove(&p.id);
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
                         // createEntityFromPacket: the player takes the profile of its list entry.
@@ -2067,6 +2075,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.level_players.remove(&id);
                         r.level_player_names.remove(&id);
+                        r.level_player_textures.remove(&id);
                     }
                     self.remove_entity(id);
                 }
@@ -3353,15 +3362,16 @@ impl Game<'_> {
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
     fn update_remote_skins(&mut self) {
-        let Some(r) = self.remote.as_ref() else {
+        let Some(r) = self.remote.as_mut() else {
             return;
         };
+        let mut entries = skin_entries(
+            &r.level_players,
+            &r.skin_textures,
+            &mut r.level_player_textures,
+        );
+        let r = &*r;
         let local = r.profile;
-        let mut entries: Vec<(u128, horizon_client::skins::Textures)> = r
-            .skin_textures
-            .iter()
-            .map(|(uuid, textures)| (*uuid, textures.clone()))
-            .collect();
         // Minecraft.profileFuture: the signed-in account's own profile, fetched from the
         // services, gives the local player its skin where the server sends none (single
         // player's offline-mode server).
@@ -7034,6 +7044,34 @@ impl Remote {
     }
 }
 
+/// The textures to resolve skins from: every list entry's, and for a player
+/// entity whose entry is gone the profile it kept. `kept` first takes, for each
+/// player entity without one, its entry's textures (`AbstractClientPlayer.getPlayerInfo`
+/// looks the PlayerInfo up once and holds it, removed from the list or not).
+fn skin_entries(
+    level_players: &HashMap<i32, u128>,
+    listed: &HashMap<u128, horizon_client::skins::Textures>,
+    kept: &mut HashMap<i32, horizon_client::skins::Textures>,
+) -> Vec<(u128, horizon_client::skins::Textures)> {
+    for (id, uuid) in level_players {
+        if !kept.contains_key(id)
+            && let Some(textures) = listed.get(uuid)
+        {
+            kept.insert(*id, textures.clone());
+        }
+    }
+    let mut entries: Vec<_> = listed.iter().map(|(u, t)| (*u, t.clone())).collect();
+    for (id, textures) in kept.iter() {
+        if let Some(uuid) = level_players.get(id)
+            && !listed.contains_key(uuid)
+            && !entries.iter().any(|(u, _)| u == uuid)
+        {
+            entries.push((*uuid, textures.clone()));
+        }
+    }
+    entries
+}
+
 /// `AttributeInstance.calculateValue` before the attribute's range: the base,
 /// `ADD_VALUE`s, then `ADD_MULTIPLIED_BASE`s of that, then each
 /// `ADD_MULTIPLIED_TOTAL`.
@@ -7054,6 +7092,45 @@ fn snapshot_value(s: &play::AttributeSnapshot) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    /// An NPC plugin lists the NPC, spawns it, and takes the entry off the list:
+    /// the entity keeps the skin it found; a player spawned before its entry
+    /// arrives takes the entry once it comes.
+    #[test]
+    fn a_player_entity_keeps_the_skin_its_entry_gave() {
+        use horizon_client::skins::Textures;
+        use std::collections::HashMap;
+        let npc = Textures {
+            skin: Some("http://textures.minecraft.net/texture/npc".into()),
+            signed: true,
+            ..Textures::default()
+        };
+        let (mut listed, mut kept) = (HashMap::from([(7u128, npc.clone())]), HashMap::new());
+        let mut players = HashMap::from([(2i32, 7u128), (3, 8)]);
+        assert_eq!(
+            super::skin_entries(&players, &listed, &mut kept),
+            [(7, npc.clone())]
+        );
+        listed.remove(&7);
+        assert_eq!(
+            super::skin_entries(&players, &listed, &mut kept),
+            [(7, npc.clone())]
+        );
+        // Player 8's entry comes after its entity.
+        let late = Textures {
+            skin: Some("http://textures.minecraft.net/texture/late".into()),
+            ..npc.clone()
+        };
+        listed.insert(8, late.clone());
+        let mut entries = super::skin_entries(&players, &listed, &mut kept);
+        entries.sort_by_key(|(u, _)| *u);
+        assert_eq!(entries, [(7, npc), (8, late)]);
+        // A removed entity forgets its profile with it.
+        players.remove(&2);
+        kept.remove(&2);
+        listed.clear();
+        assert_eq!(super::skin_entries(&players, &listed, &mut kept).len(), 1);
+    }
+
     /// An NPC plugin's scale: a base the plugin sets, or a modifier on 1.
     #[test]
     fn attribute_values_add_then_multiply_as_vanilla() {
