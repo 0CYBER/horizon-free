@@ -1280,6 +1280,9 @@ impl Game<'_> {
         // The seed in SpawnInfo is already the hashed one the client's BiomeManager holds.
         self.streaming.biome_zoom = horizon_core::biome::BiomeZoom::new(spawn.seed);
         self.player = None;
+        // handleLogin / handleRespawn: LocalPlayer.setPortalCooldown, so a
+        // player who arrives standing in a portal gets no overlay from it.
+        self.portals.player.cooldown = spawn.portal_cooldown;
         self.apply_settings();
     }
 

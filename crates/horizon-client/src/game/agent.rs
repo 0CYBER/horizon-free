@@ -486,6 +486,8 @@ impl Game<'_> {
                 // LivingEntity.deathTime while dead (the camera's death roll).
                 "death_time": self.death_time(),
                 "air": p.air,
+                // LocalPlayer.portalEffectIntensity: the Nether portal overlay.
+                "portal_effect": self.screen_fx.portal,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
                 "shield_cooldown": self.shield_cooldown,
