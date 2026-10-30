@@ -786,7 +786,12 @@ impl Game<'_> {
             return;
         };
         let assets = &self.armor_stand_assets;
-        let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
+        let Some((texture, _)) = assets
+            .equipment
+            .get(asset)
+            .and_then(|k| k.get("wings"))
+            .and_then(|layers| layers.first())
+        else {
             return;
         };
         let sprites = &self.gui.atlas.sprites;

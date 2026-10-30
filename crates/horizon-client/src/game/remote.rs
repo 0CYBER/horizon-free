@@ -2713,6 +2713,10 @@ impl Game<'_> {
                     self.remote_firework_explosion(p.id);
                 }
                 self.remote_fangs_event(p.id as u32, p.event);
+                // Arrow.handleEntityEvent 0: a tipped arrow's burst of particles.
+                if p.event == 0 {
+                    self.remote_arrow_puff(p.id as u32);
+                }
                 // LivingEntity.handleEntityEvent 2: a spear's hit felt.
                 if p.event == 2 {
                     self.remote_kinetic_hit(p.id);
