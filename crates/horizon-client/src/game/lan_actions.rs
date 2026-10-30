@@ -2989,9 +2989,13 @@ impl Game<'_> {
             // LivingEntity.aiStep: a Riptide spin counts down on the server's
             // copy too, or it would stay in the spin pose (eye 0.4) for good.
             // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
-            // ends with updatePlayerPose: a swimmer, or a player crawling
-            // under a block, takes the short box its moves are checked with.
-            let _ = w.server_player_pose_tick();
+            // ends with updatePlayerPose — or, for a passenger, the rideTick
+            // path that clears a swim (#4509 / #3308).
+            let _ = if riding {
+                w.passenger_pose_tick()
+            } else {
+                w.server_player_pose_tick()
+            };
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {

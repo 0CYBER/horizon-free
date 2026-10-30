@@ -195,6 +195,13 @@ impl MotionWorld<'_, '_, '_> {
         self.player.swimming = false;
         self.player.fall_flying = false;
         self.player.fall_fly_ticks = 0;
-        self.update_player_pose()
+        self.update_player_pose()?;
+        // A cushion's seat puts the feet in the support block, so neither
+        // standing nor crawling fits and `updatePlayerPose` keeps the old
+        // pose. A prior swim would stick (#4509); sit up like a boat rider.
+        if self.player.pose == Pose::Swimming && !self.player.sleeping {
+            self.player.set_pose(Pose::Standing)?;
+        }
+        Ok(())
     }
 }

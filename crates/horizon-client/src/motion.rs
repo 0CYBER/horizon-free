@@ -3829,6 +3829,38 @@ mod tests {
         assert_eq!(w.player.pose, crate::pose::Pose::Standing);
         assert_eq!(w.player.dimensions.eye_height, 1.62);
     }
+    /// #4509: a cushion seat clips the feet into the floor, so `can_fit_pose`
+    /// rejects standing and would leave a swim pose; sit up anyway.
+    #[test]
+    fn a_swimming_passenger_sits_up_even_when_standing_does_not_fit() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        // Feet inside the floor block, as on a cushion seat (y - 0.35).
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 9.65, 20.5)).unwrap();
+        player.swimming = true;
+        player.set_pose(crate::pose::Pose::Swimming).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        assert!(!w.can_fit_pose(crate::pose::Pose::Standing).unwrap());
+        w.passenger_pose_tick().unwrap();
+        assert!(!w.player.swimming);
+        assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+    }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
