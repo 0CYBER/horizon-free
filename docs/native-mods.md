@@ -104,10 +104,13 @@ crate, and has no `Cargo.lock`, `[workspace]` or build of its own.
 **Dependencies come from Horizon's `Cargo.lock`.** A crate names registry crates by version requirement
 (`crc32fast = "1"`, `{ version, features, default-features, optional }`); each must already be in Horizon's lock
 file in a version that matches, and builds in exactly that version. The lock file is the allow list: horizon-mixins
-refuses a crate the lock lacks (`E_CRATE_DEPENDENCY`) and writes the mod's crates into the staged lock without
-changing any other byte, so the game still builds with `--locked`. The launcher checks it again (every downloaded
-package of the staged lock as in Horizon's: name, version, source, checksum), and a feature that turns on a
-dependency the lock lacks fails at `cargo fetch --locked` with a message saying so. The build stops with:
+refuses a crate the lock lacks (`E_CRATE_DEPENDENCY`) and writes the mod's crates into the staged lock. A
+dependency's features (its default ones included) may use other crates: `hashbrown = "0.15"` needs
+`allocator-api2` and `equivalent`, which Horizon locks for other crates while it uses hashbrown without its defaults.
+horizon-mixins lets `cargo update --workspace` add those links between crates already in the lock, and refuses any
+crate it would add or change, naming it, so the game still builds with `--locked`. The launcher checks it again
+(every downloaded package of the staged lock as in Horizon's: name, version, source, checksum), and a lock that
+still misses something fails at `cargo fetch --locked` with a message saying so. The build stops with:
 
 ```
 horizon-mixins failed (exit status: 1). The end of its output, the whole of it in …/native/build.log:
@@ -130,8 +133,10 @@ both (`mixins/<id>/data/…`, `mixins/<id>/<crate>/data/…`).
 ### Post-build steps
 
 A `[[post_build]]` names a bin of one of the mod's crates. After the game compiles, the launcher builds it with the
-same profile into the same `native/target/`, then runs it (at low priority, in mod order) in the new build's version
-folder with:
+same profile into the same `native/target/`, copies it out at once, then runs it (at low priority, in mod order) in
+the new build's version folder. A bin's file name doesn't include its crate, so horizon-mixins refuses a step bin
+named like a workspace bin (`horizon-client`) or another mod's step bin, ignoring case (`E_POST_BUILD`); the copy
+keeps an older bundle from running another mod's program or replacing the game. The step runs with:
 
 | Variable | What |
 |---|---|

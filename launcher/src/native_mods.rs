@@ -29,7 +29,7 @@ mod crates;
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "cb1ad23022392d88f006cf94cbf6552a73f5df12";
+pub const MIXINS_REV: &str = "d9c83d7096b7ea5b83678da2efdfd6161f74997e";
 /// The profile builds use: the workspace's `fast` (the release's optimizations without its
 /// link-time ones, incremental), so a rebuild recompiles and links only what the mods changed.
 /// A revision without it builds with `release` ([`profile_of`]).
@@ -655,17 +655,22 @@ fn lock_crates(rust: &Toolchain, source: &Path, stage: &Path) -> Result<(), Stri
 }
 
 /// Builds the mods' post-build programs with the game's profile in `target`; each step and its
-/// program, in mod order.
+/// program, in mod order. A bin's file name doesn't include its package, so two mods' bins of the
+/// same name (or one named like the game) are the same file in `target`: each program is copied
+/// to `programs/<step>/` as soon as it is built. horizon-mixins refuses such names too
+/// (`E_POST_BUILD`, horizon-mixins#8); this keeps a bundle built by an older one safe.
 fn post_build_programs(
     rust: &Toolchain,
     stage: &Path,
     target: &Path,
+    programs: &Path,
     progress: &impl Fn(Step),
 ) -> Result<Vec<(crates::PostBuild, PathBuf)>, String> {
     let steps = crates::post_builds(stage)?;
     let profile = profile_of(stage);
+    let _ = fs::remove_dir_all(programs);
     let mut out = Vec::new();
-    for step in steps {
+    for (i, step) in steps.into_iter().enumerate() {
         progress(Step::PostBuild(step.mod_id.clone()));
         let mut cmd = cargo(rust, stage, "build");
         cmd.env("CARGO_TARGET_DIR", target);
@@ -683,10 +688,9 @@ fn post_build_programs(
             &format!("Building {}'s post-build step", step.mod_id),
             |_| {},
         )?;
-        let program =
-            target
-                .join(profile)
-                .join(format!("{}{}", step.bin, std::env::consts::EXE_SUFFIX));
+        let file = format!("{}{}", step.bin, std::env::consts::EXE_SUFFIX);
+        let program = programs.join(i.to_string()).join(&file);
+        copy_out(&target.join(profile).join(&file), &program)?;
         out.push((step, program));
     }
     Ok(out)
@@ -848,7 +852,16 @@ pub fn build(
             },
         )
         .map_err(crates::locked)?;
-        let post = post_build_programs(&rust, &stage, &target, &progress)?;
+        // Out of `target` before any post-build bin is built there (`post_build_programs`).
+        let binary = real.join("programs").join(backend::CLIENT);
+        copy_out(&target.join(profile).join(backend::CLIENT), &binary)?;
+        let post = post_build_programs(
+            &rust,
+            &stage,
+            &target,
+            &real.join("programs").join("post-build"),
+            &progress,
+        )?;
         progress(Step::Install);
         let about = serde_json::json!({
             "base": origin,
@@ -859,7 +872,6 @@ pub fn build(
             "profile": profile,
             "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
         });
-        let binary = target.join(profile).join(backend::CLIENT);
         install(base, &version, &binary, &about, |dir| {
             for (step, program) in &post {
                 progress(Step::PostBuild(step.mod_id.clone()));
@@ -868,6 +880,7 @@ pub fn build(
             }
             Ok(())
         })?;
+        let _ = fs::remove_dir_all(real.join("programs"));
     } else {
         // Used again: it counts as the newest of the builds kept (`prune`).
         let _ = fs::write(backend::version_dir(&version).join(".installed"), "");
@@ -876,6 +889,16 @@ pub fn build(
     prune(&version);
     let _ = fs::remove_dir_all(&incoming);
     Ok(version)
+}
+
+/// Copies the program `from` (in the shared target folder) to `to`, keeping it executable.
+fn copy_out(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(dir) = to.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    fs::copy(from, to)
+        .map(|_| ())
+        .map_err(|e| format!("{}: {e}", from.display()))
 }
 
 /// Installs `binary` as version `version`: a copy of installed version `base`'s folder (its
