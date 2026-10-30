@@ -16,7 +16,7 @@ use std::{
 };
 
 pub struct ServerAdvancements {
-    tree: Tree,
+    tree: std::sync::Arc<Tree>,
     kids: Vec<Vec<usize>>,
     layout: Vec<Option<(i32, f32)>>,
     /// Recipe files by id.
@@ -34,12 +34,13 @@ pub struct FirstTick {
 }
 
 impl ServerAdvancements {
-    pub fn load(resources: &Path) -> Self {
-        let tree = Tree::load(&resources.join("data"));
+    pub fn load(resources: &Path, overlay: &horizon_world::loot::PackOverlay) -> Self {
+        let tree = Tree::shared(&resources.join("data"), overlay);
         let kids = tree.children();
         let layout = tree.layout();
         let mut recipes = BTreeMap::new();
         super::recipes::recipes(&resources.join("data/minecraft/recipe"), "", &mut recipes);
+        super::recipes::overlay_recipes(overlay, &mut recipes);
         let mut groups = HashMap::new();
         for r in recipes.values() {
             if let Some(g) = r["group"].as_str().filter(|g| !g.is_empty()) {
@@ -52,7 +53,7 @@ impl ServerAdvancements {
             kids,
             layout,
             recipes,
-            displays: RecipeIndex::load(resources),
+            displays: RecipeIndex::load(resources, overlay),
             groups,
         }
     }
@@ -127,6 +128,50 @@ impl ServerAdvancements {
             recipe_book_add,
             update_advancements: w.data,
         }
+    }
+
+    /// `PlayerAdvancements.reload` (`PlayerList.reloadResources`): the
+    /// progress is read again against the new tree (`applyFrom` ignores an
+    /// advancement that no longer exists and `AdvancementProgress.update`
+    /// drops a criterion it lost), the next `flushDirty` is a first packet
+    /// again, and the next `CriteriaTriggers.TICK` meets the new tree's
+    /// `minecraft:tick` criteria, rewarding the recipes of the advancements
+    /// that complete. Returns the recipe book packet those recipes need.
+    pub fn reload(
+        &self,
+        sync: &SyncData,
+        now_millis: i64,
+        progress: &mut Progress,
+        book: &mut Settings,
+    ) -> Option<Vec<u8>> {
+        let by_id: HashMap<&str, &crate::advancements::Advancement> =
+            self.tree.list.iter().map(|a| (a.id.as_str(), a)).collect();
+        progress
+            .criteria
+            .retain(|id, got| match by_id.get(id.as_str()) {
+                Some(a) => {
+                    got.retain(|name, _| a.criteria.iter().any(|c| &c.name == name));
+                    true
+                }
+                None => false,
+            });
+        let date = crate::advancements::date_text(now_millis.div_euclid(1000));
+        let mut entries = Vec::new();
+        for a in &self.tree.list {
+            let was_done = progress.done(a);
+            for c in &a.criteria {
+                if c.trigger == "minecraft:tick" && c.conditions.is_null() {
+                    progress.grant(&a.id, &c.name, &date);
+                }
+            }
+            if !was_done && progress.done(a) {
+                book.add_recipes(&self.displays, &a.rewards.recipes);
+                for id in &a.rewards.recipes {
+                    entries.extend(self.book_entries(id, sync, NOTIFY_AND_HIGHLIGHT));
+                }
+            }
+        }
+        (!entries.is_empty()).then(|| book_add(entries, false))
     }
 
     /// `PlayerAdvancements.flushDirty`: the advancements that became visible

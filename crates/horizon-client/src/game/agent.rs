@@ -7,7 +7,6 @@ use super::{Game, Screen};
 use horizon_client::{
     Result,
     block_entity_anim::Ticker,
-    chunk::{MIN_Y, SECTIONS},
     items::ItemStack,
     mobs::{
         Species,
@@ -486,6 +485,8 @@ impl Game<'_> {
                 // LivingEntity.deathTime while dead (the camera's death roll).
                 "death_time": self.death_time(),
                 "air": p.air,
+                // LocalPlayer.portalEffectIntensity: the Nether portal overlay.
+                "portal_effect": self.screen_fx.portal,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
                 "shield_cooldown": self.shield_cooldown,
@@ -547,7 +548,7 @@ impl Game<'_> {
                 selected,
             } => json!({
                 "mode": "select-world",
-                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 })).collect::<Vec<_>>(),
+                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1, "corrupted": w.corrupted })).collect::<Vec<_>>(),
                 "selected": selected,
             }),
             Mode::Create {
@@ -565,7 +566,7 @@ impl Game<'_> {
                 "hardcore": options.hardcore,
                 "difficulty": horizon_client::title::DIFFICULTIES[options.difficulty()],
                 "allow_commands": options.commands(*creative),
-                "superflat": options.flat,
+                "world_type": options.world_type.id(),
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
             }),
@@ -578,7 +579,7 @@ impl Game<'_> {
             } => json!({
                 "mode": "customize-flat",
                 "fields": { "name": name, "seed": seed },
-                "superflat": options.flat,
+                "superflat": options.world_type == horizon_client::save::WorldPreset::Flat,
                 "biome": flat.settings().biome,
                 "layers": flat.settings().layers.iter().map(|layer| json!({
                     "block": layer.block,
@@ -598,8 +599,19 @@ impl Game<'_> {
             Mode::Delete { world } => {
                 json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
             }
-            Mode::BackupBeforeUpgrade { world } => {
+            Mode::BackupBeforeUpgrade { world, .. } => {
                 json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
+            }
+            Mode::Recover { world, issues } => {
+                let issue = |i: &Option<horizon_client::save::DatIssue>| match i {
+                    None => json!(null),
+                    Some(horizon_client::save::DatIssue::Missing) => json!("missing file"),
+                    Some(horizon_client::save::DatIssue::Unreadable(why)) => json!(why),
+                };
+                json!({ "mode": "recover-world", "folder": world.folder, "level_dat": issue(&issues[0]), "level_dat_old": issue(&issues[1]) })
+            }
+            Mode::Recovered { world, success } => {
+                json!({ "mode": "recovery-done", "folder": world.folder, "success": success })
             }
             Mode::Error { message, .. } => {
                 json!({ "mode": "world-operation-error", "message": message })
@@ -1086,7 +1098,9 @@ impl Game<'_> {
                                 .world
                                 .chunks
                                 .get(&(x >> 4, z >> 4))
-                                .filter(|_| (MIN_Y..MIN_Y + SECTIONS as i32 * 16).contains(&y))
+                                .filter(|_| {
+                                    (self.world.bottom_y()..self.world.top_y()).contains(&y)
+                                })
                                 .map(|c| c.light(x & 15, y, z & 15));
                             let digit = |v: u8| char::from_digit(u32::from(v), 16).unwrap_or('.');
                             sky.push(packed.map_or('.', |v| digit(v >> 4)));

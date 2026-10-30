@@ -51,6 +51,9 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(cc.parse("/unclaim"), cc.Command("unclaim"))
         self.assertEqual(cc.parse("/unclaim @Some-One"), cc.Command("unclaim", "Some-One"))
         self.assertEqual(cc.parse("/unclaim some-one"), cc.Command("unclaim", "some-one"))
+        # An agent's comment starts with "🤖 Agent:" (CLAUDE.md); its command follows.
+        self.assertEqual(cc.parse("🤖 Agent: /claim"), cc.Command("claim"))
+        self.assertEqual(cc.parse("🤖 Agent: /unclaim @Some-One"), cc.Command("unclaim", "Some-One"))
 
     def test_not_commands(self):
         for text in ("", "claim", "/claimed", "/claims", "thanks\n/claim", "/close", "/unclaimed"):
@@ -71,6 +74,14 @@ class ClaimTests(unittest.TestCase):
     def test_taken(self):
         with self.assertRaisesRegex(cc.Refused, "@other already claimed"):
             do("/claim", Fake({5: thread(holders=("other",))}))
+
+    def test_claimed_on_discord(self):
+        t = thread()
+        t["labels"] = [{"name": "In progress"}]
+        api = Fake({5: t})
+        with self.assertRaisesRegex(cc.Refused, "on Discord"):
+            do("/claim", api)
+        self.assertEqual(api.calls, [])
 
     def test_already_yours(self):
         with self.assertRaisesRegex(cc.Refused, "already hold"):

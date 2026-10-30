@@ -88,7 +88,11 @@ pub(crate) const CLIENT: &str = if cfg!(windows) {
 /// one is set (`proxy`).
 fn agent(url: &str) -> ureq::Agent {
     crate::proxy::agent(
-        ureq::AgentBuilder::new().user_agent(&format!("horizon-launcher/{VERSION}")),
+        ureq::AgentBuilder::new()
+            .user_agent(&format!("horizon-launcher/{VERSION}"))
+            // A connection that goes quiet fails instead of waiting for ever.
+            .timeout_connect(std::time::Duration::from_secs(15))
+            .timeout_read(std::time::Duration::from_secs(60)),
         url,
     )
     .build()
@@ -662,6 +666,9 @@ pub(crate) fn install_as(
 
 pub fn remove(tag: &str) -> Result<(), String> {
     let dir = version_dir(tag);
+    // The marker goes first: a version counted as installed until its folder is gone comes back
+    // into `installed` when an overlapping removal re-reads the list mid-delete.
+    let _ = fs::remove_file(dir.join(COMPLETE));
     // Windows holds a file for a moment after the game, a scan or the launcher's own reader lets
     // go of it, and remove_dir_all stops at the first one. Retry for a second; a folder that is
     // already gone is removed.
@@ -1001,6 +1008,9 @@ pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
     let versions = versions_dir();
     let reused = reuse_prepared_in(&versions);
     for tag in installed_in(&versions) {
+        // Here, on the start-up thread, and not in `complete_assets`, which Play also runs: a
+        // download of thousands of files is not for the moment the game is waited for.
+        refill_own_store(&tag);
         complete_assets(&tag);
     }
     reused
@@ -1146,6 +1156,38 @@ pub fn complete_assets(tag: &str) {
     complete_assets_in(&versions_dir(), tag, minecraft_folders, &|line| {
         eprintln!("{line}")
     });
+}
+
+/// Horizon's own download (an owner's) may have stopped before the sounds and the languages,
+/// and the copies of `complete_assets` read them from its store: asked again, once per run, through
+/// the same owner gate as any download from Mojang (`download_for_owner`), which keeps the files
+/// already whole. Called where a download is expected (`reuse_prepared_everywhere`), never on Play.
+fn refill_own_store(tag: &str) {
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let own = data_dir().join("minecraft");
+    let resources = resources_at(&versions_dir().join(tag));
+    if !own.join("assets/indexes").is_dir()
+        || !(lacks_languages(&resources) || !sounds_in(&resources))
+        || ASKED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    let Some(pins) = read_json(&version_dir(tag).join("research-lock.json"))
+        .and_then(|l| sources::Pins::read(&l))
+    else {
+        return;
+    };
+    let fetch = |url: &str| -> Result<Vec<u8>, String> {
+        let mut body = Vec::new();
+        get(url)?
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| e.to_string())?;
+        Ok(body)
+    };
+    if let Err(e) = download_for_owner(&pins, &own, &fetch, &|line| eprintln!("{line}")) {
+        eprintln!("{tag}: the missing assets were not downloaded: {e}");
+    }
 }
 
 /// `folders`: where to look, asked only when the version lacks something.
@@ -1559,6 +1601,41 @@ pub enum MinecraftFrom {
     Mojang,
 }
 
+/// A preparation's steps, in the order they run, as Home names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrepareStep {
+    /// Minecraft's files: found in an install, or downloaded from Mojang.
+    Files,
+    Java,
+    Sounds,
+    /// horizon-prepare's own work on those files.
+    Prepare,
+}
+
+impl PrepareStep {
+    pub const ALL: [PrepareStep; 4] = [Self::Files, Self::Java, Self::Sounds, Self::Prepare];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Files => "Game files",
+            Self::Java => "Java",
+            Self::Sounds => "Sounds",
+            Self::Prepare => "Prepare",
+        }
+    }
+}
+
+/// The step the preparation under way is at (`PrepareStep::ALL`'s index).
+static PREPARE_STEP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn prepare_step() -> PrepareStep {
+    PrepareStep::ALL[PREPARE_STEP.load(std::sync::atomic::Ordering::Relaxed)]
+}
+
+pub fn set_prepare_step(step: PrepareStep) {
+    PREPARE_STEP.store(step as usize, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1570,6 +1647,7 @@ pub fn preparer(
     from: MinecraftFrom,
     log: &dyn Fn(String),
 ) -> Result<(Preparer, PathBuf), String> {
+    set_prepare_step(PrepareStep::Files);
     let version = game_version(tag);
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
@@ -1641,6 +1719,7 @@ pub fn preparer(
             .into_iter()
             .map(|(_, dir)| dir),
     );
+    set_prepare_step(PrepareStep::Java);
     let java_home = java(
         major,
         !horizon_prepare::exporters::available(&dir),
@@ -1718,6 +1797,7 @@ pub fn sounds(tag: &str, minecraft: &Path, log: &dyn Fn(String)) {
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("horizon-prepare sounds"))
     });
+    set_prepare_step(PrepareStep::Sounds);
     log("Copying the sounds from your Minecraft install".into());
     let result = match binary {
         Some(binary) => crate::process::command(binary)
@@ -3131,6 +3211,20 @@ mod tests {
         assert!(!asked.lock().unwrap().is_empty());
         let _ = fs::remove_dir_all(&dir);
 
+        // A store that lacks assets is not filled for a non-owner either: nothing is asked.
+        fs::create_dir_all(dir.join("assets/indexes")).unwrap();
+        fs::write(
+            dir.join("assets/indexes/34.json"),
+            r#"{"objects":{"a":{"hash":"00","size":1}}}"#,
+        )
+        .unwrap();
+        asked.lock().unwrap().clear();
+        for (pass, signed_in) in [(Err(account::NoOwner), true), (no_owner(), true)] {
+            assert!(download_for(&pins, &dir, pass, signed_in, &fetch, &log).is_err());
+        }
+        assert!(asked.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+
         // In the sources: one call downloads the game, in `download_for`, and the only caller
         // of that asks the strict gate. Game-file hosts appear nowhere else.
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -3169,6 +3263,29 @@ mod tests {
         // `download_for` is defined once and called once, by `download_for_owner`.
         assert_eq!(backend.matches("download_for(").count(), 2);
         assert!(body("download_for_owner").contains("download_for("));
+        // Refilling an incomplete store asks the same gate and names no host or download itself.
+        assert!(body("refill_own_store").contains("download_for_owner("));
+        assert!(!body("refill_own_store").contains("mojang::"));
+        // It runs at start-up, never on Play, which also runs `complete_assets`.
+        let public = |f: &str| {
+            let start = backend
+                .find(&format!(
+                    "
+pub fn {f}("
+                ))
+                .unwrap();
+            &backend[start
+                ..start
+                    + backend[start + 1..]
+                        .find(
+                            "
+}
+",
+                        )
+                        .unwrap()]
+        };
+        assert!(public("reuse_prepared_everywhere").contains("refill_own_store("));
+        assert!(!public("complete_assets").contains("refill_own_store("));
         for host in [
             "piston-data",
             "libraries.minecraft.net",
