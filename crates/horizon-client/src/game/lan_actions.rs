@@ -1092,12 +1092,19 @@ impl Game<'_> {
                     // The pause between two blocks is the client's (MultiPlayerGameMode's
                     // destroyDelay); the server digs from the START it receives.
                     play.destroy_delay = 0;
-                    // ServerPlayerGameMode.handleBlockBreakAction: a survival START
+                    // ServerPlayerGameMode.handleBlockBreakAction: a creative START
+                    // destroys the block at once (destroyAndAck "creative destroy"),
+                    // so a UseItemOn sent behind it in the same tick (both buttons
+                    // at once, #3006) replaces the air it left. A survival START
                     // attacks the block at once, so a tap released in the same tick
                     // still plays a note. The dig is marked begun for tick_mining.
                     let pos = a.pos;
-                    self.as_guest(host, conn, |g| {
-                        if g.may_build() && !g.creative {
+                    let destroyed = self.as_guest(host, conn, |g| {
+                        if g.creative {
+                            let _ = g.break_block(pos);
+                            return true;
+                        }
+                        if g.may_build() {
                             let _ = g.attack_block(pos);
                             g.mining = Some(Mining {
                                 pos,
@@ -1105,7 +1112,13 @@ impl Game<'_> {
                                 ticks: 0,
                             });
                         }
+                        false
                     });
+                    if destroyed == Some(true)
+                        && let Some(play) = host.play.get_mut(&conn)
+                    {
+                        play.digging = None;
+                    }
                 }
                 1 => {}
                 3 => {

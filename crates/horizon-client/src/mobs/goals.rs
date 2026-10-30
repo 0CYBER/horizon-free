@@ -480,6 +480,14 @@ impl Mob {
             (!water && m.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
         })
     }
+    /// `WaterAvoidingRandomFlyingGoal.getPosition`: a hover spot ahead, else
+    /// any air or water spot ahead.
+    pub fn flying_stroll_pos(&mut self, w: &MobWorld) -> Option<[f64; 3]> {
+        let [xd, _, zd] = self.view_vector();
+        let max_rad = f64::from(std::f32::consts::FRAC_PI_2);
+        self.hover_random_pos(w, 8, 7, xd, zd, max_rad, 3, 1)
+            .or_else(|| self.air_and_water_random_pos(w, 8, 4, -2, xd, zd))
+    }
     /// LandRandomPos.getPos
     pub fn land_random_pos(&mut self, w: &MobWorld, h: i32, v: i32) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {
@@ -788,6 +796,8 @@ pub struct Stroll {
     pub swim: bool,
     /// WaterAvoidingRandomFlyingGoal: a hover spot, else an air or water pos.
     pub flying: bool,
+    /// `Parrot.ParrotWanderGoal`: to a tree, else as `flying`.
+    pub parrot: bool,
     pub force: bool,
     wanted: [f64; 3],
 }
@@ -800,6 +810,7 @@ impl Stroll {
             water_avoiding: None,
             swim: false,
             flying: false,
+            parrot: false,
             force: false,
             wanted: [0.0; 3],
         }
@@ -821,6 +832,14 @@ impl Stroll {
             ..Self::new(speed)
         }
     }
+    /// `Parrot.ParrotWanderGoal(speed)`, a WaterAvoidingRandomFlyingGoal.
+    pub fn parrot(speed: f64) -> Self {
+        Self {
+            water_avoiding: Some(0.001),
+            parrot: true,
+            ..Self::new(speed)
+        }
+    }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
         Self {
@@ -832,7 +851,9 @@ impl Stroll {
 impl Goal for Stroll {
     goal_clone!();
     fn name(&self) -> &'static str {
-        if self.water_avoiding.is_some() {
+        if self.parrot {
+            "ParrotWander"
+        } else if self.water_avoiding.is_some() {
             "Stroll"
         } else if self.swim {
             "RandomSwimming"
@@ -853,6 +874,7 @@ impl Goal for Stroll {
             }
         }
         let pos = match self.water_avoiding {
+            Some(_) if self.parrot => super::parrot::wander_pos(m, cx.w),
             Some(prob) => {
                 if m.fluids.in_water {
                     m.land_random_pos(cx.w, 15, 7)
@@ -880,21 +902,7 @@ impl Goal for Stroll {
                 }
                 p
             }
-            None if self.flying => {
-                // WaterAvoidingRandomFlyingGoal.getPosition.
-                let [xd, _, zd] = m.view_vector();
-                m.hover_random_pos(
-                    cx.w,
-                    8,
-                    7,
-                    xd,
-                    zd,
-                    f64::from(std::f32::consts::FRAC_PI_2),
-                    3,
-                    1,
-                )
-                .or_else(|| m.air_and_water_random_pos(cx.w, 8, 4, -2, xd, zd))
-            }
+            None if self.flying => m.flying_stroll_pos(cx.w),
             None => m.default_random_pos(cx.w, 10, 7),
         };
         let Some(p) = pos else { return false };

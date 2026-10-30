@@ -127,6 +127,27 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
+
+/// `AbstractWindCharge` is pickable, so a thrown pearl's
+/// `ProjectileUtil.getEntityHitResult` can strike it (`ThrownEnderpearl.onHit`).
+const WIND_CHARGE_HIT: u32 = super::dragon::SPECIAL - 1;
+
+fn wind_charge_hitboxes(projectiles: &[Projectile], skip: usize) -> Vec<(Who, Aabb)> {
+    projectiles
+        .iter()
+        .enumerate()
+        .filter(|(j, q)| {
+            *j != skip
+                && !q.stuck
+                && matches!(
+                    q.kind,
+                    ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+                )
+        })
+        .map(|(_, q)| (Who::Mob(WIND_CHARGE_HIT), q.aabb()))
+        .collect()
+}
+
 /// `FlameFeatureRenderer`: fire quads stacked up a burning entity's box,
 /// turned to the camera around Y, at full block light. `at` is the entity's
 /// feet relative to the camera.
@@ -2493,13 +2514,21 @@ impl Game<'_> {
                     .map(|g| g.conn)
                     .collect()
             });
-            projectiles.retain_mut(|p| {
+            let mut keep_flags = vec![true; projectiles.len()];
+            for i in 0..projectiles.len() {
+                let winds = if matches!(projectiles[i].kind, ProjectileKind::EnderPearl) {
+                    wind_charge_hitboxes(&projectiles, i)
+                } else {
+                    Vec::new()
+                };
+                let p = &mut projectiles[i];
                 if vanish
                     && matches!(p.kind, ProjectileKind::EnderPearl)
                     && p.owner == Some(Who::Player)
                     && p.guest.map_or(host_dead, |c| dead_guests.contains(&c))
                 {
-                    return false;
+                    keep_flags[i] = false;
+                    continue;
                 }
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
                 // A player's arrows, snowballs and eggs meet every player; a
@@ -2514,11 +2543,25 @@ impl Game<'_> {
                 if shooter.is_some() {
                     p.owner = shooter;
                 }
-                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp) {
-                    (true, false) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
-                    (true, true) => horizon_client::arrows::tick(p, &scene, &arrow_targets_guests),
-                    (false, false) => p.tick(&pw),
-                    (false, true) => p.tick(&pw_guests),
+                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp, winds.is_empty()) {
+                    (true, false, _) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
+                    (true, true, _) => {
+                        horizon_client::arrows::tick(p, &scene, &arrow_targets_guests)
+                    }
+                    (false, false, true) => p.tick(&pw),
+                    (false, true, true) => p.tick(&pw_guests),
+                    (false, pvp_shot, false) => {
+                        let mut targets = if pvp_shot {
+                            pw_guests.targets.clone()
+                        } else {
+                            pw.targets.clone()
+                        };
+                        targets.extend(winds);
+                        p.tick(&ProjWorld {
+                            w: if pvp_shot { pw_guests.w } else { pw.w },
+                            targets,
+                        })
+                    }
                 };
                 if shooter.is_some() {
                     p.owner = Some(Who::Player);
@@ -2564,7 +2607,7 @@ impl Game<'_> {
                         arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                     }
                     deflections.push([at.x, at.y, at.z]);
-                    return true;
+                    continue;
                 }
                 // AbstractWindCharge.tick: out of the world's top it bursts.
                 if wind && keep && p.position.y > 350.0 {
@@ -2576,12 +2619,19 @@ impl Game<'_> {
                             face: [0; 3],
                         },
                     ));
-                    return false;
+                    keep_flags[i] = false;
+                    continue;
                 }
                 if hit != Hit::None {
                     hits.push((p.clone(), hit));
                 }
-                keep
+                keep_flags[i] = keep;
+            }
+            let mut idx = 0;
+            projectiles.retain(|_| {
+                let k = keep_flags[idx];
+                idx += 1;
+                k
             });
         }
         self.smoke_trails(trails);
