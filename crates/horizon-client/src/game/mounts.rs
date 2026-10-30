@@ -186,7 +186,12 @@ impl Game<'_> {
         let tamed = m.extra.tame;
         let sound = if item == "minecraft:saddle" && tamed && !m.extra.saddled {
             m.set_saddle(held);
-            Some("minecraft:entity.horse.saddle")
+            // Camel.getSaddleSound (the equip sound of a camel's saddle).
+            Some(match species {
+                Species::Camel => "minecraft:entity.camel.saddle",
+                Species::CamelHusk => "minecraft:entity.camel_husk.saddle",
+                _ => "minecraft:entity.horse.saddle",
+            })
         } else if item.ends_with("_horse_armor")
             && species == Species::Horse
             && tamed

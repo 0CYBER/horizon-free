@@ -979,6 +979,9 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             .next_spawn_data
             .as_ref()
             .map(|d| Tag::compound([("spawn_data", d.encode())])),
+        // CommandBlockEntity.getUpdateTag: saveWithoutMetadata, the command
+        // and its output settings (the edit screen reads them).
+        BlockEntity::CommandBlock(c) => Some(Tag::compound(c.save())),
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();

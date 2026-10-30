@@ -47,6 +47,11 @@ impl LevelPlayer {
             + (self.position.y - y).powi(2)
             + (self.position.z - z).powi(2)
     }
+    /// `Level.hasNearbyAlivePlayer`'s test of one player (any distance for a
+    /// negative range).
+    fn alive_near(&self, x: f64, y: f64, z: f64, range: f64) -> bool {
+        self.alive && !self.spectator && (range < 0.0 || self.distance_sqr(x, y, z) < range * range)
+    }
 }
 /// `ChunkMap.euclideanDistanceSquared` below 128 blocks
 /// (`playerIsCloseEnoughForSpawning`).
@@ -342,9 +347,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
 impl horizon_client::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
     /// `Level.hasNearbyAlivePlayer`, over every player.
     fn alive_player_near(&self, x: f64, y: f64, z: f64, range: f64) -> bool {
-        self.players.iter().any(|p| {
-            p.alive && !p.spectator && (range < 0.0 || p.distance_sqr(x, y, z) < range * range)
-        })
+        self.players.iter().any(|p| p.alive_near(x, y, z, range))
     }
     fn spawner_blocks_work(&self) -> bool {
         self.game.ui.rules.bool("spawner_blocks_work")
@@ -422,7 +425,18 @@ impl<'a> Game<'a> {
     /// Every player in the level in place: the local player, and the LAN
     /// guests or server players in it.
     pub(super) fn level_players(&self) -> Vec<LevelPlayer> {
-        let mut players: Vec<LevelPlayer> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+        self.level_players_iter().collect()
+    }
+    /// `level_players` one at a time, without collecting them.
+    fn level_players_iter(&self) -> impl Iterator<Item = LevelPlayer> + '_ {
+        let local = self.player_view().map(|p| LevelPlayer {
+            position: p.position,
+            bounds: p.bounds,
+            alive: p.alive,
+            creative: p.creative,
+            spectator: p.spectator,
+        });
+        let guests = self.lan.iter().flat_map(|h| {
             h.hub
                 .guests
                 .iter()
@@ -434,21 +448,14 @@ impl<'a> Game<'a> {
                     creative: g.creative(),
                     spectator: g.spectator(),
                 })
-                .collect()
         });
-        if let Some(p) = self.player_view() {
-            players.insert(
-                0,
-                LevelPlayer {
-                    position: p.position,
-                    bounds: p.bounds,
-                    alive: p.alive,
-                    creative: p.creative,
-                    spectator: p.spectator,
-                },
-            );
-        }
-        players
+        local.into_iter().chain(guests)
+    }
+    /// `Level.hasNearbyAlivePlayer` before a level is built for the spawn
+    /// code: what a spawner asks first, every tick.
+    pub(super) fn alive_player_near(&self, x: f64, y: f64, z: f64, range: f64) -> bool {
+        self.level_players_iter()
+            .any(|p| p.alive_near(x, y, z, range))
     }
     /// `ChunkMap.collectSpawningChunks`: the natural spawn chunk tracker's
     /// chunks (within 8 chunks of a player, `getSpawnCandidateChunks`) that
