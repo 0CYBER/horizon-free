@@ -191,6 +191,11 @@ struct Launcher {
     /// Native mods (`native_mods`): the build's step while it runs, why it failed, and the
     /// warning before a build while it is open, with the mods it names.
     native_step: Option<String>,
+    /// When the running native build started, and the whole seconds last drawn (the status shows
+    /// the time it has taken).
+    native_started: Option<(Instant, u64)>,
+    /// How the last native build ended ("Built in 42 s (fast, incremental)", or "Up to date").
+    native_done: Option<String>,
     native_error: Option<String>,
     native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
     /// The mods of a build made for other Horizon versions (`native_mods::MISMATCH`): the build
@@ -430,6 +435,8 @@ impl Launcher {
             disk_for: Vec::new(),
             install_error: None,
             native_step: None,
+            native_started: None,
+            native_done: None,
             native_error: None,
             native_confirm: None,
             native_mismatch: None,
@@ -666,11 +673,15 @@ impl Launcher {
             }
         };
         self.native_step = Some(tr("Starting the build").into());
+        self.native_started = Some((Instant::now(), 0));
+        self.native_done = None;
+        let profile = native_mods::Profile::from_setting(self.settings.native_release);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = native_mods::build(&base, &folder, Some(&instance), anyway, |step| {
-                let _ = tx.send(Msg::NativeProgress(step.label()));
-            });
+            let result =
+                native_mods::build(&base, &folder, Some(&instance), anyway, profile, |step| {
+                    let _ = tx.send(Msg::NativeProgress(step.label()));
+                });
             let _ = tx.send(Msg::Native(result));
         });
     }
@@ -715,6 +726,13 @@ impl Launcher {
             }
             Some(perf::Step::Quit) => cx.quit(),
             Some(perf::Step::Wait) | None => {}
+        }
+        // The running build's clock moves on each second.
+        if let Some((started, shown)) = &mut self.native_started {
+            if started.elapsed().as_secs() != *shown {
+                *shown = started.elapsed().as_secs();
+                changed = true;
+            }
         }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
@@ -903,7 +921,10 @@ impl Launcher {
                 Msg::Updates(Err(e)) => self.update_error = Some(e),
                 Msg::NativeProgress(step) => self.native_step = Some(step),
                 Msg::Native(result) => {
-                    self.native_step = None;
+                    // The last step of a build that worked says how it went.
+                    let last = self.native_step.take();
+                    self.native_started = None;
+                    self.native_done = result.is_ok().then_some(last).flatten();
                     self.installed = backend::installed();
                     self.reload_instances();
                     match result.map_err(|e| match e.strip_prefix(native_mods::MISMATCH) {
@@ -3118,16 +3139,41 @@ impl Launcher {
         );
         if on {
             let status = match (&self.native_step, &self.native_error) {
-                (Some(step), _) => Some(div().child(step.clone())),
+                (Some(step), _) => {
+                    let secs = self
+                        .native_started
+                        .map_or(0, |(s, _)| s.elapsed().as_secs());
+                    Some(div().child(format!("{step} - {}", native_mods::duration_label(secs))))
+                }
                 (None, Some(e)) => Some(div().text_color(t.danger).child(e.clone())),
-                (None, None) => instances::selected()
-                    .version
-                    .filter(|v| native_mods::is_native(v))
-                    .map(|v| {
-                        div().child(trf("{version} plays in this instance.", &[("version", &v)]))
-                    }),
+                (None, None) => match &self.native_done {
+                    Some(done) => Some(div().child(done.clone())),
+                    None => instances::selected()
+                        .version
+                        .filter(|v| native_mods::is_native(v))
+                        .map(|v| {
+                            div()
+                                .child(trf("{version} plays in this instance.", &[("version", &v)]))
+                        }),
+                },
             };
             detail = detail.children(status);
+            let release = self.settings.native_release;
+            detail = detail.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(switch("native-release", release, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.settings.native_release = !this.settings.native_release;
+                            this.native_done = None;
+                            this.settings.save();
+                            cx.notify();
+                        },
+                    )))
+                    .child(tr("Release build: slower to build, slightly faster game").to_string()),
+            );
             if let (None, Some(list)) = (&self.native_step, &self.native_mismatch) {
                 detail = detail.child(self.native_mismatch_panel(list, cx));
             } else if self.native_step.is_none() && self.native_confirm.is_none() {

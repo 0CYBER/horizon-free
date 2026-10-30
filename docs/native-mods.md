@@ -101,8 +101,12 @@ trusting native code is the player's decision, never an agent's.
 4. **Mixins.** The bundles are copied first, so the build and its key use that copy whatever happens to the
    folder meanwhile. `horizon-mixins apply` stages the modded source; the launcher copies only the files that
    changed into `native/stage/`, so Cargo, which goes by file times, recompiles only the crates the mods touch.
-5. **Compile**: `cargo build --locked --profile release --features horizon-client/mods -p horizon-client`, the
-   release's own command (game-build.yml), into `native/target/`. Cargo downloads the locked crates from
+5. **Compile**: `cargo build --locked --profile fast --features horizon-client/mods -p horizon-client`, into
+   `native/target/`. `fast` is the workspace's `[profile.fast]` (no LTO, 16 codegen units, incremental) and the
+   default; Settings → Game → Native mods → "Release build: slower to build, slightly faster game", the setting
+   `horizon-launcher settings native-profile release` or `native-build --profile release` compile the release's own
+   profile instead (thin LTO, game-build.yml). The profile is in the build's key and each has its own folder
+   (`native/target/fast/`, `native/target/release/`), so the two never mix and may both stay. Cargo downloads the locked crates from
    crates.io (Horizon has no git dependencies). The log is `native/build.log`; a failure shows its last lines (a
    horizon-mixins diagnostic in one line).
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
@@ -151,6 +155,22 @@ Installing turns Native mods on, as any native mod does; then build as usual.
 The key hashes the commit, the horizon-mixins commit, Rust's version, the profile and features, and every file of
 every bundle. The same set on the same commit is never built twice. A change gives a new build, and
 `native/target/` stays, so a rebuild compiles only `horizon-client` and what the mods touched.
+
+**Incremental rebuilds.** With `fast`, Cargo recompiles only the changed parts of `horizon-client`, not the whole
+crate with LTO. This holds because the stage (`native/stage/`) is one folder for every build and the launcher writes
+only the files whose content changed (Cargo goes by file times), switching mods on the same commit reuses the same
+`native/target/`, and the launcher removes `CARGO_INCREMENTAL` and `CARGO_BUILD_INCREMENTAL` from the build's
+environment. `release` has no incremental compilation (the release profile's own).
+
+**Build status.** Before it starts, the build says which case it is, with the profile: "Up to date (no build needed)",
+"Incremental rebuild: mods X, Y" (or "Horizon commit a to b", "horizon-mixins"; compared with the last build of that
+profile, kept in `native/built.json`) or "First build: the whole game (several minutes)". While compiling it shows the
+crate, crates done of the total (Cargo's own progress), and the time taken; afterwards "Built in 42 s (fast,
+incremental)". The window shows it in the Native mods row, `native-build` prints each step with its time on standard
+error; `native/build.log` keeps Cargo's output as before (without the progress bar).
+
+The timing tables below were measured with the release profile, before `fast` was the default; they are not the
+numbers of a `fast` build.
 
 Measured 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on Nightly `83f15fa`,
 `CARGO_BUILD_JOBS=8` while other agents' builds ran (upper bounds):

@@ -237,5 +237,6 @@
   "No mod matches.": "Żaden mod nie pasuje.",
   "{source} · needed by another mod": "{source} · wymagany przez inny mod",
   "Local file · {file}": "Plik lokalny · {file}",
-  "Update {version}": "Aktualizuj do {version}"
+  "Update {version}": "Aktualizuj do {version}",
+  "Release build: slower to build, slightly faster game": "Kompilacja release: dłuższa, gra nieco szybsza"
 }

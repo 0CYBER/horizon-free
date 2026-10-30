@@ -237,5 +237,6 @@
   "No mod matches.": "Немає відповідних модів.",
   "{source} · needed by another mod": "{source} · потрібен іншому моду",
   "Local file · {file}": "Локальний файл · {file}",
-  "Update {version}": "Оновити до {version}"
+  "Update {version}": "Оновити до {version}",
+  "Release build: slower to build, slightly faster game": "Release-збірка: збирається довше, гра трохи швидша"
 }
