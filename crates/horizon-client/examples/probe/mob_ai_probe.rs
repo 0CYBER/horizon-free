@@ -1047,6 +1047,15 @@ pub fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if matches!(
+                m.species(),
+                Species::Cod | Species::Salmon | Species::TropicalFish
+            ) {
+                // The oracle draws FollowFlockLeaderGoal's first delay again once seeded.
+                let delay =
+                    horizon_client::mobs::aquatic::FollowFlockLeader::next_start_tick(&mut m);
+                m.ai.goals.set_start_delay("FollowFlockLeaderGoal", delay);
+            }
             if m.species() == Species::Bee {
                 // The oracle draws the constructor's cooldowns again once seeded.
                 horizon_client::mobs::bee::draw_cooldowns(&mut m);

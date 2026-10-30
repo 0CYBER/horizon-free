@@ -650,6 +650,13 @@ public final class VanillaMobAiOracle {
                 level.addFreshEntity(mob);
                 for (Runnable r : afterAdd) r.run();
                 mob.getRandom().setSeed(spec.seed);
+                if (mob instanceof net.minecraft.world.entity.animal.fish.AbstractSchoolingFish fish) {
+                    // The constructor's nextStartTick draw (FollowFlockLeaderGoal), made again with the seeded random.
+                    for (WrappedGoal g : ((GoalSelector) get(fish, "goalSelector")).getAvailableGoals()) {
+                        if (g.getGoal() instanceof net.minecraft.world.entity.ai.goal.FollowFlockLeaderGoal goal)
+                            field(goal.getClass(), "nextStartTick").setInt(goal, (200 + fish.getRandom().nextInt(200) % 20 + 1) / 2);
+                    }
+                }
                 Brain<?> brain = mob.getBrain();
                 if (mob instanceof net.minecraft.world.entity.animal.golem.CopperGolem) {
                     // The constructor's TRANSPORT_ITEMS_COOLDOWN_TICKS draw, made with the seeded
