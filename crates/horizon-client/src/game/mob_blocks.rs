@@ -197,6 +197,7 @@ impl Game<'_> {
         self.worn_block_geometry(mob, camera, alpha, light, out);
         self.head_item_geometry(mob, camera, alpha, light, true, out);
         self.golem_flower_geometry(mob, camera, alpha, light, out);
+        self.antenna_block_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
         {
@@ -207,6 +208,43 @@ impl Game<'_> {
             // Preserve cross models (flowers, fungi) and state properties (facing).
             self.block_model_vertices(state, 42, t, light, true, out);
         }
+    }
+    /// `BlockDecorationLayer.submit`: the block item in a copper golem's
+    /// antenna slot (a flower, or any block item), drawn at the antenna by
+    /// `CopperGolemModel.applyBlockOnAntennaTransform` with `NO_OVERLAY`. Only
+    /// the block's default state is drawn, not the item's block state component.
+    fn antenna_block_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        use glam::{Mat4, Vec3};
+        if mob.species() != Species::CopperGolem || horizon_client::mobs::trader::is_invisible(mob)
+        {
+            return;
+        }
+        let Some(stack) = mob.saddle_item() else {
+            return;
+        };
+        let Some(state) = self.pack.assets.registry.default_state(&stack.item) else {
+            return;
+        };
+        let Some(head) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        // UNIT_CUBE_BOTTOM_CENTER_TO_ANTENNA_CENTER: translation(-0.5, 0, -0.5)
+        // then rotateAround(Z 180, 0.5, 0.5, 0.5), which JOML post-multiplies.
+        let unit = Mat4::from_translation(Vec3::new(-0.5, 0.0, -0.5))
+            * Mat4::from_translation(Vec3::splat(0.5))
+            * Mat4::from_rotation_z(180.0f32.to_radians())
+            * Mat4::from_translation(Vec3::splat(-0.5));
+        let t = head * Mat4::from_translation(Vec3::new(0.0, -1.75, 0.0)) * unit;
+        self.block_model_vertices(state, 42, t, light, true, out);
     }
     /// `IronGolemFlowerLayer`: the poppy in the right arm while the golem
     /// offers it (`getOfferFlowerTick() > 0`), drawn with `NO_OVERLAY`.
@@ -327,9 +365,19 @@ impl Game<'_> {
         for (item, off_hand) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
             let Some(item) = item else { continue };
             let left = off_hand != mob.main_arm_left();
-            let Some(t) =
+            // PlayerItemInHandLayer.submitArmWithItem (avatars only): a spyglass
+            // in use, with no swing in progress, is held to the eye (`heldOnHead`).
+            let spyglass_to_eye = &**item == "minecraft:spyglass"
+                && (&*mob.kind.id == "minecraft:player" || mob.species() == Species::Mannequin)
+                && off_hand == mob.extra.using_off_hand
+                && mob.extra.using_item > 0
+                && horizon_client::mobs::anim::state(mob, alpha as f32).swing < 1.0e-5;
+            let t = if spyglass_to_eye {
+                render::held_to_eye_matrix(mob, alpha as f32, camera, self.res.mob_data(), left)
+            } else {
                 render::held_item_transform(mob, alpha as f32, camera, self.res.mob_data(), left)
-            else {
+            };
+            let Some(t) = t else {
                 continue;
             };
             let slot = if off_hand {
@@ -350,6 +398,12 @@ impl Game<'_> {
                     continue;
                 };
                 stack.clone()
+            } else if mob.species() == Species::Witch
+                && horizon_client::mobs::witch::holds_potion(item)
+                && &**item != "minecraft:potion"
+            {
+                // A drinking witch's main hand holds the potion's type, drawn as a potion item.
+                ItemStack::new("minecraft:potion", 1).with_potion(item)
             } else {
                 ItemStack::new(item, 1)
             };
@@ -383,7 +437,9 @@ impl Game<'_> {
             // PandaHoldsItemLayer and FoxHeldItemLayer show the item as it lies
             // on the ground.
             let (context, ordinal) = match (mob.species(), left) {
-                (Species::Panda | Species::Fox, _) => (Context::Ground, 7),
+                // The spyglass held to the eye is the HEAD display.
+                _ if spyglass_to_eye => (Context::Head, 5),
+                (Species::Panda | Species::Fox | Species::Witch, _) => (Context::Ground, 7),
                 (_, true) => (Context::ThirdPersonLeftHand, 1),
                 (_, false) => (Context::ThirdPersonRightHand, 2),
             };
@@ -409,9 +465,7 @@ impl Game<'_> {
         lit: bool,
         out: &mut Vec<Vertex>,
     ) {
-        if horizon_client::mobs::trader::is_invisible(mob) {
-            return;
-        }
+        // The layer also draws on an invisible mob.
         let species = mob.species();
         if species == Species::SnowGolem
             || horizon_client::mobs::species::body_slot(species)
@@ -455,7 +509,46 @@ impl Game<'_> {
             return;
         };
         if let Some(kind) = super::armor_stands::skull_kind(&stack.item) {
-            let pose = head * glam::Mat4::from_scale(glam::Vec3::splat(1.1875));
+            // Only the renderers that add a `CustomHeadLayer` draw a skull:
+            // the humanoid mobs, the illagers, the villagers, the copper golem
+            // and the avatars.
+            if !(&*mob.kind.id == "minecraft:player"
+                || matches!(
+                    species,
+                    Species::Zombie
+                        | Species::Husk
+                        | Species::Drowned
+                        | Species::ZombieVillager
+                        | Species::Skeleton
+                        | Species::Stray
+                        | Species::Bogged
+                        | Species::Parched
+                        | Species::WitherSkeleton
+                        | Species::Piglin
+                        | Species::PiglinBrute
+                        | Species::ZombifiedPiglin
+                        | Species::Pillager
+                        | Species::Vindicator
+                        | Species::Evoker
+                        | Species::Illusioner
+                        | Species::Villager
+                        | Species::WanderingTrader
+                        | Species::CopperGolem
+                        | Species::Mannequin
+                ))
+            {
+                return;
+            }
+            // translateToHead, the renderer's `skullYOffset` (the villager's
+            // `CUSTOM_HEAD_TRANSFORMS`), then the skull's SKULL_SCALE.
+            let y_offset = if species == Species::Villager {
+                -0.074_218_75
+            } else {
+                0.0
+            };
+            let pose = head
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, y_offset, 0.0))
+                * glam::Mat4::from_scale(glam::Vec3::splat(1.1875));
             let special = horizon_assets::item_model::SpecialModel {
                 kind: if kind == "player" {
                     horizon_assets::item_model::SpecialKind::PlayerHead

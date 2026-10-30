@@ -21,7 +21,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::{
-    geometry::{Aabb, Direction, Vec3, traverse_blocks},
+    geometry::{Aabb, Direction, Vec3, traverse_blocks, trig::Mth},
     position::BlockPos,
     random::RandomSource,
 };
@@ -57,8 +57,9 @@ pub(super) struct Creatures {
     /// (game/lan_pvp.rs).
     pub sweeps: Vec<super::lan_pvp::Sweep>,
     /// Explosion packets from a guest's turn, waiting for it to end
-    /// (centre, small, radius, blocks hit; game/lan_particles.rs).
-    pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
+    /// (centre, small, radius, blocks hit, the players it pushed;
+    /// game/lan_particles.rs).
+    pub lan_explosions: Vec<([f64; 3], bool, f32, usize, Vec<(u32, [f64; 3])>)>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
@@ -107,12 +108,10 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             hit.direction.normal(),
         ))
     }
-    fn in_water(&self, at: Vec3) -> bool {
-        self.w.fluid(
-            at.x.floor() as i32,
-            at.y.floor() as i32,
-            at.z.floor() as i32,
-        ) == Fluid::Water
+    /// Entity.updateFluidInteraction over the projectile's box, not the
+    /// block at its feet (#3072).
+    fn in_water(&self, bounds: Aabb) -> bool {
+        self.w.fluids(bounds, bounds.max_position().y).in_water
     }
     fn targets(&self) -> &[(Who, Aabb)] {
         &self.targets
@@ -130,21 +129,35 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
 
 /// `AbstractWindCharge` is pickable, so a thrown pearl's
 /// `ProjectileUtil.getEntityHitResult` can strike it (`ThrownEnderpearl.onHit`).
-const WIND_CHARGE_HIT: u32 = super::dragon::SPECIAL - 1;
+/// `WIND_CHARGE_IDS + j` is `projectiles[j]` during `tick_projectiles`, below
+/// the dragon's reserved ids.
+const WIND_CHARGE_IDS: u32 = super::dragon::SPECIAL - 0x10000;
 
-fn wind_charge_hitboxes(projectiles: &[Projectile], skip: usize) -> Vec<(Who, Aabb)> {
+/// The index of the wind charge a `wind_charge_hitboxes` id stands for.
+fn wind_charge_hit(id: u32) -> Option<usize> {
+    (WIND_CHARGE_IDS..super::dragon::SPECIAL)
+        .contains(&id)
+        .then(|| (id - WIND_CHARGE_IDS) as usize)
+}
+
+fn wind_charge_hitboxes(
+    projectiles: &[Projectile],
+    alive: &[bool],
+    skip: usize,
+) -> Vec<(Who, Aabb)> {
     projectiles
         .iter()
         .enumerate()
         .filter(|(j, q)| {
             *j != skip
+                && alive[*j]
                 && !q.stuck
                 && matches!(
                     q.kind,
                     ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
                 )
         })
-        .map(|(_, q)| (Who::Mob(WIND_CHARGE_HIT), q.aabb()))
+        .map(|(j, q)| (Who::Mob(WIND_CHARGE_IDS + j as u32), q.aabb()))
         .collect()
 }
 
@@ -352,6 +365,41 @@ impl Game<'_> {
         if !persistent && !scripted {
             self.spawn_jockeys(id, true);
         }
+        Some(id)
+    }
+    /// `Mob.convertTo(type, ConversionParams.single(...))` for a mob already
+    /// removed: a new mob of `kind`, made without spawn finalization, takes
+    /// its place with what `conversion::single` carries over, and the old
+    /// mob's riders move onto it. A zombie that comes out of it rolls
+    /// `Zombie.handleAttributes(special, CONVERSION)` (the
+    /// `postConversionStep` of its `ConversionTracker`).
+    pub(super) fn convert_to(
+        &mut self,
+        from: &Mob,
+        kind: &str,
+        params: horizon_client::mobs::conversion::Params,
+    ) -> Option<u32> {
+        let t = self.res.mob_types().get(kind).cloned()?;
+        self.next_entity += 1;
+        let mut mob = Mob::new(self.next_entity, t, from.position, from.yaw);
+        horizon_client::mobs::conversion::single(from, &mut mob, params);
+        if matches!(from.species(), Species::Zombie | Species::Husk) {
+            let at = [from.position.x, from.position.y, from.position.z];
+            let special = self.local_difficulty(at).special();
+            horizon_client::mobs::finalize::zombie_attributes(
+                &mut mob,
+                special,
+                horizon_client::mobs::finalize::Reason::Conversion,
+            );
+        }
+        let id = mob.id;
+        // ConversionType.SINGLE: the passengers get off and board the new mob.
+        for rider in self.mobs.iter_mut() {
+            if rider.extra.mount == Some(from.id) {
+                rider.extra.mount = Some(id);
+            }
+        }
+        self.mobs.push(mob);
         Some(id)
     }
     /// The `summon` command: spawn a mob in front of the player or at a position.
@@ -589,8 +637,10 @@ impl Game<'_> {
             self.died.insert(m.id);
             self.mob_died(&m);
         }
-        // Their victims have been looted: no charged creeper is waiting any more.
+        // Their victims have been looted and mourned: no charged creeper is
+        // waiting any more.
         self.combat.charged_exploders.clear();
+        self.combat.exploded.clear();
         let uuid = self.level.player_uuid;
         let mut snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
@@ -833,6 +883,8 @@ impl Game<'_> {
             self.set_bed_occupied(bed, false);
         }
         let killer = self.last_hurt_by_player.remove(&m.id);
+        // TamableAnimal.die, before the rest of LivingEntity.die.
+        self.tell_owner_pet_died(m, killer);
         self.love_cause.remove(&m.id);
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
@@ -883,8 +935,12 @@ impl Game<'_> {
             }
         }
         self.score_entity_removed(m.id);
-        self.raider_died(m, by_player);
-        self.villager_murdered(m, by_player, killer.flatten());
+        // Raider.die's hero and Villager.tellWitnessesThatIWasMurdered go to
+        // the causing entity, not the credited player: a tame wolf's kill is
+        // neither its owner's heroism nor a murder by them.
+        let slain_by_player = by_player && !killed_by_mob(m);
+        self.raider_died(m, slain_by_player);
+        self.villager_murdered(m, slain_by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
         self.create_wither_rose(m);
@@ -919,7 +975,12 @@ impl Game<'_> {
     /// The killer's side of a mob's death: `ServerPlayer.awardKillScore`'s
     /// statistics and scores, and the `player_killed_entity` trigger.
     fn credit_kill(&mut self, m: &Mob) {
-        self.stats.add("killed", &m.kind.id, 1);
+        // Player.killedEntity: the killed statistic goes to the causing
+        // entity, so a kill by a mob (a tame wolf credited to its owner)
+        // leaves it out; ServerPlayer.awardKillScore counts the rest.
+        if !killed_by_mob(m) {
+            self.stats.add("killed", &m.kind.id, 1);
+        }
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(m.id));
         let view = self.mob_entity(m);
@@ -1056,6 +1117,20 @@ impl Game<'_> {
                     // the orbs' merge ids and block ticks read next).
                     self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
                 }
+                drops::Drop::CarriedBlock(state) => {
+                    // Enderman.dropCustomDeathLoot: spawnAtLocation for each
+                    // of the carried block's silk-touch drops.
+                    let stacks = horizon_client::mobs::enderman::carried_block_drops(
+                        world_items!(self),
+                        self.pack.assets.registry,
+                        state,
+                        &mut self.world.random,
+                        Some((&mut self.rand_sequences, self.level.seed)),
+                    );
+                    for item in stacks {
+                        self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
+                    }
+                }
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
                 drops::Drop::Orb(_) => {}
             }
@@ -1088,6 +1163,9 @@ impl Game<'_> {
                 }
             }
         }
+        if hurt {
+            self.resolve_player_responsible(target, source);
+        }
         if infested {
             self.mob_infested(target);
         }
@@ -1109,6 +1187,49 @@ impl Game<'_> {
             self.zombie_killed(killer, target);
         }
         hurt
+    }
+    /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a
+    /// mob: a tame wolf's hit is its owner's (`setLastHurtByPlayer(uuid, 100)`),
+    /// so the kill drops experience and player-only loot and the owner, when
+    /// in the world, gets the credit (`getKillCredit`); a tame wolf without an
+    /// owner clears it. A player's own hits are recorded where they land.
+    pub(super) fn resolve_player_responsible(&mut self, victim: u32, source: Damage) {
+        let Some(Who::Mob(attacker)) = source.attacker else {
+            return;
+        };
+        let Some(owner) = self
+            .mobs
+            .iter()
+            .find(|m| m.id == attacker && m.species() == Species::Wolf && m.extra.tame)
+            .map(|m| m.extra.owner)
+        else {
+            return;
+        };
+        let player = owner.and_then(|uuid| self.player_with_uuid(uuid));
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == victim) else {
+            return;
+        };
+        m.ai.last_hurt_by_player = if owner.is_some() { 100 } else { 0 };
+        match player {
+            Some(who) => self.last_hurt_by_player.insert(victim, who),
+            None => self.last_hurt_by_player.remove(&victim),
+        };
+    }
+    /// The player in the world with `uuid` (`EntityReference.getPlayer`), as
+    /// `last_hurt_by_player` keeps them: None for the player in place, else the
+    /// guest's connection.
+    fn player_with_uuid(&self, uuid: [i32; 4]) -> Option<Option<u32>> {
+        if self.player.is_some()
+            && horizon_client::mobs::tame::owned_by(Some(uuid), self.acting_uuid())
+        {
+            return Some(self.lan_acting);
+        }
+        let uuid = horizon_client::lan::playerdata::ints_uuid(uuid);
+        self.lan
+            .iter()
+            .flat_map(|h| h.hub.guests.iter())
+            .find(|g| g.placed && g.uuid == uuid)
+            .map(|g| Some(g.conn))
     }
     /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
     pub(super) fn mob_infested(&mut self, mob: u32) {
@@ -1205,7 +1326,7 @@ impl Game<'_> {
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
                         self.particles
                             .send_particles(&options, at, spread, speed, count);
-                        self.lan_level_particles(&options, at, spread, speed, count);
+                        self.lan_level_particles(&options, at, spread, speed, count, None);
                     }
                 }
                 MobEvent::Sound(name, at, volume, pitch)
@@ -1319,6 +1440,7 @@ impl Game<'_> {
                     self.combat.explosion_source = Some(mob);
                     // The creeper causes the blast's damage, but it is out of
                     // the mob list already: its name comes with the event.
+                    self.combat.exploded.push((mob, name.clone()));
                     self.note_named_attacker("minecraft:explosion", mob, name);
                     if charged {
                         self.combat.charged_exploders.push(mob);
@@ -1360,6 +1482,31 @@ impl Game<'_> {
                     source,
                 } => {
                     self.mob_hits_mob(target, amount, source);
+                }
+                MobEvent::CubeHurtMob {
+                    cube,
+                    target,
+                    amount,
+                    source,
+                } => {
+                    // AbstractCubeMob.dealDamage: the attack sound (and its
+                    // two pitch draws, made even for a silent cube, whose
+                    // Entity.playSound is then skipped) only follows a hit
+                    // that landed.
+                    if self.mob_hits_mob(target, amount, source)
+                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == cube)
+                    {
+                        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+                        let at = m.center();
+                        if !m.silent {
+                            self.handle_mob_events(vec![MobEvent::Sound(
+                                "entity.slime.attack",
+                                at,
+                                1.0,
+                                pitch,
+                            )])?;
+                        }
+                    }
                 }
                 MobEvent::SonicBoom {
                     target,
@@ -1502,6 +1649,9 @@ impl Game<'_> {
                     if let Some(id) = self.spawn_mob(&kind, at, setup.persistent) {
                         self.apply_setup(id, &setup);
                     }
+                }
+                MobEvent::Convert { from, kind, params } => {
+                    self.convert_to(&from, kind, params);
                 }
                 MobEvent::DropItem { item, count, at } => self.spawn_item(
                     ItemStack {
@@ -1850,6 +2000,11 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::PandaSneezed { mob } => self.panda_sneezed(mob),
+                MobEvent::FallToPassengers {
+                    mob,
+                    distance,
+                    modifier,
+                } => self.fall_to_passengers(mob, distance, modifier),
                 MobEvent::ShedScute { mob, at, pitch } => {
                     // The mob already checked `shouldDropLoot` (a baby, `mob_drops`).
                     let table = "minecraft:gameplay/armadillo_shed";
@@ -2083,7 +2238,9 @@ impl Game<'_> {
             }
             return;
         }
-        let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
+        // (Mooshroom draws its own coin in getOffspringVariant.)
+        let coin = p.species() != Species::Mooshroom
+            && self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         // Axolotl.getBreedOffspring: useRareVariant (one in 1200) makes it blue,
         // else either parent's variant. The draws come from the mother's random.
         let axolotl = if p.species() == Species::Axolotl {
@@ -2102,6 +2259,24 @@ impl Game<'_> {
         } else {
             None
         };
+        // MushroomCow.getOffspringVariant, from the mother's random: the other
+        // colour 1 time in 1024 when both parents share one, otherwise either
+        // parent's colour by a coin flip.
+        let mooshroom = if p.species() == Species::Mooshroom {
+            let mate = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            let own = p.extra.variant;
+            self.mobs.iter_mut().find(|m| m.id == parent).map(|m| {
+                if own == mate && m.random.next_int_bound(1024).unwrap_or(1) == 0 {
+                    if own == 1 { 0 } else { 1 }
+                } else if m.random.next_boolean() {
+                    own
+                } else {
+                    mate
+                }
+            })
+        } else {
+            None
+        };
         // A horse and a donkey have a mule.
         let kind = match (p.species(), q.as_ref().map(|q| q.species())) {
             (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse)) => {
@@ -2113,6 +2288,8 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            // No Mob.finalizeSpawn either: no follow range bonus, right-handed.
+            spawning::bred_offspring(child);
             // getBreedOffspring creates the baby without finalizeSpawn: it keeps
             // the default (`classic`) sound variant.
             child.extra.sound_variant = None;
@@ -2246,6 +2423,9 @@ impl Game<'_> {
             ) && !coin
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            }
+            if let Some(variant) = mooshroom {
+                child.extra.variant = variant;
             }
             // Sheep.getBreedOffspring: the lamb's wool mixes both parents' dyes.
             if p.species() == Species::Sheep {
@@ -2645,7 +2825,7 @@ impl Game<'_> {
             let mut keep_flags = vec![true; projectiles.len()];
             for i in 0..projectiles.len() {
                 let winds = if matches!(projectiles[i].kind, ProjectileKind::EnderPearl) {
-                    wind_charge_hitboxes(&projectiles, i)
+                    wind_charge_hitboxes(&projectiles, &keep_flags, i)
                 } else {
                     Vec::new()
                 };
@@ -2754,6 +2934,16 @@ impl Game<'_> {
                     hits.push((p.clone(), hit));
                 }
                 keep_flags[i] = keep;
+                // Projectile.onHit: the wind charge it hit turns before its own tick.
+                if let Hit::Entity {
+                    who: Who::Mob(id), ..
+                } = hit
+                    && let Some(j) = wind_charge_hit(id)
+                {
+                    let (owner, guest) = (p.owner, p.guest);
+                    let look = self.owner_look(owner, guest);
+                    super::deflect::aim_deflect(&mut projectiles[j], look, owner, guest);
+                }
             }
             let mut idx = 0;
             projectiles.retain(|_| {
@@ -2863,11 +3053,29 @@ impl Game<'_> {
             }
         }
     }
-    /// `onProjectileHit` of chorus flowers and decorated pots: an impact
-    /// projectile (`#impact_projectiles`) breaks the block when
-    /// `Projectile.mayInteract` and `Projectile.mayBreak` allow it, which takes
-    /// the `projectiles_can_break_blocks` rule and a shooter that may break
-    /// blocks (`canBreakBlockInAdventureMode`: never a mob, never an
+    /// `AmethystBlock.onProjectileHit`: a projectile that strikes an amethyst
+    /// block rings `block.amethyst_block.chime` there, pitched by the level random.
+    fn amethyst_projectile_hit(&mut self, pos: [i32; 3]) {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if &*self.res.facts().get(state).name != "minecraft:amethyst_block" {
+            return;
+        }
+        let pitch = 0.5 + self.world.random.next_float() * 1.2;
+        self.level_events
+            .push(horizon_world::level::LevelEvent::Sound {
+                pos: BlockPos::new(pos[0], pos[1], pos[2]),
+                sound: "minecraft:block.amethyst_block.chime".into(),
+                volume: 1.0,
+                pitch,
+            });
+        let _ = self.process_level_events();
+    }
+    /// `onProjectileHit` of chorus flowers, decorated pots and speleothems
+    /// (pointed dripstone, sulfur spikes): an impact projectile
+    /// (`#impact_projectiles`) breaks the block when `Projectile.mayInteract`
+    /// and `Projectile.mayBreak` allow it, which takes the
+    /// `projectiles_can_break_blocks` rule and a shooter that may break blocks
+    /// (`canBreakBlockInAdventureMode`: never a mob, never an
     /// adventure player). A pot is cracked first (flags 260), so it shatters.
     fn projectile_breaks_block(&mut self, p: &Projectile, pos: [i32; 3]) {
         use horizon_client::command::args::GameMode;
@@ -2895,6 +3103,11 @@ impl Game<'_> {
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         match &*self.res.facts().get(state).name {
             "minecraft:chorus_flower" => {}
+            // SpeleothemBlock.onProjectileHit (pointed dripstone and sulfur spikes): a
+            // thrown trident faster than 0.6 breaks it.
+            "minecraft:pointed_dripstone" | "minecraft:sulfur_spike"
+                if matches!(p.kind, ProjectileKind::Trident)
+                    && p.arrow.as_ref().is_some_and(|a| a.hit_speed > 0.6) => {}
             "minecraft:decorated_pot" => {
                 let registry = &self.pack.assets.registry;
                 let Some(mut pot) = registry.state(state).cloned() else {
@@ -2929,6 +3142,11 @@ impl Game<'_> {
                 [position.x, position.y, position.z],
                 [velocity.x, velocity.y, velocity.z],
             ),
+            // Arrow.tick: `broadcastEntityEvent(this, 0)`. The window and the
+            // guests burst the particles themselves (`remote_arrow_puff`).
+            ArrowEvent::PotionPuff { id, .. } => {
+                self.lan_entity_event(id as i32, 0, [at.x, at.y, at.z]);
+            }
             ArrowEvent::Sound {
                 sound,
                 volume,
@@ -3074,6 +3292,7 @@ impl Game<'_> {
             && face != [0; 3]
         {
             self.bell_projectile_hit(p, pos, at, face);
+            self.amethyst_projectile_hit(pos);
             self.projectile_breaks_block(p, pos);
         }
         self.combat.projectile_owner = match p.owner {
@@ -3229,7 +3448,7 @@ impl Game<'_> {
             }
             // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
             (ProjectileKind::Trident, Hit::Block { .. }) => {}
-            (ProjectileKind::Arrow { effect, .. }, Hit::Entity { who, .. }) => {
+            (ProjectileKind::Arrow { .. }, Hit::Entity { who, .. }) => {
                 let mut arrow = p.clone();
                 let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
                 let player_fire = self.player.as_ref().map(|pl| pl.fire_ticks);
@@ -3242,17 +3461,11 @@ impl Game<'_> {
                     }])?;
                 }
                 let hurt = match who {
-                    Who::Player => {
-                        let hurt = self.mob_hits_player(
-                            amount,
-                            [p.previous.x, p.previous.y, p.previous.z],
-                            "minecraft:arrow",
-                        );
-                        if hurt && let Some((e, t)) = effect {
-                            self.give_player_effect(e, *t, 0);
-                        }
-                        hurt
-                    }
+                    Who::Player => self.mob_hits_player(
+                        amount,
+                        [p.previous.x, p.previous.y, p.previous.z],
+                        "minecraft:arrow",
+                    ),
                     Who::Mob(id) => {
                         let hurt = self
                             .mobs
@@ -3370,6 +3583,9 @@ impl Game<'_> {
                         target: who,
                         velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
                     }])?;
+                }
+                if hurt {
+                    self.arrow_post_hurt_effects(p, who);
                 }
                 match (hurt, who) {
                     (true, _) => self.finish_arrow_hit(arrow, EntityHit::Hurt),
@@ -4696,8 +4912,14 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob_spawned(&kind, at).is_none() {
+        let Some(mob_id) = self.spawn_mob_spawned(&kind, at) else {
             return Ok(false);
+        };
+        // Entity.applyImplicitComponents: a name from an anvil names the mob.
+        if let Some(name) = stack.custom_name()
+            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id)
+        {
+            m.custom_name = Some(name.to_owned());
         }
         self.swing_arm();
         if !self.creative
@@ -4799,6 +5021,11 @@ impl Game<'_> {
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws (and
             // the outline of a glowing mob, LivingEntityRenderer.getRenderType).
             if mob.invisible && outline.is_none() {
+                continue;
+            }
+            // LevelRenderer: the entity the view looks out of is not drawn
+            // in first person.
+            if self.hides_as_camera(mob.id) {
                 continue;
             }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
@@ -4972,10 +5199,28 @@ impl Game<'_> {
                 let m = glam::Mat4::from_translation(c)
                     * glam::Mat4::from_rotation_y((a.yaw - 90.0).to_radians())
                     * glam::Mat4::from_rotation_z(a.pitch.to_radians());
+                // ArrowRenderer: `state.shake = shakeTime - partialTicks`; ArrowModel.setupAnim
+                // rolls the root while the shake timer runs.
+                let shake = a
+                    .arrow
+                    .as_ref()
+                    .map_or(0.0, |s| s.shake as f32 - alpha as f32);
+                let roll = if shake > 0.0 {
+                    -(shake * 3.0).msin() * shake * (std::f32::consts::PI / 180.0)
+                } else {
+                    0.0
+                };
+                let pose_for = |part: &horizon_client::mobs::Part| {
+                    let mut pose = part.pose;
+                    if std::ptr::eq(part, model) {
+                        pose[5] += roll;
+                    }
+                    pose
+                };
                 horizon_client::mobs::render_model(
                     model,
                     m,
-                    &|part| part.pose,
+                    &pose_for,
                     [r.u0, r.v0, r.u1, r.v1],
                     packed,
                     0,
@@ -5123,12 +5368,12 @@ impl Game<'_> {
             let Some(r) = atlas.sprites.get(name).copied() else {
                 continue;
             };
-            let s = 0.25 * a.sprite_scale();
-            for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+            let lift = is_item_billboard(&a.kind);
+            let quad = thrown_item_quad(c, right, up, a.sprite_scale(), lift);
+            for (v, uv) in quad
                 .iter()
                 .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
             {
-                let v = c + right * k.0 * s + up * k.1 * s;
                 out.push(Vertex {
                     normal: [0; 4],
                     pos: v.to_array(),
@@ -5157,6 +5402,36 @@ fn thrown_item_axes(
 ) -> (glam::Vec3, glam::Vec3) {
     let orientation = super::camera_rotation(camera_type, yaw, pitch);
     (orientation * glam::Vec3::X, orientation * glam::Vec3::Y)
+}
+/// The four corners of the item billboard, in the order its UVs are laid out.
+/// `ThrownItemRenderer` only scales and billboards it; the lift is
+/// `item/generated`'s ground display transform, `translation [0, 2, 0]` of 16
+/// units = 0.125 blocks, which is `0.125 * scale` == `0.5 * s`.
+fn thrown_item_quad(
+    at: glam::Vec3,
+    right: glam::Vec3,
+    up: glam::Vec3,
+    scale: f32,
+    lift: bool,
+) -> [glam::Vec3; 4] {
+    let s = 0.25 * scale;
+    let rise = if lift { 0.5 * s } else { 0.0 };
+    let centre = at + up * rise;
+    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .map(|k| centre + right * k.0 * s + up * k.1 * s)
+}
+/// Whether vanilla draws the kind as `ThrownItemRenderer`'s item billboard, the
+/// only ones that take that lift. Llama spit shares this quad but
+/// `LlamaSpitRenderer` is a model, with its own offset.
+fn is_item_billboard(kind: &ProjectileKind) -> bool {
+    matches!(
+        kind,
+        ProjectileKind::Snowball
+            | ProjectileKind::Egg
+            | ProjectileKind::EnderPearl
+            | ProjectileKind::SmallFireball
+            | ProjectileKind::LargeFireball { .. }
+    )
 }
 /// `Bucketable.getBucketItemStack` and `getPickupSound` of a mob that a water
 /// bucket picks up.
@@ -5221,6 +5496,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Spit => "minecraft:spit",
         K::Stalagmite => "minecraft:stalagmite",
         K::Starve => "minecraft:starve",
+        K::HotFloor => "minecraft:hot_floor",
         K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
         K::WindCharge => "minecraft:wind_charge",
         K::Wither => "minecraft:wither",
@@ -5319,6 +5595,55 @@ impl Game<'_> {
 mod tests {
     use super::super::perspective::CameraType;
     use super::thrown_item_axes;
+    use super::thrown_item_quad;
+    use super::{ProjectileKind, is_item_billboard};
+
+    /// The component-wise lowest and highest corner of the quad.
+    fn bounds(corners: &[glam::Vec3; 4]) -> (glam::Vec3, glam::Vec3) {
+        (
+            corners.iter().copied().reduce(glam::Vec3::min).unwrap(),
+            corners.iter().copied().reduce(glam::Vec3::max).unwrap(),
+        )
+    }
+
+    #[test]
+    fn thrown_item_billboard_lifts_by_the_generated_ground_transform() {
+        // The kinds vanilla draws with `ThrownItemRenderer`: the only lifted ones.
+        assert!(is_item_billboard(&ProjectileKind::Snowball));
+        assert!(is_item_billboard(&ProjectileKind::Egg));
+        assert!(is_item_billboard(&ProjectileKind::EnderPearl));
+        assert!(is_item_billboard(&ProjectileKind::SmallFireball));
+        let large = ProjectileKind::LargeFireball { power: 1 };
+        assert!(is_item_billboard(&large));
+        // A projectile at y = 100 with right = +X, up = +Y: the sprite sits
+        // 0.125 blocks above the entity (2 of `item/generated`'s 16 units) and
+        // stays 0.5 blocks wide, so the quad's y runs 99.875 .. 100.375.
+        let at = glam::Vec3::Y * 100.0;
+        let (right, up) = (glam::Vec3::X, glam::Vec3::Y);
+        let lifted = is_item_billboard(&ProjectileKind::Snowball);
+        let (lo, hi) = bounds(&thrown_item_quad(at, right, up, 1.0, lifted));
+        assert_eq!((lo.y, hi.y), (99.875, 100.375));
+        assert_eq!((lo.x, hi.x), (-0.25, 0.25));
+        // A small fireball's 0.75 scale: the same quad scaled down, lifted by
+        // 0.09375, half extent 0.1875.
+        let (lo, hi) = bounds(&thrown_item_quad(at, right, up, 0.75, lifted));
+        assert_eq!((lo.y, hi.y), (99.90625, 100.28125));
+        // A large fireball's 3.0: lift 0.375, half extent 0.75.
+        let (lo, hi) = bounds(&thrown_item_quad(at, right, up, 3.0, lifted));
+        assert_eq!((lo.y, hi.y), (99.625, 101.125));
+        // Llama spit shares the quad here but is a model in vanilla
+        // (`LlamaSpitRenderer`): no lift at all.
+        let lifted = is_item_billboard(&ProjectileKind::LlamaSpit);
+        assert!(!lifted);
+        let (lo, hi) = bounds(&thrown_item_quad(at, right, up, 1.0, lifted));
+        assert_eq!((lo.y, hi.y), (99.75, 100.25));
+        // The rise follows the billboard's own up axis, not world up.
+        let (right, up) = (glam::Vec3::Z, glam::Vec3::X);
+        let lifted = is_item_billboard(&ProjectileKind::Egg);
+        let (lo, hi) = bounds(&thrown_item_quad(at, right, up, 1.0, lifted));
+        assert_eq!((lo.x, hi.x), (-0.125, 0.375));
+        assert_eq!((lo.y, hi.y), (100.0, 100.0));
+    }
 
     #[test]
     fn thrown_item_billboard_does_not_flip_at_straight_up_or_down() {
@@ -5349,6 +5674,13 @@ mod tests {
     }
 }
 
+/// Whether the killing blow's causing entity (`DamageSource.getEntity`) was a
+/// mob, such as a tame wolf whose owner gets the kill credit.
+fn killed_by_mob(m: &Mob) -> bool {
+    m.last_damage
+        .is_some_and(|(d, _)| matches!(d.attacker, Some(Who::Mob(_))))
+}
+
 /// `Animal.finalizeSpawnChildFromBreeding`'s player: the one who fed the
 /// parent, or else the one who fed the partner (`getLoveCause`). `Some(None)`
 /// is the host, `Some(Some(conn))` a guest. Both animals are spent.
@@ -5377,5 +5709,130 @@ mod breeding_tests {
         assert_eq!(breeding_credit(&mut love, 1, 2), Some(None));
         // Neither was fed by a player (a bred pair loaded from a save).
         assert_eq!(breeding_credit(&mut love, 1, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod pearl_tests {
+    use super::*;
+
+    /// A pearl's water test is `Entity.isInWater`: `wasTouchingWater` from the
+    /// last `updateFluidInteraction`, water whose surface reaches its 0.25
+    /// box (#3072), not the block at its feet.
+    #[test]
+    fn a_pearl_feels_the_water_its_box_touches() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists()
+            || !root.join("movement-properties.nbt").exists()
+        {
+            return;
+        }
+        let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let registry = assets.registry;
+        let facts = horizon_client::blocks::BlockFacts::load(&root, registry).unwrap();
+        let motion = horizon_client::motion::MotionResources::load(&root, &assets).unwrap();
+        let data = horizon_client::mobs::MobData::load(&root, &facts);
+        let biomes = horizon_client::biome::Biomes::load(&root).unwrap();
+        let items = horizon_client::items::Items::load(
+            &root,
+            registry,
+            &facts,
+            &horizon_world::loot::PackOverlay::NONE,
+        )
+        .unwrap();
+        let collision = horizon_client::collisions::load(&root, registry).unwrap();
+        let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
+        // A pool of still water one block deep at y = 4, from x = 20 on (clear of the
+        // scene's pyramid): its
+        // surface is at 4 + 8/9.
+        let water = registry.default_state("minecraft:water").unwrap();
+        for x in 20..=40 {
+            for z in 0..=2 {
+                world.set(x, 4, z, water).unwrap();
+            }
+        }
+        let lid_openers = std::collections::HashMap::new();
+        let w = MobWorld {
+            teams: Default::default(),
+            world: &world,
+            registry,
+            facts: &facts,
+            fluid_tables: &motion.fluids,
+            movement: &motion.blocks,
+            collision: &collision,
+            data: &data,
+            player: None,
+            nearest_player: None,
+            others: &[],
+            others_grid: None,
+            others_index: None,
+            daylight: true,
+            monsters_burn: false,
+            game_time: 1000,
+            day_time: 1000,
+            raining: false,
+            thundering: false,
+            nether: false,
+            block_tags: &items.block_tags,
+            biomes: &biomes,
+            mob_griefing: true,
+            mob_drops: true,
+            max_entity_cramming: 24,
+            difficulty: spawning::LocalDifficulty::new(2, 1000, 0, 0.0),
+            end: false,
+            world_seed: 0,
+            sea_level: 63,
+            items: Some(&items),
+            lid_openers: &lid_openers,
+        };
+        let pw = ProjWorld {
+            w: &w,
+            targets: Vec::new(),
+        };
+        let pearl = |x: f64, y: f64, velocity: Vec3| {
+            let mut p = Projectile::new(ProjectileKind::EnderPearl, Vec3::new(x, y, 1.5), None);
+            p.velocity = velocity;
+            p
+        };
+        // Skimming the pool: its feet are in the water block, its box above
+        // the surface. ThrowableProjectile.applyInertia keeps the air drag.
+        let mut p = pearl(25.5, 4.95, Vec3::new(0.3, 0.0, 0.0));
+        p.tick(&pw);
+        assert!(p.position.y > 4.9, "the pearl dipped: {p:?}");
+        p.tick(&pw);
+        assert!(
+            (p.velocity.x - 0.3 * 0.99 * 0.99).abs() < 1e-9,
+            "a pearl above the surface slowed as in water: {p:?}"
+        );
+        // At the pool's edge: its feet over the dry block at x = 19, a side
+        // of its box in the water at x = 20. The water drag after the first
+        // tick, which still reads `wasTouchingWater` as false.
+        let mut p = pearl(19.95, 4.3, Vec3::ZERO);
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9,
+            "the first tick has the air drag: {p:?}"
+        );
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99 - 0.03) * 0.8).abs() < 1e-9,
+            "a pearl whose box is in the water kept the air drag: {p:?}"
+        );
+        // Thrown under water, a pearl moves with the air drag on its first
+        // tick and the water drag after it.
+        let mut p = pearl(30.5, 4.2, Vec3::ZERO);
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9,
+            "the first tick under water has the air drag: {p:?}"
+        );
+        p.tick(&pw);
+        assert!(
+            (p.velocity.y - (-0.03 * 0.99 - 0.03) * 0.8).abs() < 1e-9,
+            "the second tick under water has the water drag: {p:?}"
+        );
     }
 }

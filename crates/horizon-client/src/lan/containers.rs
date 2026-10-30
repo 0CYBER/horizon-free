@@ -309,6 +309,7 @@ impl Hub {
         });
         menu.sent = items;
         g.send(&packet);
+        g.inventory_told();
     }
 
     /// `AbstractContainerMenu.sendAllDataToRemote` for the guest's open
@@ -507,6 +508,28 @@ impl Hub {
         }
     }
 
+    /// What the client predicted for click `p` is what the server has, for a
+    /// menu of `total` slots read through `view`.
+    pub fn click_agreed(
+        &mut self,
+        i: usize,
+        p: &play::ContainerClick,
+        total: usize,
+        view: &dyn Fn(usize) -> Option<ItemStack>,
+        changed: &[usize],
+    ) -> bool {
+        let carried = self.guests[i].carried.clone();
+        if !self.hashed_matches(&p.carried, &carried) {
+            return false;
+        }
+        let claimed: HashMap<usize, &Option<Hashed>> =
+            p.changed.iter().map(|(s, h)| (*s as usize, h)).collect();
+        (0..total).all(|slot| match claimed.get(&slot) {
+            Some(c) => self.hashed_matches(c, &view(slot)),
+            None => !changed.contains(&slot),
+        })
+    }
+
     /// After a click: tell the client about every slot it got wrong, or that
     /// it did not claim, and the carried stack.
     fn answer_click(
@@ -517,6 +540,29 @@ impl Hub {
         changed: &[usize],
     ) {
         let in_menu = p.container != 0;
+        // handleContainerClick: a click made without the latest state gets the
+        // whole menu (`broadcastFullState`). Answering it slot by slot can leave
+        // the client with a correction of a click it has already gone past.
+        let g = &self.guests[i];
+        let open = g
+            .menu
+            .as_ref()
+            .filter(|_| in_menu)
+            .map(|m| (m.size, m.state));
+        let stale = match open {
+            Some((_, state)) => p.state != state,
+            None => !in_menu && p.state != g.menu_state,
+        };
+        if stale {
+            match open {
+                Some((size, _)) => {
+                    let items = (0..size).map(|s| self.view_slot(i, world, s)).collect();
+                    self.send_menu_content(i, items);
+                }
+                None => self.send_inventory(i),
+            }
+            return;
+        }
         let claimed: HashMap<usize, Option<Hashed>> = p
             .changed
             .iter()
@@ -566,6 +612,13 @@ impl Hub {
         // What the client now believes equals the server's state.
         let items: Vec<_> = (0..total).map(|s| self.view_slot(i, world, s)).collect();
         if in_menu {
+            // Nor is the inventory menu's sync to send what this click settled:
+            // ServerPlayer.tick broadcasts only the open menu.
+            let own = open.map_or(0, |(size, _)| size);
+            let settled = claimed.keys().copied().chain(changed.iter().copied());
+            for slot in settled.filter(|&s| s >= own && s < own + 36) {
+                self.guests[i].menu_sent[slot - own + 9] = items[slot].clone();
+            }
             if let Some(m) = self.guests[i].menu.as_mut() {
                 m.sent = items;
             }

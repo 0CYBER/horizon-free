@@ -438,6 +438,7 @@ impl Game<'_> {
             }
         }
         host.hub.send_to(conn, &packet);
+        host.hub.guests[gi].inventory_told();
         for packet in data {
             host.hub.send_to(conn, &packet);
         }
