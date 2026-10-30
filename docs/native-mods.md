@@ -192,7 +192,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   their level allows it, whether the world allows commands or not. The mod parses the line and sets `ran`. The
   player's state is swapped in for the call, as for their other actions, so `native_player` reads them; a
   registered command no mod takes answers as vanilla's unknown command.
-- Helpers: `native_server_players()` (uuid, name, level, dimension, position of each player on);
+- Helpers: `native_server_players()` (uuid, name, level, dimension, position and game mode of each player on);
   `native_tell(uuid, text)`, a system line to one player; `native_broadcast(text)`, to every player and the server's
   log; `native_feedback(text)`, the command's answer to the player whose command it is; `native_world_dir()`, the
   open world's folder, where a server mod keeps its data in a folder of its own so the world's backups carry it.

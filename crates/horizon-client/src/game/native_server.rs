@@ -24,6 +24,8 @@ pub(crate) struct NativeServerPlayer {
     /// `minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`.
     pub(crate) dimension: String,
     pub(crate) position: [f64; 3],
+    /// 0 survival, 1 creative, 2 adventure, 3 spectator.
+    pub(crate) game_mode: i32,
 }
 
 /// A command a native mod adds, as one usage: words, then arguments
@@ -245,6 +247,7 @@ impl Game<'_> {
                 permission: g.permission,
                 dimension: g.dimension.clone(),
                 position: g.position,
+                game_mode: g.game_mode,
             })
             .collect()
     }
@@ -343,6 +346,7 @@ impl Game<'_> {
             permission,
             dimension: g.dimension.clone(),
             position: g.position,
+            game_mode: g.game_mode,
         };
         let mut ran = false;
         self.native_perform_command(&player, line, &mut ran);
