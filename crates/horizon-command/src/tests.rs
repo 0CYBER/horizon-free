@@ -754,9 +754,18 @@ fn profile_commands_parse_like_vanilla() {
 #[test]
 fn only_a_dedicated_server_has_the_dedicated_commands() {
     // Commands.CommandSelection: an integrated server (single player, a LAN
-    // world) registers no /op, /ban, /pardon, /deop or /whitelist, so /help
-    // and Tab don't offer them.
-    let dedicated = ["ban", "deop", "op", "pardon", "whitelist"];
+    // world) registers no /op, /ban, /ban-ip, /banlist, /pardon, /pardon-ip,
+    // /deop or /whitelist, so /help and Tab don't offer them.
+    let dedicated = [
+        "ban",
+        "ban-ip",
+        "banlist",
+        "deop",
+        "op",
+        "pardon",
+        "pardon-ip",
+        "whitelist",
+    ];
     for dev in [false, true] {
         for horizon in [false, true] {
             let integrated = vanilla::game_tree(dev, horizon, false);
