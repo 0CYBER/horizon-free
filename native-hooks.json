@@ -214,6 +214,11 @@
       "name": "health_hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud"
+    },
+    {
+      "name": "interact_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"
     }
   ]
 }

@@ -140,6 +140,10 @@ frame. Nothing answered draws Horizon's own. Bundles that use it need `"hooks": 
 
 API 28 adds `native_block_in_tag` and `native_item_in_tag` for server tick hooks. They read the world's merged block and item tags, including data packs and content mods. An unknown tag returns false. An empty item stack tests the `minecraft:air` item, as vanilla does. Calls with an inactive or stale tick context return an error. Bundles that use them need `"hooks": 28`.
 
+API 29 adds right-clicking an entity, on the server for every player: `native_interact_entity` hears a right click on
+an entity (its id and type, and the stack in the hand) where `Player.interactOn` starts, once per hand. A mod that claims
+it swings the hand instead of the entity's and the item's own interaction. Bundles that use it need `"hooks": 29`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
