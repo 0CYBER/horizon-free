@@ -301,6 +301,47 @@ impl Hub {
         detail: &str,
         events: &mut Vec<HostEvent>,
     ) -> bool {
+        self.flag_to(i, check, weight, detail, events, None)
+    }
+
+    /// `prediction`: guest `conn`'s ticks that landed off the replay. A setback sends the player
+    /// back to `agreed`, where its moves last agreed.
+    pub fn anticheat_prediction(
+        &mut self,
+        conn: u32,
+        over: &super::prediction::Over,
+        agreed: [f64; 3],
+    ) -> Vec<HostEvent> {
+        let mut events = Vec::new();
+        if let Some(i) = self.guests.iter().position(|g| g.conn == conn) {
+            let ticks = if over.ticks == 1 { "tick" } else { "ticks" };
+            let detail = format!(
+                "moved up to {:.3} blocks off what its keys allow ({} {ticks})",
+                over.worst, over.ticks
+            );
+            let weight = over.weight;
+            self.flag_to(
+                i,
+                Check::Prediction,
+                weight,
+                &detail,
+                &mut events,
+                Some(agreed),
+            );
+        }
+        events
+    }
+
+    /// [`Hub::flag`], whose setback sends the player to `back` (where it was by default).
+    fn flag_to(
+        &mut self,
+        i: usize,
+        check: Check,
+        weight: f32,
+        detail: &str,
+        events: &mut Vec<HostEvent>,
+        back: Option<[f64; 3]>,
+    ) -> bool {
         let ticks = self.ticks;
         let Some(ac) = self.anticheat.as_deref_mut() else {
             return false;
@@ -349,7 +390,7 @@ impl Hub {
             let conn = self.guests[i].conn;
             self.kick(conn, text("Kicked by the server's anticheat", "white"));
         } else if v.setback && self.guests[i].awaiting_teleport.is_none() {
-            self.resend_teleport(i, None);
+            self.resend_teleport(i, back);
         }
         v.setback || v.kick
     }

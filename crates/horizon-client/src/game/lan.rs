@@ -132,7 +132,7 @@ pub(super) struct LanHost {
     pub native_commands: Option<HashMap<String, u8>>,
     /// The entities the guests track, described again every tick
     /// (`lan_entities`) over last tick's states.
-    states: lan::entity::States,
+    pub(super) states: lan::entity::States,
 }
 
 impl LanHost {
