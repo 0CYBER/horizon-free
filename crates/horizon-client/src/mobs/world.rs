@@ -431,6 +431,7 @@ pub(crate) fn with_test_world(
         player: None,
         nearest_player: None,
         others,
+        leash_boats: &[],
         others_grid: None,
         others_index: None,
         daylight: true,

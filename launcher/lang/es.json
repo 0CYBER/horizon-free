@@ -150,14 +150,13 @@
   "24/7 online": "en línea 24/7",
   "Ready in under a minute": "Listo en menos de un minuto",
   "Get my server": "Obtener mi servidor",
-  "15% off": "15% de descuento",
+  "15% off": "-15 %",
   "Not prepared. Horizon needs the files of your own Minecraft {version}.": "No preparado. Horizon necesita los archivos de tu propia instalación de Minecraft {version}.",
   "Prepared for Minecraft {version}": "Preparado para Minecraft {version}",
   "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "Preparado para Minecraft {version}, sin sonidos: el juego estará en silencio. Prepara de nuevo para copiarlos desde tu instalación de Minecraft.",
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "Esta compilación del lanzador no tiene inicio de sesión con Microsoft (HORIZON_MSA_CLIENT_ID), por lo que no puede iniciar el juego.",
   "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Inicia sesión con una cuenta de Microsoft que posea Minecraft: Java Edition para jugar",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Horizon necesita una cuenta de Microsoft que posea Minecraft: Java Edition, como otros lanzadores. También permite jugar en servidores en línea con tu nombre y aspecto.",
-  "Sign in": "Iniciar sesión",
   "Sign in with Microsoft": "Iniciar sesión con Microsoft",
   "Not now": "Ahora no",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "Horizon necesita una cuenta de Microsoft que posea Minecraft: Java Edition, como otros lanzadores.",
@@ -237,5 +236,6 @@
   "No mod matches.": "Ningún mod coincide.",
   "{source} · needed by another mod": "{source} · lo necesita otro mod",
   "Local file · {file}": "Archivo local · {file}",
-  "Update {version}": "Actualizar a {version}"
+  "Update {version}": "Actualizar a {version}",
+  "Choose image…": "Elegir imagen…"
 }

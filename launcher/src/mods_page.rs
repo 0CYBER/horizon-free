@@ -730,6 +730,12 @@ impl Launcher {
                     modpack = p.kind == PackKind::Modpack;
                     if modpack && p.source == SourceId::Horizon {
                         let pack = horizon::pack::install(&p.id, &progress)?;
+                        if let Some(url) = &p.icon {
+                            horizon_launcher::instances::adopt_icon(
+                                &horizon::pack::home(&pack.work),
+                                url,
+                            );
+                        }
                         return Ok(format!(
                             "Installed {} {} as its own profile with {}, each checked. Play it \
                              from the list above.",
@@ -745,6 +751,12 @@ impl Launcher {
                         })?;
                         let log = |line: String| progress(&line, 1.);
                         let pack = modpacks::import_and_port(&file, resources.as_deref(), &log)?;
+                        if let Some(url) = &p.icon {
+                            horizon_launcher::instances::adopt_icon(
+                                &modpacks::profile_home(&pack.work),
+                                url,
+                            );
+                        }
                         return Ok(format!(
                             "{} Play it from the list above.",
                             modpacks::outcome(&pack)
@@ -1121,9 +1133,26 @@ impl Launcher {
         out
     }
 
-    fn mods_installed_list(&self, cx: &mut Context<Self>) -> Option<Div> {
+    fn mods_installed_list(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let kind = self.mods.kind;
+        // Each project's own icon (Modrinth's, asked for once), at the row's size.
+        let ids = self
+            .mods
+            .installed
+            .iter()
+            .filter(|e| e.kind == kind && e.source == SourceId::Modrinth)
+            .map(|e| e.project.clone())
+            .collect();
+        self.ask_project_icons(ids, cx);
+        let icons: Vec<Option<PathBuf>> = self
+            .mods
+            .installed
+            .clone()
+            .iter()
+            .filter(|e| e.kind == kind)
+            .map(|e| self.project_icon(e))
+            .collect();
         let entries: Vec<&installed::Entry> = self
             .mods
             .installed
@@ -1248,8 +1277,13 @@ impl Launcher {
                         .font_family(theme::MONO)
                         .child(format!("checked: {}", short_sum(&e.checksum))),
                 );
-            index_row(
-                i + 1,
+            slot_row(
+                Some(blocks::slot(
+                    icons[i].clone().map(gpui::ImageSource::from),
+                    &e.title,
+                    40.,
+                    &t,
+                )),
                 e.title.clone(),
                 Some(detail.into_any_element()),
                 Some(right.into_any_element()),

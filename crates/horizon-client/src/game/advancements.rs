@@ -81,14 +81,17 @@ impl Toast {
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
     pub(super) fall: Option<[f64; 3]>,
-    /// `currentExplosionImpactPos`, and whether a wind charge made the blast.
-    pub(super) blast: Option<([f64; 3], bool)>,
+    /// `currentExplosionImpactPos` and `currentExplosionCause` (the entity
+    /// that made the blast, if any).
+    pub(super) blast: Option<([f64; 3], Option<EntityView>)>,
     /// `enteredLavaOnVehiclePosition`.
     pub(super) lava_ride: Option<[f64; 3]>,
     /// `enteredNetherPosition`.
     pub(super) nether: Option<[f64; 3]>,
     /// The (effect, amplifier) pairs `EffectsChangedTrigger` last saw.
     pub(super) effects: Vec<(&'static str, i32)>,
+    /// `PlayerEffects::changes` as the last tick saw it.
+    pub(super) effect_changes: u32,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -459,6 +462,16 @@ impl Game<'_> {
                 .map(|m| self.mob_entity(m))
                 .chain(self.rider_entity(b.id))
                 .collect(),
+            ..Default::default()
+        }
+    }
+    /// A dropped item as the predicates see it.
+    pub(super) fn item_entity_view(&self, e: &horizon_client::entities::ItemEntity) -> EntityView {
+        EntityView {
+            kind: "minecraft:item".into(),
+            position: [e.position.x, e.position.y, e.position.z],
+            on_ground: e.on_ground,
+            on_fire: e.fire_ticks > 0,
             ..Default::default()
         }
     }
@@ -894,13 +907,13 @@ impl Game<'_> {
         match (falling, self.adv.marks.fall) {
             (true, None) => {
                 self.adv.marks.fall = Some(at);
-                // The blast a wind charge made is spent by the fall, and counts
-                // only if the player was above where it hit.
-                if let Some((impact, wind_charge)) = self.adv.marks.blast.take()
-                    && wind_charge
+                // `trackStartFallingPosition`: the last blast is spent by the
+                // fall (whatever made it), and counts only if the player was
+                // above where it hit.
+                if let Some((impact, cause)) = self.adv.marks.blast.take()
                     && impact[1] <= at[1]
                 {
-                    self.trigger_fall_after_explosion(impact);
+                    self.trigger_fall_after_explosion(impact, cause);
                 }
             }
             // `resetFallDistance`: a fall ends by landing, climbing or water.
@@ -925,17 +938,31 @@ impl Game<'_> {
             self.adv.marks.nether = None;
             self.trigger_distance("minecraft:nether_travel", start);
         }
-        let effects: Vec<(&'static str, i32)> = self
-            .potions
+        let effects = self.effects_seen();
+        // `onEffectAdded`, `onEffectUpdated` (an `update` that changed the
+        // duration, amplifier or flags too) and `onEffectsRemoved`.
+        let changes = self.potions.effects.changes;
+        if effects != self.adv.marks.effects || changes != self.adv.marks.effect_changes {
+            self.adv.marks.effects = effects;
+            self.adv.marks.effect_changes = changes;
+            self.trigger_effects_changed(None);
+        }
+    }
+    /// The (effect, amplifier) pairs `marks.effects` compares.
+    fn effects_seen(&self) -> Vec<(&'static str, i32)> {
+        self.potions
             .effects
             .list
             .iter()
             .map(|e| (e.id, e.amplifier))
-            .collect();
-        if effects != self.adv.marks.effects {
-            self.adv.marks.effects = effects;
-            self.trigger_effects_changed(None);
-        }
+            .collect()
+    }
+    /// `EffectsChangedTrigger` for a change the caller knows the source of;
+    /// the end-of-tick check then does not fire it a second time.
+    pub(super) fn trigger_effects_changed_by(&mut self, source: Option<EntityView>) {
+        self.adv.marks.effects = self.effects_seen();
+        self.adv.marks.effect_changes = self.potions.effects.changes;
+        self.trigger_effects_changed(source);
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
     /// at `start`, and the `distance` from `start` to the player.
@@ -953,15 +980,12 @@ impl Game<'_> {
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
         });
     }
-    /// `FallAfterExplosionTrigger` for a wind charge's blast that hit the
-    /// player at `impact`, measured to where the player is now.
-    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3]) {
+    /// `FallAfterExplosionTrigger.trigger`: a blast that hit the player at
+    /// `impact` (made by `cause`, or by nothing), measured to where the
+    /// player is now. `matches` tests `cause` only when the instance has one,
+    /// and a missing cause fails it.
+    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3], cause: Option<EntityView>) {
         let me = self.player_entity();
-        let cause = EntityView {
-            kind: "minecraft:wind_charge".into(),
-            position: impact,
-            ..EntityView::default()
-        };
         self.trigger("minecraft:fall_after_explosion", move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
@@ -969,21 +993,24 @@ impl Game<'_> {
                 tool: None,
                 block_pos: None,
             };
-            let cctx = adv::Entities {
-                this: Some(&cause),
-                origin: me.position,
-                tool: None,
-                block_pos: None,
-            };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::location(&c["start_position"], impact, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], impact, me.position))
-                && adv::conditions(&c["cause"], &cctx, w)
+                && (c["cause"].is_null()
+                    || cause.as_ref().is_some_and(|cause| {
+                        let cctx = adv::Entities {
+                            this: Some(cause),
+                            origin: me.position,
+                            tool: None,
+                            block_pos: None,
+                        };
+                        adv::conditions(&c["cause"], &cctx, w)
+                    }))
         });
     }
     /// `EffectsChangedTrigger`: the player's `effects`, and for an effect that
     /// `source` gave, that entity (`source`).
-    pub(super) fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
+    fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
         let me = self.player_entity();
         self.trigger("minecraft:effects_changed", move |c, w| {
             let pctx = adv::Entities {
@@ -1684,19 +1711,43 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, y);
         let (key, color) = match frame {
-            Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
-            Frame::Goal => ("advancements.toast.goal", 0xFF00_FFFF),
+            Frame::Task => ("advancements.toast.task", 0xFFFF_FF00),
+            Frame::Goal => ("advancements.toast.goal", 0xFFFF_FF00),
             Frame::Challenge => ("advancements.toast.challenge", 0xFFFF_88FF),
         };
-        batch.text_styled(
-            atlas,
-            &Text::translate(key, &[]),
-            x + 30.0,
-            y + 7.0,
-            color,
-            false,
-        );
-        batch.text_styled(atlas, &title, x + 30.0, y + 18.0, u32::MAX, false);
+        // AdvancementToast.extractRenderState: a title of one line sits under
+        // the frame's label; a longer one is wrapped at 125, the label fading
+        // out first (to 1.5 s) and the lines fading in after it over 0.3 s.
+        let lines = atlas.font.split(&title.resolve_legacy(), 125.0);
+        let label = Text::translate(key, &[]);
+        let rgb = color & 0x00FF_FFFF;
+        if let [line] = lines.as_slice() {
+            batch.text_styled(atlas, &label, x + 30.0, y + 7.0, color, false);
+            batch.text_styled(atlas, line, x + 30.0, y + 18.0, u32::MAX, false);
+        } else if fully_for < 1500 {
+            let fade = ((1500 - fully_for) as f32 / 300.0).clamp(0.0, 1.0);
+            let alpha = (fade * 255.0).floor() as u32;
+            if alpha != 0 {
+                batch.text_styled(atlas, &label, x + 30.0, y + 11.0, alpha << 24 | rgb, false);
+            }
+        } else {
+            let fade = ((fully_for - 1500) as f32 / 300.0).clamp(0.0, 1.0);
+            let alpha = (fade * 252.0).floor() as u32;
+            if alpha != 0 {
+                let mut line_y = y + (16 - lines.len() as i32 * 9 / 2) as f32;
+                for line in &lines {
+                    batch.text_styled(
+                        atlas,
+                        line,
+                        x + 30.0,
+                        line_y,
+                        alpha << 24 | 0x00FF_FFFF,
+                        false,
+                    );
+                    line_y += 9.0;
+                }
+            }
+        }
         self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, y + 8.0);
     }
 }

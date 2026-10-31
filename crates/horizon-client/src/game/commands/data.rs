@@ -703,7 +703,7 @@ impl Game<'_> {
 
     /// Spawn an entity from its compound (`EntityType.loadEntityRecursive`);
     /// returns what was created.
-    pub(super) fn spawn_entity_from_nbt(&mut self, tag: Tag) -> Option<Target> {
+    pub(in crate::game) fn spawn_entity_from_nbt(&mut self, tag: Tag) -> Option<Target> {
         let key = {
             let p = entity_nbt::position(&tag)?;
             ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)

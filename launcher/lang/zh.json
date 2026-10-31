@@ -155,7 +155,6 @@
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "此版本启动器未配置 Microsoft 登录（HORIZON_MSA_CLIENT_ID），因此无法启动游戏。",
   "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "登录拥有 Minecraft: Java Edition 的 Microsoft 账户，即可开始游戏",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "和其他启动器一样，Horizon 需要一个拥有 Minecraft: Java Edition 的 Microsoft 账户。你也可以使用自己的名称和皮肤游玩在线服务器。",
-  "Sign in": "登录",
   "Sign in with Microsoft": "使用 Microsoft 账户登录",
   "Not now": "暂不",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "和其他启动器一样，Horizon 需要一个拥有 Minecraft: Java Edition 的 Microsoft 账户。",
@@ -237,5 +236,6 @@
   "No mod matches.": "没有匹配的模组。",
   "{source} · needed by another mod": "{source} · 其他模组需要",
   "Local file · {file}": "本地文件 · {file}",
-  "Update {version}": "更新到 {version}"
+  "Update {version}": "更新到 {version}",
+  "Choose image…": "选择图片…"
 }

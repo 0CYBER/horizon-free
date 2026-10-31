@@ -95,7 +95,9 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
     matches!(
         e,
         MobEvent::AttackPlayer(..)
+            | MobEvent::CubeHurtPlayer { .. }
             | MobEvent::AttackPlayerWithEffect { .. }
+            | MobEvent::StingPlayer { .. }
             | MobEvent::DamagePlayer { .. }
             | MobEvent::SonicBoom {
                 target: Who::Player,
