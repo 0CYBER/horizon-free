@@ -1566,6 +1566,12 @@ pub enum MobEvent {
         mob: u32,
         other: u32,
     },
+    /// `AbstractVillager.getOffers` for a villager whose offers are not made
+    /// yet: the level rolls them (the brain has no trade data), so the
+    /// behaviour that asked reads them from the next tick on.
+    VillagerOffers {
+        mob: u32,
+    },
     /// Two villagers make a baby (`VillagerMakeLove.tryToGiveBirth`): the
     /// parent has eaten and, with a bed for the child, rests; the partner
     /// eats, and rests too if `child` holds the child's bed and type
