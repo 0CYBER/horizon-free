@@ -1094,7 +1094,7 @@ fn entity_in_ui_shade(normal: glam::Vec3) -> f32 {
     (light * 0.6 + 0.4).min(1.0)
 }
 
-fn player_preview_quads(
+pub(super) fn player_preview_quads(
     mut verts: Vec<horizon_client::mesher::Vertex>,
     gui: glam::Mat4,
     fire: Option<(f32, f32)>,

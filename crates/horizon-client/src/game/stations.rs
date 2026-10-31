@@ -1825,6 +1825,11 @@ impl Game<'_> {
                     }
                 }
                 Kind::Smithing => {
+                    self.draw_smithing_armor_stand(
+                        batch,
+                        s.result.as_ref(),
+                        [ox + 121.0, oy + 20.0, ox + 161.0, oy + 80.0],
+                    );
                     // `CyclingSlotBackground.extractRenderState`: an empty slot shows the
                     // icons of what the template in the table takes.
                     for (i, cycling) in s.cycling.iter().enumerate() {
