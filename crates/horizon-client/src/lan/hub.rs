@@ -2361,6 +2361,8 @@ impl Hub {
         let g = &mut self.guests[i];
         g.first_good = g.position;
         g.known_moves = g.received_moves;
+        // ServerPlayer.tick: tickClientLoadTimeout.
+        g.load_timeout = g.load_timeout.saturating_sub(1);
         let mut budget = PACKETS_PER_TICK;
         while budget > 0 {
             let Some((packet, bytes)) = self.guests[i].inbox.pop_front() else {
@@ -2385,13 +2387,24 @@ impl Hub {
                 | S::KeepAlive(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
                 S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
-                S::PlayerInput(_) => self.guests[i].loaded,
+                S::PlayerInput(_) => self.guests[i].client_loaded(),
                 _ => true,
             };
             if acted {
                 self.guests[i].last_action_tick = self.ticks;
             }
             match packet {
+                // hasClientLoaded: these handlers ignore the player's actions until
+                // the client says the level around it is loaded (or 60 ticks pass),
+                // and while it is dead.
+                S::PlayerAction(_)
+                | S::UseItemOn(_)
+                | S::UseItem(_)
+                | S::Attack(_)
+                | S::Interact(_)
+                | S::SpectatorAction(_)
+                | S::PlayerCommand(_)
+                    if !self.guests[i].client_loaded() => {}
                 // handleAcceptTeleportPacket.
                 S::AcceptTeleportation(p) => {
                     let g = &mut self.guests[i];
@@ -2431,7 +2444,12 @@ impl Hub {
                 S::MovePlayerStatus(p) => {
                     self.move_player(i, None, None, p.flags, ctx, events);
                 }
-                S::PlayerLoaded(_) => self.guests[i].loaded = true,
+                // handleAcceptPlayerLoad: markClientLoaded.
+                S::PlayerLoaded(_) => {
+                    let g = &mut self.guests[i];
+                    g.loaded = true;
+                    g.load_timeout = 0;
+                }
                 // PlayerChunkSender.onChunkBatchReceivedByClient.
                 S::ChunkBatchReceived(p) => {
                     let g = &mut self.guests[i];
@@ -2487,8 +2505,11 @@ impl Hub {
                     }
                 }
                 S::PlayerInput(p) => {
-                    self.guests[i].input = p.flags;
-                    self.guests[i].sneaking = p.flags & 32 != 0;
+                    let g = &mut self.guests[i];
+                    g.input = p.flags;
+                    if g.client_loaded() {
+                        g.sneaking = p.flags & 32 != 0;
+                    }
                     // handlePlayerInput only records keys and updates crouching.
                     // Sprinting persists after the sprint key is released (or
                     // starts with a double tap); PlayerCommand changes it.
@@ -2567,7 +2588,8 @@ impl Hub {
             }
             g.position_this_tick = true;
         }
-        if g.landing || !g.loaded && g.ticks == 0 && pos.is_none() {
+        // handleMovePlayer: nothing moves before the client has loaded.
+        if g.landing || !g.client_loaded() {
             return;
         }
         // updateAwaitingTeleport: moves wait for the client to accept the
