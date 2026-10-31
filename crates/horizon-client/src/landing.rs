@@ -223,6 +223,12 @@ impl MotionWorld<'_, '_, '_> {
     fn fall_event(&mut self, event: FallEvent) {
         self.player.events.push(MotionEvent::Fall(event));
     }
+    /// `Entity.propagateFallToPassengers`: the call on this player, whose
+    /// vehicle fell `distance` blocks at `multiplier`, so the player takes
+    /// `Player.causeFallDamage` of it.
+    pub fn cause_mount_fall(&mut self, distance: f64, multiplier: f32) -> Result<bool> {
+        BlockLandingWorld::cause_fall_damage(self, distance, multiplier, LandingDamage::Fall)
+    }
 }
 impl FallDamageWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;

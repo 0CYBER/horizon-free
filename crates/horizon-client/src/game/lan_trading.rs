@@ -232,17 +232,17 @@ impl Game<'_> {
             next_id: std::cell::Cell::new(next_map),
         };
         let trade_env = merchant::TradeEnv {
-            trades: &self.res.stations().trades,
-            enchantments: &self.res.stations().enchantments,
+            trades: &self.stations().trades,
+            enchantments: &self.stations().enchantments,
             maps: Some(&maps),
         };
         let env = Env {
-            items: self.res.items(),
-            recipes: self.res.recipes(),
-            brewing: &self.res.stations().brewing,
-            banners: &self.res.stations().banners,
-            station_recipes: &self.res.stations().recipes,
-            enchantments: &self.res.stations().enchantments,
+            items: self.items(),
+            recipes: self.recipes(),
+            brewing: &self.stations().brewing,
+            banners: &self.stations().banners,
+            station_recipes: &self.stations().recipes,
+            enchantments: &self.stations().enchantments,
             names: &self.pack.names,
             trade: Some(&trade_env),
             maps: None,

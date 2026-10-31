@@ -69,7 +69,7 @@ impl Game<'_> {
     /// says so on the action bar.
     pub(super) fn hotbar_load_or_save(&mut self, index: usize, load: bool) {
         let path = Self::options_path().with_file_name("hotbar.nbt");
-        let known = |id: &str| self.res.items().get(id).is_some();
+        let known = |id: &str| self.items().get(id).is_some();
         let mut rows = hotbar::load(&path, &known);
         if load {
             for (slot, stack) in rows[index].iter().enumerate() {

@@ -639,7 +639,7 @@ impl Padded {
     fn new(region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> Self {
         let mut blocks = vec![0u32; P * P * P];
         let mut light = vec![0u8; P * P * P];
-        let base_y = MIN_Y + sy * 16;
+        let base_y = region[1][1].map_or(MIN_Y, Chunk::min_y) + sy * 16;
         // The section itself is unpacked in one pass; the border cells of the
         // neighbouring sections are read one by one.
         let mut own = Box::new([0u32; 4096]);
@@ -662,6 +662,15 @@ impl Padded {
                                 c.get(x & 15, wy, z & 15)
                             };
                         light[i] = c.light(x & 15, wy, z & 15);
+                    } else if let Some(c) = region[1][1] {
+                        // A neighbour not loaded continues this chunk's edge
+                        // column. As lit air, the outermost chunks' water drew
+                        // a wall toward it (fluids show both sides), a light
+                        // sheet in the water where far terrain carries on.
+                        // Vanilla draws no chunk without its neighbours.
+                        let (ex, ez) = (x.clamp(0, 15), z.clamp(0, 15));
+                        blocks[i] = c.get(ex, wy, ez);
+                        light[i] = c.light(ex, wy, ez);
                     } else {
                         light[i] = 0xF0;
                     }
@@ -848,7 +857,7 @@ impl Mesher<'_> {
         }
         let pad = Padded::new(region, sy);
         out.visibility = visibility(&pad, &self.tables.info);
-        let base_y = MIN_Y + sy * 16;
+        let base_y = center.min_y() + sy * 16;
         let mut tints = Tints::new(
             region,
             self.biomes,

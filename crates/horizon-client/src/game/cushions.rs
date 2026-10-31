@@ -66,8 +66,17 @@ impl horizon_client::cushion::World for PlacementWorld<'_, '_> {
             .collect()
     }
     fn suffocating(&self, p: [i32; 3]) -> bool {
-        let state = self.0.world.block(p[0], p[1], p[2]);
-        let facts = self.0.res.facts().get(state);
+        self.0
+            .state_suffocating(self.0.world.block(p[0], p[1], p[2]))
+    }
+}
+
+impl Game<'_> {
+    /// `BlockBehaviour.Properties.isSuffocating` of a state: the block's
+    /// explicit predicate, else `causes_suffocation` with a full collision
+    /// shape.
+    pub(super) fn state_suffocating(&self, state: horizon_world::registry::BlockStateId) -> bool {
+        let facts = self.res.facts().get(state);
         let name = facts.name.as_ref();
         // Blocks' explicit predicates, then the default causes_suffocation/full-shape rule.
         match name {
@@ -76,7 +85,6 @@ impl horizon_client::cushion::World for PlacementWorld<'_, '_> {
             | "minecraft:mud"
             | "minecraft:soul_sand" => true,
             "minecraft:piston" | "minecraft:sticky_piston" => self
-                .0
                 .pack
                 .assets
                 .registry
@@ -95,12 +103,42 @@ impl horizon_client::cushion::World for PlacementWorld<'_, '_> {
             _ => {
                 facts.full_collision
                     && self
-                        .0
                         .res
                         .items()
                         .block_in_tag("minecraft:causes_suffocation", name)
             }
         }
+    }
+
+    /// `BlockState.isViewBlocking(level, pos, nearPlaneBox)`: stairs and
+    /// slabs (`NEAR_PLANE_INTERSECTS_OUTLINE`) block when the near plane
+    /// touches a box of their shape, snow only at eight layers, anything else
+    /// when it is suffocating.
+    pub(super) fn state_view_blocking(
+        &self,
+        state: horizon_world::registry::BlockStateId,
+        pos: [i32; 3],
+        near_plane: Aabb,
+    ) -> bool {
+        let name = self.res.facts().get(state).name.as_ref();
+        if name == "minecraft:snow" {
+            return self
+                .pack
+                .assets
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("layers"))
+                .is_some_and(|l| l.parse::<i32>().is_ok_and(|l| l >= 8));
+        }
+        if (name.ends_with("_stairs") || name.ends_with("_slab"))
+            && name != "minecraft:petrified_oak_slab"
+        {
+            return self
+                .outline_boxes(pos)
+                .iter()
+                .any(|b| aabb(([b[0], b[1], b[2]], [b[3], b[4], b[5]])).intersects(near_plane));
+        }
+        self.state_suffocating(state)
     }
 }
 
@@ -130,7 +168,7 @@ impl Game<'_> {
         let bounds = aabb(c.bounds()).next_deflated();
         blocks_in(bounds).any(|p| {
             let facts = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
-            self.res.items().block_in_tag("minecraft:fire", &facts.name)
+            self.items().block_in_tag("minecraft:fire", &facts.name)
         })
     }
 
@@ -147,7 +185,7 @@ impl Game<'_> {
             point: hit.point,
         };
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if self.res.items().block_in_tag(
+        if self.items().block_in_tag(
             "minecraft:cushion_uses_collision_shape",
             &self.res.facts().get(state).name,
         ) && let Some(eye) = self.eye_position()
@@ -200,7 +238,7 @@ impl Game<'_> {
     /// `CushionItem.useOn`: spawn the cushion where `cushion_spawn` allows,
     /// unless another cushion is in the way.
     pub(super) fn place_cushion(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item).cloned() else {
+        let Some(info) = self.items().get(&stack.item).cloned() else {
             return false;
         };
         let Some(default_color) = info.cushion_color.as_deref() else {
