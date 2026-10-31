@@ -117,6 +117,12 @@ API 23 adds `native_level_tick_pre` and `native_level_tick_post`, server-side ob
 level tick pass. Each receives the dimension ID; neither can cancel the tick. Paused and held passes fire
 neither hook, and an error skips the post hook. Bundles that use them need `"hooks": 23`.
 
+API 24 adds `native_set_block`, a server-side `Game` helper that replaces a state in the current dimension through
+`Level.setBlock`. It accepts vanilla's neighbour and shape flags and returns whether a block changed; a block with a
+block entity gets one. Horizon sends every write to players whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE`
+and `UPDATE_IMMEDIATE` change nothing yet. Hooks holding only `GameLevel` cannot call it yet. Bundles that use it need
+`"hooks": 24`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
