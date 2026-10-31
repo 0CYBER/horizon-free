@@ -250,7 +250,6 @@
   "{instance} doesn't play its native mods yet: build the game with them.": "{instance} nie gra jeszcze ze swoimi modami natywnymi: skompiluj grę z nimi.",
   "{instance} is building: one build at a time.": "{instance} jest kompilowana: tylko jedna kompilacja naraz.",
   "Choose image…": "Wybierz obraz…",
-  "Build the game to play with the native mods turned on.": "Skompiluj grę, aby grać z włączonymi modami natywnymi.",
   "Mods and shader packs made for Horizon from its own reviewed registry, and resource packs from Modrinth. Each file is checked against its source's checksum before it reaches your game folder.": "Mody i paczki shaderów stworzone dla Horizon z własnego sprawdzonego rejestru oraz paczki zasobów z Modrinth. Każdy plik jest sprawdzany z sumą kontrolną źródła przed trafieniem do folderu gry.",
   "Modpacks": "Modpacki",
   "Resource packs": "Paczki zasobów",

@@ -273,7 +273,6 @@
   "Categories": "Категорії",
   "Clear filters": "Очистити фільтри",
   "Browse modpacks": "Огляд модпаків",
-  "Installs into {instance}: pick another instance on the left.": "Встановлюється в {instance}: виберіть інший екземпляр ліворуч.",
   "A data pack goes into a world, and {instance} has none yet: create one in the game, then come back.": "Пакет даних встановлюється у світ, а в {instance} його ще немає: створіть світ у грі й поверніться сюди.",
   "Installs into a world of {instance}; the game turns the pack on when the world opens.": "Встановлюється у світ із {instance}; гра вмикає пакет під час відкриття світу.",
   "Not checked: {error}": "Не перевірено: {error}",

@@ -273,7 +273,6 @@
   "Categories": "Catégories",
   "Clear filters": "Effacer les filtres",
   "Browse modpacks": "Parcourir les modpacks",
-  "Installs into {instance}: pick another instance on the left.": "S'installe dans {instance} : choisissez une autre instance à gauche.",
   "A data pack goes into a world, and {instance} has none yet: create one in the game, then come back.": "Un pack de données s'installe dans un monde, et {instance} n'en a pas encore : créez-en un dans le jeu, puis revenez.",
   "Installs into a world of {instance}; the game turns the pack on when the world opens.": "S'installe dans un monde de {instance} ; le jeu active le pack à l'ouverture du monde.",
   "Not checked: {error}": "Non vérifié : {error}",
