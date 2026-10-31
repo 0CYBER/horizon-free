@@ -825,6 +825,7 @@ impl Game<'_> {
                     amount,
                     true,
                     horizon_client::mobs::DamageKind::PlayerAttack,
+                    None,
                 );
                 ok()
             }
