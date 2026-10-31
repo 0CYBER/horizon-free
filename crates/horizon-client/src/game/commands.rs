@@ -14,6 +14,8 @@ pub(super) mod pregen;
 mod profiles;
 mod raid;
 mod terrain_cmds;
+mod test_locate;
+mod test_runs;
 mod text_commands;
 mod world_cmds;
 
@@ -114,6 +116,25 @@ fn wrap_degrees(angle: f32) -> f32 {
     }
 }
 
+/// The network id of a target that is no player: its entity id.
+fn non_player_entity_id(t: Target) -> Option<i32> {
+    let (Target::Mob(id)
+    | Target::Item(id)
+    | Target::Orb(id)
+    | Target::Projectile(id)
+    | Target::Stand(id)
+    | Target::Frame(id)
+    | Target::Painting(id)
+    | Target::Boat(id)
+    | Target::Cart(id)
+    | Target::Other(id)
+    | Target::Crystal(id)
+    | Target::Dragon(id)) = t
+    else {
+        return None;
+    };
+    i32::try_from(id).ok()
+}
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
@@ -202,6 +223,10 @@ impl Game<'_> {
             self.command_block_output(block, message);
             return;
         }
+        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+            self.cart_command_output(cart, message);
+            return;
+        }
         self.system_message(message);
     }
     /// `sendSuccess(message, false)`: the source is told (when it takes
@@ -212,6 +237,10 @@ impl Game<'_> {
         }
         if let Some(block) = self.command_source.and_then(|s| s.block) {
             self.command_block_success(block, message);
+            return;
+        }
+        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+            self.cart_command_success(cart, message);
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {
@@ -225,6 +254,10 @@ impl Game<'_> {
         }
         if let Some(block) = self.command_source.and_then(|s| s.block) {
             self.command_block_success(block, message);
+            return;
+        }
+        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+            self.cart_command_success(cart, message);
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {
@@ -939,6 +972,8 @@ impl Game<'_> {
             id if id.starts_with("posteffect.") => self.cmd_posteffect(id, ctx),
             "kick" => self.cmd_kick(ctx),
             "op" | "deop" | "ban" | "pardon" => self.cmd_profiles(id, ctx),
+            "ban-ip" | "pardon-ip" => self.cmd_ip_bans(id, ctx),
+            id if id.starts_with("banlist") => self.cmd_banlist(id),
             id if id.starts_with("whitelist.") => self.cmd_whitelist(id, ctx),
             "fetchprofile" => self.cmd_fetchprofile(ctx),
             "publish" => self.cmd_publish(ctx),
@@ -1502,10 +1537,24 @@ impl Game<'_> {
     /// `ServerPlayer.lookAt`: besides turning the player, tell their client
     /// with a `ClientboundPlayerLookAtPacket` (`from` anchor, the point, and
     /// the entity with its anchor when the target is one). Only a connected
-    /// player has a client to tell. The entity form is sent for mobs, whose
-    /// ids are their network ids; `LookAt.LookAtEntity.perform` falls back to
-    /// the point (`LookAt.LookAtPosition`) for any other kind of target,
-    /// which turns the client the same unless the entity moves first.
+    /// player has a client to tell. The entity form is sent whenever the
+    /// target is an entity with a network id (`LookAt.LookAtEntity.perform`);
+    /// a player whose id is not known here (a guest's turn, with the host
+    /// out of reach) falls back to the point, which a client takes the same
+    /// unless the entity moves first.
+    /// `Entity.getId` as the players' clients know it: a player's is the one the
+    /// hub gave it, any other entity's is its own id.
+    pub(super) fn network_entity_id(&self, t: Target) -> Option<i32> {
+        let host = self.lan.as_ref();
+        match t {
+            Target::Player => match self.lan_acting {
+                Some(conn) => host?.hub.guest(conn).map(|g| g.entity_id),
+                None => host.map(|h| h.host_entity),
+            },
+            Target::Guest(conn) => host?.hub.guest(conn).map(|g| g.entity_id),
+            other => non_player_entity_id(other),
+        }
+    }
     pub(super) fn send_player_look_at(
         &mut self,
         t: Target,
@@ -1516,12 +1565,11 @@ impl Game<'_> {
         let packet = C::PlayerLookAt(play::PlayerLookAt {
             from: i32::from(from_eyes),
             target,
-            entity: entity.and_then(|(e, eyes)| match e {
-                Target::Mob(id) => Some(play::LookAtEntity {
-                    id: id as i32,
+            entity: entity.and_then(|(e, eyes)| {
+                Some(play::LookAtEntity {
+                    id: self.network_entity_id(e)?,
                     anchor: i32::from(eyes),
-                }),
-                _ => None,
+                })
             }),
         });
         match t {
@@ -1888,7 +1936,13 @@ impl Game<'_> {
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
             Target::Frame(id) => self.item_frames.retain(|f| f.id != id),
             Target::Painting(id) => self.paintings.retain(|p| p.id != id),
-            Target::Boat(id) => self.boats.retain(|b| b.id != id),
+            Target::Boat(id) => {
+                // AbstractBoat.remove: a killed boat drops its lead.
+                if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+                    let b = self.boats.remove(i);
+                    self.boat_removed(&b);
+                }
+            }
             Target::Cart(id) => self.carts.retain(|c| c.id != id),
             Target::Other(id) => self.others.retain(|o| o.id != id),
             Target::Crystal(id) => self.kill_crystal(id),
@@ -2747,6 +2801,12 @@ impl Game<'_> {
                 &[name(i)],
             )));
         }
+        self.set_difficulty_forced(i);
+        self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
+        Ok(0)
+    }
+    /// `MinecraftServer.setDifficulty(difficulty, true)`.
+    pub(super) fn set_difficulty_forced(&mut self, i: u8) {
         self.ui.difficulty = i;
         // The level data holds the world's difficulty: it survives the
         // reopen, so it follows the command.
@@ -2765,8 +2825,6 @@ impl Game<'_> {
                     locked: self.level.difficulty_locked,
                 }));
         }
-        self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
-        Ok(0)
     }
     fn cmd_spawnpoint(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {
@@ -3445,4 +3503,29 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     }
     out.push(&s[start..]);
     out
+}
+
+#[cfg(test)]
+mod look_at_tests {
+    use super::{Target, non_player_entity_id};
+
+    #[test]
+    fn look_at_entity_form_names_any_entity_by_its_id() {
+        for t in [
+            Target::Mob(7),
+            Target::Item(7),
+            Target::Orb(7),
+            Target::Projectile(7),
+            Target::Boat(7),
+            Target::Cart(7),
+            Target::Crystal(7),
+            Target::Dragon(7),
+        ] {
+            assert_eq!(non_player_entity_id(t), Some(7), "{t:?}");
+        }
+        // Players are the hub's to name; a dragon part's id is no entity id.
+        assert_eq!(non_player_entity_id(Target::Player), None);
+        assert_eq!(non_player_entity_id(Target::Guest(3)), None);
+        assert_eq!(non_player_entity_id(Target::Mob(u32::MAX - 4096)), None);
+    }
 }

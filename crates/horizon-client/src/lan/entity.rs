@@ -70,6 +70,9 @@ pub struct EntityState {
     /// `ServerPlayer.isSpectator`: a player in spectator mode, whom only the
     /// clients of other spectators track (`ServerPlayer.broadcastToPlayer`).
     pub spectator: bool,
+    /// `ServerPlayer.getCamera() != this`: a spectator watching through
+    /// another entity is shown to nobody (`ServerPlayer.broadcastToPlayer`).
+    pub watching: bool,
 }
 
 impl EntityState {
@@ -94,6 +97,7 @@ impl EntityState {
         self.needs_sync = false;
         self.leash = None;
         self.spectator = false;
+        self.watching = false;
     }
 }
 
@@ -242,6 +246,8 @@ struct ServerEntity {
     /// Whether it was a spectator last tick: its pairs are checked again when
     /// that changes, as `ServerPlayer.broadcastToPlayer` answers otherwise.
     spectator: bool,
+    /// Likewise for a spectator who watches through a camera.
+    watching: bool,
 }
 
 /// SectionPos.of(entity).
@@ -283,6 +289,7 @@ impl ServerEntity {
             added: true,
             section: section_of(e.position),
             spectator: e.spectator,
+            watching: e.watching,
         }
     }
 
@@ -635,6 +642,18 @@ struct Probe {
     range: i32,
     chunk: u32,
     spectator: bool,
+    watching: bool,
+}
+
+/// `ServerPlayer.broadcastToPlayer` (`Entity`'s is `true`): to a spectator,
+/// a player is shown only while its camera is itself; to anyone else, a
+/// spectator is hidden.
+fn broadcast_to_player(viewer_spectator: bool, p: &Probe) -> bool {
+    if viewer_spectator {
+        !p.watching
+    } else {
+        !p.spectator
+    }
 }
 
 /// TrackedEntity.updatePlayer: within the type's range (capped by the view
@@ -647,7 +666,7 @@ struct Probe {
 fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]) -> bool {
     let range = f64::from(p.range.min(v.view_distance * 16));
     let (dx, dz) = (v.position[0] - p.x, v.position[2] - p.z);
-    dx * dx + dz * dz <= range * range && (v.spectator || !p.spectator) && {
+    dx * dx + dz * dz <= range * range && broadcast_to_player(v.spectator, p) && {
         let held = &mut held[p.chunk as usize];
         if *held == 0 {
             *held = 1 + u8::from(v.chunks.contains(&chunks[p.chunk as usize]));
@@ -737,9 +756,14 @@ impl Entities {
             // catches at the player's next move, a second later at most):
             // updatePlayers.
             let section = section_of(e.position);
-            if added || section != s.section || e.spectator != s.spectator {
+            if added
+                || section != s.section
+                || e.spectator != s.spectator
+                || e.watching != s.watching
+            {
                 s.section = section;
                 s.spectator = e.spectator;
+                s.watching = e.watching;
                 self.moved.push(index);
                 self.is_moved[index] = true;
             }
@@ -761,6 +785,7 @@ impl Entities {
                     .map_or(s.range * 16, |p| p * (s.range * 16) / 100),
                 chunk,
                 spectator: e.spectator,
+                watching: e.watching,
             });
         }
         // TrackedEntity.getEffectiveRange: a vehicle is tracked as far as its
@@ -940,6 +965,7 @@ mod tests {
             needs_sync: false,
             leash: None,
             spectator: false,
+            watching: false,
         }
     }
 
@@ -1527,6 +1553,33 @@ mod tests {
         c.tick(&mut level, &[&one, &two, &three]);
         assert!(c.trackers[0].is_tracking(2) && c.trackers[1].is_tracking(1));
         assert!(!c.trackers[0].is_tracking(3) && !c.trackers[1].is_tracking(3));
+    }
+
+    /// ServerPlayer.broadcastToPlayer for a spectator: a spectator watching
+    /// through a camera is hidden from the other spectators too.
+    #[test]
+    fn a_spectator_with_a_camera_is_hidden_from_spectators() {
+        let mut level = Entities::default();
+        let mut c = Clients::new();
+        let player = |id: i32| {
+            let mut p = state(0.0);
+            (p.id, p.uuid, p.kind) = (id, id as u128, "minecraft:player".into());
+            p
+        };
+        let (mut one, mut two) = (player(1), player(2));
+        (one.spectator, two.spectator) = (true, true);
+        c.spectators = [true, true];
+        c.tick(&mut level, &[&one, &two]);
+        c.tick(&mut level, &[&one, &two]);
+        assert!(c.trackers[0].is_tracking(2) && c.trackers[1].is_tracking(1));
+        // The second spectator takes a camera: the first loses sight of it.
+        two.watching = true;
+        c.tick(&mut level, &[&one, &two]);
+        assert!(!c.trackers[0].is_tracking(2) && c.trackers[1].is_tracking(1));
+        // Back to its own view: it shows up again.
+        two.watching = false;
+        c.tick(&mut level, &[&one, &two]);
+        assert!(c.trackers[0].is_tracking(2));
     }
 
     #[test]

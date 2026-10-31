@@ -106,13 +106,55 @@ impl Game<'_> {
         self.keys.clear();
         self.screen = Screen::Options;
         self.options_from_title = from_title;
+        self.options_to_game = false;
         let ui = &mut self.ui.options;
         ui.open_at(!from_title && self.title.is_none(), page);
         let root = self.options.resources.clone();
         ui.languages = lang::available(&[&root]);
         self.refresh_pack_lists();
     }
+    /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
+    /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s
+    /// watcher).
+    fn watch_pack_folder(&mut self) {
+        if !self.ui.options.resource_packs_open() {
+            self.pack_folder = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .pack_folder
+            .as_ref()
+            .is_some_and(|(at, _)| now.duration_since(*at).as_secs_f32() < 1.0)
+        {
+            return;
+        }
+        let signature: Vec<(String, u64, Option<std::time::SystemTime>)> =
+            std::fs::read_dir(super::packs::packs_dir())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| {
+                    let meta = e.metadata().ok();
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        meta.as_ref().map_or(0, |m| m.len()),
+                        meta.and_then(|m| m.modified().ok()),
+                    )
+                })
+                .collect();
+        let changed = self
+            .pack_folder
+            .as_ref()
+            .is_some_and(|(_, seen)| *seen != signature);
+        self.pack_folder = Some((now, signature));
+        if changed {
+            let infos = super::packs::pack_infos(&self.vanilla_root());
+            self.ui.options.update_pack_infos(infos);
+        }
+    }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
+        self.watch_pack_folder();
         let mut ui = std::mem::take(&mut self.ui.options);
         ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
         self.ui.options = ui;
@@ -234,13 +276,17 @@ impl Game<'_> {
                 Event::Close if self.ui.options.resource_error.is_some() => {}
                 Event::Close => {
                     self.settings.save(&Self::options_path());
+                    let to_game = std::mem::take(&mut self.options_to_game);
                     self.screen = if std::mem::take(&mut self.options_to_world_options) {
                         Screen::WorldOptions
-                    } else if self.options_from_title {
+                    } else if self.options_from_title || to_game {
                         Screen::Playing
                     } else {
                         Screen::Paused
                     };
+                    if to_game {
+                        self.capture(true);
+                    }
                     self.dragging = false;
                 }
                 Event::Language(code) => {
@@ -295,15 +341,46 @@ impl Game<'_> {
         self.ui.chat.rescale(&self.gui.atlas);
         self.creative_screen.forget_items();
     }
+    /// Window.updateFullscreenIfChanged: only a changed option asks the
+    /// window to change, so applying settings never undoes a fullscreen
+    /// the compositor set up.
+    fn apply_fullscreen(&mut self) {
+        if let Some(w) = self.window.clone() {
+            let modes = w
+                .current_monitor()
+                .or_else(|| w.primary_monitor())
+                .map(|m| horizon_client::window::monitor_video_modes(&m))
+                .unwrap_or_default();
+            let in_video_screen = self.screen == Screen::Options
+                && self.ui.options.page() == horizon_client::options_ui::Page::Video;
+            let wanted = self.settings.fullscreen;
+            let exclusive = self.settings.file.bool("exclusiveFullscreen");
+            let preferred = self
+                .settings
+                .file
+                .fullscreen_resolution
+                .as_deref()
+                .and_then(horizon_client::window::VideoMode::read);
+            self.fullscreen
+                .apply(&w, wanted, exclusive, preferred, in_video_screen);
+            self.settings.video_modes = modes;
+        }
+    }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
     pub(super) fn apply_ui_settings(&mut self) {
+        self.apply_fullscreen();
         let s = &self.settings;
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
             r.fullbright = s.extras.fullbright;
+            r.improved_transparency = s.improved_transparency;
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
+            r.set_texture_filtering(
+                s.file.int("textureFiltering"),
+                s.file.int("maxAnisotropyBit"),
+            );
             r.set_world_post(
                 s.horizon.resolution_scale as f32 / 100.0,
                 s.horizon.fxaa,
@@ -318,14 +395,6 @@ impl Game<'_> {
                 s.horizon.hdr_ui_brightness as f32 / 100.0,
                 &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
-        }
-        // Window.updateFullscreenIfChanged: only a changed option asks the
-        // window to change, so applying settings never undoes a fullscreen
-        // the compositor set up.
-        if let Some(w) = &self.window
-            && let Some(want) = self.fullscreen.request(s.fullscreen)
-        {
-            w.set_fullscreen(want.then_some(Fullscreen::Borderless(None)));
         }
         let mut volumes = s.volumes;
         volumes[0] = 1.0;
@@ -378,7 +447,11 @@ impl Game<'_> {
                 .as_ref()
                 .is_some_and(|w| w.is_minimized().unwrap_or(false)),
             focused: self.focused,
-            exclusive_fullscreen: false,
+            // Window.isExclusiveFullscreen.
+            exclusive_fullscreen: self
+                .window
+                .as_ref()
+                .is_some_and(|w| matches!(w.fullscreen(), Some(Fullscreen::Exclusive(_)))),
             now_ms: self.started.elapsed().as_millis() as i64,
             latest_input_ms: self.last_input.duration_since(self.started).as_millis() as i64,
             has_level: self.title.is_none(),

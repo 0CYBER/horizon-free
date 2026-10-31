@@ -72,6 +72,8 @@ pub(super) struct RecipeUi {
     ghost: Vec<Ghost>,
     last_placed: Option<String>,
     overlay: Option<Overlay>,
+    /// A press landed in the search box, so a drag selects text in it.
+    search_drag: bool,
     view: View,
     view_key: u64,
     /// Squeeze animations of new recipes: ticks left per button index and tab.
@@ -140,6 +142,12 @@ impl Game<'_> {
             Some(book) if self.book_open(book) && width >= NARROW => 77.0,
             _ => 0.0,
         }
+    }
+    /// `AbstractRecipeBookScreen.isHovering` is false while the book is
+    /// visible in a window narrower than `NARROW`: the book covers the menu,
+    /// so no slot is hovered or clicked.
+    pub(super) fn book_covers_menu(&self, width: f32) -> bool {
+        width < NARROW && self.active_book().is_some_and(|b| self.book_open(b))
     }
     /// Whether typed keys go to the search box.
     pub(super) fn recipe_search_focused(&self) -> bool {
@@ -617,8 +625,14 @@ impl Game<'_> {
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
-        if !self.book_open(book_type) || self.spectator() {
+        if !self.book_open(book_type) {
             return false;
+        }
+        // AbstractRecipeBookScreen.mouseClicked: in a narrow window the visible
+        // book takes every click, even one it does not use itself.
+        let narrow = batch.width < NARROW;
+        if self.spectator() {
+            return narrow;
         }
         self.refresh_book_view(book_type);
         let (xo, yo) = self.book_origin(&batch);
@@ -630,7 +644,9 @@ impl Game<'_> {
                 let y = overlay.y + 5.0 + 25.0 * (n / maxrow) as f32;
                 if !right && inside(cursor, x, y, 24.0, 24.0) {
                     let shift = self.shift_down();
-                    self.try_place(*entry, shift);
+                    if self.try_place(*entry, shift) {
+                        self.close_narrow_book(book_type, &batch);
+                    }
                     return true;
                 }
             }
@@ -671,7 +687,9 @@ impl Game<'_> {
                 let step = self.swap_index();
                 let (entry, _) = button.entries[step % button.entries.len()];
                 let shift = self.shift_down();
-                self.try_place(entry, shift);
+                if self.try_place(entry, shift) {
+                    self.close_narrow_book(book_type, &batch);
+                }
             }
             return true;
         }
@@ -681,6 +699,7 @@ impl Game<'_> {
             search.y = yo + 13.0;
             let magnifier = inside(cursor, xo + 8.0, yo + 13.0, 17.0, 14.0);
             if magnifier || inside(cursor, search.x, search.y, search.width, search.height) {
+                self.recipe_ui.search_drag = true;
                 search.focused = true;
                 search.reset_blink();
                 if !magnifier {
@@ -714,7 +733,24 @@ impl Game<'_> {
                 return true;
             }
         }
-        false
+        narrow
+    }
+    /// `RecipeBookComponent.mouseDragged`: while the search box is focused a
+    /// drag moves its selection end to the pointer (`EditBox.onDrag`).
+    pub(super) fn recipe_book_drag(&mut self) {
+        if !self.recipe_ui.search_drag || !self.active_book().is_some_and(|b| self.book_open(b)) {
+            return;
+        }
+        let x = self.cursor.0;
+        if let Some(search) = self.recipe_ui.search.as_mut()
+            && search.focused
+        {
+            search.drag_to(&self.gui.atlas, x);
+        }
+    }
+    /// A mouse button let go: a drag no longer selects in the search box.
+    pub(super) fn recipe_book_release(&mut self) {
+        self.recipe_ui.search_drag = false;
     }
     /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
     fn send_book_settings(&self, book_type: BookType) {
@@ -835,10 +871,21 @@ impl Game<'_> {
 
     // ---- placing a recipe ----
 
-    /// `RecipeBookComponent.tryPlaceRecipe`.
-    fn try_place(&mut self, entry_index: usize, use_max: bool) {
-        let Some(book_type) = self.active_book() else {
+    /// What the book's click handler does once a recipe was placed: a book
+    /// that is not offset next to the menu (`!isOffsetNextToMainGUI`, a window
+    /// narrower than `NARROW`) closes with `setVisible(false)`.
+    fn close_narrow_book(&mut self, book_type: BookType, batch: &HudBatch) {
+        if batch.width >= NARROW {
             return;
+        }
+        self.level.recipe_book.open[book_type.index()] = false;
+        self.send_book_settings(book_type);
+        self.recipe_ui.overlay = None;
+    }
+    /// `RecipeBookComponent.tryPlaceRecipe`: false when the click is refused.
+    fn try_place(&mut self, entry_index: usize, use_max: bool) -> bool {
+        let Some(book_type) = self.active_book() else {
+            return false;
         };
         let Some(id) = self
             .recipe_ui
@@ -847,7 +894,7 @@ impl Game<'_> {
             .and_then(|b| b.entries.get(entry_index))
             .map(|e| e.id.clone())
         else {
-            return;
+            return false;
         };
         let button_craftable = self
             .recipe_ui
@@ -857,11 +904,12 @@ impl Game<'_> {
             .flat_map(|b| b.entries.iter())
             .any(|e| e.0 == entry_index && e.1);
         if !button_craftable && self.recipe_ui.last_placed.as_deref() == Some(id.as_str()) {
-            return;
+            return false;
         }
         self.recipe_ui.last_placed = Some(id);
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
+        true
     }
     /// Whether the open screen takes `native_place_recipe`: a crafting grid's
     /// book (the inventory's or a crafting table's).

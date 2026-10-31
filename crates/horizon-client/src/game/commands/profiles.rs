@@ -1,5 +1,6 @@
-//! `/op`, `/deop`, `/ban`, `/pardon` and `/whitelist` (OpCommand,
-//! DeOpCommands, BanPlayerCommands, PardonCommand, WhitelistCommand):
+//! `/op`, `/deop`, `/ban`, `/pardon`, `/ban-ip`, `/pardon-ip`, `/banlist` and
+//! `/whitelist` (OpCommand, DeOpCommands, BanPlayerCommands, PardonCommand,
+//! BanIpCommands, PardonIpCommand, BanListCommands, WhitelistCommand):
 //! commands of a dedicated server, run on its lists by an operator in game
 //! (the console has its own handlers in game/dedicated.rs).
 use super::{Arg, Context, Game, R, Target, err};
@@ -181,6 +182,147 @@ impl Game<'_> {
             }
         }
         Ok(count)
+    }
+
+    /// `BanIpCommands.banIpOrName` and `PardonIpCommand.unban`: an address,
+    /// or for `/ban-ip` an online player's.
+    pub(super) fn cmd_ip_bans(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        let lists = self.dedicated_lists()?;
+        let lit = |s: &str| Text::literal(s.to_owned());
+        let target = match ctx.get("target") {
+            Some(Arg::Str(t)) => t.clone(),
+            _ => return Err(err("command.unknown.argument", &[])),
+        };
+        let is_ip = target.parse::<std::net::IpAddr>().is_ok();
+        if id == "pardon-ip" {
+            if !is_ip {
+                return Err(err("commands.pardonip.invalid", &[]));
+            }
+            let removed = {
+                let mut l = lists.lock().unwrap();
+                l.ip_bans.get(&target).is_some() && l.ip_bans.remove(&target)
+            };
+            if !removed {
+                return Err(err("commands.pardonip.failed", &[]));
+            }
+            self.feedback(Text::translate(
+                "commands.pardonip.success",
+                &[lit(&target)],
+            ));
+            return Ok(1);
+        }
+        // PlayerList.getPlayerByName, then ServerPlayer.getIpAddress.
+        let address = |name: &str| {
+            let hub = &self.lan.as_ref()?.hub;
+            hub.guests
+                .iter()
+                .find(|g| g.name.eq_ignore_ascii_case(name))
+                .map(|g| g.address.ip().to_string())
+        };
+        let ip = if is_ip {
+            Some(target)
+        } else {
+            address(&target)
+        };
+        let Some(ip) = ip else {
+            return Err(err("commands.banip.invalid", &[]));
+        };
+        if lists.lock().unwrap().ip_bans.get(&ip).is_some() {
+            return Err(err("commands.banip.failed", &[]));
+        }
+        let players: Vec<(u128, String)> = self
+            .lan
+            .as_ref()
+            .map(|h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.address.ip().to_string() == ip)
+                    .map(|g| (g.uuid, g.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let reason = match ctx.get("reason") {
+            Some(Arg::Str(raw)) => {
+                let raw = raw.clone();
+                Some(self.expand_selectors(&raw).plain().to_string())
+            }
+            _ => None,
+        };
+        let source = self.source_text_name();
+        lists.lock().unwrap().ip_bans.add(BanEntry::new(
+            ip.clone(),
+            Some(source),
+            None,
+            reason.clone(),
+        ));
+        self.feedback(Text::translate(
+            "commands.banip.success",
+            &[lit(&ip), Self::reason_message(reason.as_deref())],
+        ));
+        if !players.is_empty() {
+            let names: Vec<&str> = players.iter().map(|(_, n)| n.as_str()).collect();
+            self.feedback(Text::translate(
+                "commands.banip.info",
+                &[lit(&players.len().to_string()), lit(&names.join(", "))],
+            ));
+        }
+        for (uuid, _) in &players {
+            self.kick_uuid(*uuid, translatable("multiplayer.disconnect.ip_banned", &[]));
+        }
+        Ok(players.len() as i32)
+    }
+
+    /// `BanListCommands.showList`: the players' bans then the addresses'
+    /// (`banlist`), or one of them; told to the source only.
+    pub(super) fn cmd_banlist(&mut self, id: &str) -> R<i32> {
+        let lists = self.dedicated_lists()?;
+        let lit = |s: &str| Text::literal(s.to_owned());
+        let entries: Vec<(String, String, Option<String>)> = {
+            let l = lists.lock().unwrap();
+            let players = l
+                .bans
+                .entries()
+                .into_iter()
+                .map(|b| (b.user.name.clone(), b.source.clone(), b.reason.clone()));
+            let ips = l
+                .ip_bans
+                .entries()
+                .into_iter()
+                .map(|b| (b.user.clone(), b.source.clone(), b.reason.clone()));
+            match id {
+                "banlist.ips" => ips.collect(),
+                "banlist.players" => players.collect(),
+                _ => players.chain(ips).collect(),
+            }
+        };
+        if entries.is_empty() {
+            self.feedback_unbroadcast(Text::translate("commands.banlist.none", &[]));
+            return Ok(0);
+        }
+        self.feedback_unbroadcast(Text::translate(
+            "commands.banlist.list",
+            &[lit(&entries.len().to_string())],
+        ));
+        for (name, source, reason) in &entries {
+            self.feedback_unbroadcast(Text::translate(
+                "commands.banlist.entry",
+                &[
+                    lit(name),
+                    lit(source),
+                    Self::reason_message(reason.as_deref()),
+                ],
+            ));
+        }
+        Ok(entries.len() as i32)
+    }
+
+    /// `BanListEntry.getReasonMessage`.
+    fn reason_message(reason: Option<&str>) -> Text {
+        reason.map_or_else(
+            || Text::translate("multiplayer.disconnect.banned.reason.default", &[]),
+            |r| Text::literal(r.to_owned()),
+        )
     }
 
     /// `WhitelistCommand`: `on`, `off`, `list`, `reload`, `add` and `remove`.

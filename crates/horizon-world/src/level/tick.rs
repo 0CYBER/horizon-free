@@ -1,7 +1,7 @@
 //! Scheduled block ticks (`BlockBehaviour.tick`), random ticks
 //! (`BlockBehaviour.randomTick`) and the per-tick drivers.
 use super::{
-    Behaviours, LevelAccess, LevelEvent, Sim, Ticks,
+    Behaviours, LevelAccess, LevelEvent, Sim, Spread, Ticks,
     classes::Class,
     data::state_flags,
     update::{HORIZONTAL, above, below, rel},
@@ -123,6 +123,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         pos,
                         state,
                         kind: "command_block",
+                    });
+                }
+                // TestBlock.tick resets the block entity: the caller owns it.
+                Class::TestBlock => {
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "test_block_tick",
                     });
                 }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
@@ -583,7 +591,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             (Direction::North, 300),
             (Direction::South, 300),
         ] {
-            self.fire_check_burn_out(rel(pos, direction), chance + extra, age);
+            self.fire_check_burn_out(pos, rel(pos, direction), chance + extra, age);
         }
         for xx in -1..=1 {
             for zz in -1..=1 {
@@ -607,8 +615,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                             && (!self.level.is_raining() || !self.fire_near_rain(test))
                         {
                             let spread_age = 15.min(age + self.rand_int(5) / 4);
-                            let next = self.fire_state_with_age(test, spread_age);
-                            self.set_block_and_update(test, next);
+                            if self.level.allow_spread(Spread::Fire, pos, test) {
+                                let next = self.fire_state_with_age(test, spread_age);
+                                self.set_block_and_update(test, next);
+                            }
                         }
                     }
                 }
@@ -633,19 +643,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             || self.level.is_raining_at(rel(pos, Direction::North))
             || self.level.is_raining_at(rel(pos, Direction::South))
     }
-    fn fire_check_burn_out(&mut self, pos: BlockPos, chance: i32, age: i32) {
+    /// `FireBlock.checkBurnOut` of the block at `pos` by the fire at `fire`.
+    fn fire_check_burn_out(&mut self, fire: BlockPos, pos: BlockPos, chance: i32, age: i32) {
         let b = self.b;
         let odds = self.burn_odds(self.state(pos));
         if self.rand_int(chance) < odds {
             let old = self.state(pos);
+            let allowed = self.level.allow_spread(Spread::Fire, fire, pos);
             if self.rand_int(age + 10) < 5 && !self.level.is_raining_at(pos) {
                 let new_age = (age + self.rand_int(5) / 4).min(15);
-                let next = self.fire_state_with_age(pos, new_age);
-                self.set_block_and_update(pos, next);
-            } else {
+                if allowed {
+                    let next = self.fire_state_with_age(pos, new_age);
+                    self.set_block_and_update(pos, next);
+                }
+            } else if allowed {
                 self.remove_block(pos, false);
             }
-            if b.instance_of(old, Class::Tnt) {
+            if allowed && b.instance_of(old, Class::Tnt) {
                 self.prime_tnt(pos);
             }
         }

@@ -1064,8 +1064,9 @@ pub struct ParticleEngine {
     pub particle_level: u8,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
-    /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
-    pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
+    /// Local sounds requested by particles (dripstone drips, firework bursts):
+    /// (event, position, volume, pitch, distanceDelay).
+    pub sounds: Vec<(&'static str, [f64; 3], f32, f32, bool)>,
     /// How many of each type were made, for `horizon-ctl status`.
     made: std::collections::BTreeMap<&'static str, u64>,
     /// The item particles' sprites (`BreakingItemParticle`'s slime ball, snowball
@@ -3059,7 +3060,7 @@ impl ParticleEngine {
                     (false, false) => "minecraft:entity.firework_rocket.blast",
                 };
                 let pitch = 0.95 + self.random.next_float() * 0.1;
-                self.sounds.push((sound, s.at, 20.0, pitch));
+                self.sounds.push((sound, s.at, 20.0, pitch, true));
             }
             if s.life % 2 == 0 && ((s.life / 2) as usize) < s.explosions.len() {
                 let e = s.explosions[(s.life / 2) as usize].clone();
@@ -3110,7 +3111,7 @@ impl ParticleEngine {
                         "minecraft:entity.firework_rocket.twinkle"
                     };
                     let pitch = 0.9 + self.random.next_float() * 0.15;
-                    self.sounds.push((sound, s.at, 20.0, pitch));
+                    self.sounds.push((sound, s.at, 20.0, pitch, true));
                 }
                 continue;
             }
@@ -3305,7 +3306,7 @@ impl ParticleEngine {
                         }
                         if let Some(sound) = sound {
                             let volume = p.random.next_float() * 0.7 + 0.3;
-                            self.sounds.push((sound, p.position, volume, 1.0));
+                            self.sounds.push((sound, p.position, volume, 1.0, false));
                         }
                     }
                     _ => {}

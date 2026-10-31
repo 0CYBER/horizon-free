@@ -820,7 +820,12 @@ impl Game<'_> {
             "dragon-hurt" => {
                 // Test hook: damage the dragon's head as the player would.
                 let amount: f32 = arg(1)?.parse()?;
-                self.hit_special(super::dragon::SPECIAL, amount, true, false);
+                self.hit_special(
+                    super::dragon::SPECIAL,
+                    amount,
+                    true,
+                    horizon_client::mobs::DamageKind::PlayerAttack,
+                );
                 ok()
             }
             "quit" => {
@@ -1111,6 +1116,8 @@ impl Game<'_> {
         status["maps"] = json!(self.maps_status());
         // The particles made so far, by type.
         status["particles"] = json!(self.particles.made());
+        // The pickup particles made so far, by what was taken.
+        status["pickups"] = json!(self.pickups.made());
         // The world border this side knows of.
         status["border"] = json!({ "center": self.border.center(), "size": self.border.size() });
         // The scoreboard sidebar the HUD shows.
