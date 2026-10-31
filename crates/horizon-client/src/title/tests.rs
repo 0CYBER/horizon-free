@@ -1590,13 +1590,16 @@ fn a_world_that_needs_file_fixing_cannot_be_optimized() {
     let mut f = Fixture::new();
     f.world("World", "World");
     let path = f.title.saves.join("World/level.dat");
+    f.select();
+    f.click("Edit");
+    // SelectWorldScreen only enables Edit for a world that needs no file
+    // fixing (`LevelSummary.canEdit`), so the data goes stale while the
+    // edit screen is open.
     let mut root = crate::save::read_dat(&path).unwrap();
     if let Some(Tag::Compound(data)) = root.get_mut("Data") {
         data.insert("DataVersion".into(), Tag::Int(3000));
     }
     crate::save::write_dat(&path, root).unwrap();
-    f.select();
-    f.click("Edit");
     f.click("Optimize World");
     f.click("I Know What I'm Doing!");
     // `OptimizeWorldScreen.create` returns null: `setScreen(null)`.

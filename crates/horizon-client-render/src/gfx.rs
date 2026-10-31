@@ -84,6 +84,7 @@ mod native_pack;
 mod native_post;
 mod native_sky;
 mod occlusion;
+mod oit;
 mod pack_atlas;
 pub mod pack_draw;
 mod pack_entities;
@@ -678,6 +679,10 @@ pub struct Renderer {
     pub gamma: f32,
     /// Optional full-light lightmap (Horizon Extras).
     pub fullbright: bool,
+    /// The Improved transparency option (`GameRenderer.useImprovedTransparency`).
+    pub improved_transparency: bool,
+    /// Its passes and targets, made when first drawn with.
+    oit: Option<oit::Oit>,
     /// Advance animated block textures (Horizon setting; vanilla always does).
     pub animated_textures: bool,
     present_modes: Vec<wgpu::PresentMode>,
@@ -1155,6 +1160,7 @@ async fn open_backend(
     // stand-in neither clamps nor drops NaN.
     let features = timing::GpuTimer::features(&adapter)
         | cull::Cull::features(&adapter)
+        | oit::features(&adapter)
         | (adapter.features()
             & (wgpu::Features::INDIRECT_FIRST_INSTANCE
                 | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
@@ -2944,6 +2950,8 @@ impl Renderer {
             screenshot: None,
             screenshot_result: None,
             gamma: 0.5,
+            improved_transparency: false,
+            oit: None,
             fullbright: false,
             animated_textures: true,
             present_modes,
@@ -3043,8 +3051,10 @@ impl Renderer {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
                 // TEXTURE_BINDING: a post effect may read the depth buffer.
+                // COPY_SRC: improved transparency copies it.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -4945,9 +4955,17 @@ impl Renderer {
                 &self.globals,
             );
         }
+        // GameRenderer.useImprovedTransparency. A shader pack keeps its own
+        // path, and the translucent layer draws per section (not flat).
+        let oit_on = self.improved_transparency
+            && !frame.title
+            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
+            && self.native.is_none()
+            && oit::supported(&self.device);
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on
+                    && !oit_on
                     && !self.draws.is_empty()
                     && (self.drawn_sections >= flat.min_sections
                         || pack_terrain
@@ -5029,7 +5047,7 @@ impl Renderer {
         }
         let pack_reads_world = pack_post || native_post;
         // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
-        let keep_depth = pack_reads_world || (taa && self.world_post.taa);
+        let keep_depth = pack_reads_world || (taa && self.world_post.taa) || oit_on;
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         // The shadow camera's lists, drawn by the pack's shadow programs.
@@ -5082,6 +5100,29 @@ impl Renderer {
         if culling && let Some(cull) = &mut self.cull {
             cull.bind_depth(&self.device, world_depth);
         }
+        if oit_on {
+            let size = self
+                .world_post
+                .size()
+                .filter(|_| scaled.is_some())
+                .unwrap_or([self.config.width, self.config.height]);
+            let (device, layout, sprites) =
+                (&self.device, &self.terrain_layout, self.terrain_sprites);
+            let clouds = [0, 1].map(|i| self.cloud_pipeline.get_bind_group_layout(i));
+            let format = self.config.format.remove_srgb_suffix();
+            self.oit
+                .get_or_insert_with(|| {
+                    oit::Oit::new(device, layout, [&clouds[0], &clouds[1]], sprites, format)
+                })
+                .prepare(
+                    &self.device,
+                    &self.queue,
+                    size,
+                    &views.primary().projection,
+                    [water_mask_quads > 0, cloud_quads > 0],
+                );
+        }
+        let oit = self.oit.as_ref().filter(|_| oit_on);
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
         let clear = if frame.title || (frame.end_sky && !frame.underwater && sky_open(frame)) {
             wgpu::Color::BLACK
@@ -5369,7 +5410,7 @@ impl Renderer {
             }
             // BoatRenderer's water patch (RenderTypes.waterMask): depth only,
             // before translucent terrain, so no water shows inside the boat.
-            if water_mask_quads > 0 {
+            if water_mask_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.water_mask_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5426,6 +5467,68 @@ impl Renderer {
             match self.flat.as_ref().filter(|_| flat_frame) {
                 // The pack draws translucent terrain after its deferred programs.
                 _ if pack_draws_water => {}
+                // LevelRenderer.executeOit in place of the classic blend; what
+                // follows draws over its composite in a pass of its own.
+                _ if let Some(oit) = oit => {
+                    drop(pass);
+                    // LevelRenderer.executeOitWaterMask and CloudRenderer.renderOit.
+                    let mask = |pass: &mut wgpu::RenderPass<'_>| {
+                        pass.set_pipeline(&self.water_mask_pipeline);
+                        pass.set_bind_group(0, &self.entity_group, &[]);
+                        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                        pass.draw_indexed(
+                            0..water_mask_quads * 6,
+                            ((entity_quads
+                                + text_quads
+                                + crumbling_quads
+                                + translucent_crumbling_quads)
+                                * 4) as i32,
+                            0..1,
+                        );
+                    };
+                    let clouds =
+                        |pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline| {
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &self.entity_group, &[]);
+                            pass.set_bind_group(1, &self.cloud_group, &[]);
+                            pass.set_index_buffer(
+                                self.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
+                            pass.draw_indexed(0..cloud_quads * 6, 0, 0..1);
+                        };
+                    let extras = oit::Extras {
+                        water_mask: (water_mask_quads > 0).then_some(&mask as _),
+                        clouds: (cloud_quads > 0).then_some(&clouds as _),
+                    };
+                    oit.run(
+                        &mut encoder,
+                        world_view,
+                        world_depth,
+                        &|pass, pipeline| {
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &self.group, &[]);
+                            pass.set_index_buffer(
+                                self.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_vertex_buffer(1, self.instances.slice(..));
+                            self.draw_sections(
+                                pass,
+                                &self.indirect,
+                                0,
+                                solid_draws,
+                                translucent_draws,
+                            );
+                        },
+                        &extras,
+                    );
+                    pass = world_pass_after_culling(&mut encoder, world_view, world_depth, true);
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
                 Some(flat) => {
                     pass.set_pipeline(pack_flat.map_or(&flat.translucent, |p| &p.1));
                     flat.draw(&mut pass, flat.translucent_calls(), |p| {
@@ -5492,7 +5595,7 @@ impl Renderer {
                     0..1,
                 );
             }
-            if cloud_quads > 0 && !pack_draws_clouds {
+            if cloud_quads > 0 && !pack_draws_clouds && !oit_on {
                 pass.set_pipeline(&self.cloud_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_bind_group(1, &self.cloud_group, &[]);
@@ -6358,8 +6461,25 @@ mod tests {
             &mut files,
         );
         assert!(files.len() >= 10, "{files:?}");
+        // Improved transparency's files are appended to terrain.wgsl and entity.wgsl.
+        let mut sources: Vec<(std::path::PathBuf, String)> = Vec::new();
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name == "oit.wgsl" {
+                // The shared maths: it needs the file it is appended to.
+                continue;
+            } else if name == "oit_world.wgsl" {
+                let base = include_str!("terrain.wgsl").to_owned() + include_str!("oit.wgsl");
+                sources.push((path, base + &text));
+            } else if name == "oit_clouds.wgsl" {
+                let base = super::entity_shader() + include_str!("oit.wgsl");
+                sources.push((path, base + &text));
+            } else {
+                sources.push((path, text));
+            }
+        }
+        for (path, text) in sources {
             // entity.wgsl comes after the overlay's constants (entity_shader).
             let module = naga::front::wgsl::parse_str(&text)
                 .or_else(|_| {

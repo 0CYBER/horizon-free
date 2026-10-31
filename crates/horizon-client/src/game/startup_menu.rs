@@ -86,7 +86,10 @@ impl StartupMenu {
     }
 
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
-        game.title = self.title.take();
+        game.title = self
+            .title
+            .take()
+            .map(|title| title.with_user(|| game.options.player_name()));
         game.pending_entry = self.pending.take();
         game.cursor = self.cursor;
         game.modifiers = self.modifiers;

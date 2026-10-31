@@ -374,6 +374,18 @@ impl VanillaTerrain {
         let worker = worker.get_or_insert_with(|| self.generator.worker());
         worker.structure_starts(ChunkPos::new(x, z))
     }
+    /// `/place structure`: `Structure.generate` for `structure` in chunk
+    /// `(x, z)`, whatever the chunk's structure sets place there.
+    pub fn structure_start(
+        &self,
+        structure: &str,
+        x: i32,
+        z: i32,
+    ) -> Option<Arc<horizon_world::worldgen::structure::start::StructureStart>> {
+        let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
+        let worker = worker.get_or_insert_with(|| self.generator.worker());
+        worker.structure_start(structure, ChunkPos::new(x, z))
+    }
     /// `/locate structure`: the nearest start of one of `names` within
     /// `radius` placement sectors of block `from`.
     pub fn locate(

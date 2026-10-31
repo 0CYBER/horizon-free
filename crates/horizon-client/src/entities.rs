@@ -882,6 +882,10 @@ pub struct ArmorStand {
     /// `DATA_HEAD_POSE` to `DATA_RIGHT_LEG_POSE`: head, body, left arm, right
     /// arm, left leg, right leg, in degrees (`POSE_KEYS` order).
     pub pose: [[f32; 3]; 6],
+    /// `Entity.vehicle` on a server's client (`SetPassengers`): the mob it
+    /// rides, which seats it every tick (`positionRider`), as NPC plugins hang
+    /// a second name over a player's head.
+    pub vehicle: Option<u32>,
 }
 impl ArmorStand {
     pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
@@ -916,6 +920,7 @@ impl ArmorStand {
             name_visible: false,
             last_hit: i64::MIN / 2,
             pose: Self::DEFAULT_POSE,
+            vehicle: None,
         }
     }
     pub fn environment_tick(
