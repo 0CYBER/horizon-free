@@ -6,6 +6,11 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 37 adds mobs for server mods (`native_spawn_mob`, `native_mob`,
+//! `native_mobs`, `native_teleport_mob`, `native_push_mob`,
+//! `native_set_mob_health`, `native_kill_mob`, `native_remove_mob`... in
+//! `native_mobs.rs`).
+//!
 //! API 36 adds recipes of a mod's own types (`native_recipes_of_type`,
 //! `native_recipe_ingredient`, `native_recipe_result`).
 //!
@@ -172,7 +177,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 36;
+pub(crate) const NATIVE_HOOKS_API: u32 = 37;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
