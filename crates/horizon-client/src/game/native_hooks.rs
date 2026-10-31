@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 32 adds shape updates a mod can answer (`native_update_shape`), and
+//! `native_schedule_block_tick` and `native_schedule_fluid_tick` on the
+//! level for the ticks a block's shape update schedules.
+//!
 //! API 31 adds a player's server tick (`native_player_tick`).
 //!
 //! API 30 adds left-clicking a block (`native_left_click_block`).
@@ -125,9 +129,14 @@ use horizon_client::{
     particles::{ParticleOptions, ParticleType},
     text::Text,
 };
-use horizon_core::{geometry::Direction, position::BlockPos};
+use horizon_core::{
+    geometry::Direction,
+    position::BlockPos,
+    ticks::{ScheduleResult, TickPriority},
+};
 use horizon_world::{
-    level::{BlockId, flags},
+    fluid::FluidKind,
+    level::{BlockId, LevelAccess, Ticks, flags},
     nbt::Compound,
     registry::BlockStateId,
 };
@@ -142,7 +151,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 31;
+pub(crate) const NATIVE_HOOKS_API: u32 = 32;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -207,6 +216,44 @@ impl GameLevel<'_> {
         canceled: &mut bool,
     ) {
         let _ = (dimension, piston, direction, push, destroy, canceled);
+    }
+
+    /// An authoritative server is about to compute the state the block
+    /// `state` at `pos` takes now that its neighbour in `direction` is
+    /// `neighbour` (`BlockBehaviour.updateShape`). `state` may not be in the
+    /// world yet (a piston landing it): decide from `state`, not from the
+    /// block at `pos`. Answer only for your own blocks: put the new state in
+    /// `new` (`state` keeps the block as it is; air breaks it, with its drops,
+    /// on a neighbour update) and the block's own `updateShape` doesn't run,
+    /// nor the ticks it would schedule. The level is read-only, as vanilla's
+    /// `LevelReader`; ticks go through `native_schedule_block_tick` and
+    /// `native_schedule_fluid_tick` with `ticks` (`ScheduledTickAccess`). It
+    /// runs often, at least six times per `setBlock` that updates shapes
+    /// (more for redstone wire's diagonals and knock-on updates): keep it
+    /// short.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn native_update_shape(
+        &self,
+        ticks: &mut Ticks,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        neighbour_pos: BlockPos,
+        neighbour: BlockStateId,
+        new: &mut Option<BlockStateId>,
+    ) {
+        let _ = (
+            ticks,
+            dimension,
+            pos,
+            state,
+            direction,
+            neighbour_pos,
+            neighbour,
+            new,
+        );
     }
 }
 
@@ -989,6 +1036,49 @@ impl GameLevel<'_> {
                 count,
             });
         true
+    }
+    /// Schedules a tick of `block` (a block name) at `pos` in `delay` game
+    /// ticks, as a falling block's shape update schedules its fall
+    /// (`ScheduledTickAccess.scheduleTick(pos, block, delay)`, normal
+    /// priority); false for an unknown block or a position that isn't
+    /// loaded. A tick of that block already queued there is kept and counts
+    /// as scheduled. `ticks` is the hook's. API 32.
+    pub(super) fn native_schedule_block_tick(
+        &self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        block: &str,
+        delay: i32,
+    ) -> bool {
+        let Some(state) = self.registry.default_state(block) else {
+            return false;
+        };
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let block = self.behaviours.block(state);
+        let time = self.game_time();
+        ticks.schedule_block(time, at, block, delay, TickPriority::Normal)
+            != ScheduleResult::MissingChunk
+    }
+    /// Schedules a tick of `fluid` (`minecraft:water`, `minecraft:lava`,
+    /// `minecraft:flowing_water`...) at `pos` in `delay` game ticks, as a
+    /// waterlogged block's shape update schedules its water in 5
+    /// (`ScheduledTickAccess.scheduleTick(pos, fluid, delay)`); false for
+    /// an unknown fluid or a position that isn't loaded. A tick of that
+    /// fluid already queued there is kept and counts as scheduled. `ticks` is
+    /// the hook's. API 32.
+    pub(super) fn native_schedule_fluid_tick(
+        &self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        fluid: &str,
+        delay: i32,
+    ) -> bool {
+        let Some(kind) = FluidKind::from_name(fluid) else {
+            return false;
+        };
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let time = self.game_time();
+        ticks.schedule_fluid(time, at, kind, delay) != ScheduleResult::MissingChunk
     }
 }
 

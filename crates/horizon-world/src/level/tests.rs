@@ -2117,3 +2117,151 @@ fn a_candle_on_an_uneaten_cake_makes_a_candle_cake() {
     w.use_item(pos, "minecraft:stone");
     assert_eq!(w.get(pos), cake);
 }
+
+#[test]
+fn update_shape_hook_can_answer_for_the_block() {
+    use horizon_core::ticks::TickPriority;
+    use std::cell::RefCell;
+
+    struct Shaper {
+        inner: TestLevel,
+        b: &'static Behaviours,
+        fence: BlockId,
+        /// The state the hook answers for a fence, if any.
+        answer: Option<BlockStateId>,
+        seen: RefCell<Vec<(BlockPos, Direction)>>,
+        /// The `state` each call was given.
+        states: RefCell<Vec<BlockStateId>>,
+    }
+    impl LevelAccess for Shaper {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn emit(&mut self, event: LevelEvent) {
+            self.inner.emit(event);
+        }
+        fn before_update_shape(
+            &self,
+            ticks: &mut Ticks,
+            pos: BlockPos,
+            state: BlockStateId,
+            direction: Direction,
+            neighbour_pos: BlockPos,
+            neighbour: BlockStateId,
+            new: &mut Option<BlockStateId>,
+        ) {
+            // A piston landing a block asks before the block is in the world.
+            assert_eq!(self.block_state(neighbour_pos), neighbour);
+            self.seen.borrow_mut().push((pos, direction));
+            self.states.borrow_mut().push(state);
+            if let Some(answer) = self.answer
+                && self.b.block(state) == self.fence
+            {
+                *new = Some(answer);
+                let time = self.game_time();
+                ticks.schedule_block(time, pos, self.fence, 2, TickPriority::Normal);
+            }
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let fence = f.registry.default_state("minecraft:oak_fence").unwrap();
+    let with = |key: &str| {
+        let mut s = f.registry.state(fence).unwrap().clone();
+        s.properties.insert(key.into(), "true".into());
+        f.registry.resolve(&s).unwrap()
+    };
+    let stone = f.registry.default_state("minecraft:stone").unwrap();
+    let mut level = Shaper {
+        inner: TestLevel::new(b),
+        b,
+        fence: b.block(fence),
+        answer: Some(with("west")),
+        seen: RefCell::new(Vec::new()),
+        states: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
+    let pos = BlockPos::new(1, 1, 1);
+    level.set_raw(pos, fence);
+    // Stone placed east of the fence: the hook's state, not the fence's own,
+    // and the tick the hook scheduled.
+    b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(2, 1, 1),
+        stone,
+        flags::UPDATE_ALL,
+    );
+    assert!(level.seen.borrow().contains(&(pos, Direction::East)));
+    assert_eq!(level.block_state(pos), with("west"));
+    assert!(ticks.has_block_tick(pos, b.block(fence)));
+    // Fitted to all its neighbours (as post-processing or a piston does), the
+    // fence is asked once per direction.
+    level.seen.borrow_mut().clear();
+    assert_eq!(
+        b.update_from_neighbour_shapes(&mut level, &mut ticks, pos, with("west")),
+        with("west")
+    );
+    assert_eq!(level.seen.borrow().len(), 6);
+    // Fitted into an empty spot (a piston landing it), every call still got
+    // the incoming state first, not the air at `pos`.
+    level.seen.borrow_mut().clear();
+    level.states.borrow_mut().clear();
+    level.set_raw(pos, b.air());
+    assert_eq!(
+        b.update_from_neighbour_shapes(&mut level, &mut ticks, pos, fence),
+        with("west")
+    );
+    assert_eq!(level.seen.borrow().len(), 6);
+    assert_eq!(level.states.borrow()[0], fence);
+    // A made-up id is ignored, not trusted.
+    level.answer = Some(BlockStateId(u32::MAX));
+    level.set_raw(pos, fence);
+    b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(2, 1, 1),
+        stone,
+        flags::UPDATE_ALL,
+    );
+    assert_ne!(level.block_state(pos), BlockStateId(u32::MAX));
+    level.answer = Some(with("west"));
+    // Without an answer the fence connects as vanilla's does.
+    level.answer = None;
+    level.set_raw(pos, fence);
+    b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(1, 1, 2),
+        stone,
+        flags::UPDATE_ALL,
+    );
+    assert_eq!(level.block_state(pos), with("south"));
+    // Air breaks the fence, with its drops.
+    level.answer = Some(b.air());
+    level.set_raw(pos, fence);
+    b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(1, 1, 0),
+        stone,
+        flags::UPDATE_ALL,
+    );
+    assert_eq!(level.block_state(pos), b.air());
+    assert!(level.inner.events.iter().any(
+        |e| matches!(e, LevelEvent::DropResources { pos: p, state } if *p == pos && *state == fence)
+    ));
+}

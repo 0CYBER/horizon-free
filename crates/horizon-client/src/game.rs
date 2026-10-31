@@ -1035,6 +1035,29 @@ impl LevelAccess for GameLevel<'_> {
         }
         !canceled
     }
+    fn before_update_shape(
+        &self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        neighbour_pos: BlockPos,
+        neighbour: BlockStateId,
+        new: &mut Option<BlockStateId>,
+    ) {
+        if self.native_authoritative {
+            self.native_update_shape(
+                ticks,
+                self.dimension,
+                pos,
+                state,
+                direction,
+                neighbour_pos,
+                neighbour,
+                new,
+            );
+        }
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
