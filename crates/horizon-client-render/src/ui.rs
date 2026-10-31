@@ -928,7 +928,7 @@ pub fn multiline_word_position(value: &str, dir: isize, from: usize) -> usize {
 }
 /// `Character.isWhitespace`: Unicode spaces and line breaks but not the no-break spaces, plus
 /// the ASCII separators U+001C to U+001F.
-fn java_whitespace(c: char) -> bool {
+pub(crate) fn java_whitespace(c: char) -> bool {
     (c.is_whitespace() && !matches!(c, '\u{85}' | '\u{a0}' | '\u{2007}' | '\u{202f}'))
         || ('\u{1c}'..='\u{1f}').contains(&c)
 }
@@ -1288,6 +1288,9 @@ impl EditBox {
             } else {
                 batch.text(atlas, "_", cursor_x, ty, color, true);
             }
+        }
+        if self.focused {
+            crate::preedit::report_caret(cursor_x, ty, 10.0);
         }
     }
     /// Character index under GUI x (mouse click).

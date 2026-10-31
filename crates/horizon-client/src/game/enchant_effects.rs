@@ -91,7 +91,7 @@ impl Game<'_> {
     pub(super) fn wear(&mut self, stack: &ItemStack, amount: u32) -> u32 {
         let loss = self.durability_loss(stack, amount);
         if loss > 0 {
-            self.trigger_item_durability(stack);
+            self.trigger_item_durability(stack, stack.damage + loss);
         }
         loss
     }
@@ -134,7 +134,7 @@ impl Game<'_> {
     /// enchantment, halved) plus 0.5 for a sprinting full-strength hit, and
     /// whether the hit is that knockback attack.
     pub(super) fn extra_knockback(&mut self, target_kind: &str, scale: f32) -> (f32, bool) {
-        let knockback_attack = scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting);
+        let sprinting = self.player.as_ref().is_some_and(|p| p.sprinting);
         let enchanted = match self.held().cloned() {
             Some(held) => {
                 let ctx = EffectContext {
@@ -155,8 +155,7 @@ impl Game<'_> {
             }
             None => 0.0,
         };
-        let bonus = if knockback_attack { 0.5 } else { 0.0 };
-        (enchanted / 2.0 + bonus, knockback_attack)
+        horizon_client::attack_strength::extra_knockback(enchanted, scale, sprinting)
     }
     /// `causeExtraKnockback`'s direction, `(sin yRot, -cos yRot)` from Mth's
     /// sine table: the target flies where the attacker looks, not away from
@@ -167,9 +166,11 @@ impl Game<'_> {
         (f64::from(trig::sin(yaw)), -f64::from(trig::cos(yaw)))
     }
     /// The attacker's side of `causeExtraKnockback` as the attacking client
-    /// sees it: the server's player stops sprinting, and its flag reaches the
-    /// client. (The server's 0.6 speed cut never does: the client's own
-    /// `Player.attack` simulates no hurt, so it skips the knockback.)
+    /// sees it after a hit on a mob: the server's player stops sprinting, and
+    /// its flag reaches the client. (The server's 0.6 speed cut never does:
+    /// the client's own `Player.attack` simulates no hurt on a mob, so it
+    /// skips the knockback. A hit on another player does simulate one:
+    /// `remote_player_attack`.)
     pub(super) fn stop_sprint_after_extra_knockback(&mut self) {
         if let Some(p) = self.player.as_mut() {
             let _ = p.set_sprinting(false);

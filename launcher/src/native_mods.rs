@@ -39,7 +39,7 @@ pub fn is_native(version: &str) -> bool {
     version.starts_with(PREFIX)
 }
 
-fn root() -> PathBuf {
+pub(crate) fn root() -> PathBuf {
     backend::data_dir().join("native")
 }
 
@@ -141,7 +141,7 @@ pub fn bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
     Ok(found)
 }
 
-fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
+pub(crate) fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
     if dir.join(MANIFEST).is_file() {
         return bundle(dir, None).map(Some);
     }
@@ -272,8 +272,40 @@ fn newest(
         .unwrap_or_default())
 }
 
-/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts).
+/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts), from the dates kept
+/// in [`DATES`] when it was asked before: a commit's date never changes, so a build of mods made
+/// for different revisions can be used again offline or past GitHub's rate limit.
 fn committed(repo: &str, revision: &str) -> Result<String, String> {
+    remembered(&root().join(DATES), repo, revision, ask_github)
+}
+
+/// The file in [`root`] keeping the commit dates GitHub gave, as `{"repo@revision": date}`.
+const DATES: &str = "commit-dates.json";
+
+/// The date `file` keeps for `repo`'s `revision`, else `ask`'s, then kept in `file`.
+fn remembered(
+    file: &Path,
+    repo: &str,
+    revision: &str,
+    ask: impl FnOnce(&str, &str) -> Result<String, String>,
+) -> Result<String, String> {
+    let key = format!("{repo}@{revision}");
+    let mut dates: serde_json::Map<String, serde_json::Value> = fs::read(file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if let Some(date) = dates.get(&key).and_then(|d| d.as_str()) {
+        return Ok(date.to_owned());
+    }
+    let date = ask(repo, revision)?;
+    dates.insert(key, date.clone().into());
+    if let Ok(text) = serde_json::to_vec_pretty(&dates) {
+        let _ = fs::write(file, text);
+    }
+    Ok(date)
+}
+
+fn ask_github(repo: &str, revision: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{repo}/commits/{revision}");
     let commit: serde_json::Value = backend::get(&url)?.into_json().map_err(|e| e.to_string())?;
     commit["commit"]["committer"]["date"]
@@ -460,6 +492,18 @@ pub fn version_for(revision: &str, mixins: &str, bundles: &[Bundle]) -> Result<S
     Ok(format!("{PREFIX}{}-{key}", &revision[..7]))
 }
 
+/// A digest of a mod's files (name, length, bytes, sorted by name), kept in `native-mods.json` so
+/// the Mods page sees a mod edited or reinstalled without a version bump.
+pub fn digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
+    let mut hash = Sha256::new();
+    for (name, bytes) in files {
+        hash.update(name.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Where a build is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -492,7 +536,8 @@ impl Step {
 }
 
 /// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
-/// An error ends with the last lines.
+/// An error ends with its first `error` lines and the last lines: a failed build script's output
+/// alone could push the line naming its crate out of the last ones.
 fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), String> {
     let mut log = fs::OpenOptions::new()
         .create(true)
@@ -507,12 +552,16 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         .spawn()
         .map_err(|e| format!("Could not start {what}: {e}"))?;
     let mut tail = std::collections::VecDeque::new();
+    let mut errors = Vec::new();
     for text in BufReader::new(child.stderr.take().expect("piped"))
         .lines()
         .map_while(Result::ok)
     {
         let _ = writeln!(log, "{text}");
         line(&text);
+        if text.starts_with("error") && errors.len() < 4 {
+            errors.push(text.clone());
+        }
         if tail.len() == 12 {
             tail.pop_front();
         }
@@ -523,11 +572,29 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         return Ok(());
     }
     let tail: Vec<String> = tail.into();
-    Err(format!(
-        "{what} failed ({status}). The end of its output, the whole of it in {}:\n{}",
-        log_path().display(),
-        diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"))
-    ))
+    Err(failure(what, &status.to_string(), &errors, &tail))
+}
+
+/// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
+fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
+    let end = diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"));
+    let first: Vec<&str> = errors
+        .iter()
+        .filter(|e| !tail.contains(e))
+        .map(String::as_str)
+        .collect();
+    let (shown, first) = if first.is_empty() {
+        ("The end of its output", String::new())
+    } else {
+        (
+            "Its first errors and the end of its output",
+            format!("{}\n…\n", first.join("\n")),
+        )
+    };
+    format!(
+        "{what} failed ({status}). {shown}, the whole of it in {}:\n{first}{end}",
+        log_path().display()
+    )
 }
 
 /// A horizon-mixins diagnostic (`{"code", "message", "file"}`) in one line.
@@ -587,9 +654,21 @@ fn source(revision: &str) -> Result<PathBuf, String> {
         backend::REPO
     );
     let partial = root().join("source").join(format!(".{revision}.partial"));
+    let top = unpack_archive(&archive, &partial, u64::MAX)?;
+    fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(&dir);
+    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
-    fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
-    let reader = flate2::read::GzDecoder::new(backend::get(&archive)?.into_reader());
+    Ok(dir)
+}
+
+/// GitHub's archive (`.tar.gz`) at `url`, unpacked into the fresh folder `partial`: the archive's
+/// one top folder, which is returned. Links are left out; at most `limit` bytes are unpacked.
+pub(crate) fn unpack_archive(url: &str, partial: &Path, limit: u64) -> Result<PathBuf, String> {
+    use std::io::Read;
+    let _ = fs::remove_dir_all(partial);
+    fs::create_dir_all(partial).map_err(|e| e.to_string())?;
+    let reader = flate2::read::GzDecoder::new(backend::get(url)?.into_reader()).take(limit);
     let mut tar = tar::Archive::new(reader);
     for entry in tar.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| format!("Download interrupted: {e}"))?;
@@ -598,21 +677,16 @@ fn source(revision: &str) -> Result<PathBuf, String> {
             continue;
         }
         entry
-            .unpack_in(&partial)
+            .unpack_in(partial)
             .map_err(|e| format!("Could not unpack the source: {e}"))?;
     }
-    // The archive's one top folder (horizon-<commit>/) is the source's root.
-    let top = fs::read_dir(&partial)
+    // The archive's one top folder (<repo>-<commit>/) is the source's root.
+    fs::read_dir(partial)
         .map_err(|e| e.to_string())?
         .flatten()
         .map(|e| e.path())
         .find(|p| p.is_dir())
-        .ok_or("The source archive is empty.")?;
-    fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&dir);
-    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&partial);
-    Ok(dir)
+        .ok_or_else(|| "The source archive is empty.".into())
 }
 
 /// Makes `to` hold `from`'s files, writing only those that changed, so Cargo, which goes by file
@@ -749,7 +823,14 @@ pub fn build(
             "horizon_mixins": mixins,
             "hooks": mods.iter().find_map(|m| m.hooks),
             "rust": rust_toolchain::VERSION,
-            "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
+            "mods": mods.iter().map(|m| serde_json::json!({
+                "id": m.id,
+                "version": m.version,
+                "sha256": files(&m.dir).ok().map(|list| {
+                    let read: Vec<_> = list.iter().filter_map(|(n, p)| Some((n.clone(), fs::read(p).ok()?))).collect();
+                    digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice())))
+                }),
+            })).collect::<Vec<_>>(),
         });
         let binary = target.join(PROFILE).join(backend::CLIENT);
         install(base, &version, &binary, &about)?;
@@ -1172,6 +1253,35 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_date_is_asked_once_and_kept() {
+        let d = dir("commit-dates");
+        let file = d.join(DATES);
+        let ask = |_: &str, r: &str| -> Result<String, String> { Ok(format!("date of {r}")) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, ask).unwrap(),
+            format!("date of {A}")
+        );
+        let offline = |_: &str, _: &str| -> Result<String, String> { Err("offline".into()) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, offline).unwrap(),
+            format!("date of {A}")
+        );
+        // Another repo or revision isn't known yet.
+        assert!(remembered(&file, "acme/y", A, offline).is_err());
+        assert!(remembered(&file, "acme/x", B, offline).is_err());
+        // A broken file is asked again and rewritten.
+        fs::write(&file, "not json").unwrap();
+        assert_eq!(
+            remembered(&file, "acme/x", B, ask).unwrap(),
+            format!("date of {B}")
+        );
+        assert_eq!(
+            remembered(&file, "acme/x", B, offline).unwrap(),
+            format!("date of {B}")
+        );
+    }
+
+    #[test]
     fn mods_on_the_hook_points_follow_the_game_or_the_pins() {
         assert_eq!(
             hooks_in("x\npub(crate) const NATIVE_HOOKS_API: u32 = 3;\n"),
@@ -1297,5 +1407,28 @@ mod tests {
             diagnostic(err).as_deref(),
             Some("E_REVISION: requires exact Horizon revision a (m.toml)")
         );
+    }
+
+    #[test]
+    fn a_failed_build_names_the_crate_its_output_pushed_out() {
+        // cargo's output on Linux without ALSA's development files (Rust 1.99.1, 2026-10-31):
+        // the build script's report fills the last lines.
+        let errors = ["error: failed to run custom build command for `alsa-sys v0.3.1`".to_owned()];
+        let tail: Vec<String> = [
+            "  The system library `alsa` required by crate `alsa-sys` was not found.",
+            "  HINT: you may need to install a package such as alsa, alsa-dev or alsa-devel.",
+            "warning: build failed, waiting for other jobs to finish...",
+        ]
+        .map(str::to_owned)
+        .into();
+        let e = failure("Compiling the game", "exit status: 101", &errors, &tail);
+        assert!(e.starts_with("Compiling the game failed (exit status: 101). Its first errors"));
+        assert!(
+            e.ends_with(&format!("{}\n…\n{}", errors[0], tail.join("\n"))),
+            "{e}"
+        );
+        // An error still among the last lines isn't said twice.
+        let e = failure("horizon-mixins", "exit status: 1", &errors, &errors);
+        assert!(e.contains("The end of its output") && e.matches("alsa-sys").count() == 1);
     }
 }

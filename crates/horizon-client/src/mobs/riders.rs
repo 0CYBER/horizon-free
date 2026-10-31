@@ -17,13 +17,29 @@ const BOARDING_COOLDOWN: i32 = 60;
 /// `Piglin.startRiding`: how many baby piglins stack on one hoglin.
 const MAX_PASSENGERS_ON_ONE_HOGLIN: i32 = 3;
 
+/// `LivingEntity.getScale`: the `minecraft:scale` a player or mannequin
+/// carries (`extra.model_scale`, 0 when none came), 1 for every other mob.
+fn scale(m: &Mob) -> f64 {
+    if m.extra.model_scale > 0.0 {
+        f64::from(m.extra.model_scale)
+    } else {
+        1.0
+    }
+}
+/// Players and mannequins (`Avatar`).
+fn avatar(m: &Mob) -> bool {
+    matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin")
+}
 /// `EntityType` passenger attachment of a vehicle (before rotation): where a
-/// rider's attachment point sits relative to the vehicle's feet.
+/// rider's attachment point sits relative to the vehicle's feet, in its
+/// scale (`getDimensions` scales the attachments with the box).
 pub fn passenger_attachment(v: &Mob) -> [f64; 3] {
     let [x, y, z] = base_attachment(v);
-    // AbstractHorse.getPassengerAttachmentPoint: a rearing horse slides it.
+    let s = scale(v);
+    // AbstractHorse.getPassengerAttachmentPoint: a rearing horse slides it,
+    // after the scaled attachment (`rear_offset` scales with age itself).
     let rear = super::equine::rear_offset(v);
-    [x + rear[0], y + rear[1], z + rear[2]]
+    [x * s + rear[0], y * s + rear[1], z * s + rear[2]]
 }
 fn base_attachment(v: &Mob) -> [f64; 3] {
     match v.species() {
@@ -45,9 +61,16 @@ fn base_attachment(v: &Mob) -> [f64; 3] {
     }
 }
 /// The rider's own `VEHICLE` attachment height (`ridingOffset`): how far
-/// below the vehicle's attachment point its feet hang.
+/// below the vehicle's attachment point its feet hang, in its scale.
 pub fn vehicle_attachment(r: &Mob) -> f64 {
+    unscaled_vehicle_attachment(r) * scale(r)
+}
+fn unscaled_vehicle_attachment(r: &Mob) -> f64 {
     use Species as S;
+    // Avatar.DEFAULT_VEHICLE_ATTACHMENT.
+    if avatar(r) {
+        return 0.6;
+    }
     match r.species() {
         S::Zombie | S::Husk | S::Drowned if r.is_baby() => 0.1875,
         S::ZombieVillager if r.is_baby() => 0.125,
@@ -326,6 +349,32 @@ mod tests {
         // Facing west (yaw 90), behind is to the east.
         let [x, _, z] = rotated(behind, 90.0);
         assert!((x - 0.0625).abs() < 1e-9 && z.abs() < 1e-9);
+    }
+    fn npc(scale: f32) -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.id = "minecraft:player".into();
+        let mut m = Mob::new(1, std::sync::Arc::new(kind), Vec3::ZERO, 0.0);
+        m.extra.model_scale = scale;
+        m
+    }
+    /// An NPC plugin's enlarged fake player: the name it carries sits on the
+    /// top of its scaled box, and on a seat it hangs `Avatar`'s 0.6 lower, scaled too.
+    #[test]
+    fn a_scaled_player_carries_and_sits_in_its_scale() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert!(close(passenger_attachment(&npc(0.0))[1], 1.8));
+        assert!(close(passenger_attachment(&npc(1.5))[1], 2.7));
+        assert!(close(vehicle_attachment(&npc(0.0)), 0.6));
+        assert!(close(vehicle_attachment(&npc(1.5)), 0.9));
+        // On a seat at y 55 (a text display, whose attachment is its feet):
+        // a 1.5 NPC's feet at 54.1, where the server puts it.
+        let seat = seat(
+            [0.0; 3],
+            vehicle_attachment(&npc(1.5)),
+            Vec3::new(0.0, 55.0, 0.0),
+            0.0,
+        );
+        assert!(close(seat.y, 54.1));
     }
     #[test]
     fn archers_keep_their_distance_and_brawlers_close_in() {

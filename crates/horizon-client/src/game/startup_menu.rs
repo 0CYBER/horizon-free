@@ -77,12 +77,19 @@ impl StartupMenu {
             );
             title.last_server = settings.file.string("lastServer");
             title.skip_multiplayer_warning = settings.file.bool("skipMultiplayerWarning");
+            // Gui.addInitialScreens: the accessibility onboarding comes first.
+            if settings.file.bool("onboardAccessibility") {
+                title.start_onboarding();
+            }
             self.title = Some(title);
         }
     }
 
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
-        game.title = self.title.take();
+        game.title = self
+            .title
+            .take()
+            .map(|title| title.with_user(|| game.options.player_name()));
         game.pending_entry = self.pending.take();
         game.cursor = self.cursor;
         game.modifiers = self.modifiers;
@@ -307,10 +314,26 @@ impl Loading {
             gui.atlas.font.uniform = self.settings.force_unicode;
             gui.atlas.font.japanese = self.settings.japanese_glyphs;
         }
-        if let Some(window) = &self.window
-            && let Some(want) = self.fullscreen.request(self.settings.fullscreen)
-        {
-            window.set_fullscreen(want.then_some(winit::window::Fullscreen::Borderless(None)));
+        if let Some(window) = self.window.clone() {
+            let modes = window
+                .current_monitor()
+                .or_else(|| window.primary_monitor())
+                .map(|m| horizon_client::window::monitor_video_modes(&m))
+                .unwrap_or_default();
+            let preferred = self
+                .settings
+                .file
+                .fullscreen_resolution
+                .as_deref()
+                .and_then(horizon_client::window::VideoMode::read);
+            self.fullscreen.apply(
+                &window,
+                self.settings.fullscreen,
+                self.settings.file.bool("exclusiveFullscreen"),
+                preferred,
+                false,
+            );
+            self.settings.video_modes = modes;
         }
         self.update_menu_cursor();
     }
@@ -465,6 +488,13 @@ impl Loading {
             Action::Options => self.open_menu_options(Page::Main),
             Action::Accessibility => self.open_menu_options(Page::Accessibility),
             Action::Language => self.open_menu_options(Page::Language),
+            Action::Sounds => self.open_menu_options(Page::Sound),
+            Action::Credits => self.open_menu_options(Page::Credits),
+            Action::OpenUri(uri) => super::packs::open_uri(&uri),
+            Action::CopyText(text) => {
+                use horizon_client::clipboard::Clipboard;
+                self.menu.clipboard.set(&text);
+            }
             Action::DataPacks { dir, selected } => {
                 let resources = self.vanilla_root.clone();
                 self.menu.options.open_data_packs(dir, selected, resources);
@@ -497,6 +527,14 @@ impl Loading {
         }
         match event {
             WindowEvent::CloseRequested => {
+                if !self.settings.quit_shortcuts
+                    && horizon_client::input::is_quit_shortcut_down(
+                        self.menu.modifiers,
+                        &self.menu.physical_keys,
+                    )
+                {
+                    return Ok(());
+                }
                 self.save_menu_settings();
                 event_loop.exit();
             }
@@ -663,11 +701,12 @@ impl Loading {
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
         let Some(gui) = &self.gui else { return };
         if self.menu.pending.is_some() {
-            horizon_client::level_loading::draw_progress(
+            horizon_client::level_loading::draw_loading_overlay(
                 batch,
                 &gui.atlas,
                 self.progress.line(),
                 self.progress.fraction(),
+                self.settings.file.bool("darkMojangStudiosBackground"),
             );
         } else if let Some((win, frame)) = &mut self.menu.win {
             let now = Instant::now();
@@ -684,6 +723,14 @@ impl Loading {
                 .draw(&self.settings, batch, &gui.atlas, self.menu.cursor);
         } else if let Some(title) = &mut self.menu.title {
             title.poll_backup();
+            if std::mem::take(&mut title.onboarding_finished) {
+                // Options.onboardingAccessibilityFinished.
+                self.settings.file.set(
+                    "onboardAccessibility",
+                    horizon_client::options_file::V::Bool(false),
+                );
+                self.settings.save(&Game::options_path());
+            }
             let _ = title.update_toast(self.settings.notification_display_time);
             title.draw(
                 &gui.atlas,

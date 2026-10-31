@@ -32,6 +32,8 @@ pub struct Navigation {
     timeout_limit: f64,
     pub max_distance_to_waypoint: f32,
     delayed_recompute: bool,
+    /// `ServerLevel.sendBlockUpdated` asked for a recompute: made at the next tick.
+    pending_recompute: bool,
     time_last_recompute: i64,
     pub target_pos: Option<[i32; 3]>,
     reach_range: i32,
@@ -66,6 +68,7 @@ impl Default for Navigation {
             timeout_limit: 0.0,
             max_distance_to_waypoint: 0.5,
             delayed_recompute: false,
+            pending_recompute: false,
             time_last_recompute: 0,
             target_pos: None,
             reach_range: 0,
@@ -397,9 +400,37 @@ impl Mob {
             path.nodes.truncate(i);
         }
     }
+    /// `PathNavigation.shouldRecomputePath`: a block changed at `pos` near the
+    /// middle of what is left of the path.
+    pub fn should_recompute_path(&self, pos: [i32; 3]) -> bool {
+        let nav = &self.ai.nav;
+        if nav.delayed_recompute {
+            return false;
+        }
+        let Some(path) = nav.path.as_ref().filter(|p| !p.is_done()) else {
+            return false;
+        };
+        let Some(end) = path.nodes.last() else {
+            return false;
+        };
+        let middle = Vec3::new(
+            (f64::from(end.x) + self.position.x) / 2.0,
+            (f64::from(end.y) + self.position.y) / 2.0,
+            (f64::from(end.z) + self.position.z) / 2.0,
+        );
+        super::doors::closer_to_center(pos, middle, (path.nodes.len() - path.next) as f64)
+    }
+    /// `ServerLevel.sendBlockUpdated` for a mob that should re-path: the
+    /// recompute happens at the start of its next navigation tick.
+    pub fn queue_path_recompute(&mut self) {
+        self.ai.nav.pending_recompute = true;
+    }
     /// PathNavigation.tick.
     pub fn nav_tick(&mut self, w: &MobWorld) {
         self.ai.nav.tick += 1;
+        if std::mem::take(&mut self.ai.nav.pending_recompute) {
+            self.recompute_path(w);
+        }
         if self.ai.nav.delayed_recompute {
             self.recompute_path(w);
         }
@@ -626,5 +657,55 @@ impl Mob {
             }
             NavKind::Amphibious => !w.facts.is_air(w.world.block(p[0], p[1] - 1, p[2])),
         }
+    }
+}
+
+#[cfg(test)]
+mod recompute_tests {
+    use super::*;
+    use crate::mobs::path::{Path, PathNode, PathType};
+
+    fn walker() -> Mob {
+        let kind = crate::mobs::sensor_scan_tests::kind();
+        Mob::new(1, kind, Vec3::new(0.5, 0.0, 0.5), 0.0)
+    }
+    fn straight(len: i32) -> Path {
+        Path {
+            nodes: (0..len)
+                .map(|x| PathNode {
+                    x,
+                    y: 0,
+                    z: 0,
+                    kind: PathType::Walkable,
+                })
+                .collect(),
+            next: 0,
+            target: [len - 1, 0, 0],
+            dist_to_target: 0.0,
+            reached: true,
+        }
+    }
+
+    /// `PathNavigation.shouldRecomputePath`: a block within (nodes left) of the
+    /// middle of the way to the path's end, and nothing while a recompute waits.
+    #[test]
+    fn a_change_near_the_middle_of_the_path_asks_for_a_recompute() {
+        let mut m = walker();
+        assert!(!m.should_recompute_path([5, 0, 0]), "no path");
+        m.ai.nav.path = Some(straight(11));
+        // The middle of (10, 0, 0) and (0.5, 0, 0.5) is about (5.25, 0, 0.25);
+        // 11 nodes are left.
+        assert!(m.should_recompute_path([5, 0, 0]));
+        assert!(m.should_recompute_path([5, 5, 0]));
+        assert!(!m.should_recompute_path([5, 12, 0]), "too far");
+        assert!(!m.should_recompute_path([-9, 0, 0]), "behind the mob");
+        m.ai.nav.delayed_recompute = true;
+        assert!(
+            !m.should_recompute_path([5, 0, 0]),
+            "one is already waiting"
+        );
+        m.ai.nav.delayed_recompute = false;
+        m.ai.nav.path.as_mut().unwrap().next = 11;
+        assert!(!m.should_recompute_path([5, 0, 0]), "the path is done");
     }
 }

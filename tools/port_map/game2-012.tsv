@@ -78,10 +78,10 @@ CandleCakeBlock.useWithoutItem	port	crates/horizon-world/src/level/interact.rs::
 CandleCakeBlock.candleHit	missing		player: the hit-on-candle check for the missing candle-cake snuff.
 CandleCakeBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::update_shape_class	Candle cake drops to air when unsupported below.
 CarvedPumpkinBlock.getWeatherStateFromPattern	inline	crates/horizon-client/src/game/golems.rs::Game::try_spawn_copper_golem	Weathering comes from the copper block below; waxed blocks count as unwaxed.
-CarvedPumpkinBlock.getOrCreateSnowGolemBase	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	Snow column under the head; the lazy pattern cache is not needed.
-CarvedPumpkinBlock.getOrCreateSnowGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	Snow golem with a pumpkin head on the snow column.
-CarvedPumpkinBlock.getOrCreateIronGolemBase	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	Iron arms and body under the head.
-CarvedPumpkinBlock.getOrCreateIronGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	Iron golem pattern with air cells.
+CarvedPumpkinBlock.getOrCreateSnowGolemBase	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::SNOW_GOLEM_BASE (a space where the head goes), matched by BlockPattern::find; the lazy pattern cache is not needed.
+CarvedPumpkinBlock.getOrCreateSnowGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::SNOW_GOLEM_FULL, a pumpkin head on the snow column.
+CarvedPumpkinBlock.getOrCreateIronGolemBase	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::IRON_GOLEM_BASE, air beside the arms and body under the head.
+CarvedPumpkinBlock.getOrCreateIronGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::IRON_GOLEM_FULL, with its air cells.
 CarvedPumpkinBlock.getOrCreateCopperGolemBase	port	crates/horizon-client/src/game/golems.rs::Game::copper_golem_base	Copper block under the head.
 CarvedPumpkinBlock.getOrCreateCopperGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::try_spawn_copper_golem	Copper golem spawn with the pumpkin head; the head check is in is_golem_head.
 CarvedPumpkinBlock.replaceCopperBlockWithChest	inline	crates/horizon-client/src/game/golems.rs::Game::try_spawn_copper_golem	Copper block becomes its chest with flag 2 through copper_chest_from_block.
