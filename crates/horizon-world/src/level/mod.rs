@@ -93,7 +93,7 @@ use horizon_core::{
     position::{BlockPos, ChunkPos},
     random::LegacyRandom,
 };
-use std::{collections::HashMap, io, path::Path, sync::Arc, sync::Mutex};
+use std::{collections::HashMap, io, path::Path, sync::Arc, sync::RwLock};
 
 pub mod classes;
 pub mod data;
@@ -150,6 +150,8 @@ pub mod flags {
     pub const UPDATE_NEIGHBORS: i32 = 1;
     pub const UPDATE_CLIENTS: i32 = 2;
     pub const UPDATE_INVISIBLE: i32 = 4;
+    /// Read only by a client's level, which rebuilds the section at once.
+    pub const UPDATE_IMMEDIATE: i32 = 8;
     pub const UPDATE_KNOWN_SHAPE: i32 = 16;
     pub const UPDATE_SUPPRESS_DROPS: i32 = 32;
     pub const UPDATE_MOVE_BY_PISTON: i32 = 64;
@@ -344,6 +346,52 @@ pub trait LevelAccess {
         _state: BlockStateId,
         _changed: BlockId,
         _moved: bool,
+    ) {
+    }
+    /// `BlockState.randomTick` from `ServerLevel.tickChunk`, before the block
+    /// handles it. The level may change the block (`Behaviours::set_block`
+    /// with `ticks`); setting `handled` skips the block's own random tick. A
+    /// level that changed the block without setting `handled` must put the
+    /// block's state as it is now in `state`: the block's own random tick
+    /// runs on it. The default does nothing.
+    fn before_random_tick(
+        &mut self,
+        _ticks: &mut Ticks,
+        _pos: BlockPos,
+        _state: &mut BlockStateId,
+        _handled: &mut bool,
+    ) {
+    }
+    /// `BlockState.tick` from `ServerLevel.tickBlock` (a due scheduled tick
+    /// whose block is still there), before the block handles it. The level
+    /// may change the block (`Behaviours::set_block` with `ticks`); setting
+    /// `handled` skips the block's own tick. A level that changed the block
+    /// without setting `handled` must put the block's state as it is now in
+    /// `state`: the block's own tick runs on it. The default does nothing.
+    fn before_tick_block(
+        &mut self,
+        _ticks: &mut Ticks,
+        _pos: BlockPos,
+        _state: &mut BlockStateId,
+        _handled: &mut bool,
+    ) {
+    }
+    /// `BlockState.updateShape` for `state` at `pos` after its neighbour in
+    /// `direction` became `neighbour`, before the block computes it. `state`
+    /// may not be in the level yet (a piston landing it). A state put in
+    /// `new` is the result, and the block's own `updateShape` doesn't run;
+    /// the level may schedule ticks through `ticks`, as that would. The
+    /// default does nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn before_update_shape(
+        &self,
+        _ticks: &mut Ticks,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+        _neighbour_pos: BlockPos,
+        _neighbour: BlockStateId,
+        _new: &mut Option<BlockStateId>,
     ) {
     }
     /// `Level.isClientSide`: this level is a client's copy (false on a
@@ -549,7 +597,7 @@ pub struct Behaviours {
     liquid_blocks: FluidBlockBindings,
     /// Uncached (position- or block-entity-dependent) collision shapes.
     dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
-    occlusion_cache: Mutex<HashMap<(i32, i32, u8), bool>>,
+    occlusion_cache: RwLock<HashMap<(i32, i32, u8), bool>>,
     growth: growth::Growth,
 }
 

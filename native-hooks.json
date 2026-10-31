@@ -21,6 +21,16 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
     },
     {
+      "name": "level_tick_pre",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_level_tick_pre"
+    },
+    {
+      "name": "level_tick_post",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_level_tick_post"
+    },
+    {
       "name": "block_changed",
       "version": 1,
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_changed"
@@ -29,6 +39,21 @@
       "name": "neighbor_changed",
       "version": 1,
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"
+    },
+    {
+      "name": "random_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_random_tick"
+    },
+    {
+      "name": "tick_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"
+    },
+    {
+      "name": "update_shape",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_update_shape"
     },
     {
       "name": "hud",
@@ -49,6 +74,11 @@
       "name": "command",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_command"
+    },
+    {
+      "name": "commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_commands"
     },
     {
       "name": "zoom",
@@ -199,6 +229,26 @@
       "name": "attack_entity",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
+    },
+    {
+      "name": "health_hud",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud"
+    },
+    {
+      "name": "interact_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"
+    },
+    {
+      "name": "left_click_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"
+    },
+    {
+      "name": "player_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
     }
   ]
 }

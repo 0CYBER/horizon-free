@@ -125,6 +125,7 @@ HELPER
 impl Game {
     fn stop_mining(&mut self) { self.mining = false; }
     fn reset_inventory_clicks(&mut self) {}
+    fn restore_held_keys(&mut self) {}
     fn dialog_open(&self) -> bool { false }
 METHODS
 }

@@ -53,6 +53,12 @@ pub fn report_save_failure(dir: &Path, x: i32, z: i32, error: &dyn std::fmt::Dis
     with(|p| p.save_failure = Some((x, z)));
 }
 
+/// `Minecraft.sendLowDiskSpaceWarning`: a server's `ClientboundLowDiskSpaceWarningPacket`
+/// (`ClientPacketListener.handleLowDiskSpaceWarning`) toasts like the local report.
+pub fn report_low_disk_space() {
+    with(|p| p.low_disk_space = true);
+}
+
 /// The reports since the last call.
 pub fn take() -> Pending {
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
@@ -114,6 +120,13 @@ mod tests {
             }
         );
         assert_eq!(take(), Pending::default());
+    }
+
+    #[test]
+    fn a_servers_warning_packet_toasts_low_disk_space() {
+        let _ = take();
+        report_low_disk_space();
+        assert!(take().low_disk_space);
     }
 
     #[test]

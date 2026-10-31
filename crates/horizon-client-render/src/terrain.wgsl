@@ -27,6 +27,9 @@ struct Globals {
     // The sunrise fan's 16 triangles (gfx/sunrise_fan.rs): xyz the apex weight's normal, w the
     // triangle's volume with the camera; then each rim vertex's normal against the apex.
     sunrise_fan: array<vec4<f32>, 32>,
+    // x: Options.textureFiltering (0 none, 1 RGSS, 2 anisotropic), y: the sprite arrays' width
+    // in texels (vanilla's TextureSize).
+    filtering: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;
@@ -45,14 +48,12 @@ struct Globals {
 // which then samples exactly as before.
 override SPRITE_ARRAYS: u32 = 1u;
 override SPRITE_SPLIT: u32 = 2048u;
-fn sprite(uv: vec2<f32>, layer: u32) -> vec4<f32> {
-    if SPRITE_ARRAYS == 1u {
-        return textureSample(sprites, sprite_sampler, uv, i32(layer));
-    }
-    // The array is chosen per fragment: sample with the derivatives taken here.
-    let dx = dpdx(uv);
-    let dy = dpdy(uv);
+// A sprite sampled with the given gradients, from whichever array holds its layer.
+fn sprite_grad(uv: vec2<f32>, layer: u32, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     let l = i32(layer % SPRITE_SPLIT);
+    if SPRITE_ARRAYS == 1u {
+        return textureSampleGrad(sprites, sprite_sampler, uv, l, dx, dy);
+    }
     switch layer / SPRITE_SPLIT {
         case 0u: { return textureSampleGrad(sprites, sprite_sampler, uv, l, dx, dy); }
         case 1u: { return textureSampleGrad(sprites_1, sprite_sampler, uv, l, dx, dy); }
@@ -63,6 +64,78 @@ fn sprite(uv: vec2<f32>, layer: u32) -> vec4<f32> {
         case 6u: { return textureSampleGrad(sprites_6, sprite_sampler, uv, l, dx, dy); }
         default: { return textureSampleGrad(sprites_7, sprite_sampler, uv, l, dx, dy); }
     }
+}
+// The same at an explicit mip level.
+fn sprite_level(uv: vec2<f32>, layer: u32, lod: f32) -> vec4<f32> {
+    let l = i32(layer % SPRITE_SPLIT);
+    if SPRITE_ARRAYS == 1u {
+        return textureSampleLevel(sprites, sprite_sampler, uv, l, lod);
+    }
+    switch layer / SPRITE_SPLIT {
+        case 0u: { return textureSampleLevel(sprites, sprite_sampler, uv, l, lod); }
+        case 1u: { return textureSampleLevel(sprites_1, sprite_sampler, uv, l, lod); }
+        case 2u: { return textureSampleLevel(sprites_2, sprite_sampler, uv, l, lod); }
+        case 3u: { return textureSampleLevel(sprites_3, sprite_sampler, uv, l, lod); }
+        case 4u: { return textureSampleLevel(sprites_4, sprite_sampler, uv, l, lod); }
+        case 5u: { return textureSampleLevel(sprites_5, sprite_sampler, uv, l, lod); }
+        case 6u: { return textureSampleLevel(sprites_6, sprite_sampler, uv, l, lod); }
+        default: { return textureSampleLevel(sprites_7, sprite_sampler, uv, l, lod); }
+    }
+}
+// texture_sampling.glsl's sampleNearest: the sprite's texels stay square pixels, blending only
+// across the one screen pixel where two meet, so a linear (and anisotropic) sampler keeps them crisp.
+fn sample_nearest(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv: vec2<f32>,
+                  texel_screen: vec2<f32>) -> vec4<f32> {
+    let texel_coords = uv / pixel;
+    let center = round(texel_coords) - 0.5;
+    var offset = texel_coords - center;
+    offset = (offset - 0.5) * pixel / max(texel_screen, vec2(1e-12)) + 0.5;
+    offset = clamp(offset, vec2(0.0), vec2(1.0));
+    return sprite_grad((center + offset) * pixel, layer, du, dv);
+}
+// sampleRGSS: four rotated-grid samples of the two nearest mip levels, faded in as the texels
+// shrink below two screen pixels, over sample_nearest.
+fn sample_rgss(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv: vec2<f32>,
+               texel_screen: vec2<f32>) -> vec4<f32> {
+    let max_texel = max(texel_screen.x, texel_screen.y);
+    let min_pixel = min(pixel.x, pixel.y);
+    let blend = smoothstep(min_pixel, min_pixel * 2.0, max_texel);
+    let du_len = length(du);
+    let dv_len = length(dv);
+    let effective = sqrt(min(du_len, dv_len) * max(du_len, dv_len));
+    let exact = max(0.0, log2(effective / min_pixel));
+    let low = floor(exact);
+    let mip_blend = fract(exact);
+    var offsets = array<vec2<f32>, 4>(
+        vec2(0.125, 0.375), vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(-0.375, 0.125));
+    var sum_low = vec4(0.0);
+    var sum_high = vec4(0.0);
+    for (var i = 0; i < 4; i++) {
+        let p = uv + offsets[i] * pixel;
+        sum_low += sprite_level(p, layer, low);
+        sum_high += sprite_level(p, layer, low + 1.0);
+    }
+    let rgss = mix(sum_low * 0.25, sum_high * 0.25, mip_blend);
+    return mix(sample_nearest(uv, layer, pixel, du, dv, texel_screen), rgss, blend);
+}
+fn sprite(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    let mode = u32(globals.filtering.x);
+    if mode != 0u {
+        // Texture Filtering Anisotropic or RGSS: terrain.fsh's two sampling paths.
+        let du = dpdx(uv);
+        let dv = dpdy(uv);
+        let pixel = vec2(1.0 / globals.filtering.y);
+        let texel_screen = sqrt(du * du + dv * dv);
+        if mode == 1u {
+            return sample_rgss(uv, layer, pixel, du, dv, texel_screen);
+        }
+        return sample_nearest(uv, layer, pixel, du, dv, texel_screen);
+    }
+    if SPRITE_ARRAYS == 1u {
+        return textureSample(sprites, sprite_sampler, uv, i32(layer));
+    }
+    // The array is chosen per fragment: sample with the derivatives taken here.
+    return sprite_grad(uv, layer, dpdx(uv), dpdy(uv));
 }
 
 struct TerrainOut {
@@ -302,7 +375,7 @@ fn sky_fog(color: vec3<f32>, dist: vec2<f32>) -> vec3<f32> {
 // Weight of the fan centre where the ray crosses the sunrise fan (0 when missed):
 // Moller-Trumbore from the origin along d, over normals built once a frame
 // (gfx/sunrise_fan.rs). The barycentrics are apex/s, k1/s and -k0/s; s is -det.
-fn sunrise_weight(d: vec3<f32>) -> f32 {
+fn sunrise_weight_full(d: vec3<f32>) -> f32 {
     if globals.sunrise.a <= 0.001 { return 0.0; }
     var best = 0.0;
     var k0 = dot(d, globals.sunrise_fan[16].xyz);
@@ -319,6 +392,50 @@ fn sunrise_weight(d: vec3<f32>) -> f32 {
             }
         }
         k0 = k1;
+    }
+    return best;
+}
+// The rim's YZ projection is an ellipse. Comparing its unsquashed X/Y
+// magnitudes with tan(PI/8) selects one of sixteen sectors without atan2.
+fn sunrise_triangle_weight(d: vec3<f32>, i: u32) -> f32 {
+    let k0 = dot(d, globals.sunrise_fan[16u+i].xyz);
+    let k1 = dot(d, globals.sunrise_fan[16u+(i+1u)%16u].xyz);
+    let triangle = globals.sunrise_fan[i];
+    let apex = dot(d, triangle.xyz);
+    let s = apex + k1 - k0;
+    if abs(s) >= 1e-6 && s * triangle.w > 0.0 && apex * s >= 0.0
+        && k1 * s >= 0.0 && k0 * s <= 0.0 {
+        return apex / s;
+    }
+    return 0.0;
+}
+fn sunrise_weight(d: vec3<f32>) -> f32 {
+    if globals.sunrise.a <= 0.001 { return 0.0; }
+    if dot(d.yz, d.yz) < 1e-10 { return sunrise_weight_full(d); }
+    // The camera lies in the rim plane. A forward ray can reach the fan
+    // only on the apex side. Keep a guard for rounded coplanar normals.
+    let apex = dot(d, globals.sunrise_fan[0].xyz);
+    if apex * globals.sunrise_fan[0].w < -1e-4 { return 0.0; }
+    let y = dot(d, globals.sunrise_fan[16].xyz);
+    let x = -dot(d, globals.sunrise_fan[20].xyz);
+    let ax = abs(x);
+    let ay = abs(y);
+    let tangent = 0.414213562373095;
+    let quadrant_sector = select(select(0u, 1u, ay > ax * tangent),
+        select(2u, 3u, ax < ay * tangent), ay > ax);
+    let sector = select(select(8u + quadrant_sector, 7u - quadrant_sector, y >= 0.0),
+        select(15u - quadrant_sector, quadrant_sector, y >= 0.0), x >= 0.0);
+    var best = max(sunrise_triangle_weight(d, sector),
+        sunrise_triangle_weight(d, (sector + 8u) % 16u));
+    // Test adjacent sectors only at a rounded boundary; their exact rim
+    // normals remain the authority for hit tests and interpolation weights.
+    let k0 = dot(d, globals.sunrise_fan[16u+sector].xyz);
+    let k1 = dot(d, globals.sunrise_fan[16u+(sector+1u)%16u].xyz);
+    if min(abs(k0), abs(k1)) < max(ax, ay) * 0.001 {
+        best = max(best, sunrise_triangle_weight(d, (sector + 15u) % 16u));
+        best = max(best, sunrise_triangle_weight(d, (sector + 1u) % 16u));
+        best = max(best, sunrise_triangle_weight(d, (sector + 7u) % 16u));
+        best = max(best, sunrise_triangle_weight(d, (sector + 9u) % 16u));
     }
     return best;
 }

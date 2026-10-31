@@ -1788,6 +1788,76 @@ mod tests {
         assert_eq!(kind(r#"{"type":7}"#), None);
         assert_eq!(kind("{}"), None);
     }
+    /// Recipes of a mod's own types land in `custom` by type, in file order,
+    /// with the id the file has; a data pack overrides by id and adds more; a
+    /// `minecraft` type the game doesn't know is dropped.
+    #[test]
+    fn custom_recipes_load_by_type_with_pack_override() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-custom-recipes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        fs::create_dir_all(root.join("data/mymod/recipe")).unwrap();
+        fs::write(
+            root.join(horizon_items::content_namespaces::MARKER),
+            br#"["mymod"]"#,
+        )
+        .unwrap();
+        let file =
+            |kind: &str, tag: &str| format!(r#"{{"type":"{kind}","tag":"{tag}"}}"#).into_bytes();
+        fs::write(
+            root.join("data/mymod/recipe/a.json"),
+            file("mymod:crusher", "a"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("data/mymod/recipe/b.json"),
+            file("mymod:crusher", "b"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("data/mymod/recipe/c.json"),
+            file("mymod:mixer", "c"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("data/minecraft/recipe/later.json"),
+            file("minecraft:from_a_later_version", "x"),
+        )
+        .unwrap();
+        let items = Items::for_tests(HashMap::new());
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        let ids = |kind: &str| -> Vec<String> {
+            recipes.custom[kind].iter().map(|r| r.id.clone()).collect()
+        };
+        assert_eq!(ids("mymod:crusher"), ["mymod:a", "mymod:b"]);
+        assert_eq!(ids("mymod:mixer"), ["mymod:c"]);
+        assert_eq!(recipes.custom.len(), 2);
+        // Not crafted, and no recipe-book meta of their own.
+        assert!(recipes.crafting.is_empty() && recipes.cooking.is_empty());
+        assert!(!recipes.meta.keys().any(|k| k.starts_with("mymod:")));
+        // A pack replaces `mymod:b`, and adds `pack:d` and a `minecraft:p` of its own type.
+        let packs = [
+            (
+                "recipe/mymod:b".to_owned(),
+                vec![file("mymod:crusher", "pack-b")],
+            ),
+            ("recipe/pack:d".to_owned(), vec![file("mymod:crusher", "d")]),
+            (
+                "recipe/minecraft:p".to_owned(),
+                vec![file("pack:press", "p")],
+            ),
+        ];
+        let recipes = Recipes::load(&root, &items, &PackOverlay { files: &packs }).unwrap();
+        let crusher = &recipes.custom["mymod:crusher"];
+        assert_eq!(
+            crusher.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["mymod:a", "mymod:b", "pack:d"]
+        );
+        assert_eq!(crusher[1].json["tag"], "pack-b");
+        assert_eq!(recipes.custom["pack:press"][0].id, "minecraft:p");
+        let _ = fs::remove_dir_all(&root);
+    }
     #[test]
     fn a_recipe_result_needs_an_item_and_a_sane_count() {
         let result = |json: &str| recipe_result(&serde_json::from_str(json).unwrap());

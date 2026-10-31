@@ -269,42 +269,7 @@ pub const LOW_DISK_SPACE: u64 = 67_108_864;
 /// `LevelStorageAccess.estimateDiskSpace`: the usable bytes of the disk holding `dir`
 /// (`FileStore.getUsableSpace`), `u64::MAX` when it cannot be asked.
 pub fn estimate_disk_space(dir: &Path) -> u64 {
-    #[cfg(unix)]
-    {
-        match rustix::fs::statvfs(dir) {
-            Ok(stat) => stat.f_bavail.saturating_mul(stat.f_frsize),
-            Err(_) => u64::MAX,
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        unsafe extern "system" {
-            fn GetDiskFreeSpaceExW(
-                directory: *const u16,
-                available: *mut u64,
-                total: *mut u64,
-                free: *mut u64,
-            ) -> i32;
-        }
-        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut available = 0u64;
-        // SAFETY: `wide` is NUL-terminated and the out pointers are valid or null.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut available,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 { u64::MAX } else { available }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = dir;
-        u64::MAX
-    }
+    fs4::available_space(dir).unwrap_or(u64::MAX)
 }
 /// `LevelStorageAccess.checkForLowDiskSpace`.
 pub fn low_disk_space(dir: &Path) -> bool {
@@ -2762,6 +2727,16 @@ pub fn restore_level_data_from_old(dir: &Path) -> bool {
 fn backup_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
 }
+/// `LevelStorageAccess.getUnfixedDataTagWithFallback`, which the dedicated server's `Main` calls:
+/// a level.dat that does not read falls back to level.dat_old, which is restored in its place
+/// (`restoreLevelDataFromOld`). Whether it did; `false` leaves the world as it was, for the
+/// caller to refuse (both files broken, or nothing to fall back to).
+pub fn fall_back_to_level_dat_old(world: &Path) -> bool {
+    level_dat_issue(world, false).is_some()
+        && world.join("level.dat_old").exists()
+        && level_dat_issue(world, true).is_none()
+        && restore_level_data_from_old(world)
+}
 /// `LevelStorageSource.readLevelDataTagFixed`: level.dat, else level.dat_old.
 fn read_level_dat(dir: &Path) -> Option<Tag> {
     read_dat(&dir.join("level.dat")).or_else(|| read_dat(&dir.join("level.dat_old")))
@@ -3281,6 +3256,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
+    /// ServerPlayer.postEffects: the `post_effect` chains `/posteffect` set.
+    pub post_effects: Vec<String>,
     /// Player.lastDeathLocation: the dimension and block of the last death.
     pub last_death: Option<(String, [i32; 3])>,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
@@ -3513,6 +3490,16 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.post_effects = match p.get("post_effects") {
+            Some(Tag::List(list)) => list
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::String(s) => Some(s.to_string_lossy()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         self.last_death = p.get("LastDeathLocation").and_then(|d| {
             let Some(Tag::IntArray(pos)) = d.get("pos") else {
                 return None;
@@ -3626,6 +3613,7 @@ impl Level {
                 "EnderItems",
                 "equipment",
                 "active_effects",
+                "post_effects",
                 "Pos",
                 "respawn",
                 "recipeBook",
@@ -3757,6 +3745,11 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        // `output.store` writes the list even when it is empty.
+        entries.push((
+            "post_effects",
+            Tag::List(self.post_effects.iter().map(|e| string(e)).collect()),
+        ));
         if let Some((dimension, pos)) = &self.last_death {
             entries.push((
                 "LastDeathLocation",
@@ -3839,6 +3832,15 @@ impl Level {
     }
     /// Write every file; a world without a player UUID gets a random one.
     pub fn write(&mut self, dir: &Path) -> Result<()> {
+        self.write_internal(dir, true)
+    }
+
+    /// Dedicated servers save connected players separately.
+    pub fn write_without_player(&mut self, dir: &Path) -> Result<()> {
+        self.write_internal(dir, false)
+    }
+
+    fn write_internal(&mut self, dir: &Path, write_player: bool) -> Result<()> {
         fs::create_dir_all(dir)?;
         restore_level_dat(dir);
         let existing = read_dat(&dir.join("level.dat")).and_then(|r| r.get("Data").cloned());
@@ -4031,12 +4033,14 @@ impl Level {
             }
             write_saved_data(dir, "game_rules", rules)?;
         }
-        let player_file = dir
-            .join("players")
-            .join("data")
-            .join(format!("{}.dat", uuid_text(uuid)));
-        back_up_unreadable_player(&player_file);
-        write_dat(&player_file, self.player_tag())?;
+        if write_player {
+            let player_file = dir
+                .join("players")
+                .join("data")
+                .join(format!("{}.dat", uuid_text(uuid)));
+            back_up_unreadable_player(&player_file);
+            write_dat(&player_file, self.player_tag())?;
+        }
         write_dat(&dir.join("level.dat"), Tag::compound([("Data", data)]))?;
         Ok(())
     }
@@ -4586,6 +4590,41 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 #[cfg(test)]
 mod tests {
     use crate::mobs::spawner::SpawnDataExt;
+
+    #[test]
+    fn a_server_falls_back_to_level_dat_old_and_restores_it() {
+        let world = std::env::temp_dir().join(format!("horizon-dat-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&world);
+        fs::create_dir_all(&world).unwrap();
+        let level = |name: &str| {
+            Tag::compound([(
+                "Data",
+                Tag::compound([("LevelName", Tag::String(name.into()))]),
+            )])
+        };
+        // Both files broken, or only level.dat_old there: nothing to fall back to.
+        fs::write(world.join("level.dat"), b"cut short").unwrap();
+        assert!(!fall_back_to_level_dat_old(&world));
+        fs::write(world.join("level.dat_old"), b"cut short").unwrap();
+        assert!(!fall_back_to_level_dat_old(&world));
+        // A good level.dat_old: it takes level.dat's place and the broken file is kept.
+        write_dat(&world.join("level.dat_old"), level("old")).unwrap();
+        assert!(fall_back_to_level_dat_old(&world));
+        assert!(level_dat_issue(&world, false).is_none());
+        let kept = fs::read_dir(&world)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("level.dat_corrupted_")
+            })
+            .count();
+        assert_eq!(kept, 1);
+        // A readable level.dat is left alone.
+        assert!(!fall_back_to_level_dat_old(&world));
+        let _ = fs::remove_dir_all(&world);
+    }
 
     #[test]
     fn points_of_interest_save_as_poi_sections() {
@@ -5980,6 +6019,50 @@ mod tests {
             ..Level::default()
         };
         assert_eq!(other.difficulty_id(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Dedicated world saves must not overwrite separately managed player data.
+    #[test]
+    fn dedicated_world_save_preserves_player_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-dedicated-player-save-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut level = Level {
+            name: "Test".into(),
+            position: Some([12.5, 70.0, -8.25]),
+            inventory: vec![(0, "minecraft:diamond".into(), 7, 0)],
+            ..Level::default()
+        };
+
+        // Create a real player file using the existing singleplayer writer.
+        level.write(&dir).unwrap();
+        let uuid = level.player_uuid.unwrap();
+        let player_file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(uuid)));
+
+        let before = fs::read(&player_file).unwrap();
+
+        // Simulate an incomplete world-level player state.
+        level.position = None;
+        level.inventory.clear();
+        level.day_time = 12345;
+
+        // Dedicated saves must update metadata without touching player data.
+        level.write_without_player(&dir).unwrap();
+
+        let after = fs::read(&player_file).unwrap();
+        assert_eq!(before, after, "dedicated save overwrote player data");
+
+        // The world metadata must still be persisted.
+        let reopened = Level::read(&dir).unwrap();
+        assert_eq!(reopened.day_time, 12345);
+
         let _ = fs::remove_dir_all(&dir);
     }
 

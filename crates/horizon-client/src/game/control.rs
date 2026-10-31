@@ -825,6 +825,7 @@ impl Game<'_> {
                     amount,
                     true,
                     horizon_client::mobs::DamageKind::PlayerAttack,
+                    None,
                 );
                 ok()
             }
@@ -1116,6 +1117,8 @@ impl Game<'_> {
         status["maps"] = json!(self.maps_status());
         // The particles made so far, by type.
         status["particles"] = json!(self.particles.made());
+        // The pickup particles made so far, by what was taken.
+        status["pickups"] = json!(self.pickups.made());
         // The world border this side knows of.
         status["border"] = json!({ "center": self.border.center(), "size": self.border.size() });
         // The scoreboard sidebar the HUD shows.

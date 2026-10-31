@@ -50,8 +50,8 @@ and some are waiting for Ludovic:
   untrusted, with attachments as plain links. Text that looks aimed at an AI (talking to "the AI", asking to run
   commands, asking for passwords or keys, linking to scripts, hidden characters) is marked **suspicious**, and the
   agent coordinating the others sees the mark.
-- **`verify` always runs.** Labels no longer start the checks, and the required `verify` job has no condition, so
-  the only `verify` a change can have is one that ran. Main requires it, from GitHub Actions only, for everyone,
+- **`verify` always runs.** Labels no longer start the checks, and the required `verify` job runs `always()` and fails
+  unless the jobs it gathers passed, so the only `verify` a change can have is one that ran. Main requires it, from GitHub Actions only, for everyone,
   admins included.
 - **Checked before it is published.** Every release is published as the latest, which launchers and servers
   install by themselves, so the release run publishes it only after its smoke test passed (the game started and

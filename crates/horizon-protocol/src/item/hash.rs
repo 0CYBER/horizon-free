@@ -9,6 +9,7 @@
 //! Horizon can build (vanilla has none, an id has no name, or a codec is not
 //! ported yet) has no hash: it is left out of the added map and a vanilla server
 //! resyncs that slot.
+mod exact;
 mod gameplay;
 mod raw;
 use super::{Component, FireworkExplosion, Hashed, Stack, WirePatch, component as kind};
@@ -77,9 +78,13 @@ fn pick(table: &[&str], id: i32) -> Option<HashCode> {
 fn text(tag: &horizon_world::nbt::Tag) -> HashCode {
     HashOps::from_nbt(tag, &TEXT_BOOLS)
 }
-/// `Filterable.codec`: the full record, with no filtered variant.
-fn filterable(raw: HashCode) -> HashCode {
-    RecordHash::new().field("raw", raw).build()
+/// `Filterable.codec`: the full record (`Codec.withAlternative` encodes with
+/// the first codec), the filtered variant absent when there is none.
+fn filterable(raw: HashCode, filtered: Option<HashCode>) -> HashCode {
+    RecordHash::new()
+        .field("raw", raw)
+        .optional("filtered", filtered)
+        .build()
 }
 /// `Codec.xxx.optionalFieldOf(name, default)`: absent when equal to the default.
 fn or_default<T: PartialEq>(
@@ -283,18 +288,26 @@ impl Component {
                 }
                 .build()
             }
-            Self::WritableBook(pages) => if pages.is_empty() {
+            Self::WritableBook { pages, filtered } => if pages.is_empty() {
                 RecordHash::new()
             } else {
                 RecordHash::new().field(
                     "pages",
-                    HashOps::create_list(pages.iter().map(|p| filterable(string(p)))),
+                    HashOps::create_list(pages.iter().enumerate().map(|(i, p)| {
+                        filterable(
+                            string(p),
+                            filtered.get(i).and_then(Option::as_ref).map(|f| string(f)),
+                        )
+                    })),
                 )
             }
             .build(),
             Self::WrittenBook(b) => {
                 let rec = RecordHash::new()
-                    .field("title", filterable(string(&b.title)))
+                    .field(
+                        "title",
+                        filterable(string(&b.title), b.title_filtered.as_deref().map(string)),
+                    )
                     .field("author", string(&b.author));
                 let rec = or_default(
                     rec,
@@ -308,7 +321,12 @@ impl Component {
                 } else {
                     rec.field(
                         "pages",
-                        HashOps::create_list(b.pages.iter().map(|p| filterable(text(p)))),
+                        HashOps::create_list(b.pages.iter().enumerate().map(|(i, p)| {
+                            filterable(
+                                text(p),
+                                b.pages_filtered.get(i).and_then(Option::as_ref).map(text),
+                            )
+                        })),
                     )
                 };
                 or_default(
@@ -727,7 +745,10 @@ mod tests {
             (
                 "writable",
                 k::WRITABLE_BOOK_CONTENT,
-                C::WritableBook(vec!["page one".into(), "two".into()]),
+                C::WritableBook {
+                    pages: vec!["page one".into(), "two".into()],
+                    filtered: vec![],
+                },
                 1900254632,
             ),
             (
@@ -739,6 +760,7 @@ mod tests {
                     generation: 1,
                     pages: vec![text("p1")],
                     resolved: true,
+                    ..WrittenBook::default()
                 }),
                 -112185549,
             ),
@@ -751,6 +773,7 @@ mod tests {
                     generation: 0,
                     pages: vec![],
                     resolved: false,
+                    ..WrittenBook::default()
                 }),
                 -809804424,
             ),

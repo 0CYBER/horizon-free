@@ -3,7 +3,15 @@
 //! when the entity dies, the player sneaks, is teleported or leaves
 //! spectator mode.
 use super::{Game, commands::Target, lan::LanHost};
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Clientbound as C};
+
+/// Where a camera entity is, which way it looks and its box.
+pub(super) struct CameraExtra {
+    pub position: [f64; 3],
+    pub rotation: [f32; 2],
+    pub bounds: Aabb,
+}
 
 /// `ServerPlayer.camera` of one guest other than itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +50,9 @@ impl Game<'_> {
                 [self.yaw, self.pitch],
             ));
         }
+        if let Some(special) = self.camera_extra(id) {
+            return Some((special.position, special.rotation));
+        }
         let t = self.level_entity(id)?;
         if let Target::Mob(m) = t
             && !self.mobs.iter().any(|x| x.id == m && x.alive())
@@ -49,6 +60,40 @@ impl Game<'_> {
             return None;
         }
         Some((self.target_position(t)?, self.target_rotation(t)))
+    }
+
+    /// The camera targets `Target` does not name: primed TNT and falling
+    /// blocks (`isPickable` is `!isRemoved`) and `EnderDragonPart`s
+    /// (`ServerLevel.getEntityOrPart`; `isPickable` is `true`, and a part
+    /// never turns).
+    pub(super) fn camera_extra(&self, id: i32) -> Option<CameraExtra> {
+        let id = u32::try_from(id).ok().filter(|&id| id != 0)?;
+        let at = |v: Vec3| [v.x, v.y, v.z];
+        if let Some(t) = self.tnts.iter().find(|t| t.id == id) {
+            return Some(CameraExtra {
+                position: at(t.position),
+                rotation: [0.0; 2],
+                bounds: t.bounds(),
+            });
+        }
+        if let Some(f) = self.falling.iter().find(|f| f.id == id) {
+            // EntityType.FALLING_BLOCK: 0.98 x 0.98.
+            let h = 0.49;
+            return Some(CameraExtra {
+                position: at(f.position),
+                rotation: [0.0; 2],
+                bounds: Aabb::new(
+                    Vec3::new(f.position.x - h, f.position.y, f.position.z - h),
+                    Vec3::new(f.position.x + h, f.position.y + 0.98, f.position.z + h),
+                ),
+            });
+        }
+        let (position, bounds) = self.dragon_part(id)?;
+        Some(CameraExtra {
+            position: at(position),
+            rotation: [0.0; 2],
+            bounds,
+        })
     }
 
     /// `Entity.isPickable` of the entity with that id.
@@ -60,7 +105,19 @@ impl Game<'_> {
         if id == host.host_entity {
             return self.player.is_some() && !self.spectator();
         }
+        if self.camera_extra(id).is_some() {
+            return true;
+        }
         match self.level_entity(id) {
+            // Projectile.isPickable: the redirectable projectiles
+            // (`#redirectable_projectile`); ShulkerBullet's is `true`.
+            Some(t @ Target::Projectile(_)) => matches!(
+                self.target_type(t).as_str(),
+                "minecraft:fireball"
+                    | "minecraft:wind_charge"
+                    | "minecraft:breeze_wind_charge"
+                    | "minecraft:shulker_bullet"
+            ),
             // LivingEntity: not removed. ArmorStand: not a marker.
             Some(Target::Mob(_)) => self.camera_state(host, id).is_some(),
             Some(Target::Stand(s)) => self.armor_stands.iter().any(|a| a.id == s && !a.marker),
@@ -88,7 +145,10 @@ impl Game<'_> {
         let Some(id) = target else {
             return;
         };
-        let Some(bounds) = self.guest_target_box(host, gi, id) else {
+        let Some(bounds) = self
+            .guest_target_box(host, gi, id)
+            .or_else(|| self.camera_extra(id).map(|e| e.bounds))
+        else {
             return;
         };
         let Some((at, _)) = self.camera_state(host, id) else {
@@ -134,6 +194,8 @@ impl Game<'_> {
                 self.cmds.guest_cameras.remove(&conn);
             }
         }
+        // ServerPlayer.broadcastToPlayer: a spectator with a camera is shown to nobody.
+        host.hub.guests[gi].watching = camera.is_some();
         // teleportTo(level, camera.x, y, z): same look.
         host.hub.teleport(gi, at);
         host.hub.send_to(

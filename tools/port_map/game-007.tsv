@@ -96,12 +96,12 @@ AnimalPanic.checkExtraStartConditions	inline	crates/horizon-client/src/mobs/anim
 AnimalPanic.start	port	crates/horizon-client/src/mobs/animal_brain.rs::try_start	panic memory set, walk target cleared, navigation stopped
 AnimalPanic.lookForWater	missing		minor: a burning brain animal (sniffer, ghastling) does not run for nearby water; goal-driven animals do (goals.rs Panic)
 BabyFollowAdult.create	port	crates/horizon-client/src/mobs/animal_brain.rs::trigger	B::FollowAdult for the ghastling; goat, camel, armadillo, axolotl and hoglin babies use the FollowParent goal
-BackUpIfTooClose.create	missing		player: a crossbow piglin stays put when you come within 5 blocks; vanilla backs away strafing while it keeps aiming
+BackUpIfTooClose.create	inline	crates/horizon-client/src/mobs/piglin.rs::BackUpIfTooClose	goal stand-in for the piglin brain (no tick parity: the probe has no piglin brain); only a crossbow piglin
 BecomePassiveIfMemoryPresent.create	port	crates/horizon-client/src/mobs/piglin.rs::hoglin_repellent	a hoglin near a repellent is pacified for 200 ticks and drops its target
 Behavior.hasRequiredMemories	inline	crates/horizon-client/src/mobs/villager_brain.rs::try_start	each behaviour tests its memories at the top of its try_start arm
 BehaviorUtils.entityIsVisible	port	crates/horizon-client/src/mobs/villager_brain.rs::visible_contains	also copied in the animal, warden and monster brains
 BehaviorUtils.setWalkAndLookTargetMemoriesToEachOther	port	crates/horizon-client/src/mobs/animal_brain.rs::lock_gaze_and_walk	this mob's half; the partner's half comes with the breed-target event
-BehaviorUtils.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget	missing		minor: piglins, hoglins and zoglins switch to any attacker, even one more than 4 blocks further than their current target
+BehaviorUtils.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget	port	crates/horizon-client/src/mobs/piglin.rs::much_further_than_target	the empty-target guard and the +16.0 (4 blocks squared) margin; hoglin_retaliates checks sight, piglin_retaliates ignores it; vanilla has no line-of-sight test of its own, the callers do it
 BehaviorUtils.getNearestTarget	skip:other		picks among attack, avoid and nearest targets for PiglinAi and HoglinAi; those mobs choose with goals (NearestTarget, HurtByTarget)
 BehaviorUtils.getTargetNearestMe	skip:other		same helper
 BehaviorUtils.getLivingEntityFromUUIDMemory	skip:other		the ANGRY_AT memory is the mob's anger and target fields
