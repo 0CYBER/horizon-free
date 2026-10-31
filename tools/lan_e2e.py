@@ -9605,5 +9605,37 @@ CHECKS += ['pet_death']
 CHECK_FNS['pet_death'] = check_pet_death
 
 
+def check_arrow_pickup(host, guest, out):
+    """ClientPacketListener.handleTakeItemEntity (#4486): an arrow a player picks up
+    (AbstractArrow.playerTouch, once in the ground) flies into them on every client, the
+    collector's and the other player's, as an ItemPickupParticle, like an item does."""
+    face_each_other(host, guest)
+    seen = {}
+    try:
+        # The guest stands 3 blocks east: each arrow lands on the far side from the other player.
+        for game, dx in ((host, -0.9), (guest, 0.9)):
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            before = {g.name: g('status')['pickups'].get('arrow', 0) for g in (host, guest)}
+            game('command', command=f'summon minecraft:arrow ~{dx} ~2 ~ {{pickup:1b,Motion:[0.0,-1.0,0.0]}}')
+            game.wait(40)
+            game.shot(out, 'arrow-pickup')
+            seen[game.name] = {'flown': {g.name: g('status')['pickups'].get('arrow', 0) - before[g.name]
+                                         for g in (host, guest)},
+                               'arrows': game('inventory')['counts'].get('minecraft:arrow', 0)}
+    finally:
+        for game in (host, guest):
+            game('command', command='clear @s')
+        host('command', command='kill @e[type=minecraft:arrow]')
+    for name, case in seen.items():
+        assert case['arrows'] == 1, f'{name} did not pick the arrow up: {seen}'
+        assert all(n == 1 for n in case['flown'].values()), f"{name}'s arrow did not fly to them: {seen}"
+    return seen
+
+
+CHECKS += ['arrow_pickup']
+CHECK_FNS['arrow_pickup'] = check_arrow_pickup
+
+
 if __name__ == '__main__':
     main()
