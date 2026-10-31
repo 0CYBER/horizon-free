@@ -140,6 +140,13 @@ impl Game<'_> {
                 display.vehicle = None;
             }
         }
+        for a in &mut self.armor_stands {
+            if passengers.contains(&(a.id as i32)) {
+                a.vehicle = Some(vehicle_id);
+            } else if a.vehicle == Some(vehicle_id) {
+                a.vehicle = None;
+            }
+        }
         for (&id, i) in &mut self.interactions {
             if passengers.contains(&id) {
                 i.vehicle = Some(vehicle_id);

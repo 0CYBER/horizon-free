@@ -146,6 +146,33 @@ impl Game<'_> {
                 }
             }
         }
+        // Armor stands riding a mob or the local player (a server's name tag
+        // hologram): seated like the displays above, so the name follows its
+        // vehicle instead of staying where the stand spawned. The stand's own
+        // vehicle attachment is the default 0, so its feet sit on the seat.
+        for i in 0..self.armor_stands.len() {
+            let Some(vehicle) = self.armor_stands[i].vehicle else {
+                continue;
+            };
+            let at = if Some(vehicle) == me {
+                let Some(at) = own_seat else { continue };
+                at
+            } else {
+                let Some(&j) = index.get(&vehicle) else {
+                    continue;
+                };
+                let vehicle = &self.mobs[j];
+                riders::seat(
+                    riders::passenger_attachment(vehicle),
+                    0.0,
+                    vehicle.position,
+                    vehicle.yaw,
+                )
+            };
+            let stand = &mut self.armor_stands[i];
+            stand.position = at;
+            stand.velocity = Vec3::ZERO;
+        }
     }
 
     /// `Entity.getPassengerRidingPosition` of a vehicle: where the feet of a
