@@ -740,10 +740,6 @@ impl HurtWorld for Environment<'_> {
         self.event(HealthEvent::DamageBroadcast {
             source: self.source.type_id(),
         });
-        // The player hears its own hurt sound from handleDamageEvent; a
-        // blocked hit sends the block sound (onBlocked) instead.
-        let sound = hurt_sound(&self.source.definition().effects);
-        self.events.push(MotionEvent::HurtSound(sound));
         Ok(())
     }
     fn mark_hurt(&mut self, _: &mut State) -> io::Result<()> {
@@ -784,6 +780,10 @@ impl HurtWorld for Environment<'_> {
     }
     /// `Player.playSound` leaves the player itself out: others hear this one.
     fn hurt_sound(&mut self, _: &mut State) -> io::Result<()> {
+        if !self.block_sound {
+            let sound = hurt_sound(&self.source.definition().effects);
+            self.events.push(MotionEvent::HurtSound(sound));
+        }
         self.phase("hurt-sound")
     }
     fn game_time(&mut self, _: &mut State) -> io::Result<i64> {
