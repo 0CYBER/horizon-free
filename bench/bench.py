@@ -11,8 +11,8 @@ server, lets `horizon-bots` join one every --join-every seconds, warms up, then 
 - TPS: `time query gametime` at the start and the end of the window, as game ticks per wall-clock second;
 - MSPT: `tick query` every 5 s (average, P50, P95, P99 over the last 100 ticks), averaged over the window;
 - RSS and CPU of the server's whole process tree, once a second (needs `ps`: Linux and macOS);
-- bandwidth: `bytes_in`/`bytes_out` from the bots' report, per player and second, when the bots report them
-  (they do not yet: the field is null until issue S-6); join time: the bots' `joined_after_ms`.
+- bandwidth: `bytes_in`/`bytes_out` from the bots' report, per player and second online (each bot's whole time
+  on the server, its join included), when the bots report them (they do not yet: the field is null until S-6); join time: the bots' `joined_after_ms`.
 
 It writes one JSON report (--out) and prints the Markdown table of the design (docs/design.md, section 1).
 
@@ -288,16 +288,21 @@ def split_bot_output(lines):
     return samples, (json.loads(text) if text.strip() else {})
 
 
+def bytes_per_player_second(per_bot, run_seconds, join_every):
+    """The bots' bytes over the seconds they were connected: bot i connects i * join_every after the first and
+    stays to the end of the run. So it is each bot's average from its login on, its join included, not the
+    measuring window's alone (the bots report one total at the end). None until the bots count bytes (S-6)."""
+    counted = [(i, b) for i, b in enumerate(per_bot) if 'bytes_in' in b and not b.get('error')]
+    online = sum(max(run_seconds - i * join_every, 0) for i, _ in counted)
+    if not counted or online <= 0:
+        return None
+    return {k: round(sum(b.get(k, 0) for _, b in counted) / online) for k in ('bytes_in', 'bytes_out')}
+
+
 def summarize(kind, args, ticks, rss, cpu, gametime, window_seconds, summary, start_seconds, run_seconds):
     mean = lambda xs: round(statistics.fmean(xs), 2) if xs else None
     joins = [b['joined_after_ms'] for b in summary.get('per_bot', []) if b.get('joined_after_ms', 0) > 0]
-    players = max(summary.get('joined') or 0, 1)
-    # None until the bots count bytes (issue S-6).
-    bandwidth = None
-    totals = [b for b in summary.get('per_bot', []) if 'bytes_in' in b]
-    if totals and run_seconds > 0:
-        bandwidth = {k: round(sum(b.get(k, 0) for b in totals) / players / run_seconds)
-                     for k in ('bytes_in', 'bytes_out')}
+    bandwidth = bytes_per_player_second(summary.get('per_bot', []), run_seconds, args.join_every)
     return {
         'server': kind,
         'bots': args.bots,
@@ -384,7 +389,7 @@ def table(runs):
         ('MSPT p99 (worst query)', ('mspt_worst_p99',)),
         ('RSS mean MB', ('rss_mb', 'mean')),
         ('CPU %', ('cpu_percent',)),
-        ('Bytes in per player and s', ('bytes_per_player_second', 'bytes_in')),
+        ('Bytes in per player and s online', ('bytes_per_player_second', 'bytes_in')),
         ('Join p50 ms', ('join_ms', 'p50')),
         ('Join worst ms', ('join_ms', 'worst')),
         ('Start s', ('start_seconds',)),

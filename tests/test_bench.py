@@ -41,6 +41,13 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(samples, [{'t': 1, 'online': 2}])
         self.assertEqual(summary, {'joined': 2})
 
+    def test_bandwidth_divides_by_each_bots_time_online(self):
+        # Bot 0 is on for 100 s, bot 1 for 90 s (it joined 10 s later), bot 2 failed and counts for nothing.
+        per_bot = [{'bytes_in': 1000, 'bytes_out': 100}, {'bytes_in': 900, 'bytes_out': 90},
+                   {'bytes_in': 50, 'bytes_out': 5, 'error': 'refused'}]
+        self.assertEqual(bench.bytes_per_player_second(per_bot, 100, 10), {'bytes_in': 10, 'bytes_out': 1})
+        self.assertIsNone(bench.bytes_per_player_second([{'joined_after_ms': 80}], 100, 10))
+
 
 class SetupTests(unittest.TestCase):
     def test_pumpkin_config_and_pre_generated_world(self):
@@ -75,7 +82,7 @@ class TableTests(unittest.TestCase):
                'bytes_per_player_second': None, 'join_ms': {'p50': 80, 'worst': 120}}
         text = bench.table([run, {'server': 'pumpkin', 'error': 'no start\nmore'}])
         self.assertIn('| TPS | 20.0 |', text)
-        self.assertIn('| Bytes in per player and s | - |', text)
+        self.assertIn('| Bytes in per player and s online | - |', text)
         self.assertIn('pumpkin failed: no start', text)
 
 
