@@ -133,11 +133,12 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
             .after(since.unwrap_or(0), &wanted);
         return Response::json(200, &json!({ "next": last, "events": events }));
     }
+    // Without a number, the stream starts with the request: what happens while the reply's headers go out
+    // is sent.
+    let mut cursor = since.unwrap_or_else(|| shared.events.lock().unwrap().last);
     let shared = shared.clone();
     let mut response = Response::text(200, "text/event-stream", "");
     response.stream = Some(Box::new(move |mut stream| {
-        // Without a number, the stream starts now.
-        let mut cursor = since.unwrap_or_else(|| shared.events.lock().unwrap().last);
         let mut quiet_since = Instant::now();
         loop {
             let events = {
