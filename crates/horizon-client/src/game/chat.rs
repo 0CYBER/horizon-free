@@ -1353,6 +1353,8 @@ impl Game<'_> {
     /// cause is known to the client).
     pub(super) fn death_message(&mut self) {
         let cause = self.ui.death_cause.take();
+        let player = self.native_acting_id();
+        self.native_player_died(player, cause.as_deref());
         self.ui.died_at = Some(std::time::Instant::now());
         self.ui.death_text = None;
         self.ui.death_confirm = None;

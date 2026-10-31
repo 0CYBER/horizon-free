@@ -1880,6 +1880,14 @@ impl Game<'_> {
                 .take()
                 .expect("the hub is back after the quiet commands");
         }
+        if self.native_net_waiting() {
+            self.lan = Some(host);
+            self.run_native_net();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the mod messages");
+        }
         if !host.hub.native_menu_events.is_empty() {
             self.lan = Some(host);
             self.run_native_menu_events();
@@ -1903,6 +1911,7 @@ impl Game<'_> {
         self.lan_sync_border(&mut host);
         host.hub.anticheat_ping();
         drop(holding);
+        self.flush_native_net(&mut host);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
         // A blast from a guest's attack, and a mace's wind burst.

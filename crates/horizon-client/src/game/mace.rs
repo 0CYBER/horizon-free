@@ -534,7 +534,11 @@ impl Game<'_> {
             let source = self.attack_source(from);
             // hurtServer first; the knockback and post-attack effects follow
             // only when it landed.
+            let old_health = self.mobs[i].health;
             if self.hurt_by_player(i, amount, source) {
+                if old_health > 0.0 && !self.mobs[i].alive() {
+                    self.native_kill_event(i);
+                }
                 self.mobs[i].knockback(0.4, xd, zd);
                 self.last_hurt_by_player
                     .insert(self.mobs[i].id, self.lan_acting);

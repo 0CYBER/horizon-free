@@ -218,6 +218,11 @@ held stack, `native_inventory_tick` runs each tick for every stack a player carr
 `native_carried_stack` reads and changes that stack, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
 that use them need `"hooks": 39`.
 
+API 40 adds [mod messages](#mod-messages) between a mod's server and client halves, and hearing players and mobs on the
+server for every player: `native_player_died`, `native_mob_spawned`, `native_mob_killed` (a player's melee blow, a sweep or a spear thrust too),
+`native_item_dropped` (a throw; not the items scattered when a player dies) and `native_item_picked_up` (`canceled` leaves the stack on the ground). They name a player by UUID. Bundles that use them
+need `"hooks": 40`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -459,6 +464,21 @@ place; `native_server_tick` does not define one, so name the dimension and expec
   and no loot (it is not saved either).
 - While the game ticks its mobs they are out of the level: from a hook inside that tick, a spawned mob joins after the tick, and the others
   read as gone.
+
+### Mod messages
+
+API 40, `crates/horizon-client/src/game/native_net.rs`: bytes between a mod's server half and its client half, on the
+one custom payload channel `horizon:mod_net`. A vanilla client never gets them, and a vanilla server isn't sent any.
+
+- `native_net_send_to_player(player, channel, data)` on the server and `native_net_send_to_server(channel, data)` on the
+  client send one. The channel is `mod_id:name`: the id `[a-z0-9_]`, the name `[a-z0-9_./-]`, each 1 to 64 characters;
+  `minecraft` and `horizon` are the game's. The data is at most 30 000 bytes, and 32 messages a tick go each way per
+  player. Ok means accepted: a player who left doesn't get it. Sending to the server is an error until the player has
+  joined.
+- `native_net_from_client(player, channel, data)` and `native_net_from_server(channel, data)` hear them, all mods on every
+  message: check the channel. What a client sent is checked by nothing, so treat it as a player's own input.
+- A player's message reaches the server's hook in the tick after it arrives, when the helpers can reach every player;
+  a message to a player leaves at the end of the tick, from any server hook.
 
 ### Server menus
 
