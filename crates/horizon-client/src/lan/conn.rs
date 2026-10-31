@@ -12,7 +12,7 @@ use super::{
 };
 use horizon_protocol::{
     PROTOCOL_VERSION,
-    connection::{ConnReader, ConnWriter, Connection},
+    connection::{Closer, ConnReader, ConnWriter, Connection},
     crypto::{offline_uuid, server_hash, uuid_string},
     packets::{
         Empty,
@@ -237,6 +237,8 @@ pub struct PlayerSender {
     held: Arc<Mutex<Vec<Vec<u8>>>>,
     /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
     posted: Arc<AtomicUsize>,
+    /// A network connection's keep-alive clock (none for a test's channel).
+    watch: Option<Arc<KeepAliveWatch>>,
 }
 impl PlayerSender {
     pub fn new(tx: Sender<Out>, pending: Arc<AtomicUsize>) -> Self {
@@ -245,6 +247,19 @@ impl PlayerSender {
             pending,
             held: Arc::default(),
             posted: Arc::default(),
+            watch: None,
+        }
+    }
+    /// Whether the client has answered no keep-alive for too long, read
+    /// without the writer thread, which a client that stops reading blocks.
+    pub fn timed_out(&self) -> bool {
+        self.watch.as_ref().is_some_and(|w| w.timed_out())
+    }
+    /// Close the connection now: the writer and reader threads then end,
+    /// even blocked on it.
+    pub fn close(&self) {
+        if let Some(w) = &self.watch {
+            w.closer.close();
         }
     }
     fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
@@ -789,7 +804,8 @@ fn login_and_configure(
         }
     }
     // Configuration.
-    let sync: &SyncData = &shared.sync;
+    let sync_data = shared.sync();
+    let sync: &SyncData = &sync_data;
     let send = |c: &mut Connection, p: cfg::Clientbound| c.send(&p.encode()).map_err(e);
     send(
         c,
@@ -846,6 +862,21 @@ fn login_and_configure(
             _ => {}
         }
     };
+    // horizon-clients-only: the brand the client sent ("vanilla" when it sent
+    // none) must be Horizon's.
+    if shared.config.horizon_clients_only && brand != "horizon" {
+        let text = super::HORIZON_CLIENTS_ONLY_REASON;
+        let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(text));
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        if let Some(log) = &shared.config.log {
+            let line = format!(
+                "Disconnecting {name}: its client is \"{brand}\", not Horizon (horizon-clients-only)"
+            );
+            (log.write)("Server thread", "INFO", &line);
+        }
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
+        return Ok(None);
+    }
     // A Horizon client hears that this server runs its mods' quiet commands
     // (horizon_protocol::quiet); a vanilla one is told nothing.
     if brand == "horizon" {
@@ -895,10 +926,16 @@ fn login_and_configure(
             return Ok(None);
         }
     }
-    for packet in sync.registry_packets(known_pack) {
+    for packet in sync.registry_packets(known_pack, &shared.config.levels) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    // addOptionalTasks: the code of conduct task comes first.
+    if let Some(text) =
+        super::code_of_conduct::pick(&shared.config.code_of_conducts, &info.language)
+    {
+        accept_code_of_conduct(c, text, &mut info)?;
+    }
     if let Some(pack) = &shared.config.resource_pack
         && let Some(rejected) = offer_pack(c, pack, &mut info)?
     {
@@ -982,6 +1019,54 @@ fn offer_pack(
     };
     c.send(&cfg::Clientbound::ResourcePackPush(push).encode())
         .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
+            let rejected = r.action == PACK_DECLINED && pack.required;
+            Some(Ok(rejected.then_some(r.id)))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// ServerCodeOfConductConfigurationTask: send the text, then wait for
+/// ServerboundAcceptCodeOfConductPacket (`handleAcceptCodeOfConduct`),
+/// keeping the connection alive while the player reads. Finishing the
+/// configuration first is `finishCurrentTask` of the wrong task type, an
+/// error that drops the connection.
+fn accept_code_of_conduct(
+    c: &mut Connection,
+    text: &str,
+    info: &mut ClientInformation,
+) -> Result<(), String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    c.send(&cfg::Clientbound::CodeOfConduct(cfg::CodeOfConduct { text: text.into() }).encode())
+        .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::AcceptCodeOfConduct(_)) => Some(Ok(())),
+        Ok(cfg::Serverbound::FinishConfiguration(_)) => {
+            Some(Err("Unexpected configuration task".to_owned()))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// Read configuration packets until `answer` has a result, sending a
+/// keep-alive every `KEEP_ALIVE_EVERY` meanwhile
+/// (ServerConfigurationPacketListenerImpl.tick).
+fn wait_alive<T>(
+    c: &mut Connection,
+    mut answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
+) -> Result<T, String> {
     std::thread::scope(|scope| {
         let (stop, stopped) = channel::<()>();
         let writer = &mut c.writer;
@@ -995,23 +1080,19 @@ fn offer_pack(
                 }
             }
         });
-        let answer = loop {
-            let (id, payload) = match c.reader.recv() {
-                Ok(packet) => packet,
+        let result = loop {
+            let packet = match c.reader.recv() {
+                Ok((id, payload)) => {
+                    cfg::Serverbound::decode(id, &payload).map_err(|e| e.to_string())
+                }
                 Err(err) => break Err(err.to_string()),
             };
-            match cfg::Serverbound::decode(id, &payload) {
-                Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
-                    let rejected = r.action == PACK_DECLINED && pack.required;
-                    break Ok(rejected.then_some(r.id));
-                }
-                Ok(cfg::Serverbound::ClientInformation(i)) => *info = i,
-                Ok(_) => {}
-                Err(err) => break Err(err.to_string()),
+            if let Some(result) = answer(packet) {
+                break result;
             }
         };
         drop(stop);
-        answer
+        result
     })
 }
 
@@ -1024,7 +1105,15 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     let pending = Arc::new(AtomicUsize::new(0));
     let latency = Arc::new(AtomicI32::new(0));
     let alive = Arc::new(AtomicI64::new(-1));
-    let sender = PlayerSender::new(tx.clone(), pending.clone());
+    let start = Instant::now();
+    let mut sender = PlayerSender::new(tx.clone(), pending.clone());
+    if let Ok(closer) = reader.closer() {
+        sender.watch = Some(Arc::new(KeepAliveWatch {
+            start,
+            alive: alive.clone(),
+            closer,
+        }));
+    }
     let writer_thread = {
         let (alive, latency, pending) = (alive.clone(), latency.clone(), pending.clone());
         std::thread::Builder::new()
@@ -1032,7 +1121,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
             .spawn(move || {
                 // Ticks and frames come first (horizon_threads).
                 horizon_threads::behind_server();
-                write_loop(writer, rx, alive, latency, pending)
+                write_loop(writer, rx, start, alive, latency, pending)
             })
             .ok()
     };
@@ -1154,7 +1243,7 @@ fn read_loop(
             // The client closed the connection: Connection.channelInactive
             // without details, multiplayer.disconnect.generic.
             Err(e)
-                if e.0 == "Connection closed by the server"
+                if e.is_end_of_stream()
                     || e.0.contains("reset by peer")
                     || e.0.contains("aborted") =>
             {
@@ -1173,7 +1262,10 @@ fn read_loop(
                 return Ended::PackDeclined(r.id);
             }
             Ok(p) => {
-                if events.send(NetEvent::Packet(conn, Box::new(p))).is_err() {
+                if events
+                    .send(NetEvent::Packet(conn, Box::new(p), payload.len()))
+                    .is_err()
+                {
                     return Ended::Closed("server closed".to_owned());
                 }
             }
@@ -1259,14 +1351,33 @@ fn send_body(writer: &mut ConnWriter, body: &[u8]) -> horizon_protocol::Result<(
     }
 }
 
+/// The keep-alive clock of a play connection, shared by the writer thread
+/// (which sends the keep-alives) and the game thread (which watches them).
+struct KeepAliveWatch {
+    /// What keep-alive ids count from: an id is its sending time in ms.
+    start: Instant,
+    /// The id of the last keep-alive the client answered (-1: none yet).
+    alive: Arc<AtomicI64>,
+    closer: Closer,
+}
+impl KeepAliveWatch {
+    /// keepConnectionAlive sends a keep-alive 15 s after the last and drops
+    /// a client that has not answered it 15 s later: nothing answered of
+    /// what was sent in the last 30 s.
+    fn timed_out(&self) -> bool {
+        let answered = u64::try_from(self.alive.load(Ordering::Relaxed)).unwrap_or(0);
+        self.start.elapsed() > Duration::from_millis(answered) + 2 * KEEP_ALIVE_EVERY
+    }
+}
+
 fn write_loop(
     mut writer: ConnWriter,
     rx: Receiver<Out>,
+    start: Instant,
     alive: Arc<AtomicI64>,
     latency: Arc<AtomicI32>,
     pending: Arc<AtomicUsize>,
 ) {
-    let start = Instant::now();
     let mut sent_at: Option<(i64, Instant)> = None;
     let mut next = Instant::now() + KEEP_ALIVE_EVERY;
     loop {
@@ -1295,22 +1406,16 @@ fn write_loop(
             Err(RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
-        if let Some((id, at)) = sent_at {
-            if alive.load(Ordering::Relaxed) == id {
-                let ms = i32::try_from(at.elapsed().as_millis()).unwrap_or(i32::MAX);
-                let old = latency.load(Ordering::Relaxed);
-                latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
-                sent_at = None;
-            } else if at.elapsed() >= KEEP_ALIVE_EVERY {
-                let _ = writer.send(
-                    &play::Clientbound::Disconnect(cfg::Disconnect {
-                        reason: translatable("disconnect.timeout", &[]),
-                    })
-                    .encode(),
-                );
-                break;
-            }
+        if let Some((id, at)) = sent_at
+            && alive.load(Ordering::Relaxed) == id
+        {
+            let ms = i32::try_from(at.elapsed().as_millis()).unwrap_or(i32::MAX);
+            let old = latency.load(Ordering::Relaxed);
+            latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
+            sent_at = None;
         }
+        // The game thread times a client out ([`PlayerSender::timed_out`]):
+        // this thread may be blocked on a client that stopped reading.
         if sent_at.is_none() && now >= next {
             let id = i64::try_from(start.elapsed().as_millis()).unwrap_or(0);
             if writer
@@ -1330,6 +1435,36 @@ fn write_loop(
 mod tests {
     use super::*;
 
+    /// Logs in through `c` and answers the `LoginFinished` profile.
+    fn login_profile(mut c: Connection, name: &str) -> login::GameProfile {
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port: 0,
+                intent: handshake::LOGIN,
+            })
+            .encode(),
+        )
+        .unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: name.into(),
+                uuid: offline_uuid(name),
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            match login::Clientbound::decode(id, &payload).unwrap() {
+                login::Clientbound::Compression(p) => c.set_compression(p.threshold),
+                login::Clientbound::LoginFinished(p) => return p.profile,
+                other => panic!("unexpected login packet {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn prompts_become_the_components_vanilla_sends() {
         let tag = |json: &str| {
@@ -1346,6 +1481,34 @@ mod tests {
             tag(r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#),
             r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#
         );
+    }
+
+    /// The owner's login never waits on the profile fetch, even one that
+    /// never answers, and carries no properties.
+    #[test]
+    fn the_owners_login_never_waits_on_the_profile_fetch() {
+        let (_hold, never) = channel::<()>();
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(move || {
+                let _ = never.recv();
+                Vec::new()
+            }))),
+            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let start = Instant::now();
+        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(owner.uuid, offline_uuid("Owner"));
+        assert!(owner.properties.is_empty());
     }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {
@@ -1455,6 +1618,31 @@ mod tests {
         sender.flush();
         assert_eq!(bodies(&rx), [vec![vec![5]], vec![b"disconnect".to_vec()]]);
         assert_eq!(sender.pending.load(Ordering::Relaxed), 5);
+    }
+
+    /// A client that answers no keep-alive is timed out 30 s after the last
+    /// one it answered was sent (or after joining), and closing ends a read
+    /// blocked on its connection.
+    #[test]
+    fn a_silent_client_times_out_and_closes() {
+        let (a, _b) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, _writer) = Connection::local(a).split();
+        let ago = |s| Instant::now().checked_sub(Duration::from_secs(s)).unwrap();
+        let watch = |start, answered| KeepAliveWatch {
+            start,
+            alive: Arc::new(AtomicI64::new(answered)),
+            closer: reader.closer().unwrap(),
+        };
+        assert!(!watch(ago(29), -1).timed_out());
+        assert!(watch(ago(31), -1).timed_out());
+        // Answered the keep-alive sent 15 s in: fine until 45 s.
+        assert!(!watch(ago(44), 15_000).timed_out());
+        assert!(watch(ago(46), 15_000).timed_out());
+        let closer = watch(ago(0), -1).closer;
+        let blocked = std::thread::spawn(move || reader.recv().is_err());
+        std::thread::sleep(Duration::from_millis(50));
+        closer.close();
+        assert!(blocked.join().unwrap(), "the read should end once closed");
     }
 
     #[test]

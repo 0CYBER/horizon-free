@@ -12,6 +12,7 @@
 //! portal) until the player is in that dimension and its exit is loaded.
 use super::{Dim, Game, Screen};
 use horizon_client::Result;
+use horizon_client::fast_hash::FxHashMap;
 use horizon_client::nether_portal::{ENTITY_DELAY, PortalState};
 use horizon_core::{
     geometry::{Aabb, Axis, Vec3},
@@ -87,7 +88,7 @@ pub(super) struct Portals {
     /// Items and mobs, by entity id.
     entities: HashMap<u32, PortalState>,
     /// Positions before this tick's moves, by entity id.
-    pub(super) before: HashMap<u32, Vec3>,
+    pub(super) before: FxHashMap<u32, Vec3>,
     arrivals: Vec<Arrival>,
     /// The vehicles server players ride that went through a portal this
     /// tick, in their level, with their entry: they carry their riders
@@ -339,7 +340,7 @@ impl Game<'_> {
                     }) {
                         continue;
                     }
-                    let base = horizon_client::chunk::MIN_Y + 16 * s as i32;
+                    let base = self.world.bottom_y() + 16 * s as i32;
                     for y in base..base + 16 {
                         for lz in 0..16 {
                             for lx in 0..16 {
@@ -372,6 +373,9 @@ impl Game<'_> {
             max_section,
         );
         if let Some(found) = found {
+            // NetherPortalBlock.getExitPortal: the ticket goes on the chunk
+            // of the portal found.
+            self.place_portal_ticket((found.x >> 4, found.z >> 4));
             let state = self.world.block(found.x, found.y, found.z);
             let x_axis = self.res.behaviours().portal_axis(state).unwrap_or(true);
             return Some(largest_rectangle_around(
@@ -389,7 +393,27 @@ impl Game<'_> {
             b.create_portal(level, ticks, approximate, x_axis, &border, logical)
         });
         let _ = self.process_level_events();
+        if let Some(exit) = created {
+            // A portal built for the entity: the ticket goes on the chunk it
+            // arrives in (`TeleportTransition.PLACE_PORTAL_TICKET`).
+            let (at, _) = self.arrival(plan, exit);
+            self.place_portal_ticket(Self::chunk_of(at));
+        }
         created
+    }
+    /// `ChunkPos.containing`: the chunk a position is in.
+    pub(super) fn chunk_of(at: Vec3) -> (i32, i32) {
+        ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4)
+    }
+    /// `Entity.placePortalTicket`: a `TicketType.PORTAL` ticket of radius 3
+    /// on `chunk` in the level in place, which keeps the area running for 300
+    /// ticks with no player in it (the entity that just came through ticks
+    /// there, and goes back through the portal when its cooldown ends).
+    /// Only a server holds levels with tickets of their own.
+    pub(super) fn place_portal_ticket(&mut self, chunk: (i32, i32)) {
+        if !self.options.execution_role.is_client() {
+            self.tickets.add_portal(chunk);
+        }
     }
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
@@ -632,19 +656,29 @@ impl Game<'_> {
         for c in &self.carts {
             self.portals.before.insert(c.id, c.position);
         }
-        let ids: Vec<(u32, bool)> = self
-            .dropped
-            .iter()
-            .map(|e| (e.id, true))
-            .chain(self.mobs.iter().map(|m| (m.id, self.mob_can_use_portal(m))))
-            .chain(
-                self.boats
-                    .iter()
-                    .map(|b| b.id)
-                    .chain(self.carts.iter().map(|c| c.id))
-                    .map(|id| (id, self.vehicle_can_use_portal(id))),
-            )
-            .collect();
+        // Only an entity in a portal, or cooling down from one, has a state
+        // here: whether the others could use a portal is not worth asking
+        // for each of them on every tick.
+        let mut ids: Vec<(u32, bool)> = Vec::new();
+        if !self.portals.entities.is_empty() {
+            let tracked = &self.portals.entities;
+            for e in &self.dropped {
+                if tracked.contains_key(&e.id) {
+                    ids.push((e.id, true));
+                }
+            }
+            for m in &self.mobs {
+                if tracked.contains_key(&m.id) {
+                    ids.push((m.id, self.mob_can_use_portal(m)));
+                }
+            }
+            let vehicles = self.boats.iter().map(|b| b.id);
+            for id in vehicles.chain(self.carts.iter().map(|c| c.id)) {
+                if tracked.contains_key(&id) {
+                    ids.push((id, self.vehicle_can_use_portal(id)));
+                }
+            }
+        }
         let present: std::collections::HashSet<u32> = ids.iter().map(|(id, _)| *id).collect();
         self.portals.entities.retain(|id, _| present.contains(id));
         for (id, allowed) in ids {
@@ -869,21 +903,18 @@ impl Game<'_> {
         reach: horizon_core::geometry::Aabb,
         sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> bool {
-        use horizon_client::{
-            chunk::{MIN_Y, SECTIONS},
-            section_mask::SectionMask,
-        };
+        use horizon_client::section_mask::SectionMask;
         let (min, max) = (reach.min_position(), reach.max_position());
         if !min.is_finite() || !max.is_finite() {
             return true;
         }
         let (min, max) = (BlockPos::containing(min), BlockPos::containing(max));
-        let top = SECTIONS as i32 - 1;
+        let top = self.world.layout().sections() as i32 - 1;
         let (x0, x1) = (min.x >> 4, max.x >> 4);
         let (z0, z1) = (min.z >> 4, max.z >> 4);
         let (y0, y1) = (
-            ((min.y - MIN_Y) >> 4).clamp(0, top),
-            ((max.y - MIN_Y) >> 4).clamp(0, top),
+            ((min.y - self.world.bottom_y()) >> 4).clamp(0, top),
+            ((max.y - self.world.bottom_y()) >> 4).clamp(0, top),
         );
         let count = (i64::from(x1) - i64::from(x0) + 1)
             * (i64::from(y1) - i64::from(y0) + 1)
@@ -1030,6 +1061,8 @@ impl Game<'_> {
             let (at, motion, [yaw, pitch]) = if plan.end {
                 // Relative.DELTA: the motion is kept.
                 let at = self.end_portal_exit(&plan);
+                // EndPortalBlock.getPortalDestination: PLACE_PORTAL_TICKET.
+                self.place_portal_ticket(Self::chunk_of(at));
                 let into_end = plan.dim == Dim::End;
                 let turn =
                     end_portal_rotation(into_end, [yaw, pitch], self.level.world_spawn_angle);

@@ -148,6 +148,15 @@ pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
         _ => None,
     }
 }
+/// `MobEffectInstance.withScaledDuration`: max(floor(d * scale), 1), leaving
+/// an infinite (-1) or zero duration alone.
+pub fn scaled_duration(duration: i32, scale: f32) -> i32 {
+    if duration == -1 || duration == 0 {
+        duration
+    } else {
+        ((duration as f32 * scale).floor() as i32).max(1)
+    }
+}
 /// What an omen's `applyEffectTick` decided.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OmenTick {
@@ -162,6 +171,9 @@ pub enum OmenTick {
 pub struct PlayerEffects {
     pub list: Vec<EffectInstance>,
     pub tick_count: i32,
+    /// How many times `add` added or updated an effect: each is one
+    /// `onEffectAdded` or `onEffectUpdated` (`EffectsChangedTrigger`).
+    pub changes: u32,
 }
 impl PlayerEffects {
     pub fn get(&self, id: &str) -> Option<&EffectInstance> {
@@ -172,13 +184,17 @@ impl PlayerEffects {
     }
     /// `LivingEntity.addEffect`; returns whether anything changed.
     pub fn add(&mut self, effect: EffectInstance) -> bool {
-        match self.list.iter_mut().find(|e| e.id == effect.id) {
+        let changed = match self.list.iter_mut().find(|e| e.id == effect.id) {
             Some(existing) => existing.update(&effect),
             None => {
                 self.list.push(effect);
                 true
             }
+        };
+        if changed {
+            self.changes = self.changes.wrapping_add(1);
         }
+        changed
     }
     pub fn clear(&mut self) {
         self.list.clear();
@@ -309,18 +325,28 @@ impl PlayerEffects {
         potion: Option<&str>,
         scale: f32,
     ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
+        let effects = potion
+            .and_then(potions::potion)
+            .map_or(&[][..], |d| d.effects);
+        Self::contents_effects(effects, scale)
+    }
+    /// `PotionContents.forEachEffect`'s effects, as `potion_effects`.
+    pub fn contents_effects(
+        effects: &[(&'static str, i32, i32)],
+        scale: f32,
+    ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
         let mut lasting = Vec::new();
         let mut now = Vec::new();
-        if let Some(def) = potion.and_then(potions::potion) {
-            for (id, duration, amp) in def.effects {
-                let id = potions::effect(id).map_or("speed", |e| e.id);
-                if potions::effect(id).is_some_and(|e| e.instant) {
-                    now.extend(instant(id, *amp, 1.0));
-                } else {
-                    // withScaledDuration: max(floor(d * scale), 1).
-                    let d = ((*duration as f32) * scale).floor() as i32;
-                    lasting.push(EffectInstance::new(id, d.max(1), *amp));
-                }
+        for (id, duration, amp) in effects {
+            let id = potions::effect(id).map_or("speed", |e| e.id);
+            if potions::effect(id).is_some_and(|e| e.instant) {
+                now.extend(instant(id, *amp, 1.0));
+            } else {
+                lasting.push(EffectInstance::new(
+                    id,
+                    scaled_duration(*duration, scale),
+                    *amp,
+                ));
             }
         }
         (lasting, now)
@@ -462,6 +488,19 @@ pub fn effect_modifier(effect: &str) -> Option<(&'static str, &'static str, f64,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_counts_a_change_only_when_the_effect_changed() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("speed", 100, 0));
+        assert_eq!(fx.changes, 1);
+        // A longer duration updates the effect (`onEffectUpdated`).
+        fx.add(EffectInstance::new("speed", 200, 0));
+        assert_eq!(fx.changes, 2);
+        // A shorter one with the same amplifier is hidden by nothing: no change.
+        fx.add(EffectInstance::new("speed", 50, 0));
+        assert_eq!(fx.changes, 2);
+    }
 
     #[test]
     fn bad_omen_in_a_village_becomes_raid_omen_over_two_ticks() {
