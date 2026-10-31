@@ -3,11 +3,13 @@
 //! `runthat`, `runfailed`, `resetclosest`/`these`/`that`,
 //! `clearthat`/`these`/`all` and `stop`, with `TestFinder`'s searches.
 //!
-//! Not done: `verify`, `locate`, `pos`, `create`, retries (`numberOfTimes`,
-//! `untilFailed`), tests of another dimension than the level in place.
+//! Retries are `RetryOptions(numberOfTimes, untilFailed)`.
+//!
+//! Not done: `verify`, `locate`, `pos`, `create`, tests of another dimension
+//! than the level in place.
 use super::{Arg, Context, Game, R, err};
 use crate::game::{
-    game_tests::{Grid, Info},
+    game_tests::{Grid, Info, Retry},
     test_instances::TestDef,
 };
 use horizon_client::text::{self, Text};
@@ -167,7 +169,7 @@ impl Game<'_> {
     }
 
     /// `createGameTestInfo`: the test of a test instance block.
-    fn test_info_at(&mut self, pos: Pos) -> Option<Info> {
+    fn test_info_at(&mut self, pos: Pos, retry: Retry) -> Option<Info> {
         let key = self.test_instance_at(pos).and_then(|b| b.data.test.clone());
         if self.test_instance_at(pos).is_none() {
             self.test_failure(Text::translate(
@@ -195,11 +197,17 @@ impl Game<'_> {
         }
         let rotation = self.test_rotation(pos);
         let id = self.game_tests.next_id();
-        Some(Info::new(id, key, def, Some(pos), self.dim, rotation))
+        Some(Info::new(id, key, def, Some(pos), self.dim, rotation).with_retry(retry))
     }
 
     /// `toGameTestInfo`: a test without a block, in the level in place.
-    fn test_info_for(&mut self, key: String, def: TestDef, steps: i32) -> R<Option<Info>> {
+    fn test_info_for(
+        &mut self,
+        key: String,
+        def: TestDef,
+        steps: i32,
+        retry: Retry,
+    ) -> R<Option<Info>> {
         if !self.verify_test_structure(&def.structure) {
             return Ok(None);
         }
@@ -212,7 +220,9 @@ impl Game<'_> {
         }
         let rotation = rotation_for_steps(steps).ok_or_else(|| err("command.failed", &[]))?;
         let id = self.game_tests.next_id();
-        Ok(Some(Info::new(id, key, def, None, self.dim, rotation)))
+        Ok(Some(
+            Info::new(id, key, def, None, self.dim, rotation).with_retry(retry),
+        ))
     }
 
     /// `createTestPositionAround`: three blocks south of the source, on the
@@ -226,14 +236,14 @@ impl Game<'_> {
     }
 
     /// `TestCommand.run`.
-    fn run_tests(&mut self, finder: &Finder, steps: i32, per_row: i32) -> R<i32> {
+    fn run_tests(&mut self, finder: &Finder, retry: Retry, steps: i32, per_row: i32) -> R<i32> {
         self.clear_game_tests();
         let mut infos = Vec::new();
         for pos in self.finder_positions(finder) {
-            infos.extend(self.test_info_at(pos));
+            infos.extend(self.test_info_at(pos, retry));
         }
         for (key, def) in self.finder_tests(finder) {
-            infos.extend(self.test_info_for(key, def, steps)?);
+            infos.extend(self.test_info_for(key, def, steps, retry)?);
         }
         if infos.is_empty() {
             self.feedback_unbroadcast(Text::translate("commands.test.no_tests", &[]));
@@ -254,7 +264,7 @@ impl Game<'_> {
         self.clear_game_tests();
         let mut count = 0;
         for pos in self.finder_positions(finder) {
-            if self.test_info_at(pos).is_some() {
+            if self.test_info_at(pos, Retry::none()).is_some() {
                 // resetGameTestInfo: `TestInstanceBlockEntity.resetTest`.
                 self.reset_test(pos);
                 count += 1;
@@ -302,6 +312,12 @@ impl Game<'_> {
             Some(Arg::Int(v)) => Some(*v),
             _ => None,
         };
+        // runWithRetryOptions: `RetryOptions(numberOfTimes, untilFailed)`, else
+        // no retries.
+        let retry = match int("numberOfTimes") {
+            Some(n) => Retry::new(n, matches!(ctx.get("untilFailed"), Some(Arg::Bool(true)))),
+            None => Retry::none(),
+        };
         let has = |word: &str| ctx.literals.iter().any(|l| l == word);
         let looks = has("runthat") || has("resetthat") || has("clearthat");
         if looks {
@@ -331,6 +347,11 @@ impl Game<'_> {
                 let finder = Finder::Selection { tests, copies };
                 self.run_tests(
                     &finder,
+                    if has("runmultiple") {
+                        Retry::none()
+                    } else {
+                        retry
+                    },
                     int("rotationSteps").unwrap_or(0),
                     int("testsPerRow").unwrap_or(8),
                 )
@@ -348,6 +369,7 @@ impl Game<'_> {
                 };
                 self.run_tests(
                     &finder,
+                    retry,
                     int("rotationSteps").unwrap_or(0),
                     int("testsPerRow").unwrap_or(8),
                 )

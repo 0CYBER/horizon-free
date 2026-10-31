@@ -112,6 +112,7 @@ pub fn register_parrot(m: &mut Mob) {
     g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
     g.add(2, Stroll::parrot(1.0));
     g.add(3, LandOnOwnersShoulder);
+    g.add(3, super::goals::FollowMob::new(1.0, 3.0, 7.0));
 }
 /// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
 /// the shoulder of the owner it touches; the host does the landing.
