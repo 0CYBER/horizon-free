@@ -152,6 +152,7 @@ mod tests {
             mode: TestBlockMode::Log,
             message: "hello".into(),
             powered: false,
+            triggered: false,
         };
         let mut e = TestBlockEditor::new(&block);
         let mut entity = BlockEntity::TestBlock(Box::new(block));
