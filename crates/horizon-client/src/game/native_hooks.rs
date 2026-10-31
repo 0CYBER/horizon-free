@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 33 adds random ticks a mod can handle (`native_random_tick`), and
+//! `native_set_block_property` on the level, which takes `Level.setBlock`'s
+//! `flags` as `Game::native_set_block_property_with` does.
+//!
 //! API 32 adds shape updates a mod can answer (`native_update_shape`), and
 //! `native_schedule_block_tick` and `native_schedule_fluid_tick` on the
 //! level for the ticks a block's shape update schedules.
@@ -136,9 +140,9 @@ use horizon_core::{
 };
 use horizon_world::{
     fluid::FluidKind,
-    level::{BlockId, LevelAccess, Ticks, flags},
+    level::{BlockId, LevelAccess, Ticks},
     nbt::Compound,
-    registry::BlockStateId,
+    registry::{BlockRegistry, BlockStateId},
 };
 use std::{
     fs,
@@ -148,10 +152,17 @@ use std::{
 };
 use winit::{event::MouseButton, keyboard::KeyCode};
 
+/// `Level.setBlock`'s flags, for the `native_set_block_property` helpers:
+/// `flags::UPDATE_CLIENTS` as a vanilla crop grows, `flags::UPDATE_ALL` as a
+/// furnace sets its `lit`. Horizon sends every write to players, so
+/// `UPDATE_CLIENTS`, `UPDATE_INVISIBLE` and `UPDATE_IMMEDIATE` change nothing
+/// yet.
+pub(super) use horizon_world::level::flags;
+
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 32;
+pub(crate) const NATIVE_HOOKS_API: u32 = 33;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -216,6 +227,27 @@ impl GameLevel<'_> {
         canceled: &mut bool,
     ) {
         let _ = (dimension, piston, direction, push, destroy, canceled);
+    }
+
+    /// An authoritative server's `ServerLevel.tickChunk` is about to
+    /// random-tick the block `state` at `pos` (`BlockState.randomTick`):
+    /// only blocks that tick randomly, a mod's as its vanilla template block
+    /// does. Bone meal's random ticks (`StemBlock.performBonemeal`) don't
+    /// fire it. Change the block with `native_set_block_property` and set
+    /// `handled` to skip the block's own random tick (a mod crop growing its
+    /// own way); a block changed without `handled` takes its own random tick
+    /// as it is now, if it still ticks randomly. Lava's fluid random tick
+    /// runs either way.
+    #[inline(always)]
+    pub(super) fn native_random_tick(
+        &mut self,
+        ticks: &mut Ticks,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        handled: &mut bool,
+    ) {
+        let _ = (ticks, dimension, pos, state, handled);
     }
 
     /// An authoritative server is about to compute the state the block
@@ -1037,6 +1069,40 @@ impl GameLevel<'_> {
             });
         true
     }
+    /// Sets property `key` of the block at `pos` to `value` with
+    /// `Level.setBlock(pos, state, flags)`, from a hook that gets the
+    /// level's `ticks` (`native_random_tick`). A crop's random tick grows it
+    /// with `flags::UPDATE_CLIENTS`: neighbours' shapes update, but no
+    /// neighbour gets `neighborChanged` and comparators aren't told;
+    /// `flags::UPDATE_ALL` does both. Horizon sends every write to players
+    /// whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE` and
+    /// `UPDATE_IMMEDIATE` change nothing yet. Any loaded position, not only
+    /// the hook's; false off an authoritative server, when the block has no
+    /// such property or value, or `pos` is not loaded; true without a write
+    /// when the property already has `value`. Elsewhere,
+    /// `Game::native_set_block_property_with` does the same. API 33.
+    pub(super) fn native_set_block_property(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: i32,
+    ) -> bool {
+        if !self.native_authoritative {
+            return false;
+        }
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let state = self.block_state(at);
+        let Some(id) = with_property(self.registry, state, key, value) else {
+            return false;
+        };
+        if id == state {
+            return true;
+        }
+        let b = self.behaviours;
+        b.set_block(self, ticks, at, id, flags)
+    }
     /// Schedules a tick of `block` (a block name) at `pos` in `delay` game
     /// ticks, as a falling block's shape update schedules its fall
     /// (`ScheduledTickAccess.scheduleTick(pos, block, delay)`, normal
@@ -1138,22 +1204,32 @@ impl Game<'_> {
         key: &str,
         value: &str,
     ) -> bool {
-        let registry = self.pack.assets.registry;
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        let Some(mut s) = registry.state(state).cloned() else {
+        self.native_set_block_property_with(pos, key, value, flags::UPDATE_ALL)
+    }
+    /// `native_set_block_property` with `Level.setBlock`'s `flags`, as a
+    /// brewing stand's tick sets its bottles with `flags::UPDATE_CLIENTS`.
+    /// Players get the write whatever the flags (`flags`); false when this
+    /// window isn't a server. API 33.
+    pub(super) fn native_set_block_property_with(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: i32,
+    ) -> bool {
+        // As `native_set_block`: a window that isn't a server holds a copy.
+        if self.serving.is_none() && self.options.dedicated.is_none() {
             return false;
-        };
-        match s.properties.get(key) {
-            Some(v) if v == value => return true,
-            Some(_) => {}
-            None => return false,
         }
-        s.properties.insert(key.into(), value.into());
-        let Ok(id) = registry.resolve(&s) else {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(id) = with_property(self.pack.assets.registry, state, key, value) else {
             return false;
         };
+        if id == state {
+            return true;
+        }
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags::UPDATE_ALL))
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags))
     }
     /// Runs `change` on the mod block entity at `pos` (a generator charging
     /// the machine beside it) and returns what it returns; none for any
@@ -1949,6 +2025,24 @@ fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
     MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
 }
 
+/// `state` with its property `key` set to `value`; none when the block has
+/// no such property or value.
+fn with_property(
+    registry: &BlockRegistry,
+    state: BlockStateId,
+    key: &str,
+    value: &str,
+) -> Option<BlockStateId> {
+    let mut s = registry.state(state)?.clone();
+    match s.properties.get(key) {
+        Some(v) if v == value => return Some(state),
+        Some(_) => {}
+        None => return None,
+    }
+    s.properties.insert(key.into(), value.into());
+    registry.resolve(&s).ok()
+}
+
 /// `config/` beside `options`, made when missing.
 fn config_dir(options: &Path) -> Result<PathBuf, String> {
     let dir = options.with_file_name("config");
@@ -1963,6 +2057,30 @@ fn finite(v: f32, lo: f32, hi: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A mod's property write: none for a key or value the block lacks, the
+    /// state itself when it already has the value, else the new state.
+    #[test]
+    fn with_property_finds_the_state() {
+        let facts = br#"{"defaults":{"minecraft:air":0,"test:crop":1},"states":[
+            ["air",true,false,"","minecraft:air"],
+            ["crop0",false,false,"",{"id":"test:crop","properties":{"age":"0"}}],
+            ["crop1",false,false,"",{"id":"test:crop","properties":{"age":"1"}}]
+        ]}"#;
+        let registry = horizon_world::registry::BlockRegistry::from_facts_json(&facts[..]).unwrap();
+        use horizon_world::registry::BlockStateId;
+        let (age0, age1) = (BlockStateId(1), BlockStateId(2));
+        assert_eq!(
+            super::with_property(&registry, age0, "age", "0"),
+            Some(age0)
+        );
+        assert_eq!(
+            super::with_property(&registry, age0, "age", "1"),
+            Some(age1)
+        );
+        assert_eq!(super::with_property(&registry, age0, "age", "9"), None);
+        assert_eq!(super::with_property(&registry, age0, "lit", "true"), None);
+    }
     /// horizon-mixins refuses targets whose body has a `cfg` or a macro:
     /// the hook points and helpers must stay free of both. The launcher
     /// reads the API line as it is.

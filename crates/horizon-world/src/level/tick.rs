@@ -225,7 +225,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn random_tick_at(&mut self, pos: BlockPos) {
         let state = self.state(pos);
         if self.b.is_randomly_ticking(state) {
-            self.random_tick_block(state, pos);
+            let (mut current, mut handled) = (state, false);
+            self.level
+                .before_random_tick(self.ticks, pos, &mut current, &mut handled);
+            // A block the level changed ticks as it is now, if it still ticks
+            // randomly.
+            if !handled && (current == state || self.b.is_randomly_ticking(current)) {
+                self.random_tick_block(current, pos);
+            }
         }
         // Only lava's fluid state ticks randomly. A lava block is ticked twice
         // (LiquidBlock.randomTick, then FluidState.randomTick), as in vanilla.

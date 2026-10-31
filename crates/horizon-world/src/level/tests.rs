@@ -365,6 +365,137 @@ fn neighbor_observation_follows_dispatch_order() {
 }
 
 #[test]
+fn random_tick_hook_can_change_the_block_and_skip_its_own_tick() {
+    use std::cell::Cell;
+
+    struct Grower {
+        inner: TestLevel,
+        b: &'static Behaviours,
+        /// The state the hook sets, if any, and the `setBlock` flags it sets
+        /// it with.
+        to: Option<BlockStateId>,
+        flags: i32,
+        handle: bool,
+        /// `neighborChanged` calls the hook's writes made.
+        notified: Cell<usize>,
+        seen: Vec<(BlockPos, BlockStateId)>,
+        /// Moves on with every write, as `World::revision` does.
+        revision: u64,
+    }
+    impl LevelAccess for Grower {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.revision += 1;
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_neighbor_changed(
+            &self,
+            _pos: BlockPos,
+            _state: BlockStateId,
+            _changed: BlockId,
+            _moved: bool,
+        ) {
+            self.notified.set(self.notified.get() + 1);
+        }
+        fn before_random_tick(
+            &mut self,
+            ticks: &mut Ticks,
+            pos: BlockPos,
+            state: &mut BlockStateId,
+            handled: &mut bool,
+        ) {
+            assert_eq!(self.block_state(pos), *state);
+            self.seen.push((pos, *state));
+            // The hook, then the level's part of the contract as `GameLevel`
+            // keeps it: re-read the block if the hook wrote.
+            let revision = self.revision;
+            if let Some(to) = self.to {
+                let b = self.b;
+                assert!(b.set_block(self, ticks, pos, to, self.flags));
+            }
+            *handled = self.handle;
+            if !*handled && self.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let wheat = f.registry.default_state("minecraft:wheat").unwrap();
+    let grown = b.table.set_int(wheat, b.props.age, 3);
+    let next = b.table.set_int(wheat, b.props.age, 4);
+    let mut level = Grower {
+        inner: TestLevel::new(b),
+        b,
+        to: Some(grown),
+        flags: flags::UPDATE_CLIENTS,
+        handle: true,
+        notified: Cell::new(0),
+        seen: Vec::new(),
+        revision: 0,
+    };
+    let mut ticks = Ticks::new(0);
+    let stone = f.registry.default_state("minecraft:stone").unwrap();
+    let (low, high) = (BlockPos::new(0, 1, 0), BlockPos::new(4, 1, 0));
+    level.set_raw(low, stone);
+    level.set_raw(high, wheat);
+    let draw = |level: &Grower| level.inner.random.clone().next_long();
+    let before = draw(&level);
+    b.random_tick(&mut level, &mut ticks, low);
+    assert!(level.seen.is_empty());
+    b.random_tick(&mut level, &mut ticks, high);
+    assert_eq!(level.seen, [(high, wheat)]);
+    assert_eq!(level.block_state(high), grown);
+    // The crop's own tick never ran: it would have drawn from the random.
+    assert_eq!(draw(&level), before);
+    // Grown with flag 2, as `CropBlock.randomTick` grows a crop, no
+    // neighbour hears of it; with `UPDATE_ALL` the six do.
+    assert_eq!(level.notified.get(), 0);
+    level.flags = flags::UPDATE_ALL;
+    level.set_raw(high, wheat);
+    b.random_tick(&mut level, &mut ticks, high);
+    assert_eq!(level.block_state(high), grown);
+    assert_eq!(level.notified.get(), 6);
+    level.flags = flags::UPDATE_CLIENTS;
+    // Unhandled and unchanged, the crop ticks as before.
+    (level.to, level.handle) = (None, false);
+    level.set_raw(high, wheat);
+    b.random_tick(&mut level, &mut ticks, high);
+    assert_eq!(level.seen.len(), 3);
+    assert_ne!(draw(&level), before);
+    // Changed but unhandled, the crop ticks as the hook left it: it stays at
+    // the hook's age or grows from there, never from the age it had.
+    level.to = Some(grown);
+    let mut grew = false;
+    for _ in 0..1000 {
+        level.set_raw(high, wheat);
+        b.random_tick(&mut level, &mut ticks, high);
+        let now = level.block_state(high);
+        assert!(now == grown || now == next, "{now:?}");
+        grew |= now == next;
+    }
+    assert!(grew);
+    // Changed into a block that doesn't tick randomly, nothing more runs.
+    level.to = Some(stone);
+    level.set_raw(high, wheat);
+    let before = draw(&level);
+    b.random_tick(&mut level, &mut ticks, high);
+    assert_eq!(level.block_state(high), stone);
+    assert_eq!(draw(&level), before);
+}
+
+#[test]
 fn state_table_matches_registry() {
     let Some(f) = fixture() else {
         return;
