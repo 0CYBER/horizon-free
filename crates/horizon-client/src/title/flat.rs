@@ -460,6 +460,7 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
         enabled,
         id,
         icon: None,
+        trailing: None,
     };
     match state.page {
         Page::Layers => {

@@ -1118,6 +1118,8 @@ pub fn put_brain(map: &mut Compound, m: &Mob, dimension: &str) {
     for &(name, value, ttl) in &m.extra.memories {
         let value = match name {
             "hunted_recently" => Tag::Byte(value as i8),
+            // `Unit` memories save an empty compound.
+            "is_pregnant" => Tag::Compound(Compound::new()),
             "home" => match m.extra.home {
                 Some(p) => Tag::compound([
                     ("dimension", string(dimension)),
@@ -1536,6 +1538,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 pos: [p[0], p[1], p[2]],
             });
         }
+    }
+    if m.species() == crate::mobs::Species::Frog
+        && tag
+            .get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get("minecraft:is_pregnant"))
+            .is_some()
+    {
+        crate::mobs::frog::set_pregnant(&mut m, true);
     }
     if crate::mobs::camel::is_camel(m.species()) {
         // The tick is a game time: `camel::finish_load` puts it on the mob's
@@ -1986,6 +1997,8 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
             power: number(tag.get("ExplosionPower")).unwrap_or(1) as i32,
         },
         "minecraft:small_fireball" => ProjectileKind::SmallFireball,
+        "minecraft:wind_charge" => ProjectileKind::WindCharge,
+        "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
         _ => return None,
     };
     let owner = uuid_from_tag(tag.get("Owner"));
@@ -3419,6 +3432,20 @@ mod fireball_nbt_tests {
             (p.kind, p.acceleration),
             (ProjectileKind::LargeFireball { power: 1 }, 0.1)
         );
+        // `/summon` and a saved world give back both wind charges.
+        for (id, kind) in [
+            ("minecraft:wind_charge", ProjectileKind::WindCharge),
+            (
+                "minecraft:breeze_wind_charge",
+                ProjectileKind::BreezeWindCharge,
+            ),
+        ] {
+            let tag = Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("Pos", doubles(&[0.0, 0.0, 0.0])),
+            ]);
+            assert_eq!(fireball_from_nbt(&tag, None).unwrap().kind, kind);
+        }
     }
 }
 

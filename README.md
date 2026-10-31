@@ -47,7 +47,7 @@ The [documentation](https://playhorizon.dev/docs/) covers each of these.
 
 - **The game:** singleplayer with vanilla's world generation, mobs, villagers, raids, redstone, every command, the HUD and the recipe book, on saves in vanilla's format. Worlds from 1.8 to 26.2 are upgraded as vanilla does. [Status table](#project-status).
 - **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
-- **Resource packs and data packs:** resource packs work, and data packs load functions, predicates, item modifiers and world generation (vanilla's heights and biomes for now).
+- **Resource packs and data packs:** resource packs work, and data packs load functions, predicates, item modifiers and world generation, taller levels included (vanilla's biomes for now).
 - **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining servers, online-mode ones with the Microsoft account the launcher signs in with. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
 - **Mods:** content mods add blocks, items and data, and native mods change the game's own Rust code, built by the launcher on your copy, with no Rust to install. Horizon's own (Zoom, FPS Counter, Keystrokes, Minimap, Recipes and Coordinates HUD) are native mods. Java mod jars do not run in Horizon. See [Mods and data packs](https://playhorizon.dev/docs/mods).
 
@@ -166,7 +166,7 @@ lists every method of vanilla 26.3 next to the Rust functions that port it, with
 
 ### Known issues
 
-Skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
+Skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; item tooltips lack attribute lines.
 
 ## Licence
 

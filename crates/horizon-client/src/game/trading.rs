@@ -451,7 +451,14 @@ impl Game<'_> {
                 merchant::Event::Traded(index) => {
                     traded.extend(session.offers.get(index).map(|o| o.result.clone()));
                 }
-                merchant::Event::TradeSound => {}
+                merchant::Event::TradeSound => {
+                    let sound = if villager {
+                        "minecraft:entity.villager.yes"
+                    } else {
+                        "minecraft:entity.wandering_trader.yes"
+                    };
+                    self.audio.play(sound, Some(origin), 1.0, 1.0);
+                }
             }
         }
         (session, traded)
