@@ -172,9 +172,10 @@ still add theirs, as a higher data pack does. Since the result depends on load o
 of adds are left out, ...". Tags are the only `minecraft` files a mod may hold: its other content stays in its own
 namespaces.
 
-A mod adds to structure sets and template pools that are not its own (vanilla's villages, another mod's houses) with
-a set or pool file in its own namespace holding `horizon:add_to`, a key vanilla data never has. Its entries are
-appended to each set or pool named, after every mod's own files, in mod and file order; the file is no set or pool
+A mod adds to structure sets, template pools and processor lists that are not its own (vanilla's villages, another
+mod's houses) with a set, pool or processor list file in its own namespace holding `horizon:add_to`, a key vanilla data
+never has. Its entries are appended to each set, pool or list named, after every mod's own files, by
+`horizon:priority` (lower first, 1000 when it has none), then in mod and file order; the file is no set, pool or list
 itself. A name nobody defines is skipped.
 
 ```json
@@ -182,8 +183,14 @@ itself. A name nobody defines is skipped.
   "structures": [ { "structure": "mymod:village_beach", "weight": 10 } ] }
 ```
 
-A pool addition holds `"elements"` as a pool does. `horizon-port-pack carry` writes these from the Lithostitched
-modifiers `add_structure_set_entries` and `add_template_pool_elements`.
+A pool addition holds `"elements"` as a pool does, a processor list addition `"processors"`. This is what
+Lithostitched's `add_structure_set_entries`, `add_template_pool_elements` and `add_processor_list_processors` modifiers
+do on NeoForge and Fabric, and `horizon-port-pack carry` writes the last two from those.
+
+A pool element may be one of Lithostitched's: `lithostitched:limited` (`delegate`, `limit`, `min_depth`) places its
+`delegate` at most `limit` times in one structure start, and `lithostitched:guaranteed` (`delegate`, `count`,
+`min_depth`) is tried before its pool's other elements at each jigsaw that reaches that pool (as target or fallback)
+until `count` are placed. Neither goes below a piece shallower than `min_depth` (the start is at depth 0).
 
 A structure (and any of its pool elements, in place of the structure's) may hold
 `horizon:enhanced_terrain_adaptation`: MoogsStructureLib's terrain kernel, which carves or buries terrain around the
