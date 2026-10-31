@@ -3419,7 +3419,10 @@ impl Game<'_> {
             }
             // ClientPacketListener.handleSetTime: the game time, then
             // ClientClockManager.handleUpdates: the clock catches up with the
-            // game time and takes the server's state.
+            // game time and takes the server's state. Only this level's
+            // default world clock is applied — a packet that only updates
+            // another clock (the End's) must not overwrite day_time, or the
+            // sky follows game_time and looks inverted vs the server's day.
             C::SetTime(p) => {
                 self.world.game_time = p.game_time;
                 self.remote_clock_tick();
@@ -3427,15 +3430,20 @@ impl Game<'_> {
                     let r = self.remote.as_ref();
                     let names =
                         r.and_then(|r| r.registries.registries.get("minecraft:world_clock"));
-                    let wanted = r.map(|r| r.dimension.name.clone()).unwrap_or_default();
+                    let tracked = r.and_then(|r| r.clock);
+                    let wanted = r
+                        .and_then(|r| r.dimension.default_clock.clone())
+                        .or_else(|| r.map(|r| r.dimension.name.clone()))
+                        .unwrap_or_else(|| "minecraft:overworld".into());
+                    let name = |id: i32| {
+                        names
+                            .and_then(|n| n.get(id as usize))
+                            .map(|(n, _)| n.as_str())
+                    };
                     p.clocks
                         .iter()
-                        .find(|c| {
-                            names
-                                .and_then(|n| n.get(c.clock as usize))
-                                .is_some_and(|(n, _)| *n == wanted)
-                        })
-                        .or_else(|| p.clocks.first())
+                        .find(|c| name(c.clock) == Some(wanted.as_str()))
+                        .or_else(|| tracked.and_then(|id| p.clocks.iter().find(|c| c.clock == id)))
                         .cloned()
                 };
                 if let Some(c) = clock {
