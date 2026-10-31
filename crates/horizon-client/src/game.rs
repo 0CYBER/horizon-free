@@ -2259,6 +2259,8 @@ struct Game<'a> {
     world_options: Option<lan_screen::WorldOptions>,
     /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
     options_to_world_options: bool,
+    /// HDR's settings opened with their key from the game: Done returns to the game.
+    options_to_game: bool,
     command_block_screen: Option<command_blocks::CommandBlockScreen>,
     block_editor: Option<block_editor::BlockEditScreen>,
     /// `StructureTemplateManager.structureRepository`: the templates in memory
@@ -13636,7 +13638,7 @@ impl Game<'_> {
             }
             return Ok(());
         }
-        if self.sort_key_press(key) {
+        if self.sort_key_press(key) || self.hdr_key_press(key) {
             return Ok(());
         }
         if self.remote.is_some() && self.remote_key(key)? {
@@ -14648,7 +14650,7 @@ impl ApplicationHandler for Game<'_> {
                         // Neither edge of a bound button is an ordinary slot click.
                         return Ok(());
                     }
-                    if pressed && self.sort_mouse_press(button) {
+                    if pressed && (self.sort_mouse_press(button) || self.hdr_mouse_press(button)) {
                         return Ok(());
                     }
                     match self.screen {
@@ -15709,6 +15711,7 @@ impl<'a> Game<'a> {
             serving: None,
             world_options: None,
             options_to_world_options: false,
+            options_to_game: false,
             command_block_screen: None,
             block_editor: None,
             structure_templates: HashMap::new(),

@@ -44,6 +44,8 @@ pub enum H {
     /// Opens `Level::Hdr`.
     HdrSettings,
     HdrBlackLevel,
+    /// Binds `Graphics::hdr_key`.
+    HdrKey,
     HdrPeak,
     HdrPaperWhite,
     HdrUiBrightness,
@@ -153,6 +155,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::HdrUiBrightness,
                 None,
                 "How bright the HUD and menus are, against paper white.",
+            ),
+            h(
+                H::HdrKey,
+                None,
+                "A key that opens this screen from the game. Not bound at first.",
             ),
         ],
         Level::Advanced => vec![
@@ -469,6 +476,9 @@ impl H {
                 ),
             ),
             H::HdrUiBrightness => labelled("UI Brightness", format!("{}%", g.hdr_ui_brightness)),
+            H::HdrKey => {
+                Text::literal("Shortcut: ").append(crate::keybinds::display_name(&g.hdr_key))
+            }
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -701,6 +711,8 @@ pub enum Action {
     OpenAdvanced,
     OpenSimple,
     OpenHdr,
+    /// Wait for a key or mouse button to bind to this name.
+    BindKey(&'static str),
     Done,
 }
 
@@ -723,6 +735,8 @@ pub struct GraphicsUi {
     /// The list's scroll amount and its held scrollbar (`AbstractScrollArea`).
     scroll: ui::Scroll,
     dragging: Option<Item>,
+    /// The key binding the options screen is waiting on (`Action::BindKey`).
+    pub binding: Option<&'static str>,
 }
 
 impl GraphicsUi {
@@ -855,7 +869,13 @@ impl GraphicsUi {
                     if !shown(wd.y, 20.0) {
                         continue;
                     }
-                    let label = item.label(s);
+                    let mut label = item.label(s);
+                    if item == Item::Horizon(H::HdrKey) && self.binding.is_some() {
+                        // KeyBindsScreen: "> key <" while it waits.
+                        label = Text::literal("Shortcut: > ")
+                            .append(crate::keybinds::display_name(&s.horizon.hdr_key))
+                            .append(" <");
+                    }
                     let blocked = item.blocked(s);
                     let live = blocked.is_none();
                     if hover && let Some(why) = blocked {
@@ -979,6 +999,12 @@ impl GraphicsUi {
                 Target::Item(item) if item.blocked(s).is_some() => Vec::new(),
                 Target::Item(Item::Horizon(H::HdrSettings)) => {
                     vec![Action::ButtonClick, Action::OpenHdr]
+                }
+                Target::Item(Item::Horizon(H::HdrKey)) => {
+                    vec![
+                        Action::ButtonClick,
+                        Action::BindKey(crate::graphics::HDR_KEY),
+                    ]
                 }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
