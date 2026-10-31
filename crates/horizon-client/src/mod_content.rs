@@ -16,7 +16,7 @@
 //! content mod the root is the base root itself.
 use crate::{Result, blocks::MAP_COLORS};
 use horizon_core::geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape};
-use horizon_mods::content::{Block, Content, Rarity};
+use horizon_mods::content::{Block, Content, MobEffect, Rarity};
 use horizon_world::nbt::{self, JavaString, Limits, Tag};
 use serde::{Deserialize, Serialize, de};
 use std::{
@@ -30,6 +30,14 @@ use std::{
 pub struct ContentMod {
     pub id: String,
     pub content: Content,
+}
+
+/// The mods' mob effects in registry order: by id, as items are. Their
+/// network ids follow vanilla's in this order.
+pub fn mob_effects(mods: &[ContentMod]) -> Vec<&MobEffect> {
+    let mut effects: Vec<&MobEffect> = mods.iter().flat_map(|m| &m.content.effects).collect();
+    effects.sort_by(|a, b| a.id.cmp(&b.id));
+    effects
 }
 
 /// JSON with its object keys in file order, so a rewritten table differs
@@ -335,6 +343,7 @@ struct NewItem {
 struct Plan<'a> {
     blocks: Vec<NewBlock<'a>>,
     items: Vec<NewItem>,
+    effects: Vec<&'a MobEffect>,
     /// Vanilla's state count (the tables' length before).
     states: usize,
     /// Each vanilla block's default state.
@@ -605,6 +614,7 @@ impl<'a> Plan<'a> {
         Ok(Plan {
             blocks,
             items,
+            effects: mob_effects(mods),
             states: names.len(),
             defaults,
             sounds,
@@ -828,14 +838,20 @@ impl<'a> Plan<'a> {
             }
             "items.json" => self.items(doc, true)?,
             "registries.json" => {
-                // Network ids: the game and its server map items and blocks through
-                // this report, so new ones get the ids after vanilla's, in plan order.
+                // Network ids: the game and its server map items, blocks and mob
+                // effects through this report, so new ones get the ids after
+                // vanilla's, in plan order.
                 let new_items = self.items.iter().map(|i| i.rename.to.clone());
                 let new_blocks = self.blocks.iter().map(|b| b.decl.id.clone());
-                for (registry, names) in [
+                let mut registries = vec![
                     ("minecraft:item", new_items.collect::<Vec<_>>()),
                     ("minecraft:block", new_blocks.collect()),
-                ] {
+                ];
+                if !self.effects.is_empty() {
+                    let new_effects = self.effects.iter().map(|e| e.id.clone());
+                    registries.push(("minecraft:mob_effect", new_effects.collect()));
+                }
+                for (registry, names) in registries {
                     let Some(J::Obj(entries)) =
                         doc.get_mut(registry).and_then(|r| r.get_mut("entries"))
                     else {
@@ -872,6 +888,14 @@ impl<'a> Plan<'a> {
                 }
                 if let Some(J::Arr(ids)) = doc.at("by_registry/minecraft:block/ids") {
                     ids.extend(new_blocks());
+                }
+                // `/effect` and the mob_effect resource arguments.
+                let new_effects = || self.effects.iter().map(|e| J::Str(e.id.clone()));
+                if let Some(J::Arr(ids)) = doc.at("effects") {
+                    ids.extend(new_effects());
+                }
+                if let Some(J::Arr(ids)) = doc.at("by_registry/minecraft:mob_effect/ids") {
+                    ids.extend(new_effects());
                 }
             }
             "mob-data.json" => states(doc, "states", false, false)?,
@@ -1609,7 +1633,11 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
             &serde_json::to_vec(&remainders)?,
         )?;
     }
-    if mods.iter().any(|m| !m.content.blocks.is_empty()) {
+    // Clients must agree on the block states and the mob effects' network ids.
+    if mods
+        .iter()
+        .any(|m| !m.content.blocks.is_empty() || !m.content.effects.is_empty())
+    {
         overlay.write(crate::content_identity::MARKER, b"1")?;
     }
     overlay.write(WARNINGS, warnings.join("\n").as_bytes())?;

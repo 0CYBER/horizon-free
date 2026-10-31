@@ -21,7 +21,7 @@ impl Tracker {
     }
 }
 fn effect_name(id: &str) -> Text {
-    Text::translate(&format!("effect.minecraft.{id}"), &[])
+    Text::translate(&brewing::description_id(id), &[])
 }
 impl Game<'_> {
     fn effect_arg(ctx: &Context) -> R<&'static brewing::EffectDef> {
