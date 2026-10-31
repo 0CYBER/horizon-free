@@ -14,6 +14,8 @@ pub(super) mod pregen;
 mod profiles;
 mod raid;
 mod terrain_cmds;
+mod test_locate;
+mod test_runs;
 mod text_commands;
 mod world_cmds;
 
@@ -970,6 +972,8 @@ impl Game<'_> {
             id if id.starts_with("posteffect.") => self.cmd_posteffect(id, ctx),
             "kick" => self.cmd_kick(ctx),
             "op" | "deop" | "ban" | "pardon" => self.cmd_profiles(id, ctx),
+            "ban-ip" | "pardon-ip" => self.cmd_ip_bans(id, ctx),
+            id if id.starts_with("banlist") => self.cmd_banlist(id),
             id if id.starts_with("whitelist.") => self.cmd_whitelist(id, ctx),
             "fetchprofile" => self.cmd_fetchprofile(ctx),
             "publish" => self.cmd_publish(ctx),
@@ -1540,7 +1544,7 @@ impl Game<'_> {
     /// unless the entity moves first.
     /// `Entity.getId` as the players' clients know it: a player's is the one the
     /// hub gave it, any other entity's is its own id.
-    fn network_entity_id(&self, t: Target) -> Option<i32> {
+    pub(super) fn network_entity_id(&self, t: Target) -> Option<i32> {
         let host = self.lan.as_ref();
         match t {
             Target::Player => match self.lan_acting {
@@ -1887,7 +1891,7 @@ impl Game<'_> {
         self.feedback(Text::translate(key, &[]));
         Ok(duration.unwrap_or(-1))
     }
-    fn kill_target(&mut self, t: Target) {
+    pub(super) fn kill_target(&mut self, t: Target) {
         // An entity in another level is killed in the level that holds it.
         let _ = self.in_target_level(t, |g| g.kill_target_in_level(t));
     }
@@ -1932,7 +1936,13 @@ impl Game<'_> {
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
             Target::Frame(id) => self.item_frames.retain(|f| f.id != id),
             Target::Painting(id) => self.paintings.retain(|p| p.id != id),
-            Target::Boat(id) => self.boats.retain(|b| b.id != id),
+            Target::Boat(id) => {
+                // AbstractBoat.remove: a killed boat drops its lead.
+                if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+                    let b = self.boats.remove(i);
+                    self.boat_removed(&b);
+                }
+            }
             Target::Cart(id) => self.carts.retain(|c| c.id != id),
             Target::Other(id) => self.others.retain(|o| o.id != id),
             Target::Crystal(id) => self.kill_crystal(id),
@@ -2791,6 +2801,12 @@ impl Game<'_> {
                 &[name(i)],
             )));
         }
+        self.set_difficulty_forced(i);
+        self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
+        Ok(0)
+    }
+    /// `MinecraftServer.setDifficulty(difficulty, true)`.
+    pub(super) fn set_difficulty_forced(&mut self, i: u8) {
         self.ui.difficulty = i;
         // The level data holds the world's difficulty: it survives the
         // reopen, so it follows the command.
@@ -2809,8 +2825,6 @@ impl Game<'_> {
                     locked: self.level.difficulty_locked,
                 }));
         }
-        self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
-        Ok(0)
     }
     fn cmd_spawnpoint(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {

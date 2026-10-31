@@ -43,10 +43,10 @@ Pillager.applyRaidBuffs	port	crates/horizon-client/src/game/mob_gear.rs::Game::a
 Pillager.createAttributes	skip:data		attributes come from entity-types.json
 Pillager.finalizeSpawn	inline	crates/horizon-client/src/mobs/finalize.rs::Ctx::mob	crossbow in the main hand via populate; the enchant roll is in Ctx::enchant
 Pillager.getArmPose	port	crates/horizon-client/src/mobs/illager.rs::arm_pose	
-Pillager.getSlot	missing		minor: the pillager's five spare slots (ids 300 and up, used by /item) are not modelled
-Pillager.pickUpItem	missing		player: during a raid a pillager does not pick up a white banner lying on the ground
+Pillager.getSlot	skip:other		Horizon's /item addresses named slots (weapon.mainhand, armor.head, ...); a mob has no numeric slot ids, so the pillager's 300+ inventory slots have no target
+Pillager.pickUpItem	inline	crates/horizon-client/src/game/raids.rs::Game::sync_raiders	an ominous banner beside a raider in a live raid with no leader becomes its head slot and the wave's leader (banner scan at 779-789, pickup at 894-906); gap: minor: a plain banner falls through to Mob.pickUpItem's gear swap, which Horizon does not do
 Pillager.registerGoals	port	crates/horizon-client/src/mobs/illager.rs::register_pillager	
-Pillager.wantsItem	missing		player: the raid banner pickup check is missing (see pickUpItem)
+Pillager.wantsItem	skip:other		dead code: only a white banner passes, and Pillager.pickUpItem sends every BannerItem to Raider.pickUpItem before consulting it; the ominous banner pickup is in game/raids.rs
 PiglinBrute.createAttributes	skip:data		attributes come from entity-types.json
 PiglinBrute.customServerAiStep	inline	crates/horizon-client/src/mobs/piglin.rs::register_brute	gap: minor: the brain tick is replaced by the goals set in register_brute; the activity update is in PiglinBruteAi rows
 PiglinBrute.finalizeSpawn	inline	crates/horizon-client/src/mobs/finalize.rs::Ctx::mob	golden axe in the main hand via populate; initMemories is missing
@@ -76,8 +76,8 @@ Abilities.apply	port	crates/horizon-client/src/game/remote.rs::Game::apply_remot
 Abilities.pack	skip:java		record copy for the abilities packet; the flags are read in remote.rs
 PlayerSkin.with	missing		minor: skin patches (body, cape, elytra and model overrides) are not applied on top of a profile skin
 PlayerSkin.Patch.create	skip:java		record factory for the patch; the patch itself is missing (see PlayerSkin.with)
-SpectralArrow.doPostHurtEffects	missing		player: a spectral arrow shot from a bow or crossbow does not make its target glow; release_bow and crossbow use no effect
-SpectralArrow.tick	missing		player: a spectral arrow in flight leaves no yellow effect trail
+SpectralArrow.doPostHurtEffects	port	crates/horizon-client/src/game/potions.rs::Game::arrow_post_hurt_effects	200-tick Glowing on any target a spectral arrow lands on (creatures.rs:3589); a bow, a crossbow and a dispenser also store the effect on the arrow
+SpectralArrow.tick	port	crates/horizon-client/src/game/remote_projectiles.rs::Game::arrow_effect_particles	client tick: an effect sparkle at the arrow's position while it is not stuck; the tipped arrow's colour swirls share the fn
 Fireball.getSlot	missing		minor: the fireball's item slot (its displayed fire charge) is not modelled
 Fireball.readAdditionalSaveData	missing		unsure: fireball_from_nbt reads no Item key, so the displayed item is not restored
 Fireball.setItem	missing		minor: the displayed item of a fireball is not set
@@ -85,10 +85,10 @@ Fireball.shouldRenderAtSqrDistance	skip:ui		render distance rule for the first t
 LargeFireball.onHit	port	crates/horizon-client/src/game/creatures.rs::Game::projectile_hit	LargeFireball arm: explosion of the given power, then the projectile is gone
 LargeFireball.onHitEntity	port	crates/horizon-client/src/game/creatures.rs::Game::projectile_hit	LargeFireball arm: 6 damage to the entity
 SmallFireball.onHitEntity	port	crates/horizon-client/src/game/creatures.rs::Game::projectile_hit	SmallFireball arm: ignites for 5 seconds and deals 5 damage
-AbstractThrownPotion.affectEntitiesAround	missing		player: a splash water potion does not hurt water-sensitive mobs or put out burning entities nearby
+AbstractThrownPotion.affectEntitiesAround	port	crates/horizon-client/src/game/splash_water.rs::Game::affect_entities_around	water potion in the potion's (4, 2, 4) box: 1 indirect-magic damage to water-sensitive mobs, put out burning mobs, players and armor stands, then Axolotl.rehydrate
 AbstractThrownPotion.calculateHorizontalHurtKnockbackDirection	missing		minor: the splash hurt pushes nothing away from the potion's position
-AbstractThrownPotion.douseFire	missing		player: a splash water potion does not put out fire blocks, candles or campfires around where it lands
-AbstractThrownPotion.onHitBlock	missing		player: a water splash that lands on a block does not douse fire, candles or campfires next to it
+AbstractThrownPotion.douseFire	port	crates/horizon-client/src/game/splash_water.rs::Game::douse_fire	fire blocks break without drops, lit candles and campfires go out (campfire with level event 1009 and the block-change game event); gap: minor: that game event carries no source entity
+AbstractThrownPotion.onHitBlock	port	crates/horizon-client/src/game/splash_water.rs::Game::potion_hit_block	a potion in #douses_fire puts out the cell in front of the face it hit, the block it hit and the four horizontal neighbours of the cell in front
 Snowball.getParticle	port	crates/horizon-client/src/game/creatures.rs::Game::item_burst	snowball item burst on break
 Snowball.handleEntityEvent	port	crates/horizon-client/src/game/creatures.rs::Game::thrown_break_event	break event 3 for thrown items
 Snowball.onHit	inline	crates/horizon-client/src/game/creatures.rs::Game::projectile_hit	Snowball arm: 3 damage to blazes, then the break burst

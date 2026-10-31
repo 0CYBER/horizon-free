@@ -17,7 +17,8 @@ and what the game's loaders make of it. For every block and item the mod registe
 - recipes: each recipe's result, count and ingredients;
 - items: present, and their stack size;
 - item stats: durability, attribute modifiers (damage, speed, armour), tool rules, enchantability, repair
-  items, armour slot and food, from the oracle's 1.21.1 components with ids upgraded to 26.3's.
+  items, armour slot and the textures worn armour draws (the jar's own layers), and food, from the
+  oracle's 1.21.1 components with ids upgraded to 26.3's.
 
 Each mod is probed on its own, against vanilla. Writes WORK/mods/<id>/harness/{horizon,result}.json
 per mod and prints a table. Jars, facts and results stay
@@ -102,7 +103,7 @@ def tool_rules(rules):
     return {blocks(r['blocks']): (r.get('speed'), r.get('correct_for_drops')) for r in rules}
 
 
-def item_stats(oi, hi):
+def item_stats(oi, hi, carry_dir=None):
     """(ok, what) per stat of an item the oracle has components for."""
     c = oi['components']
     yield hi['max_damage'] == c.get('minecraft:max_damage', 0), f'durability {hi["max_damage"]}'
@@ -124,12 +125,22 @@ def item_stats(oi, hi):
     if 'repair_items' in oi:
         yield sorted(hi['repairable']) == sorted(oi['repair_items']), f'repair items {hi["repairable"]}'
     if 'armor' in oi:
-        yield hi['equip_slot'] == oi['armor']['slot'], f'armour slot {hi["equip_slot"]}'
+        armor = oi['armor']
+        yield hi['equip_slot'] == armor['slot'], f'armour slot {hi["equip_slot"]}'
+        if armor.get('layers') and carry_dir:
+            # Worn, the armour draws the jar's own layer textures.
+            layer = armor['layers'][0]
+            for kind, texture in (('humanoid', layer['texture']), ('humanoid_leggings', layer['texture_legs'])):
+                ns, path = texture.split(':', 1)
+                want = carry_dir / 'assets' / ns / path
+                have = ((hi.get('equipment') or {}).get(kind))
+                same = have is not None and want.exists() and Path(have).read_bytes() == want.read_bytes()
+                yield same, f'worn {kind} texture {have}, want {want.name}'
     if 'food' in oi:
         yield (hi['food'] or {}).get('nutrition') == oi['food']['nutrition'], f'food {hi["food"]}'
 
 
-def compare_mod(mod, oracle, horizon, carry, upgrades, old_items):
+def compare_mod(mod, oracle, horizon, carry, upgrades, old_items, carry_dir=None):
     checks = {c: Check() for c in CHECKS}
     prefix = mod + ':'
     templates = {prefix + b: t for b, t in carry.get('blocks', {}).items()}
@@ -199,7 +210,7 @@ def compare_mod(mod, oracle, horizon, carry, upgrades, old_items):
         checks['items'].record(hi is not None and hi['max_stack_size'] == oi['max_stack_size'],
                                f'{iid}: {"missing" if hi is None else "stack " + str(hi["max_stack_size"])}')
         if hi is not None and 'components' in oi and oi.get('block') is None:
-            for ok, what in item_stats(oi, hi):
+            for ok, what in item_stats(oi, hi, carry_dir):
                 checks['item_stats'].record(ok, f'{iid}: {what}')
     result = {c: v.json() for c, v in checks.items()}
     failed = sum(v.failed for v in checks.values())
@@ -244,7 +255,8 @@ def main():
         horizon = json.loads(out.read_text())
         carry_report = work / 'mods' / mod / 'carry-report.json'
         carry = json.loads(carry_report.read_text()) if carry_report.exists() else {}
-        rows.append(compare_mod(mod, oracle, horizon, carry, sound_upgrades(oracle, horizon), old_items))
+        rows.append(compare_mod(mod, oracle, horizon, carry, sound_upgrades(oracle, horizon), old_items,
+                                work / 'mods' / mod / 'carry'))
     print(f'{"mod":<16} {"result":<7} ' + ' '.join(f'{c:>12}' for c in CHECKS))
     for result in rows:
         mod = result['mod']
