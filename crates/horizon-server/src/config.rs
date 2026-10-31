@@ -55,6 +55,17 @@ keep = 1                     # other releases kept by updates, besides the one i
 [panel]
 bind = "127.0.0.1:8130"      # the web panel: this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false         # true lets bind be any address; never put the panel on the open internet
+
+# Horizon's anticheat (docs/anticheat.md) is off: the server checks only what vanilla's checks. To turn it on:
+# [anticheat]
+# enabled = true
+# alerts = true              # tell online operators (alert_level = 2) in their chat; the console always is
+# log = "logs/anticheat.log" # every flag, one line each
+# [anticheat.timer]          # a sped-up game: more client ticks than the server's clock allows
+# setback = 2                # the violation level from which the player is sent back; 0: never
+# alert = 5
+# kick = 20
+# decay = 0.02               # violation level lost each second
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
@@ -92,6 +103,13 @@ pub struct Config {
     pub updates: Updates,
     #[serde(default)]
     pub panel: Panel,
+    /// The game reads this section itself (docs/anticheat.md); written only when it isn't the default (off).
+    #[serde(default, skip_serializing_if = "anticheat_off")]
+    pub anticheat: horizon_anticheat::Config,
+}
+
+fn anticheat_off(c: &horizon_anticheat::Config) -> bool {
+    *c == horizon_anticheat::Config::default()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -296,6 +314,7 @@ impl Config {
         }
         crate::backup::interval(&self.backups.every)?;
         self.panel.address()?;
+        self.anticheat.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -403,7 +422,14 @@ pub fn render(config: &Config) -> String {
     ] {
         set(&mut doc, section, field, &table[section][field]);
     }
-    doc.to_string()
+    let mut text = doc.to_string();
+    if let Some(anticheat) = table.get("anticheat") {
+        let mut only = toml::Table::new();
+        only.insert("anticheat".into(), anticheat.clone());
+        text.push('\n');
+        text.push_str(&toml::to_string(&only).expect("the anticheat's settings are a table"));
+    }
+    text
 }
 
 /// After the game stopped: copies into `server.toml` the keys it wrote that the game changed in
@@ -538,6 +564,25 @@ mod tests {
     fn template_is_the_default() {
         assert_eq!(Config::parse(TEMPLATE).unwrap(), Config::default());
         assert_eq!(render(&Config::default()), TEMPLATE);
+    }
+
+    #[test]
+    fn anticheat_is_off_unless_its_section_turns_it_on() {
+        assert!(!Config::default().anticheat.enabled);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[anticheat]"));
+        let text =
+            format!("{TEMPLATE}\n[anticheat]\nenabled = true\n[anticheat.timer]\nkick = 0\n");
+        let c = Config::parse(&text).unwrap();
+        assert!(c.anticheat.enabled);
+        assert_eq!(c.anticheat.timer.kick, 0.0);
+        // The game reads the same section from the same file.
+        assert_eq!(
+            horizon_anticheat::Config::from_server_toml(&text).unwrap(),
+            c.anticheat
+        );
+        assert_eq!(Config::parse(&render(&c)).unwrap(), c);
+        assert!(Config::parse("[anticheat]\nenable = true\n").is_err());
+        assert!(Config::parse("[anticheat.timer]\nalert = -1\n").is_err());
     }
 
     #[test]
