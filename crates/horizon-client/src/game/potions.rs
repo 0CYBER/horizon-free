@@ -72,22 +72,9 @@ impl PotionCloud {
         ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0])
     }
 }
-/// A mob's effect ids carry the `minecraft:` namespace.
+/// A mob's effect ids carry the `minecraft:` namespace; a mod's has its own.
 pub(super) fn mob_effect_id(id: &str) -> Option<&'static str> {
-    use std::{collections::HashMap, sync::OnceLock};
-    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    let id = id.trim_start_matches("minecraft:");
-    IDS.get_or_init(|| {
-        brewing::EFFECTS
-            .iter()
-            .map(|e| {
-                let full: &'static str = Box::leak(format!("minecraft:{}", e.id).into_boxed_str());
-                (e.id, full)
-            })
-            .collect()
-    })
-    .get(id)
-    .copied()
+    brewing::effect(id).map(|e| brewing::namespaced(e.id))
 }
 /// `LivingEntity.canBeAffected` with the mob overrides (`WitherBoss` and
 /// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,

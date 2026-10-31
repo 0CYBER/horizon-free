@@ -797,6 +797,7 @@ struct GameLevel<'w> {
     client_side: bool,
     /// Only the integrated or dedicated server dispatches native observations.
     native_authoritative: bool,
+    native_sounds: &'w mut Vec<creatures::NativeSound>,
     native_particles: &'w mut Vec<lan_particles::QueuedParticle>,
 }
 struct PlayerCollision {
@@ -3504,12 +3505,14 @@ impl Game<'_> {
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
             native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
+            native_sounds: &mut self.creatures.lan_sounds,
             native_particles: &mut self.creatures.lan_particles,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
         if self.lan.is_some() {
             self.flush_lan_particles();
+            self.flush_native_sounds();
         }
         result
     }
@@ -7269,7 +7272,17 @@ impl Game<'_> {
                     under_water,
                     vehicle_hearts,
                 };
-                let draws = self.health_hud.layout(&inputs, wi, hi);
+                let at = [p.position.x, p.position.y, p.position.z];
+                // The native mods' health HUD (`native_health_hud`): a mod
+                // that answers draws every row instead.
+                let mut native_health_hud = None;
+                self.native_health_hud(&inputs, wi, hi, &mut native_health_hud);
+                let draws = match native_health_hud {
+                    Some(draws) => draws,
+                    None => self.health_hud.layout(&inputs, wi, hi),
+                };
+                // A fresh borrow: the hook ran with all of `self`.
+                let atlas = &self.gui.atlas;
                 hud_layout::paint(&mut batch, atlas, &draws);
                 bar_height = self
                     .health_hud
@@ -7278,7 +7291,6 @@ impl Game<'_> {
                 // Hud.playAirBubblePoppedSound: Player.playSound (PLAYERS), heard
                 // by this client only.
                 if let Some((volume, pitch)) = self.health_hud.bubble_pop_sound.take() {
-                    let at = [p.position.x, p.position.y, p.position.z];
                     let players = horizon_client::settings::SOUND_SOURCES
                         .iter()
                         .position(|s| *s == "player")

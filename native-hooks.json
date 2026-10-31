@@ -209,6 +209,11 @@
       "name": "attack_entity",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
+    },
+    {
+      "name": "health_hud",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud"
     }
   ]
 }

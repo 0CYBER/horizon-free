@@ -6,6 +6,15 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 28 adds block and item tag reads for server tick hooks (`native_block_in_tag`,
+//! `native_item_in_tag`).
+//!
+//! API 27 adds the player-health HUD rows (`native_health_hud`).
+//!
+//! API 26 adds the game's shared config folder (`native_config_dir`).
+//!
+//! API 25 adds server sound playback (`native_play_sound`).
+//!
 //! API 24 adds a server block setter (`native_set_block`).
 //!
 //! API 23 adds per-level server tick hooks (`native_level_tick_pre`,
@@ -116,13 +125,18 @@ use horizon_world::{
     nbt::Compound,
     registry::BlockStateId,
 };
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 24;
+pub(crate) const NATIVE_HOOKS_API: u32 = 28;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -511,6 +525,22 @@ impl Game<'_> {
     pub(super) fn native_hud(&mut self, batch: &mut HudBatch, corners: &mut Corners) {
         let _ = (batch, corners);
     }
+    /// The player-health HUD rows, once a frame the HUD draws them
+    /// (`HealthHud::layout`, not under F1): `inputs` carries the health,
+    /// food, air and vehicle state the layout reads, `wi`/`hi` the screen's
+    /// GUI size. A mod that sets `draws` replaces every row — armour,
+    /// hearts, food, air and the heights (`left_height`/`right_height`)
+    /// above the hotbar are the answer's to give; `bubble_pop_sound` too.
+    /// Nothing set draws Horizon's own.
+    pub(super) fn native_health_hud(
+        &mut self,
+        inputs: &horizon_client::hud_layout::HealthInputs,
+        wi: i32,
+        hi: i32,
+        draws: &mut Option<Vec<horizon_client::hud_layout::GuiDraw>>,
+    ) {
+        let _ = (inputs, wi, hi, draws);
+    }
     /// A key or mouse button went down or up, by its vanilla name
     /// (`key.keyboard.z`, `key.mouse.left`): keys on any screen (check
     /// `native_playing`), mouse buttons while playing. Repeats are left out.
@@ -820,9 +850,52 @@ impl Game<'_> {
     }
 }
 
+fn dimension_id(dimension: LevelDimension) -> &'static str {
+    match dimension {
+        LevelDimension::Overworld => "minecraft:overworld",
+        LevelDimension::Nether => "minecraft:the_nether",
+        LevelDimension::End => "minecraft:the_end",
+    }
+}
+
 /// Server-level helpers for native mods.
 #[allow(dead_code)]
 impl GameLevel<'_> {
+    /// Play a registered vanilla sound for nearby players in this server level.
+    /// The return value means queued, not heard. Unknown sound events are
+    /// rejected at dispatch when the server registry is available.
+    pub(super) fn native_play_sound(
+        &mut self,
+        sound: &str,
+        at: [f64; 3],
+        source: usize,
+        volume: f32,
+        pitch: f32,
+    ) -> bool {
+        if !self.native_authoritative || !sound.starts_with("minecraft:") {
+            return false;
+        }
+        if source >= horizon_client::settings::SOUND_SOURCES.len() {
+            return false;
+        }
+        let position_ok = at
+            .into_iter()
+            .all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX) / 8.0);
+        let gain_ok = volume.is_finite() && volume >= 0.0 && pitch.is_finite() && pitch >= 0.0;
+        if !position_ok || !gain_ok {
+            return false;
+        }
+        self.native_sounds.push(super::creatures::NativeSound {
+            dimension: dimension_id(self.dimension),
+            sound: sound.to_owned(),
+            at,
+            source: source as i32,
+            volume,
+            pitch,
+        });
+        true
+    }
+
     /// Queue particles in this authoritative level. A zero count sends one
     /// directional particle. The return value means accepted, not delivered.
     /// Block particle types require their block state; item, trail and
@@ -861,14 +934,9 @@ impl GameLevel<'_> {
         {
             return false;
         }
-        let dimension = match self.dimension {
-            LevelDimension::Overworld => "minecraft:overworld",
-            LevelDimension::Nether => "minecraft:the_nether",
-            LevelDimension::End => "minecraft:the_end",
-        };
         self.native_particles
             .push(super::lan_particles::QueuedParticle {
-                dimension,
+                dimension: dimension_id(self.dimension),
                 options: options.clone(),
                 state,
                 at,
@@ -1183,6 +1251,16 @@ impl Game<'_> {
     pub(super) fn native_set_setting(&self, mod_id: &str, key: &str, value: &str) {
         let dir = self.native_data_dir(mod_id);
         let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
+    }
+    /// The game's `config/` folder beside `options.txt`, shared by every mod
+    /// as on Fabric and NeoForge: a mod names its own files in it
+    /// (`config/<id>.json`, or a folder of its own). The same folder on the
+    /// window, its server thread and a LAN host; a dedicated server's is in
+    /// its own folder, beside `server.properties`. Made when missing. No
+    /// `self`, so it works from any hook (`Game::native_config_dir()`), the
+    /// level's too. API 26.
+    pub(super) fn native_config_dir() -> Result<PathBuf, String> {
+        config_dir(&Self::options_path())
     }
     /// Shows the panel beside container screens with these items (at most
     /// 8192), as the game's own slots in pages, with a search box; the
@@ -1737,6 +1815,13 @@ fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
     MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
 }
 
+/// `config/` beside `options`, made when missing.
+fn config_dir(options: &Path) -> Result<PathBuf, String> {
+    let dir = options.with_file_name("config");
+    fs::create_dir_all(&dir).map_err(|e| dir.display().to_string() + ": " + &e.to_string())?;
+    Ok(dir)
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -1862,6 +1947,24 @@ mod tests {
         assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
         assert_eq!(mod_menu("minecraft:brewing_stand"), None);
         assert_eq!(mod_menu("hopper"), None);
+    }
+
+    /// The config folder is `config/` beside `options.txt`, made when
+    /// missing.
+    #[test]
+    fn config_dir_is_config_beside_options() {
+        // Callable without a game, from any hook.
+        let _: fn() -> Result<std::path::PathBuf, String> = super::Game::native_config_dir;
+        use super::config_dir;
+        let root = std::env::temp_dir().join(format!("horizon-config-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let options = root.join("options.txt");
+        assert!(!root.join("config").exists());
+        let dir = config_dir(&options).unwrap();
+        assert_eq!(dir, root.join("config"));
+        assert!(dir.is_dir());
+        assert_eq!(config_dir(&options).unwrap(), dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left
