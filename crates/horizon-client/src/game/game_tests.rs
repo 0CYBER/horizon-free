@@ -100,8 +100,9 @@ pub(super) struct Info {
     /// `id()`: the test's registry id.
     key: String,
     def: TestDef,
-    /// The test instance block (`getTestBlockPos`).
+    /// The test instance block (`getTestBlockPos`), once there is one.
     pos: Pos,
+    has_pos: bool,
     dim: Dim,
     extra_rotation: Rotation,
     tick_count: i32,
@@ -119,7 +120,7 @@ impl Info {
         id: u32,
         key: String,
         def: TestDef,
-        pos: Pos,
+        pos: Option<Pos>,
         dim: Dim,
         extra_rotation: Rotation,
     ) -> Self {
@@ -127,7 +128,8 @@ impl Info {
             id,
             key,
             def,
-            pos,
+            pos: pos.unwrap_or_default(),
+            has_pos: pos.is_some(),
             dim,
             extra_rotation,
             tick_count: 0,
@@ -212,6 +214,31 @@ struct Runner {
     batch_pending: usize,
     tracked: Vec<Tracked>,
     halt_on_error: bool,
+    /// `newStructureSpawner`: where the tests without a block go.
+    grid: Option<Grid>,
+}
+
+/// `StructureGridSpawner` (for one dimension) without `clearOnBatch`.
+pub(super) struct Grid {
+    first: Pos,
+    next: Pos,
+    per_row: i32,
+    /// The z extent of `rowBounds` (an `AABB(BlockPos)` is one block deep).
+    row_z: (i32, i32),
+    count: i32,
+}
+
+impl Grid {
+    /// `new DimensionGridState(start)`.
+    pub(super) fn new(first: Pos, per_row: i32) -> Self {
+        Self {
+            first,
+            next: first,
+            per_row,
+            row_z: (first.2, first.2 + 1),
+            count: 0,
+        }
+    }
 }
 
 /// What a runner says to the server, sent on the next tick (a test's
@@ -260,7 +287,12 @@ impl Game<'_> {
     /// `TestCommand.trackAndStartRunner` for tests already built (batched by
     /// environment, 50 to a batch): the tracker and its listeners, then
     /// `GameTestRunner.start`.
-    pub(super) fn track_and_start_runner(&mut self, infos: Vec<Info>, halt_on_error: bool) {
+    pub(super) fn track_and_start_runner(
+        &mut self,
+        infos: Vec<Info>,
+        halt_on_error: bool,
+        grid: Option<Grid>,
+    ) {
         let tracked = infos
             .iter()
             .map(|i| Tracked {
@@ -305,6 +337,7 @@ impl Game<'_> {
             batch_pending: 0,
             tracked,
             halt_on_error,
+            grid,
         });
         self.run_batch(0);
     }
@@ -324,8 +357,7 @@ impl Game<'_> {
         // createStructuresForBatch: `StructureSpawner.IN_PLACE`.
         let mut spawned = Vec::new();
         for mut info in infos.drain(..) {
-            if self.prepare_test_structure(&mut info) {
-                info.start_execution(1);
+            if self.spawn_test(&mut info) {
                 spawned.push(info);
             }
         }
@@ -371,6 +403,51 @@ impl Game<'_> {
     }
 
     // ---- GameTestInfo ----
+
+    /// `GameTestRunner.spawn`: a test with a block is prepared where it is
+    /// (`StructureSpawner.IN_PLACE`), one without goes to the next place in
+    /// the grid (`StructureGridSpawner.spawnStructure`), or is dropped
+    /// (`NOT_SET`).
+    fn spawn_test(&mut self, info: &mut Info) -> bool {
+        if info.has_pos {
+            if !self.prepare_test_structure(info) {
+                return false;
+            }
+            info.start_execution(1);
+            return true;
+        }
+        let Some(mut grid) = self
+            .game_tests
+            .runner
+            .as_mut()
+            .and_then(|runner| runner.grid.take())
+        else {
+            return false;
+        };
+        info.pos = grid.next;
+        info.has_pos = true;
+        let prepared = self.prepare_test_structure(info);
+        if prepared {
+            info.start_execution(1);
+            if let Some(b) = self.test_bounding_box(info.pos) {
+                // `getTestBounds()`: the structure's box and its padding.
+                let width = b.max[0] - b.min[0] + 1;
+                grid.row_z = (grid.row_z.0.min(b.min[2]), grid.row_z.1.max(b.max[2] + 1));
+                grid.next.0 += width + 5;
+                grid.count += 1;
+                if grid.count >= grid.per_row {
+                    grid.count = 0;
+                    grid.next.2 += grid.row_z.1 - grid.row_z.0 + 6;
+                    grid.next.0 = grid.first.0;
+                    grid.row_z = (grid.next.2, grid.next.2 + 1);
+                }
+            }
+        }
+        if let Some(runner) = self.game_tests.runner.as_mut() {
+            runner.grid = Some(grid);
+        }
+        prepared
+    }
 
     /// `GameTestInfo.prepareTestStructure`: the test instance block with the
     /// test's data, then `placeStructure`. False when the block is gone.
@@ -422,7 +499,7 @@ impl Game<'_> {
     }
 
     /// `getTestBoundingBox`: the structure's box and its padding.
-    fn test_bounding_box(&self, pos: Pos) -> Option<BoundingBox> {
+    pub(super) fn test_bounding_box(&self, pos: Pos) -> Option<BoundingBox> {
         let padding = self.test_holder_padding(pos);
         let inner = self.test_structure_box(pos)?;
         Some(BoundingBox::new(
@@ -916,7 +993,7 @@ mod tests {
             1,
             "minecraft:t".into(),
             TestDef::sample(block_based, max_ticks, setup_ticks),
-            (0, 64, 0),
+            Some((0, 64, 0)),
             Dim::Overworld,
             Rotation::None,
         )

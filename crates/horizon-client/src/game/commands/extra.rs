@@ -188,7 +188,7 @@ fn civil(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
 
 impl Game<'_> {
     /// CommandSourceStack.getPlayerOrException.
-    fn source_player(&self) -> R<Target> {
+    pub(super) fn source_player(&self) -> R<Target> {
         match self.command_source.map(|s| s.entity) {
             None | Some(Some(Target::Player)) => Ok(Target::Player),
             _ => Err(err("permissions.requires.player", &[])),
@@ -673,32 +673,16 @@ impl Game<'_> {
 
     // ---- /test ----------------------------------------------------------
 
-    /// `TestCommand`. Horizon has no game test instances or test runner: every
-    /// finder comes back empty, as in a world without test instance blocks.
+    /// `TestCommand`: running, resetting and clearing tests is
+    /// `test_runs`; `verify`, `create`, `locate` and `pos` are not ported and
+    /// answer as in a world without test instance blocks.
     pub(super) fn cmd_test(&mut self, id: &str, ctx: &Context) -> R<i32> {
         match id {
-            // run <tests>, runmultiple, verify: GameTestRunner.
-            "test.run" | "test.verify" | "test.create" => Err(err("command.failed", &[])),
-            // runthese/runclosest/runthat/runfailed: TestFinder finds nothing.
-            "test.run.found" => {
-                if ctx.literals.iter().any(|l| l == "runthat") {
-                    self.source_player()?;
-                }
-                self.feedback(Text::translate("commands.test.no_tests", &[]));
-                Ok(0)
+            "test.run" | "test.run.found" | "test.clear" | "test.stop" => {
+                self.cmd_test_runs(id, ctx)
             }
-            // reset*/clear*: TestCommand.reset throws CLEAR_NO_TESTS too.
-            "test.clear" => {
-                if ctx
-                    .literals
-                    .iter()
-                    .any(|l| l == "resetthat" || l == "clearthat")
-                {
-                    self.source_player()?;
-                }
-                Err(err("commands.test.clear.error.no_tests", &[]))
-            }
-            "test.stop" => Ok(1),
+            // verify, create: not ported.
+            "test.verify" | "test.create" => Err(err("command.failed", &[])),
             "test.locate" => {
                 // CommandSourceStack.sendSystemMessage: no feedback rule.
                 if !self.command_source.is_some_and(|s| s.silent) {
