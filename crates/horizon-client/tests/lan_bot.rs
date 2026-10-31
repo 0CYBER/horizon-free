@@ -183,6 +183,7 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            shoulders: [None; 2],
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,
@@ -448,6 +449,7 @@ fn sprint_commands_survive_keyboard_input_changes() {
     }
     let id = s.hub.guests[0].entity_id;
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     s.hub.guests[0].inbox.push_back((
         S::PlayerCommand(play::PlayerCommand {
             id,
@@ -508,6 +510,7 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
         thread::yield_now();
     }
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     let at = s.hub.guests[0].position;
     let below = [
         at[0].floor() as i32,
@@ -613,6 +616,7 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
         thread::yield_now();
     }
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     // The join's teleport accepted: the hub takes moves.
     s.hub.guests[0].awaiting_teleport = None;
     let at = s.hub.guests[0].position;

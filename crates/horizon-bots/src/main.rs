@@ -63,6 +63,8 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --attack NAME          attack the player NAME twice a second, from wherever the bot is (a reach test);
                          the report gives each bot's last health
   --attack-after S       start attacking S seconds after joining; default 5
+  --no-loaded            never say the level is loaded (ServerboundPlayerLoadedPacket): a vanilla server
+                         ignores the player's moves and actions for its first 3 seconds
   --no-read              stop reading from the server once spawned (a client that lets the
                          server's replies pile up)
   --join-every SECONDS   default 1
@@ -135,6 +137,7 @@ struct Options {
     attack_after: f64,
     flood: usize,
     no_read: bool,
+    no_loaded: bool,
     height: f64,
     ground: bool,
     /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
@@ -162,6 +165,7 @@ fn options() -> Result<Options, String> {
         attack_after: 5.0,
         flood: 100,
         no_read: false,
+        no_loaded: false,
         height: 24.0,
         ground: false,
         give: Vec::new(),
@@ -178,6 +182,10 @@ fn options() -> Result<Options, String> {
         }
         if arg == "--no-read" {
             o.no_read = true;
+            continue;
+        }
+        if arg == "--no-loaded" {
+            o.no_loaded = true;
             continue;
         }
         if arg == "--ground" {
@@ -732,7 +740,9 @@ fn run_bot(
     bot.joined_after_ms
         .store(asked.elapsed().as_millis() as u64, Ordering::SeqCst);
     let send = |body: Vec<u8>| lock(&writer).send(&body).is_ok();
-    send(raw(sb::PLAYER_LOADED, |_| {}));
+    if !o.no_loaded {
+        send(raw(sb::PLAYER_LOADED, |_| {}));
+    }
     bot.deaf.store(o.no_read, Ordering::Relaxed);
     // What the costly floods need in hand (creative: the server takes the bot's word for it).
     let tool = match behaviour {

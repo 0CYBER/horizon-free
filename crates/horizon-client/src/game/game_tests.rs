@@ -14,6 +14,7 @@ use super::{
     Dim, Game,
     structure_blocks::template_size,
     test_entities::{aabb_of, inflate},
+    test_environments::Activation,
     test_instances::TestDef,
 };
 use horizon_client::{
@@ -272,10 +273,43 @@ impl Info {
 }
 
 /// One `GameTestBatch`.
-struct Batch {
-    index: i32,
-    environment: String,
-    infos: Vec<Info>,
+pub(super) struct Batch {
+    pub(super) index: i32,
+    pub(super) environment: String,
+    pub(super) infos: Vec<Info>,
+}
+
+/// What `GameTestRunner.Builder` is given.
+pub(super) struct RunnerOptions {
+    halt_on_error: bool,
+    batch_size: usize,
+    clear_between_batches: bool,
+    grid_for_existing: bool,
+    grid: Option<Grid>,
+}
+
+impl RunnerOptions {
+    pub(super) fn new(halt_on_error: bool, grid: Option<Grid>) -> Self {
+        Self {
+            halt_on_error,
+            batch_size: 50,
+            clear_between_batches: false,
+            grid_for_existing: false,
+            grid,
+        }
+    }
+
+    /// `/test verify`: `batcher(fromGameTestInfo(100))`, the grid for
+    /// existing tests too, `haltOnError`, `clearBetweenBatches`.
+    pub(super) fn verify(grid: Grid) -> Self {
+        Self {
+            halt_on_error: true,
+            batch_size: 100,
+            clear_between_batches: true,
+            grid_for_existing: true,
+            grid: Some(grid),
+        }
+    }
 }
 
 /// What `MultipleTestTracker` knows of a test.
@@ -286,16 +320,16 @@ struct Tracked {
     failed: bool,
 }
 
-/// `GameTestBatchFactory.fromGameTestInfo`: one batch per environment (and
-/// dimension), in 50s.
-fn batch_infos(infos: Vec<Info>) -> Vec<Batch> {
+/// `GameTestBatchFactory.fromGameTestInfo(size)`: one batch per environment
+/// (and dimension), `size` to a batch.
+fn batch_infos(infos: Vec<Info>, size: usize) -> Vec<Batch> {
     let mut batches: Vec<Batch> = Vec::new();
     let mut counts: Vec<(String, i32)> = Vec::new();
     for info in infos {
         let env = info.def.environment.clone();
         let open = batches
             .iter_mut()
-            .find(|b| b.environment == env && b.infos.len() < 50);
+            .find(|b| b.environment == env && b.infos.len() < size);
         if let Some(batch) = open {
             batch.infos.push(info);
             continue;
@@ -315,6 +349,37 @@ fn batch_infos(infos: Vec<Info>) -> Vec<Batch> {
             environment: env,
             infos: vec![info],
         });
+    }
+    batches
+}
+
+/// `/test verify`'s batches: each test in each rotation 100 times, with
+/// `RetryOptions(1, true)`, at the test's block if it has one; the batch
+/// index is the rotation's ordinal.
+pub(super) fn verify_batches(infos: &[Info], mut next_id: impl FnMut() -> u32) -> Vec<Batch> {
+    let mut batches = Vec::new();
+    for info in infos {
+        for (ordinal, rotation) in Rotation::ALL.into_iter().enumerate() {
+            let copies = (0..100)
+                .map(|_| {
+                    let pos = info.has_pos.then_some(info.pos);
+                    Info::new(
+                        next_id(),
+                        info.key.clone(),
+                        info.def.clone(),
+                        pos,
+                        info.dim,
+                        rotation,
+                    )
+                    .with_retry(Retry::new(1, true))
+                })
+                .collect();
+            batches.push(Batch {
+                index: ordinal as i32,
+                environment: info.def.environment.clone(),
+                infos: copies,
+            });
+        }
     }
     batches
 }
@@ -340,6 +405,15 @@ struct Runner {
     batch_pending: usize,
     tracked: Vec<Tracked>,
     halt_on_error: bool,
+    /// `GameTestBatchFactory.fromGameTestInfo(maxTestsPerBatch)`, for reruns.
+    batch_size: usize,
+    /// `clearBetweenBatches`.
+    clear_between_batches: bool,
+    /// The grid is also `existingStructureSpawner` (`/test verify`): a test
+    /// with a block is moved onto it.
+    grid_for_existing: bool,
+    /// The tests of the batch before: their blocks, for `clearBetweenBatches`.
+    last_batch: Vec<Pos>,
     /// `newStructureSpawner`: where the tests without a block go.
     grid: Option<Grid>,
     /// `ReportGameListener`'s (attempts, successes), by original test.
@@ -358,6 +432,10 @@ pub(super) struct Grid {
     /// The z extent of `rowBounds` (an `AABB(BlockPos)` is one block deep).
     row_z: (i32, i32),
     count: i32,
+    /// `clearOnBatch`.
+    clear_on_batch: bool,
+    /// `testsInLastBatch`: their blocks.
+    last_batch: Vec<Pos>,
 }
 
 impl Grid {
@@ -369,7 +447,15 @@ impl Grid {
             per_row,
             row_z: (first.2, first.2 + 1),
             count: 0,
+            clear_on_batch: false,
+            last_batch: Vec::new(),
         }
+    }
+
+    /// `clearOnBatch = true`.
+    pub(super) fn clearing(mut self) -> Self {
+        self.clear_on_batch = true;
+        self
     }
 }
 
@@ -394,6 +480,8 @@ pub(super) struct GameTests {
     /// `FailedTestTracker.LAST_FAILED_TESTS`.
     pub(super) failed: Vec<String>,
     outbox: Vec<Out>,
+    /// `GameTestRunner.currentEnvironment`.
+    environment: Option<Activation>,
 }
 
 impl GameTests {
@@ -412,7 +500,10 @@ impl Game<'_> {
             self.game_tests.halting = true;
         } else {
             self.game_tests.ticker.clear();
-            self.game_tests.runner = None;
+            if self.game_tests.runner.take().is_some() {
+                // GameTestRunner.stop: endCurrentEnvironment.
+                self.end_test_environment();
+            }
         }
     }
 
@@ -425,8 +516,15 @@ impl Game<'_> {
         halt_on_error: bool,
         grid: Option<Grid>,
     ) {
-        let tracked = infos
+        let batches = batch_infos(infos, 50);
+        self.track_and_start_batches(batches, RunnerOptions::new(halt_on_error, grid));
+    }
+
+    /// `TestCommand.trackAndStartRunner` for batches already made.
+    pub(super) fn track_and_start_batches(&mut self, batches: Vec<Batch>, options: RunnerOptions) {
+        let tracked = batches
             .iter()
+            .flat_map(|b| &b.infos)
             .map(|i| Tracked {
                 id: i.id,
                 required: i.def.required,
@@ -434,14 +532,17 @@ impl Game<'_> {
                 failed: false,
             })
             .collect();
-        let batches = batch_infos(infos);
         self.game_tests.runner = Some(Runner {
             batches,
             current: 0,
             batch_pending: 0,
             tracked,
-            halt_on_error,
-            grid,
+            halt_on_error: options.halt_on_error,
+            batch_size: options.batch_size,
+            clear_between_batches: options.clear_between_batches,
+            grid_for_existing: options.grid_for_existing,
+            last_batch: Vec::new(),
+            grid: options.grid,
             reports: Vec::new(),
             scheduled: Vec::new(),
             stopped: false,
@@ -454,12 +555,43 @@ impl Game<'_> {
         let Some(runner) = self.game_tests.runner.as_mut() else {
             return;
         };
-        let Some(batch) = runner.batches.get_mut(index) else {
-            // endCurrentEnvironment, runScheduledRerunTests.
+        if index >= runner.batches.len() {
+            self.end_test_environment();
             self.run_scheduled_reruns();
             return;
-        };
+        }
         runner.current = index;
+        // clearBetweenBatches: the batch before is cleared and its blocks
+        // destroyed.
+        let cleared = if index > 0 && runner.clear_between_batches {
+            std::mem::take(&mut runner.last_batch)
+        } else {
+            Vec::new()
+        };
+        // StructureGridSpawner.onBatchStart (clearOnBatch).
+        let grid_cleared = runner.grid.as_mut().filter(|g| g.clear_on_batch).map(|g| {
+            g.next = g.first;
+            g.row_z = (g.first.2, g.first.2 + 1);
+            g.count = 0;
+            std::mem::take(&mut g.last_batch)
+        });
+        for pos in cleared {
+            if let Some(area) = self.test_bounding_box(pos) {
+                self.clear_test_space(&area);
+            }
+            self.set_test_block_state(pos, "minecraft:air", flags::UPDATE_ALL);
+        }
+        for pos in grid_cleared.into_iter().flatten() {
+            if let Some(area) = self.test_bounding_box(pos) {
+                self.clear_test_space(&area);
+            }
+        }
+        let Some(runner) = self.game_tests.runner.as_mut() else {
+            return;
+        };
+        let Some(batch) = runner.batches.get_mut(index) else {
+            return;
+        };
         let mut infos = std::mem::take(&mut batch.infos);
         let (environment, batch_number) = (batch.environment.clone(), batch.index);
         // createStructuresForBatch: `StructureSpawner.IN_PLACE`.
@@ -473,8 +605,15 @@ impl Game<'_> {
             "Running test environment '{environment}' batch {batch_number} ({} tests)...",
             spawned.len()
         );
-        // TestEnvironmentDefinition.activate: the environments' definitions
-        // are not read, so none changes the level.
+        // endCurrentEnvironment, then TestEnvironmentDefinition.activate.
+        self.end_test_environment();
+        match self.test_environment(&environment) {
+            Some(definition) => {
+                let activation = self.activate_test_environment(definition);
+                self.game_tests.environment = Some(activation);
+            }
+            None => log::error!("Missing test environment {environment}"),
+        }
         self.game_tests.outbox.push(Out::Console {
             text: Text::translate(
                 "commands.test.batch.starting",
@@ -484,8 +623,16 @@ impl Game<'_> {
         });
         if let Some(runner) = self.game_tests.runner.as_mut() {
             runner.batch_pending = spawned.len();
+            runner.last_batch = spawned.iter().map(|i| i.pos).collect();
         }
         self.game_tests.ticker.extend(spawned);
+    }
+
+    /// `GameTestRunner.endCurrentEnvironment`.
+    fn end_test_environment(&mut self) {
+        if let Some(activation) = self.game_tests.environment.take() {
+            self.tear_down_test_environment(activation);
+        }
     }
 
     /// `GameTestRunner.runScheduledRerunTests`: the reruns are batched
@@ -508,7 +655,7 @@ impl Game<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        runner.batches = batch_infos(scheduled);
+        runner.batches = batch_infos(scheduled, runner.batch_size);
         runner.stopped = false;
         self.run_batch(0);
     }
@@ -555,7 +702,12 @@ impl Game<'_> {
     /// the grid (`StructureGridSpawner.spawnStructure`), or is dropped
     /// (`NOT_SET`).
     fn spawn_test(&mut self, info: &mut Info) -> bool {
-        if info.has_pos {
+        let in_place = !self
+            .game_tests
+            .runner
+            .as_ref()
+            .is_some_and(|r| r.grid_for_existing);
+        if info.has_pos && in_place {
             if !self.prepare_test_structure(info) {
                 return false;
             }
@@ -575,6 +727,7 @@ impl Game<'_> {
         info.has_pos = true;
         let prepared = self.prepare_test_structure(info);
         if prepared {
+            grid.last_batch.push(info.pos);
             info.start_execution(1);
             self.test_structure_loaded(info);
             if let Some(b) = self.test_bounding_box(info.pos) {
@@ -1260,6 +1413,27 @@ mod tests {
             Dim::Overworld,
             Rotation::None,
         )
+    }
+
+    #[test]
+    fn verify_runs_each_rotation_a_hundred_times_in_its_own_batch() {
+        let mut id = 0;
+        let batches = verify_batches(&[info(true, 100, 0)], || {
+            id += 1;
+            id
+        });
+        assert_eq!(batches.len(), 4);
+        for (i, batch) in batches.iter().enumerate() {
+            assert_eq!(batch.index, i as i32);
+            assert_eq!(batch.infos.len(), 100);
+            assert!(
+                batch
+                    .infos
+                    .iter()
+                    .all(|t| t.extra_rotation == Rotation::ALL[i])
+            );
+        }
+        assert_eq!(id, 400);
     }
 
     #[test]

@@ -79,12 +79,31 @@ fn menu_title(tag: &Tag) -> horizon_client::text::Text {
     remote_text(tag).resolve_legacy()
 }
 
-/// A player message Chat Delay holds back, and its signature.
+/// A player message Chat Delay holds back, its signature and trust level.
 type QueuedChat = (
     horizon_client::text::Text,
     horizon_client::chat::ChatSource,
     Option<Signature>,
+    ChatTrust,
 );
+
+/// `ChatTrustLevel`; a modified message keeps the signed content it was
+/// changed from.
+pub(super) enum ChatTrust {
+    Secure,
+    Modified(String),
+    NotSecure,
+}
+impl ChatTrust {
+    /// `ChatTrustLevel.createTag`.
+    fn tag(&self) -> Option<horizon_client::chat::Tag> {
+        match self {
+            Self::Secure => None,
+            Self::Modified(original) => Some(horizon_client::chat::Tag::modified(original)),
+            Self::NotSecure => Some(horizon_client::chat::Tag::not_secure()),
+        }
+    }
+}
 
 /// Streaming needs a generator; a server world never generates.
 struct NoTerrain;
@@ -251,6 +270,8 @@ pub(super) struct Remote {
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
     joined: bool,
+    /// `ServerReconfigScreen` is up since this tick.
+    reconfiguring: Option<u64>,
     /// `handleLogin` ran: vanilla's `Minecraft.player` exists from then on,
     /// while here the player is made at the first teleport.
     pub(super) logged_in: bool,
@@ -369,6 +390,8 @@ pub(super) struct Remote {
     /// own player, as the server synced them.
     pub(super) own_arrows: i32,
     pub(super) own_stingers: i32,
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT` of the own player.
+    pub(super) own_shoulders: [Option<i32>; 2],
     /// The local player's profile UUID (always in the level).
     profile: u128,
     /// The local player's profile name: its score holder and team member.
@@ -508,10 +531,13 @@ impl Game<'_> {
         if let Err(error) = self.join_server(address, name, None, cookies) {
             log::warn!("Horizon: could not join server: {error}");
             if self.title.is_none() {
-                self.title = Some(horizon_client::title::Title::new(
-                    std::env::current_dir()?.join("saves"),
-                    &self.options.resources,
-                ));
+                self.title = Some(
+                    horizon_client::title::Title::new(
+                        std::env::current_dir()?.join("saves"),
+                        &self.options.resources,
+                    )
+                    .with_user(|| self.options.player_name()),
+                );
             }
             let skip = self.settings.file.bool("skipMultiplayerWarning");
             if let Some(title) = &mut self.title {
@@ -668,6 +694,7 @@ impl Game<'_> {
             lang,
             registries: Arc::new(Dynamic::default()),
             joined: false,
+            reconfiguring: None,
             logged_in: false,
             status: "Connecting to the server...".into(),
             entity_id: 0,
@@ -726,6 +753,7 @@ impl Game<'_> {
             own_invisible: false,
             own_arrows: 0,
             own_stingers: 0,
+            own_shoulders: [None; 2],
             profile: 0,
             profile_name: String::new(),
             destroying: None,
@@ -833,7 +861,8 @@ impl Game<'_> {
             r.clear_sections(self.world.layout());
         }
         let saves = std::env::current_dir()?.join("saves");
-        let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources)
+            .with_user(|| self.options.player_name());
         title.last_server = self.settings.file.string("lastServer");
         title.skip_multiplayer_warning = self.settings.file.bool("skipMultiplayerWarning");
         if single_player && reason.is_none() {
@@ -981,7 +1010,7 @@ impl Game<'_> {
         content: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
     ) -> bool {
-        self.signed_chat_line(content, source, None)
+        self.signed_chat_line(content, source, None, ChatTrust::Secure)
     }
     /// `chat_line` of a player message, keeping its signature for a
     /// deletion (`GuiMessage.signature`).
@@ -990,16 +1019,26 @@ impl Game<'_> {
         content: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
         signature: Option<Signature>,
+        trust: ChatTrust,
     ) -> bool {
+        // ChatListener.showMessageToPlayer: Only Show Secure Chat drops what is not secure.
+        if matches!(trust, ChatTrust::NotSecure) && self.settings.file.bool("onlyShowSecureChat") {
+            return false;
+        }
         if !self.ui.chat.shows(source) {
             return false;
         }
         let text = content.plain();
         let focused = self.screen == Screen::Chat;
         if source == horizon_client::chat::ChatSource::Player {
-            self.ui
-                .chat
-                .add_signed(&self.gui.atlas, content, signature, self.ticks, focused);
+            self.ui.chat.add_signed(
+                &self.gui.atlas,
+                content,
+                signature,
+                trust.tag(),
+                self.ticks,
+                focused,
+            );
         } else {
             // addServerSystemMessage and addClientSystemMessage both carry
             // GuiMessageTag.systemSinglePlayer: the grey bar at the line's left.
@@ -1029,14 +1068,61 @@ impl Game<'_> {
         &mut self,
         line: horizon_client::text::Text,
         signature: Option<Signature>,
+        trust: ChatTrust,
     ) {
         let source = horizon_client::chat::ChatSource::Player;
         if self.chat_delay_ms() > 0 {
             if let Some(r) = self.remote.as_mut() {
-                r.chat_queue.push_back((line, source, signature));
+                r.chat_queue.push_back((line, source, signature, trust));
             }
         } else {
-            self.accept_chat(line, source, signature);
+            self.accept_chat(line, source, signature, trust);
+        }
+    }
+
+    /// `ChatTrustLevel.evaluate` of a player message, with
+    /// `ChatListener.evaluateTrustLevel`: the player's own message on their
+    /// own server is secure. `decorated` is the line shown, `unsigned` the
+    /// server's replacement for the signed content.
+    fn chat_trust(
+        &self,
+        sender: u128,
+        signed: bool,
+        timestamp: i64,
+        content: &str,
+        unsigned: Option<&Tag>,
+        decorated: &horizon_client::text::Text,
+    ) -> ChatTrust {
+        use horizon_client::scoreboard::{comp_text, tag_to_json};
+        if self.integrated.is_some() && self.remote.as_ref().is_some_and(|r| r.profile == sender) {
+            return ChatTrust::Secure;
+        }
+        // PlayerChatMessage.hasExpiredClient: MESSAGE_EXPIRES_AFTER_CLIENT is
+        // the server's five minutes and two more.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let expired = now
+            > timestamp.saturating_add(
+                horizon_protocol::secure_chat::EXPIRES_AFTER_SERVER + 2 * 60 * 1000,
+            );
+        if !signed || expired {
+            return ChatTrust::NotSecure;
+        }
+        // ChatTrustLevel.isModified: the signed content is not in the line, or
+        // the replacement uses a font other than the default.
+        let font_changed = unsigned.is_some_and(|tag| {
+            comp_text(&tag_to_json(tag)).spans.iter().any(|span| {
+                span.style
+                    .font
+                    .as_deref()
+                    .is_some_and(|font| font != "minecraft:default")
+            })
+        });
+        if !decorated.plain().contains(content) || font_changed {
+            ChatTrust::Modified(content.to_owned())
+        } else {
+            ChatTrust::Secure
         }
     }
 
@@ -1056,7 +1142,7 @@ impl Game<'_> {
         };
         let queued = r.chat_queue.len();
         r.chat_queue
-            .retain(|(_, _, s)| s.as_ref() != Some(&signature));
+            .retain(|(_, _, s, _)| s.as_ref() != Some(&signature));
         if r.chat_queue.len() == queued {
             self.ui
                 .chat
@@ -1071,8 +1157,9 @@ impl Game<'_> {
         line: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
         signature: Option<Signature>,
+        trust: ChatTrust,
     ) -> bool {
-        let shown = self.signed_chat_line(line, source, signature);
+        let shown = self.signed_chat_line(line, source, signature, trust);
         if shown && let Some(r) = self.remote.as_mut() {
             r.chat_previous = Some(Instant::now());
         }
@@ -1118,10 +1205,10 @@ impl Game<'_> {
         }
         // A message the Chat option hides is dropped and the next one is tried,
         // until one shows.
-        while let Some((line, source, signature)) =
+        while let Some((line, source, signature, trust)) =
             self.remote.as_mut().and_then(|r| r.chat_queue.pop_front())
         {
-            if self.accept_chat(line, source, signature) {
+            if self.accept_chat(line, source, signature, trust) {
                 break;
             }
         }
@@ -1137,8 +1224,8 @@ impl Game<'_> {
         else {
             return;
         };
-        for (line, source, signature) in queue {
-            self.signed_chat_line(line, source, signature);
+        for (line, source, signature, trust) in queue {
+            self.signed_chat_line(line, source, signature, trust);
         }
         if let Some(r) = self.remote.as_mut() {
             r.chat_previous = None;
@@ -1297,6 +1384,7 @@ impl Game<'_> {
                     self.close_dialogs();
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
+                        // handleLogin: startWaitingForNewLevel with Reason.OTHER.
                         r.profile = uuid;
                         r.profile_name = name.clone();
                         // LevelLoadingScreen's line: no player name.
@@ -1314,6 +1402,19 @@ impl Game<'_> {
                 Event::QuietCommands => {
                     if let Some(remote) = &mut self.remote {
                         remote.quiet_commands = true;
+                    }
+                }
+                Event::Reconfiguring => {
+                    // handleConfigurationStart: the held-back chat shows, then
+                    // clearClientLevel opens ServerReconfigScreen over no level.
+                    self.flush_chat_queue();
+                    self.close_dialogs();
+                    self.player = None;
+                    self.screen = Screen::Playing;
+                    self.capture(false);
+                    let ticks = self.ticks;
+                    if let Some(r) = self.remote.as_mut() {
+                        r.reconfiguring = Some(ticks);
                     }
                 }
                 Event::Reconfigured(registries) => {
@@ -2338,7 +2439,13 @@ impl Game<'_> {
                 self.debug_charts.ping.log(delay);
             }
             C::Login(p) => {
+                self.test_highlights.clear();
                 self.level.hardcore = p.hardcore;
+                // handleLogin: startWaitingForNewLevel with Reason.OTHER, which
+                // replaces ServerReconfigScreen.
+                if let Some(r) = self.remote.as_mut() {
+                    r.reconfiguring = None;
+                }
                 // handleLogin makes a new MultiPlayerGameMode (carried index 0) and a
                 // new LocalPlayer (slot 0, no effects).
                 self.selected = 0;
@@ -2399,6 +2506,8 @@ impl Game<'_> {
                 );
                 self.enter_remote_dimension(&p.spawn, true, reason);
                 if dimension_changed {
+                    // LevelExtractor.setLevel: a new level drops the highlights.
+                    self.test_highlights.clear();
                     let (music, _) = self.situational_music();
                     self.music.stop_playing(music.as_ref(), &mut self.audio);
                 }
@@ -2838,6 +2947,12 @@ impl Game<'_> {
                             (13, Value::Int(count)) => {
                                 if let Some(r) = self.remote.as_mut() {
                                     r.own_stingers = *count;
+                                }
+                            }
+                            (19 | 20, Value::Id(v)) => {
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_shoulders[usize::from(*index == 20)] =
+                                        (*v > 0).then(|| (*v - 1).clamp(0, 4));
                                 }
                             }
                             (17, Value::Float(amount)) => {
@@ -3558,6 +3673,8 @@ impl Game<'_> {
                     self.cooldowns.add(group, p.duration);
                 }
             }
+            // ClientPacketListener.handleGameTestHighlightPos.
+            C::GameTestHighlightPos(p) => self.highlight_test_pos(p.absolute, p.relative),
             // ClientPacketListener.handleTestInstanceBlockStatus.
             C::TestInstanceBlockStatus(p) => {
                 self.block_editor_status(remote_text(&p.status), p.size);
@@ -3598,17 +3715,28 @@ impl Game<'_> {
                     .as_deref()
                     .and_then(horizon_protocol::secure_chat::signature);
                 r.signatures.push(&last_seen, signature.as_ref());
+                // ChatListener.handlePlayerChatMessage: Only Show Secure Chat
+                // shows the signed content, never the server's replacement.
                 let content = p
                     .unsigned_content
                     .as_ref()
+                    .filter(|_| !self.settings.file.bool("onlyShowSecureChat"))
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
-                self.handle_player_chat(line, signature);
+                let trust = self.chat_trust(
+                    p.sender,
+                    signature.is_some(),
+                    p.timestamp,
+                    &p.content,
+                    p.unsigned_content.as_ref(),
+                    &line,
+                );
+                self.handle_player_chat(line, signature, trust);
             }
             C::DisguisedChat(p) => {
                 let content = horizon_client::scoreboard::tag_to_json(&p.message);
                 let line = self.format_chat(&p.chat_type, content);
-                self.handle_player_chat(line, None);
+                self.handle_player_chat(line, None, ChatTrust::Secure);
             }
             C::DeleteChat(p) => self.handle_delete_chat(&p.signature)?,
             C::PlayerInfoUpdate(p) => {
@@ -4616,15 +4744,7 @@ impl Game<'_> {
         self.ticks += 1;
         // Hud.tick ends with ChatComponent.tick.
         self.ui.chat.tick(&self.gui.atlas, self.ticks);
-        // AbstractSignEditScreen.tick: the editor closes once its sign is removed.
-        if let Some(edit) = &self.sign_edit
-            && !matches!(
-                self.world.block_entities.get(&edit.pos),
-                Some(BlockEntity::Sign(_))
-            )
-        {
-            self.close_sign_editor();
-        }
+        self.tick_sign_editor();
         self.track_experience_display();
         self.tick_enchanting_book();
         // Leaving a slot clears its bundle's selection here and on the server.
@@ -7721,6 +7841,10 @@ impl Game<'_> {
         }
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
+        if let Some(since) = r.reconfiguring {
+            self.draw_reconfiguring(batch, since);
+            return true;
+        }
         if r.joined || loading {
             // LevelLoadingScreen: the world's terrain comes in. A server's
             // chunk status view and progress are the integrated server's alone
@@ -7754,6 +7878,35 @@ impl Game<'_> {
             }
         })
     }
+    /// `ServerReconfigScreen`: a vertical layout of cells padded by 10, the
+    /// title (9 high) over Disconnect (150 x 20), centred. The title's and the
+    /// button's top left corners.
+    fn reconfigure_layout(&self, (w, h): (f32, f32)) -> ((f32, f32), (f32, f32)) {
+        let title = horizon_client::text::Text::translate("connect.reconfiguring", &[]);
+        let title_w = self.gui.atlas.font.width_text(&title).ceil() as i32;
+        let width = (title_w + 20).max(170);
+        let left = ((w as i32 - width) as f32 * 0.5) as i32;
+        let top = ((h as i32 - 69) as f32 * 0.5) as i32;
+        let across = |child: i32| (10.0 + ((width - child - 10) as f32 - 10.0) * 0.5) as i32;
+        (
+            ((left + across(title_w)) as f32, (top + 10) as f32),
+            ((left + across(150)) as f32, (top + 39) as f32),
+        )
+    }
+    /// `ServerReconfigScreen` over the panorama; Disconnect wakes up after
+    /// `DISCONNECT_TIME` (600 ticks).
+    fn draw_reconfiguring(&self, batch: &mut HudBatch, since: u64) {
+        let atlas = &self.gui.atlas;
+        let (w, h) = (batch.width, batch.height);
+        horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        let title = horizon_client::text::Text::translate("connect.reconfiguring", &[]);
+        let ((tx, ty), (bx, by)) = self.reconfigure_layout((w, h));
+        batch.text_styled(atlas, &title, tx, ty, u32::MAX, true);
+        let label = horizon_client::text::Text::translate("gui.disconnect", &[]);
+        let active = self.ticks.saturating_sub(since) >= 600;
+        let hover = horizon_client::ui::hovered(self.cursor, bx, by, 150.0, 20.0);
+        horizon_client::ui::button(batch, atlas, bx, by, 150.0, 20.0, &label, active, hover);
+    }
     /// `ConnectScreen`'s Cancel: a server's (single player's server isn't
     /// joined through `ConnectScreen`), until the login is done.
     fn connect_cancel(&self, (w, h): (f32, f32)) -> Option<(f32, f32)> {
@@ -7765,6 +7918,17 @@ impl Game<'_> {
     /// (`connect.aborted`) and goes back. Escape does nothing there
     /// (`shouldCloseOnEsc` is false).
     pub(super) fn connect_screen_click(&mut self) -> Result<()> {
+        // ServerReconfigScreen's Disconnect, once it is active.
+        if let Some(since) = self.remote.as_ref().and_then(|r| r.reconfiguring) {
+            let (_, (x, y)) = self.reconfigure_layout(self.gui_size());
+            if self.ticks.saturating_sub(since) >= 600
+                && horizon_client::ui::hovered(self.cursor, x, y, 150.0, 20.0)
+            {
+                self.audio.play_button_click();
+                self.leave_server(None)?;
+            }
+            return Ok(());
+        }
         let Some((x, y)) = self.connect_cancel(self.gui_size()) else {
             return Ok(());
         };

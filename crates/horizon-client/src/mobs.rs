@@ -875,6 +875,9 @@ pub struct Extra {
     /// `LivingEntity.DATA_STINGER_COUNT_ID`: the bee stingers stuck in a
     /// player (`BeeStingerLayer`).
     pub stinger_count: i32,
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the variant of the
+    /// parrot on each shoulder (`ParrotOnShoulderLayer`).
+    pub shoulder_parrots: [Option<i32>; 2],
     pub main_hand_left: bool,
     /// The skin layers a player hides (`PlayerModelPart` bits, set to
     /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
