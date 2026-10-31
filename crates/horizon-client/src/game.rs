@@ -3637,8 +3637,25 @@ impl Game<'_> {
         }
         self.process_level_events()
     }
-    /// `AbstractCandleBlock.extinguish`: the smoke from each wick, at
-    /// CandleBlock.PARTICLE_OFFSETS (sixteenths of a block), rising 0.1.
+    /// `AbstractCandleBlock.getParticleOffsets`, in sixteenths of a block:
+    /// `CandleBlock.PARTICLE_OFFSETS` by its `candles` (one to four wicks),
+    /// then `CandleCakeBlock.PARTICLE_OFFSETS`, whose one wick sits a block up.
+    fn candle_offsets(name: &str, candles: Option<usize>) -> &'static [[u8; 3]] {
+        const OFFSETS: [&[[u8; 3]]; 5] = [
+            &[[8, 8, 8]],
+            &[[6, 7, 8], [10, 8, 7]],
+            &[[8, 5, 10], [6, 7, 8], [9, 8, 7]],
+            &[[7, 5, 9], [10, 7, 9], [6, 7, 6], [9, 8, 6]],
+            &[[8, 16, 8]],
+        ];
+        if name.ends_with("candle_cake") {
+            OFFSETS[4]
+        } else {
+            OFFSETS[candles.unwrap_or(1).clamp(1, 4) - 1]
+        }
+    }
+    /// `AbstractCandleBlock.extinguish`: the smoke from each wick, at the
+    /// block's `getParticleOffsets` (sixteenths of a block), rising 0.1.
     fn candle_smoke(&mut self, pos: [i32; 3], state: BlockStateId) {
         use horizon_client::particles::{ParticleOptions, ParticleType};
         let candles = self
@@ -3646,15 +3663,9 @@ impl Game<'_> {
             .assets
             .registry
             .state(state)
-            .and_then(|s| s.properties.get("candles")?.parse::<usize>().ok())
-            .unwrap_or(1);
-        const OFFSETS: [&[[u8; 3]]; 4] = [
-            &[[8, 8, 8]],
-            &[[6, 7, 8], [10, 8, 7]],
-            &[[8, 5, 10], [6, 7, 8], [9, 8, 7]],
-            &[[7, 5, 9], [10, 7, 9], [6, 7, 6], [9, 8, 6]],
-        ];
-        for o in OFFSETS[candles.clamp(1, 4) - 1] {
+            .and_then(|s| s.properties.get("candles")?.parse::<usize>().ok());
+        let offsets = Self::candle_offsets(&self.res.facts().get(state).name, candles);
+        for o in offsets {
             self.particles.add(
                 &ParticleOptions::simple(ParticleType::Smoke),
                 [
@@ -17926,6 +17937,24 @@ mod entity_model_loading_tests;
 mod tests {
     use super::*;
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
+
+    /// Snuffing a candle or a candle cake draws one smoke per
+    /// `getParticleOffsets`: by `candles` for a candle, a block up for a cake.
+    #[test]
+    fn a_snuffed_candle_and_candle_cake_smoke_at_vanillas_offsets() {
+        assert_eq!(
+            Game::candle_offsets("minecraft:candle", Some(1)),
+            [[8u8, 8, 8]].as_slice()
+        );
+        assert_eq!(
+            Game::candle_offsets("minecraft:red_candle", Some(3)),
+            [[8u8, 5, 10], [6, 7, 8], [9, 8, 7]].as_slice()
+        );
+        assert_eq!(
+            Game::candle_offsets("minecraft:candle_cake", None),
+            [[8u8, 16, 8]].as_slice()
+        );
+    }
 
     /// Held items apply their main-hand and off-hand modifiers to the player (#4118, #4777).
     #[test]
