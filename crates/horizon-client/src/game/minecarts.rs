@@ -960,6 +960,12 @@ impl Game<'_> {
             self.carts.remove(i);
             self.riding = None;
         }
+        // AbstractMinecart.activateMinecart: a powered activator rail ejects
+        // the rider, and getDismountLocationForPassenger places it beside the
+        // cart instead of leaving it at the seat.
+        if alive && self.riding.is_none() {
+            self.dismount_cart(i);
+        }
         true
     }
     /// `getDismountLocationForPassenger`: beside the cart (across its facing), else on top.
