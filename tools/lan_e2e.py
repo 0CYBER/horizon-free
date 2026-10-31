@@ -8154,6 +8154,53 @@ CHECKS += ['recipe_settings']
 CHECK_FNS.update(recipe_settings=check_recipe_settings)
 
 
+def check_reopen_player(host, guest, out):
+    """Save and Quit, then reopen: the owner comes back where they stood with what
+    they held (the world's own player file, `players/data/<singleplayer uuid>.dat`),
+    and a guest likewise from their own file (#5065, #5075)."""
+    places = {host.name: (40.5, 120.0, -30.5), guest.name: (-25.5, 110.0, 45.5)}
+    items = {host.name: ('minecraft:diamond', 7), guest.name: ('minecraft:emerald', 5)}
+
+    def held(game):
+        item = items[game.name][0]
+        return game('inventory')['counts'].get(item, 0)
+
+    for game in (host, guest):
+        back_to_game(game)
+        x, y, z = places[game.name]
+        item, count = items[game.name]
+        # A glass block to stand on, so nobody is still falling when the world saves.
+        host('command', command=f'setblock {math.floor(x)} {int(y) - 1} {math.floor(z)} minecraft:glass')
+        game('command', command=f'tp @s {x} {y} {z}')
+        game('command', command=f'give @s {item} {count}')
+    host.wait(40)
+    before = {game.name: {'position': [round(v, 1) for v in pos_of(game)], 'held': held(game)}
+              for game in (host, guest)}
+    for game in (host, guest):
+        want = {'position': list(places[game.name]), 'held': items[game.name][1]}
+        assert before[game.name] == want, f'{game.name} not set up: {before[game.name]}'
+    guest.raw('disconnect')
+    host.raw('pause')
+    host.raw('click-button', 'Save and Quit to Title')
+    host.raw('wait-for', 'screen', 'title', '--timeout', 120)
+    host.raw('open', 'Lan')
+    host('wait_ready', seconds=400)
+    port = host.raw('lan', 'open', 0, 'commands')['port']
+    guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+    guest.raw('wait-for', 'loaded', '--timeout', 300)
+    guest.wait(20)
+    after = {}
+    for game in (host, guest):
+        after[game.name] = {'position': [round(v, 1) for v in pos_of(game)], 'held': held(game)}
+        game.shot(out, 'reopen-player')
+    assert after == before, f'players reset on reopen: before={before}, after={after}'
+    return {'reopened': after}
+
+
+CHECKS += ['reopen_player']
+CHECK_FNS.update(reopen_player=check_reopen_player)
+
+
 def check_recipe_targets(host, guest, out):
     """RecipeCommand gives and takes the recipes of each target's own ServerRecipeBook: a
     `/recipe give|take <other player>` changes that player's book and reaches their client,
