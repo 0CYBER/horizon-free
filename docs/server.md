@@ -327,6 +327,8 @@ horizon-server cmd <command…>            one console command, with its output
 horizon-server logs [-f] [-n N]
 horizon-server op|deop <player>
 horizon-server whitelist on|off|list|add|remove [player]
+horizon-server players [--json]          who is online, operators, whitelist, bans
+horizon-server kick|ban <player> [reason]   pardon <player>   ban-ip <address|player> [reason]   pardon-ip <address>
 horizon-server backup [NAME]             backups             restore <backup> [--yes]
 horizon-server import <server.properties>
 horizon-server config [--json]           config set KEY=VALUE... [--json]
@@ -337,8 +339,6 @@ horizon-server update --archive FILE --version NAME     an archive you have (you
 
 Planned:
 horizon-server console                   attach: the live log, and send commands (Ctrl-D detaches)
-horizon-server players [--json]          who is online, operators, whitelist, bans
-horizon-server kick|ban <player> [reason]   pardon <player>   ban-ip <address|player> [reason]   pardon-ip <address>
 horizon-server import-resources <dir>      prepare --server-jar PATH
 horizon-server mcp                       MCP server on stdio (section 8)
 ```

@@ -12,7 +12,7 @@ address), op and deop, the whitelist, and metrics as Prometheus text.
 
 | | Count |
 | --- | --- |
-| Commands | 22 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `op`, `deop`, `whitelist`, `version`) |
+| Commands | 28 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `op`, `deop`, `whitelist`, `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`, `version`) |
 | `server.toml` keys | 25 in 7 sections, plus `[properties]` for any other vanilla key |
 | Control API endpoints | 27 under `/api/v1` |
 
@@ -23,7 +23,7 @@ address), op and deop, the whitelist, and metrics as Prometheus text.
 3. From a program: read `.horizon/api.json` (address and token), then `GET /api/v1/status` with
    `Authorization: Bearer <token>`. A program that runs elsewhere or keeps its settings (a Discord bot) uses a
    fixed address and token: `[api] bind` and `[api] token` in `server.toml` ([hosting.md](../hosting.md#a-bot-or-a-tool-of-your-own)).
-4. Moderate: `GET /api/v1/players`, `POST /api/v1/players/ban` (or `horizon-server cmd ban NAME REASON`). An
+4. Moderate: `horizon-server players`, `horizon-server ban NAME [REASON]`, or `POST /api/v1/players/ban`. An
    action runs vanilla's console command on the running game, so it kicks, logs and saves `banned-players.json`
    exactly as an operator's `/ban` does; the reply says whether anything `changed` and has the console's lines.
 5. Monitor: point Prometheus (or any scraper that sends a bearer token) at `GET /api/v1/metrics/prometheus`.
@@ -70,6 +70,7 @@ addition; a change to one starts `/api/v2`, served beside `/api/v1`.
 
 - `api::ROUTES` lists the endpoints; the reference is generated from it.
 - `/api/v1`: status, metrics, logs, command, stop, restart, backups, restore, update, panel login.
+- Commands: `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`.
 - `/api/v1` additions: `players`, `players/{kick,ban,pardon,ban-ip,pardon-ip,op,deop}`, `whitelist`,
   `whitelist/{add,remove}`, `metrics/prometheus`, `GET`/`PATCH config`, `DELETE backups`, `GET backups/download`;
   `server.toml` gets `[api]` (`bind`, `token`, `allow_public`).
