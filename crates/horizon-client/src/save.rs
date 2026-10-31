@@ -269,42 +269,7 @@ pub const LOW_DISK_SPACE: u64 = 67_108_864;
 /// `LevelStorageAccess.estimateDiskSpace`: the usable bytes of the disk holding `dir`
 /// (`FileStore.getUsableSpace`), `u64::MAX` when it cannot be asked.
 pub fn estimate_disk_space(dir: &Path) -> u64 {
-    #[cfg(unix)]
-    {
-        match rustix::fs::statvfs(dir) {
-            Ok(stat) => stat.f_bavail.saturating_mul(stat.f_frsize),
-            Err(_) => u64::MAX,
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        unsafe extern "system" {
-            fn GetDiskFreeSpaceExW(
-                directory: *const u16,
-                available: *mut u64,
-                total: *mut u64,
-                free: *mut u64,
-            ) -> i32;
-        }
-        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut available = 0u64;
-        // SAFETY: `wide` is NUL-terminated and the out pointers are valid or null.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut available,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 { u64::MAX } else { available }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = dir;
-        u64::MAX
-    }
+    fs4::available_space(dir).unwrap_or(u64::MAX)
 }
 /// `LevelStorageAccess.checkForLowDiskSpace`.
 pub fn low_disk_space(dir: &Path) -> bool {
