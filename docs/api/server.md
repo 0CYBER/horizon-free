@@ -13,15 +13,16 @@ address), op and deop, the whitelist, and metrics as Prometheus text.
 | | Count |
 | --- | --- |
 | Commands | 22 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `op`, `deop`, `whitelist`, `version`) |
-| `server.toml` keys | 22 in 6 sections, plus `[properties]` for any other vanilla key |
-| Control API endpoints | 23 under `/api/v1` |
+| `server.toml` keys | 25 in 7 sections, plus `[properties]` for any other vanilla key |
+| Control API endpoints | 27 under `/api/v1` |
 
 ## Guide
 
 1. `horizon-server init` in an empty folder, then `horizon-server start` ([hosting.md](../hosting.md)).
 2. From a script: `horizon-server status --json`, `horizon-server cmd say hi`, `horizon-server backup`.
 3. From a program: read `.horizon/api.json` (address and token), then `GET /api/v1/status` with
-   `Authorization: Bearer <token>`.
+   `Authorization: Bearer <token>`. A program that runs elsewhere or keeps its settings (a Discord bot) uses a
+   fixed address and token: `[api] bind` and `[api] token` in `server.toml` ([hosting.md](../hosting.md#a-bot-or-a-tool-of-your-own)).
 4. Moderate: `GET /api/v1/players`, `POST /api/v1/players/ban` (or `horizon-server cmd ban NAME REASON`). An
    action runs vanilla's console command on the running game, so it kicks, logs and saves `banned-players.json`
    exactly as an operator's `/ban` does; the reply says whether anything `changed` and has the console's lines.
@@ -42,6 +43,9 @@ curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/players"
 curl -s -H "Authorization: Bearer $token" -d '{"name": "Steve", "reason": "griefing"}' "http://$address/api/v1/players/ban"
 # {"changed":true,"output":["Banned Steve: griefing"]}
 curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/metrics/prometheus"
+curl -s -H "Authorization: Bearer $token" -X PATCH -d '{"changes": {"world.difficulty": "hard"}}' "http://$address/api/v1/config"
+# {"applied":["world.difficulty"],"restart":[],"running":true,"saved":["world.difficulty"]}
+curl -s -H "Authorization: Bearer $token" -o world.zip "http://$address/api/v1/backups/download?name=2026-10-31T12-00-00Z-manual.zip"
 ```
 
 ## Stability
@@ -56,7 +60,7 @@ addition; a change to one starts `/api/v2`, served beside `/api/v1`.
 - **Console stream**: the log as a stream (server-sent events) rather than `logs?since=N` polling; chat, joins, leaves,
   deaths and crashes as typed events.
 - **Metrics**: entities and per-dimension counts in the Prometheus text.
-- **Backups**: delete and download one; restore a single dimension.
+- **Backups**: restore a single dimension.
 - **Mods on a dedicated server**: list, turn on and off, and their settings, once native mods can be built for the
   server ([mods.md](../mods.md), [native-mods.md](../native-mods.md#multiplayer)).
 - **An MCP server** for the same endpoints, so a host's agent manages the server as it manages the game.
@@ -67,4 +71,5 @@ addition; a change to one starts `/api/v2`, served beside `/api/v1`.
 - `api::ROUTES` lists the endpoints; the reference is generated from it.
 - `/api/v1`: status, metrics, logs, command, stop, restart, backups, restore, update, panel login.
 - `/api/v1` additions: `players`, `players/{kick,ban,pardon,ban-ip,pardon-ip,op,deop}`, `whitelist`,
-  `whitelist/{add,remove}`, `metrics/prometheus`.
+  `whitelist/{add,remove}`, `metrics/prometheus`, `GET`/`PATCH config`, `DELETE backups`, `GET backups/download`;
+  `server.toml` gets `[api]` (`bind`, `token`, `allow_public`).

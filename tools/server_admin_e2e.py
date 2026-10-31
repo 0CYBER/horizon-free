@@ -8,7 +8,8 @@ players join. Through the control API, with the token from .horizon/api.json, th
 ops and deops, whitelists, bans and pardons by name and by address, kicks, and turns the whitelist on and off,
 checking each reply (`changed`, the console's lines), vanilla's files, the server's log and `GET players`.
 It also checks the Prometheus text, and that a call without the token is refused and a name with a space is
-not run.
+not run; then reads the settings and changes the difficulty live, and backs up, downloads and deletes a backup.
+The API listens on the address and with the token server.toml's [api] fixes, as a moderation bot's would.
 
 Everything runs in a fresh temporary folder with fresh HORIZON_HOME and XDG folders and no audio. Logs go
 to --out. Build first:
@@ -31,6 +32,7 @@ from server_bench import DONE, Server  # noqa: E402
 
 EXE = '.exe' if os.name == 'nt' else ''
 IP = '203.0.113.7'
+TOKEN = 'the-moderation-bots-token'
 
 
 class Failed(Exception):
@@ -50,15 +52,15 @@ class Api:
         self.port = int(port)
         self.token = endpoint['token']
 
-    def call(self, method, path, body=None, token=None):
+    def call(self, method, path, body=None, token=None, raw=False):
         conn = http.client.HTTPConnection(self.host, self.port, timeout=60)
         headers = {'Authorization': f'Bearer {self.token if token is None else token}',
                    'Content-Type': 'application/json'}
         conn.request(method, path, json.dumps(body) if body is not None else None, headers)
         response = conn.getresponse()
-        text = response.read().decode()
+        data = response.read()
         conn.close()
-        return response.status, text
+        return response.status, data if raw else data.decode()
 
     def __call__(self, method, path, body=None):
         status, text = self.call(method, path, body)
@@ -145,6 +147,26 @@ def scenario(bins, folder, server, port):
         check(api('GET', '/api/v1/players')['whitelist']['enabled'] is True, 'players says the whitelist is on')
         act('/api/v1/whitelist', {'enabled': False}, True, 'Whitelist is now turned off')
         check(listed(folder, 'banned-players.json') == [], 'banned-players.json is empty again')
+
+        config = api('GET', '/api/v1/config')['config']
+        check(config['api']['token'] == '(set)' and config['world']['difficulty'] == 'easy',
+              'config: the token hidden, the difficulty easy')
+        outcome = api('PATCH', '/api/v1/config', {'changes': {'world.difficulty': 'hard', 'server.max_players': 30}})
+        check(outcome['applied'] == ['world.difficulty'] and outcome['restart'] == ['server.max_players'],
+              f'config: the difficulty applies now, max_players at the next start ({outcome})')
+        said = api('POST', '/api/v1/command', {'line': 'difficulty'})['output']
+        check(any('The difficulty is Hard' in line for line in said), f'the game plays on Hard ({said})')
+        check('difficulty = "hard"' in (folder / 'server.toml').read_text(), 'server.toml says hard')
+        status, _ = api.call('PATCH', '/api/v1/config', {'changes': {'engine.path': '/bin/sh'}})
+        check(status == 403, 'the API cannot change the program the server runs')
+
+        name = api('POST', '/api/v1/backups', {'name': 'e2e'})['name']
+        check(name in [b['name'] for b in api('GET', '/api/v1/backups')['backups']], f'backup {name} is listed')
+        status, data = api.call('GET', f'/api/v1/backups/download?name={name}', raw=True)
+        check(status == 200 and data == (folder / 'backups' / name).read_bytes() and data[:2] == b'PK',
+              f'the download is the zip ({len(data)} bytes)')
+        api('DELETE', f'/api/v1/backups?name={name}')
+        check(not (folder / 'backups' / name).exists(), 'the backup is deleted')
     finally:
         for b in bots:
             b.kill()
@@ -163,7 +185,7 @@ def main():
     work = Path(tempfile.mkdtemp(prefix='hz-server-admin-'))
     folder = work / 'server'
     folder.mkdir()
-    port = lab.free_port()
+    port, api_port = lab.free_port(), lab.free_port()
     (folder / 'eula.txt').write_text('eula=true\n')
     (folder / 'server.toml').write_text(f'''[server]
 port = {port}
@@ -187,10 +209,17 @@ every = "0"
 
 [panel]
 bind = ""
+
+[api]
+bind = "127.0.0.1:{api_port}"
+token = "{TOKEN}"
 ''')
     server = Server([bins / f'horizon-server{EXE}', '--dir', folder, 'run'], folder, out / 'server.log')
     try:
         server.wait_for(DONE, 300)
+        endpoint = json.loads((folder / '.horizon' / 'api.json').read_text())
+        if (endpoint['address'], endpoint['token']) != (f'127.0.0.1:{api_port}', TOKEN):
+            raise Failed(f'the API is not where [api] says: {endpoint}')
         scenario(bins, folder, server, port)
         server.process.wait(timeout=120)
     except (Failed, RuntimeError, OSError, subprocess.TimeoutExpired) as e:

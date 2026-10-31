@@ -382,7 +382,7 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   `HttpOnly; SameSite=Strict` session cookie. Anyone who can read the server folder can manage the server,
   and no one else can. Sessions end when the supervisor stops.
 - **Protection.** The `Host` header must name the panel itself: its address, `localhost` on loopback, or a
-  tailnet name (a MagicDNS short name or `*.ts.net`). That stops DNS rebinding. Changes are POST only and need
+  tailnet name (a MagicDNS short name or `*.ts.net`). That stops DNS rebinding. Changes (POST, PATCH, DELETE) need
   the `X-Horizon: 1` header, which stops CSRF. After 10 failed logins in a minute, logins are refused for a
   while. The page is served with a strict Content-Security-Policy (nothing from elsewhere) and can't be
   framed.
@@ -450,10 +450,15 @@ runtime or new dependency. Server-sent events can replace the polling later if a
     bans), `POST players/{kick,ban,pardon,ban-ip,pardon-ip,op,deop}`, `POST whitelist {enabled}`,
     `POST whitelist/{add,remove}` (each runs vanilla's console command and answers `changed` and its lines),
     `GET metrics/prometheus` (Prometheus text);
-  - planned: `GET events` (SSE: log lines and metrics),
-    `GET`/`PATCH config` (server.toml fields, validated).
+  - built (server-admin): `GET config` (the token hidden), `PATCH config {changes}` (as `config set`;
+    not `engine.*`, `panel.*`, `api.*`, nor the RCON, query and management keys, so the API can't widen who
+    reaches the server or change what program runs), `DELETE backups?name=`, `GET backups/download?name=`
+    (the zip, streamed);
+  - planned: `GET events` (SSE: log lines and metrics).
 - **Auth.** Every call needs `Authorization: Bearer <token from .horizon/api.json>` (file mode 0600), and the
-  `Host` header must be the loopback address it listens on.
+  `Host` header must name the address it listens on (as the panel's). `[api] bind` and `[api] token` fix the
+  address and the token for a program that runs elsewhere (a moderation bot); `bind` takes loopback or a
+  tailnet address unless `allow_public = true`, which drops the Host check and warns at every start.
 - **MCP.** `horizon-server mcp` is an MCP server on stdio, for Claude Code or any MCP client run as the same OS
   user. It reads the token itself, and its tools map one to one onto the API: `status`, `players`,
   `run_command`, `logs`, `backup`, `list_backups`, `restore` (needs `confirm: true`), `start`, `stop`,

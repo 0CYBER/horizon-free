@@ -57,6 +57,11 @@ keep = 1                     # other releases kept by updates, besides the one i
 bind = "127.0.0.1:8130"      # the web panel: this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false         # true lets bind be any address; never put the panel on the open internet
 
+[api]
+bind = ""                    # the control API: "" a free port on 127.0.0.1; or a fixed one, like 127.0.0.1:8131 or a tailnet address
+token = ""                   # its token (16 characters or more); "" a new random one at every start
+allow_public = false         # true lets bind be any address; the token is then all that guards the server
+
 # Horizon's anticheat (docs/anticheat.md) is off: the server checks only what vanilla's checks. To turn it on:
 # [anticheat]
 # enabled = true
@@ -105,6 +110,8 @@ pub struct Config {
     pub updates: Updates,
     #[serde(default)]
     pub panel: Panel,
+    #[serde(default)]
+    pub api: Api,
     /// The game reads this section itself (docs/anticheat.md); written only when it isn't the default (off).
     #[serde(default, skip_serializing_if = "anticheat_off")]
     pub anticheat: horizon_anticheat::Config,
@@ -169,24 +176,62 @@ impl Default for Panel {
 impl Panel {
     /// Where the panel listens; `None` when it is off.
     pub fn address(&self) -> Result<Option<std::net::SocketAddr>, String> {
-        if self.bind.trim().is_empty() {
-            return Ok(None);
-        }
-        let address: std::net::SocketAddr = self.bind.trim().parse().map_err(|_| {
-            format!(
-                "panel.bind is \"{}\": use an address and a port, like 127.0.0.1:8130",
-                self.bind
-            )
-        })?;
-        if !self.allow_public && !private(address.ip()) {
-            return Err(format!(
-                "panel.bind is \"{}\": the panel listens only on this computer (127.0.0.1) or a tailnet \
-                 address (100.64.0.0/10, fd7a:115c:a1e0::/48); reach it from elsewhere over Tailscale or SSH",
-                self.bind
-            ));
-        }
-        Ok(Some(address))
+        listen_address("panel", &self.bind, self.allow_public, 8130)
     }
+}
+
+/// The control API's fixed address and token (docs/api/server.md); by default neither: a free port on
+/// 127.0.0.1 and a random token, both written to `.horizon/api.json`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Api {
+    pub bind: String,
+    pub token: String,
+    pub allow_public: bool,
+}
+
+impl Api {
+    /// Where the API listens: `bind`, or a free port on 127.0.0.1.
+    pub fn address(&self) -> Result<std::net::SocketAddr, String> {
+        Ok(listen_address("api", &self.bind, self.allow_public, 8131)?
+            .unwrap_or_else(|| (std::net::Ipv4Addr::LOCALHOST, 0).into()))
+    }
+
+    fn check(&self) -> Result<(), String> {
+        self.address()?;
+        let token = self.token.trim();
+        if !token.is_empty() && (token.len() < 16 || token.chars().any(|c| !c.is_ascii_graphic())) {
+            return Err(
+                "api.token must be 16 characters or more, without spaces (or \"\": a random one)"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// A `bind` setting: `None` when empty; anything but this computer or the tailnet needs `allow_public`.
+fn listen_address(
+    what: &str,
+    bind: &str,
+    allow_public: bool,
+    example_port: u16,
+) -> Result<Option<std::net::SocketAddr>, String> {
+    if bind.trim().is_empty() {
+        return Ok(None);
+    }
+    let address: std::net::SocketAddr = bind.trim().parse().map_err(|_| {
+        format!(
+            "{what}.bind is \"{bind}\": use an address and a port, like 127.0.0.1:{example_port}"
+        )
+    })?;
+    if !allow_public && !private(address.ip()) {
+        return Err(format!(
+            "{what}.bind is \"{bind}\": the {what} listens only on this computer (127.0.0.1) or a tailnet \
+             address (100.64.0.0/10, fd7a:115c:a1e0::/48); reach it from elsewhere over Tailscale or SSH"
+        ));
+    }
+    Ok(Some(address))
 }
 
 /// Loopback, or a Tailscale address: reachable only from this computer or the owner's tailnet.
@@ -319,6 +364,7 @@ impl Config {
         }
         crate::backup::interval(&self.backups.every)?;
         self.panel.address()?;
+        self.api.check()?;
         self.anticheat.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
@@ -424,6 +470,9 @@ pub fn render(config: &Config) -> String {
         ("updates", "keep"),
         ("panel", "bind"),
         ("panel", "allow_public"),
+        ("api", "bind"),
+        ("api", "token"),
+        ("api", "allow_public"),
     ] {
         set(&mut doc, section, field, &table[section][field]);
     }
