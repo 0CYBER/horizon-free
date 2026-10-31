@@ -981,6 +981,15 @@ impl Game<'_> {
             .find(|(s, _)| *s == CRYSTAL_IDS + i as u32)
             .map(|(_, b)| b)
     }
+    /// `ServerLevel.dragonParts`: where the part with that entity id is
+    /// and its box.
+    pub(super) fn dragon_part(&self, id: u32) -> Option<(Vec3, Aabb)> {
+        let d = self.dragon.as_ref().filter(|d| d.alive() && d.id != 0)?;
+        (d.id + 1..=d.id + 8).contains(&id).then(|| {
+            let i = (id - d.id - 1) as usize;
+            (d.parts[i].0, d.part_box(i))
+        })
+    }
     /// Damage to a special id (from projectiles and melee): what the
     /// dragon part or crystal made of it. `arrow` for a direct arrow.
     pub(super) fn hit_special(
@@ -2624,8 +2633,13 @@ impl Game<'_> {
             0,
             &mut eye_quads,
         );
+        // `RenderTypes.eyes` has an `OitPipelineSet`: improved transparency
+        // moves the tagged quads into its stages (the HDR tier is the eyes'
+        // shine, `mobs::render::EYES_TIER`).
         for v in &mut eye_quads {
-            v.layer = 2;
+            v.layer = 2
+                | horizon_client::gfx::OIT_ENTITY
+                | u32::from(horizon_client::mesher::BRIGHT) << 16;
         }
         additive.extend(eye_quads);
         if death > 0.0 {
@@ -2918,6 +2932,7 @@ impl Game<'_> {
             needs_sync: false,
             leash: None,
             spectator: false,
+            watching: false,
         })
     }
 }
@@ -3334,6 +3349,9 @@ impl Game<'_> {
     /// The END stage: the portal crystals blow up (no block damage) and a
     /// new dragon takes over.
     fn finish_respawn(&mut self) {
+        // Portal crystals are not on spikes; clear their revival beams before
+        // the spike reset and before they are removed (vanilla resetEndCrystals).
+        self.respawn_beams(None);
         self.reset_spike_crystals();
         self.fight.respawn = None;
         let list = std::mem::take(&mut self.fight.respawn_crystals);
@@ -3388,6 +3406,7 @@ impl Game<'_> {
     /// `abortRespawnSequence`.
     fn abort_respawn(&mut self) {
         self.fight.respawn = None;
+        self.respawn_beams(None);
         self.fight.respawn_crystals.clear();
         self.reset_spike_crystals();
         let _ = self.activate_exit_portal();

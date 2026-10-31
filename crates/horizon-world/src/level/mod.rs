@@ -93,7 +93,7 @@ use horizon_core::{
     position::{BlockPos, ChunkPos},
     random::LegacyRandom,
 };
-use std::{collections::HashMap, io, path::Path, sync::Arc, sync::Mutex};
+use std::{collections::HashMap, io, path::Path, sync::Arc, sync::RwLock};
 
 pub mod classes;
 pub mod data;
@@ -549,7 +549,7 @@ pub struct Behaviours {
     liquid_blocks: FluidBlockBindings,
     /// Uncached (position- or block-entity-dependent) collision shapes.
     dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
-    occlusion_cache: Mutex<HashMap<(i32, i32, u8), bool>>,
+    occlusion_cache: RwLock<HashMap<(i32, i32, u8), bool>>,
     growth: growth::Growth,
 }
 

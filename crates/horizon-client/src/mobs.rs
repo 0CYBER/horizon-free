@@ -875,6 +875,9 @@ pub struct Extra {
     /// `LivingEntity.DATA_STINGER_COUNT_ID`: the bee stingers stuck in a
     /// player (`BeeStingerLayer`).
     pub stinger_count: i32,
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the variant of the
+    /// parrot on each shoulder (`ParrotOnShoulderLayer`).
+    pub shoulder_parrots: [Option<i32>; 2],
     pub main_hand_left: bool,
     /// The skin layers a player hides (`PlayerModelPart` bits, set to
     /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
@@ -1338,6 +1341,14 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `AbstractCubeMob.dealDamage` on the player (`playerTouch`): the hit,
+    /// then, only when `hurtServer` let it land, the cube's
+    /// `entity.slime.attack` with its pitch drawn from the cube's random.
+    CubeHurtPlayer {
+        cube: u32,
+        amount: f32,
+        from: [f64; 3],
+    },
     /// `AbstractCubeMob.dealDamage` on a mob (an iron golem it touches): the
     /// hit, then, only when `hurtServer` let it land, the cube's
     /// `entity.slime.attack` with its pitch drawn from the cube's random.
@@ -1554,6 +1565,12 @@ pub enum MobEvent {
     VillagerMeet {
         mob: u32,
         other: u32,
+    },
+    /// `AbstractVillager.getOffers` for a villager whose offers are not made
+    /// yet: the level rolls them (the brain has no trade data), so the
+    /// behaviour that asked reads them from the next tick on.
+    VillagerOffers {
+        mob: u32,
     },
     /// Two villagers make a baby (`VillagerMakeLove.tryToGiveBirth`): the
     /// parent has eaten and, with a bed for the child, rests; the partner

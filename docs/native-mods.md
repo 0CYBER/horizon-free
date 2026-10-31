@@ -113,9 +113,15 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
-API next adds `native_set_block`, a server-side `Game` helper that replaces a state in the current dimension through
-`Level.setBlock`. It accepts vanilla update flags and returns whether a block changed. Hooks holding only `GameLevel`
-cannot call it yet.
+API 23 adds `native_level_tick_pre` and `native_level_tick_post`, server-side observations around each
+level tick pass. Each receives the dimension ID; neither can cancel the tick. Paused and held passes fire
+neither hook, and an error skips the post hook. Bundles that use them need `"hooks": 23`.
+
+API 24 adds `native_set_block`, a server-side `Game` helper that replaces a state in the current dimension through
+`Level.setBlock`. It accepts vanilla's neighbour and shape flags and returns whether a block changed; a block with a
+block entity gets one. Horizon sends every write to players whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE`
+and `UPDATE_IMMEDIATE` change nothing yet. Hooks holding only `GameLevel` cannot call it yet. Bundles that use it need
+`"hooks": 24`.
 
 ## What the launcher does
 

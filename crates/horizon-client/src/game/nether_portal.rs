@@ -373,6 +373,9 @@ impl Game<'_> {
             max_section,
         );
         if let Some(found) = found {
+            // NetherPortalBlock.getExitPortal: the ticket goes on the chunk
+            // of the portal found.
+            self.place_portal_ticket((found.x >> 4, found.z >> 4));
             let state = self.world.block(found.x, found.y, found.z);
             let x_axis = self.res.behaviours().portal_axis(state).unwrap_or(true);
             return Some(largest_rectangle_around(
@@ -390,7 +393,27 @@ impl Game<'_> {
             b.create_portal(level, ticks, approximate, x_axis, &border, logical)
         });
         let _ = self.process_level_events();
+        if let Some(exit) = created {
+            // A portal built for the entity: the ticket goes on the chunk it
+            // arrives in (`TeleportTransition.PLACE_PORTAL_TICKET`).
+            let (at, _) = self.arrival(plan, exit);
+            self.place_portal_ticket(Self::chunk_of(at));
+        }
         created
+    }
+    /// `ChunkPos.containing`: the chunk a position is in.
+    pub(super) fn chunk_of(at: Vec3) -> (i32, i32) {
+        ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4)
+    }
+    /// `Entity.placePortalTicket`: a `TicketType.PORTAL` ticket of radius 3
+    /// on `chunk` in the level in place, which keeps the area running for 300
+    /// ticks with no player in it (the entity that just came through ticks
+    /// there, and goes back through the portal when its cooldown ends).
+    /// Only a server holds levels with tickets of their own.
+    pub(super) fn place_portal_ticket(&mut self, chunk: (i32, i32)) {
+        if !self.options.execution_role.is_client() {
+            self.tickets.add_portal(chunk);
+        }
     }
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
@@ -1038,6 +1061,8 @@ impl Game<'_> {
             let (at, motion, [yaw, pitch]) = if plan.end {
                 // Relative.DELTA: the motion is kept.
                 let at = self.end_portal_exit(&plan);
+                // EndPortalBlock.getPortalDestination: PLACE_PORTAL_TICKET.
+                self.place_portal_ticket(Self::chunk_of(at));
                 let into_end = plan.dim == Dim::End;
                 let turn =
                     end_portal_rotation(into_end, [yaw, pitch], self.level.world_spawn_angle);

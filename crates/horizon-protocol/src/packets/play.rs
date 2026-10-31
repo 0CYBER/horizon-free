@@ -789,6 +789,11 @@ packet!(
         entity: Option<LookAtEntity> => Opt<LookAtEntity>,
     }
 );
+packet!(
+    /// ClientboundPostEffectsPacket: the `post_effect` chains (ids) the player's
+    /// screen runs, in order (`ServerPlayer.postEffects`).
+    PostEffects { effects: Vec<String> => List<Ident> }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -825,6 +830,24 @@ packet!(
     /// ClientboundMoveVehiclePacket: the server puts a vehicle its rider
     /// controls back where it was (PositionAndRotation: x, y, z, yRot, xRot).
     MoveVehicle { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float }
+);
+packet!(
+    /// NewMinecartBehavior.MinecartStep: where a minecart is at the end of one
+    /// of the server's steps along the track, its motion, its rotation (yRot,
+    /// xRot) and the step's weight in the 3 ticks they are played over.
+    MinecartStep {
+        position: [f64; 3] => Vec3d,
+        movement: [f64; 3] => Vec3d,
+        yaw: i8 => Byte,
+        pitch: i8 => Byte,
+        weight: f32 => Float,
+    }
+);
+packet!(
+    /// ClientboundMoveMinecartPacket: the steps a minecart took along the
+    /// track since the last one (the `minecart_improvements` experiment sends
+    /// these in place of move packets).
+    MoveMinecartAlongTrack { id: i32 => VarInt, steps: Vec<MinecartStep> => List<MinecartStep> }
 );
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
@@ -1892,6 +1915,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
     ClearTitles(Bool1) = CLEAR_TITLES,
+    LowDiskSpaceWarning(Empty) = LOW_DISK_SPACE_WARNING,
     Commands(Commands) = COMMANDS,
     RecipeBookAdd(super::recipes::RecipeBookAdd) = RECIPE_BOOK_ADD,
     RecipeBookRemove(super::recipes::RecipeBookRemove) = RECIPE_BOOK_REMOVE,
@@ -1913,6 +1937,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
+    GameTestHighlightPos(GameTestHighlightPos) = GAME_TEST_HIGHLIGHT_POS,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     DamageEvent(DamageEvent) = DAMAGE_EVENT,
@@ -1941,6 +1966,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerLookAt(PlayerLookAt) = PLAYER_LOOK_AT,
     PlayerPosition(PlayerPosition) = PLAYER_POSITION,
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
+    PostEffects(PostEffects) = POST_EFFECTS,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
     RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
     ResetScore(ResetScore) = RESET_SCORE,
@@ -1972,6 +1998,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPassengers(SetPassengers) = SET_PASSENGERS,
     MoveVehicle(MoveVehicle) = MOVE_VEHICLE,
+    MoveMinecartAlongTrack(MoveMinecartAlongTrack) = MOVE_MINECART_ALONG_TRACK,
     ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
@@ -2300,6 +2327,11 @@ packet!(
     /// ServerboundTestInstanceBlockActionPacket: `action` is the `Action` id
     /// (INIT 0, QUERY 1, SET 2, RESET 3, SAVE 4, EXPORT 5, RUN 6).
     TestInstanceBlockAction { pos: [i32; 3] => Pos, action: i32 => VarInt, data: TestInstanceData => TestInstanceData }
+);
+packet!(
+    /// ClientboundGameTestHighlightPosPacket: the absolute position and the
+    /// position relative to the test's origin.
+    GameTestHighlightPos { absolute: [i32; 3] => Pos, relative: [i32; 3] => Pos }
 );
 packet!(
     /// ClientboundTestInstanceBlockStatus: the test's description and, for a
@@ -2781,6 +2813,7 @@ mod tests {
     fn clientbound_round_trips() {
         let packets = vec![
             Clientbound::BundleDelimiter(Empty),
+            Clientbound::LowDiskSpaceWarning(Empty),
             Clientbound::PongResponse(crate::packets::status::Ping { time: 1_234_567 }),
             Clientbound::SetBorderCenter(SetBorderCenter { x: 1.5, z: -2.0 }),
             Clientbound::SetBorderLerpSize(SetBorderLerpSize {
@@ -3463,6 +3496,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn post_effects_round_trips() {
+        let p = PostEffects {
+            effects: vec!["minecraft:invert".into(), "pack:glow".into()],
+        };
+        let bytes = Clientbound::PostEffects(p.clone()).encode();
+        assert_eq!(
+            Clientbound::decode(crate::ids::play::clientbound::POST_EFFECTS, &bytes[1..]).unwrap(),
+            Clientbound::PostEffects(p)
+        );
+        // The empty list the server sends on join.
+        assert_eq!(
+            Clientbound::decode(crate::ids::play::clientbound::POST_EFFECTS, &[0]).unwrap(),
+            Clientbound::PostEffects(PostEffects {
+                effects: Vec::new()
+            })
+        );
+    }
+
     /// ClientboundChunksBiomesPacket is read, not passed through as an
     /// unknown packet: one column (1, -2) with two bytes of biomes.
     #[test]
@@ -3809,6 +3861,18 @@ mod tests {
             Clientbound::TestInstanceBlockStatus(TestInstanceBlockStatus {
                 status: Tag::String("ok".into()),
                 size: Some([1, 2, 3]),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
+    fn game_test_highlight_pos_round_trips() {
+        round_trip(
+            Clientbound::GameTestHighlightPos(GameTestHighlightPos {
+                absolute: [10, -64, 30],
+                relative: [1, 2, 3],
             }),
             Clientbound::encode,
             Clientbound::decode,

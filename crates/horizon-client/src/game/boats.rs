@@ -16,9 +16,11 @@ use horizon_client::{
     },
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
+    position::BlockPos,
     random::RandomSource,
 };
+use horizon_world::collision_context::CollisionContext;
 use std::{collections::HashMap, f32::consts::PI, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -339,14 +341,37 @@ impl Game<'_> {
         if in_water {
             return Status::InWater;
         }
-        // getGroundFriction over the blocks just below the hull (corners skipped).
-        let y0 = (lo.y - 0.001).floor() as i32;
-        let (x0, x1, z0, z1) = (
-            lo.x.floor() as i32 - 1,
-            hi.x.ceil() as i32 + 1,
-            lo.z.floor() as i32 - 1,
-            hi.z.ceil() as i32 + 1,
+        let friction = self.boat_ground_friction(bb);
+        if friction > 0.0 {
+            b.land_friction = friction;
+            Status::OnLand
+        } else {
+            Status::InAir
+        }
+    }
+    /// `AbstractBoat.getGroundFriction`: average friction of the blocks whose
+    /// collision shape meets a thin slab just under the hull (lily pads skipped).
+    fn boat_ground_friction(&self, bb: Aabb) -> f32 {
+        let (lo, hi) = (bb.min_position(), bb.max_position());
+        let ground = Aabb::new(
+            Vec3::new(lo.x, lo.y - 0.001, lo.z),
+            Vec3::new(hi.x, lo.y, hi.z),
         );
+        let (g_lo, g_hi) = (ground.min_position(), ground.max_position());
+        let (x0, x1, y0, y1, z0, z1) = (
+            g_lo.x.floor() as i32 - 1,
+            g_hi.x.ceil() as i32 + 1,
+            g_lo.y.floor() as i32 - 1,
+            g_hi.y.ceil() as i32 + 1,
+            g_lo.z.floor() as i32 - 1,
+            g_hi.z.ceil() as i32 + 1,
+        );
+        let slab = VoxelShape::from_box(ground).unwrap_or_else(|_| VoxelShape::empty());
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
         let (mut friction, mut count) = (0.0f32, 0);
         for x in x0..x1 {
             for z in z0..z1 {
@@ -354,22 +379,39 @@ impl Game<'_> {
                 if edges == 2 {
                     continue;
                 }
-                let inside = f64::from(x) < hi.x
-                    && f64::from(x + 1) > lo.x
-                    && f64::from(z) < hi.z
-                    && f64::from(z + 1) > lo.z;
-                let f = self.res.facts().get(self.world.block(x, y0, z));
-                if inside && (f.full_collision || f.legacy_solid) && !f.has_class("LilyPadBlock") {
-                    friction += f.friction;
-                    count += 1;
+                for y in y0..y1 {
+                    if edges == 1 && (y == y0 || y == y1 - 1) {
+                        continue;
+                    }
+                    let state = self.world.block(x, y, z);
+                    let f = self.res.facts().get(state);
+                    if f.name.as_ref() == "minecraft:air" || f.has_class("LilyPadBlock") {
+                        continue;
+                    }
+                    let Ok(shape) = self.collision.collision_shape_with_context(
+                        &mut scene,
+                        state,
+                        BlockPos::new(x, y, z),
+                        &CollisionContext::empty(false),
+                    ) else {
+                        continue;
+                    };
+                    let world_shape =
+                        shape.moved(Vec3::new(f64::from(x), f64::from(y), f64::from(z)));
+                    if world_shape
+                        .join_is_not_empty(&slab, ShapeOp::AND)
+                        .unwrap_or(false)
+                    {
+                        friction += f.friction;
+                        count += 1;
+                    }
                 }
             }
         }
-        if count > 0 && friction > 0.0 {
-            b.land_friction = friction / count as f32;
-            Status::OnLand
+        if count > 0 {
+            friction / count as f32
         } else {
-            Status::InAir
+            0.0
         }
     }
     /// `AbstractBoat.tick` for one boat (`controlled` when the player rides it).

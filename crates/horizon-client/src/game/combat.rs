@@ -224,9 +224,6 @@ impl Game<'_> {
                     };
                     (d.name.clone(), *amount)
                 }
-                MotionEvent::Health(HealthEvent::StarvationDamage(amount)) => {
-                    ("minecraft:starve".to_owned(), *amount)
-                }
                 _ => continue,
             };
             let attacker = self
