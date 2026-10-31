@@ -171,20 +171,44 @@ pub(super) struct PostBuild {
 pub(super) fn post_builds(stage: &Path) -> Result<Vec<PostBuild>, String> {
     let path = stage.join(POST_BUILD);
     match fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
-        Err(_) => Ok(Vec::new()),
+        Ok(text) => {
+            let steps: Vec<PostBuild> =
+                serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+            match steps
+                .iter()
+                .find(|s| !horizon_mods::index::valid_id(&s.mod_id))
+            {
+                Some(bad) => Err(format!(
+                    "{}: invalid mod id {:?}",
+                    path.display(),
+                    bad.mod_id
+                )),
+                None => Ok(steps),
+            }
+        }
+        // Only a missing file means none: any other error must not skip the steps.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
     }
+}
+
+/// Whether `stage` has any mod's crate: a build with none skips the crate check, even when an
+/// earlier build left `native-crates/` behind (the stage keeps folders).
+pub(super) fn any(stage: &Path) -> bool {
+    manifests(&stage.join(DIR)).is_ok_and(|m| !m.is_empty())
 }
 
 /// Step `step`'s program `program` set up to run in the new build's version folder `version`,
 /// with the mod's folders in its environment: `HORIZON_NATIVE_DATA_DIR` (what the game reads at
 /// run time, in the version folder) and `HORIZON_NATIVE_CACHE_DIR` (kept across builds, under
-/// `cache`). Both are created.
+/// `cache`). Both are created. `HORIZON_NATIVE_BUNDLE_DATA_DIR` is the bundle's own `data/`
+/// as staged in `stage` (`native-data/<mod id>/`), which the step may read.
 pub(super) fn post_build(
     program: &Path,
     step: &PostBuild,
     version: &Path,
     cache: &Path,
+    stage: &Path,
 ) -> Result<Command, String> {
     let data = version.join("native-data").join(&step.mod_id);
     let cache = cache.join(&step.mod_id);
@@ -198,7 +222,11 @@ pub(super) fn post_build(
         .env("HORIZON_NATIVE_MOD", &step.mod_id)
         .env("HORIZON_NATIVE_VERSION_DIR", version)
         .env("HORIZON_NATIVE_DATA_DIR", &data)
-        .env("HORIZON_NATIVE_CACHE_DIR", &cache);
+        .env("HORIZON_NATIVE_CACHE_DIR", &cache)
+        .env(
+            "HORIZON_NATIVE_BUNDLE_DATA_DIR",
+            stage.join("native-data").join(&step.mod_id),
+        );
     Ok(cmd)
 }
 
@@ -303,6 +331,9 @@ checksum = "def"
             "an emptied crate folder is skipped"
         );
         assert_eq!(post_builds(&stage).unwrap(), []);
+        assert!(any(&stage));
+        fs::remove_file(krate.join("Cargo.toml")).unwrap();
+        assert!(!any(&stage), "only emptied crate folders left");
     }
 
     #[test]
@@ -322,6 +353,7 @@ checksum = "def"
             &steps[0],
             &version,
             &root.join("cache"),
+            &root.join("stage"),
         )
         .unwrap();
         assert_eq!(cmd.get_current_dir(), Some(version.as_path()));
@@ -342,8 +374,20 @@ checksum = "def"
             env("HORIZON_NATIVE_CACHE_DIR"),
             Some(root.join("cache/bake"))
         );
+        assert_eq!(
+            env("HORIZON_NATIVE_BUNDLE_DATA_DIR"),
+            Some(root.join("stage/native-data/bake"))
+        );
         assert!(version.join("native-data/bake").is_dir() && root.join("cache/bake").is_dir());
         fs::write(root.join(POST_BUILD), "{}").unwrap();
+        assert!(post_builds(&root).is_err());
+        // A mod id that would leave its folder is refused.
+        let bad = r#"[{"mod":"../x","package":"p","bin":"b"}]"#;
+        fs::write(root.join(POST_BUILD), bad).unwrap();
+        assert!(post_builds(&root).is_err());
+        // A file that can't be read is an error, not "no steps".
+        fs::remove_file(root.join(POST_BUILD)).unwrap();
+        fs::create_dir(root.join(POST_BUILD)).unwrap();
         assert!(post_builds(&root).is_err());
     }
 }

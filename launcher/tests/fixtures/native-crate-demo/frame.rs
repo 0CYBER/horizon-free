@@ -9,8 +9,11 @@ fn crate_demo_frame(game: &mut crate::game::Game<'_>) {
     // The bundle's data/greeting.txt, compiled in.
     let greeting = horizon_client::native_data!("crate_demo", "greeting.txt");
     // What the post-build step wrote when the launcher built this game.
-    let baked = game.native_built_data("crate_demo").join("baked.txt");
-    let baked = std::fs::read_to_string(baked).unwrap_or_else(|e| format!("missing ({e})"));
+    let baked = match game.native_built_data("crate_demo") {
+        Some(dir) => std::fs::read_to_string(dir.join("baked.txt"))
+            .unwrap_or_else(|e| format!("missing ({e})")),
+        None => "missing (the game's folder is unknown)".to_owned(),
+    };
     let line = format!(
         "crate_demo: {} checksum {:08x}, baked {}",
         String::from_utf8_lossy(greeting).trim(),

@@ -116,6 +116,120 @@ player). Each may cancel, and nothing happens. Bundles that use them need `"hook
 API 23 adds bundles' data files (`native_data!`, `native_built_data`; "Data files" below). Bundles that use them need
 `"hooks": 23`.
 
+## A bundle
+
+A bundle is a folder with a `horizon-mixin.toml`. Besides its helpers and modules (horizon-mixins' README) it can
+have its own crate, data files and a post-build step (horizon-mixins 0.6.0). The test bundle
+[`launcher/tests/fixtures/native-crate-demo`](../launcher/tests/fixtures/native-crate-demo) uses all of them:
+
+```
+native-crate-demo/
+  horizon-mixin.toml
+  frame.rs                # helper, compiled into the game
+  data/greeting.txt       # the bundle's data: native_data!("crate_demo", "greeting.txt")
+  engine/                 # the mod's own crate
+    Cargo.toml            # [dependencies] crc32fast = "1"
+    data/salt.txt         # the crate's data: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/salt.txt"))
+    src/lib.rs
+    src/bin/bake.rs       # the post-build step
+```
+
+```toml
+[mod]
+id = "crate_demo"
+version = "0.1.0"
+
+[[injection]]
+id = "frame"
+hook = "frame"            # a name from native-hooks.json, instead of `target`
+hook_version = 1
+kind = "HEAD"
+helper = "frame.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+[[crate]]
+id = "engine"
+path = "engine"           # holds Cargo.toml
+# dependent = "horizon-client"   (the default: the workspace package that depends on it)
+
+[[post_build]]
+crate = "engine"
+bin = "bake"
+args = []
+```
+
+### Named hook points
+
+`native-hooks.json` at the root of the source names each hook point and the version of its contract (signature,
+when it is called, what it does): `{"name": "hud", "version": 1, "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"}`.
+An injection names `hook` and `hook_version` instead of `target`, and horizon-mixins resolves it from the catalog
+of the source it applies to, so a hook point can move in the source without breaking the mods that use it. A name
+the catalog lacks is `E_HOOK_UNKNOWN` (the error lists the names it has), a version it lacks `E_HOOK_VERSION`. A
+contract is never changed: an incompatible change adds a version. Helpers (`native_text`, `native_player`…) are not
+in the catalog; they are kept stable as the hook points are. A test (`catalog_matches_hook_points`) keeps the
+catalog and `native_hooks.rs` in step.
+
+### The mod's crate
+
+A `[[crate]]` is a Cargo package of the bundle's, staged as `native-crates/<mod>/<crate>/` and added to the
+workspace's members and to the `[dependencies]` of its `dependent`, so helpers call it as
+`crate_demo_engine::checksum(…)`. Cargo compiles it once and keeps it: editing a helper, or switching another mod
+on or off, recompiles `horizon-client` but not the mod's crate, so the heavy code of a big mod belongs there and
+only the glue in helpers. A crate can't depend on `horizon-client` (Cargo forbids the cycle) or on any path or git
+crate, and has no `Cargo.lock`, `[workspace]` or build of its own. Horizon's own crates (`horizon-core`…) are path
+crates too, so they are refused the same way, on purpose for now: a mod names game types through its helpers, which
+are compiled into `horizon-client`; a stable API crate for mods' own crates is #3897.
+
+**Dependencies come from Horizon's `Cargo.lock`.** A crate names registry crates by version requirement
+(`crc32fast = "1"`, `{ version, features, default-features, optional }`); each must already be in Horizon's lock
+file in a version that matches, and builds in exactly that version. The lock file is the allow list: horizon-mixins
+refuses a crate the lock lacks (`E_CRATE_DEPENDENCY`) and writes the mod's crates into the staged lock without
+changing any other byte, so the game still builds with `--locked`. The launcher checks it again (every downloaded
+package of the staged lock as in Horizon's: name, version, source, checksum), and a feature that turns on a
+dependency the lock lacks fails at `cargo fetch --locked` with a message saying so. The build stops with:
+
+```
+horizon-mixins failed (exit status: 1). The end of its output, the whole of it in …/native/build.log:
+E_CRATE_DEPENDENCY: crate_lock needs rand ^0.9, which isn't in Horizon's Cargo.lock (…/horizon-mixin.toml)
+```
+
+### Data files
+
+A bundle's `data/` folder (any files) is staged as `native-data/<mod>/` at the root of the workspace. A helper or
+module compiles a file in with `horizon_client::native_data!("<mod id>", "path/in/data")` (`&'static [u8; N]`,
+`crate::native_data!` inside the lib), since hook points API 23. A mod's crate keeps its own data in its folder and
+reads it with `include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/…"))`. The registry's `.hnmod` may carry
+both (`mixins/<id>/data/…`, `mixins/<id>/<crate>/data/…`).
+
+Both are compiled in: neither folder is beside the game when it runs. A file the game reads at run time is one a
+post-build step writes into `HORIZON_NATIVE_DATA_DIR` (below), copying it from `HORIZON_NATIVE_BUNDLE_DATA_DIR` or
+making it; the game finds it with `native_built_data("<mod>")` (None only when the game can't tell its own folder).
+
+**What a `.hnmod` holds.** Only files under `mixins/<id>/`: `.rs` and `.toml` files, the data folders above, and the
+text files a crate folder carries (`README*`, `LICENSE*`, `COPYING*`, `NOTICE*`, `.gitignore`, in the bundle's
+folder or a crate's), so a crate that compiles its README in builds the same from the registry as from a folder. At
+most 512 files and 64 MiB unpacked; anything else refuses the bundle. A local folder build has no such limits.
+
+### Post-build steps
+
+A `[[post_build]]` names a bin of one of the mod's crates. After the game compiles, the launcher builds it with the
+same profile into the same `native/target/`, then runs it (at low priority, in mod order) in the new build's version
+folder with:
+
+| Variable | What |
+|---|---|
+| `HORIZON_NATIVE_MOD` | the mod's id |
+| `HORIZON_NATIVE_VERSION_DIR` | the new build's version folder (also the working directory) |
+| `HORIZON_NATIVE_DATA_DIR` | `<version folder>/native-data/<mod>/`, created: what the game reads at run time with `native_built_data("<mod>")` (or `horizon_client::native_data::built`) |
+| `HORIZON_NATIVE_CACHE_DIR` | `<launcher data>/native/cache/<mod>/`, created, kept from one build to the next |
+| `HORIZON_NATIVE_BUNDLE_DATA_DIR` | the bundle's own `data/` as staged for the build (`native/stage/native-data/<mod>/`); read it, don't write it |
+
+Its output goes to `native/build.log`. A `native-post-build.json` that can't be read, or names a mod id that isn't
+one, stops the build instead of skipping the steps. When a step fails, so does the build ("crate_demo's post-build
+step failed …") and the version folder is removed. It runs on the player's computer like the rest of the mod's code: only the
+launcher runs it, never horizon-mixins.
+
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

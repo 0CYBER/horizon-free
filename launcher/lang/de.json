@@ -197,6 +197,7 @@
   "Applying the mixins": "Mixins werden angewendet",
   "Checking the mods' crates against Horizon's Cargo.lock": "Crates der Mods werden mit Horizons Cargo.lock abgeglichen",
   "Compiling the game: {count} crates, now {name}": "Spiel wird kompiliert: {count} Crates, gerade {name}",
+  "Building {name}'s post-build step": "Post-Build-Schritt von {name} wird gebaut",
   "Running {name}'s post-build step": "Post-Build-Schritt von {name} wird ausgeführt",
   "Installing the build": "Build wird installiert",
   "These mods were made for different Horizon versions": "Diese Mods wurden für verschiedene Horizon-Versionen gemacht",

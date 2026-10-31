@@ -194,6 +194,7 @@
   "Applying the mixins": "Застосування міксинів",
   "Checking the mods' crates against Horizon's Cargo.lock": "Перевірка крейтів модів за Cargo.lock Horizon",
   "Compiling the game: {count} crates, now {name}": "Компіляція гри: {count} крейтів, зараз {name}",
+  "Building {name}'s post-build step": "Збирання кроку після збирання мода {name}",
   "Running {name}'s post-build step": "Виконання кроку після збирання мода {name}",
   "Installing the build": "Встановлення збірки",
   "These mods were made for different Horizon versions": "Ці моди зроблено для різних версій Horizon",

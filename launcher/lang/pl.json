@@ -195,6 +195,7 @@
   "Downloading Horizon's source at {revision}": "Pobieranie kodu źródłowego Horizon w wersji {revision}",
   "Downloading Rust {version} (once): {done}%": "Pobieranie Rust {version} (jednorazowo): {done}%",
   "Installing the build": "Instalowanie kompilacji",
+  "Building {name}'s post-build step": "Budowanie kroku po kompilacji moda {name}",
   "Running {name}'s post-build step": "Uruchamianie kroku po kompilacji moda {name}",
   "These mods were made for different Horizon versions": "Te mody zrobiono dla różnych wersji Horizon",
   "They often still work together. If the build fails, install versions made for the same Nightly.": "Często i tak działają razem. Jeśli kompilacja się nie powiedzie, zainstaluj wersje zrobione dla tej samej Nightly.",

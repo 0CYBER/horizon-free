@@ -194,6 +194,7 @@
   "Applying the mixins": "正在应用 mixin",
   "Checking the mods' crates against Horizon's Cargo.lock": "正在对照 Horizon 的 Cargo.lock 检查模组的 crate",
   "Compiling the game: {count} crates, now {name}": "正在编译游戏：已完成 {count} 个 crate，当前 {name}",
+  "Building {name}'s post-build step": "正在构建 {name} 的构建后步骤",
   "Running {name}'s post-build step": "正在运行 {name} 的构建后步骤",
   "Installing the build": "正在安装构建",
   "These mods were made for different Horizon versions": "这些模组是为不同版本的 Horizon 制作的",

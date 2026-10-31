@@ -71,6 +71,27 @@ pub struct Bundle {
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
+/// Whether `rest` (a path inside `mixins/<id>/`) is a data file: under the bundle's `data/`, or
+/// under the top-level `data/` of a folder of it (a crate's, `engine/data/`), not any folder
+/// named `data` deeper in.
+fn in_data(rest: &str) -> bool {
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() >= 2 && (parts[0] == "data" || (parts.len() >= 3 && parts[1] == "data"))
+}
+
+/// Whether `rest` is one of the text files a crate folder usually carries, which a crate may need
+/// to compile (`#![doc = include_str!("../README.md")]`): `README*`, `LICENSE*`, `COPYING*`,
+/// `NOTICE*` and `.gitignore`, in the bundle's folder or a top-level folder of it.
+fn text(rest: &str) -> bool {
+    let parts: Vec<&str> = rest.split('/').collect();
+    let name = parts[parts.len() - 1];
+    parts.len() <= 2
+        && (["README", "LICENSE", "LICENCE", "COPYING", "NOTICE"]
+            .iter()
+            .any(|p| name.starts_with(p))
+            || name == ".gitignore")
+}
+
 impl Bundle {
     pub fn read(path: &Path) -> Result<Self, String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -116,13 +137,11 @@ impl Bundle {
                 .map_err(|e| e.to_string())?;
         manifest.check()?;
         let prefix = format!("mixins/{}/", manifest.id);
-        // Data: the bundle's `data/`, or a `data/` of one of its crates (`engine/data/`).
-        let in_data = |rest: &str| rest.rsplit('/').skip(1).any(|dir| dir == "data");
         for name in files.keys().filter(|n| n.as_str() != MANIFEST) {
             let Some(rest) = name.strip_prefix(&prefix) else {
                 return Err(format!("unexpected native source: {name}"));
             };
-            if !(name.ends_with(".rs") || name.ends_with(".toml") || in_data(rest)) {
+            if !(name.ends_with(".rs") || name.ends_with(".toml") || in_data(rest) || text(rest)) {
                 return Err(format!("unexpected native source: {name}"));
             }
         }
@@ -221,6 +240,9 @@ mod tests {
             &[
                 ("mixins/veinminer/data/nested/table.bin", &bytes),
                 ("mixins/veinminer/engine/data/model.bin", &bytes),
+                ("mixins/veinminer/engine/README.md", b"# engine"),
+                ("mixins/veinminer/engine/LICENSE-MIT", b"MIT"),
+                ("mixins/veinminer/.gitignore", b"target/"),
             ],
             &mixin(),
         )
@@ -240,6 +262,9 @@ mod tests {
             "mixins/veinminer/data/../code.dll",
             "mixins/veinminer/database/file.bin",
             "mixins/veinminer/engine/data.bin",
+            "mixins/veinminer/engine/src/data/blob.bin",
+            "mixins/veinminer/engine/src/README.md",
+            "mixins/veinminer/engine/README.dll/x.bin",
             "mixins/veinminer/engine/Cargo.lock",
             "mixins/other/data/file.bin",
             "mixins\\veinminer\\hook.rs",

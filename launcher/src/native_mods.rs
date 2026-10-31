@@ -590,7 +590,9 @@ pub enum Step {
     Crates,
     /// Crates compiled so far, and the last one.
     Compile(usize, String),
-    /// A mod's post-build step, built and run.
+    /// A mod's post-build step being built.
+    PostBuildCompile(String),
+    /// A mod's post-build step running in the new build's folder.
     PostBuild(String),
     Install,
 }
@@ -616,6 +618,7 @@ impl Step {
                 "Compiling the game: {count} crates, now {name}",
                 &[("count", &n.to_string()), ("name", name)],
             ),
+            Self::PostBuildCompile(id) => trf("Building {name}'s post-build step", &[("name", id)]),
             Self::PostBuild(id) => trf("Running {name}'s post-build step", &[("name", id)]),
             Self::Install => tr("Installing the build").into(),
         }
@@ -676,13 +679,15 @@ fn diagnostic(text: &str) -> Option<String> {
     Some(line)
 }
 
-/// horizon-mixins at commit `rev`, built once with the launcher's cargo (`cargo install --locked`).
-fn tool(rust: &Toolchain, rev: &str) -> Result<PathBuf, String> {
+/// horizon-mixins at commit `rev`, built once with the launcher's cargo (`cargo install --locked`);
+/// `progress` hears [`Step::Tool`] only when it is built.
+fn tool(rust: &Toolchain, rev: &str, progress: &impl Fn(Step)) -> Result<PathBuf, String> {
     let dir = root().join("tools").join(&rev[..12]);
     let bin = dir
         .join("bin")
         .join(format!("horizon-mixins{}", std::env::consts::EXE_SUFFIX));
     if !bin.is_file() {
+        progress(Step::Tool);
         let mut cmd = rust.command(&rust.cargo());
         rust_toolchain::low_priority(&mut cmd);
         cmd.args([
@@ -774,7 +779,7 @@ fn post_build_programs(
     let _ = fs::remove_dir_all(programs);
     let mut out = Vec::new();
     for (i, step) in steps.into_iter().enumerate() {
-        progress(Step::PostBuild(step.mod_id.clone()));
+        progress(Step::PostBuildCompile(step.mod_id.clone()));
         let mut cmd = cargo(rust, stage, "build");
         cmd.env("CARGO_TARGET_DIR", target);
         cmd.args([
@@ -946,8 +951,7 @@ pub fn build(
     if !backend::installed().contains(&version) {
         rust_toolchain::linker()?;
         let rust = rust_toolchain::install(|f| progress(Step::Rust(f)))?;
-        progress(Step::Tool);
-        let tool = tool(&rust, &mixins)?;
+        let tool = tool(&rust, &mixins, &progress)?;
         progress(Step::Source(revision.clone()));
         let source = source(&revision)?;
         progress(Step::Mixins);
@@ -965,7 +969,7 @@ pub fn build(
         let stage = real.join("stage");
         sync(&fresh, &stage)?;
         let _ = fs::remove_dir_all(&fresh);
-        if stage.join(crates::DIR).is_dir() {
+        if crates::any(&stage) {
             progress(Step::Crates);
             lock_crates(&rust, &source, &stage)?;
         }
@@ -1007,7 +1011,7 @@ pub fn build(
         install(base, &version, &binary, &about, |dir| {
             for (step, program) in &post {
                 progress(Step::PostBuild(step.mod_id.clone()));
-                let cmd = crates::post_build(program, step, dir, &real.join("cache"))?;
+                let cmd = crates::post_build(program, step, dir, &real.join("cache"), &stage)?;
                 run(cmd, &format!("{}'s post-build step", step.mod_id), |_| {})?;
             }
             Ok(())
