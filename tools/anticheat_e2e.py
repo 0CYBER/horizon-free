@@ -15,10 +15,15 @@ Checks:
          hovering 24 blocks up that claims the ground in every move (no-fall) and one standing on water
          that does (jesus) are flagged, their claim dropped, and kicked; bots walking on the ground and
          standing still are never flagged.
+- prediction: `[anticheat]` on, survival: a real Horizon client, through a relay that holds every packet
+         20-120 ms, walks, sprint-jumps, strafes and sneaks, with effects given and cleared, over ice and
+         soul sand, swims, walks into cows, has blocks changed around it, flies in creative, glides with an
+         elytra and a firework, launches with riptide and rides a boat: it is never flagged. A bot, which
+         moves by its own rules and sends no keys, is flagged and sent back.
 
 Each server runs in a fresh folder with fresh HORIZON_HOME and XDG folders (lab.game_env), on a free port,
 in a flat world (creative unless the check says otherwise: the bots fly). Build first:
-    cargo build --profile fast -p horizon-client --bin horizon-client
+    cargo build --profile fast -p horizon-client --bin horizon-client --bin horizon-ctl
     cargo build --profile fast -p horizon-bots
 """
 import argparse
@@ -26,10 +31,14 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import queue
+import random
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -176,7 +185,181 @@ def check_ground(bins, scratch, out, seconds):
     print(f'ground: the no-fall and jesus bots are flagged and kicked; {walkers} bots on the ground never flagged')
 
 
-CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground}
+class Jitter:
+    """A relay to the server on `port` that holds everything it carries 20-120 ms, in order: a player on
+    a bad connection."""
+
+    def __init__(self, port):
+        self.server = port
+        self.listener = socket.create_server(('127.0.0.1', 0))
+        self.port = self.listener.getsockname()[1]
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self):
+        while True:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            upstream = socket.create_connection(('127.0.0.1', self.server))
+            for a, b in ((client, upstream), (upstream, client)):
+                held = queue.Queue()
+                threading.Thread(target=self.read, args=(a, held), daemon=True).start()
+                threading.Thread(target=self.write, args=(b, held), daemon=True).start()
+
+    @staticmethod
+    def read(conn, held):
+        due = 0.0
+        while True:
+            try:
+                data = conn.recv(65536)
+            except OSError:
+                data = b''
+            due = max(due, time.monotonic() + random.uniform(0.02, 0.12))
+            held.put((due, data))
+            if not data:
+                return
+
+    @staticmethod
+    def write(conn, held):
+        while True:
+            due, data = held.get()
+            time.sleep(max(0.0, due - time.monotonic()))
+            if not data:
+                conn.close()
+                return
+            try:
+                conn.sendall(data)
+            except OSError:
+                return
+
+    def close(self):
+        self.listener.close()
+
+
+def honest_play(game, console):
+    """What the honest client does on the prediction's server, in a survival, peaceful flat world."""
+    def at(command):
+        console(f'execute as Walker at Walker run {command}')
+    game.raw('move', 'forward', 2)
+    game.raw('move', 'forward', 3, '--sprint', '--jump')
+    game.raw('turn', 90, 0, '--over', 1)
+    game.raw('move', 'left', 2)
+    game.raw('move', 'back', 2, '--sneak')
+    console('effect give Walker minecraft:speed 30 2')
+    console('effect give Walker minecraft:jump_boost 30 1')
+    game.wait(10)
+    game.raw('move', 'forward', 2, '--sprint', '--jump')
+    console('effect clear Walker')
+    game.wait(10)
+    # Ice, then soul sand, under a sprint; a pool to swim across.
+    at('fill ~-3 ~-1 ~-3 ~3 ~-1 ~12 minecraft:packed_ice')
+    game.wait(10)
+    game.raw('move', 'forward', 2, '--sprint', '--jump')
+    at('fill ~-3 ~-1 ~-3 ~3 ~-1 ~12 minecraft:soul_sand')
+    game.wait(10)
+    game.raw('move', 'forward', 2, '--sprint')
+    at('fill ~-3 ~-3 ~-3 ~3 ~-1 ~12 minecraft:water')
+    game.wait(20)
+    game.raw('move', 'forward', 3, '--jump')
+    # Riptide, from the pool: a trident drawn for 25 ticks.
+    console('item replace entity Walker weapon.mainhand with minecraft:trident'
+            '[minecraft:enchantments={"minecraft:riptide":3}]')
+    game.wait(5)
+    game.script(['mouse right down', 'wait 25', 'mouse right up', 'wait 60'])
+    console('item replace entity Walker weapon.mainhand with minecraft:air')
+    at('fill ~-4 ~-4 ~-4 ~4 ~-1 ~13 minecraft:stone')
+    game.wait(20)
+    # Cows to walk into, blocks changed in front, under and around.
+    for ahead in (1, 2):
+        at(f'summon minecraft:cow ^ ^ ^{ahead}')
+    game.wait(10)
+    game.raw('move', 'forward', 2)
+    console('kill @e[type=minecraft:cow]')
+    at('setblock ^ ^ ^1 minecraft:stone')
+    game.wait(2)
+    game.raw('move', 'forward', 1, '--jump')
+    at('fill ~-1 ~-1 ~-1 ~1 ~-1 ~1 minecraft:air')
+    game.wait(30)
+    at('fill ~-2 ~-1 ~-2 ~2 ~-1 ~2 minecraft:stone')
+    game.wait(10)
+    # Creative flight (double jump), then back to survival on the ground.
+    console('gamemode creative Walker')
+    game.wait(10)
+    game.script(['key space tap', 'wait 2', 'key space tap', 'wait 2', 'key space down', 'wait 10',
+                 'key space up', 'key w down', 'wait 30', 'key w up', 'key shift down', 'wait 40',
+                 'key shift up'])
+    console('gamemode survival Walker')
+    game.wait(60)
+    # An elytra from 60 blocks up (Resistance V against the landing), with a firework, then a teleport
+    # back down.
+    console('effect give Walker minecraft:resistance 60 4 true')
+    console('item replace entity Walker armor.chest with minecraft:elytra')
+    console('item replace entity Walker weapon.mainhand with minecraft:firework_rocket')
+    at('tp @s ~ ~60 ~ 0 0')
+    game.wait(6)
+    game.script(['key space down', 'wait 1', 'key space up', 'wait 20', 'mouse right click', 'wait 40'])
+    at('tp @s ~ -60 ~')
+    game.wait(40)
+    console('item replace entity Walker armor.chest with minecraft:air')
+    console('effect clear Walker')
+    # A boat on a pool: in, paddle, out.
+    from lan_e2e import board, leave_vehicle  # noqa: E402
+    x, y, z = game('state')['player']['position']
+    at('fill ~-2 ~-1 ~-2 ~2 ~-1 ~10 minecraft:water')
+    console(f'summon minecraft:oak_boat {x:.2f} {y - 0.1:.2f} {z + 2:.2f}')
+    game.wait(30)
+    board(game, 'oak_boat', (x, y, z + 2))
+    game.script(['key w down', 'wait 40', 'key w up'])
+    leave_vehicle(game, 'boat')
+    game.wait(20)
+    at('fill ~-3 ~-2 ~-3 ~3 ~-1 ~11 minecraft:stone')
+    game.raw('move', 'back', 2, '--sprint')
+    game.wait(40)
+
+
+def check_prediction(bins, scratch, out, seconds):
+    folder = scratch / 'prediction'
+    # The other checks stay out of it: this one is about the prediction alone.
+    toml = '[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
+    server, port = start(bins, folder, toml, out, 'prediction', gamemode='survival', difficulty='peaceful')
+    from lan_e2e import Game  # noqa: E402 (only this check drives a client)
+    game = Game('client', bins / f'horizon-ctl{EXE}', lab.RESOURCES.resolve())
+    for key in ('XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'HORIZON_LAUNCHER_HOME'):
+        game.d.env[key] = str(game.work / key.lower())
+    game.d.env['HORIZON_LAUNCHER_NO_SELF_UPDATE'] = '1'
+    relay = Jitter(port)
+    try:
+        try:
+            game('launch', wait=False, offscreen=sys.platform == 'darwin')
+            game.raw('connect', f'127.0.0.1:{relay.port}', 'Walker')
+            game.raw('wait-for', 'loaded', '--timeout', 300)
+            game.wait(60)
+            honest_play(game, server.console)
+        except Exception as e:
+            raise Failed(f'prediction: the honest client could not play: {e}') from e
+        finally:
+            (out / 'prediction-client.log').write_text(game.close())
+            relay.close()
+            shutil.rmtree(game.work, ignore_errors=True)
+            log = folder / 'logs/anticheat.log'
+            if log.exists():
+                shutil.copy(log, out / 'prediction-anticheat.log')
+        if log.exists() and 'Walker' in log.read_text():
+            raise Failed(f'prediction: the honest client was flagged:\n{log.read_text()}')
+        cheat = bots(bins, port, out, 'Cheat', 1, 'walk', seconds)
+    finally:
+        server.stop()
+    log = log.read_text() if log.exists() else ''
+    cheater = cheat['per_bot'][0]
+    flags = log.count(f'{cheater["name"]} failed prediction')
+    if flags < 3 or 'sent back' not in log or cheater['pulled_back'] == 0:
+        raise Failed(f'prediction: the bot was flagged {flags} times, sent back {cheater["pulled_back"]}:\n{log}')
+    print(f'prediction: the honest client (20-120 ms jitter) was never flagged; the bot was flagged {flags} '
+          f'times and sent back {cheater["pulled_back"]} times')
+
+
+CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction}
 
 
 def main():

@@ -442,6 +442,8 @@ mod tests {
         /// From tick `.0` on, the ticks come in a burst that the server only plays at tick `.1`,
         /// when the client accepts a teleport back to where the burst began.
         teleport: Option<(usize, usize)>,
+        /// Blocks set in the scene after the floor.
+        blocks: Vec<([i32; 3], &'static str)>,
     }
 
     impl Run {
@@ -453,6 +455,7 @@ mod tests {
                 pitch: 0.0,
                 glider: false,
                 teleport: None,
+                blocks: Vec::new(),
             }
         }
     }
@@ -495,6 +498,10 @@ mod tests {
             .default_state("minecraft:smooth_stone_slab")
             .unwrap();
         scene.set(20, 5, 23, slab).unwrap();
+        for &(at, block) in &run.blocks {
+            let state = assets.registry.default_state(block).unwrap();
+            scene.set(at[0], at[1], at[2], state).unwrap();
+        }
         let start = run.start;
         let mut client = PlayerMotion::new(&resources, start).unwrap();
         client.client_side = true;
@@ -696,6 +703,7 @@ mod tests {
             pitch: 10.0,
             glider: true,
             teleport: None,
+            blocks: Vec::new(),
         };
         let Some(steps) = steps_in(run, |_, _, honest| honest, None) else {
             return;
@@ -721,5 +729,71 @@ mod tests {
         let offsets: Vec<f64> = steps.iter().map(|s| s.played.offset).collect();
         assert!(offsets.iter().all(|&o| o <= EXACT), "{offsets:?}");
         assert!(steps.iter().all(|s| s.over == Over::default()));
+    }
+
+    /// A client walking 40 ticks towards +z, over the slab, into `blocks`, its moves passed through
+    /// `cheat`: the tick the cheat starts counts, and none before it does.
+    fn caught(blocks: Vec<([i32; 3], &'static str)>, cheat: impl Fn(Vec3, Vec3) -> Option<Vec3>) {
+        let run = Run {
+            script: vec![(1, 0.0); 40],
+            blocks,
+            ..Run::walk()
+        };
+        let started = std::cell::Cell::new(None);
+        let Some(steps) = steps_in(
+            run,
+            |i, before, honest| match cheat(before, honest) {
+                Some(p) => {
+                    started.set(started.get().or(Some(i)));
+                    p
+                }
+                None => honest,
+            },
+            None,
+        ) else {
+            return;
+        };
+        let start = started.get().expect("the cheat never started");
+        for (i, s) in steps.iter().enumerate().take(start) {
+            assert_eq!(s.over, Over::default(), "tick {i}");
+        }
+        assert_eq!(steps[start].over.ticks, 1, "{:?}", steps[start].played);
+        let counted = steps[start..].iter().filter(|s| s.over.ticks > 0).count();
+        assert!(counted > 0, "{counted}");
+    }
+
+    /// A wall at z 25 (from y 5 up), which the walk runs into at z 24.7.
+    fn wall(height: i32) -> Vec<([i32; 3], &'static str)> {
+        (19..=21)
+            .flat_map(|x| (5..5 + height).map(move |y| ([x, y, 25], "minecraft:stone")))
+            .collect()
+    }
+
+    /// Step: up onto a full block without a jump (the most a walk steps up is 0.6).
+    #[test]
+    fn a_step_is_caught() {
+        caught(wall(1), |before, honest| {
+            (honest.z > 24.6 && before.y < 6.0).then(|| Vec3::new(honest.x, 6.0, 25.1))
+        });
+    }
+
+    /// Spider: up a wall, 0.2 a tick, with no ladder or vine.
+    #[test]
+    fn a_spider_is_caught() {
+        caught(wall(4), |before, honest| {
+            (honest.z > 24.6).then(|| Vec3::new(honest.x, before.y + 0.2, honest.z))
+        });
+    }
+
+    /// Jesus: walking on water as on the ground.
+    #[test]
+    fn a_jesus_is_caught() {
+        let water = (19..=21)
+            .flat_map(|x| (25..=40).map(move |z| ([x, 4, z], "minecraft:water")))
+            .collect();
+        caught(water, |before, honest| {
+            (honest.z > 25.4 && honest.y < before.y)
+                .then(|| Vec3::new(honest.x, before.y, honest.z))
+        });
     }
 }
