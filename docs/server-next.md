@@ -86,7 +86,7 @@ area before it accepts players). The raw JSON comes with S-2.
   higher KB/s per player is the extra chunks. So bandwidth can't drop much further on vanilla's format. The Horizon
   fast path (section 8) is where it can.
 - **Join.** Pumpkin's median is lowest (43–55 ms), but its worst reached 4.1 s at 50 bots. Horizon's stays at
-  74–93 ms with a worst of 244 ms. Vanilla takes 0.9 to 4.8 s.
+  74–93 ms with a worst of 249 ms. Vanilla takes 0.9 to 4.8 s.
 - **The work isn't fully equal.** Pumpkin never pulled a bot back (0 against ~14 600 for Horizon and vanilla at
   100): it doesn't run vanilla's "moved too quickly" check, so its explore bots never wait for it. The mob counts
   of vanilla and Pumpkin can't be seen from outside; Horizon had 1 834 mobs at the end of the 100-bot window.
@@ -140,7 +140,7 @@ if most of the work moves to parallel phases.
 Single player runs on the server thread (`game/integrated.rs`, since #1514), so the integrated server, LAN
 hosts and `--dedicated` share every line of server code: the tick, the levels, the hub, the entity tracker,
 saving. A separate server repo would fork that code or pin it across repos, and either way two copies would
-drift. Gameplay is about 300 000 lines (`game/` 133 k, `mobs/` 62 k, `lan/` 15 k, the flat lib 90 k, and
+drift. Gameplay is about 420 000 lines (`game/` 133 k, `mobs/` 62 k, `lan/` 15 k, the flat lib 90 k, and
 `horizon-world` 124 k), guarded by the 324 harnesses. So everything here lands in horizon:
 
 | Part | Where | Shared by |
@@ -272,7 +272,7 @@ disconnects stay unchanged. **Removes:** thread switches and lock traffic per pa
 
 Login and configuration (registries, tags, known packs) are the same for every player. They are encoded once
 per server start and sent as prepared frames. The first chunks around the spawn come from the chunk cache
-(5.3), not the generator. **Removes:** Horizon already joins in 74–93 ms p50 on loopback, worst 244 ms. Pumpkin's median is lower (43–55 ms) but its worst reached 4.1 s at 50 bots. Prepared frames bring the median under Pumpkin's and keep the worst flat.
+(5.3), not the generator. **Removes:** Horizon already joins in 74–93 ms p50 on loopback, worst 249 ms. Pumpkin's median is lower (43–55 ms) but its worst reached 4.1 s at 50 bots. Prepared frames bring the median under Pumpkin's and keep the worst flat.
 
 ### 5.3 Chunk cache and compression level
 
@@ -286,8 +286,8 @@ per server start and sent as prepared frames. The first chunks around the spawn 
 
 ### 5.4 Entity tracking as deltas
 
-- Today the tracker rebuilds each tracked entity's state per tick (`lan/tracking.rs`, `Entities::tick`,
-  `mob_meta` ~3 % of the tick thread).
+- Today the tracker rebuilds each tracked entity's state per tick (`lan/entity.rs` `Entities::tick`,
+  `game/lan.rs` `mob_meta` ~3 % of the tick thread).
 - Instead, the engine writes a change log as it changes an entity (position, rotation, metadata index, equipment,
   passengers). The tracker turns each changed entity into packets once, and sends them to every player who
   sees it.
@@ -378,7 +378,7 @@ in configuration:
 1. The client sends brand `horizon` (it does today, `net.rs`), then a `horizon:hello` custom payload:
    protocol revision plus a capability bit set.
 2. The server answers `horizon:hello` with the subset it accepts. Horizon's server already answers a Horizon
-   brand with `horizon:quiet` (`lan/conn.rs`), and this is the same mechanism.
+   brand with `horizon:quiet_commands` (`lan/conn.rs`), and this is the same mechanism.
 3. A client that sends no hello, or a capability the server doesn't know, gets vanilla. The fast path is
    always negotiated, never assumed.
 
