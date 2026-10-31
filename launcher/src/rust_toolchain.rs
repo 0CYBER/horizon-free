@@ -142,9 +142,11 @@ impl Toolchain {
 
     /// `program` (this toolchain's cargo, or a tool built with it) set up to use only this
     /// toolchain: its rustc, its MinGW-w64 where it has one, the launcher's Cargo home, and none of
-    /// the player's rustup or compiler-wrapper settings.
+    /// the player's rustup or compiler-wrapper settings. On Windows it opens no console window:
+    /// cargo is a console program, and the launcher has none to share, so each build showed an
+    /// empty one for as long as it ran (#4770).
     pub fn command(&self, program: &Path) -> Command {
-        let mut cmd = Command::new(program);
+        let mut cmd = crate::process::command(program);
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mingw = Some(self.mingw_bin()).filter(|bin| bin.is_dir());
         let paths = std::iter::once(self.dir.join("bin"))

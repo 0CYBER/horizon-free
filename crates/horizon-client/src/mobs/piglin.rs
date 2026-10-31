@@ -946,9 +946,9 @@ impl Goal for WalkAway {
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.source(m, cx.w).is_some() && !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.speed);
+        m.nav_move_to_path(cx.w, path, self.speed);
     }
     fn every_tick(&self) -> bool {
         true
@@ -956,7 +956,7 @@ impl Goal for WalkAway {
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if self.step(m, cx) {
             let path = m.ai.pending_path.take();
-            m.nav_move_to_path(path, self.speed);
+            m.nav_move_to_path(cx.w, path, self.speed);
         }
     }
 }
@@ -1041,16 +1041,62 @@ fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
         _ => true,
     }
 }
+/// `BackUpIfTooClose.create(5, 0.75)` of `PiglinAi.initFightActivity`, behind
+/// `hasCrossbow`: with no walk target and the attack target in sight within 5
+/// blocks, look at it and strafe backwards every tick. It takes no flags so the
+/// crossbow goal keeps aiming meanwhile.
+#[derive(Clone, Debug)]
+struct BackUpIfTooClose;
+impl BackUpIfTooClose {
+    fn too_close(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+        if m.extra.main_hand.as_deref() != Some("minecraft:crossbow") || !m.ai.nav.is_done() {
+            return None;
+        }
+        let who = m.ai.target?;
+        let t = cx.w.target_info(who)?;
+        if !t.position.closer_than(m.position, 5.0) || !m.sees(cx.w, who) {
+            return None;
+        }
+        Some([t.position.x, t.eye_y, t.position.z])
+    }
+}
+impl Goal for BackUpIfTooClose {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        Self::too_close(m, cx).is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.can_use(m, cx)
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(eye) = Self::too_close(m, cx) else {
+            return;
+        };
+        m.look_at(eye);
+        m.ai.mov.strafe(-0.75, 0.0);
+        m.yaw = super::control::rotate_if_necessary(m.yaw, m.head_yaw, 0.0);
+    }
+}
 pub fn register_piglin(m: &mut Mob) {
-    let crossbow = m.extra.main_hand.as_deref() == Some("minecraft:crossbow");
+    // `AbstractPiglin.<init>`: a piglin's navigation opens doors.
+    m.ai.nav.can_open_doors = true;
     let g = &mut m.ai.goals;
     g.add(0, Float);
+    // `PiglinAi.initCoreActivity`: `InteractWithDoor.create()`.
+    g.add(0, super::doors::InteractWithDoor::default());
     g.add(1, Admire);
     // `PiglinAi.initRetreatActivity`: `SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.0, 12, true)`.
     g.add(2, WalkAway::retreat(1.0, 12.0, true));
-    if crossbow {
-        g.add(3, super::illager::crossbow_goal(1.0, 8.0));
-    }
+    // Registered before the spawn weapon is equipped, so the goal checks the
+    // held item itself (it only starts while a crossbow is in the main hand).
+    g.add(3, super::illager::crossbow_goal(1.0, 8.0));
+    g.add(3, BackUpIfTooClose);
     // `PiglinAi.initFightActivity`: the spear behaviours come before the melee one.
     g.add(3, super::spear_use::PiglinSpear::new());
     g.add(
@@ -1262,9 +1308,9 @@ impl Goal for HoglinAvoidRepellent {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(cx.w, path, 1.0);
     }
 }
 /// `PiglinAi.avoidRepellent`: `SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0, 8, false)`
@@ -1315,9 +1361,9 @@ impl Goal for PiglinAvoidRepellent {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(cx.w, path, 1.0);
     }
 }
 /// `PiglinAi.isPlayerHoldingLovedItem`: the idle and celebrate activities'
@@ -1859,4 +1905,34 @@ pub fn hoglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     p.xrot("left_front_leg", (pos + PI).mcos() * 1.2 * sp);
     p.xrot("right_hind_leg", (pos + PI).mcos() * 1.2 * sp);
     p.xrot("left_hind_leg", pos.mcos() * 1.2 * sp);
+}
+
+#[cfg(test)]
+mod crossbow_tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    fn piglin() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:piglin".into();
+        k.species = Species::Piglin;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// The spawn weapon is equipped after the goals are registered, so the
+    /// crossbow goal must exist on a piglin that holds nothing yet, and the
+    /// melee goal must be off once a crossbow is held.
+    #[test]
+    fn a_piglin_with_a_crossbow_shoots_instead_of_meleeing() {
+        let mut m = piglin();
+        assert!(format!("{:?}", m.ai.goals).contains("CrossbowAttack"));
+        assert!(!super::super::spear_use::holds_non_melee_weapon(&m));
+        m.extra.set_main_hand(Some("minecraft:crossbow".into()));
+        assert!(super::super::spear_use::holds_non_melee_weapon(&m));
+        m.extra.set_main_hand(Some("minecraft:golden_sword".into()));
+        assert!(!super::super::spear_use::holds_non_melee_weapon(&m));
+    }
 }

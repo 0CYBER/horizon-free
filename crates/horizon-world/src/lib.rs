@@ -109,6 +109,7 @@ pub mod registry_fluid;
 pub mod retrogen;
 pub mod server_player_combat;
 pub mod server_player_damage;
+pub mod snbt_text;
 pub mod stored_consume;
 pub mod stored_effect_attributes;
 pub mod suffocation;

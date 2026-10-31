@@ -25,6 +25,26 @@ pub(super) fn redirectable(p: &Projectile) -> bool {
         )
 }
 
+/// `Projectile.onRedirectProjectile`: another projectile hit `p`, which turns
+/// with `deflect(AIM_DEFLECT, hitter's owner, hitter's owner, true, 1.0)`.
+/// It flies along the owner's look (`Entity.getLookAngle`; unchanged when the
+/// owner is gone), is that owner's now, and its acceleration power is back
+/// to 0.1 (`AbstractHurtingProjectile.onDeflection` by an attack).
+pub(super) fn aim_deflect(
+    p: &mut Projectile,
+    look: Option<Vec3>,
+    owner: Option<Who>,
+    guest: Option<u32>,
+) {
+    if let Some(look) = look {
+        p.velocity = look;
+        p.needs_sync = true;
+    }
+    p.owner = owner;
+    p.guest = guest;
+    p.acceleration = 0.1;
+}
+
 /// Its box for the crosshair: the entity's (a fireball 1 x 1, a wind charge
 /// 0.3125, from its feet up) grown by the pick radius.
 fn pick_box(p: &Projectile) -> Aabb {
@@ -106,6 +126,27 @@ impl Game<'_> {
         d2 < range * range
     }
 
+    /// `Entity.getLookAngle` of a projectile's owner: the host, the guest who
+    /// threw it, or a mob; none when the owner is not here.
+    pub(super) fn owner_look(&self, owner: Option<Who>, guest: Option<u32>) -> Option<Vec3> {
+        let (pitch, yaw) = match (owner?, guest) {
+            (Who::Player, Some(conn)) => {
+                let lan = self.lan.as_ref()?;
+                let g = lan.hub.guests.iter().find(|g| g.conn == conn)?;
+                (g.pitch, g.yaw)
+            }
+            (Who::Player, None) => {
+                self.player.as_ref()?;
+                (self.pitch, self.yaw)
+            }
+            (Who::Mob(id), _) => {
+                let m = self.mobs.iter().find(|m| m.id == id)?;
+                (m.head_pitch, m.yaw)
+            }
+        };
+        Some(horizon_world::view_direction::view_vector(pitch, yaw))
+    }
+
     /// `Projectile.deflect(AIM_DEFLECT, player, player, true)`.
     pub(super) fn deflect(&mut self, i: usize) {
         let dir = view_vector(self.yaw, self.pitch);
@@ -155,5 +196,37 @@ mod tests {
         let b = pick_box(&large);
         assert_eq!(b.min_position().x, -1.5);
         assert_eq!(b.max_position().y, 66.0);
+    }
+
+    fn wind_charge() -> Projectile {
+        let mut p = Projectile::new(
+            ProjectileKind::WindCharge,
+            Vec3::new(0.0, 70.0, 0.0),
+            Some(Who::Mob(7)),
+        );
+        p.velocity = Vec3::new(0.0, 1.5, 0.0);
+        p
+    }
+
+    #[test]
+    fn a_redirected_wind_charge_flies_along_the_new_owners_look() {
+        let mut p = wind_charge();
+        let look = Vec3::new(0.0, -1.0, 0.0);
+        aim_deflect(&mut p, Some(look), Some(Who::Player), Some(3));
+        assert_eq!(p.velocity, look);
+        assert_eq!(p.owner, Some(Who::Player));
+        assert_eq!(p.guest, Some(3));
+        assert_eq!(p.acceleration, 0.1);
+        assert!(p.needs_sync);
+    }
+
+    #[test]
+    fn with_no_owner_here_it_keeps_its_movement_but_changes_hands() {
+        let mut p = wind_charge();
+        aim_deflect(&mut p, None, None, None);
+        assert_eq!(p.velocity, Vec3::new(0.0, 1.5, 0.0));
+        assert_eq!(p.owner, None);
+        assert_eq!(p.acceleration, 0.1);
+        assert!(!p.needs_sync);
     }
 }

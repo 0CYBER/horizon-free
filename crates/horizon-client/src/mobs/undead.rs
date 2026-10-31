@@ -554,24 +554,20 @@ fn skeleton_freezing(m: &mut Mob, cx: &mut Cx) {
     } else if m.extra.counter2 > 0 {
         m.extra.counter2 -= 1;
         if m.extra.counter2 == 0 {
-            // levelEvent 1048: the conversion sound at the stray.
-            let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
-            cx.events.push(MobEvent::Sound(
-                "entity.skeleton.converted_to_stray",
-                m.center(),
-                2.0,
-                pitch,
-            ));
-            cx.events.push(MobEvent::SpawnKind {
-                kind: "minecraft:stray".into(),
-                at: [m.position.x, m.position.y, m.position.z],
-                setup: super::SpawnSetup {
-                    yaw: m.yaw,
-                    persistent: m.persistent,
-                    ..Default::default()
-                },
-            });
-            m.removed = true;
+            // ConversionTracker.doConversion: convertTo(STRAY,
+            // ConversionParams.single(this, true, true)).
+            convert(m, "minecraft:stray", cx);
+            // levelEvent 1048: the conversion sound at the stray, unless it
+            // is silent.
+            if !m.silent {
+                let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+                cx.events.push(MobEvent::Sound(
+                    "entity.skeleton.converted_to_stray",
+                    m.center(),
+                    2.0,
+                    pitch,
+                ));
+            }
         }
     } else {
         m.extra.counter += 1;
@@ -579,6 +575,17 @@ fn skeleton_freezing(m: &mut Mob, cx: &mut Cx) {
             m.extra.counter2 = 301;
         }
     }
+}
+/// `Mob.convertTo(kind, ConversionParams.single(this, true, true))`: the
+/// mob is discarded and a new one of `kind` takes its place with its
+/// equipment, name, effects and flags (`MobEvent::Convert`).
+fn convert(m: &mut Mob, kind: &'static str, cx: &mut Cx) {
+    cx.events.push(MobEvent::Convert {
+        from: Box::new(m.clone()),
+        kind,
+        params: super::conversion::Params::KEEP_ALL,
+    });
+    m.removed = true;
 }
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     if m.species() == Species::Skeleton && m.alive() && !m.no_ai {
@@ -601,18 +608,13 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
                 } else {
                     ("minecraft:drowned", "entity.zombie.converted_to_drowned")
                 };
-                cx.events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
-                cx.events.push(MobEvent::SpawnKind {
-                    kind: kind.into(),
-                    at: [m.position.x, m.position.y, m.position.z],
-                    setup: super::SpawnSetup {
-                        baby: m.is_baby(),
-                        yaw: m.yaw,
-                        persistent: m.persistent,
-                        ..Default::default()
-                    },
-                });
-                m.removed = true;
+                // ConversionTracker.doConversion: convertTo(type,
+                // ConversionParams.single(this, true, true)); levelEvent
+                // 1040 or 1041 unless the new mob is silent.
+                convert(m, kind, cx);
+                if !m.silent {
+                    cx.events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+                }
             }
         } else if m.fluids.eye_in_water {
             m.extra.counter += 1;
@@ -1074,8 +1076,8 @@ impl Goal for MoveThroughVillage {
             )
     }
     /// `MoveThroughVillageGoal.start`.
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
-        m.nav_move_to_path(self.path.clone(), self.speed);
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to_path(cx.w, self.path.clone(), self.speed);
     }
     /// `MoveThroughVillageGoal.stop`: a point reached (or the walk ended) is
     /// visited.
@@ -1232,5 +1234,120 @@ impl Goal for AttackTurtleEgg {
             ));
         }
         self.since_reached += 1;
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+    use crate::{items::ItemStack, mobs::world::with_test_world};
+    use std::sync::Arc;
+
+    /// The mob the game makes of a conversion event (`Game::convert_to` or,
+    /// for a plain spawn, `spawn_mob` plus `apply_setup` without the spawn
+    /// finalization's random gear).
+    fn resolve(event: &MobEvent, types: &crate::mobs::MobTypes) -> Option<Mob> {
+        let new = |kind: &str, at: Vec3, yaw: f32| {
+            Mob::new(2, Arc::new(types.types[kind].clone()), at, yaw)
+        };
+        match event {
+            MobEvent::Convert { from, kind, params } => {
+                let mut m = new(kind, from.position, from.yaw);
+                crate::mobs::conversion::single(from, &mut m, *params);
+                Some(m)
+            }
+            MobEvent::SpawnKind { kind, at, setup } => {
+                let mut m = new(kind, Vec3::new(at[0], at[1], at[2]), setup.yaw);
+                m.persistent = setup.persistent;
+                if setup.baby {
+                    m.extra.age = -24000;
+                }
+                Some(m)
+            }
+            _ => None,
+        }
+    }
+
+    /// `Zombie.drowningTracker` / `Husk`: the last tick of the conversion
+    /// under water turns the mob into `into`; what comes out (None only
+    /// without the extracted vanilla data).
+    fn drown(kind: &str, dress: impl FnOnce(&mut Mob)) -> Option<Mob> {
+        let mut out = None;
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(
+                1,
+                Arc::new(types.types[kind].clone()),
+                Vec3::new(0.5, 64.0, 0.5),
+                30.0,
+            );
+            dress(&mut m);
+            m.fluids.eye_in_water = true;
+            m.extra.counter2 = 1;
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut events = Vec::new();
+            let mut cx = Cx {
+                w,
+                lr: &mut lr,
+                events: &mut events,
+            };
+            custom_server_ai_step(&mut m, &mut cx);
+            assert!(m.removed, "the {kind} is discarded");
+            let new = events.iter().find_map(|e| resolve(e, types));
+            out = Some(new.expect("the conversion makes a new mob"));
+        });
+        out
+    }
+
+    #[test]
+    fn a_drowning_zombie_keeps_its_gear_and_name_tag() {
+        let Some(d) = drown("minecraft:zombie", |m| {
+            m.custom_name = Some("Bob".into());
+            m.name_visible = true;
+            m.persistent = true;
+            m.extra.head = Some("minecraft:iron_helmet".into());
+            m.extra.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
+            m.extra
+                .set_main_hand_stack(Some(ItemStack::new("minecraft:iron_sword", 1)));
+            m.extra.drop_chances = Some(Box::new([2.0; 8]));
+            m.extra.pick_up_loot = true;
+            m.add_effect("minecraft:speed", 600, 1);
+        }) else {
+            return;
+        };
+        assert_eq!(d.species(), Species::Drowned);
+        assert_eq!(d.custom_name.as_deref(), Some("Bob"));
+        assert!(d.name_visible && d.persistent);
+        assert_eq!(d.extra.head.as_deref(), Some("minecraft:iron_helmet"));
+        assert_eq!(
+            d.extra.armor[0].as_ref().map(|s| &*s.item),
+            Some("minecraft:iron_helmet")
+        );
+        assert_eq!(
+            d.extra.main_hand_stack().map(|s| &*s.item),
+            Some("minecraft:iron_sword")
+        );
+        assert_eq!(d.extra.drop_chances.as_deref(), Some(&[2.0; 8]));
+        assert!(d.extra.pick_up_loot);
+        assert!(d.has_effect("minecraft:speed"));
+        assert_eq!(d.position, Vec3::new(0.5, 64.0, 0.5));
+    }
+
+    #[test]
+    fn a_husk_turns_into_a_zombie_with_its_flags() {
+        let Some(z) = drown("minecraft:husk", |m| {
+            m.custom_name = Some("Dusty".into());
+            m.no_ai = false;
+            m.silent = true;
+            m.extra.age = i32::MIN / 2;
+            m.extra.feet = Some("minecraft:golden_boots".into());
+            m.extra.armor[3] = Some(ItemStack::new("minecraft:golden_boots", 1));
+            m.extra.left_handed = true;
+        }) else {
+            return;
+        };
+        assert_eq!(z.species(), Species::Zombie);
+        assert_eq!(z.custom_name.as_deref(), Some("Dusty"));
+        assert!(z.silent && z.is_baby() && z.extra.left_handed);
+        assert_eq!(z.extra.feet.as_deref(), Some("minecraft:golden_boots"));
     }
 }

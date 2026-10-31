@@ -426,6 +426,30 @@ pub(super) fn submit_banner_result(
     }
 }
 
+/// `GuiBookModelRenderer.renderToTexture`'s book under `pose`: `BookModel`
+/// set up for `BookModel.State.forAnimation(0, page1, page2, open)`.
+pub(super) fn submit_book(
+    renderer: &ItemRenderer,
+    pose: Mat4,
+    open: f32,
+    page1: f32,
+    page2: f32,
+    sprites: &HashMap<String, Rect>,
+    sink: &mut dyn ItemSink,
+) {
+    let (Some(book), Some(r)) = (
+        renderer.part("book"),
+        sprites
+            .get("entity/enchantment/enchanting_table_book")
+            .copied(),
+    ) else {
+        return;
+    };
+    // forAnimation at time 0: (sin(0) * 0.1 + 1.25) * open.
+    let pose_for = book_pose(1.25 * open, page1, page2);
+    draw(book, "root", pose, &pose_for, r, argb(-1), Foil::None, sink);
+}
+
 /// `SpecialModelRenderer.submit`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn submit(

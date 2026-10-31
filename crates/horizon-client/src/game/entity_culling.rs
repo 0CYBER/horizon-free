@@ -1,6 +1,5 @@
 //! Entity occlusion affects mesh submission, never entity ticking or interaction.
 use super::{Game, Vertex};
-use horizon_client::chunk::MIN_Y;
 use horizon_client::{
     blocks::{RenderShape, StateFacts},
     entity_culling::Culler,
@@ -41,7 +40,7 @@ impl Game<'_> {
             if !opaque(self.res.facts().get(state)) {
                 return false;
             }
-            let Some(y) = pos[1].checked_sub(MIN_Y) else {
+            let Some(y) = pos[1].checked_sub(self.world.bottom_y()) else {
                 return false;
             };
             let section = (pos[0] >> 4, y.div_euclid(16), pos[2] >> 4);

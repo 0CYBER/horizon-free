@@ -341,7 +341,7 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher mods remove <pack>
     horizon-launcher servers [list]                 the servers hosted from the launcher, and whether they run
     horizon-launcher servers create [--name N] [--seed S | --copy-world DIR] [--mode M] [--difficulty D]
-                     [--max-players N] [--open] [--check-accounts] [--player NAME]... --accept-eula
+                     [--max-players N] [--open] [--offline] [--player NAME]... --accept-eula
     horizon-launcher servers set-up [--version <tag>]   copy a prepared version's programs and game files for servers
     horizon-launcher servers run <server> -- <horizon-server command>   for example: servers run "My server" -- start
     horizon-launcher servers forget <server>        take it off the list (its folder stays)

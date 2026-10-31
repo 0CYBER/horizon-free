@@ -1114,7 +1114,11 @@ impl BlockEntityRenderer {
     pub fn renders(&self, state: u32) -> bool {
         !matches!(self.kind(state), Kind::None)
     }
-    /// ChestRenderer and BannerRenderer submit their animated models for crumbling.
+    /// `submitCrumblingOverlay` of ChestRenderer.submit, BannerRenderer.submit,
+    /// SkullBlockRenderer.submitSkull, ShulkerBoxRenderer.submit,
+    /// BellRenderer.submit, LecternRenderer.submit (the book) and
+    /// CopperGolemStatueBlockRenderer.submit: the model drawn again under the
+    /// destroy stage.
     pub fn render_breaking(
         &self,
         scene: &Scene,
@@ -1123,7 +1127,16 @@ impl BlockEntityRenderer {
         stage: [f32; 2],
         out: &mut Vec<Vertex>,
     ) {
-        if !matches!(self.kind(state), Kind::Banner { .. } | Kind::Chest { .. }) {
+        if !matches!(
+            self.kind(state),
+            Kind::Banner { .. }
+                | Kind::Chest { .. }
+                | Kind::Skull { .. }
+                | Kind::Shulker { .. }
+                | Kind::Bell
+                | Kind::Lectern { .. }
+                | Kind::CopperGolem { .. }
+        ) {
             return;
         }
         let origin = (DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
