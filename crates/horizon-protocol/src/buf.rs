@@ -393,6 +393,18 @@ impl Codec<Option<i32>> for OptVarInt {
         w.varint(v.map_or(0, |v| v + 1))
     }
 }
+/// Vec3i.STREAM_CODEC: three var ints.
+pub struct VarVec3i;
+impl Codec<[i32; 3]> for VarVec3i {
+    fn read(r: &mut Reader) -> Result<[i32; 3]> {
+        Ok([r.varint()?, r.varint()?, r.varint()?])
+    }
+    fn write(v: &[i32; 3], w: &mut Writer) {
+        for n in v {
+            w.varint(*n);
+        }
+    }
+}
 /// Vec3.STREAM_CODEC: three doubles.
 pub struct Vec3d;
 impl Codec<[f64; 3]> for Vec3d {

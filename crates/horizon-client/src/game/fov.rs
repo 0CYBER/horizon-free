@@ -79,6 +79,14 @@ impl Game<'_> {
             .fov_player()
             .map_or(1.0, |p| field_of_view_modifier(&p, first_person, effect));
         let target = self.zoomed_fov_target(target);
+        // A server's spectator camera on a mob: its eye height. Its modifier
+        // stays 1 (another player's own modifier is not modelled here); the
+        // zoom extra still narrows it.
+        if let Some(m) = self.camera_mob() {
+            let eye = m.eye_height() as f32;
+            self.view.tick(Some(eye), self.zoomed_fov_target(1.0));
+            return;
+        }
         let eye = self.player.as_ref().map(|p| {
             if self.sleeping.is_some() {
                 0.2

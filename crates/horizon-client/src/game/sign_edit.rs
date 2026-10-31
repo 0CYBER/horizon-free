@@ -118,6 +118,7 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
     /// Run a sign's `run_command` line as the prefixed command vanilla runs

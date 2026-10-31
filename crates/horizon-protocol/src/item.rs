@@ -8,7 +8,10 @@ use crate::{
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
+mod hash;
 mod skip;
+
+pub use hash::{Names, NoNames};
 
 /// minecraft:data_component_type registry ids (26.3).
 pub mod component {
@@ -193,6 +196,47 @@ pub struct Profile {
     pub name: Option<String>,
     pub id: Option<u128>,
     pub properties: Vec<(String, String, Option<String>)>,
+    pub skin: SkinPatch,
+}
+/// `PlayerSkin.Patch`: the optional body, cape and elytra texture ids and the
+/// model type (`true` for slim).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkinPatch {
+    pub body: Option<String>,
+    pub cape: Option<String>,
+    pub elytra: Option<String>,
+    pub slim: Option<bool>,
+}
+impl SkinPatch {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let texture = |r: &mut Reader| -> Result<Option<String>> {
+            if r.bool()? {
+                Ok(Some(r.string(32767)?))
+            } else {
+                Ok(None)
+            }
+        };
+        let (body, cape, elytra) = (texture(r)?, texture(r)?, texture(r)?);
+        let slim = if r.bool()? { Some(r.bool()?) } else { None };
+        Ok(Self {
+            body,
+            cape,
+            elytra,
+            slim,
+        })
+    }
+    fn write(&self, w: &mut Writer) {
+        for texture in [&self.body, &self.cape, &self.elytra] {
+            w.bool(texture.is_some());
+            if let Some(texture) = texture {
+                w.string(texture);
+            }
+        }
+        w.bool(self.slim.is_some());
+        if let Some(slim) = self.slim {
+            w.bool(slim);
+        }
+    }
 }
 impl Component {
     pub(crate) fn read(kind: i32, r: &mut Reader) -> Result<Self> {
@@ -313,19 +357,12 @@ impl Component {
                     let name = Some(r.string(64)?);
                     (name, id, properties(r)?)
                 };
-                // PlayerSkin.Patch: body, cape, elytra and model, each absent
-                // in the profiles servers send for heads.
-                for _ in 0..4 {
-                    if r.bool()? {
-                        // ClientAsset.ResourceTexture: its id and its texture path.
-                        r.string(32767)?;
-                        r.string(32767)?;
-                    }
-                }
+                // PlayerSkin.Patch: three texture ids and the model type.
                 Self::Profile(Profile {
                     name,
                     id,
                     properties,
+                    skin: SkinPatch::read(r)?,
                 })
             }
             CUSTOM_MODEL_DATA => {
@@ -523,9 +560,7 @@ impl Component {
                         w.string(signature);
                     }
                 }
-                for _ in 0..4 {
-                    w.bool(false);
-                }
+                p.skin.write(w);
             }
             Self::CustomModelData {
                 floats,
@@ -612,6 +647,26 @@ impl WirePatch {
             };
             r.bytes(len).is_ok() && k == kind
         })
+    }
+}
+impl WirePatch {
+    /// The components and removals a patch in this form holds, read as
+    /// [`DelimitedSlot`] does.
+    pub fn decode(patch: &[u8]) -> Result<(Vec<(i32, Component)>, Vec<i32>)> {
+        let mut r = Reader::new(patch);
+        let positive = r.count(65536)?;
+        let negative = r.count(65536)?;
+        let mut added = Vec::with_capacity(positive.min(64));
+        for _ in 0..positive {
+            let kind = r.varint()?;
+            let len = r.count(r.remaining())?;
+            added.push((
+                kind,
+                Component::read(kind, &mut Reader::new(r.bytes(len)?))?,
+            ));
+        }
+        let removed = (0..negative).map(|_| r.varint()).collect::<Result<_>>()?;
+        Ok((added, removed))
     }
 }
 impl PartialEq for WirePatch {
@@ -787,9 +842,7 @@ impl Codec<Stack> for Template {
 }
 
 /// HashedStack: what the client believes a slot holds. Component values are
-/// sent as hashes; Horizon sends patches without hashes, so a server whose
-/// stack carries components resynchronises that slot (as it does for any
-/// mismatched prediction).
+/// sent as hashes ([`Hashed::create`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hashed {
     pub item: i32,
@@ -798,13 +851,10 @@ pub struct Hashed {
     pub removed: Vec<i32>,
 }
 impl Hashed {
+    /// The stack hashed without registry names: only components that hold no
+    /// registry id get a hash (see [`Hashed::create`]).
     pub fn of(stack: &Stack) -> Self {
-        Self {
-            item: stack.item,
-            count: stack.count,
-            added: Vec::new(),
-            removed: stack.removed.clone(),
-        }
+        Self::create(stack, &NoNames)
     }
 }
 pub struct HashedSlot;
@@ -1088,6 +1138,12 @@ mod tests {
                 name: Some("Player53470".into()),
                 id: Some(0x7a5d_6a1a_30d7_4187_88c5_efe9_1201_8922),
                 properties: vec![("textures".into(), "dGV4dHVyZXM=".into(), None)],
+                skin: SkinPatch {
+                    body: Some("minecraft:entity/player/wide/steve".into()),
+                    cape: None,
+                    elytra: None,
+                    slim: Some(true),
+                },
             }),
         ));
         round::<Option<Stack>, Slot>(Some(sword));

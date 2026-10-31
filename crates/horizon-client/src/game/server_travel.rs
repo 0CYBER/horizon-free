@@ -373,8 +373,11 @@ impl Game<'_> {
         };
         let at = [destination.x, destination.y, destination.z];
         let ctx = self.server_ctx();
-        // TeleportTransition.PLAY_PORTAL_SOUND.
-        host.hub.change_level(i, at, yaw, None, true, &ctx);
+        // Through a portal: the client waits on its loading screen until
+        // the exit is found (`arrive_server_trips`). The cooldown is the one
+        // Entity.handlePortal set before the teleport.
+        host.hub
+            .change_level(i, at, yaw, None, true, PLAYER_DELAY, &ctx);
         self.as_guest(host, conn, |g| {
             g.trigger_dimension(source, target, [from.x, from.y, from.z])
         });
@@ -543,6 +546,8 @@ impl Game<'_> {
             if trip.placed {
                 continue;
             }
+            // A portal's trip (`start_server_trip`): its client waits to land.
+            let portal = trip.end || trip.plan.is_some();
             self.resolve_arrivals();
             let yaw = host.hub.guests[i].yaw;
             let (position, yaw) = if let Some(config) = trip.respawn {
@@ -585,7 +590,11 @@ impl Game<'_> {
                     None => self.end_arrival(trip.target, &mut trip.finder),
                 };
                 match arrival {
-                    Ok(Some((at, turned))) => (at, turned.unwrap_or(yaw)),
+                    Ok(Some((at, turned))) => {
+                        // EndPortalBlock.getPortalDestination: PLACE_PORTAL_TICKET.
+                        self.place_portal_ticket(Self::chunk_of(at));
+                        (at, turned.unwrap_or(yaw))
+                    }
                     Ok(None) => {
                         self.server_trips.insert(k, trip);
                         k += 1;
@@ -621,8 +630,12 @@ impl Game<'_> {
             g.yaw = yaw;
             // A new body at the exit: no fall distance or motion carried over.
             g.motion = None;
-            host.hub
-                .teleport(i, Some([position.x, position.y, position.z]));
+            let at = [position.x, position.y, position.z];
+            if portal {
+                host.hub.land(i, at);
+            } else {
+                host.hub.teleport(i, Some(at));
+            }
         }
     }
 
@@ -670,9 +683,10 @@ impl Game<'_> {
             let origin = g.position;
             // A new body there: no fall distance or motion carried over.
             g.motion = None;
+            let cooldown = host.play.get(&t.conn).map_or(0, |p| p.portal.cooldown);
             let ctx = self.server_ctx();
             host.hub
-                .change_level(i, t.at, yaw, Some(pitch), false, &ctx);
+                .change_level(i, t.at, yaw, Some(pitch), false, cooldown, &ctx);
             self.as_guest(host, t.conn, |g| g.trigger_dimension(source, t.dim, origin));
             self.server_trips.retain(|trip| !trip.is(t.conn));
             self.server_trips.push(Trip {
@@ -715,6 +729,7 @@ impl Game<'_> {
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
             border: &self.border,
+            streaming: Some(&self.streaming),
         }
     }
 }

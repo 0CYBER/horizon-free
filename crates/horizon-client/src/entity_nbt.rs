@@ -87,6 +87,11 @@ impl Base<'_> {
     }
 }
 
+/// The mobs that save `Age` and `AgeLocked`.
+fn saves_age(s: crate::mobs::Species) -> bool {
+    use crate::mobs::{Species, drops::can_be_baby, finalize::ageable};
+    s == Species::Tadpole || (ageable(s) && can_be_baby(s))
+}
 /// `LivingEntity` + `Mob` (+ `AgeableMob`, creeper and skeleton specifics).
 /// The mobs whose class extends vanilla's `Animal` (and so save `InLove`):
 /// not allays, villagers, golems, dolphins or fish.
@@ -409,19 +414,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         map.entry(key.into()).or_insert(value);
     }
     let id = m.kind.id.as_str();
-    // Only breedable animals have an age; a loaded creature that was saved without
-    // one (a frog) stays without.
-    let aged = raw.is_none_or(|r| r.get("Age").is_some());
-    if (m.kind.category == "creature" || m.species() == crate::mobs::Species::Hoglin) && aged {
+    // AgeableMob.addAdditionalSaveData, only if canBeABaby (not a frog or a
+    // parrot); a tadpole saves its own age.
+    let species = m.species();
+    if saves_age(species) {
         map.insert("Age".into(), Tag::Int(m.extra.age));
         map.insert("AgeLocked".into(), Tag::Byte(i8::from(m.extra.age_locked)));
-        map.insert("ForcedAge".into(), Tag::Int(m.extra.forced_age));
-        for (key, value) in [
-            ("Age", Tag::Int(0)),
-            ("ForcedAge", Tag::Int(0)),
-            ("AgeLocked", Tag::Byte(0)),
-        ] {
-            map.entry(key.into()).or_insert(value);
+        if species != crate::mobs::Species::Tadpole {
+            map.insert("ForcedAge".into(), Tag::Int(m.extra.forced_age));
         }
     }
     // Animal.addAdditionalSaveData: the love ticks left, whatever the save had.
@@ -447,17 +447,21 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         );
     }
     match id {
-        // Fox.addAdditionalSaveData; Horizon models only the type.
+        // Fox.addAdditionalSaveData; Horizon models only the type, the
+        // flags and no trusted players yet.
         "minecraft:fox" => {
             let kind = if m.extra.variant == 1 { "snow" } else { "red" };
             map.insert("Type".into(), string(kind));
-            for (key, value) in [
-                ("Trusted", Tag::List(Vec::new())),
-                ("Sleeping", Tag::Byte(0)),
-                ("Sitting", Tag::Byte(0)),
-                ("Crouching", Tag::Byte(0)),
+            map.entry("Trusted".into()).or_insert(Tag::List(Vec::new()));
+            for (key, bit) in [
+                ("Sleeping", crate::mobs::fox::SLEEPING),
+                ("Sitting", crate::mobs::fox::SITTING),
+                ("Crouching", crate::mobs::fox::CROUCHING),
             ] {
-                map.entry(key.into()).or_insert(value);
+                map.insert(
+                    key.into(),
+                    Tag::Byte(i8::from(crate::mobs::fox::flag(m, bit))),
+                );
             }
         }
         // MushroomCow.addAdditionalSaveData: the Variant codec's name (stew
@@ -660,6 +664,8 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         "minecraft:villager" => {
             map.insert("VillagerData".into(), villager_data(m));
+            // A loaded villager with VillagerData is finalized.
+            map.insert("VillagerDataFinalized".into(), Tag::Byte(1));
             let t = m.extra.trade.as_deref().cloned().unwrap_or_default();
             map.insert("Xp".into(), Tag::Int(t.xp));
             map.insert("LastRestock".into(), Tag::Long(t.last_restock));
@@ -713,25 +719,48 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 ]));
             }
             map.insert("Inventory".into(), Tag::List(inv));
+            if let Some(st) = &m.extra.allay {
+                map.insert("listener".into(), st.vibration.to_nbt());
+            }
             map.insert(
                 "DuplicationCooldown".into(),
                 Tag::Long(i64::from(m.extra.egg_time)),
             );
+            let mut memories: Vec<(&str, Tag)> = Vec::new();
             if m.extra.tame {
-                map.insert(
-                    "Brain".into(),
+                memories.push((
+                    "minecraft:liked_player",
                     Tag::compound([(
-                        "memories",
-                        Tag::compound([(
-                            "minecraft:liked_player",
-                            Tag::compound([(
-                                "value",
-                                Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
-                            )]),
-                        )]),
+                        "value",
+                        Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
                     )]),
-                );
+                ));
             }
+            // GlobalPos.CODEC, and the cooldown while it runs.
+            if let Some(liked) = m.extra.allay.as_ref().and_then(|st| st.noteblock) {
+                memories.push((
+                    "minecraft:liked_noteblock",
+                    Tag::compound([(
+                        "value",
+                        Tag::compound([
+                            ("dimension", string(liked.dimension)),
+                            ("pos", Tag::IntArray(liked.pos.to_vec())),
+                        ]),
+                    )]),
+                ));
+            }
+            if m.extra.ints[2] > 0 {
+                memories.push((
+                    "minecraft:liked_noteblock_cooldown_ticks",
+                    Tag::compound([("value", Tag::Int(m.extra.ints[2]))]),
+                ));
+            }
+            // Always written, so a forgotten note block does not come back
+            // from the compound the allay was loaded with.
+            map.insert(
+                "Brain".into(),
+                Tag::compound([("memories", Tag::compound(memories))]),
+            );
         }
         "minecraft:camel" | "minecraft:camel_husk" => {
             // LastPoseTick: the pose change time, negative while sitting. The
@@ -865,8 +894,63 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     ) {
         map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
     }
+    // NeutralMob.addPersistentAngerSaveData; the bee saves its own.
+    if matches!(
+        id,
+        "minecraft:iron_golem"
+            | "minecraft:wolf"
+            | "minecraft:polar_bear"
+            | "minecraft:zombified_piglin"
+            | "minecraft:enderman"
+    ) {
+        map.entry("anger_end_time".into()).or_insert(Tag::Long(-1));
+    }
     if let Some(a) = m.extra.attributes.as_deref() {
         put_attributes(map, m, a);
+    }
+    // The attribute their load makes, which AttributeMap.pack then saves:
+    // Zombie and Piglin.setBaby (even for an adult) the speed, Rabbit.setVariant
+    // the attack damage.
+    use crate::mobs::finalize::Attr;
+    let made = if crate::mobs::doors::is_zombie(species) || species == crate::mobs::Species::Piglin
+    {
+        Some(Attr::MovementSpeed)
+    } else if species == crate::mobs::Species::Rabbit {
+        Some(Attr::AttackDamage)
+    } else {
+        None
+    };
+    if let Some(attr) = made {
+        let base = crate::mobs::finalize::base_value(m, attr);
+        let mut list = match map.get(&"attributes".into()) {
+            Some(Tag::List(l)) => l.clone(),
+            _ => Vec::new(),
+        };
+        let attr_id = format!("minecraft:{}", attr.name());
+        if !list
+            .iter()
+            .any(|t| text(t.get("id")).as_deref() == Some(attr_id.as_str()))
+        {
+            list.push(Tag::compound([
+                ("id", string(&attr_id)),
+                ("base", Tag::Double(base.to_bits())),
+            ]));
+            map.insert("attributes".into(), Tag::List(list));
+        }
+    }
+    // Mob.addAdditionalSaveData: the chances that are not the default.
+    if let Some(chances) = &m.extra.drop_chances {
+        let set: Vec<(&str, Tag)> = crate::mobs::drops::SLOTS
+            .iter()
+            .zip(chances.iter())
+            .filter(|(_, c)| **c != crate::mobs::drops::DEFAULT_DROP_CHANCE)
+            .map(|(slot, c)| (*slot, Tag::Float(c.to_bits())))
+            .collect();
+        if set.is_empty() {
+            map.remove(&"drop_chances".into());
+        } else {
+            map.insert("drop_chances".into(), Tag::compound(set));
+        }
     }
     crate::mobs::raider::write_nbt(m, map);
     crate::mobs::riders::write_nbt(m, map);
@@ -1034,6 +1118,8 @@ pub fn put_brain(map: &mut Compound, m: &Mob, dimension: &str) {
     for &(name, value, ttl) in &m.extra.memories {
         let value = match name {
             "hunted_recently" => Tag::Byte(value as i8),
+            // `Unit` memories save an empty compound.
+            "is_pregnant" => Tag::Compound(Compound::new()),
             "home" => match m.extra.home {
                 Some(p) => Tag::compound([
                     ("dimension", string(dimension)),
@@ -1191,7 +1277,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.custom_name = custom_name(tag);
     m.custom_name_text = tag.get("CustomName").map(name_text);
     m.extra.left_handed = flag(tag, "LeftHanded");
-    if m.kind.category == "creature" || m.species() == crate::mobs::Species::Hoglin {
+    if let Some(Tag::Compound(c)) = tag.get("drop_chances") {
+        let mut chances = [crate::mobs::drops::DEFAULT_DROP_CHANCE; 8];
+        for (chance, slot) in chances.iter_mut().zip(crate::mobs::drops::SLOTS) {
+            if let Some(Tag::Float(v)) = c.get(&slot.into()) {
+                *chance = f32::from_bits(*v);
+            }
+        }
+        m.extra.drop_chances = Some(Box::new(chances));
+    }
+    if saves_age(m.species()) {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
@@ -1322,6 +1417,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     match m.species() {
         crate::mobs::Species::Fox => {
             m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("snow"));
+            // Fox.readAdditionalSaveData: the sleeping, sitting and crouching flags.
+            for (key, bit) in [
+                ("Sleeping", crate::mobs::fox::SLEEPING),
+                ("Sitting", crate::mobs::fox::SITTING),
+                ("Crouching", crate::mobs::fox::CROUCHING),
+            ] {
+                if flag(tag, key) {
+                    m.extra.ints[0] |= bit;
+                }
+            }
         }
         // MushroomCow.readAdditionalSaveData: a missing or unknown name is
         // Variant.DEFAULT, red.
@@ -1402,6 +1507,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.ints[1] = number(first.get("count")).unwrap_or(1) as i32;
         }
         m.extra.egg_time = number(tag.get("DuplicationCooldown")).unwrap_or(0) as i32;
+        if let (Some(st), Some(listener)) = (m.extra.allay.as_mut(), tag.get("listener")) {
+            st.vibration = crate::sculk::Data::from_nbt(listener);
+        }
         let liked = tag
             .get("Brain")
             .and_then(|b| b.get("memories"))
@@ -1410,6 +1518,35 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.owner = liked
             .and_then(|l| l.get("value"))
             .and_then(|v| crate::save::uuid_from_tag(Some(v)));
+        let memory = |key: &str| {
+            tag.get("Brain")
+                .and_then(|b| b.get("memories"))
+                .and_then(|b| b.get(key))
+                .and_then(|l| l.get("value"))
+        };
+        m.extra.ints[2] =
+            number(memory("minecraft:liked_noteblock_cooldown_ticks")).unwrap_or(0) as i32;
+        if let Some(st) = m.extra.allay.as_mut()
+            && let Some(noteblock) = memory("minecraft:liked_noteblock")
+            && let Some(Tag::IntArray(p)) = noteblock.get("pos")
+            && p.len() == 3
+        {
+            st.noteblock = Some(crate::mobs::allay::GlobalPos {
+                dimension: crate::mobs::allay::dimension_id(
+                    &text(noteblock.get("dimension")).unwrap_or_default(),
+                ),
+                pos: [p[0], p[1], p[2]],
+            });
+        }
+    }
+    if m.species() == crate::mobs::Species::Frog
+        && tag
+            .get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get("minecraft:is_pregnant"))
+            .is_some()
+    {
+        crate::mobs::frog::set_pregnant(&mut m, true);
     }
     if crate::mobs::camel::is_camel(m.species()) {
         // The tick is a game time: `camel::finish_load` puts it on the mob's
@@ -1860,6 +1997,8 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
             power: number(tag.get("ExplosionPower")).unwrap_or(1) as i32,
         },
         "minecraft:small_fireball" => ProjectileKind::SmallFireball,
+        "minecraft:wind_charge" => ProjectileKind::WindCharge,
+        "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
         _ => return None,
     };
     let owner = uuid_from_tag(tag.get("Owner"));
@@ -3171,6 +3310,33 @@ mod sheep_nbt_tests {
     }
 
     #[test]
+    fn a_baby_villager_keeps_its_age() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let types: HashMap<String, Arc<MobType>> = data
+            .types
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
+            .collect();
+        let saved = Tag::compound([
+            ("id", string("minecraft:villager")),
+            ("Pos", doubles(&[0.5, 64.0, 0.5])),
+            ("Age", Tag::Int(-21359)),
+        ]);
+        let m = mob_from_nbt(&saved, &types, 1).unwrap();
+        assert_eq!(m.extra.age, -21359);
+        let tag = mob_to_nbt(&m, [1, 2, 3, 4], None);
+        assert_eq!(number(tag.get("Age")), Some(-21359));
+        assert_eq!(number(tag.get("AgeLocked")), Some(0));
+        assert_eq!(number(tag.get("VillagerDataFinalized")), Some(1));
+    }
+
+    #[test]
     fn foxes_mooshrooms_rabbits_and_goats_keep_their_kind() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
@@ -3266,6 +3432,20 @@ mod fireball_nbt_tests {
             (p.kind, p.acceleration),
             (ProjectileKind::LargeFireball { power: 1 }, 0.1)
         );
+        // `/summon` and a saved world give back both wind charges.
+        for (id, kind) in [
+            ("minecraft:wind_charge", ProjectileKind::WindCharge),
+            (
+                "minecraft:breeze_wind_charge",
+                ProjectileKind::BreezeWindCharge,
+            ),
+        ] {
+            let tag = Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("Pos", doubles(&[0.0, 0.0, 0.0])),
+            ]);
+            assert_eq!(fireball_from_nbt(&tag, None).unwrap().kind, kind);
+        }
     }
 }
 
