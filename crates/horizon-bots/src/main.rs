@@ -79,6 +79,8 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          on it; higher, or over water: a no-fall or jesus cheat, to test an anticheat)
   --give SLOT:ID:COUNT,...  creative-slot packets sent once joined (inventory menu slot, item
                          registry id, count), to test what a server takes
+  --click X,Y,Z:SLOT:BUTTON:MODE  3 s after joining, open the block at X,Y,Z (a chest), then a second later
+                         click SLOT of its window (ServerboundContainerClickPacket), to test what a server takes
   --timer F              cheat, to test an anticheat: tick F times as fast as vanilla's client (1.5: 30 Hz)
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
@@ -142,6 +144,8 @@ struct Options {
     ground: bool,
     /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
     give: Vec<(i16, i32, i32)>,
+    /// --click: the block to open, then the slot, button and click type in its window.
+    click: Option<([i32; 3], i16, i8, i32)>,
     name: String,
     /// The `minecraft:brand` to send, if any.
     brand: Option<String>,
@@ -169,6 +173,7 @@ fn options() -> Result<Options, String> {
         height: 24.0,
         ground: false,
         give: Vec::new(),
+        click: None,
         name: "Bot".into(),
         report: None,
         brand: None,
@@ -225,6 +230,21 @@ fn options() -> Result<Options, String> {
                     let ((slot, item), count) = parsed.ok_or_else(|| number("SLOT:ID:COUNT"))?;
                     o.give.push((slot, item, count));
                 }
+            }
+            "--click" => {
+                let bad = || number("X,Y,Z:SLOT:BUTTON:MODE");
+                let n: Vec<&str> = value.split(':').collect();
+                let [at, slot, button, mode] = n[..] else {
+                    return Err(bad());
+                };
+                let at: Vec<i32> = at
+                    .split(',')
+                    .map(str::parse)
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| bad())?;
+                let at = <[i32; 3]>::try_from(at).map_err(|_| bad())?;
+                let parse = |s: &str| s.parse::<i32>().map_err(|_| bad());
+                o.click = Some((at, parse(slot)? as i16, parse(button)? as i8, parse(mode)?));
             }
             "--height" => o.height = value.parse().map_err(|_| number("blocks"))?,
             "--timer" => {
@@ -881,6 +901,38 @@ fn run_bot(
                     pos[0] += heading.cos() * step;
                     pos[2] += heading.sin() * step;
                 }
+            }
+        }
+        if let Some((at, slot, button, input)) = o.click {
+            // Ticks of 50 ms: the block 3 s after joining, the click a second later.
+            if tick == 60 {
+                sequence += 1;
+                send(
+                    play::Serverbound::UseItemOn(play::UseItemOn {
+                        hand: 0,
+                        pos: at,
+                        face: 1,
+                        cursor: [0.5, 1.0, 0.5],
+                        inside: false,
+                        world_border: false,
+                        sequence,
+                    })
+                    .encode(),
+                );
+            } else if tick == 80 {
+                // The first window a player opens is 1.
+                send(
+                    play::Serverbound::ContainerClick(play::ContainerClick {
+                        container: 1,
+                        state: 0,
+                        slot,
+                        button,
+                        input,
+                        changed: Vec::new(),
+                        carried: None,
+                    })
+                    .encode(),
+                );
             }
         }
         // The costly floods go out wherever the bot is, chunks or not (--no-read gets none).

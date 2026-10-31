@@ -1081,3 +1081,72 @@ fn changed_biomes_reach_the_players_that_see_the_column() {
             .all(|(i, b)| i == 4 || b.get(25) == 0)
     );
 }
+
+#[test]
+fn a_click_past_the_menu_is_ignored() {
+    use horizon_client::{containers::BlockEntity, items::ItemStack, lan::menu::Slots};
+    struct NoRules;
+    impl horizon_client::lan::menu::Rules for NoRules {
+        fn items(&self) -> &horizon_client::items::Items {
+            unreachable!("a click past the menu never reaches it")
+        }
+        fn max_stack(&self, _: &str) -> u32 {
+            64
+        }
+        fn armor_index(&self, _: &str) -> Option<usize> {
+            None
+        }
+    }
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Clicker", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    let conn = s.hub.guests[0].conn;
+    let at = s.hub.guests[0].position;
+    let key = (
+        at[0].floor() as i32,
+        at[1].floor() as i32,
+        at[2].floor() as i32 + 2,
+    );
+    s.world.set(key.0, key.1, key.2, BlockStateId(2)).unwrap();
+    let items = vec![None; 27];
+    s.world
+        .block_entities
+        .insert(key, BlockEntity::Chest(items.clone()));
+    s.hub.open_container(
+        conn,
+        "minecraft:generic_9x3",
+        horizon_protocol::text::translatable("container.chest", &[]),
+        key,
+        Slots::Block(key),
+        items,
+    );
+    let stone = Some(ItemStack::new("minecraft:stone", 64));
+    s.hub.guests[0].inventory[9] = stone.clone();
+    let window = s.hub.guests[0].menu.as_ref().unwrap().window;
+    // AbstractContainerMenu.isValidSlotIndex: the chest's menu has 63 slots. Throwing
+    // the whole stack (THROW, button 1) from slot 63 reached the inventory's slot 9.
+    let click = play::ContainerClick {
+        container: window,
+        state: 1,
+        slot: 63,
+        button: 1,
+        input: 4,
+        changed: Vec::new(),
+        carried: None,
+    };
+    let drops = s.hub.container_click(conn, &click, &mut s.world, &NoRules);
+    assert!(drops.is_empty(), "nothing is thrown");
+    assert_eq!(
+        s.hub.guests[0].inventory[9], stone,
+        "slot 9 keeps its stone"
+    );
+}
