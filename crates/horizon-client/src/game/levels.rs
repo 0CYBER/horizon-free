@@ -132,6 +132,13 @@ impl Levels {
     }
 
     /// The levels that are not in place, by dimension.
+    /// The forced chunks of every level not in place, released.
+    pub(super) fn release_parked_forced_chunks(&mut self) {
+        for level in self.parked.values_mut() {
+            level.streaming.forced.clear();
+        }
+    }
+
     pub(super) fn parked_dims(&self) -> Vec<Dim> {
         self.parked.keys().copied().collect()
     }
@@ -325,6 +332,19 @@ impl Game<'_> {
         }
     }
 
+    /// Far terrain for a client in `dim`: the level in place may be another
+    /// one, the server ticking its levels in turn.
+    pub(super) fn lod_source_in(
+        &self,
+        dim: Dim,
+    ) -> Option<Arc<dyn horizon_client::streaming::LodSource>> {
+        if dim == self.dim {
+            return Some(self.streaming.lod_source());
+        }
+        let parked = self.levels.parked.get(&dim)?;
+        Some(parked.streaming.lod_source())
+    }
+
     /// Put `dim`'s level in place for a command whose source is there
     /// (`execute in`, `execute at` a player in another level), opening it if
     /// nobody is in it; returns the level to put back afterwards. Only a
@@ -361,6 +381,8 @@ impl Game<'_> {
         {
             self.native_lifecycle_server_tick_start(running);
         }
+        let observe_level =
+            running.is_some() && (self.serving.is_some() || self.options.dedicated.is_some());
         let dims = self.levels_to_tick();
         let n = dims.len();
         let mut result = Ok(());
@@ -374,6 +396,9 @@ impl Game<'_> {
                 last: k + 1 == n,
                 running,
             };
+            if observe_level {
+                self.native_level_tick_pre(dim.id());
+            }
             self.update_dedicated_streaming();
             self.update_world();
             result = if paused {
@@ -390,6 +415,9 @@ impl Game<'_> {
             };
             if result.is_err() {
                 break;
+            }
+            if observe_level {
+                self.native_level_tick_post(dim.id());
             }
         }
         self.level_pass = Pass::default();
@@ -503,16 +531,33 @@ impl Game<'_> {
                 guests.iter().any(|g| g.dimension == d.id())
                     || self.player_bed_levels().any(|b| b == *d)
                     || forced
+                    // A game test runs in its own level, players or not.
+                    || self.game_tests.has_tests_in(*d)
                     || self.pregen_level() == Some(*d)
                     // A pending portal arrival keeps its destination level
                     // running so it can land and tick (the portal ticket).
                     || !self.arrival_chunks(*d).is_empty()
+                    // A portal ticket keeps its dimension active
+                    // (`TicketType.shouldKeepDimensionActive`).
+                    || !self.portal_ticket_chunks(*d).is_empty()
             })
             .collect();
         if dims.is_empty() {
             dims.push(Dim::Overworld);
         }
         dims
+    }
+
+    /// The chunks holding a portal ticket in `dim`'s level (`placePortalTicket`).
+    pub(super) fn portal_ticket_chunks(&self, dim: Dim) -> Vec<(i32, i32)> {
+        if dim == self.dim {
+            self.tickets.portal_chunks().collect()
+        } else {
+            self.levels
+                .parked
+                .get(&dim)
+                .map_or_else(Vec::new, |p| p.tickets.portal_chunks().collect())
+        }
     }
 
     /// Count the parked levels' empty ticks, and save and close the ones

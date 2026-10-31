@@ -332,6 +332,48 @@ impl Gizmos {
     }
 }
 
+/// `CuboidGizmo.emit`'s fill: the six quads (+X, -X, -Z, +Z, +Y, -Y), each
+/// counter-clockwise seen from outside.
+pub fn cuboid_fill_quads(min: [f64; 3], max: [f64; 3]) -> [[[f64; 3]; 4]; 6] {
+    let [x0, y0, z0] = min;
+    let [x1, y1, z1] = max;
+    [
+        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+        [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
+        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+        [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+        [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+        [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+    ]
+}
+
+/// `ARGB.colorFromFloat(0.375F, 1.0F, 0.0F, 0.0F)`: the fill of an error marker.
+pub const ERROR_MARKER_FILL: u32 = 0x5FFF_0000;
+/// `TestInstanceRenderer.submitErrorMarker`'s billboard text scale.
+pub const ERROR_MARKER_TEXT_SCALE: f32 = 0.16;
+
+/// `TestInstanceRenderer.submitErrorMarker`: the marker's box, `new
+/// AABB(pos).inflate(0.02F)`, and the centre of its text,
+/// `Vec3.atLowerCornerWithOffset(pos, 0.5, 1.2, 0.5)`.
+pub fn error_marker_shape(pos: [i32; 3]) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    let pad = f64::from(0.02f32);
+    (
+        pos.map(|v| f64::from(v) - pad),
+        pos.map(|v| f64::from(v) + 1.0 + pad),
+        [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 1.2,
+            f64::from(pos[2]) + 0.5,
+        ],
+    )
+}
+
+/// `GizmoFeatureRenderer.buildTexts`: the world size of one font pixel,
+/// `scale / 16`.
+pub fn billboard_text_unit(scale: f32) -> f32 {
+    scale / 16.0
+}
+
 /// The edges of `CuboidGizmo.emit`'s stroke, in order.
 fn cuboid_edges(min: [f64; 3], max: [f64; 3]) -> [([f64; 3], [f64; 3]); 12] {
     let [x0, y0, z0] = min;
@@ -407,6 +449,32 @@ pub fn camera_relative(lines: &[Line], camera: [f64; 3], view: glam::Mat4) -> Ve
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_error_marker_is_a_filled_box_with_text_above_it() {
+        let (min, max, text) = error_marker_shape([10, 64, -3]);
+        let pad = f64::from(0.02f32);
+        assert_eq!(min, [10.0 - pad, 64.0 - pad, -3.0 - pad]);
+        assert_eq!(max, [11.0 + pad, 65.0 + pad, -2.0 + pad]);
+        assert_eq!(text, [10.5, 65.2, -2.5]);
+        // 0.375 of 255 floors to 95; the colour is red.
+        assert_eq!(ERROR_MARKER_FILL, 0x5FFF_0000);
+        assert_eq!(billboard_text_unit(ERROR_MARKER_TEXT_SCALE), 0.01);
+        let quads = cuboid_fill_quads(min, max);
+        assert_eq!(quads.len(), 6);
+        // Every quad is flat on a face of the box and counter-clockwise from outside.
+        for q in quads {
+            let n = (glam::DVec3::from(q[1]) - glam::DVec3::from(q[0]))
+                .cross(glam::DVec3::from(q[2]) - glam::DVec3::from(q[1]));
+            let centre = q
+                .iter()
+                .fold(glam::DVec3::ZERO, |a, p| a + glam::DVec3::from(*p))
+                / 4.0;
+            let middle = (glam::DVec3::from(min) + glam::DVec3::from(max)) / 2.0;
+            assert!(n.dot(centre - middle) > 0.0);
+        }
+        assert_eq!(quads[0][0], [max[0], min[1], min[2]]);
+    }
+
     use super::*;
 
     #[test]

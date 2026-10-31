@@ -112,6 +112,30 @@ pub(super) fn blast_spares_decorations(
     !mob_griefing && (interaction == BlockInteraction::Keep || by_mob)
 }
 
+/// A mob in a blast's reach: `hurtServer` when its team allows the damage
+/// (`hurtable`), then `pushFromExplosion` whatever that returned, so a mob
+/// that refuses the hit (invulnerable, in its hurt cooldown, a wither and an
+/// undead `cause`) is still pushed. `Entity.push` sets `needsSync`.
+fn hurt_and_push_mob(
+    m: &mut horizon_client::mobs::Mob,
+    hurtable: bool,
+    cause: Option<horizon_client::mobs::Species>,
+    (amount, source): (f32, horizon_client::mobs::Damage),
+    push: [f64; 3],
+) {
+    let shielded =
+        cause.is_some_and(|c| horizon_client::mobs::wither::shielded_from(m.species(), c));
+    if hurtable && !shielded {
+        m.damage(amount, source);
+    }
+    m.velocity = Vec3::new(
+        m.velocity.x + push[0],
+        m.velocity.y + push[1],
+        m.velocity.z + push[2],
+    );
+    m.needs_sync = true;
+}
+
 thread_local! {
     /// Client-side randomness (explosion sound pitch), separate from the level random.
     static CLIENT_RANDOM: std::cell::RefCell<LegacyRandom> = std::cell::RefCell::new(LegacyRandom::new(0x5eed));
@@ -433,13 +457,16 @@ impl Game<'_> {
             .and_then(|id| self.mobs.iter().find(|m| m.id == id))
             .map(|m| m.species());
         // Mobs, but not the one exploding (`getEntities(source, box)`): a
-        // wither's spawn blast neither hurts nor pushes it.
+        // wither's spawn blast neither hurts nor pushes it. `Warden.ignoreExplosion`:
+        // nor does any blast hurt or push a digging or emerging warden.
         let spared = exploding.filter(|_| self.combat.explosion_source_named);
         let mut mobs = std::mem::take(&mut self.mobs);
-        for m in mobs
-            .iter_mut()
-            .filter(|m| m.alive() && spared != Some(m.id))
-        {
+        for m in mobs.iter_mut().filter(|m| {
+            m.alive()
+                && spared != Some(m.id)
+                && !(m.species() == horizon_client::mobs::Species::Warden
+                    && horizon_client::mobs::warden::digging_or_emerging(m))
+        }) {
             let hurtable = teams_allow(self, self.mob_team(m.id));
             let feet = [m.position.x, m.position.y, m.position.z];
             let dist = distance(feet) / diameter;
@@ -467,19 +494,16 @@ impl Game<'_> {
                     .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
-            let shielded =
-                cause.is_some_and(|c| horizon_client::mobs::wither::shielded_from(m.species(), c));
-            if hurtable && (shielded || !m.damage(damage(dist, exposure), source)) {
-                continue;
-            }
             // `EXPLOSION_KNOCKBACK_RESISTANCE`, not `KNOCKBACK_RESISTANCE`: its
             // base is 0 for every mob type, so iron golems and ravagers are pushed.
             let dir = direction(eye);
             let power = (1.0 - dist) * f64::from(exposure);
-            m.velocity = Vec3::new(
-                m.velocity.x + dir[0] * power,
-                m.velocity.y + dir[1] * power,
-                m.velocity.z + dir[2] * power,
+            hurt_and_push_mob(
+                m,
+                hurtable,
+                cause,
+                (damage(dist, exposure), source),
+                [dir[0] * power, dir[1] * power, dir[2] * power],
             );
         }
         self.mobs = mobs;
@@ -690,6 +714,8 @@ impl Game<'_> {
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.exploded_positions(center, radius, resists);
+        let dimension = self.dim.id();
+        self.native_explosion_detonate(dimension, center, &mut targets);
         let pushed = self.explosion_hurt_entities(center, radius, damage_type, interaction);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)
@@ -869,6 +895,98 @@ mod tests {
         assert!(blast_reaches(center, 8.0, [8.5, 64.0, 0.5]));
         assert!(blast_reaches(center, 8.0, [-3.5, 68.0, 4.5]));
         assert!(!blast_reaches(center, 8.0, [8.6, 64.0, 0.5]));
+    }
+
+    /// A zombie's type with only what a hurt and a push read.
+    fn zombie_type() -> std::sync::Arc<horizon_client::mobs::MobType> {
+        use horizon_client::mobs::{Anim, Brain, MobType, Part, Species};
+        std::sync::Arc::new(MobType {
+            id: "minecraft:zombie".into(),
+            species: Species::Zombie,
+            width: 0.6,
+            height: 1.95,
+            eye_height: 1.74,
+            category: "monster".into(),
+            max_health: 20.0,
+            speed: 0.23,
+            flying_speed: 0.02,
+            attack_damage: 3.0,
+            attack_knockback: 0.0,
+            follow_range: 35.0,
+            step_height: 0.6,
+            armor: 2.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Default::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Default::default(),
+            model: std::sync::Arc::new(Part {
+                name: "root".into(),
+                pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                polygons: Vec::new(),
+                children: Vec::new(),
+            }),
+            layers: Default::default(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Humanoid { zombie_arms: true },
+            sounds: ["", "", ""],
+            step_sound: None,
+            food: Default::default(),
+            tempt: Default::default(),
+        })
+    }
+
+    #[test]
+    fn a_mob_that_refuses_the_hit_is_still_pushed() {
+        use horizon_client::mobs::{Damage, DamageKind, Mob, Species};
+        let hit = (10.0, Damage::of(DamageKind::Explosion));
+        let push = [0.5, 0.25, -0.5];
+        let mob = |id, species| {
+            let mut kind = (*zombie_type()).clone();
+            kind.species = species;
+            Mob::new(id, std::sync::Arc::new(kind), Vec3::ZERO, 0.0)
+        };
+        let pushed = |m: &Mob| {
+            assert_eq!(m.velocity, Vec3::new(0.5, 0.25, -0.5));
+            assert!(m.needs_sync);
+        };
+        // An ordinary mob is hurt and pushed.
+        let mut m = mob(1, Species::Zombie);
+        let health = m.health;
+        hurt_and_push_mob(&mut m, true, None, hit, push);
+        assert!(m.health < health);
+        pushed(&m);
+        // An invulnerable one refuses the hit, and is pushed all the same.
+        let mut m = mob(2, Species::Zombie);
+        m.invulnerable_flag = true;
+        let health = m.health;
+        hurt_and_push_mob(&mut m, true, None, hit, push);
+        assert_eq!(m.health, health);
+        pushed(&m);
+        // A team mate of the exploding mob is not hurt, but pushed.
+        let mut m = mob(3, Species::Zombie);
+        let health = m.health;
+        hurt_and_push_mob(&mut m, false, None, hit, push);
+        assert_eq!(m.health, health);
+        pushed(&m);
+        // A wither shrugs off a blast an undead caused, and is pushed.
+        let mut m = mob(4, Species::Wither);
+        let health = m.health;
+        hurt_and_push_mob(&mut m, true, Some(Species::Skeleton), hit, push);
+        assert_eq!(m.health, health);
+        pushed(&m);
     }
 
     #[test]

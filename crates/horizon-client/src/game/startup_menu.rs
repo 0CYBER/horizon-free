@@ -86,7 +86,10 @@ impl StartupMenu {
     }
 
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
-        game.title = self.title.take();
+        game.title = self
+            .title
+            .take()
+            .map(|title| title.with_user(|| game.options.player_name()));
         game.pending_entry = self.pending.take();
         game.cursor = self.cursor;
         game.modifiers = self.modifiers;
@@ -238,6 +241,7 @@ pub(super) fn spawn_loader(
     let settings = settings.clone();
     let vanilla_root = vanilla_root.to_path_buf();
     let dev_mods = options.dev_mods.clone();
+    let world = launch_world(options).map(str::to_owned);
     let progress = progress.clone();
     let handle = std::thread::Builder::new()
         .name("resource-loader".into())
@@ -251,6 +255,7 @@ pub(super) fn spawn_loader(
             let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
             let result = load_resources(
                 root,
+                world.as_deref(),
                 &vanilla_root,
                 &settings,
                 started,
@@ -487,6 +492,11 @@ impl Loading {
             Action::Language => self.open_menu_options(Page::Language),
             Action::Sounds => self.open_menu_options(Page::Sound),
             Action::Credits => self.open_menu_options(Page::Credits),
+            Action::OpenUri(uri) => super::packs::open_uri(&uri),
+            Action::CopyText(text) => {
+                use horizon_client::clipboard::Clipboard;
+                self.menu.clipboard.set(&text);
+            }
             Action::DataPacks { dir, selected } => {
                 let resources = self.vanilla_root.clone();
                 self.menu.options.open_data_packs(dir, selected, resources);
@@ -693,11 +703,12 @@ impl Loading {
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
         let Some(gui) = &self.gui else { return };
         if self.menu.pending.is_some() {
-            horizon_client::level_loading::draw_progress(
+            horizon_client::level_loading::draw_loading_overlay(
                 batch,
                 &gui.atlas,
                 self.progress.line(),
                 self.progress.fraction(),
+                self.settings.file.bool("darkMojangStudiosBackground"),
             );
         } else if let Some((win, frame)) = &mut self.menu.win {
             let now = Instant::now();

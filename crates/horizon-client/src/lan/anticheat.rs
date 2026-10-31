@@ -109,6 +109,14 @@ impl Hub {
         let Some(ac) = self.anticheat.as_deref() else {
             return;
         };
+        if ac.config.runs(Check::Prediction) {
+            let g = &mut self.guests[i];
+            let (input, sprinting) = (g.input, g.sprinting);
+            g.anticheat
+                .record
+                .get_or_insert_default()
+                .tick_end(input, sprinting);
+        }
         if !ac.config.runs(Check::Timer) {
             return;
         }
@@ -121,6 +129,69 @@ impl Hub {
                 &format!("{ahead:.0} ms ahead"),
                 events,
             );
+        }
+    }
+
+    /// Whether the prediction records the players' client ticks.
+    pub fn recording(&self) -> bool {
+        self.anticheat
+            .as_deref()
+            .is_some_and(|ac| ac.config.runs(Check::Prediction))
+    }
+
+    /// A move packet from guest `i`, as it came: the prediction's record of the client tick.
+    pub(super) fn anticheat_moved(
+        &mut self,
+        i: usize,
+        pos: Option<[f64; 3]>,
+        rot: Option<(f32, f32)>,
+        flags: u8,
+    ) {
+        if self.recording() {
+            let record = self.guests[i].anticheat.record.get_or_insert_default();
+            record.moved(pos, rot, flags);
+        }
+    }
+
+    /// ServerboundPongPacket: the client has handled every packet of the server tick `id` (the ping
+    /// [`Hub::anticheat_ping`] sent at its end).
+    pub(super) fn anticheat_pong(&mut self, i: usize, id: i32) {
+        let ticks = self.ticks;
+        if self.recording() {
+            let record = self.guests[i].anticheat.record.get_or_insert_default();
+            // Ids are server ticks, cut to 32 bits.
+            record.pong(u64::from(id as u32), ticks);
+        }
+    }
+
+    /// The end of a server tick, after everything it sent: a ping whose id is the tick to each
+    /// player in the world, so the prediction knows from which client tick on that tick's packets
+    /// were in effect.
+    pub fn anticheat_ping(&mut self) {
+        if !self.recording() {
+            return;
+        }
+        // What the tick sent the players that changes their movement went out before this ping.
+        let ticks = self.ticks;
+        for g in &mut self.guests {
+            let changes = std::mem::take(
+                g.changes
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            if let Some(record) = g.anticheat.record.as_deref_mut() {
+                for change in changes {
+                    record.changed(ticks, change);
+                }
+            }
+        }
+        let ping = horizon_protocol::packets::play::Clientbound::Ping(
+            horizon_protocol::packets::configuration::Ping {
+                id: self.ticks as u32 as i32,
+            },
+        );
+        for g in self.guests.iter().filter(|g| g.placed) {
+            g.send(&ping);
         }
     }
 
@@ -230,6 +301,47 @@ impl Hub {
         detail: &str,
         events: &mut Vec<HostEvent>,
     ) -> bool {
+        self.flag_to(i, check, weight, detail, events, None)
+    }
+
+    /// `prediction`: guest `conn`'s ticks that landed off the replay. A setback sends the player
+    /// back to `agreed`, where its moves last agreed.
+    pub fn anticheat_prediction(
+        &mut self,
+        conn: u32,
+        over: &super::prediction::Over,
+        agreed: [f64; 3],
+    ) -> Vec<HostEvent> {
+        let mut events = Vec::new();
+        if let Some(i) = self.guests.iter().position(|g| g.conn == conn) {
+            let ticks = if over.ticks == 1 { "tick" } else { "ticks" };
+            let detail = format!(
+                "moved up to {:.3} blocks off what its keys allow ({} {ticks})",
+                over.worst, over.ticks
+            );
+            let weight = over.weight;
+            self.flag_to(
+                i,
+                Check::Prediction,
+                weight,
+                &detail,
+                &mut events,
+                Some(agreed),
+            );
+        }
+        events
+    }
+
+    /// [`Hub::flag`], whose setback sends the player to `back` (where it was by default).
+    fn flag_to(
+        &mut self,
+        i: usize,
+        check: Check,
+        weight: f32,
+        detail: &str,
+        events: &mut Vec<HostEvent>,
+        back: Option<[f64; 3]>,
+    ) -> bool {
         let ticks = self.ticks;
         let Some(ac) = self.anticheat.as_deref_mut() else {
             return false;
@@ -278,7 +390,7 @@ impl Hub {
             let conn = self.guests[i].conn;
             self.kick(conn, text("Kicked by the server's anticheat", "white"));
         } else if v.setback && self.guests[i].awaiting_teleport.is_none() {
-            self.resend_teleport(i, None);
+            self.resend_teleport(i, back);
         }
         v.setback || v.kick
     }

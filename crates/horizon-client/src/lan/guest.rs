@@ -57,6 +57,9 @@ pub struct SentEffect {
     pub tick_count: i32,
 }
 
+/// ServerGamePacketListenerImpl.CLIENT_LOADED_TIMEOUT_TIME.
+pub const CLIENT_LOADED_TIMEOUT: u8 = 60;
+
 pub struct Guest {
     pub conn: u32,
     /// The client's address (IP bans, `list`).
@@ -116,6 +119,8 @@ pub struct Guest {
     pub living_flags: i8,
     /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID`.
     pub stuck: (i32, i32),
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the parrots' variants.
+    pub shoulders: [Option<i32>; 2],
     /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
@@ -131,11 +136,15 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// The teleport awaited keeps the player's motion (`Hub::teleport_keeping_motion`).
+    pub awaiting_keeps_motion: bool,
     /// Through a portal, until `LanHub::land` gives the client its position:
     /// the moves it sent from the old level are ignored, as they would be
     /// while it had a teleport to accept.
     pub landing: bool,
     pub teleport_counter: i32,
+    /// `ServerPlayer.getCamera() != this`.
+    pub watching: bool,
     /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
     pub teleport_tick: u64,
     /// Where the player was when this tick's packets began (firstGoodX/Y/Z),
@@ -154,15 +163,25 @@ pub struct Guest {
     pub position_this_tick: bool,
     /// Violation levels and the checks' state (the anticheat, when on).
     pub anticheat: horizon_anticheat::Player,
+    /// The movement prediction's replay of the client's own moves (only while it runs).
+    pub replay: Option<Box<super::prediction::Replay>>,
+    /// What the server sent this tick that changes how the client moves (only while it records).
+    pub changes: std::sync::Mutex<Vec<horizon_anticheat::prediction::Change>>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
     /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
     pub loaded: bool,
+    /// Ticks left before the server stops waiting for that packet
+    /// (ServerGamePacketListenerImpl.clientLoadedTimeoutTimer): 60 at join and
+    /// after a respawn, 0 once it comes.
+    pub load_timeout: u8,
     // Chunks.
     pub center: Option<(i32, i32)>,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
+    /// The far ring's chunks still to send, past the view distance (`lan::far`), closest first.
+    pub far_queue: Vec<(i32, i32)>,
     /// PlayerChunkSender: batches sent but not yet acknowledged, how many
     /// may be (1 until the client's first acknowledgement, then 10), the
     /// rate the client asks for and the chunks the next batch may hold.
@@ -266,6 +285,9 @@ pub struct Guest {
     pub saved: Option<horizon_world::nbt::Tag>,
     /// `ServerPlayer.seenCredits`: the end poem has been shown.
     pub seen_credits: bool,
+    /// `ServerPlayer.postEffects` and `postEffectsDirty`.
+    pub post_effects: Vec<String>,
+    pub post_effects_dirty: bool,
     /// `ServerPlayer.recipeBook`.
     pub recipe_book: crate::recipe_book::Settings,
     /// `PlayerAdvancements`: the criteria obtained, whether they came from
@@ -323,14 +345,17 @@ impl Guest {
             sleeping: false,
             living_flags: 0,
             stuck: (0, 0),
+            shoulders: [None; 2],
             bed: None,
             sleep_timer: 0,
             sent_bed: None,
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            awaiting_keeps_motion: false,
             landing: false,
             teleport_counter: 0,
+            watching: false,
             teleport_tick: 0,
             first_good: position,
             received_moves: 0,
@@ -339,11 +364,15 @@ impl Guest {
             above_ground_ticks: 0,
             position_this_tick: false,
             anticheat: Default::default(),
+            replay: None,
+            changes: Default::default(),
             moved: false,
             loaded: false,
+            load_timeout: CLIENT_LOADED_TIMEOUT,
             center: None,
             sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
+            far_queue: Vec::new(),
             unacknowledged: 0,
             max_unacknowledged: 1,
             chunks_per_tick: 9.0,
@@ -397,6 +426,8 @@ impl Guest {
             drag: None,
             saved: None,
             seen_credits: false,
+            post_effects: Vec::new(),
+            post_effects_dirty: true,
             recipe_book: Default::default(),
             advancements: Default::default(),
             advancements_loaded: false,
@@ -407,7 +438,38 @@ impl Guest {
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {
+        if self.anticheat.record.is_some() {
+            self.note_change(packet);
+        }
         self.sender.send(packet.encode());
+    }
+    /// What `packet` changes about how the client moves, for the prediction's replay: kept until
+    /// the tick's ping places it (`Hub::anticheat_ping`).
+    fn note_change(&self, packet: &play::Clientbound) {
+        use horizon_anticheat::prediction::Change;
+        use play::Clientbound as C;
+        let own = |id: i32| id == self.entity_id;
+        let change = match packet {
+            C::SetEntityMotion(p) if own(p.id) => {
+                Change::Velocity(horizon_protocol::buf::LpVec3::quantize(p.velocity))
+            }
+            C::Explode(p) => match p.knockback {
+                Some(k) => Change::Knockback(k),
+                None => return,
+            },
+            C::UpdateAttributes(p) if own(p.id) => Change::State,
+            C::UpdateMobEffect(p) if own(p.id) => Change::State,
+            C::RemoveMobEffect(p) if own(p.id) => Change::State,
+            C::PlayerAbilities(_) => Change::Abilities,
+            // The chest slot (InventoryMenu's slot 6): a glider.
+            C::ContainerSetSlot(p) if p.container == 0 && p.slot == 6 => Change::Abilities,
+            C::ContainerSetContent(p) if p.container == 0 => Change::Abilities,
+            _ => return,
+        };
+        self.changes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(change);
     }
     /// `Entity.stopRiding`: out of the vehicle it rode.
     pub fn stop_riding(&mut self) {
@@ -438,6 +500,11 @@ impl Guest {
     }
     pub fn creative(&self) -> bool {
         self.game_mode == CREATIVE
+    }
+    /// ServerGamePacketListenerImpl.hasClientLoaded: not dead (waitingForRespawn) and
+    /// loaded, or waited for long enough. Until then the player's actions are ignored.
+    pub fn client_loaded(&self) -> bool {
+        !self.dead && self.load_timeout == 0
     }
     pub fn spectator(&self) -> bool {
         self.game_mode == SPECTATOR
@@ -872,7 +939,10 @@ fn network_stack(
         if !d.writable_pages.is_empty() {
             stack.added.push((
                 horizon_protocol::item::component::WRITABLE_BOOK_CONTENT,
-                horizon_protocol::item::Component::WritableBook(d.writable_pages.clone()),
+                horizon_protocol::item::Component::WritableBook {
+                    pages: d.writable_pages.clone(),
+                    filtered: Vec::new(),
+                },
             ));
         }
         if let Some(w) = &d.written {
@@ -892,6 +962,7 @@ fn network_stack(
                                 .collect()
                         },
                         resolved: true,
+                        ..Default::default()
                     },
                 ),
             ));
@@ -1033,6 +1104,18 @@ mod tests {
             position,
             10,
         )
+    }
+
+    #[test]
+    fn the_client_has_loaded_once_it_says_so_or_after_60_ticks_and_not_while_dead() {
+        let mut g = guest_at([0.0; 3]);
+        assert!(!g.client_loaded());
+        g.load_timeout -= 59;
+        assert!(!g.client_loaded());
+        g.load_timeout -= 1;
+        assert!(g.client_loaded());
+        g.dead = true;
+        assert!(!g.client_loaded());
     }
 
     #[test]

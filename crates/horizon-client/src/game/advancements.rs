@@ -212,8 +212,8 @@ impl adv::World for View<'_, '_> {
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
         let items = &self.0.res.items();
         match registry {
-            "item" => items.item_tags.get(tag).is_some_and(|t| t.contains(id)),
-            "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
+            "item" => items.item_in_tag(tag, id),
+            "block" => items.block_in_tag(tag, id),
             "entity_type" => self.0.res.mob_data().entity_has(tag, id),
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
             "damage_type" => self
@@ -432,7 +432,10 @@ impl Game<'_> {
                 .effects
                 .list
                 .iter()
-                .map(|e| (format!("minecraft:{}", e.id), e.amplifier, e.duration))
+                .map(|e| {
+                    let id = horizon_client::brewing::namespaced(e.id);
+                    (id.to_owned(), e.amplifier, e.duration)
+                })
                 .collect(),
             gamemode: Some(self.mode.name().to_owned()),
             ..Default::default()
@@ -462,6 +465,16 @@ impl Game<'_> {
                 .map(|m| self.mob_entity(m))
                 .chain(self.rider_entity(b.id))
                 .collect(),
+            ..Default::default()
+        }
+    }
+    /// A dropped item as the predicates see it.
+    pub(super) fn item_entity_view(&self, e: &horizon_client::entities::ItemEntity) -> EntityView {
+        EntityView {
+            kind: "minecraft:item".into(),
+            position: [e.position.x, e.position.y, e.position.z],
+            on_ground: e.on_ground,
+            on_fire: e.fire_ticks > 0,
             ..Default::default()
         }
     }
@@ -582,6 +595,39 @@ impl Game<'_> {
             self.trigger_criteria(&tree, &list, |c, _| {
                 c["recipes"].as_str() == Some(r.as_str())
             });
+        }
+    }
+    /// `KnowledgeBookItem.use`: the recipes the book names become known and it
+    /// is used up. A book naming a recipe this server does not have is
+    /// vanilla's `Invalid recipe: {}` and knows nothing. Whether the click
+    /// ends here: `InteractionResult.SUCCESS` does and swings, `FAIL` leaves
+    /// the other hand its turn (`Minecraft.startUseItem`).
+    pub(super) fn use_knowledge_book(&mut self, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:knowledge_book" {
+            return false;
+        }
+        let slot = self.held_slot();
+        let mut hand = self.stack_in(slot).cloned();
+        let infinite = self.creative;
+        let index = &world_stations!(self).recipe_index;
+        let result = self
+            .level
+            .recipe_book
+            .use_knowledge_book(index, &mut hand, infinite);
+        *self.stack_in_mut(slot) = hand;
+        match result {
+            Ok(unlocked) => {
+                self.recipe_unlocked(&unlocked);
+                self.stats.add("used", &stack.item, 1);
+                self.swing_arm();
+                true
+            }
+            Err(invalid) => {
+                if let Some(id) = invalid {
+                    log::error!("Invalid recipe: {id}");
+                }
+                false
+            }
         }
     }
     /// `PlayerAdvancements.award` once done: rewards, toast, announcement.
@@ -1701,19 +1747,43 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, y);
         let (key, color) = match frame {
-            Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
-            Frame::Goal => ("advancements.toast.goal", 0xFF00_FFFF),
+            Frame::Task => ("advancements.toast.task", 0xFFFF_FF00),
+            Frame::Goal => ("advancements.toast.goal", 0xFFFF_FF00),
             Frame::Challenge => ("advancements.toast.challenge", 0xFFFF_88FF),
         };
-        batch.text_styled(
-            atlas,
-            &Text::translate(key, &[]),
-            x + 30.0,
-            y + 7.0,
-            color,
-            false,
-        );
-        batch.text_styled(atlas, &title, x + 30.0, y + 18.0, u32::MAX, false);
+        // AdvancementToast.extractRenderState: a title of one line sits under
+        // the frame's label; a longer one is wrapped at 125, the label fading
+        // out first (to 1.5 s) and the lines fading in after it over 0.3 s.
+        let lines = atlas.font.split(&title.resolve_legacy(), 125.0);
+        let label = Text::translate(key, &[]);
+        let rgb = color & 0x00FF_FFFF;
+        if let [line] = lines.as_slice() {
+            batch.text_styled(atlas, &label, x + 30.0, y + 7.0, color, false);
+            batch.text_styled(atlas, line, x + 30.0, y + 18.0, u32::MAX, false);
+        } else if fully_for < 1500 {
+            let fade = ((1500 - fully_for) as f32 / 300.0).clamp(0.0, 1.0);
+            let alpha = (fade * 255.0).floor() as u32;
+            if alpha != 0 {
+                batch.text_styled(atlas, &label, x + 30.0, y + 11.0, alpha << 24 | rgb, false);
+            }
+        } else {
+            let fade = ((fully_for - 1500) as f32 / 300.0).clamp(0.0, 1.0);
+            let alpha = (fade * 252.0).floor() as u32;
+            if alpha != 0 {
+                let mut line_y = y + (16 - lines.len() as i32 * 9 / 2) as f32;
+                for line in &lines {
+                    batch.text_styled(
+                        atlas,
+                        line,
+                        x + 30.0,
+                        line_y,
+                        alpha << 24 | 0x00FF_FFFF,
+                        false,
+                    );
+                    line_y += 9.0;
+                }
+            }
+        }
         self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, y + 8.0);
     }
 }
