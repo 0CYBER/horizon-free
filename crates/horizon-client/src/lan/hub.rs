@@ -240,6 +240,9 @@ pub struct Hub {
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
     entity_out: Vec<Vec<Vec<u8>>>,
+    /// Each placed guest's entities gone this tick, where they were last sent (only while the
+    /// prediction records).
+    entity_gone: Vec<Vec<[f64; 3]>>,
     /// Server mods' commands, a root in the commands report's format, sent
     /// after vanilla's; the key the game last set them for.
     mod_commands: (serde_json::Value, Option<u64>),
@@ -492,6 +495,7 @@ impl Hub {
             entity_types: Default::default(),
             entities: Default::default(),
             entity_out: Vec::new(),
+            entity_gone: Vec::new(),
             mod_commands: (serde_json::Value::Null, None),
             native_menu_events: Vec::new(),
             teams: Vec::new(),
@@ -1177,6 +1181,8 @@ impl Hub {
         g.teleport_counter = (g.teleport_counter + 1) & 0x7FFF_FFFF;
         let id = g.teleport_counter;
         g.awaiting_teleport = Some((id, g.position));
+        use play::relative::{DELTA_X, DELTA_Y, DELTA_Z};
+        g.awaiting_keeps_motion = relatives & (DELTA_X | DELTA_Y | DELTA_Z) != 0;
         let turn = relatives & (play::relative::Y_ROT | play::relative::X_ROT) != 0;
         g.send(&C::PlayerPosition(play::PlayerPosition {
             teleport: id,
@@ -1869,6 +1875,8 @@ impl Hub {
         let mut changes = std::mem::take(log);
         changes.sort_unstable();
         changes.dedup();
+        // The prediction's replay excuses a client that hadn't seen a change near it.
+        let recording = self.recording();
         // Group by section.
         let mut sections: std::collections::BTreeMap<(i32, i32, i32), Vec<(i32, i32, i32)>> =
             Default::default();
@@ -1914,6 +1922,22 @@ impl Hub {
             let body = packet.encode();
             for &i in &viewers {
                 self.guests[i].sender.send(body.clone());
+            }
+            if recording {
+                for &i in &viewers {
+                    let g = &mut self.guests[i];
+                    let Some(record) = g.anticheat.record.as_deref_mut() else {
+                        continue;
+                    };
+                    let slack = super::prediction::slack(std::array::from_fn(|i| {
+                        g.position[i] - g.previous_position[i]
+                    }));
+                    for &(x, y, z) in &positions {
+                        if super::prediction::near(g.position, [x, y, z], slack) {
+                            record.changed_near(self.ticks, [x, y, z]);
+                        }
+                    }
+                }
             }
             // Block entities with data the client shows.
             for &(x, y, z) in &positions {
@@ -2188,12 +2212,16 @@ impl Hub {
         let dimension = &self.config.dimension;
         let here = |g: &Guest| g.placed && g.dimension == *dimension;
         outs.resize_with(self.guests.iter().filter(|g| here(g)).count(), Vec::new);
+        // The prediction's replay excuses a client that may still have an entity that left it.
+        let recording = self.recording();
+        let mut gone = std::mem::take(&mut self.entity_gone);
+        gone.resize_with(outs.len(), Vec::new);
         let mut viewers: Vec<Viewer> = self
             .guests
             .iter_mut()
             .filter(|g| here(g))
-            .zip(outs.iter_mut())
-            .map(|(g, out)| Viewer {
+            .zip(outs.iter_mut().zip(gone.iter_mut()))
+            .map(|(g, (out, gone))| Viewer {
                 entity_id: g.entity_id,
                 spectator: g.spectator(),
                 moved: std::mem::take(&mut g.moved),
@@ -2202,6 +2230,7 @@ impl Hub {
                 chunks: &g.sent_chunks,
                 tracker: &mut g.tracker,
                 out,
+                gone: recording.then_some(gone),
             })
             .collect();
         level.range_percent = Some(self.entity_range_percent);
@@ -2213,6 +2242,26 @@ impl Hub {
         for (g, out) in self.guests.iter().filter(|g| here(g)).zip(outs.iter_mut()) {
             g.sender.send_many(out.drain(..));
         }
+        let ticks = self.ticks;
+        for (g, gone) in self
+            .guests
+            .iter_mut()
+            .filter(|g| here(g))
+            .zip(gone.iter_mut())
+        {
+            let slack = super::prediction::slack(std::array::from_fn(|i| {
+                g.position[i] - g.previous_position[i]
+            }));
+            for at in gone.drain(..) {
+                let block = at.map(|v| v.floor() as i32);
+                if let Some(record) = g.anticheat.record.as_deref_mut()
+                    && super::prediction::near(g.position, block, slack)
+                {
+                    record.entity_gone(ticks);
+                }
+            }
+        }
+        self.entity_gone = gone;
         self.entity_out = outs;
         self.entities.insert(self.config.dimension.clone(), level);
     }
@@ -2587,7 +2636,11 @@ impl Hub {
                         g.awaiting_teleport = None;
                         // The prediction's replay starts again where the client now is.
                         if recording {
-                            g.anticheat.record.get_or_insert_default().teleported(at);
+                            let kept = g.awaiting_keeps_motion;
+                            g.anticheat
+                                .record
+                                .get_or_insert_default()
+                                .teleported(at, kept);
                         }
                         let rot = (p.yaw, p.pitch);
                         self.position_change(i, [p.x, p.y, p.z], rot, 0, ctx, events);

@@ -49,8 +49,12 @@ PROPERTIES = {
     'simulation-distance': '4',
     'max-players': '100',
 }
+# The bots move by their own rules, not vanilla's: the prediction, which plays each move again with
+# vanilla's movement code, would flag every one of them. Its own check runs real clients.
 ON = '''[anticheat]
 enabled = true
+[anticheat.prediction]
+enabled = false
 '''
 
 

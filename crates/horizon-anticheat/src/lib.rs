@@ -134,10 +134,18 @@ checks! {
     ground: Ground => GroundConfig [5.0, 15.0, 60.0, 2.0] {}
 
     /// Prediction: each move played again from the client's own inputs with vanilla's movement code,
-    /// and compared (speed, step, fly, jesus...). Being built: for now it records each player's
-    /// client ticks (`prediction::Record`), with a ping a tick to place what the server changes, and
-    /// plays them again (horizon-client's `lan::prediction`), but flags nothing.
-    prediction: Prediction => PredictionConfig [5.0, 15.0, 60.0, 2.0] {}
+    /// and compared (speed, step, fly, jesus...). Each player's client ticks are recorded
+    /// (`prediction::Record`), with a ping a tick to place what the server changes, and played again
+    /// (horizon-client's `lan::prediction`). A move that lands farther than `tolerance` from the
+    /// replay flags, by how far it lands (one `tolerance` off weighs 1, at most 5 a tick), and the
+    /// setback puts the player back where its moves last agreed. A tick near what the replay can't
+    /// play yet (another entity, a block change or abilities the client hadn't seen, a moving piston,
+    /// a chunk the client doesn't have, a riptide launch) is excused, and so are the ticks after it
+    /// until the moves agree again.
+    prediction: Prediction => PredictionConfig [5.0, 15.0, 60.0, 2.0] {
+        /// How far, in blocks, a move may land from where the replay puts it.
+        tolerance: f64 = 0.03,
+    }
 }
 
 /// How many checks there are.
@@ -177,6 +185,10 @@ impl Config {
                     c.name()
                 ));
             }
+        }
+        let tolerance = self.prediction.tolerance;
+        if !tolerance.is_finite() || tolerance <= 0.0 {
+            return Err("anticheat.prediction: tolerance is a number of blocks above 0".into());
         }
         Ok(())
     }
@@ -266,6 +278,8 @@ mod tests {
         assert_eq!(c.timer.kick, 0.0);
         assert_eq!(c.timer.tolerance_ms, 500.0);
         assert_eq!(c.timer.alert, TimerConfig::default().alert);
+        let zero = "[anticheat]\n[anticheat.prediction]\ntolerance = 0\n";
+        assert!(Config::from_server_toml(zero).is_err());
         let off = "[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n";
         assert!(!Config::from_server_toml(off).unwrap().runs(Check::Timer));
     }

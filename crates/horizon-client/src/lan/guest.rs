@@ -136,6 +136,8 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// The teleport awaited keeps the player's motion (`Hub::teleport_keeping_motion`).
+    pub awaiting_keeps_motion: bool,
     /// Through a portal, until `LanHub::land` gives the client its position:
     /// the moves it sent from the old level are ignored, as they would be
     /// while it had a teleport to accept.
@@ -350,6 +352,7 @@ impl Guest {
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            awaiting_keeps_motion: false,
             landing: false,
             teleport_counter: 0,
             watching: false,
@@ -457,6 +460,10 @@ impl Guest {
             C::UpdateAttributes(p) if own(p.id) => Change::State,
             C::UpdateMobEffect(p) if own(p.id) => Change::State,
             C::RemoveMobEffect(p) if own(p.id) => Change::State,
+            C::PlayerAbilities(_) => Change::Abilities,
+            // The chest slot (InventoryMenu's slot 6): a glider.
+            C::ContainerSetSlot(p) if p.container == 0 && p.slot == 6 => Change::Abilities,
+            C::ContainerSetContent(p) if p.container == 0 => Change::Abilities,
             _ => return,
         };
         self.changes
