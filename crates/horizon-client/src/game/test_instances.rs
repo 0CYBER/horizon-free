@@ -27,6 +27,9 @@ use horizon_world::{
 
 type Pos = (i32, i32, i32);
 
+/// `GameTestBlockHighlightRenderer.highlightPos`'s colour, 1610678016: ARGB 0x6000FF00.
+const HIGHLIGHT_FILL: u32 = 0x6000_FF00;
+
 /// `ServerboundTestInstanceBlockActionPacket.Action`.
 const INIT: i32 = 0;
 const QUERY: i32 = 1;
@@ -214,6 +217,16 @@ impl Game<'_> {
         self.test_holder(pos).map_or(0, |t| t.padding)
     }
 
+    /// `ClientPacketListener.handleGameTestHighlightPos`:
+    /// `GameTestBlockHighlightRenderer.highlightPos` shows the block for ten
+    /// seconds with its position relative to the test.
+    pub(super) fn highlight_test_pos(&mut self, absolute: [i32; 3], relative: [i32; 3]) {
+        let text = format!("{}, {}, {}", relative[0], relative[1], relative[2]);
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(10_000);
+        self.test_highlights
+            .insert((absolute[0], absolute[1], absolute[2]), (text, until));
+    }
+
     /// `TestInstanceRenderer.submit`'s error markers, for any player within
     /// the beacon's view distance of the block: each marked block in a
     /// translucent red box (`out`, blending) and its text as a billboard over
@@ -225,7 +238,15 @@ impl Game<'_> {
         see_through: &mut Vec<Vertex>,
     ) {
         use horizon_client::gizmos as g;
-        let mut markers = Vec::new();
+        // `GameTestBlockHighlightRenderer.emitGizmos`: expired highlights go,
+        // the rest are a green box with the relative position over it.
+        let now = std::time::Instant::now();
+        self.test_highlights.retain(|_, (_, until)| now <= *until);
+        let mut markers: Vec<(_, _, u32)> = self
+            .test_highlights
+            .iter()
+            .map(|(&pos, (text, _))| ([pos.0, pos.1, pos.2], text.clone(), HIGHLIGHT_FILL))
+            .collect();
         for (pos, entity) in &self.world.block_entities {
             let BlockEntity::TestInstanceBlock(b) = entity else {
                 continue;
@@ -237,22 +258,26 @@ impl Game<'_> {
                 continue;
             }
             for marker in &b.error_markers {
-                markers.push((marker.pos, name_text(&marker.text).plain()));
+                markers.push((
+                    marker.pos,
+                    name_text(&marker.text).plain(),
+                    g::ERROR_MARKER_FILL,
+                ));
             }
         }
         if markers.is_empty() {
             return;
         }
-        // A plain colour: the atlas's white pixel at the fill's colour.
-        let mut fill = HudBatch::new([1, 1]);
-        fill.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, g::ERROR_MARKER_FILL);
-        let Some(v) = fill.vertices.first().copied() else {
-            return;
-        };
         let light = vertex_light(0xFF);
         self.mark_translucent_entity(out.len(), "minecraft:test_instance_block");
         let mut patches = Vec::new();
-        for (pos, text) in markers {
+        for (pos, text, color) in markers {
+            // A plain colour: the atlas's white pixel at the fill's colour.
+            let mut fill = HudBatch::new([1, 1]);
+            fill.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, color);
+            let Some(v) = fill.vertices.first().copied() else {
+                continue;
+            };
             let (min, max, text_at) = g::error_marker_shape(pos);
             for quad in g::cuboid_fill_quads(min, max) {
                 for corner in quad {
