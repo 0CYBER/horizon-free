@@ -110,10 +110,11 @@ impl Game<'_> {
                     self.music_notes.color,
                 );
             }
-        } else if !hidden && self.music_toast_state == 2 {
-            if let Some(toast) = &self.now_playing {
-                toast.draw(&self.gui.atlas, batch, &song, &self.music_notes);
-            }
+        } else if !hidden
+            && self.music_toast_state == 2
+            && let Some(toast) = &self.now_playing
+        {
+            toast.draw(&self.gui.atlas, batch, &song, &self.music_notes);
         }
     }
     /// `Minecraft.tick` -> `SoundManager.tick(pause)`, after the music, with

@@ -1985,14 +1985,13 @@ impl Game<'_> {
             self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
-        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            if tooltip.is_none()
-                && tooltip_stack.is_none()
-                && let Some(stack) = self.slot_mut(slot).clone()
-                && self.tooltip_with_carried(&stack)
-            {
-                tooltip_stack = Some(stack);
-            }
+        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
+            && tooltip.is_none()
+            && tooltip_stack.is_none()
+            && let Some(stack) = self.slot_mut(slot).clone()
+            && self.tooltip_with_carried(&stack)
+        {
+            tooltip_stack = Some(stack);
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
