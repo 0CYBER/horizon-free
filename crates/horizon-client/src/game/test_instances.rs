@@ -47,6 +47,9 @@ pub(super) struct TestDef {
     pub(super) environment: String,
     pub(super) max_ticks: i32,
     pub(super) setup_ticks: i32,
+    /// `TestData.maxAttempts` and `requiredSuccesses`.
+    pub(super) max_attempts: i32,
+    pub(super) required_successes: i32,
     /// The dimension the test runs in (`TestData.dimension`).
     pub(super) dimension: String,
     description: Text,
@@ -68,6 +71,8 @@ impl TestDef {
             dimension: "minecraft:overworld".into(),
             max_ticks,
             setup_ticks,
+            max_attempts: 1,
+            required_successes: 1,
             description: Text::literal(""),
         }
     }
@@ -111,6 +116,13 @@ impl Game<'_> {
         let environment = string("environment")?.to_owned();
         let dimension = string("dimension").unwrap_or("minecraft:overworld");
         let function = string("function");
+        // `ExtraCodecs.POSITIVE_INT`, 1 when absent.
+        let positive = |key: &str| {
+            json.get(key)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .clamp(1, i64::from(i32::MAX)) as i32
+        };
         // GameTestInstance.describe: the type, the function (function tests
         // only), then the structure, batch and dimension.
         let block_based = string("type") == Some("minecraft:block_based");
@@ -166,6 +178,8 @@ impl Game<'_> {
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0)
                 .clamp(0, i64::from(i32::MAX)) as i32,
+            max_attempts: positive("max_attempts"),
+            required_successes: positive("required_successes"),
             description,
         })
     }
