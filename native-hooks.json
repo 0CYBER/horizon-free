@@ -46,6 +46,11 @@
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_random_tick"
     },
     {
+      "name": "tick_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"
+    },
+    {
       "name": "update_shape",
       "version": 1,
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_update_shape"

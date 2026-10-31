@@ -496,6 +496,141 @@ fn random_tick_hook_can_change_the_block_and_skip_its_own_tick() {
 }
 
 #[test]
+fn tick_block_hook_can_change_the_block_and_skip_its_own_tick() {
+    use horizon_core::ticks::TickPriority;
+
+    struct Ticked {
+        inner: TestLevel,
+        b: &'static Behaviours,
+        /// The state the hook sets, if any, and the `setBlock` flags it sets
+        /// it with.
+        to: Option<BlockStateId>,
+        flags: i32,
+        handle: bool,
+        seen: Vec<(BlockPos, BlockStateId)>,
+        /// Moves on with every write, as `World::revision` does.
+        revision: u64,
+    }
+    impl LevelAccess for Ticked {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.revision += 1;
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn before_tick_block(
+            &mut self,
+            ticks: &mut Ticks,
+            pos: BlockPos,
+            state: &mut BlockStateId,
+            handled: &mut bool,
+        ) {
+            assert_eq!(self.block_state(pos), *state);
+            self.seen.push((pos, *state));
+            // The hook, then the level's part of the contract as `GameLevel`
+            // keeps it: re-read the block if the hook wrote.
+            let revision = self.revision;
+            if let Some(to) = self.to {
+                let b = self.b;
+                assert!(b.set_block(self, ticks, pos, to, self.flags));
+            }
+            *handled = self.handle;
+            if !*handled && self.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let target = f.registry.default_state("minecraft:target").unwrap();
+    let powered = b.table.set_int(target, b.props.power, 15);
+    let to = b.table.set_int(target, b.props.power, 7);
+    let mut level = Ticked {
+        inner: TestLevel::new(b),
+        b,
+        to: Some(to),
+        // A target's own tick writes with `setBlockAndUpdate`.
+        flags: flags::UPDATE_ALL,
+        handle: true,
+        seen: Vec::new(),
+        revision: 0,
+    };
+    let mut ticks = Ticks::new(0);
+    ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
+    let pos = BlockPos::new(1, 1, 1);
+    // The due ticks run as the game runs them, stepped (scheduled_begin,
+    // scheduled_step, scheduled_finish), or as tests do, through
+    // tick_scheduled.
+    let run = |level: &mut Ticked, ticks: &mut Ticks, stepped: bool| {
+        if stepped {
+            assert!(b.scheduled_begin(level, ticks, false));
+            while b.scheduled_step(level, ticks, false) {}
+            b.scheduled_finish(ticks, false);
+        } else {
+            b.tick_scheduled(level, ticks);
+        }
+    };
+    // One tick of the block at `pos` falls due.
+    let due = |level: &mut Ticked, ticks: &mut Ticks, stepped: bool| {
+        let (time, block) = (level.inner.time, b.block(level.block_state(pos)));
+        ticks.schedule_block(time, pos, block, 1, TickPriority::Normal);
+        level.inner.time += 1;
+        run(level, ticks, stepped);
+    };
+    let rod = |facing: &str, powered: &str| {
+        let lightning_rod = f.registry.default_state("minecraft:lightning_rod").unwrap();
+        let mut s = f.registry.state(lightning_rod).unwrap().clone();
+        s.properties.insert("facing".into(), facing.into());
+        s.properties.insert("powered".into(), powered.into());
+        f.registry.resolve(&s).unwrap()
+    };
+    for stepped in [false, true] {
+        level.seen.clear();
+        (level.to, level.handle) = (Some(to), true);
+        level.set_raw(pos, powered);
+        due(&mut level, &mut ticks, stepped);
+        assert_eq!(level.seen, [(pos, powered)]);
+        assert_eq!(level.block_state(pos), to);
+        // Unhandled, the target's own tick turns it off.
+        (level.to, level.handle) = (None, false);
+        level.set_raw(pos, powered);
+        due(&mut level, &mut ticks, stepped);
+        assert_eq!(level.block_state(pos), target);
+        // A tick whose block was replaced runs nothing.
+        let stone = f.registry.default_state("minecraft:stone").unwrap();
+        level.set_raw(pos, powered);
+        let block = b.block(powered);
+        ticks.schedule_block(level.inner.time, pos, block, 1, TickPriority::Normal);
+        level.inner.time += 1;
+        level.set_raw(pos, stone);
+        run(&mut level, &mut ticks, stepped);
+        assert_eq!(level.seen.len(), 2);
+        // Changed into another block and unhandled, nothing more runs.
+        level.to = Some(stone);
+        level.set_raw(pos, powered);
+        due(&mut level, &mut ticks, stepped);
+        assert_eq!(level.seen.len(), 3);
+        assert_eq!(level.block_state(pos), stone);
+        // Changed but unhandled, the block ticks as the hook left it: the
+        // rod's tick unpowers it facing where the hook turned it.
+        (level.to, level.handle) = (Some(rod("north", "true")), false);
+        level.set_raw(pos, rod("up", "true"));
+        due(&mut level, &mut ticks, stepped);
+        assert_eq!(level.block_state(pos), rod("north", "false"));
+    }
+}
+
+#[test]
 fn state_table_matches_registry() {
     let Some(f) = fixture() else {
         return;

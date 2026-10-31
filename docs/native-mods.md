@@ -177,7 +177,7 @@ draw that lands on one: it runs often, so keep it short. Bone meal's random tick
 `randomTick` itself) don't fire it. The hook may change the block with the level's
 `native_set_block_property(ticks, pos, key, value, flags)` and set `handled` to skip the block's own random tick, so a
 mod crop grows its own way. Without `handled`, the block then takes its own random tick as it is now (if it still
-ticks randomly), and lava's fluid random tick runs either way. It needs the level mutably, which only `native_random_tick` gives. It is API 18's `Game::native_set_block_property` with `Level.setBlock`'s flags (`native_hooks::flags`): a
+ticks randomly), and lava's fluid random tick runs either way. It needs the level mutably, which only `native_random_tick` and API 34's `native_tick_block` give. It is API 18's `Game::native_set_block_property` with `Level.setBlock`'s flags (`native_hooks::flags`): a
 vanilla crop grows with `flags::UPDATE_CLIENTS` (neighbours' shapes update, so an observer fires, but no neighbour
 gets `neighborChanged` and comparators aren't told), a furnace sets its `lit` with `flags::UPDATE_ALL` (both). Horizon
 sends every write to players whatever the flags: `UPDATE_CLIENTS` (2), `UPDATE_INVISIBLE` (4) and `UPDATE_IMMEDIATE`
@@ -186,6 +186,14 @@ value the block doesn't have or a position that isn't loaded, and true without w
 the value. Elsewhere, `Game::native_set_block_property_with(pos, key, value, flags)` does the same, as a brewing
 stand's tick sets its bottles with `flags::UPDATE_CLIENTS`. The deprecated in-frame path fires none. Bundles that use
 them need `"hooks": 33`.
+
+API 34 adds scheduled block ticks a mod can handle through `native_tick_block`: on an authoritative server, each due
+scheduled tick of a block that is still there (`ServerLevel.tickBlock` → `BlockState.tick`), with its dimension,
+position and state, before the block handles it. The hook may change the block with the level's
+`native_set_block_property` and the flags the block's own tick would write with (as in API 33: an observer's tick
+uses `flags::UPDATE_CLIENTS`) and set `handled` to skip the block's own tick. Without `handled`, the block then takes
+its own tick as it is now, if it is still the tick's block. The deprecated in-frame path fires none. Bundles that use
+it need `"hooks": 34`.
 
 ## What the launcher does
 
@@ -402,6 +410,8 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`native_random_tick(ticks, dimension, pos, state, handled)`** (API 33, on `GameLevel`): a block `tickChunk`
   random-ticks, before its own `randomTick`. Change the block with the level's `native_set_block_property(ticks, pos,
   key, value, flags)`; set `handled` to skip the block's own random tick.
+- **`native_tick_block(ticks, dimension, pos, state, handled)`** (API 34, on `GameLevel`): a due scheduled tick of a block
+  that is still there (`ServerLevel.tickBlock`), before its own `tick`; the same contract as `native_random_tick`.
 - **`native_explosion_detonate(dimension, center, blocks)`** (API 22): the positions an explosion is about to break,
   before any is hit; take out the ones to spare. Entities are hurt as before.
 - **`native_fill_bucket(stack, pos, canceled)`** and **`native_attack_entity(entity, kind, pos, canceled)`** (API 22):
