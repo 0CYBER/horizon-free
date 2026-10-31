@@ -124,6 +124,26 @@ impl Weather {
         uploads.buffer(encoder, &self.vertices, 0, bytemuck::cast_slice(vertices));
         uploads.buffer(encoder, &self.uniform, 0, bytemuck::bytes_of(&time));
     }
+    /// The classic pipeline, for its layouts.
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+    /// `draw` with another pipeline of the same layouts and vertex format.
+    pub fn draw_with(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &wgpu::RenderPipeline,
+        entities: &wgpu::BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, entities, &[]);
+        pass.set_bind_group(1, &self.group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.draw_indexed(0..self.count / 4 * 6, 0, 0..1);
+    }
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, entities: &wgpu::BindGroup) {
         if self.count == 0 {
             return;

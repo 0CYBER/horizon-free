@@ -136,3 +136,31 @@ fn oit_sample_transmittance(pixel: vec2<i32>, depth: f32, current: f32) -> f32 {
     let c = array<f32, 8>(a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
     return oit_transmittance(oit_sample_absorbance(c, depth, oit_absorbance(current)));
 }
+
+// The three stages' ends for a pipeline whose fragment colour is computed as
+// it is without improved transparency (vanilla's `executeAlphaOnlyPhase` and
+// `sampleColorForAccumulation`). `color` is the classic result, fogged:
+// weighting a fogged colour equals fogging the weighted one, since the fog
+// is a mix and vanilla premultiplies the fog colour by the same alpha.
+fn oit_bounds_fragment(alpha: f32, clip: vec4<f32>) -> vec4<f32> {
+    if alpha < 0.01 { discard; }
+    let linear = oit_linear_depth(clip.z);
+    let opaque = select(0.0, clip.z, alpha > OIT_FULLY_OPAQUE_ALPHA);
+    return vec4(-linear, linear, clip.z, opaque);
+}
+fn oit_transmittance_fragment(alpha: f32, clip: vec4<f32>) -> OitCoefficients {
+    return oit_add_transmittance(1.0 - alpha, clip.z, clip.xy);
+}
+fn oit_accumulate_fragment(color: vec4<f32>, clip: vec4<f32>) -> vec4<f32> {
+    let seen = oit_sample_transmittance(vec2<i32>(clip.xy),
+        oit_normalize_depth(clip.z, clip.xy), 1.0 - color.a);
+    return vec4(color.rgb * color.a, color.a) * seen;
+}
+// `OIT_ADDITIVE`: no coverage and nothing in the transmittance. The colour
+// is not fogged yet: the fog colour is premultiplied by the alpha, which is
+// zero, so the fog fades it out instead of tinting it.
+fn oit_accumulate_additive(color: vec4<f32>, fog: f32, clip: vec4<f32>) -> vec4<f32> {
+    let seen = oit_sample_transmittance(vec2<i32>(clip.xy),
+        oit_normalize_depth(clip.z, clip.xy), 1.0);
+    return vec4(color.rgb * color.a * (1.0 - fog), 0.0) * seen;
+}

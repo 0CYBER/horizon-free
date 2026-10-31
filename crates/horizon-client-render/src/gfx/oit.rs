@@ -5,6 +5,7 @@
 //! composites the sum. With the option off none of this exists and the world
 //! draws as before.
 
+use super::oit_features::Features;
 use glam::Mat4;
 
 /// The depth bounds' clear: `LevelRenderer.DEPTH_BOUNDS_CLEAR_COLOR`.
@@ -39,7 +40,7 @@ pub fn supported(device: &wgpu::Device) -> bool {
 }
 
 /// What a stage's pipelines write: `OIT_*_SNIPPET`'s colour targets.
-fn stage_targets(stage: Stage) -> Vec<Option<wgpu::ColorTargetState>> {
+pub(super) fn stage_targets(stage: Stage) -> Vec<Option<wgpu::ColorTargetState>> {
     let blend = |operation| wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::One,
@@ -130,6 +131,10 @@ pub struct Extras<'a> {
     pub water_mask: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
     /// `CloudRenderer.renderOit`: draws the clouds with the pipeline given.
     pub clouds: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline)>,
+    /// "Features, World Border, Weather": draws what the entity, weather and
+    /// border shaders put after the opaque world, with `Oit::features`'s
+    /// pipelines of the stage.
+    pub features: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>, Stage)>,
 }
 
 struct Views {
@@ -146,6 +151,9 @@ pub struct Oit {
     layouts: [wgpu::BindGroupLayout; 4],
     /// One per `Stage`.
     terrain: [wgpu::RenderPipeline; 3],
+    /// The terrain's flat section draws (`Flat`), where the device has them.
+    flat: Option<[wgpu::RenderPipeline; 3]>,
+    features: Features,
     clouds: [wgpu::RenderPipeline; 3],
     cull: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
@@ -154,11 +162,15 @@ pub struct Oit {
 
 impl Oit {
     /// `terrain`: the terrain bind group layout that `vs_terrain` reads,
+    /// `flat` the flat draws' second group, `features` the entity, weather
+    /// and world border layouts,
     /// `clouds` the cloud pipeline's two, `sprites` the terrain's override
     /// constants, `format` the world target's.
     pub fn new(
         device: &wgpu::Device,
         terrain: &wgpu::BindGroupLayout,
+        flat: Option<&wgpu::BindGroupLayout>,
+        features: [&wgpu::BindGroupLayout; 3],
         clouds: [&wgpu::BindGroupLayout; 2],
         sprites: [f64; 2],
         format: wgpu::TextureFormat,
@@ -272,7 +284,7 @@ impl Oit {
                     buffers,
                 },
                 primitive: wgpu::PrimitiveState {
-                    cull_mode: (vertex == "vs_terrain").then_some(wgpu::Face::Back),
+                    cull_mode: vertex.starts_with("vs_terrain").then_some(wgpu::Face::Back),
                     ..Default::default()
                 },
                 depth_stencil,
@@ -310,6 +322,48 @@ impl Oit {
             ),
             terrain_pipeline("OIT accumulate", "fs_oit_accumulate", Stage::Accumulate),
         ];
+        // The same fragments over `vs_terrain_flat`: one vertex buffer, and
+        // the draw table at group 1.
+        let flat_pipelines = flat.map(|draw| {
+            let flat_buffers = &buffers[..1];
+            [
+                (
+                    "OIT depth bounds (flat)",
+                    "fs_oit_bounds",
+                    Stage::DepthBounds,
+                ),
+                (
+                    "OIT transmittance (flat)",
+                    "fs_oit_transmittance",
+                    Stage::Transmittance,
+                ),
+                (
+                    "OIT accumulate (flat)",
+                    "fs_oit_accumulate",
+                    Stage::Accumulate,
+                ),
+            ]
+            .map(|(label, fragment, stage)| {
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Improved transparency flat terrain"),
+                    bind_group_layouts: &[
+                        Some(terrain),
+                        Some(draw),
+                        Some(&layouts[stage as usize]),
+                    ],
+                    ..Default::default()
+                });
+                pipeline(
+                    label,
+                    &layout,
+                    "vs_terrain_flat",
+                    fragment,
+                    flat_buffers,
+                    &stage_targets(stage),
+                    depth(false),
+                )
+            })
+        });
         let screen = |label, fragment, group, targets: &[_], depth_stencil| {
             pipeline(
                 label,
@@ -434,10 +488,13 @@ impl Oit {
                 Stage::Accumulate,
             ),
         ];
+        let features = Features::new(device, &layouts, features[0], features[1], features[2]);
         Self {
             uniform,
             layouts,
             terrain: terrain_pipelines,
+            flat: flat_pipelines,
+            features,
             clouds: cloud_pipelines,
             cull,
             composite,
@@ -448,6 +505,16 @@ impl Oit {
     /// The pipeline the terrain's translucent layer draws with in `stage`.
     pub fn terrain(&self, stage: Stage) -> &wgpu::RenderPipeline {
         &self.terrain[stage as usize]
+    }
+
+    /// The pipeline the terrain's translucent layer draws with in `stage`
+    /// as flat section draws, where they run.
+    pub fn flat(&self, stage: Stage) -> Option<&wgpu::RenderPipeline> {
+        self.flat.as_ref().map(|f| &f[stage as usize])
+    }
+
+    pub fn features(&self) -> &Features {
+        &self.features
     }
 
     /// Sizes the targets to the world's and writes this frame's projection.
@@ -551,7 +618,7 @@ impl Oit {
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
-        draw: &dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
+        draw: &dyn Fn(&mut wgpu::RenderPass<'_>, Stage),
         extras: &Extras<'_>,
     ) {
         let Some(t) = &self.targets else { return };
@@ -618,7 +685,29 @@ impl Oit {
                     ..Default::default()
                 });
                 pass.set_bind_group(GROUP, group, &[]);
-                draw(&mut pass, self.terrain(stage));
+                draw(&mut pass, stage);
+            }
+            if let Some(features) = extras.features {
+                // Over the world's own depth, even where a water mask patched
+                // the terrain's: the masks only hide water.
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label),
+                    color_attachments: &[attachment(
+                        match stage {
+                            Stage::DepthBounds => &t.views.bounds,
+                            Stage::Transmittance => c0,
+                            Stage::Accumulate => &t.views.accumulated,
+                        },
+                        load,
+                    )]
+                    .into_iter()
+                    .chain((stage == Stage::Transmittance).then(|| attachment(c1, load)))
+                    .collect::<Vec<_>>(),
+                    depth_stencil_attachment: read_only(depth),
+                    ..Default::default()
+                });
+                pass.set_bind_group(GROUP, group, &[]);
+                features(&mut pass, stage);
             }
             if stage == Stage::DepthBounds {
                 self.execute_depth_bounds_cull(encoder, t, depth);
@@ -835,6 +924,29 @@ mod tests {
                 "fs_oit_cloud_transmittance",
                 "fs_oit_cloud_accumulate",
             ],
+        );
+    }
+
+    #[test]
+    fn the_feature_shaders_validate() {
+        let stages = |name: &str| {
+            ["bounds", "transmittance", "accumulate"].map(|s| format!("fs_oit_{name}_{s}"))
+        };
+        let entity = ["entity", "shadow", "weather", "swirl"]
+            .map(stages)
+            .concat();
+        validate(
+            &(super::super::entity_shader()
+                + include_str!("../oit.wgsl")
+                + include_str!("../oit_features.wgsl")),
+            &entity.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        let border = stages("border");
+        validate(
+            &(include_str!("../border.wgsl").to_owned()
+                + include_str!("../oit.wgsl")
+                + include_str!("../oit_border.wgsl")),
+            &border.iter().map(String::as_str).collect::<Vec<_>>(),
         );
     }
 
