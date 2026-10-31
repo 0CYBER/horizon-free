@@ -2325,6 +2325,20 @@ impl Game<'_> {
         if let Some(text) = horizon_client::item_tooltip::honey_line(stack, &display, &translate) {
             push(&mut lines, text, gray);
         }
+        // TypedEntityData.addToTooltip: a spawn egg of a monster in Peaceful.
+        if let Some(text) = horizon_client::item_tooltip::spawn_egg_peaceful_line(
+            stack,
+            self.ui.difficulty == 0,
+            &display,
+            &|id| {
+                self.res.mob_types().get(id).is_none_or(|t| {
+                    horizon_client::mobs::spawn_rules::allowed_in_peaceful(t.species)
+                })
+            },
+            &translate,
+        ) {
+            push(&mut lines, text, rgba(255, 85, 85, 255));
+        }
         // Spawner.appendHoverText: what a spawner or trial spawner item spawns.
         if display.shows("minecraft:block_entity_data")
             && matches!(

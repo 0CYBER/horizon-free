@@ -141,9 +141,6 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the terrain sampler has no RGSS or anisotropic filtering yet.
-                | Opt::TextureFiltering
-                | Opt::MaxAnisotropy
                 // Saved, but the mouse doesn't read it yet.
                 | Opt::CtrlClickEmulatesRightClick
         )
@@ -1416,6 +1413,10 @@ fn inactive(mut w: Widget) -> Widget {
 }
 fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
     if !opt.available() {
+        return inactive(button(x, y, w, opt.label(s), Act::Cycle(opt)));
+    }
+    // VideoSettingsScreen.tick: Max Anisotropy only works with Anisotropic filtering.
+    if opt == Opt::MaxAnisotropy && s.file.int("textureFiltering") != 2 {
         return inactive(button(x, y, w, opt.label(s), Act::Cycle(opt)));
     }
     match opt.kind(s) {
@@ -4024,9 +4025,21 @@ mod tests {
             assert_eq!(s.file.int("maxAnisotropyBit"), bit, "{preset}");
             assert_eq!(s.file.int("textureFiltering"), filtering, "{preset}");
         }
-        // Nothing samples the terrain atlas with them yet, so the buttons stay greyed out.
-        assert!(!Opt::TextureFiltering.available());
-        assert!(!Opt::MaxAnisotropy.available());
+        assert!(Opt::TextureFiltering.available());
+        assert!(Opt::MaxAnisotropy.available());
+        // The anisotropy slider only works with Anisotropic filtering (VideoSettingsScreen.tick).
+        let grey = |s: &Settings| {
+            matches!(
+                option_widget(s, Opt::MaxAnisotropy, 0.0, 0.0, 150.0).kind,
+                WKind::Button { active: false, .. }
+            )
+        };
+        s.file
+            .set("textureFiltering", crate::options_file::V::Int(1));
+        assert!(grey(&s));
+        s.file
+            .set("textureFiltering", crate::options_file::V::Int(2));
+        assert!(!grey(&s));
     }
 
     #[test]

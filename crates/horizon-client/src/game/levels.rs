@@ -325,6 +325,19 @@ impl Game<'_> {
         }
     }
 
+    /// Far terrain for a client in `dim`: the level in place may be another
+    /// one, the server ticking its levels in turn.
+    pub(super) fn lod_source_in(
+        &self,
+        dim: Dim,
+    ) -> Option<Arc<dyn horizon_client::streaming::LodSource>> {
+        if dim == self.dim {
+            return Some(self.streaming.lod_source());
+        }
+        let parked = self.levels.parked.get(&dim)?;
+        Some(parked.streaming.lod_source())
+    }
+
     /// Put `dim`'s level in place for a command whose source is there
     /// (`execute in`, `execute at` a player in another level), opening it if
     /// nobody is in it; returns the level to put back afterwards. Only a

@@ -2016,6 +2016,8 @@ struct Game<'a> {
     /// the attack strength tickers the hand reads.
     clicks: horizon_client::first_person::Clicks,
     attack_clicks: u32,
+    /// Use clicks since the last tick; `handleKeybinds` consumes them after the attack clicks.
+    use_clicks: u32,
     hand_strength: horizon_client::attack_strength::AttackStrength,
     settings: Settings,
     tutorial: tutorial::Tutorial,
@@ -9130,6 +9132,7 @@ impl Game<'_> {
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.test_instance_marker_geometry(camera, &mut out, &mut see_through);
         self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
@@ -13421,6 +13424,21 @@ impl Game<'_> {
                 effects: &requested_post_effects,
                 root: &self.options.resources,
                 menu_blur_radius: self.settings.menu_blur as f32,
+                // GlobalSettingsUniform.update.
+                globals: horizon_client::post_chain::Globals {
+                    camera_block_pos: [
+                        camera.x.floor() as i32,
+                        camera.y.floor() as i32,
+                        camera.z.floor() as i32,
+                    ],
+                    camera_offset: [
+                        (camera.x.floor() - camera.x) as f32,
+                        (camera.y.floor() - camera.y) as f32,
+                        (camera.z.floor() - camera.z) as f32,
+                    ],
+                    game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+                    ..Default::default()
+                },
             },
             chunk_fade: self.settings.chunk_fade,
         };
@@ -13782,10 +13800,10 @@ impl Game<'_> {
                     .button(3, pressed, false, self.settings.toggle_use);
                 self.right = self.toggles.is_down(3);
                 // handleKeybinds consumes use clicks without acting while an
-                // item is in use.
+                // item is in use. Minecraft.tick runs them after the attack
+                // clicks, so a place and a break in one tick replace the block.
                 if pressed && self.using.is_none() {
-                    self.use_with_hand()?;
-                    self.use_delay = 4;
+                    self.use_clicks += 1;
                 }
             }
             MouseButton::Middle if pressed => {
@@ -13870,8 +13888,9 @@ impl Game<'_> {
             return;
         }
         self.lod_source_attempted = true;
+        let dim = self.dim;
         let source = match &self.integrated {
-            Some(server) => server.call(|game| game.streaming.lod_source()),
+            Some(server) => server.call(move |game| game.lod_source_in(dim)).flatten(),
             None => Some(self.streaming.lod_source()),
         };
         if let Some(source) = source {
@@ -14330,6 +14349,11 @@ impl ApplicationHandler for Game<'_> {
                     self.focus_lost = (!focused).then(Instant::now);
                     if !focused && self.control.is_none() {
                         self.keys.clear();
+                        // Latched sneak/sprint live in `toggles`, not in the
+                        // physical keys: put them back so a short alt-tab
+                        // (no pause screen) does not drop them.
+                        self.sync_toggle(0);
+                        self.sync_toggle(1);
                         self.left = false;
                         self.right = false;
                         self.capture(false);
@@ -15504,6 +15528,7 @@ impl<'a> Game<'a> {
             hands_replaced: [false; 2],
             clicks: Default::default(),
             attack_clicks: 0,
+            use_clicks: 0,
             hand_strength: Default::default(),
             settings,
             tutorial,

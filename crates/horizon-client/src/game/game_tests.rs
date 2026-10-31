@@ -3,9 +3,13 @@
 //! and the two test instance types (`BlockBasedTestInstance` and
 //! `FunctionGameTestInstance`), over the test instance blocks in a level.
 //!
-//! Not ported: test sequences (`GameTestSequence`), retries and flaky tests,
-//! test environments other than the empty `all_of`, and removing the entities
-//! of a finished test.
+//! Retries (`RetryOptions`, `/test run .. <numberOfTimes> <untilFailed>`) and
+//! flaky tests (`max_attempts`, `required_successes`) go through
+//! `ReportGameListener`'s counters and `GameTestRunner.rerunTest`.
+//!
+//! Not ported: test sequences (`GameTestSequence`: the built-in tests, only
+//! `always_pass`, do not use them), test environments other than the empty
+//! `all_of`, and removing the entities of a finished test.
 use super::{Dim, Game, structure_blocks::template_size, test_instances::TestDef};
 use horizon_client::{
     containers::BlockEntity,
@@ -87,6 +91,44 @@ impl TestError {
     }
 }
 
+/// `RetryOptions`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Retry {
+    number_of_tries: i32,
+    halt_on_failure: bool,
+}
+
+impl Retry {
+    pub(super) fn new(number_of_tries: i32, halt_on_failure: bool) -> Self {
+        Self {
+            number_of_tries,
+            halt_on_failure,
+        }
+    }
+
+    /// `noRetries`.
+    pub(super) fn none() -> Self {
+        Self::new(1, true)
+    }
+
+    /// `unlimitedTries`.
+    fn unlimited(&self) -> bool {
+        self.number_of_tries < 1
+    }
+
+    /// `hasTriesLeft`.
+    fn has_tries_left(&self, attempts: i32, successes: i32) -> bool {
+        let has_failures = attempts != successes;
+        let has_more_attempts = self.unlimited() || attempts < self.number_of_tries;
+        has_more_attempts && (!has_failures || !self.halt_on_failure)
+    }
+
+    /// `hasRetries`.
+    fn has_retries(&self) -> bool {
+        self.number_of_tries != 1
+    }
+}
+
 /// What `runAtTickTime` runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -100,8 +142,9 @@ pub(super) struct Info {
     /// `id()`: the test's registry id.
     key: String,
     def: TestDef,
-    /// The test instance block (`getTestBlockPos`).
+    /// The test instance block (`getTestBlockPos`), once there is one.
     pos: Pos,
+    has_pos: bool,
     dim: Dim,
     extra_rotation: Rotation,
     tick_count: i32,
@@ -112,6 +155,11 @@ pub(super) struct Info {
     run_at: Vec<(i64, Action)>,
     started_at: Option<Instant>,
     run_ms: u128,
+    retry: Retry,
+    /// The test whose `ReportGameListener` counts this run: its own id, or
+    /// the original's for a rerun (`copyReset`).
+    origin: u32,
+    rerun: bool,
 }
 
 impl Info {
@@ -119,7 +167,7 @@ impl Info {
         id: u32,
         key: String,
         def: TestDef,
-        pos: Pos,
+        pos: Option<Pos>,
         dim: Dim,
         extra_rotation: Rotation,
     ) -> Self {
@@ -127,7 +175,8 @@ impl Info {
             id,
             key,
             def,
-            pos,
+            pos: pos.unwrap_or_default(),
+            has_pos: pos.is_some(),
             dim,
             extra_rotation,
             tick_count: 0,
@@ -138,7 +187,32 @@ impl Info {
             run_at: Vec::new(),
             started_at: None,
             run_ms: 0,
+            retry: Retry::none(),
+            origin: id,
+            rerun: false,
         }
+    }
+
+    pub(super) fn with_retry(mut self, retry: Retry) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    /// `copyReset`: the same test, level and block, as a new run.
+    fn copy_reset(&self, id: u32) -> Self {
+        let pos = self.has_pos.then_some(self.pos);
+        let mut copy = Self::new(
+            id,
+            self.key.clone(),
+            self.def.clone(),
+            pos,
+            self.dim,
+            self.extra_rotation,
+        )
+        .with_retry(self.retry);
+        copy.origin = self.origin;
+        copy.rerun = true;
+        copy
     }
 
     /// `getRotation`.
@@ -204,6 +278,52 @@ struct Tracked {
     failed: bool,
 }
 
+/// `GameTestBatchFactory.fromGameTestInfo`: one batch per environment (and
+/// dimension), in 50s.
+fn batch_infos(infos: Vec<Info>) -> Vec<Batch> {
+    let mut batches: Vec<Batch> = Vec::new();
+    let mut counts: Vec<(String, i32)> = Vec::new();
+    for info in infos {
+        let env = info.def.environment.clone();
+        let open = batches
+            .iter_mut()
+            .find(|b| b.environment == env && b.infos.len() < 50);
+        if let Some(batch) = open {
+            batch.infos.push(info);
+            continue;
+        }
+        let index = match counts.iter_mut().find(|(e, _)| *e == env) {
+            Some((_, n)) => {
+                *n += 1;
+                *n
+            }
+            None => {
+                counts.push((env.clone(), 0));
+                0
+            }
+        };
+        batches.push(Batch {
+            index,
+            environment: env,
+            infos: vec![info],
+        });
+    }
+    batches
+}
+
+/// A listener's counters, (origin, attempts, successes): its attempts and successes.
+fn report_of(reports: &mut Vec<(u32, i32, i32)>, origin: u32) -> (&mut i32, &mut i32) {
+    let at = reports
+        .iter()
+        .position(|r| r.0 == origin)
+        .unwrap_or_else(|| {
+            reports.push((origin, 0, 0));
+            reports.len() - 1
+        });
+    let r = &mut reports[at];
+    (&mut r.1, &mut r.2)
+}
+
 /// `GameTestRunner`.
 struct Runner {
     batches: Vec<Batch>,
@@ -212,6 +332,37 @@ struct Runner {
     batch_pending: usize,
     tracked: Vec<Tracked>,
     halt_on_error: bool,
+    /// `newStructureSpawner`: where the tests without a block go.
+    grid: Option<Grid>,
+    /// `ReportGameListener`'s (attempts, successes), by original test.
+    reports: Vec<(u32, i32, i32)>,
+    /// `scheduledForRerun`.
+    scheduled: Vec<Info>,
+    /// `stopped`: no batch is running.
+    stopped: bool,
+}
+
+/// `StructureGridSpawner` (for one dimension) without `clearOnBatch`.
+pub(super) struct Grid {
+    first: Pos,
+    next: Pos,
+    per_row: i32,
+    /// The z extent of `rowBounds` (an `AABB(BlockPos)` is one block deep).
+    row_z: (i32, i32),
+    count: i32,
+}
+
+impl Grid {
+    /// `new DimensionGridState(start)`.
+    pub(super) fn new(first: Pos, per_row: i32) -> Self {
+        Self {
+            first,
+            next: first,
+            per_row,
+            row_z: (first.2, first.2 + 1),
+            count: 0,
+        }
+    }
 }
 
 /// What a runner says to the server, sent on the next tick (a test's
@@ -260,7 +411,12 @@ impl Game<'_> {
     /// `TestCommand.trackAndStartRunner` for tests already built (batched by
     /// environment, 50 to a batch): the tracker and its listeners, then
     /// `GameTestRunner.start`.
-    pub(super) fn track_and_start_runner(&mut self, infos: Vec<Info>, halt_on_error: bool) {
+    pub(super) fn track_and_start_runner(
+        &mut self,
+        infos: Vec<Info>,
+        halt_on_error: bool,
+        grid: Option<Grid>,
+    ) {
         let tracked = infos
             .iter()
             .map(|i| Tracked {
@@ -270,41 +426,17 @@ impl Game<'_> {
                 failed: false,
             })
             .collect();
-        // `GameTestBatchFactory.fromGameTestInfo`: one batch per environment
-        // (and dimension), in 50s.
-        let mut batches: Vec<Batch> = Vec::new();
-        let mut counts: Vec<(String, i32)> = Vec::new();
-        for info in infos {
-            let env = info.def.environment.clone();
-            let open = batches
-                .iter_mut()
-                .find(|b| b.environment == env && b.infos.len() < 50);
-            if let Some(batch) = open {
-                batch.infos.push(info);
-                continue;
-            }
-            let index = match counts.iter_mut().find(|(e, _)| *e == env) {
-                Some((_, n)) => {
-                    *n += 1;
-                    *n
-                }
-                None => {
-                    counts.push((env.clone(), 0));
-                    0
-                }
-            };
-            batches.push(Batch {
-                index,
-                environment: env,
-                infos: vec![info],
-            });
-        }
+        let batches = batch_infos(infos);
         self.game_tests.runner = Some(Runner {
             batches,
             current: 0,
             batch_pending: 0,
             tracked,
             halt_on_error,
+            grid,
+            reports: Vec::new(),
+            scheduled: Vec::new(),
+            stopped: false,
         });
         self.run_batch(0);
     }
@@ -315,7 +447,8 @@ impl Game<'_> {
             return;
         };
         let Some(batch) = runner.batches.get_mut(index) else {
-            // endCurrentEnvironment, runScheduledRerunTests: nothing is left.
+            // endCurrentEnvironment, runScheduledRerunTests.
+            self.run_scheduled_reruns();
             return;
         };
         runner.current = index;
@@ -324,8 +457,7 @@ impl Game<'_> {
         // createStructuresForBatch: `StructureSpawner.IN_PLACE`.
         let mut spawned = Vec::new();
         for mut info in infos.drain(..) {
-            if self.prepare_test_structure(&mut info) {
-                info.start_execution(1);
+            if self.spawn_test(&mut info) {
                 spawned.push(info);
             }
         }
@@ -346,6 +478,44 @@ impl Game<'_> {
             runner.batch_pending = spawned.len();
         }
         self.game_tests.ticker.extend(spawned);
+    }
+
+    /// `GameTestRunner.runScheduledRerunTests`: the reruns are batched
+    /// again and run, or the runner stops.
+    fn run_scheduled_reruns(&mut self) {
+        let Some(runner) = self.game_tests.runner.as_mut() else {
+            return;
+        };
+        if runner.scheduled.is_empty() {
+            runner.batches = Vec::new();
+            runner.stopped = true;
+            return;
+        }
+        let scheduled = std::mem::take(&mut runner.scheduled);
+        log::info!(
+            "Starting re-run of tests: {}",
+            scheduled
+                .iter()
+                .map(|i| i.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        runner.batches = batch_infos(scheduled);
+        runner.stopped = false;
+        self.run_batch(0);
+    }
+
+    /// `GameTestRunner.rerunTest`.
+    fn rerun_test(&mut self, info: &Info) {
+        let id = self.game_tests.next_id();
+        let copy = info.copy_reset(id);
+        let Some(runner) = self.game_tests.runner.as_mut() else {
+            return;
+        };
+        runner.scheduled.push(copy);
+        if runner.stopped {
+            self.run_scheduled_reruns();
+        }
     }
 
     /// `GameTestServer`'s per-tick call: `MinecraftServer.tickServer`'s
@@ -371,6 +541,60 @@ impl Game<'_> {
     }
 
     // ---- GameTestInfo ----
+
+    /// `GameTestRunner.spawn`: a test with a block is prepared where it is
+    /// (`StructureSpawner.IN_PLACE`), one without goes to the next place in
+    /// the grid (`StructureGridSpawner.spawnStructure`), or is dropped
+    /// (`NOT_SET`).
+    fn spawn_test(&mut self, info: &mut Info) -> bool {
+        if info.has_pos {
+            if !self.prepare_test_structure(info) {
+                return false;
+            }
+            info.start_execution(1);
+            self.test_structure_loaded(info);
+            return true;
+        }
+        let Some(mut grid) = self
+            .game_tests
+            .runner
+            .as_mut()
+            .and_then(|runner| runner.grid.take())
+        else {
+            return false;
+        };
+        info.pos = grid.next;
+        info.has_pos = true;
+        let prepared = self.prepare_test_structure(info);
+        if prepared {
+            info.start_execution(1);
+            self.test_structure_loaded(info);
+            if let Some(b) = self.test_bounding_box(info.pos) {
+                // `getTestBounds()`: the structure's box and its padding.
+                let width = b.max[0] - b.min[0] + 1;
+                grid.row_z = (grid.row_z.0.min(b.min[2]), grid.row_z.1.max(b.max[2] + 1));
+                grid.next.0 += width + 5;
+                grid.count += 1;
+                if grid.count >= grid.per_row {
+                    grid.count = 0;
+                    grid.next.2 += grid.row_z.1 - grid.row_z.0 + 6;
+                    grid.next.0 = grid.first.0;
+                    grid.row_z = (grid.next.2, grid.next.2 + 1);
+                }
+            }
+        }
+        if let Some(runner) = self.game_tests.runner.as_mut() {
+            runner.grid = Some(grid);
+        }
+        prepared
+    }
+
+    /// `ReportGameListener.testStructureLoaded`.
+    fn test_structure_loaded(&mut self, info: &Info) {
+        if let Some(runner) = self.game_tests.runner.as_mut() {
+            *report_of(&mut runner.reports, info.origin).0 += 1;
+        }
+    }
 
     /// `GameTestInfo.prepareTestStructure`: the test instance block with the
     /// test's data, then `placeStructure`. False when the block is gone.
@@ -422,7 +646,7 @@ impl Game<'_> {
     }
 
     /// `getTestBoundingBox`: the structure's box and its padding.
-    fn test_bounding_box(&self, pos: Pos) -> Option<BoundingBox> {
+    pub(super) fn test_bounding_box(&self, pos: Pos) -> Option<BoundingBox> {
         let padding = self.test_holder_padding(pos);
         let inner = self.test_structure_box(pos)?;
         Some(BoundingBox::new(
@@ -757,46 +981,19 @@ impl Game<'_> {
     /// and the runner's batch listener.
     fn test_finished(&mut self, info: &Info) {
         let passed = info.error.is_none();
-        match &info.error {
-            None => {
-                // reportPassed
-                self.set_test_status(info.pos, Status::Finished, None);
-                self.say(
-                    text::GREEN,
-                    format!(
-                        "{} passed! ({}ms / {}gameticks)",
-                        info.key, info.run_ms, info.tick_count
-                    ),
-                );
-            }
-            Some(error) => {
-                // reportFailure
-                self.set_test_status(info.pos, Status::Finished, Some(&error.description()));
-                let required = info.def.required;
-                let message = format!(
-                    "{}{} failed! {}",
-                    if required { "" } else { "(optional) " },
-                    info.key,
-                    error.message()
-                );
-                self.say(if required { text::RED } else { text::YELLOW }, message);
-                if let TestError::AssertPos {
-                    message, absolute, ..
-                } = error
-                {
-                    self.mark_test_error(info.pos, *absolute, message);
-                }
-            }
-        }
-        // TestSummaryDisplayer
+        self.report_game_test(info, passed);
+        // TestSummaryDisplayer: only the tests the command started (the
+        // listener is not passed on to a rerun's copy).
         let Some(runner) = self.game_tests.runner.as_mut() else {
             return;
         };
-        if let Some(t) = runner.tracked.iter_mut().find(|t| t.id == info.id) {
+        let tracked = runner.tracked.iter_mut().find(|t| t.id == info.id);
+        let counted = tracked.is_some();
+        if let Some(t) = tracked {
             t.done = true;
             t.failed = !passed;
         }
-        let all_done = runner.tracked.iter().all(|t| t.done);
+        let all_done = counted && runner.tracked.iter().all(|t| t.done);
         let total = runner.tracked.len();
         let failed_required = runner
             .tracked
@@ -843,7 +1040,7 @@ impl Game<'_> {
             }
         }
         // FailedTestTracker.rememberFailedTest
-        if !passed {
+        if !passed && counted {
             self.game_tests.failed.push(info.key.clone());
         }
         // The runner's batch listener.
@@ -860,6 +1057,123 @@ impl Game<'_> {
         if runner.batch_pending == 0 {
             let next = runner.current + 1;
             self.run_batch(next);
+        }
+    }
+
+    /// `ReportGameListener.testPassed` and `testFailed`.
+    fn report_game_test(&mut self, info: &Info, passed: bool) {
+        let Some(runner) = self.game_tests.runner.as_mut() else {
+            return;
+        };
+        let (attempts, successes) = report_of(&mut runner.reports, info.origin);
+        if passed {
+            *successes += 1;
+        }
+        let (attempts, successes) = (*attempts, *successes);
+        let (max_attempts, required) = (info.def.max_attempts, info.def.required_successes);
+        let flaky = max_attempts > 1;
+        let retry = info.retry;
+        let again = if passed {
+            if retry.has_retries() {
+                let line = retry_line(info, retry, attempts, successes, true);
+                self.report_passed(info, &line);
+                retry.has_tries_left(attempts, successes)
+            } else if !flaky {
+                let line = format!(
+                    "{} passed! ({}ms / {}gameticks)",
+                    info.key, info.run_ms, info.tick_count
+                );
+                self.report_passed(info, &line);
+                false
+            } else if successes >= required {
+                let line = format!(
+                    "{} passed {successes} times of {attempts} attempts.",
+                    info.key
+                );
+                self.report_passed(info, &line);
+                false
+            } else {
+                self.say(
+                    text::GREEN,
+                    format!(
+                        "Flaky test {} succeeded, attempt: {attempts} successes: {successes}",
+                        info.key
+                    ),
+                );
+                true
+            }
+        } else if !flaky {
+            self.report_failure(info, None);
+            if retry.has_retries() {
+                let line = retry_line(info, retry, attempts, successes, false);
+                self.say(text::RED, line);
+                retry.has_tries_left(attempts, successes)
+            } else {
+                false
+            }
+        } else {
+            let mut line = format!(
+                "Flaky test {} failed, attempt: {attempts}/{max_attempts}",
+                info.key
+            );
+            if required > 1 {
+                line.push_str(&format!(", successes: {successes} ({required} required)"));
+            }
+            self.say(text::YELLOW, line);
+            if max_attempts - attempts + successes >= required {
+                true
+            } else {
+                self.report_failure(info, Some((attempts, successes)));
+                false
+            }
+        };
+        if again {
+            self.rerun_test(info);
+        }
+    }
+
+    /// `ReportGameListener.reportPassed`.
+    fn report_passed(&mut self, info: &Info, line: &str) {
+        self.set_test_status(info.pos, Status::Finished, None);
+        self.say(text::GREEN, line.to_owned());
+    }
+
+    /// `ReportGameListener.reportFailure`: the test's own error, or the
+    /// `ExhaustedAttemptsException` of a flaky test that ran out of
+    /// attempts (`attempts`, `successes`), whose cause is the test's error.
+    fn report_failure(&mut self, info: &Info, exhausted: Option<(i32, i32)>) {
+        let Some(error) = &info.error else {
+            return;
+        };
+        let (description, message) = match exhausted {
+            None => (error.description(), error.message()),
+            Some((attempts, successes)) => {
+                let text = format!(
+                    "Not enough successes: {successes} out of {attempts} attempts. Required successes: {}. max attempts: {}.",
+                    info.def.required_successes, info.def.max_attempts
+                );
+                // describeError(error) is the cause's message.
+                let cause = error.message();
+                (
+                    Text::literal(cause.clone()),
+                    format!("{text} cause: {cause}"),
+                )
+            }
+        };
+        self.set_test_status(info.pos, Status::Finished, Some(&description));
+        let required = info.def.required;
+        let message = format!(
+            "{}{} failed! {}",
+            if required { "" } else { "(optional) " },
+            info.key,
+            message
+        );
+        self.say(if required { text::RED } else { text::YELLOW }, message);
+        if let TestError::AssertPos {
+            message, absolute, ..
+        } = error
+        {
+            self.mark_test_error(info.pos, *absolute, message);
         }
     }
 
@@ -907,6 +1221,26 @@ impl Game<'_> {
     }
 }
 
+/// `ReportGameListener.handleRetry`'s line: the counters, then the test's
+/// result.
+fn retry_line(info: &Info, retry: Retry, attempts: i32, successes: i32, passed: bool) -> String {
+    let mut report = format!(
+        "[Run: {attempts:>4}, Ok: {successes:>4}, Fail: {:>4}",
+        attempts - successes
+    );
+    if !retry.unlimited() {
+        report.push_str(&format!(", Left: {:>4}", retry.number_of_tries - attempts));
+    }
+    report.push(']');
+    let name = format!(
+        "{} {}! {}ms",
+        info.key,
+        if passed { "passed" } else { "failed" },
+        info.run_ms
+    );
+    format!("{report:<53}{name}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,7 +1250,7 @@ mod tests {
             1,
             "minecraft:t".into(),
             TestDef::sample(block_based, max_ticks, setup_ticks),
-            (0, 64, 0),
+            Some((0, 64, 0)),
             Dim::Overworld,
             Rotation::None,
         )
@@ -956,5 +1290,47 @@ mod tests {
     fn unknown_errors_report_their_reason() {
         let error = TestError::Unknown("no such function".into());
         assert_eq!(error.message(), "no such function");
+    }
+
+    #[test]
+    fn retry_options_decide_whether_a_test_runs_again() {
+        // noRetries: one try, no rerun.
+        assert!(!Retry::none().has_retries());
+        assert!(!Retry::none().has_tries_left(1, 1));
+        // 3 times, not until failed: runs on through failures.
+        let three = Retry::new(3, false);
+        assert!(three.has_retries());
+        assert!(three.has_tries_left(1, 0));
+        assert!(three.has_tries_left(2, 2));
+        assert!(!three.has_tries_left(3, 3));
+        // Until failed: stops at the first failure, and 0 means unlimited.
+        let until = Retry::new(0, true);
+        assert!(until.unlimited());
+        assert!(until.has_tries_left(50, 50));
+        assert!(!until.has_tries_left(50, 49));
+    }
+
+    #[test]
+    fn a_retry_line_counts_runs_and_pads_to_53() {
+        let info = info(true, 10, 0);
+        let line = retry_line(&info, Retry::new(5, false), 2, 1, false);
+        assert!(line.starts_with("[Run:    2, Ok:    1, Fail:    1, Left:    3]"));
+        assert_eq!(line.find("minecraft:t"), Some(53));
+        assert!(line.ends_with("minecraft:t failed! 0ms"));
+        let unlimited = retry_line(&info, Retry::new(0, true), 1, 1, true);
+        assert!(unlimited.starts_with("[Run:    1, Ok:    1, Fail:    0]"));
+    }
+
+    #[test]
+    fn a_rerun_is_a_copy_that_shares_the_originals_counters() {
+        let original = info(true, 10, 0).with_retry(Retry::new(2, false));
+        let copy = original.copy_reset(9);
+        assert_eq!((copy.id, copy.origin, copy.rerun), (9, 1, true));
+        assert_eq!(copy.retry, original.retry);
+        assert!(copy.has_pos && copy.pos == original.pos);
+        let mut reports = Vec::new();
+        *report_of(&mut reports, copy.origin).0 += 1;
+        *report_of(&mut reports, original.origin).1 += 1;
+        assert_eq!(reports, vec![(1, 1, 1)]);
     }
 }
