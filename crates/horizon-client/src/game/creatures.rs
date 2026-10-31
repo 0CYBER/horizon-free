@@ -1058,7 +1058,7 @@ impl Game<'_> {
             None => source.clone(),
         };
         horizon_client::advancements::DamageView {
-            kind: damage_type(d.kind, matches!(d.attacker, Some(Who::Player))).to_owned(),
+            kind: source_damage_type(d).to_owned(),
             // DamageSource.isDirect: the causing entity is the direct one.
             is_direct: projectile.is_none(),
             direct,
@@ -1116,9 +1116,8 @@ impl Game<'_> {
                 }),
                 _ => source.clone(),
             };
-            let player_source = matches!(d.attacker, Some(Who::Player));
             LootDamage {
-                kind: damage_type(d.kind, player_source).into(),
+                kind: source_damage_type(d).into(),
                 source,
                 direct,
             }
@@ -5593,9 +5592,15 @@ fn bucketable(species: Species) -> Option<(&'static str, &'static str)> {
         _ => return None,
     })
 }
-/// Mob.getBaseExperienceReward
-/// The damage type id of a Horizon damage kind.
-pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static str {
+/// The damage type id of a mob's damage source (`DamageSources.explosion`: a
+/// blast with a causing entity is `player_explosion` whoever it is, an
+/// exploding creeper too).
+pub(super) fn source_damage_type(d: Damage) -> &'static str {
+    damage_type(d.kind, d.attacker.is_some())
+}
+/// The damage type id of a Horizon damage kind. `caused`: the source has a
+/// causing entity (only a blast asks).
+pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, caused: bool) -> &'static str {
     use horizon_client::mobs::DamageKind as K;
     match kind {
         K::PlayerAttack => "minecraft:player_attack",
@@ -5605,7 +5610,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Arrow => "minecraft:arrow",
         K::Thrown => "minecraft:thrown",
         K::Fireball => "minecraft:fireball",
-        K::Explosion if player => "minecraft:player_explosion",
+        K::Explosion if caused => "minecraft:player_explosion",
         K::Explosion => "minecraft:explosion",
         K::Fall => "minecraft:fall",
         K::FallingBlock => "minecraft:falling_block",
@@ -5849,6 +5854,32 @@ mod breeding_tests {
         assert_eq!(breeding_credit(&mut love, 1, 2), Some(None));
         // Neither was fed by a player (a bred pair loaded from a save).
         assert_eq!(breeding_credit(&mut love, 1, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod damage_type_tests {
+    use super::*;
+
+    /// `DamageSources.explosion`: a blast with a causing entity is
+    /// `player_explosion` whoever caused it, so an exploding creeper's too.
+    #[test]
+    fn a_creeper_blast_is_a_player_explosion() {
+        let blast = |attacker| Damage {
+            kind: DamageKind::Explosion,
+            attacker,
+            from: Some([0.0; 3]),
+        };
+        let creeper = blast(Some(Who::Mob(7)));
+        assert_eq!(source_damage_type(creeper), "minecraft:player_explosion");
+        // No causing entity.
+        assert_eq!(source_damage_type(blast(None)), "minecraft:explosion");
+        // The other kinds do not ask.
+        let bite = Damage {
+            kind: DamageKind::MobAttack,
+            ..creeper
+        };
+        assert_eq!(source_damage_type(bite), "minecraft:mob_attack");
     }
 }
 

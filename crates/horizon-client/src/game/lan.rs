@@ -2173,8 +2173,7 @@ impl Game<'_> {
                 && let Some((source, _)) = m.last_damage
             {
                 use horizon_client::mobs::{DamageKind as K, Who};
-                let player = source.attacker == Some(Who::Player);
-                let kind = super::creatures::damage_type(source.kind, player);
+                let kind = super::creatures::source_damage_type(source);
                 // The player a mob sees is the guest acting, else the host.
                 let cause = source.attacker.map(|who| match who {
                     Who::Player => host
