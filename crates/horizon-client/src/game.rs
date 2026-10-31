@@ -13422,6 +13422,21 @@ impl Game<'_> {
                 effects: &requested_post_effects,
                 root: &self.options.resources,
                 menu_blur_radius: self.settings.menu_blur as f32,
+                // GlobalSettingsUniform.update.
+                globals: horizon_client::post_chain::Globals {
+                    camera_block_pos: [
+                        camera.x.floor() as i32,
+                        camera.y.floor() as i32,
+                        camera.z.floor() as i32,
+                    ],
+                    camera_offset: [
+                        (camera.x.floor() - camera.x) as f32,
+                        (camera.y.floor() - camera.y) as f32,
+                        (camera.z.floor() - camera.z) as f32,
+                    ],
+                    game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+                    ..Default::default()
+                },
             },
             chunk_fade: self.settings.chunk_fade,
         };
