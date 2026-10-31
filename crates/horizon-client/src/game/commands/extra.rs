@@ -115,6 +115,12 @@ mod fetchprofile_tests {
 pub(in crate::game) struct CommandExtras {
     /// ServerPlayer.camera: the entity `/spectate` attached the view to.
     pub camera: Option<Target>,
+    /// The cameras of the guests of a server, by connection
+    /// (game/lan_camera.rs).
+    pub guest_cameras: HashMap<u32, super::super::lan_camera::GuestCamera>,
+    /// `/spectate` for a guest: connection and the camera's network id
+    /// (None to stop), taken in the guests' tick.
+    pub camera_requests: Vec<(u32, Option<i32>)>,
     /// ServerPlayer.postEffects, in insertion order.
     pub post_effects: Vec<String>,
     /// MinecraftServer's tick profiler (`/debug start`): when it started and
@@ -182,7 +188,7 @@ fn civil(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
 
 impl Game<'_> {
     /// CommandSourceStack.getPlayerOrException.
-    fn source_player(&self) -> R<Target> {
+    pub(super) fn source_player(&self) -> R<Target> {
         match self.command_source.map(|s| s.entity) {
             None | Some(Some(Target::Player)) => Ok(Target::Player),
             _ => Err(err("permissions.requires.player", &[])),
@@ -225,7 +231,19 @@ impl Game<'_> {
                 &[self.target_name(t)],
             ));
         }
-        self.set_camera(target);
+        // A guest's camera is the hub's: the view moves in the guests' tick.
+        let guest = match player {
+            Target::Player => self.lan_acting,
+            Target::Guest(conn) => Some(conn),
+            _ => None,
+        };
+        match guest {
+            Some(conn) => {
+                let camera = target.and_then(|t| self.network_entity_id(t));
+                self.cmds.camera_requests.push((conn, camera));
+            }
+            None => self.set_camera(target),
+        }
         match target {
             Some(t) => {
                 let name = self.target_name(t);
@@ -537,11 +555,53 @@ impl Game<'_> {
 
     // ---- /posteffect ----------------------------------------------------
 
+    /// `ServerPlayer.postEffects` of a player target: a connected player's
+    /// (told to their client at the end of their tick), or the host's own.
+    fn post_effects_of(&self, t: Target) -> Vec<String> {
+        let conn = match t {
+            Target::Guest(conn) => Some(conn),
+            Target::Player => self.lan_acting,
+            _ => return Vec::new(),
+        };
+        match conn {
+            Some(conn) => self
+                .command_guest(conn)
+                .map(|g| g.post_effects.clone())
+                .unwrap_or_default(),
+            None => self.cmds.post_effects.clone(),
+        }
+    }
+
+    /// Changes a player target's `postEffects`; whether `change` did, which
+    /// sets `postEffectsDirty` for the packet.
+    fn change_post_effects(
+        &mut self,
+        t: Target,
+        change: impl FnOnce(&mut Vec<String>) -> bool,
+    ) -> bool {
+        let conn = match t {
+            Target::Guest(conn) => Some(conn),
+            Target::Player => self.lan_acting,
+            _ => return false,
+        };
+        match conn {
+            Some(conn) => {
+                let Some(g) = self.lan.as_mut().and_then(|h| h.hub.guest_mut(conn)) else {
+                    return false;
+                };
+                let changed = change(&mut g.post_effects);
+                g.post_effects_dirty |= changed;
+                changed
+            }
+            None => change(&mut self.cmds.post_effects),
+        }
+    }
+
     pub(super) fn cmd_posteffect(&mut self, id: &str, ctx: &Context) -> R<i32> {
         if id == "posteffect.list" {
             let t = self.one_entity(ctx, "target", true)?;
             let name = self.target_name(t);
-            let effects = self.cmds.post_effects.clone();
+            let effects = self.post_effects_of(t);
             if effects.is_empty() {
                 self.feedback(Text::translate("commands.posteffect.list.empty", &[name]));
             } else {
@@ -559,24 +619,27 @@ impl Game<'_> {
         };
         let mut changed: Vec<Target> = Vec::new();
         for t in &targets {
-            let done = match id {
+            let done = self.change_post_effects(*t, |list| match id {
+                // ServerPlayer.addPostEffect.
                 "posteffect.add" => {
-                    if self.cmds.post_effects.contains(&effect) {
+                    if list.contains(&effect) {
                         false
                     } else {
-                        self.cmds.post_effects.push(effect.clone());
+                        list.push(effect.clone());
                         true
                     }
                 }
-                "posteffect.remove" => {
-                    let before = self.cmds.post_effects.len();
-                    if let Some(i) = self.cmds.post_effects.iter().position(|e| *e == effect) {
-                        self.cmds.post_effects.remove(i);
+                // ServerPlayer.removePostEffect.
+                "posteffect.remove" => match list.iter().position(|e| *e == effect) {
+                    Some(i) => {
+                        list.remove(i);
+                        true
                     }
-                    before != self.cmds.post_effects.len()
-                }
-                _ => !std::mem::take(&mut self.cmds.post_effects).is_empty(),
-            };
+                    None => false,
+                },
+                // ServerPlayer.clearPostEffects.
+                _ => !std::mem::take(list).is_empty(),
+            });
             if done {
                 changed.push(*t);
             }
@@ -610,53 +673,22 @@ impl Game<'_> {
 
     // ---- /test ----------------------------------------------------------
 
-    /// `TestCommand`. Horizon has no game test instances or test runner: every
-    /// finder comes back empty, as in a world without test instance blocks.
+    /// `TestCommand`: running, resetting and clearing tests is
+    /// `test_runs`; `locate`, `pos` and `create` are `test_locate`.
     pub(super) fn cmd_test(&mut self, id: &str, ctx: &Context) -> R<i32> {
         match id {
-            // run <tests>, runmultiple, verify: GameTestRunner.
-            "test.run" | "test.verify" | "test.create" => Err(err("command.failed", &[])),
-            // runthese/runclosest/runthat/runfailed: TestFinder finds nothing.
-            "test.run.found" => {
-                if ctx.literals.iter().any(|l| l == "runthat") {
-                    self.source_player()?;
-                }
-                self.feedback(Text::translate("commands.test.no_tests", &[]));
-                Ok(0)
+            "test.run" | "test.run.found" | "test.clear" | "test.stop" => {
+                self.cmd_test_runs(id, ctx)
             }
-            // reset*/clear*: TestCommand.reset throws CLEAR_NO_TESTS too.
-            "test.clear" => {
-                if ctx
-                    .literals
-                    .iter()
-                    .any(|l| l == "resetthat" || l == "clearthat")
-                {
-                    self.source_player()?;
-                }
-                Err(err("commands.test.clear.error.no_tests", &[]))
-            }
-            "test.stop" => Ok(1),
-            "test.locate" => {
-                // CommandSourceStack.sendSystemMessage: no feedback rule.
-                if !self.command_source.is_some_and(|s| s.silent) {
-                    self.system_message(Text::translate("commands.test.locate.started", &[]));
-                }
-                Err(err("commands.test.error.no_test_instances", &[]))
-            }
-            _ => {
-                // TestCommand.showPos: the block the player looks at (10 blocks).
-                self.source_player()?;
-                let p = self.test_pick_block();
-                Err(err(
-                    "commands.test.error.no_test_containing_pos",
-                    &[&p[0], &p[1], &p[2]],
-                ))
-            }
+            "test.verify" => self.test_verify(ctx),
+            "test.create" => self.test_create(ctx),
+            "test.locate" => self.test_locate(ctx),
+            _ => self.test_show_pos(ctx),
         }
     }
     /// `Entity.pick(10, 1, false)`: the first non-air block on the view ray,
     /// else the block at the ray's end.
-    fn test_pick_block(&self) -> [i32; 3] {
+    pub(super) fn test_pick_block(&self) -> [i32; 3] {
         use horizon_core::{
             geometry::{Vec3, traverse_blocks},
             position::BlockPos,
@@ -818,6 +850,15 @@ impl Game<'_> {
     }
     /// The answers of the profile lookups that have come in
     /// (`server.execute(() -> result.ifPresentOrElse(...))`).
+    /// Whether a `/fetchprofile` lookup is still in flight (the command
+    /// harness waits for them, as vanilla's oracle resolves at once).
+    pub(in crate::game) fn profile_fetches_pending(&mut self) -> bool {
+        let mut resolver = self.skin_profiles.borrow_mut();
+        self.cmds
+            .profile_fetches
+            .iter()
+            .any(|f| matches!(resolver.state(&f.key), Resolve::Pending))
+    }
     fn tick_profile_fetches(&mut self) {
         let fetches = std::mem::take(&mut self.cmds.profile_fetches);
         for fetch in fetches {

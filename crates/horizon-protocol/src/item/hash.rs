@@ -4,9 +4,14 @@
 //!
 //! Horizon holds a component as the wire form (registry ids, no names), so the
 //! codec form is rebuilt from it with a registry lookup for the ids that the
-//! codec writes as identifiers. A component Horizon only keeps as bytes
-//! ([`Component::Raw`]), or whose codec form needs data it dropped, has no hash:
-//! it is left out of the added map and a vanilla server resyncs that slot.
+//! codec writes as identifiers. [`raw`] decodes the stream bytes of the components
+//! Horizon keeps as bytes ([`Component::Raw`]). A component with no codec form
+//! Horizon can build (vanilla has none, an id has no name, or a codec is not
+//! ported yet) has no hash: it is left out of the added map and a vanilla server
+//! resyncs that slot.
+mod exact;
+mod gameplay;
+mod raw;
 use super::{Component, FireworkExplosion, Hashed, Stack, WirePatch, component as kind};
 use crate::hash_ops::{HashCode, HashOps, RecordHash};
 
@@ -73,9 +78,13 @@ fn pick(table: &[&str], id: i32) -> Option<HashCode> {
 fn text(tag: &horizon_world::nbt::Tag) -> HashCode {
     HashOps::from_nbt(tag, &TEXT_BOOLS)
 }
-/// `Filterable.codec`: the full record, with no filtered variant.
-fn filterable(raw: HashCode) -> HashCode {
-    RecordHash::new().field("raw", raw).build()
+/// `Filterable.codec`: the full record (`Codec.withAlternative` encodes with
+/// the first codec), the filtered variant absent when there is none.
+fn filterable(raw: HashCode, filtered: Option<HashCode>) -> HashCode {
+    RecordHash::new()
+        .field("raw", raw)
+        .optional("filtered", filtered)
+        .build()
 }
 /// `Codec.xxx.optionalFieldOf(name, default)`: absent when equal to the default.
 fn or_default<T: PartialEq>(
@@ -211,16 +220,24 @@ impl Component {
                 potion,
                 color,
                 rest,
-            } if rest.is_empty() => RecordHash::new()
-                .optional(
-                    "potion",
-                    match potion {
-                        Some(p) => Some(entry(names, "minecraft:potion", *p)?),
-                        None => None,
-                    },
-                )
-                .optional("custom_color", color.map(HashOps::create_int))
-                .build(),
+            } => {
+                let rec = RecordHash::new()
+                    .optional(
+                        "potion",
+                        match potion {
+                            Some(p) => Some(entry(names, "minecraft:potion", *p)?),
+                            None => None,
+                        },
+                    )
+                    .optional("custom_color", color.map(HashOps::create_int));
+                // An empty tail is no custom effects and no name.
+                if rest.is_empty() {
+                    rec
+                } else {
+                    raw::potion_tail(rec, rest, names)?
+                }
+                .build()
+            }
             Self::CustomModelData {
                 floats,
                 flags,
@@ -271,18 +288,26 @@ impl Component {
                 }
                 .build()
             }
-            Self::WritableBook(pages) => if pages.is_empty() {
+            Self::WritableBook { pages, filtered } => if pages.is_empty() {
                 RecordHash::new()
             } else {
                 RecordHash::new().field(
                     "pages",
-                    HashOps::create_list(pages.iter().map(|p| filterable(string(p)))),
+                    HashOps::create_list(pages.iter().enumerate().map(|(i, p)| {
+                        filterable(
+                            string(p),
+                            filtered.get(i).and_then(Option::as_ref).map(|f| string(f)),
+                        )
+                    })),
                 )
             }
             .build(),
             Self::WrittenBook(b) => {
                 let rec = RecordHash::new()
-                    .field("title", filterable(string(&b.title)))
+                    .field(
+                        "title",
+                        filterable(string(&b.title), b.title_filtered.as_deref().map(string)),
+                    )
                     .field("author", string(&b.author));
                 let rec = or_default(
                     rec,
@@ -296,7 +321,12 @@ impl Component {
                 } else {
                     rec.field(
                         "pages",
-                        HashOps::create_list(b.pages.iter().map(|p| filterable(text(p)))),
+                        HashOps::create_list(b.pages.iter().enumerate().map(|(i, p)| {
+                            filterable(
+                                text(p),
+                                b.pages_filtered.get(i).and_then(Option::as_ref).map(text),
+                            )
+                        })),
                     )
                 };
                 or_default(
@@ -394,8 +424,8 @@ impl Component {
                 HashOps::create_list(out)
             }
             Self::PaintingVariant(i) => entry(names, "minecraft:painting_variant", *i)?,
-            // Profiles, and anything Horizon reads past: no codec form to hash.
-            Self::Potion { .. } | Self::Profile(_) | Self::Raw(_) => return None,
+            Self::Profile(p) => raw::profile(p),
+            Self::Raw(bytes) => raw::code(id, bytes, names)?,
         })
     }
 
@@ -715,7 +745,10 @@ mod tests {
             (
                 "writable",
                 k::WRITABLE_BOOK_CONTENT,
-                C::WritableBook(vec!["page one".into(), "two".into()]),
+                C::WritableBook {
+                    pages: vec!["page one".into(), "two".into()],
+                    filtered: vec![],
+                },
                 1900254632,
             ),
             (
@@ -727,6 +760,7 @@ mod tests {
                     generation: 1,
                     pages: vec![text("p1")],
                     resolved: true,
+                    ..WrittenBook::default()
                 }),
                 -112185549,
             ),
@@ -739,6 +773,7 @@ mod tests {
                     generation: 0,
                     pages: vec![],
                     resolved: false,
+                    ..WrittenBook::default()
                 }),
                 -809804424,
             ),
@@ -768,9 +803,11 @@ mod tests {
             C::Enchantments(vec![(9, 1)]).hash(k::ENCHANTMENTS, &Table),
             None
         );
-        assert_eq!(C::Raw(vec![1]).hash(k::CONTAINER, &Table), None);
+        // additional_trade_cost has no persistent codec either.
+        assert_eq!(C::Raw(vec![1]).hash(42, &Table), None);
         assert_eq!(C::Unit.hash(k::CREATIVE_SLOT_LOCK, &Table), None);
         assert_eq!(C::Int(0).hash(k::MAP_POST_PROCESSING, &Table), None);
+        // Custom effects cut short.
         let custom_effects = C::Potion {
             potion: None,
             color: None,
@@ -783,7 +820,7 @@ mod tests {
     fn a_hashed_stack_carries_each_hashable_component_and_the_removed_ones() {
         let mut stack = Stack::new(1, 2);
         stack.added.push((k::DAMAGE, C::Int(5)));
-        stack.added.push((k::CONTAINER, C::Raw(vec![0])));
+        stack.added.push((42, C::Raw(vec![0])));
         stack.removed.push(k::RARITY);
         assert_eq!(
             Hashed::create(&stack, &Table),

@@ -37,7 +37,7 @@ impl Game<'_> {
             });
             self.mobs[i].extra.flag =
                 dancing && !horizon_client::mobs::goals::should_panic(&self.mobs[i]);
-            let Some(held) = self.mobs[i].extra.main_hand.clone() else {
+            let Some(held) = self.mobs[i].extra.main_hand_stack().cloned() else {
                 self.mobs[i].extra.point = None;
                 continue;
             };
@@ -45,10 +45,10 @@ impl Game<'_> {
             let max = self
                 .res
                 .items()
-                .get(&held)
+                .get(&held.item)
                 .map_or(64, |i| i.max_stack as i32);
-            // GoToWantedItem / wantsToPickUp: the same item within 32 that the
-            // allay sees (NearestItemSensor's hasLineOfSight, eye to eye).
+            // GoToWantedItem / wantsToPickUp: a stack it considers equal within 32
+            // that the allay sees (NearestItemSensor's hasLineOfSight, eye to eye).
             let wanted = if griefing && carried < max && self.mobs[i].extra.ints[3] <= 0 {
                 let w = self.mob_world_base(&[]);
                 let eye = horizon_core::geometry::Vec3::new(pos.x, self.mobs[i].eye_y(), pos.z);
@@ -58,7 +58,9 @@ impl Game<'_> {
                 self.dropped
                     .iter()
                     .enumerate()
-                    .filter(|(_, e)| e.stack.item == held && e.pickup_delay == 0)
+                    .filter(|(_, e)| {
+                        e.pickup_delay == 0 && allay::considers_item_equal(&held, &e.stack)
+                    })
                     .map(|(j, e)| (j, e.position.distance_squared(pos)))
                     .filter(|(_, d)| *d < 32.0 * 32.0)
                     .filter(|(j, _)| {
@@ -92,6 +94,11 @@ impl Game<'_> {
             if b.contains(e.position) {
                 let take = (max - carried).min(e.stack.count as i32);
                 let (item, id) = (e.clone(), self.mobs[i].id);
+                // It carries the fetched stack, potion and all, not just its id.
+                self.mobs[i].extra.set_main_hand_stack(Some(ItemStack {
+                    count: 1,
+                    ..e.stack.clone()
+                }));
                 self.add_pickup(
                     super::pickups::Taken::Item(Box::new(item)),
                     super::pickups::Collector::Mob(id),
@@ -178,7 +185,7 @@ impl Game<'_> {
         if target.distance_squared(eye) >= 9.0 {
             return;
         }
-        let Some(item) = m.extra.main_hand.clone() else {
+        let Some(item) = m.extra.main_hand_stack().cloned() else {
             return;
         };
         let from = [
@@ -200,7 +207,8 @@ impl Game<'_> {
             target.z.floor() as i32,
         ];
         let uuid = self.allay_liked_uuid(i);
-        let stack = ItemStack::new(&item, 1);
+        // AllayAi.throwItem: one item of the held stack, its components and all.
+        let stack = ItemStack { count: 1, ..item };
         self.for_each_player(|g| {
             if g.acting_uuid() == uuid && !g.spectator() {
                 g.trigger_block("minecraft:allay_drop_item_on_block", below, &stack);
@@ -210,7 +218,7 @@ impl Game<'_> {
         m.extra.ints[1] -= 1;
         m.extra.ints[3] = 60;
         // ItemEntity.setDefaultPickUpDelay.
-        self.spawn_item(ItemStack::new(&item, 1), from, v, 10);
+        self.spawn_item(stack, from, v, 10);
         // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
         let allay = self.mob_uuid(self.mobs[i].id);
         if let Some(thrown) = self.dropped.last_mut() {
@@ -228,13 +236,14 @@ impl Game<'_> {
     }
     /// `Allay.mobInteract`: duplicate when dancing with an amethyst shard,
     /// take the held item, or hand back what it holds.
-    pub(super) fn interact_allay(&mut self, index: usize, item: &str) -> bool {
+    pub(super) fn interact_allay(&mut self, index: usize, item: Option<&ItemStack>) -> bool {
         let m = &self.mobs[index];
         if m.species() != Species::Allay || !m.alive() {
             return false;
         }
         let at = [m.position.x, m.position.y, m.position.z];
-        if m.extra.flag && item == "minecraft:amethyst_shard" && m.extra.egg_time == 0 {
+        let shard = item.is_some_and(|s| &*s.item == "minecraft:amethyst_shard");
+        if m.extra.flag && shard && m.extra.egg_time == 0 {
             let pos = at;
             self.mobs[index].extra.egg_time = 6000;
             if let Some(id) = self.spawn_mob("minecraft:allay", pos, true)
@@ -252,9 +261,11 @@ impl Game<'_> {
         }
         let acting = self.acting_uuid();
         let holds = m.extra.main_hand.is_some();
-        if !holds && !item.is_empty() {
+        if !holds && let Some(mut given) = item.cloned() {
             let m = &mut self.mobs[index];
-            m.extra.set_main_hand(Some(item.into()));
+            // `Allay.mobInteract` hands over one item, its components and all.
+            given.count = 1;
+            m.extra.set_main_hand_stack(Some(given));
             m.extra.tame = true;
             // `Allay.mobInteract` remembers LIKED_PLAYER by UUID.
             m.extra.owner = Some(acting);
@@ -263,13 +274,15 @@ impl Game<'_> {
             self.consume_held();
             return true;
         }
-        if holds && item.is_empty() {
+        if holds && item.is_none() {
             let m = &mut self.mobs[index];
+            // The hand's stack keeps the components (a potion) the items came with.
             let held = m
                 .extra
-                .main_hand
-                .take()
-                .unwrap_or_else(|| "minecraft:air".into());
+                .main_hand_stack()
+                .cloned()
+                .unwrap_or_else(|| ItemStack::new("minecraft:air", 1));
+            m.extra.set_main_hand(None);
             let carried = std::mem::take(&mut m.extra.ints[1]);
             m.extra.tame = false;
             m.extra.owner = None;
@@ -277,13 +290,16 @@ impl Game<'_> {
                 .play("minecraft:entity.allay.item_taken", Some(at), 2.0, 1.0);
             if carried > 0 {
                 self.spawn_item(
-                    ItemStack::new(&held, carried as u32),
+                    ItemStack {
+                        count: carried as u32,
+                        ..held.clone()
+                    },
                     at,
                     [0.0, 0.2, 0.0],
                     40,
                 );
             }
-            if let Some(rest) = self.give(ItemStack::new(&held, 1))
+            if let Some(rest) = self.give(ItemStack { count: 1, ..held })
                 && let Some(eye) = self.eye_position()
             {
                 self.spawn_item(rest, eye, [0.0; 3], 0);

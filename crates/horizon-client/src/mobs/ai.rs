@@ -1081,6 +1081,17 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         // Fox.getAmbientSound: a sleeping fox makes its sleep sound.
         Species::Fox if super::fox::flag(m, super::fox::SLEEPING) => "entity.fox.sleep",
+        // Fox.playAmbientSound: the screech at volume 2. Anything else goes to
+        // Mob.playAmbientSound, which asks getAmbientSound again (a second draw).
+        Species::Fox => {
+            if super::fox::awake_ambient(m, w) == super::fox::SCREECH {
+                let pitch = m.voice_pitch();
+                let at = [m.position.x, m.position.y, m.position.z];
+                events.push(MobEvent::Sound(super::fox::SCREECH, at, 2.0, pitch));
+                return;
+            }
+            super::fox::awake_ambient(m, w)
+        }
         // Turtle.getAmbientSound: the land ambient only on land and grown up, else silent.
         Species::Turtle if m.fluids.in_water || !m.on_ground || m.is_baby() => return,
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
@@ -1601,7 +1612,7 @@ fn species_ai_step(
         Species::Blaze => super::nether::blaze_ai_step(m, events),
         Species::IronGolem => super::golem::iron_ai_step(m),
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
-            super::piglin::ai_step(m, w, events)
+            super::piglin::ai_step(m, w, level_random, events)
         }
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w, events),
@@ -2091,6 +2102,13 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
             super::bee::hurt(m);
             true
         }
+        // Wolf.hurtServer, Parrot.hurtServer: a hit it isn't invulnerable to
+        // stands it up before LivingEntity.hurtServer, even one the hurt
+        // frames then turn away.
+        Species::Wolf | Species::Parrot => {
+            super::tame::stand_when_hurt(m);
+            true
+        }
         // Panda.hurtServer: up first, whatever the damage.
         Species::Panda => {
             super::panda::hurt(m);
@@ -2117,7 +2135,6 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Armadillo => super::armadillo::after_hurt(m, source),
         Species::Shulker => super::shulker::after_hurt(m),
         Species::Warden => super::warden::hurt(m, source),
-        Species::Wolf => super::tame::after_hurt(m, source),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::after_hurt(m, source),
         Species::Zombie
         | Species::Husk
@@ -2900,5 +2917,99 @@ mod forgiveness_tests {
         forgive_dead_player(&mut golem);
         assert_eq!(golem.extra.anger, 300, "anger at another mob stays");
         assert_eq!(golem.ai.target, Some(Who::Mob(7)));
+    }
+}
+
+#[cfg(test)]
+mod fox_screech_tests {
+    use super::*;
+    use crate::mobs::PlayerView;
+    use crate::mobs::world::with_test_world;
+
+    fn player_at(x: f64) -> PlayerView {
+        crate::mobs::world::test_player(Vec3::new(x, 64.0, 0.5))
+    }
+
+    /// The (sound, volume) of 200 ambient sounds from one fox in `w`.
+    fn sounds(w: &MobWorld<'_>, types: &crate::mobs::MobTypes) -> Vec<(&'static str, f32)> {
+        let kind = std::sync::Arc::new(types.types["minecraft:fox"].clone());
+        let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+        let mut events = Vec::new();
+        for _ in 0..200 {
+            play_ambient(&mut m, w, &mut events);
+        }
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                MobEvent::Sound(s, _, volume, _) => Some((s, volume)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `Fox.getAmbientSound` and `playAmbientSound`: at night with nobody
+    /// within 16 blocks, about one call in ten screeches at volume 2; by day,
+    /// in the End, or with a player near, never.
+    #[test]
+    fn a_fox_screeches_only_at_night_with_no_player_near() {
+        with_test_world(&[], |w, types| {
+            let mut night = w.clone();
+            night.daylight = false;
+            let alone = sounds(&night, types);
+            assert_eq!(alone.len(), 200);
+            let screeches: Vec<_> = alone
+                .iter()
+                .filter(|s| s.0 == "entity.fox.screech")
+                .collect();
+            assert!(!screeches.is_empty(), "no screech in 200 night calls");
+            assert!(screeches.len() < 60, "{} screeches", screeches.len());
+            // Played by playAmbientSound itself at volume 2...
+            assert!(screeches.iter().any(|s| s.1 == 2.0));
+            // ...or picked again through Mob.playAmbientSound (makeSound, volume 1).
+            assert!(screeches.iter().all(|s| s.1 == 2.0 || s.1 == 1.0));
+            assert!(
+                alone
+                    .iter()
+                    .all(|s| s.0 == "entity.fox.screech" || s.0 == "entity.fox.ambient")
+            );
+
+            let by_day = sounds(w, types);
+            assert!(by_day.iter().all(|s| s.0 == "entity.fox.ambient"));
+
+            let mut end = night.clone();
+            end.daylight = true;
+            end.end = true;
+            assert!(
+                sounds(&end, types)
+                    .iter()
+                    .any(|s| s.0 == "entity.fox.screech")
+            );
+
+            let mut near = night.clone();
+            near.player = Some(player_at(16.0));
+            assert!(
+                sounds(&near, types)
+                    .iter()
+                    .all(|s| s.0 == "entity.fox.ambient")
+            );
+
+            let mut far = night.clone();
+            far.player = Some(player_at(18.0));
+            assert!(
+                sounds(&far, types)
+                    .iter()
+                    .any(|s| s.0 == "entity.fox.screech")
+            );
+
+            let mut spectator = night.clone();
+            let mut p = player_at(2.0);
+            p.spectator = true;
+            spectator.player = Some(p);
+            assert!(
+                sounds(&spectator, types)
+                    .iter()
+                    .any(|s| s.0 == "entity.fox.screech")
+            );
+        });
     }
 }

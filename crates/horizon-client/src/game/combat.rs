@@ -224,9 +224,6 @@ impl Game<'_> {
                     };
                     (d.name.clone(), *amount)
                 }
-                MotionEvent::Health(HealthEvent::StarvationDamage(amount)) => {
-                    ("minecraft:starve".to_owned(), *amount)
-                }
                 _ => continue,
             };
             let attacker = self
@@ -568,13 +565,7 @@ impl Game<'_> {
                 let direct = (attacker.is_none() && e.source.kind == DamageKind::Arrow)
                     .then(|| Text::translate("entity.minecraft.arrow", &[]));
                 Entry {
-                    // DamageSources.explosion: player_explosion whenever
-                    // something caused the blast (the only kind that asks).
-                    damage_type: super::creatures::damage_type(
-                        e.source.kind,
-                        e.source.attacker.is_some(),
-                    )
-                    .to_owned(),
+                    damage_type: super::creatures::source_damage_type(e.source).to_owned(),
                     damage: e.damage,
                     fall_location: e.in_water.then_some("water"),
                     fall_distance: e.fall_distance,
