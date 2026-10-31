@@ -52,20 +52,20 @@ impl AuthSession {
     /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa", "xuid"}.
     pub fn parse(text: &str) -> Result<Self, String> {
         let v: serde_json::Value =
-            serde_json::from_str(text).map_err(|_| "the session file is not valid JSON")?;
+            serde_json::from_str(text).map_err(|_| "the session is not valid JSON")?;
         let field = |k: &str| v.get(k).and_then(|s| s.as_str());
-        let name = field("name").ok_or("the session file has no name")?;
+        let name = field("name").ok_or("the session has no name")?;
         if name.is_empty() || name.chars().count() > 16 {
-            return Err("the session file's name is not a valid player name".into());
+            return Err("the session's name is not a valid player name".into());
         }
         let uuid = field("uuid")
             .and_then(parse_uuid)
-            .ok_or("the session file has no valid uuid")?;
+            .ok_or("the session has no valid uuid")?;
         let access_token = field("access_token")
             .filter(|t| !t.is_empty())
-            .ok_or("the session file has no access token")?;
+            .ok_or("the session has no access token")?;
         if field("user_type").is_some_and(|t| t != "msa") {
-            return Err("the session file is not a Microsoft account session".into());
+            return Err("the session is not a Microsoft account session".into());
         }
         Ok(Self {
             name: name.to_owned(),

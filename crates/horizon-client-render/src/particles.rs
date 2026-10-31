@@ -1042,6 +1042,8 @@ pub struct ParticleEngine {
     level_random: LegacyRandom,
     /// `SpellParticle.RANDOM`.
     spell_random: LegacyRandom,
+    /// The local player's eye while it looks through a spyglass in first person.
+    scope_eye: Option<[f64; 3]>,
     /// Seeds for each particle's own random (`RandomSource.create()`).
     seeds: LegacyRandom,
     /// When set, particles ask the level for other particles here instead
@@ -1062,8 +1064,9 @@ pub struct ParticleEngine {
     pub particle_level: u8,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
-    /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
-    pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
+    /// Local sounds requested by particles (dripstone drips, firework bursts):
+    /// (event, position, volume, pitch, distanceDelay).
+    pub sounds: Vec<(&'static str, [f64; 3], f32, f32, bool)>,
     /// How many of each type were made, for `horizon-ctl status`.
     made: std::collections::BTreeMap<&'static str, u64>,
     /// The item particles' sprites (`BreakingItemParticle`'s slime ball, snowball
@@ -1080,6 +1083,7 @@ impl ParticleEngine {
             random: LegacyRandom::new(0x7061_7274),
             level_random: LegacyRandom::new(0x6c65_7665),
             spell_random: LegacyRandom::new(0x7370_656c),
+            scope_eye: None,
             seeds: LegacyRandom::new(0x7365_6564),
             requested: None,
             names: Vec::new(),
@@ -1436,6 +1440,16 @@ impl ParticleEngine {
                 self.add(options, p, [xa, ya + 0.2, za]);
             }
         }
+    }
+    /// Set each frame to the local player's eye while it scopes in first person.
+    pub fn set_scope_eye(&mut self, eye: Option<[f64; 3]>) {
+        self.scope_eye = eye;
+    }
+    /// `SpellParticle.isCloseToScopingPlayer`: within 3 blocks of that eye.
+    fn close_to_scoping_player(&self, pos: [f64; 3]) -> bool {
+        self.scope_eye.is_some_and(|eye| {
+            (eye[0] - pos[0]).powi(2) + (eye[1] - pos[1]).powi(2) + (eye[2] - pos[2]).powi(2) <= 9.0
+        })
     }
     /// `ClientPacketListener.handleParticleEvent` for `ServerLevel.sendParticles`.
     pub fn send_particles(
@@ -2636,6 +2650,12 @@ impl ParticleEngine {
                 q.size *= 0.75;
                 q.lifetime = (8.0 / (f64::from(r.next_float()) * 0.8 + 0.2)) as i32;
                 q.has_physics = false;
+                // SpellParticle's constructor: setAlpha(0.0F), which also sets originalAlpha.
+                // MobEffectProvider sets the option's alpha after it, so an entity
+                // effect starts visible and the first tick hides it.
+                if self.close_to_scoping_player(q.position) {
+                    q.rgba[3] = 0.0;
+                }
                 match ty {
                     T::Witch => {
                         let b = self.random.next_float() * 0.5 + 0.35;
@@ -3040,7 +3060,7 @@ impl ParticleEngine {
                     (false, false) => "minecraft:entity.firework_rocket.blast",
                 };
                 let pitch = 0.95 + self.random.next_float() * 0.1;
-                self.sounds.push((sound, s.at, 20.0, pitch));
+                self.sounds.push((sound, s.at, 20.0, pitch, true));
             }
             if s.life % 2 == 0 && ((s.life / 2) as usize) < s.explosions.len() {
                 let e = s.explosions[(s.life / 2) as usize].clone();
@@ -3091,7 +3111,7 @@ impl ParticleEngine {
                         "minecraft:entity.firework_rocket.twinkle"
                     };
                     let pitch = 0.9 + self.random.next_float() * 0.15;
-                    self.sounds.push((sound, s.at, 20.0, pitch));
+                    self.sounds.push((sound, s.at, 20.0, pitch, true));
                 }
                 continue;
             }
@@ -3286,7 +3306,7 @@ impl ParticleEngine {
                         }
                         if let Some(sound) = sound {
                             let volume = p.random.next_float() * 0.7 + 0.3;
-                            self.sounds.push((sound, p.position, volume, 1.0));
+                            self.sounds.push((sound, p.position, volume, 1.0, false));
                         }
                     }
                     _ => {}
@@ -3743,7 +3763,12 @@ impl ParticleEngine {
             Behaviour::Spell { original_alpha } => {
                 p.base_tick(level);
                 self.sprite_from_age(p);
-                p.rgba[3] += (original_alpha - p.rgba[3]) * 0.05;
+                // SpellParticle.tick: alpha 0 while close, else eased back to originalAlpha.
+                if self.close_to_scoping_player(p.position) {
+                    p.rgba[3] = 0.0;
+                } else {
+                    p.rgba[3] += (original_alpha - p.rgba[3]) * 0.05;
+                }
             }
             Behaviour::Cloud => {
                 p.base_tick(level);

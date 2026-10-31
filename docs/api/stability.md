@@ -32,13 +32,6 @@ required; refusing input that was accepted; a JSON field that changes type.
 Not breaking: a new function, interface, capability, command, endpoint, tool or `server.toml` key; a new optional
 argument or JSON field (readers must ignore fields they don't know); faster, or fixing behaviour to what the reference already says.
 
-### Mod API levels (WebAssembly mods, removed)
-
-While WebAssembly mods ran, every function the game offered them had an **API level**, the one it arrived at, read
-from the mod's file (`crates/horizon-mods/src/api_level.rs`, levels 0 to 7). Nothing new is added to it. The registry
-index still records each old version's level (`api_level`, [mod-index.md](mod-index.md)), for the modpacks that
-require those mods.
-
 ## Stability levels
 
 Every part of an API has one level, shown in its reference and its surface page.
@@ -79,6 +72,7 @@ Every preview and stable API has tests that run old users against the current co
 | Agent control | a transcript per protocol version: commands and the reply keys each must have |
 | Server | `api::ROUTES` against `route()` (generated reference); a `server.toml` from each release line parses to the same settings; golden replies per endpoint |
 | Launcher | the generated reference; golden `--json` output per command |
+| Launch | the generated reference, which holds `--launch-api`'s reply; every listed option is accepted |
 | Data formats | a sample file of every version a reader accepts, read by today's reader |
 
 The generated references are the API's own diff: a pull request that changes an API changes its reference, and the
@@ -102,6 +96,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | `horizon-server` commands, `server.toml` | stable | `horizon-server --version` |
 | Server control API | stable | `/api/v1` |
 | `horizon-launcher` commands and MCP tools | preview | none yet (unversioned) |
+| Launch API: `horizon-client`'s launch options, session JSON, exit codes | experimental | 0.1.0, `horizon-client --launch-api` |
 | Benchmark report | stable | `"version": 1` |
 | Telemetry batch and consent | stable | `"schema": 1`, consent `2` |
 | `horizon-graphics.txt`, `horizon-extras.txt`, `horizon-mods.txt` | preview | none |

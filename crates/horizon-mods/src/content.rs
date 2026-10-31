@@ -75,12 +75,23 @@ pub struct BlockProperties {
     pub sounds: Option<String>,
 }
 
+/// Per-state outline and collision boxes, selected by one state property.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BlockShapes {
+    pub property: String,
+    pub values: BTreeMap<String, Vec<[f64; 6]>>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BlockFile {
     template: String,
     #[serde(default)]
     properties: BlockProperties,
+    shapes: Option<BlockShapes>,
+    #[serde(default)]
+    default_state: BTreeMap<String, String>,
     #[serde(default = "yes")]
     item: bool,
 }
@@ -97,6 +108,9 @@ pub struct Block {
     /// The vanilla block it copies, `minecraft:<path>`.
     pub template: String,
     pub properties: BlockProperties,
+    pub shapes: Option<BlockShapes>,
+    /// State properties overlaid on the template default.
+    pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
 }
@@ -333,6 +347,8 @@ impl Content {
                 id: block,
                 template: file.template,
                 properties: file.properties,
+                shapes: file.shapes,
+                default_state: file.default_state,
                 item: file.item,
             });
         }
@@ -392,6 +408,20 @@ fn check_block(file: &BlockFile) -> Result<(), String> {
             "template {:?} is not a vanilla block (minecraft:...)",
             file.template
         ));
+    }
+    if let Some(shapes) = &file.shapes {
+        if shapes.property.is_empty() || shapes.values.is_empty() {
+            return Err("shapes needs a property and values".into());
+        }
+        for boxes in shapes.values.values() {
+            if boxes.len() > 16
+                || boxes
+                    .iter()
+                    .any(|b| b.iter().any(|n| !n.is_finite()) || (0..3).any(|i| b[i] > b[i + 3]))
+            {
+                return Err("shape needs at most 16 finite boxes with ordered bounds".into());
+            }
+        }
     }
     let p = &file.properties;
     let finite = |v: Option<f32>| v.is_none_or(f32::is_finite);
@@ -499,6 +529,8 @@ capabilities = ["registries"]
             [Block {
                 id: "ruby:ruby_block".into(),
                 template: "minecraft:iron_block".into(),
+                shapes: None,
+                default_state: BTreeMap::new(),
                 properties: BlockProperties {
                     hardness: Some(4.0),
                     light: Some(3),
@@ -589,6 +621,15 @@ capabilities = ["registries"]
             &[(
                 "data/ruby/horizon/block/a.json",
                 br#"{"template": "minecraft:stone", "glow": true}"#,
+            )],
+        );
+        refused("shape-reversed", &[("data/ruby/horizon/block/a.json", br#"{"template":"minecraft:stone","shapes":{"property":"axis","values":{"x":[[1,0,0,0,1,1]]}}}"#)]);
+        refused("shape-malformed", &[("data/ruby/horizon/block/a.json", br#"{"template":"minecraft:stone","shapes":{"property":"axis","values":{"x":[[0,0,0,1,1]]}}}"#)]);
+        refused(
+            "shape-no-values",
+            &[(
+                "data/ruby/horizon/block/a.json",
+                br#"{"template":"minecraft:stone","shapes":{"property":"axis","values":{}}}"#,
             )],
         );
         let e = refused(

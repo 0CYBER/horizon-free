@@ -111,17 +111,20 @@ impl Launcher {
         .detach();
     }
 
-    /// Home's Worlds section, for the selected instance.
+    /// How many worlds the selected instance has; None while they are read.
+    pub(super) fn worlds_count(&mut self, cx: &mut Context<Self>) -> Option<usize> {
+        let home = self.selected_instance()?.home.clone();
+        self.load_worlds(home, cx);
+        self.worlds.fresh.then_some(self.worlds.list.len())
+    }
+
+    /// Home's Worlds tab, for the selected instance.
     pub(super) fn worlds_section(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let home = self.selected_instance()?.home.clone();
         self.load_worlds(home.clone(), cx);
         let list = self.worlds.list.clone();
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(section_title("Worlds", "globe", &t).mb(px(4.)));
+        let mut section = div().flex().flex_col().gap(px(8.));
         match &self.worlds.done {
             Some(Ok((message, zip))) => {
                 let mut line = div().flex().items_center().gap(px(12.)).child(

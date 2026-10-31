@@ -139,7 +139,7 @@ SetEnchantmentsFunction.validate	skip:data		validation at datapack load
 SetEnchantmentsFunction.Builder	skip:java		builder
 SetFireworkExplosionFunction.apply	missing		minor: no vanilla loot table uses set_firework_explosion
 SetFireworksFunction.apply	missing		minor: no vanilla loot table uses set_fireworks
-SetInstrumentFunction.run	port	crates/horizon-world/src/loot.rs::Context::run	gap: player: only draws the random option; the goat horn's instrument component is never set (pillager outpost horns)
+SetInstrumentFunction.run	port	crates/horizon-world/src/loot.rs::Context::run	the random option becomes the item's minecraft:instrument component
 SetItemCountFunction.run	port	crates/horizon-world/src/loot.rs::Context::run	set_count arm
 SetItemCountFunction.setCount	skip:java		builder factory
 SetItemDamageFunction.run	port	crates/horizon-world/src/loot.rs::Context::run	set_damage arm
