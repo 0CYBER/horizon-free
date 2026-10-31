@@ -322,6 +322,12 @@ impl Connection {
     }
 }
 impl ConnReader {
+    /// Read exactly `len` bytes as they are, with no framing.
+    pub fn read_raw(&mut self, len: usize) -> Result<Vec<u8>> {
+        let mut out = vec![0u8; len];
+        self.stream.read_exact(&mut out)?;
+        Ok(out)
+    }
     /// Block until a whole packet arrives: (id, payload).
     pub fn recv(&mut self) -> Result<(i32, Vec<u8>)> {
         loop {
@@ -375,6 +381,13 @@ impl ConnReader {
     }
 }
 impl ConnWriter {
+    /// Write bytes as they are, with no framing: the legacy server list ping
+    /// (`LegacyServerPinger`) is not a framed protocol.
+    pub fn write_raw(&mut self, data: &[u8]) -> Result<()> {
+        self.stream.write_all(data)?;
+        self.stream.flush()?;
+        Ok(())
+    }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         self.send_contents(&frame::contents(body, self.threshold)?)

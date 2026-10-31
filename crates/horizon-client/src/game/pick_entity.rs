@@ -16,7 +16,9 @@ impl Game<'_> {
             }
         };
         if let Some(hit) = self.remote_object_hit(true) {
-            offer(hit.distance, Some(hit.id));
+            // Interaction.getPickResult is Entity's: nothing to pick.
+            let id = (!self.interactions.contains_key(&hit.id)).then_some(hit.id);
+            offer(hit.distance, id);
         }
         if let Some((i, d)) = self.mob_hit() {
             offer(d, Some(self.mobs[i].id as i32));

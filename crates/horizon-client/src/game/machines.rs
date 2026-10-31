@@ -7,12 +7,13 @@ use super::Game;
 mod crafter;
 use horizon_client::{
     Result,
-    containers::{BlockEntity, HOPPER_SLOTS},
+    containers::{BlockEntity, HOPPER_SLOTS, ModContainer},
     items::{ItemStack, Items},
     world::World,
 };
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use horizon_world::{level::Behaviours, registry::BlockStateId};
+use std::sync::Arc;
 
 type Pos = (i32, i32, i32);
 
@@ -43,6 +44,8 @@ enum Kind {
     Brewing,
     /// `ChiseledBookShelfBlockEntity`: books only, one to a slot.
     Bookshelf,
+    /// A mod block's block entity (`ModContainer`).
+    Mod,
     /// `ComposterBlock.getContainer` at this level (a `WorldlyContainerHolder`
     /// without a block entity): input below 7, empty at 7, bone meal at 8.
     Composter(i32),
@@ -53,6 +56,8 @@ enum Kind {
 struct View {
     parts: Vec<(Pos, usize)>,
     kind: Kind,
+    /// A mod block's container rules (`Kind::Mod`).
+    container: Option<Arc<ModContainer>>,
 }
 impl View {
     fn len(&self) -> usize {
@@ -79,6 +84,10 @@ impl View {
             (Kind::Composter(8), Some(Direction::Down)) => vec![0],
             (Kind::Composter(level), Some(Direction::Up)) if level < 7 => vec![0],
             (Kind::Composter(_), _) => vec![],
+            (Kind::Mod, Some(face)) => self
+                .container
+                .as_ref()
+                .map_or_else(Vec::new, |c| c.faces[face as usize].clone()),
             _ => (0..self.len()).collect(),
         }
     }
@@ -148,6 +157,7 @@ impl Containers<'_> {
             return Some(View {
                 parts: vec![(pos, usize::from(level != 7))],
                 kind: Kind::Composter(level),
+                container: None,
             });
         }
         let entity = self.world.block_entities.get(&pos)?;
@@ -160,6 +170,15 @@ impl Containers<'_> {
             BlockEntity::Beehive(_) | BlockEntity::Campfire(_) | BlockEntity::Brushable(_)
         ) {
             return None;
+        }
+        // A mod's block entity is a container when its block says so.
+        if let BlockEntity::Mod(_) = entity {
+            let container = Arc::clone(self.world.block_entities.mod_container(state.0)?);
+            return Some(View {
+                parts: vec![(pos, container.slots)],
+                kind: Kind::Mod,
+                container: Some(container),
+            });
         }
         let kind = match (entity, name) {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
@@ -207,13 +226,18 @@ impl Containers<'_> {
                     } else {
                         vec![(other, 27), (pos, size)]
                     };
-                    return Some(View { parts, kind });
+                    return Some(View {
+                        parts,
+                        kind,
+                        container: None,
+                    });
                 }
             }
         }
         Some(View {
             parts: vec![(pos, size)],
             kind,
+            container: None,
         })
     }
     fn get(&self, view: &View, slot: usize) -> Option<&ItemStack> {
@@ -234,6 +258,9 @@ impl Containers<'_> {
     }
     /// `Container.canPlaceItem` (+ `canPlaceItemThroughFace` for furnaces).
     fn can_place(&self, view: &View, slot: usize, stack: &ItemStack) -> bool {
+        if let Some(c) = &view.container {
+            return c.inputs.contains(&slot);
+        }
         if view.kind == Kind::Crafter {
             return match self.world.block_entities.get(&view.parts[0].0) {
                 Some(BlockEntity::Crafter(c)) => {
@@ -299,6 +326,9 @@ impl Containers<'_> {
         }
         if view.kind == Kind::Brewing {
             return slot != 3 || &*stack.item == "minecraft:glass_bottle";
+        }
+        if let Some(c) = &view.container {
+            return c.outputs.contains(&slot);
         }
         view.kind != Kind::Furnace
             || face != Direction::Down
@@ -457,11 +487,14 @@ impl Game<'_> {
     }
     fn slot_mut_at(&mut self, view: &View, slot: usize) -> Option<&mut Option<ItemStack>> {
         let (pos, i) = view.locate(slot)?;
-        self.world
-            .block_entities
-            .get_mut(&pos)?
-            .slots_mut()
-            .get_mut(i)
+        let entity = self.world.block_entities.get_mut(&pos)?;
+        // A mod's slots grow to its container's count when first used.
+        if let BlockEntity::Mod(m) = entity
+            && m.items.len() <= i
+        {
+            m.items.resize(view.len(), None);
+        }
+        entity.slots_mut().get_mut(i)
     }
     /// `BlockEntity.setChanged` for every block entity of a container.
     fn view_changed(&mut self, view: &View) {
@@ -556,17 +589,31 @@ impl Game<'_> {
             let (x, y, z) = view.parts[0].0;
             return self.composter_container_insert([x, y, z], stack, face == Some(Direction::Up));
         }
-        let slots = if matches!(view.kind, Kind::Furnace | Kind::Brewing) && face.is_some() {
-            view.slots_for_face(face)
-        } else {
-            (0..view.len()).collect()
-        };
+        let slots =
+            if matches!(view.kind, Kind::Furnace | Kind::Brewing | Kind::Mod) && face.is_some() {
+                view.slots_for_face(face)
+            } else {
+                (0..view.len()).collect()
+            };
         let mut rest = Some(stack);
         for slot in slots {
             let Some(stack) = rest.take() else { break };
             rest = self.try_move_in_item(from_hopper, view, stack, slot);
         }
         rest
+    }
+    /// `stack` into the block container at `pos` through its side `face`, as
+    /// a hopper gives it (`addItem`); the remainder.
+    pub(super) fn insert_into_container(
+        &mut self,
+        pos: Pos,
+        stack: ItemStack,
+        face: Direction,
+    ) -> Option<ItemStack> {
+        let Some(view) = self.containers().view(pos, false) else {
+            return Some(stack);
+        };
+        self.add_item(None, &view, stack, Some(face))
     }
     /// Remove one item from a slot (`removeItem(slot, 1)`).
     fn take_one(&mut self, view: &View, slot: usize) -> Option<ItemStack> {
@@ -879,6 +926,7 @@ impl Game<'_> {
         let view = View {
             parts: vec![(key, size)],
             kind: Kind::Generic,
+            container: None,
         };
         (view, open)
     }
@@ -1080,6 +1128,9 @@ impl Game<'_> {
     }
     /// `imageHeight` of the open screen (HopperScreen is 133 tall).
     pub(super) fn screen_height(&self) -> f32 {
+        if let Some(height) = self.native_screen_height() {
+            return height;
+        }
         if self
             .station
             .as_ref()
@@ -1299,5 +1350,38 @@ mod item_column_tests {
             skipped += usize::from(!reach);
         }
         assert!(skipped > 1000, "skipped only {skipped}");
+    }
+}
+
+#[cfg(test)]
+mod mod_container_tests {
+    use super::{Kind, ModContainer, View};
+    use horizon_core::geometry::Direction;
+    use std::sync::Arc;
+
+    /// A mod's container reaches the slots its block names for each face;
+    /// without a face, every slot.
+    #[test]
+    fn mod_container_slots_by_face() {
+        let mut faces: [Vec<usize>; 6] = Default::default();
+        faces[Direction::Up as usize] = vec![0];
+        faces[Direction::Down as usize] = vec![2];
+        faces[Direction::North as usize] = vec![1];
+        let view = View {
+            parts: vec![((0, 0, 0), 3)],
+            kind: Kind::Mod,
+            container: Some(Arc::new(ModContainer {
+                slots: 3,
+                faces,
+                inputs: vec![0, 1],
+                outputs: vec![2],
+                menu: None,
+            })),
+        };
+        assert_eq!(view.slots_for_face(Some(Direction::Up)), [0]);
+        assert_eq!(view.slots_for_face(Some(Direction::Down)), [2]);
+        assert_eq!(view.slots_for_face(Some(Direction::North)), [1]);
+        assert!(view.slots_for_face(Some(Direction::East)).is_empty());
+        assert_eq!(view.slots_for_face(None), [0, 1, 2]);
     }
 }

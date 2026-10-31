@@ -15,7 +15,9 @@ and what the game's loaders make of it. For every block and item the mod registe
   (Horizon places the template as vanilla does, which the vanilla harnesses check);
 - tags: the vanilla block tags (tool and mining tags) holding the mod's blocks;
 - recipes: each recipe's result, count and ingredients;
-- items: present, and their stack size.
+- items: present, and their stack size;
+- item stats: durability, attribute modifiers (damage, speed, armour), tool rules, enchantability, repair
+  items, armour slot and food, from the oracle's 1.21.1 components with ids upgraded to 26.3's.
 
 Each mod is probed on its own, against vanilla. Writes WORK/mods/<id>/harness/{horizon,result}.json
 per mod and prints a table. Jars, facts and results stay
@@ -29,7 +31,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKS = ['blocks', 'properties', 'sounds', 'shapes', 'drops', 'placement', 'tags', 'recipes', 'items']
+CHECKS = ['blocks', 'properties', 'sounds', 'shapes', 'drops', 'placement', 'tags', 'recipes', 'items', 'item_stats']
 EXAMPLES = 8
 
 
@@ -85,6 +87,46 @@ def sound_upgrades(oracle, horizon):
             os_ = ob['states'].get(ob['default']) or next(iter(ob['states'].values()))
             out.setdefault(json.dumps(os_['sound'], sort_keys=True), []).append(hs)
     return out
+
+
+def modifiers(entries):
+    """Attribute modifiers as comparable tuples, 1.21.1's `generic.` and `player.` attribute prefixes dropped
+    (1.21.2 renamed `player.entity_interaction_range` and the others too)."""
+    return sorted((m['type'].replace(':generic.', ':').replace(':player.', ':'), m['id'], round(m['amount'], 4),
+                   m['operation'], m['slot'])
+                  for m in entries)
+
+
+def tool_rules(rules):
+    blocks = lambda b: tuple(sorted([b] if isinstance(b, str) else b))
+    return {blocks(r['blocks']): (r.get('speed'), r.get('correct_for_drops')) for r in rules}
+
+
+def item_stats(oi, hi):
+    """(ok, what) per stat of an item the oracle has components for."""
+    c = oi['components']
+    yield hi['max_damage'] == c.get('minecraft:max_damage', 0), f'durability {hi["max_damage"]}'
+    want = modifiers(oi.get('attribute_modifiers', {}).get('modifiers', []))
+    yield modifiers(hi['modifiers']) == want, f'modifiers {modifiers(hi["modifiers"])}, want {want}'
+    tool = c.get('minecraft:tool')
+    if tool is None:
+        yield hi['tool'] is None, 'a tool'
+    elif hi['tool'] is None:
+        yield False, 'no tool'
+    else:
+        have = tool_rules(hi['tool']['rules'])
+        # 26.3 templates may add vanilla's newer rules; the mod's own must all be there.
+        for blocks, rule in tool_rules(tool['rules']).items():
+            yield have.get(blocks) == rule, f'tool rule {blocks}: {have.get(blocks)}, want {rule}'
+        yield hi['tool']['default_mining_speed'] == tool.get('default_mining_speed', 1.0), 'default mining speed'
+        yield hi['tool']['damage_per_block'] == tool.get('damage_per_block', 1), 'damage per block'
+    yield hi['enchantable'] == oi.get('enchantment_value', 0), f'enchantability {hi["enchantable"]}'
+    if 'repair_items' in oi:
+        yield sorted(hi['repairable']) == sorted(oi['repair_items']), f'repair items {hi["repairable"]}'
+    if 'armor' in oi:
+        yield hi['equip_slot'] == oi['armor']['slot'], f'armour slot {hi["equip_slot"]}'
+    if 'food' in oi:
+        yield (hi['food'] or {}).get('nutrition') == oi['food']['nutrition'], f'food {hi["food"]}'
 
 
 def compare_mod(mod, oracle, horizon, carry, upgrades, old_items):
@@ -156,6 +198,9 @@ def compare_mod(mod, oracle, horizon, carry, upgrades, old_items):
         hi = horizon['items'].get(iid)
         checks['items'].record(hi is not None and hi['max_stack_size'] == oi['max_stack_size'],
                                f'{iid}: {"missing" if hi is None else "stack " + str(hi["max_stack_size"])}')
+        if hi is not None and 'components' in oi and oi.get('block') is None:
+            for ok, what in item_stats(oi, hi):
+                checks['item_stats'].record(ok, f'{iid}: {what}')
     result = {c: v.json() for c, v in checks.items()}
     failed = sum(v.failed for v in checks.values())
     total = sum(v.passed + v.failed for v in checks.values())
