@@ -69,6 +69,15 @@ impl WorldRequest {
         // openWorldLoadLevelData: level data that does not read is RecoverWorldDataScreen's to
         // handle (the title screen shows it); a world opened another way must not become a
         // new one with a random seed under the same name.
+        // The dedicated server's `Main` takes level.dat_old without asking
+        // (`getUnfixedDataTagWithFallback`): there is no world list to recover from.
+        if options.dedicated.is_some()
+            && horizon_client::save::fall_back_to_level_dat_old(&save_root)
+        {
+            log::warn!(
+                "Horizon: level.dat of \"{folder}\" did not read; level.dat_old took its place"
+            );
+        }
         if let Some(issue) = horizon_client::save::level_data_needs_recovery(&save_root) {
             let why = match issue {
                 horizon_client::save::DatIssue::Missing => "level.dat is missing".to_owned(),
