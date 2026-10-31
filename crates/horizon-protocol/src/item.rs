@@ -59,15 +59,20 @@ pub mod component {
     pub const PAINTING_VARIANT: i32 = 109;
 }
 
-/// A written book's content (`WrittenBookContent.STREAM_CODEC`): the
-/// filtered variants of the title and pages are read and dropped.
-#[derive(Clone, Debug, PartialEq)]
+/// A written book's content (`WrittenBookContent.STREAM_CODEC`). The raw title
+/// and pages are what a book shows; the filtered variants (`Filterable.filtered`,
+/// which a server sends when chat filtering is on) are kept only so that the
+/// component hashes as the server holds it.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WrittenBook {
     pub title: String,
+    pub title_filtered: Option<String>,
     pub author: String,
     pub generation: i32,
     /// Each page's text component.
     pub pages: Vec<Tag>,
+    /// Each page's filtered variant: empty (none filtered) or one per page.
+    pub pages_filtered: Vec<Option<Tag>>,
     pub resolved: bool,
 }
 
@@ -102,8 +107,12 @@ pub enum Component {
         hide: bool,
         hidden: Vec<i32>,
     },
-    /// `WritableBookContent`: the pages (raw text).
-    WritableBook(Vec<String>),
+    /// `WritableBookContent`: the pages (raw text) and their filtered variants
+    /// (empty, or one per page).
+    WritableBook {
+        pages: Vec<String>,
+        filtered: Vec<Option<String>>,
+    },
     WrittenBook(WrittenBook),
     /// `ChargedProjectiles`: a loaded crossbow's ammunition, as templates.
     Stacks(Vec<Stack>),
@@ -179,14 +188,20 @@ impl FireworkExplosion {
     }
 }
 
-/// `Filterable.streamCodec`: the raw value, then an optional filtered one
-/// (dropped).
-fn filterable<T>(r: &mut Reader, value: impl Fn(&mut Reader) -> Result<T>) -> Result<T> {
+/// `Filterable.streamCodec`: the raw value, then an optional filtered one.
+fn filterable<T>(
+    r: &mut Reader,
+    value: impl Fn(&mut Reader) -> Result<T>,
+) -> Result<(T, Option<T>)> {
     let raw = value(r)?;
-    if r.bool()? {
-        value(r)?;
-    }
-    Ok(raw)
+    let filtered = if r.bool()? { Some(value(r)?) } else { None };
+    Ok((raw, filtered))
+}
+/// The filtered variants of a list of pages, or none when no page has one.
+fn filtered_variants<T>(pages: &mut Vec<(T, Option<T>)>) -> (Vec<T>, Vec<Option<T>>) {
+    let any = pages.iter().any(|(_, f)| f.is_some());
+    let (raw, filtered): (Vec<_>, Vec<_>) = pages.drain(..).unzip();
+    (raw, if any { filtered } else { Vec::new() })
 }
 
 /// `ResolvableProfile`: an optional name and UUID and the profile's property
@@ -252,25 +267,28 @@ impl Component {
             | OMINOUS_BOTTLE_AMPLIFIER => Self::Int(r.varint()?),
             WRITABLE_BOOK_CONTENT => {
                 let n = r.count(100)?;
-                Self::WritableBook(
-                    (0..n)
-                        .map(|_| filterable(r, |r| r.string(1024)))
-                        .collect::<Result<_>>()?,
-                )
+                let mut pages = (0..n)
+                    .map(|_| filterable(r, |r| r.string(1024)))
+                    .collect::<Result<Vec<_>>>()?;
+                let (pages, filtered) = filtered_variants(&mut pages);
+                Self::WritableBook { pages, filtered }
             }
             WRITTEN_BOOK_CONTENT => {
-                let title = filterable(r, |r| r.string(32))?;
+                let (title, title_filtered) = filterable(r, |r| r.string(32))?;
                 let author = r.string(32767)?;
                 let generation = r.varint()?;
                 let n = r.count(r.remaining())?;
-                let pages = (0..n)
+                let mut pages = (0..n)
                     .map(|_| filterable(r, |r| r.nbt()))
-                    .collect::<Result<_>>()?;
+                    .collect::<Result<Vec<_>>>()?;
+                let (pages, pages_filtered) = filtered_variants(&mut pages);
                 Self::WrittenBook(WrittenBook {
                     title,
+                    title_filtered,
                     author,
                     generation,
                     pages,
+                    pages_filtered,
                     resolved: r.bool()?,
                 })
             }
@@ -600,22 +618,40 @@ impl Component {
                 }
                 w.bool(*tracked);
             }
-            Self::WritableBook(pages) => {
+            Self::WritableBook { pages, filtered } => {
                 w.varint(pages.len() as i32);
-                for page in pages {
+                for (i, page) in pages.iter().enumerate() {
                     w.string(page);
-                    w.bool(false);
+                    match filtered.get(i).and_then(Option::as_ref) {
+                        Some(f) => {
+                            w.bool(true);
+                            w.string(f);
+                        }
+                        None => w.bool(false),
+                    }
                 }
             }
             Self::WrittenBook(b) => {
                 w.string(&b.title);
-                w.bool(false);
+                match &b.title_filtered {
+                    Some(f) => {
+                        w.bool(true);
+                        w.string(f);
+                    }
+                    None => w.bool(false),
+                }
                 w.string(&b.author);
                 w.varint(b.generation);
                 w.varint(b.pages.len() as i32);
-                for page in &b.pages {
+                for (i, page) in b.pages.iter().enumerate() {
                     w.nbt(page);
-                    w.bool(false);
+                    match b.pages_filtered.get(i).and_then(Option::as_ref) {
+                        Some(f) => {
+                            w.bool(true);
+                            w.nbt(f);
+                        }
+                        None => w.bool(false),
+                    }
                 }
                 w.bool(b.resolved);
             }
@@ -1002,6 +1038,8 @@ mod tests {
                 author: "Guest".into(),
                 generation: 1,
                 pages: vec![literal("one"), literal("two")],
+                pages_filtered: vec![None, Some(literal("2"))],
+                title_filtered: Some("N".into()),
                 resolved: true,
             }),
         ));
@@ -1020,7 +1058,10 @@ mod tests {
         let mut quill = Stack::new(1099, 1);
         quill.added.push((
             component::WRITABLE_BOOK_CONTENT,
-            Component::WritableBook(vec!["a".into(), String::new()]),
+            Component::WritableBook {
+                pages: vec!["a".into(), String::new()],
+                filtered: vec![None, Some("b".into())],
+            },
         ));
         round::<Option<Stack>, Slot>(Some(quill));
         assert_eq!(sword.damage(), 17);
@@ -1098,13 +1139,16 @@ mod tests {
     }
 
     #[test]
-    fn filtered_book_pages_are_read_and_dropped() {
+    fn filtered_book_pages_are_read_and_kept() {
         // A writable book with one page "hi" and its filtered "**".
         let bytes = [1, 7, 1, 0, 56, 1, 2, b'h', b'i', 1, 2, b'*', b'*'];
         let stack = Slot::read(&mut Reader::new(&bytes)).unwrap().unwrap();
         assert_eq!(
             stack.component(component::WRITABLE_BOOK_CONTENT),
-            Some(&Component::WritableBook(vec!["hi".into()]))
+            Some(&Component::WritableBook {
+                pages: vec!["hi".into()],
+                filtered: vec![Some("**".into())],
+            })
         );
     }
 

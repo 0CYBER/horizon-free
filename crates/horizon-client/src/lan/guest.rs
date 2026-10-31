@@ -880,7 +880,10 @@ fn network_stack(
         if !d.writable_pages.is_empty() {
             stack.added.push((
                 horizon_protocol::item::component::WRITABLE_BOOK_CONTENT,
-                horizon_protocol::item::Component::WritableBook(d.writable_pages.clone()),
+                horizon_protocol::item::Component::WritableBook {
+                    pages: d.writable_pages.clone(),
+                    filtered: Vec::new(),
+                },
             ));
         }
         if let Some(w) = &d.written {
@@ -900,6 +903,7 @@ fn network_stack(
                                 .collect()
                         },
                         resolved: true,
+                        ..Default::default()
                     },
                 ),
             ));
