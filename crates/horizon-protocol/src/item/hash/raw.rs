@@ -874,11 +874,12 @@ mod tests {
 
     /// Block predicates with an `nbt` or partial component predicates, and books
     /// with filtered text: stream bytes and hashes vanilla 26.3 printed (the same
-    /// driver as above, SNBT through the component's codec). The one `None` is a
-    /// container predicate whose nested item predicate holds exact `components`.
+    /// driver as above, SNBT through the component's codec). The `container` and
+    /// `bundle_contents` predicates whose nested item predicate holds exact `components` are
+    /// hashed too, when every byte in them is a named `Codec.BOOL`.
     #[test]
     fn predicates_and_filtered_books_hash_as_vanilla_does() {
-        let cases: [(&str, i32, &str, Option<i32>); 21] = [
+        let cases: [(&str, i32, &str, Option<i32>); 24] = [
             (
                 "stone_nbt",
                 14,
@@ -974,7 +975,25 @@ mod tests {
                 "container_components",
                 14,
                 "01000000000101050a0a00056974656d73090008636f6e7461696e730a000000010a000a636f6d706f6e656e74730100246d696e6563726166743a656e6368616e746d656e745f676c696e745f6f7665727269646501000800056974656d73000f6d696e6563726166743a73746f6e65000000",
-                None,
+                Some(-1100559882),
+            ),
+            (
+                "container_components_false",
+                14,
+                "01000000000101050a0a00056974656d73090008636f6e7461696e730a000000010a000a636f6d706f6e656e74730100246d696e6563726166743a656e6368616e746d656e745f676c696e745f6f7665727269646500000800056974656d73000f6d696e6563726166743a73746f6e65000000",
+                Some(-566759991),
+            ),
+            (
+                "bundle_components_damage_and_name",
+                14,
+                "01000000000101060a0a00056974656d73090008636f6e7461696e730a000000010a000a636f6d706f6e656e74730300106d696e6563726166743a64616d616765000000050a00156d696e6563726166743a637573746f6d5f6e616d650800047465787400026869010004626f6c640100000800056974656d73000f6d696e6563726166743a73746f6e65000000",
+                Some(-473617213),
+            ),
+            (
+                "container_components_food",
+                14,
+                "01000000000101050a0a00056974656d73090008636f6e7461696e730a000000010a000a636f6d706f6e656e74730a000e6d696e6563726166743a666f6f6405000a73617475726174696f6e400000000300096e7574726974696f6e0000000401000e63616e5f616c776179735f6561740100000800056974656d73000f6d696e6563726166743a6170706c65000a000473697a650300036d696e00000001000000",
+                Some(1890827479),
             ),
             (
                 "can_break_two",
