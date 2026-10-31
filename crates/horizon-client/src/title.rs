@@ -1006,6 +1006,8 @@ impl Title {
     /// older DataVersion is what converts it whole.
     fn begin_optimize(&mut self, world: WorldEntry, erase_cache: bool) {
         let dir = self.saves.join(&world.folder);
+        // `getUnfixedDataTagWithFallback`: level.dat_old stands in for a level.dat that does not read.
+        crate::save::fall_back_to_level_dat_old(&dir);
         if crate::save::needs_file_fixes(&dir)
             || crate::save::level_data_needs_recovery(&dir).is_some()
         {
