@@ -84,6 +84,7 @@ mod native_pack;
 mod native_post;
 mod native_sky;
 mod occlusion;
+mod oit;
 mod pack_atlas;
 pub mod pack_draw;
 mod pack_entities;
@@ -672,6 +673,10 @@ pub struct Renderer {
     pub gamma: f32,
     /// Optional full-light lightmap (Horizon Extras).
     pub fullbright: bool,
+    /// The Improved transparency option (`GameRenderer.useImprovedTransparency`).
+    pub improved_transparency: bool,
+    /// Its passes and targets, made when first drawn with.
+    oit: Option<oit::Oit>,
     /// Advance animated block textures (Horizon setting; vanilla always does).
     pub animated_textures: bool,
     present_modes: Vec<wgpu::PresentMode>,
@@ -1119,6 +1124,7 @@ async fn open_backend(
     // stand-in neither clamps nor drops NaN.
     let features = timing::GpuTimer::features(&adapter)
         | cull::Cull::features(&adapter)
+        | oit::features(&adapter)
         | (adapter.features()
             & (wgpu::Features::INDIRECT_FIRST_INSTANCE
                 | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
@@ -2914,6 +2920,8 @@ impl Renderer {
             screenshot: None,
             screenshot_result: None,
             gamma: 0.5,
+            improved_transparency: false,
+            oit: None,
             fullbright: false,
             animated_textures: true,
             present_modes,
@@ -4888,9 +4896,17 @@ impl Renderer {
                 &self.globals,
             );
         }
+        // GameRenderer.useImprovedTransparency. A shader pack keeps its own
+        // path, and the translucent layer draws per section (not flat).
+        let oit_on = self.improved_transparency
+            && !frame.title
+            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
+            && self.native.is_none()
+            && oit::supported(&self.device);
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on
+                    && !oit_on
                     && !self.draws.is_empty()
                     && (self.drawn_sections >= flat.min_sections
                         || pack_terrain
@@ -4972,7 +4988,7 @@ impl Renderer {
         }
         let pack_reads_world = pack_post || native_post;
         // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
-        let keep_depth = pack_reads_world || (taa && self.world_post.taa);
+        let keep_depth = pack_reads_world || (taa && self.world_post.taa) || oit_on;
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         // The shadow camera's lists, drawn by the pack's shadow programs.
@@ -5025,6 +5041,20 @@ impl Renderer {
         if culling && let Some(cull) = &mut self.cull {
             cull.bind_depth(&self.device, world_depth);
         }
+        if oit_on {
+            let size = self
+                .world_post
+                .size()
+                .filter(|_| scaled.is_some())
+                .unwrap_or([self.config.width, self.config.height]);
+            let (device, layout, sprites) =
+                (&self.device, &self.terrain_layout, self.terrain_sprites);
+            let format = self.config.format.remove_srgb_suffix();
+            self.oit
+                .get_or_insert_with(|| oit::Oit::new(device, layout, sprites, format))
+                .prepare(&self.device, &self.queue, size, &views.primary().projection);
+        }
+        let oit = self.oit.as_ref().filter(|_| oit_on);
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
         let clear = if frame.title || (frame.end_sky && !frame.underwater && sky_open(frame)) {
             wgpu::Color::BLACK
@@ -5369,6 +5399,21 @@ impl Renderer {
             match self.flat.as_ref().filter(|_| flat_frame) {
                 // The pack draws translucent terrain after its deferred programs.
                 _ if pack_draws_water => {}
+                // LevelRenderer.executeOit in place of the classic blend; what
+                // follows draws over its composite in a pass of its own.
+                _ if let Some(oit) = oit => {
+                    drop(pass);
+                    oit.run(&mut encoder, world_view, world_depth, &|pass, pipeline| {
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(0, &self.group, &[]);
+                        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.set_vertex_buffer(1, self.instances.slice(..));
+                        self.draw_sections(pass, &self.indirect, 0, solid_draws, translucent_draws);
+                    });
+                    pass = world_pass_after_culling(&mut encoder, world_view, world_depth, true);
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
                 Some(flat) => {
                     pass.set_pipeline(pack_flat.map_or(&flat.translucent, |p| &p.1));
                     flat.draw(&mut pass, flat.translucent_calls(), |p| {
