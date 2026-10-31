@@ -3281,6 +3281,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
+    /// ServerPlayer.postEffects: the `post_effect` chains `/posteffect` set.
+    pub post_effects: Vec<String>,
     /// Player.lastDeathLocation: the dimension and block of the last death.
     pub last_death: Option<(String, [i32; 3])>,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
@@ -3513,6 +3515,16 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.post_effects = match p.get("post_effects") {
+            Some(Tag::List(list)) => list
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::String(s) => Some(s.to_string_lossy()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         self.last_death = p.get("LastDeathLocation").and_then(|d| {
             let Some(Tag::IntArray(pos)) = d.get("pos") else {
                 return None;
@@ -3626,6 +3638,7 @@ impl Level {
                 "EnderItems",
                 "equipment",
                 "active_effects",
+                "post_effects",
                 "Pos",
                 "respawn",
                 "recipeBook",
@@ -3757,6 +3770,12 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        if !self.post_effects.is_empty() {
+            entries.push((
+                "post_effects",
+                Tag::List(self.post_effects.iter().map(|e| string(e)).collect()),
+            ));
+        }
         if let Some((dimension, pos)) = &self.last_death {
             entries.push((
                 "LastDeathLocation",

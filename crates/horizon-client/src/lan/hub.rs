@@ -850,8 +850,16 @@ impl Hub {
         g.placed_at = self.ticks;
         self.send_active_effects(i);
         // ServerPlayer.sendPostEffects and initInventoryMenu.
-        self.guests[i].send(&raw(ids::POST_EFFECTS, vec![0]));
+        self.send_post_effects(i);
         self.send_inventory(i);
+    }
+
+    /// `ServerPlayer.sendPostEffects`: the player's `/posteffect` chains.
+    pub fn send_post_effects(&mut self, i: usize) {
+        let g = &mut self.guests[i];
+        g.post_effects_dirty = false;
+        let effects = g.post_effects.clone();
+        g.send(&C::PostEffects(play::PostEffects { effects }));
     }
 
     /// ClientboundUpdateMobEffectPacket for one of the guest's effects.
@@ -2262,6 +2270,10 @@ impl Hub {
             && self.guests[i].sent_health.is_some()
         {
             self.flush_advancements(i, true);
+            // ServerPlayer.doTick: sendPostEffects when postEffectsDirty.
+            if self.guests[i].post_effects_dirty {
+                self.send_post_effects(i);
+            }
         }
     }
     fn flush_advancements(&mut self, i: usize, show: bool) {
@@ -2960,7 +2972,9 @@ impl Hub {
         }));
         g.sent_xp = Some(xp);
         // ServerPlayer.sendPostEffects.
-        g.send(&raw(ids::POST_EFFECTS, vec![0]));
+        let list = g.post_effects.clone();
+        g.post_effects_dirty = false;
+        g.send(&C::PostEffects(play::PostEffects { effects: list }));
         self.send_level_info(i, ctx, true);
         self.send_permission_level(i);
         // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player.
@@ -3071,7 +3085,9 @@ impl Hub {
         self.send_active_effects(i);
         let g = &mut self.guests[i];
         // ServerPlayer.sendPostEffects.
-        g.send(&raw(ids::POST_EFFECTS, vec![0]));
+        let list = g.post_effects.clone();
+        g.post_effects_dirty = false;
+        g.send(&C::PostEffects(play::PostEffects { effects: list }));
         // lastSentExp, lastSentHealth and lastSentFood; the client's new
         // player starts with the default air and no absorption.
         g.sent_health = None;
