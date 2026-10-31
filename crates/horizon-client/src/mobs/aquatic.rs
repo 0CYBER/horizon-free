@@ -12,6 +12,7 @@ use super::{
     nav::NavKind,
 };
 use crate::blocks::Fluid;
+use crate::particles::ParticleType;
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::f32::consts::PI;
@@ -153,7 +154,25 @@ pub fn register(m: &mut Mob) {
             g.add(5, LookAtPlayer::new(6.0));
             g.add(5, super::dolphin::Jump::new(10));
             g.add(6, MeleeAttack::new(1.2, true));
-            m.ai.targets.add(1, HurtByTarget::new().alert());
+            g.add(8, super::dolphin::FollowPlayerRidden::new(false));
+            g.add(8, super::dolphin::FollowPlayerRidden::new(true));
+            // `Dolphin.registerGoals`: AvoidEntityGoal(Guardian.class, 8, 1, 1).
+            g.add(
+                9,
+                AvoidEntity::new(
+                    Avoid::Species(vec![S::Guardian, S::ElderGuardian]),
+                    8.0,
+                    1.0,
+                    1.0,
+                ),
+            );
+            // `HurtByTargetGoal(this, Guardian.class)`: guardians' hits are ignored.
+            m.ai.targets.add(
+                1,
+                HurtByTarget::new()
+                    .alert()
+                    .ignoring(&[S::Guardian, S::ElderGuardian]),
+            );
             m.ai.mov.kind = MoveKind::SmoothSwimming {
                 max_turn_x: 85.0,
                 max_turn_y: 10.0,
@@ -202,18 +221,34 @@ pub fn puff_scale(state: i32) -> f64 {
         _ => 1.0,
     }
 }
+/// `Tadpole.setAgeLockedData`: a golden dandelion flips the lock, puts the
+/// age back to 0 and starts the particle timer (40 ticks).
+pub fn set_age_locked_data(m: &mut Mob) {
+    m.extra.age_locked = !m.extra.age_locked;
+    m.extra.age = 0;
+    m.extra.age_lock_particle_timer = 40;
+}
 /// Species aiStep additions.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     use Species as S;
     match m.species() {
-        S::Squid | S::GlowSquid => squid_ai_step(m),
+        S::Squid => squid_ai_step(m),
+        S::GlowSquid => {
+            squid_ai_step(m);
+            glow_squid_ai_step(m, events);
+        }
         S::Tadpole => {
             // Tadpole.aiStep: growing up into a frog after 24000 ticks.
             if m.extra.age >= 0 && !m.extra.age_locked {
                 m.extra.age += 1;
                 if m.extra.age >= 24_000 && !m.removed {
                     m.removed = true;
-                    m.sound("entity.tadpole.grow_up", events);
+                    // Tadpole.ageUp: playSound at its feet, volume 0.15 (not
+                    // when silent: Entity.playSound).
+                    if !m.silent {
+                        let at = [m.position.x, m.position.y, m.position.z];
+                        events.push(MobEvent::Sound("entity.tadpole.grow_up", at, 0.15, 1.0));
+                    }
                     events.push(MobEvent::SpawnKind {
                         kind: "minecraft:frog".into(),
                         at: [m.position.x, m.position.y, m.position.z],
@@ -235,6 +270,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.on_ground = false;
                 m.sound("entity.tadpole.flop", events);
             }
+            // Tadpole.aiStep: the age lock's particles, after the age.
+            super::ai::make_age_locked_particle(m, events);
         }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             // AbstractFish.aiStep flops on land (applied before travel next tick).
@@ -312,11 +349,70 @@ fn squid_ai_step(m: &mut Mob) {
 
 /// Squid.aiStep also runs on remote entities: animate from packet velocity,
 /// without running goals or replacing that velocity with the server's movement vector.
-pub fn squid_client_step(m: &mut Mob) {
+/// A glow squid's own `aiStep` follows it (the dark timer and the glow).
+pub fn squid_client_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if matches!(m.species(), Species::Squid | Species::GlowSquid) {
         m.anim.vo = m.anim.v;
         squid_step(m, true);
     }
+    if m.species() == Species::GlowSquid {
+        glow_squid_ai_step(m, events);
+    }
+}
+
+/// `GlowSquid.getDarkTicksRemaining`: `DATA_DARK_TICKS_REMAINING`, the ticks
+/// left of the dimming a hit gave (kept in `extra.counter`).
+pub fn dark_ticks(m: &Mob) -> i32 {
+    m.extra.counter
+}
+
+/// `GlowSquid.setDarkTicks`: a server sends it to its clients as synched data.
+pub fn set_dark_ticks(m: &mut Mob, ticks: i32) {
+    m.extra.counter = ticks;
+}
+
+/// `GlowSquid.hurtServer`: a hit that went through dims the squid for 100
+/// ticks (called after `Squid.hurtServer`'s ink).
+pub fn hurt_server(m: &mut Mob) {
+    set_dark_ticks(m, 100);
+}
+
+/// `GlowSquid.aiStep` after `super.aiStep()`: the dark timer counts down, and
+/// a `glow` particle appears at `getRandomX(0.6)`, `getRandomY()`,
+/// `getRandomZ(0.6)` (drawn in that order). A window that simulates the world
+/// and a client of a server both draw it, so the server's own `ai_step` pushes
+/// the event as well (as the nautilus bubbles do).
+fn glow_squid_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    let ticks = dark_ticks(m);
+    if ticks > 0 {
+        set_dark_ticks(m, ticks - 1);
+    }
+    let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+    let r = &mut m.random;
+    let x = m.position.x + w * ((2.0 * r.next_double() - 1.0) * 0.6);
+    let y = m.position.y + h * r.next_double();
+    let z = m.position.z + w * ((2.0 * r.next_double() - 1.0) * 0.6);
+    events.push(MobEvent::ParticleAt {
+        kind: ParticleType::Glow.name(),
+        at: [x, y, z],
+        velocity: [0.0; 3],
+    });
+}
+
+/// `GlowSquidRenderer.getBlockLightLevel`: the block light a glow squid is
+/// drawn with, `lit` being what `EntityRenderer.getBlockLightLevel` gives (15
+/// when on fire). It glows brighter the fewer dark ticks are left.
+pub fn glow_squid_block_light(m: &Mob, lit: u32) -> u32 {
+    // Mth.clampedLerp(1.0F - darkTicks / 10.0F, 0.0F, 15.0F).
+    let factor = 1.0f32 - dark_ticks(m) as f32 / 10.0;
+    let glow = if factor < 0.0 {
+        0
+    } else if factor > 1.0 {
+        15
+    } else {
+        (factor * 15.0) as u32
+    };
+    if glow == 15 { 15 } else { glow.max(lit) }
 }
 
 /// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
@@ -643,6 +739,9 @@ impl FollowFlockLeader {
 }
 impl Goal for FollowFlockLeader {
     goal_clone!();
+    fn set_start_delay(&mut self, ticks: i32) {
+        self.next_start = ticks;
+    }
     fn name(&self) -> &'static str {
         "FollowFlockLeaderGoal"
     }
@@ -665,20 +764,25 @@ impl Goal for FollowFlockLeader {
         // follow no one, in level order; itself as it is now.
         let species = m.species();
         let area = m.bounds().inflate(Vec3::new(8.0, 8.0, 8.0));
-        let candidates: Vec<(u32, Option<u32>, i32)> =
+        let mut near: Vec<&crate::mobs::Seen> =
             cx.w.others_near(area)
                 .filter(|s| s.species == species && s.alive && s.bounds.intersects(area))
-                .map(|s| {
-                    if s.id == m.id {
-                        (s.id, m.extra.leader, m.extra.followers)
-                    } else {
-                        (s.id, s.school.0, s.school.1)
-                    }
-                })
-                .filter(|&(_, leader, followers)| {
-                    can_be_followed(species, followers) || !follows(cx.w, leader)
-                })
                 .collect();
+        // `getEntitiesOfClass`: the sections by x, z, y; in each, as they entered it.
+        near.sort_by_key(|s| (s.section.0[0], s.section.0[2], s.section.0[1], s.section.1));
+        let candidates: Vec<(u32, Option<u32>, i32)> = near
+            .into_iter()
+            .map(|s| {
+                if s.id == m.id {
+                    (s.id, m.extra.leader, m.extra.followers)
+                } else {
+                    (s.id, s.school.0, s.school.1)
+                }
+            })
+            .filter(|&(_, leader, followers)| {
+                can_be_followed(species, followers) || !follows(cx.w, leader)
+            })
+            .collect();
         let (leader, school_size) = candidates
             .iter()
             .find(|c| can_be_followed(species, c.2))

@@ -776,7 +776,7 @@ impl Game<'_> {
     /// `EquipmentDispenseItemBehavior.dispenseEquipment`: the first living
     /// entity in front that `canEquipWithDispenser` gets one of the item.
     fn dispense_equipment(&mut self, pos: Pos, facing: Direction, stack: &mut ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item) else {
+        let Some(info) = self.items().get(&stack.item) else {
             return false;
         };
         let (Some(slot), true) = (
@@ -908,6 +908,10 @@ impl Game<'_> {
         let Some(id) = self.spawn_mob_at(&kind, front, facing != Direction::Up) else {
             return Ok((Some(stack), CLICK));
         };
+        // EntityType.create: `finalizeSpawn` first, the egg's components after.
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            horizon_client::entity_nbt::apply_item_components(m, &stack);
+        }
         self.mob_ambient(id)?;
         // SpawnEggItemBehavior: the entity was placed by the dispenser.
         self.post_block_game_event("minecraft:entity_place", [pos.0, pos.1, pos.2], None, None);
@@ -1051,8 +1055,12 @@ impl Game<'_> {
         // EntityType.create rolls a yaw from the level random before the stack config turns it.
         let _ = self.world.random.next_float();
         self.next_entity += 1;
-        let stand =
+        let mut stand =
             horizon_client::entities::ArmorStand::new(self.next_entity, foot, y_rot(facing));
+        // Entity.applyImplicitComponents: a name from an anvil names the stand.
+        if let Some(name) = stack.custom_name() {
+            stand.custom_name = Some(horizon_client::text::Text::literal(name));
+        }
         self.world.modified.insert((front.0 >> 4, front.2 >> 4));
         self.armor_stands.push(stand);
         (shrink(stack), CLICK)
@@ -1176,8 +1184,9 @@ impl Game<'_> {
         let (content, sound, mob) =
             horizon_client::items::bucket_contents(&item).expect("filled bucket dispatcher");
         let target_pos = Self::pos_of(target);
-        let emptied = self
-            .with_level(|b, level, ticks| b.bucket_empty(level, ticks, target_pos, content, sound));
+        let emptied = self.with_level(|b, level, ticks| {
+            b.bucket_empty(level, ticks, target_pos, content, sound, false, false)
+        });
         self.process_level_events()?;
         if !emptied {
             return Ok((self.dispense_default(pos, facing, stack), CLICK));
@@ -1210,7 +1219,7 @@ impl Game<'_> {
             // persistent) calls out, then ENTITY_PLACE.
             if let Some(id) = self.spawn_mob_at(kind, target, true) {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    horizon_client::entity_nbt::load_bucket_data(m, &stack);
+                    horizon_client::entity_nbt::apply_item_components(m, &stack);
                 }
                 self.mob_placed(id)?;
             }
@@ -1235,7 +1244,8 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = Self::pos_of(offset(pos, facing));
-        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target));
+        let picked =
+            self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target, false));
         self.process_level_events()?;
         match picked {
             Some(filled) => {
@@ -1412,7 +1422,7 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
         let free = self.res.facts().is_air(self.block_at(target))
-            && target.1 >= horizon_client::chunk::MIN_Y + 2
+            && target.1 >= self.world.bottom_y() + 2
             && self.ui.difficulty != 0
             && self.can_build_wither(target);
         if free {
@@ -1533,7 +1543,8 @@ impl Game<'_> {
         };
         let target = (placed.x, placed.y, placed.z);
         let state = self.apply_item_block_state([target.0, target.1, target.2], state, &stack)?;
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
+        let name = self.res.facts().get(state).name.clone();
+        if let Some(entity) = self.new_block_entity(&name) {
             self.world.block_entities.insert(target, entity);
             self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         }
@@ -1683,10 +1694,10 @@ impl Game<'_> {
         table: &str,
         held: Option<&ItemStack>,
     ) -> Vec<ItemStack> {
-        match self.res.items().loot_sequence(parent) {
+        match world_items!(self).loot_sequence(parent) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items().loot_table_from(table, false, held, random)
+                world_items!(self).loot_table_from(table, false, held, random)
             }
             None => self
                 .res

@@ -15,6 +15,7 @@
 //! The loaders need no mod code, vanilla state ids never move, and with no
 //! content mod the root is the base root itself.
 use crate::{Result, blocks::MAP_COLORS};
+use horizon_core::geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape};
 use horizon_mods::content::{Block, Content, Rarity};
 use horizon_world::nbt::{self, JavaString, Limits, Tag};
 use serde::{Deserialize, Serialize, de};
@@ -228,12 +229,99 @@ impl Rename {
     }
 }
 
+// DiscreteVoxelShape.forAllEdges: merge consecutive boundary edges.
+fn shape_edges(shape: &VoxelShape) -> Vec<J> {
+    let sizes = shape.sizes();
+    let mut result = Vec::new();
+    for axis in [2, 0, 1] {
+        let a = (axis + 1) % 3;
+        let b = (axis + 2) % 3;
+        for u in 0..=sizes[a] {
+            for v in 0..=sizes[b] {
+                let mut start = None;
+                for t in 0..=sizes[axis] {
+                    let mut count = 0;
+                    let mut odd = 0;
+                    for du in 0..=1 {
+                        for dv in 0..=1 {
+                            let mut p = [0i32; 3];
+                            p[axis] = t as i32;
+                            p[a] = u as i32 + du - 1;
+                            p[b] = v as i32 + dv - 1;
+                            if shape.is_full(p[0], p[1], p[2]) {
+                                count += 1;
+                                odd ^= du ^ dv;
+                            }
+                        }
+                    }
+                    let edge = count == 1 || count == 3 || (count == 2 && odd == 0);
+                    if edge {
+                        if start.is_none() {
+                            start = Some(t);
+                        }
+                    } else if let Some(first) = start.take() {
+                        let mut from = [0.0; 3];
+                        let mut to = [0.0; 3];
+                        from[a] = shape.coordinates(Axis::ALL[a])[u];
+                        from[b] = shape.coordinates(Axis::ALL[b])[v];
+                        to[a] = from[a];
+                        to[b] = from[b];
+                        from[axis] = shape.coordinates(Axis::ALL[axis])[first];
+                        to[axis] = shape.coordinates(Axis::ALL[axis])[t];
+                        result.push(J::Arr(from.into_iter().chain(to).map(J::f64).collect()));
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+fn encode_shape(shape: &VoxelShape) -> Tag {
+    let mut c = nbt::Compound::new();
+    let (min, max) = shape.discrete_bounds();
+    c.insert("canonical".into(), Tag::Byte(0));
+    c.insert("cube".into(), Tag::Byte(i8::from(shape.is_cube())));
+    let axes = shape.cube_coordinate_axes();
+    c.insert(
+        "cube_axes".into(),
+        Tag::Byte((axes[0] as i8) | ((axes[1] as i8) << 1) | ((axes[2] as i8) << 2)),
+    );
+    for (name, axis) in ["x", "y", "z"].into_iter().zip(Axis::ALL) {
+        c.insert(
+            name.into(),
+            Tag::LongArray(
+                shape
+                    .coordinates(axis)
+                    .iter()
+                    .map(|n| n.to_bits() as i64)
+                    .collect(),
+            ),
+        );
+    }
+    let [x, y, z] = shape.sizes();
+    let mut occupied = Vec::with_capacity(x * y * z);
+    for i in 0..x {
+        for j in 0..y {
+            for k in 0..z {
+                occupied.push(u8::from(shape.is_full(i as i32, j as i32, k as i32)));
+            }
+        }
+    }
+    c.insert("occupied".into(), Tag::ByteArray(occupied));
+    c.insert("discrete_min".into(), Tag::IntArray(min.to_vec()));
+    c.insert("discrete_max".into(), Tag::IntArray(max.to_vec()));
+    Tag::Compound(c)
+}
+
 /// A block being added: its declaration and where its states go.
 struct NewBlock<'a> {
     decl: &'a Block,
     rename: Rename,
     /// The template's item, if it has one.
     item: Option<String>,
+    shapes: Option<Vec<VoxelShape>>,
+    default: u32,
 }
 /// An item being added (declared, or a block's).
 struct NewItem {
@@ -241,6 +329,7 @@ struct NewItem {
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
     components: Vec<(String, J)>,
+    crafting_remainder: Option<String>,
 }
 
 struct Plan<'a> {
@@ -272,6 +361,18 @@ fn patch_components(
         }
     }
     Ok(())
+}
+
+/// A declared component patch, as the overlay's JSON.
+fn component_patch(
+    id: &str,
+    components: &BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<(String, J)>> {
+    Ok(components
+        .iter()
+        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
+        .collect::<std::result::Result<_, serde_json::Error>>()
+        .map_err(|e| format!("{id}: {e}"))?)
 }
 
 fn read_json(path: &Path) -> Result<J> {
@@ -323,6 +424,104 @@ impl<'a> Plan<'a> {
                 let states = range(&decl.template).ok_or_else(|| {
                     format!("{}: template {} is not a block", decl.id, decl.template)
                 })?;
+                let shapes = if let Some(spec) = &decl.shapes {
+                    let Some(J::Arr(rows)) = facts.get("states") else {
+                        unreachable!()
+                    };
+                    let mut used = BTreeSet::new();
+                    let mut out = Vec::new();
+                    for id in states.clone() {
+                        let J::Arr(row) = &rows[id as usize] else {
+                            unreachable!()
+                        };
+                        let Some(J::Str(value)) = row
+                            .get(4)
+                            .and_then(|x| x.get("properties"))
+                            .and_then(|x| x.get(&spec.property))
+                        else {
+                            return Err(format!(
+                                "{}: template state lacks property {}",
+                                decl.id, spec.property
+                            )
+                            .into());
+                        };
+                        let boxes = spec.values.get(value).ok_or_else(|| {
+                            format!("{}: no shape for {}={value}", decl.id, spec.property)
+                        })?;
+                        used.insert(value.as_str());
+                        let mut shape = VoxelShape::empty();
+                        for b in boxes {
+                            let part = VoxelShape::from_box(Aabb::new(
+                                Vec3::new(b[0], b[1], b[2]),
+                                Vec3::new(b[3], b[4], b[5]),
+                            ))?;
+                            shape = shape.join_unoptimized(&part, ShapeOp::OR)?;
+                        }
+                        out.push(shape);
+                    }
+                    if used.len() != spec.values.len() {
+                        return Err(format!(
+                            "{}: shape values include an unknown {} value",
+                            decl.id, spec.property
+                        )
+                        .into());
+                    }
+                    Some(out)
+                } else {
+                    None
+                };
+                let mut default = *defaults.get(&decl.template).ok_or_else(|| {
+                    format!(
+                        "{}: template {} has no default state",
+                        decl.id, decl.template
+                    )
+                })?;
+                if !decl.default_state.is_empty() {
+                    let Some(J::Arr(rows)) = facts.get("states") else {
+                        unreachable!()
+                    };
+                    let properties = |id: u32| -> Option<&J> {
+                        let J::Arr(row) = rows.get(id as usize)? else {
+                            return None;
+                        };
+                        row.get(4)?.get("properties")
+                    };
+                    let mut wanted = properties(default).cloned().ok_or_else(|| {
+                        format!("{}: template default has no state properties", decl.id)
+                    })?;
+                    for (key, value) in &decl.default_state {
+                        if wanted.get(key).is_none() {
+                            return Err(format!(
+                                "{}: unknown state property {key} on {}",
+                                decl.id, decl.template
+                            )
+                            .into());
+                        }
+                        wanted.set(key, J::Str(value.clone()));
+                    }
+                    let matches: Vec<u32> = states
+                        .clone()
+                        .filter(|id| {
+                            properties(*id).is_some_and(|p| {
+                                let (J::Obj(a), J::Obj(b)) = (p, &wanted) else {
+                                    return false;
+                                };
+                                a.len() == b.len() && b.iter().all(|(k, v)| p.get(k) == Some(v))
+                            })
+                        })
+                        .collect();
+                    if matches.len() != 1 {
+                        return Err(format!(
+                            "{}: default_state {:?} matches {} states of {}",
+                            decl.id,
+                            decl.default_state,
+                            matches.len(),
+                            decl.template
+                        )
+                        .into());
+                    }
+                    default = matches[0];
+                }
                 let mut rename = Rename::new(&decl.template, &decl.id);
                 rename.first = next;
                 next += states.len() as u32;
@@ -337,6 +536,8 @@ impl<'a> Plan<'a> {
                     decl,
                     rename,
                     item: None,
+                    shapes,
+                    default,
                 });
             }
         }
@@ -382,7 +583,8 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(item, &b.decl.id),
                     max_stack_size: None,
                     rarity: None,
-                    components: Vec::new(),
+                    components: component_patch(&b.decl.id, &b.decl.components)?,
+                    crafting_remainder: None,
                 });
             }
         }
@@ -392,12 +594,8 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(&i.template, &i.id),
                     max_stack_size: i.max_stack_size,
                     rarity: i.rarity,
-                    components: i
-                        .components
-                        .iter()
-                        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
-                        .collect::<std::result::Result<_, serde_json::Error>>()
-                        .map_err(|e| format!("{}: {e}", i.id))?,
+                    components: component_patch(&i.id, &i.components)?,
+                    crafting_remainder: i.crafting_remainder.clone(),
                 });
             }
         }
@@ -445,6 +643,34 @@ impl<'a> Plan<'a> {
                         row.set("item", J::Str("minecraft:air".into()));
                     }
                     self.override_gameplay(b, &mut row);
+                    if let Some(shapes) = &b.shapes {
+                        let shape = &shapes[i];
+                        let boxes = shape
+                            .boxes()
+                            .iter()
+                            .map(|b| {
+                                J::Arr(
+                                    [
+                                        b.min(Axis::X),
+                                        b.min(Axis::Y),
+                                        b.min(Axis::Z),
+                                        b.max(Axis::X),
+                                        b.max(Axis::Y),
+                                        b.max(Axis::Z),
+                                    ]
+                                    .into_iter()
+                                    .map(J::f64)
+                                    .collect(),
+                                )
+                            })
+                            .collect();
+                        row.set("outline", J::Arr(boxes));
+                        row.set("outline_edges", J::Arr(shape_edges(shape)));
+                        row.set(
+                            "full_collision",
+                            J::Bool(!shape.join_is_not_empty(&VoxelShape::block(), ShapeOp::XOR)?),
+                        );
+                    }
                 }
                 list.push(row);
             }
@@ -530,6 +756,19 @@ impl<'a> Plan<'a> {
             }
             map.set(&i.rename.to, v);
         }
+        if components {
+            for i in &self.items {
+                if let Some(rest) = &i.crafting_remainder
+                    && map.get(rest).is_none()
+                {
+                    return Err(format!(
+                        "{}: crafting_remainder {rest:?} is not an item",
+                        i.rename.to
+                    )
+                    .into());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -546,7 +785,7 @@ impl<'a> Plan<'a> {
                 states(doc, "states", false, false)?;
                 let defaults = doc.at("defaults").ok_or("no defaults")?;
                 for b in &self.blocks {
-                    let default = self.defaults[&b.decl.template];
+                    let default = b.default;
                     let id = b.rename.id(default).ok_or("a default outside its block")?;
                     defaults.set(&b.decl.id, J::Num(id.into()));
                 }
@@ -645,6 +884,32 @@ impl<'a> Plan<'a> {
                 doc.set("states", J::Num(((self.states + added) as u64).into()));
             }
             _ => return Err("no rule for this table".into()),
+        }
+        Ok(())
+    }
+
+    fn collision_shapes(&self, tag: &mut Tag) -> Result<()> {
+        let Tag::Compound(root) = tag else {
+            return Err("collision table is not a compound".into());
+        };
+        let mut indices = Vec::new();
+        let Some(Tag::List(entries)) = root.get_mut(&JavaString::from("shapes")) else {
+            return Err("collision table has no shapes".into());
+        };
+        for block in &self.blocks {
+            if let Some(shapes) = &block.shapes {
+                for (i, shape) in shapes.iter().enumerate() {
+                    let id = entries.len() as i32;
+                    entries.push(encode_shape(shape));
+                    indices.push((block.rename.first as usize + i, id));
+                }
+            }
+        }
+        let Some(Tag::IntArray(mapping)) = root.get_mut(&JavaString::from("cached_shapes")) else {
+            return Err("collision table has no mapping".into());
+        };
+        for (state, id) in indices {
+            mapping[state] = id;
         }
         Ok(())
     }
@@ -1113,6 +1378,9 @@ fn tables(base: &Path, plan: &Plan, overlay: &Overlay<'_>) -> Result<()> {
             let (mut named, _) = nbt::read_named(&fs::read(&path)?, Limits::tables())
                 .map_err(|e| format!("{name}: {e}"))?;
             plan.nbt(&mut named.tag);
+            if name == "cached-collision.nbt" || name == "worldgen/blocks/cached-collision.nbt" {
+                plan.collision_shapes(&mut named.tag)?;
+            }
             nbt::write_named(&named, Limits::tables()).map_err(|e| format!("{name}: {e}"))?
         };
         overlay.write(name, &bytes)
@@ -1330,6 +1598,17 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
         .collect();
     namespaces.sort();
     overlay.write(MARKER, &serde_json::to_vec(&namespaces)?)?;
+    let remainders: BTreeMap<&str, &str> = plan
+        .items
+        .iter()
+        .filter_map(|i| Some((i.rename.to.as_str(), i.crafting_remainder.as_deref()?)))
+        .collect();
+    if !remainders.is_empty() {
+        overlay.write(
+            horizon_items::items::MOD_CRAFT_REMAINDERS,
+            &serde_json::to_vec(&remainders)?,
+        )?;
+    }
     if mods.iter().any(|m| !m.content.blocks.is_empty()) {
         overlay.write(crate::content_identity::MARKER, b"1")?;
     }

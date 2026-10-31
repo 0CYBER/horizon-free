@@ -174,6 +174,14 @@ pub struct ConnReader {
     pub threshold: Option<usize>,
     pub counters: Arc<Counters>,
 }
+/// Closes a connection from another thread: a read or a write blocked on it fails.
+pub struct Closer(Stream);
+impl Closer {
+    pub fn close(&self) {
+        self.0.shutdown();
+    }
+}
+
 pub struct ConnWriter {
     stream: Stream,
     encrypt: Option<Cfb8>,
@@ -314,6 +322,12 @@ impl Connection {
     }
 }
 impl ConnReader {
+    /// Read exactly `len` bytes as they are, with no framing.
+    pub fn read_raw(&mut self, len: usize) -> Result<Vec<u8>> {
+        let mut out = vec![0u8; len];
+        self.stream.read_exact(&mut out)?;
+        Ok(out)
+    }
     /// Block until a whole packet arrives: (id, payload).
     pub fn recv(&mut self) -> Result<(i32, Vec<u8>)> {
         loop {
@@ -333,10 +347,21 @@ impl ConnReader {
                 return Ok((id, body[start..].to_vec()));
             }
             let mut chunk = [0u8; 16384];
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
-                return Err(Error::new("Connection closed by the server"));
-            }
+            let n = match self.stream.read(&mut chunk) {
+                Ok(0) => return Err(Error::end_of_stream()),
+                Ok(n) => n,
+                // The read timeout passed: Windows reports TimedOut, Unix
+                // WouldBlock.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err(Error::timed_out());
+                }
+                Err(e) => return Err(e.into()),
+            };
             self.counters
                 .bytes_in
                 .fetch_add(n as i64, Ordering::Relaxed);
@@ -347,11 +372,22 @@ impl ConnReader {
             self.buffer.extend_from_slice(data);
         }
     }
+    /// A [`Closer`] for this connection.
+    pub fn closer(&self) -> Result<Closer> {
+        Ok(Closer(self.stream.try_clone()?))
+    }
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
         Ok(self.stream.set_read_timeout(timeout)?)
     }
 }
 impl ConnWriter {
+    /// Write bytes as they are, with no framing: the legacy server list ping
+    /// (`LegacyServerPinger`) is not a framed protocol.
+    pub fn write_raw(&mut self, data: &[u8]) -> Result<()> {
+        self.stream.write_all(data)?;
+        self.stream.flush()?;
+        Ok(())
+    }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         self.send_contents(&frame::contents(body, self.threshold)?)
@@ -479,6 +515,23 @@ mod tests {
         let refused = error("test", (0..3).map(closed).collect());
         assert!(refused.starts_with("Connection refused"), "{refused}");
         assert_eq!(error("nowhere", Vec::new()), "Unknown host nowhere");
+    }
+
+    #[test]
+    fn a_silent_peer_times_out_and_a_closed_one_ends_the_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        c.reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let silent = c.recv().unwrap_err();
+        assert!(silent.is_timed_out(), "{silent}");
+        assert_eq!(silent.to_string(), "Timed out");
+        drop(server);
+        let closed = c.recv().unwrap_err();
+        assert!(closed.is_end_of_stream(), "{closed}");
     }
 
     #[test]

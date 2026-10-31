@@ -6,16 +6,18 @@ pub mod ambience;
 pub mod animate_tick;
 pub mod arrows;
 pub use horizon_client_render::{
-    assets, atlas_sources, audio, auth, bidi, biome, block_entities, block_entity_anim,
+    assets, atlas_sources, audio, auth, ban_notice, bidi, biome, block_entities, block_entity_anim,
     block_entity_render, border_render, breaking, brewing, camera, chat, chunk, chunk_map, clouds,
     collisions, command_block, containers, crash, datapack, dynamic_light, effects, environment,
     extras, fast_hash, fog, font, gfx, graphics, graphics_style, graphics_ui, hud, hud_layout,
-    hud_overlays, inventory_effects, java_text, level_loading, light, lod, logging, menu_blur,
-    mesher, minimap, mipmap, mod_list, model_library, models, options_file, options_fixes,
-    options_ui, overlay, pack_screen, packs, par, particles, poi_sections, providers, screen_draw,
-    screen_effects, sculk, settings, shader_pack_list, signs, skins, sound_engine, sound_events,
-    spans, split_layout, sprites, streaming, tab_list, telemetry, testgen, title_edition, trims,
-    ui, vault, weather, widgets, world, worldborder, zip,
+    hud_overlays, inventory_effects, java_text, jigsaw_block, level_loading, light, lod, logging,
+    menu_blur, mesher, minimap, mipmap, mod_list, model_library, models, multiline_edit,
+    options_file, options_fixes, options_ui, overlay, pack_screen, packs, par, particles,
+    poi_sections, post_chain, potent_sulfur, preedit, providers, screen_draw, screen_effects,
+    sculk, section_mask, settings, shader_pack_list, signs, skins, sound_engine, sound_events,
+    sound_preview, spans, split_layout, sprites, streaming, structure_block, tab_list, telemetry,
+    test_block, test_instance_block, testgen, title_edition, trims, ui, vault, weather, widgets,
+    world, worldborder, zip,
 };
 pub mod attack_strength;
 pub mod attribute_updates;
@@ -28,6 +30,7 @@ pub mod block_pattern;
 pub mod block_transform;
 pub mod boss_overlay;
 pub mod cauldron;
+pub mod chunk_io;
 pub mod clock;
 pub mod command_storage;
 pub mod confirm_screen;
@@ -81,6 +84,7 @@ pub mod multiplayer;
 pub mod music;
 pub mod net;
 pub mod nether_portal;
+pub mod no_resources;
 pub mod offline_name;
 pub mod osk;
 pub mod patrol;

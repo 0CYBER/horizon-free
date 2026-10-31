@@ -151,7 +151,7 @@ impl Game<'_> {
         variant: &str,
         origin: [f64; 3],
     ) -> Vec<MerchantOffer> {
-        let Some(sequence) = self.res.stations().trades.sequence(set) else {
+        let Some(sequence) = self.stations().trades.sequence(set) else {
             return Vec::new();
         };
         let mut random = self.rand_sequences.lend(&sequence, self.level.seed);
@@ -164,8 +164,8 @@ impl Game<'_> {
             next_id: std::cell::Cell::new(next_map),
         };
         let ctx = TradeContext {
-            items: self.res.items(),
-            enchantments: &self.res.stations().enchantments,
+            items: self.items(),
+            enchantments: &self.stations().enchantments,
             variant,
             origin,
             maps: Some(&maps),
@@ -209,7 +209,7 @@ impl Game<'_> {
                 let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
                 let level = i32::from(m.extra.variant3.max(1));
                 let set = merchant::Trades::set_for(profession, level);
-                if self.res.stations().trades.sets.contains_key(&set) {
+                if self.stations().trades.sets.contains_key(&set) {
                     self.offers_from_set(&set, &variant, origin)
                 } else {
                     Vec::new()
@@ -288,7 +288,7 @@ impl Game<'_> {
             session.reputation = self.villager_reputation(id);
             session.hero = self.hero_amplifier();
             for seq in merchant::Session::sequences_needed(
-                &self.res.stations().trades,
+                &self.stations().trades,
                 &session.profession,
                 level,
             ) {
@@ -451,7 +451,14 @@ impl Game<'_> {
                 merchant::Event::Traded(index) => {
                     traded.extend(session.offers.get(index).map(|o| o.result.clone()));
                 }
-                merchant::Event::TradeSound => {}
+                merchant::Event::TradeSound => {
+                    let sound = if villager {
+                        "minecraft:entity.villager.yes"
+                    } else {
+                        "minecraft:entity.wandering_trader.yes"
+                    };
+                    self.audio.play(sound, Some(origin), 1.0, 1.0);
+                }
             }
         }
         (session, traded)
@@ -622,7 +629,7 @@ impl Game<'_> {
             m.focused,
         );
         let offers = m.session.offers.clone();
-        let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.res.items())).collect();
+        let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.items())).collect();
         let atlas = &self.gui.atlas;
         batch.fill(
             atlas,
@@ -638,7 +645,7 @@ impl Game<'_> {
             r.v1 = r.v0 + 166.0 * dv;
             batch.rect_uv(ox + SHIFT, oy, 276.0, 166.0, r, u32::MAX);
         }
-        let e = &self.res.stations().enchantments;
+        let e = &self.stations().enchantments;
         let tr = |k: &str, f: &str| e.translate(k).unwrap_or(f).to_owned();
         let name = custom.unwrap_or_else(|| {
             if progress {
@@ -837,24 +844,17 @@ impl Game<'_> {
         // Slots, hover highlight, carried stack, tooltip.
         let slots: Vec<usize> = (0..36).chain([INPUT, INPUT + 1, RESULT]).collect();
         let drag = self.drag_view();
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             let stack = self.slot_mut(i).clone();
             self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
-        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
-            if self.carried.is_none() && tooltip.is_none() {
-                tooltip = self.slot_mut(slot).clone();
-            }
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
+        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
+            && tooltip.is_none()
+        {
+            tooltip = self.slot_mut(slot).clone();
         }
         // An out-of-stock trade: "the villager needs to restock" over the
         // result (isHovering(186, 35, 22, 21), canRestock).
@@ -866,6 +866,9 @@ impl Game<'_> {
             && local.1 < 35.0 + 21.0 + 1.0;
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = tooltip.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if deprecated {
             let text = self
                 .res

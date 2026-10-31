@@ -32,7 +32,7 @@ impl Game<'_> {
 
     /// Every recipe id of the recipe manager (what `/recipe` resolves and suggests).
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
-        self.res.stations().recipe_index.ids().cloned().collect()
+        self.stations().recipe_index.ids().cloned().collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = self.entities(ctx, "targets", true)?;
@@ -82,7 +82,7 @@ impl Game<'_> {
     /// many recipe book displays changed (a transmute recipe has one per
     /// material count).
     fn change_recipes(&mut self, give: bool, recipes: &[String]) -> i32 {
-        let index = &self.res.stations().recipe_index;
+        let index = &world_stations!(self).recipe_index;
         if give {
             let (count, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
             self.recipe_unlocked(&unlocked);
@@ -113,7 +113,9 @@ impl Game<'_> {
             "explosion" | "player_explosion" | "bad_respawn_point" => DamageKind::Explosion,
             "fall" | "ender_pearl" | "fly_into_wall" => DamageKind::Fall,
             "on_fire" => DamageKind::OnFire,
-            "in_fire" | "campfire" | "hot_floor" => DamageKind::InFire,
+            "in_fire" => DamageKind::InFire,
+            "hot_floor" => DamageKind::HotFloor,
+            "campfire" => DamageKind::Campfire,
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
             "dry_out" => DamageKind::DryOut,
@@ -201,10 +203,15 @@ impl Game<'_> {
                     attacker,
                     from,
                 };
-                self.mobs
+                let hurt = self
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id)
-                    .is_some_and(|m| m.damage(amount, damage))
+                    .is_some_and(|m| m.damage(amount, damage));
+                if hurt {
+                    self.resolve_player_responsible(id, damage);
+                }
+                hurt
             }
             _ => false,
         };
@@ -233,27 +240,43 @@ impl Game<'_> {
             return Ok(0);
         };
         let current = self.target_rotation(t);
+        let mut look_at_target = None;
         let rot = if let Some(Arg::Coords(c)) = ctx.get("rotation") {
             // Relative parts are offsets from the entity's own rotation.
             c.rotation(current)
         } else {
+            let mut faced_entity = None;
             let to = if ctx.has("entity") {
                 let faced = self.entities(ctx, "facingEntity", false)?;
                 let Some(f) = faced.first().copied() else {
                     return Ok(0);
                 };
                 let mut p = self.target_position(f).unwrap_or(pos);
-                if matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true))) {
+                let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
+                if eyes {
                     p[1] += self.target_eye_height(f);
                 }
+                faced_entity = Some((f, eyes));
                 p
             } else {
                 self.position_arg(ctx, "facingLocation").unwrap_or(pos)
             };
-            let from = [pos[0], pos[1] + self.target_eye_height(t), pos[2]];
+            // LookAt.perform: Entity.lookAt from the source's anchor (the
+            // feet, unless `anchored eyes`).
+            let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+            let eye = if anchored_eyes {
+                self.target_eye_height(t)
+            } else {
+                0.0
+            };
+            let from = [pos[0], pos[1] + eye, pos[2]];
+            look_at_target = Some((anchored_eyes, to, faced_entity));
             look_at(from, to)
         };
         self.teleport_to(t, pos, Some(rot));
+        if let Some((eyes, to, entity)) = look_at_target {
+            self.send_player_look_at(t, eyes, to, entity);
+        }
         if t == Target::Player {
             self.pitch = rot[1].clamp(-90.0, 90.0);
         }
@@ -1277,12 +1300,12 @@ impl Game<'_> {
         let respect = matches!(ctx.get("respectTeams"), Some(Arg::Bool(true)));
         let max_y = match ctx.get("maxHeight") {
             Some(Arg::Int(h)) => *h,
-            _ => horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT,
+            _ => self.world.top_y(),
         };
-        if max_y < horizon_client::chunk::MIN_Y {
+        if max_y < self.world.bottom_y() {
             return Err(err(
                 "commands.spreadplayers.failed.invalid.height",
-                &[&max_y, &horizon_client::chunk::MIN_Y],
+                &[&max_y, &self.world.bottom_y()],
             ));
         }
         let targets = self.entities(ctx, "targets", false)?;
@@ -1483,7 +1506,7 @@ impl Game<'_> {
         let mut air2 = air(y);
         y -= 1;
         let mut air1 = air(y);
-        while y > horizon_client::chunk::MIN_Y {
+        while y > self.world.bottom_y() {
             y -= 1;
             let current = air(y);
             if !current && air1 && air2 {

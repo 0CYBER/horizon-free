@@ -24,6 +24,8 @@ class RemoteMiningTests(unittest.TestCase):
 #![allow(dead_code)]
 #[derive(Clone, Copy)]
 struct Hit { pos: [i32; 3], face: u8 }
+/// The held stack: `ItemStack.item`, which the debug-stick check reads.
+struct Stack { item: &'static str }
 struct Mining { pos: [i32; 3], progress: f32, ticks: u32 }
 #[derive(Default)]
 struct Remote { destroy_delay: u32, destroying: Option<([i32; 3], u8, f32)>, destroying_item: String }
@@ -35,7 +37,7 @@ struct Sounds { hit: String, volume: f32, pitch: f32 }
 struct Facts { hardness: f32, name: String, requires_tool: bool, sounds: Sounds }
 struct Resources { facts: Facts, speed: f32, tool_allows_creative: bool }
 impl Resources {
-    fn can_destroy_block(&self, _: Option<&()>, creative: bool) -> bool {
+    fn can_destroy_block(&self, _: Option<&Stack>, creative: bool) -> bool {
         !creative || self.tool_allows_creative
     }
     fn facts(&self) -> &Self { self }
@@ -87,7 +89,7 @@ impl Game {
         }
     }
     fn pick(&self) -> Option<Hit> { Some(self.hit) }
-    fn held(&self) -> Option<&()> { None }
+    fn held(&self) -> Option<&Stack> { None }
     // Player.blockActionRestricted: adventure without a can_break item.
     fn remote_break_restricted(&self) -> bool { self.restricted }
     // Game::destroy_progress (hand.rs) for a harvestable block on the ground.
@@ -98,6 +100,8 @@ impl Game {
     fn predict_break(&mut self, pos: [i32; 3], _: u32, _: i32) { self.world.broken.push(pos); }
     fn send(&mut self, S::PlayerAction(packet): S) { self.packets.push(packet); }
     fn crack_particle(&mut self, _: [i32; 3], _: u8, _: u32) {}
+    // RedStoneOreBlock.attack's dust (sculk.rs): no particles in this fixture.
+    fn redstone_ore_particles(&mut self, _: [i32; 3]) {}
     // ClientLevel.addBreakingBlockEffects: the hit sound once, when the dig
     // starts; the server's level events play it while the block is mined.
     fn breaking_block_effects(&mut self, _: [i32; 3], _: u8, play_sound: bool) {

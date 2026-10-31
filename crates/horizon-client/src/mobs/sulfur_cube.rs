@@ -264,6 +264,13 @@ pub fn fuse(m: &Mob) -> i32 {
 pub fn primed(m: &Mob) -> bool {
     fuse(m) >= 0
 }
+/// Client copy of `tickFuse`: count the fuse down for the renderer. The
+/// server alone explodes (`ai_step`); a guest never fires `Explode` here.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.counter2 > 1 {
+        m.extra.counter2 -= 1;
+    }
+}
 fn can_explode(m: &Mob) -> bool {
     archetype(m).is_some_and(|a| a.explosion.is_some()) && m.alive() && !primed(m)
 }
@@ -380,6 +387,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, amount: f32) -> bool {
             | DamageKind::Cactus
             | DamageKind::Freeze
             | DamageKind::SweetBerryBush
+            | DamageKind::HotFloor
     );
     if immune {
         if let Some(from) = source.from {
@@ -702,5 +710,34 @@ pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     m.extra.counter2 = int("fuse").unwrap_or(-1).max(-1) + 1;
     if primed(m) {
         m.invulnerable_flag = true;
+    }
+}
+
+#[cfg(test)]
+mod fuse_anim_tests {
+    use super::*;
+    use crate::mobs::{Mob, Species};
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    fn cube() -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::SulfurCube;
+        Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0)
+    }
+
+    #[test]
+    fn client_fuse_counts_down_without_going_negative() {
+        let mut m = cube();
+        m.extra.counter2 = 5; // fuse() == 4
+        assert!(primed(&m));
+        client_tick(&mut m);
+        assert_eq!(fuse(&m), 3);
+        for _ in 0..10 {
+            client_tick(&mut m);
+        }
+        // Stops at counter2 == 1 → fuse 0 (primed until the server removes it).
+        assert_eq!(m.extra.counter2, 1);
+        assert_eq!(fuse(&m), 0);
     }
 }

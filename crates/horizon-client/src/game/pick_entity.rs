@@ -16,7 +16,9 @@ impl Game<'_> {
             }
         };
         if let Some(hit) = self.remote_object_hit(true) {
-            offer(hit.distance, Some(hit.id));
+            // Interaction.getPickResult is Entity's: nothing to pick.
+            let id = (!self.interactions.contains_key(&hit.id)).then_some(hit.id);
+            offer(hit.distance, id);
         }
         if let Some((i, d)) = self.mob_hit() {
             offer(d, Some(self.mobs[i].id as i32));
@@ -73,7 +75,7 @@ impl Game<'_> {
         let item = if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
             // Mob.getPickResult: SpawnEggItem.byId.
             let egg = format!("{}_spawn_egg", m.kind.id);
-            return self.res.items().get(&egg).map(|_| ItemStack::new(&egg, 1));
+            return self.items().get(&egg).map(|_| ItemStack::new(&egg, 1));
         } else if let Some(b) = self.boats.iter().find(|b| b.id == id) {
             b.entity_type()
         } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {

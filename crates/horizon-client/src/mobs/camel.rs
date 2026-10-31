@@ -1,7 +1,7 @@
 //! Camels (`Camel`): ridden by two, sitting down and standing up now and
 //! then, dashing instead of jumping, eating cactus, always "tame".
 use super::{
-    Mob, MobEvent,
+    Mob, MobEvent, MobWorld,
     anim::{Poses, State},
     goals::{
         Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll,
@@ -9,6 +9,7 @@ use super::{
     },
 };
 use horizon_core::geometry::trig::Mth;
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_core::random::RandomSource;
 use std::collections::HashMap;
 
@@ -44,6 +45,17 @@ fn pose_time(m: &Mob) -> i64 {
 pub fn sitting(m: &Mob) -> bool {
     m.extra.camel_sitting
 }
+/// `Camel.getDefaultDimensions` for `Pose.SITTING`: the adult camel's box
+/// 1.43 lower with its eyes at 0.845, or a baby's 0.425 tall box with its
+/// eyes at 0.41. Standing, an adult has the type's box and a baby
+/// `BABY_STANDING_DIMENSIONS` (the species' baby size).
+pub fn sitting_dims(baby: bool) -> (f32, f32, f32) {
+    if baby {
+        (0.95, 0.425, 0.41)
+    } else {
+        (1.7, 2.375 - 1.43, 0.845)
+    }
+}
 fn in_transition(m: &Mob) -> bool {
     pose_time(m) < if sitting(m) { SIT_DOWN } else { STAND_UP }
 }
@@ -76,6 +88,124 @@ pub fn finish_load(m: &mut Mob, game_time: i64) {
     }
     let since = (game_time - tick.abs()).clamp(0, i64::from(i32::MAX / 2));
     m.extra.egg_time = (i64::from(m.age) - since) as i32;
+}
+/// `Camel.getDefaultDimensions`: the standing box, the type's or a baby's
+/// `BABY_STANDING_DIMENSIONS` (width and height).
+fn standing_dims(m: &Mob) -> (f32, f32) {
+    if m.is_baby() {
+        (0.95, 1.4)
+    } else {
+        (m.kind.width as f32, m.kind.height as f32)
+    }
+}
+/// `Camel.canCamelChangePose`: the box of the other pose fits where the camel
+/// is (`wouldNotSuffocateAtTargetPose`: no block in the way).
+pub fn can_change_pose(m: &Mob, w: &MobWorld) -> bool {
+    let (width, height) = if sitting(m) {
+        standing_dims(m)
+    } else {
+        let (width, height, _) = sitting_dims(m.is_baby());
+        (width, height)
+    };
+    let half = f64::from(width) / 2.0;
+    let at = m.position;
+    w.no_collision(Aabb::new(
+        Vec3::new(at.x - half, at.y, at.z - half),
+        Vec3::new(at.x + half, at.y + f64::from(height), at.z + half),
+    ))
+}
+/// `Camel.onElasticLeashPull`: a taut lead stands a sitting camel up, once it
+/// is not changing pose and has room to stand.
+pub fn on_elastic_leash_pull(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if sitting(m) && !in_transition(m) && can_change_pose(m, w) {
+        stand_up(m, events);
+    }
+}
+/// `Camel.getBodyAnchorAnimationYOffset` at the partial tick 0: how high the
+/// seat of the front (`front`) or back rider is on a camel of `height` at
+/// `scale`, following it down and up through the sit and stand animations.
+fn body_anchor_y(m: &Mob, front: bool, height: f32, scale: f32) -> f64 {
+    let age_sit_y_offset = if m.is_baby() { 0.09375 } else { 0.375 };
+    let mut base_sit_offset = f64::from(height) - age_sit_y_offset;
+    let sitting_height_difference = scale * 1.43;
+    let vertical_drop = sitting_height_difference - scale * 0.2;
+    let bottom_point = sitting_height_difference - vertical_drop;
+    let transition = in_transition(m);
+    let sits = sitting(m);
+    if transition {
+        let duration: i32 = if sits {
+            SIT_DOWN as i32
+        } else {
+            STAND_UP as i32
+        };
+        let (half_point, flex_point_offset): (i32, f32) = if sits {
+            (28, if front { 0.5 } else { 0.1 })
+        } else {
+            (if front { 24 } else { 32 }, if front { 0.6 } else { 0.35 })
+        };
+        let time = (pose_time(m) as f32).clamp(0.0, duration as f32);
+        let first_part = time < half_point as f32;
+        let part = if first_part {
+            time / half_point as f32
+        } else {
+            (time - half_point as f32) / (duration - half_point) as f32
+        };
+        let flex_point = sitting_height_difference - flex_point_offset * vertical_drop;
+        // Mth.lerp.
+        let lerp = |delta: f32, a: f32, b: f32| a + delta * (b - a);
+        base_sit_offset += f64::from(if sits {
+            lerp(
+                part,
+                if first_part {
+                    sitting_height_difference
+                } else {
+                    flex_point
+                },
+                if first_part { flex_point } else { bottom_point },
+            )
+        } else {
+            lerp(
+                part,
+                if first_part {
+                    bottom_point - sitting_height_difference
+                } else {
+                    bottom_point - flex_point
+                },
+                if first_part {
+                    bottom_point - flex_point
+                } else {
+                    0.0
+                },
+            )
+        });
+    }
+    if sits && !transition {
+        base_sit_offset += f64::from(bottom_point);
+    }
+    base_sit_offset
+}
+/// `Camel.getPassengerAttachmentPoint` of the one rider Horizon seats, before
+/// the camel's yaw turns it: half a block ahead (scaled by `getAgeScale`, 0.6
+/// for a baby) at the body anchor, which sinks while the camel sits. The
+/// second seat (-0.7 behind, 0.2 more for an animal) is not used: nothing
+/// seats a second rider yet.
+pub fn passenger_attachment(m: &Mob) -> [f64; 3] {
+    let scale = if m.is_baby() { 0.6 } else { 1.0 };
+    let height = body_anchor_y(m, true, m.height(), scale) as f32;
+    [0.0, f64::from(height), f64::from(0.5 * scale)]
+}
+/// `Camel.updateWalkAnimation`: the speed the legs go toward and how fast
+/// they get there (`WalkAnimationState.update`) for `distance` blocks moved.
+/// A camel walks only while it stands and is not dashing, six times the
+/// distance up to 1, and eases there at 0.2 (not the default 0.4).
+pub fn walk_target(m: &Mob, distance: f32) -> (f32, f32) {
+    let dashing = m.anim.states[4].started.is_some();
+    let target = if !sitting(m) && !dashing {
+        (distance * 6.0).min(1.0)
+    } else {
+        0.0
+    };
+    (target, 0.2)
 }
 /// `Camel.refuseToMove`: sitting or getting up or down.
 pub fn refuse_to_move(m: &Mob) -> bool {
@@ -161,11 +291,15 @@ impl Goal for RandomSitting {
     fn flags(&self) -> u8 {
         MOVE
     }
-    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // checkExtraStartConditions: not leashed, and no controlling
+        // passenger, a player's or a mob's (a husk on its back).
         !m.fluids.in_water
             && pose_time(m) >= 400
+            && m.extra.leash.is_none()
             && m.on_ground
             && m.rider.is_none()
+            && !super::riders::mob_controlled(m, cx.w)
             && m.random.next_int_bound(4).unwrap_or(1) == 0
     }
     fn can_continue(&mut self, _m: &mut Mob, _cx: &mut Cx) -> bool {
@@ -313,8 +447,64 @@ pub fn anim(
 mod tests {
     use super::*;
     use crate::mobs::{Anim, Brain, Flags, MobType, Part, Species};
+    use crate::mobs::{leash::Holder, world::with_test_world};
+    use horizon_core::geometry::Vec3;
     use serde_json::json;
     use std::sync::Arc;
+
+    /// `CamelAi.RandomSitting.checkExtraStartConditions`: a camel sits down
+    /// only with no controlling passenger and no lead. A husk on its back
+    /// controls it (`Mob.getControllingPassenger`), a slime does not
+    /// (`#non_controlling_rider`), so a camel carrying a husk never sits
+    /// with it floating above (#3199).
+    #[test]
+    fn a_camel_with_a_husk_on_its_back_never_sits_down() {
+        // Whether the goal starts in 64 tries (each passes 1 in 4).
+        let sits = |rider: Option<&str>, leashed: bool| {
+            let mut seen = Vec::new();
+            let mut camel = None;
+            with_test_world(&[], |_, types| {
+                let mob = |id: u32, name: &str| {
+                    let kind = std::sync::Arc::new(types.types[name].clone());
+                    Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+                };
+                let mut m = mob(1, "minecraft:camel");
+                if let Some(name) = rider {
+                    let mut r = mob(2, name);
+                    r.extra.mount = Some(m.id);
+                    m.extra.rider = Some(r.id);
+                    seen.push(r.seen(None));
+                }
+                if leashed {
+                    m.extra.leash = Some(Holder::Mob(3));
+                }
+                camel = Some(m);
+            });
+            let mut m = camel?;
+            m.age = 1000;
+            m.extra.egg_time = 0;
+            m.on_ground = true;
+            let mut started = false;
+            with_test_world(&seen, |w, _| {
+                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    lr: &mut lr,
+                    events: &mut events,
+                };
+                started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
+            });
+            Some(started)
+        };
+        let Some(alone) = sits(None, false) else {
+            return;
+        };
+        assert!(alone, "a camel with nothing on its back sits down");
+        assert_eq!(sits(Some("minecraft:husk"), false), Some(false));
+        assert_eq!(sits(Some("minecraft:slime"), false), Some(true));
+        assert_eq!(sits(None, true), Some(false), "a leashed camel");
+    }
 
     fn camel() -> Mob {
         let model = Arc::new(Part::parse("root", &json!({"children": {"head": {}}})));

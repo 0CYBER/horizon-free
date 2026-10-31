@@ -584,7 +584,15 @@ impl SpawnerExt for Spawner {
             let rules_ok = data.custom_spawn_rules.is_some()
                 || spawn_selection::mob_spawn_rules(s, l, own[0], own[1], own[2]);
             if !rules_ok
-                || !spawn_selection::spawn_obstruction(s, l, bounds, &added, own[0], own[1], own[2])
+                || !spawn_selection::spawn_obstruction(
+                    s,
+                    l,
+                    bounds,
+                    Some(&added),
+                    own[0],
+                    own[1],
+                    own[2],
+                )
             {
                 continue;
             }

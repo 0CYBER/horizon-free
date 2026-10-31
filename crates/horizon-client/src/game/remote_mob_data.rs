@@ -50,6 +50,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     m.invisible = invisible;
                 }
             }
+            // Entity.DATA_SILENT: Entity.isSilent, which keeps the sounds
+            // a client plays itself quiet (LivingEntity.breakItem's).
+            (4, Value::Bool(silent)) => m.silent = *silent,
             // Entity.DATA_POSE: the pose the species animates by.
             (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
@@ -79,6 +82,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.ai.aggressive = flags & 4 != 0;
             }
             (i, Value::Bool(b)) if Some(i) == baby => m.extra.age = if *b { -1 } else { 0 },
+            // AgeableMob.AGE_LOCKED, the entry after DATA_BABY_ID (not
+            // Zombie's or Piglin's).
+            (17, Value::Bool(locked)) if baby == Some(16) && finalize::ageable(species) => {
+                m.extra.age_locked = *locked
+            }
             _ => {}
         }
         match (species, *index, value) {
@@ -119,6 +127,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
             (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // Bogged.DATA_SHEARED: the mushrooms on its head are gone.
+            (Species::Bogged, 16, Value::Bool(sheared)) => m.extra.sheared = *sheared,
+            // Tadpole.AGE_LOCKED (after AbstractFish's FROM_BUCKET).
+            (Species::Tadpole, 17, Value::Bool(locked)) => m.extra.age_locked = *locked,
             // MushroomCow.DATA_TYPE (after AgeableMob's DATA_BABY_ID and
             // AGE_LOCKED): 0 red, 1 brown.
             (Species::Mooshroom, 18, Value::Int(variant)) => {
@@ -141,8 +153,16 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.color = (*c & 15) as u8;
             }
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
-            (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
+            (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
+            }
+            // SulfurCube.MAX_FUSE: onSyncedDataUpdated copies it into the fuse
+            // the client ticks for swell / white flash (#4548).
+            (Species::SulfurCube, 20, Value::Int(fuse)) => {
+                m.extra.counter2 = (*fuse).max(0) + 1;
+            }
+            (Species::SulfurCube, 19, Value::Bool(from_bucket)) => {
+                m.extra.scratch[3] = i32::from(*from_bucket);
             }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
             // and raised head of an angry enderman.
@@ -181,6 +201,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // Vex.DATA_FLAGS_ID: charging in bit 0.
             (Species::Vex, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // GlowSquid.DATA_DARK_TICKS_REMAINING (after AgeableMob's two).
+            (Species::GlowSquid, 18, Value::Int(ticks)) => {
+                horizon_client::mobs::aquatic::set_dark_ticks(m, *ticks);
+            }
             // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
             (Species::Creaking, 16, Value::Bool(can_move)) => m.extra.flag2 = !*can_move,
             (Species::Creaking, 17, Value::Bool(active)) => m.extra.flag = *active,
@@ -286,6 +310,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER):
             // `isOnStillTimeout` on a client, which keeps the ghast solid to
             // the player (`canBeCollidedWith`).
+            // HappyGhast.IS_LEASH_HOLDER: RopesLayer draws the ropes while set.
+            (Species::HappyGhast, 18, Value::Bool(holder)) => {
+                m.extra.scratch[1] = i32::from(*holder)
+            }
             (Species::HappyGhast, 19, Value::Bool(still)) => m.extra.counter = i32::from(*still),
             // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
             (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {
@@ -365,6 +393,16 @@ fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
             (0, Value::Byte(flags)) => m.extra.fall_flying = flags & -128 != 0,
             (6, Value::Id(pose)) => m.extra.synced_pose = (*pose).clamp(0, 17) as u8,
             (8, Value::Byte(flags)) => m.extra.auto_spin_attack = flags & 4 != 0,
+            // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
+            (12, Value::Int(count)) => m.extra.arrow_count = *count,
+            (13, Value::Int(count)) => m.extra.stinger_count = *count,
+            // Player.DATA_SHOULDER_PARROT_LEFT and _RIGHT.
+            (19, Value::Id(v)) => {
+                m.extra.shoulder_parrots[0] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
+            (20, Value::Id(v)) => {
+                m.extra.shoulder_parrots[1] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
             _ => {}
         }
     }
@@ -451,6 +489,10 @@ pub(super) fn client_defaults(m: &mut Mob) {
         // Bat's constructor sets resting only on the server; the data default is 0.
         bat::set_resting(m, false);
     }
+    // A horse's jump strength until the server syncs its own: the type's.
+    if equine::moved_by_rider(m.species()) {
+        m.extra.vector[0] = m.kind.jump_strength;
+    }
 }
 
 #[cfg(test)]
@@ -481,6 +523,23 @@ mod tests {
         let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
         client_defaults(&mut m);
         Some(m)
+    }
+
+    /// #2920: a server's horse is moved by its rider's client, which jumps
+    /// it by the type's jump strength (`createBaseHorseAttributes`,
+    /// `createBaseChestedHorseAttributes`) until the server syncs its own.
+    #[test]
+    fn a_servers_horse_jumps_its_types_strength() {
+        for (kind, strength) in [("horse", 0.7), ("donkey", 0.5), ("mule", 0.5)] {
+            let Some(m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert!(
+                (m.extra.vector[0] - strength).abs() < 1e-6,
+                "{kind}: {}",
+                m.extra.vector[0]
+            );
+        }
     }
 
     #[test]
@@ -555,6 +614,21 @@ mod tests {
         assert!(calf.is_baby());
         apply(&mut calf, &[(16, s::BOOLEAN, Value::Bool(false))]);
         assert!(!calf.is_baby());
+    }
+
+    #[test]
+    fn cube_mobs_receive_size_from_metadata() {
+        for kind in ["slime", "magma_cube", "sulfur_cube"] {
+            let Some(mut m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert_eq!(m.extra.size, 1);
+            apply(&mut m, &[(18, s::INT, Value::Int(2))]);
+            assert_eq!(m.extra.size, 2);
+            if kind == "sulfur_cube" {
+                assert!(!m.is_baby());
+            }
+        }
     }
 
     #[test]
@@ -764,6 +838,20 @@ mod tests {
         assert_eq!(m.extra.using_item, 0);
     }
 
+    /// LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID of another
+    /// player, which ArrowLayer and BeeStingerLayer draw.
+    #[test]
+    fn another_players_stuck_arrows_and_stingers_are_kept() {
+        let Some(mut m) = mob("minecraft:player") else {
+            return;
+        };
+        apply(&mut m, &[(12, s::INT, Value::Int(4))]);
+        apply(&mut m, &[(13, s::INT, Value::Int(2))]);
+        assert_eq!((m.extra.arrow_count, m.extra.stinger_count), (4, 2));
+        apply(&mut m, &[(12, s::INT, Value::Int(0))]);
+        assert_eq!((m.extra.arrow_count, m.extra.stinger_count), (0, 2));
+    }
+
     #[test]
     fn a_pillager_charges_and_a_spellcaster_casts() {
         let Some(mut p) = mob("minecraft:pillager") else {
@@ -792,5 +880,20 @@ mod tests {
             &[(17, s::RESOLVABLE_PROFILE, Value::Profile(profile.clone()))],
         );
         assert_eq!(m.profile, Some(profile));
+    }
+
+    /// #4548: SulfurCube.MAX_FUSE copies into the fuse the client ticks for swell.
+    #[test]
+    fn sulfur_cube_max_fuse_sets_the_client_fuse() {
+        let Some(mut m) = mob("minecraft:sulfur_cube") else {
+            return;
+        };
+        assert_eq!(m.extra.counter2, 0);
+        apply(&mut m, &[(20, s::INT, Value::Int(40))]);
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 40);
+        assert!(horizon_client::mobs::sulfur_cube::primed(&m));
+        apply(&mut m, &[(20, s::INT, Value::Int(0))]);
+        // Last fuse tick: still primed at 0 until the server removes it.
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 0);
     }
 }

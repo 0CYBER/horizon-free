@@ -170,7 +170,10 @@ impl Game<'_> {
             "minecraft:brushable_block",
         );
         self.trigger_loot_table(&table);
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         decorated_pot::unpack_loot(
             &mut tag,
             loot.as_deref(),

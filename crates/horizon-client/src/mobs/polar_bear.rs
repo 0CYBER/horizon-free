@@ -95,7 +95,12 @@ fn environmental_panic(m: &Mob) -> bool {
         || m.last_damage.is_some_and(|(d, t)| {
             matches!(
                 d.kind,
-                DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Cactus
+                DamageKind::OnFire
+                    | DamageKind::InFire
+                    | DamageKind::Lava
+                    | DamageKind::Cactus
+                    | DamageKind::LightningBolt
+                    | DamageKind::HotFloor
             ) && i64::from(m.age) - t <= 40
         })
 }
@@ -179,6 +184,13 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
     }
     // A player in creative or spectator mode is forgiven at once.
     if m.extra.flag2 && w.player.as_ref().is_some_and(|p| p.creative || p.spectator) {
+        stop_being_angry(m);
+    }
+}
+/// `NeutralMob.playerDied`: a bear angry at the player (its target, kept in
+/// `flag2` until the anger ends) stops.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if m.extra.flag2 {
         stop_being_angry(m);
     }
 }

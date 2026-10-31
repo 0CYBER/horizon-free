@@ -8,6 +8,8 @@ description = "Host a Horizon server: server.toml, the CLI and the supervisor th
 
 [dependencies]
 horizon-server-files = { path = "../horizon-server-files" }
+# server.toml's [anticheat], which the game reads: checked here before every start.
+horizon-anticheat = { path = "../horizon-anticheat" }
 # The game process's RAM and CPU (the same probes the benchmark reports use).
 horizon-bench = { path = "../horizon-bench" }
 # The log's local times, as the game prints them.
