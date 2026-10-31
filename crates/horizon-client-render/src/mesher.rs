@@ -217,6 +217,20 @@ impl SectionMesh {
     /// boundary when shader packs with vertex displacement (e.g. waving foliage, water) are active.
     pub const BOUNDS_PAD: f32 = 0.5;
 
+    /// Retain geometry capacity after an upload, but none of its old contents.
+    pub(crate) fn clear(&mut self) {
+        self.solid.clear();
+        self.translucent.clear();
+        self.block_entities.clear();
+        self.sides = Sides::default();
+        self.visibility = ALL_VISIBLE;
+        self.bounds = None;
+    }
+    pub(crate) fn capacity_bytes(&self) -> usize {
+        self.solid.capacity() * std::mem::size_of::<TerrainVertex>()
+            + self.translucent.capacity() * std::mem::size_of::<TerrainVertex>()
+            + self.block_entities.capacity() * std::mem::size_of::<([i32; 3], u32)>()
+    }
     /// Sorts the solid quads by the side they face, for the renderer to
     /// leave out those facing away from the eye (`sides`).
     pub fn sort_solid(&mut self) {
@@ -247,7 +261,13 @@ impl SectionMesh {
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
 /// VisGraph.resolve: flood fill non-opaque cells and connect the faces each region touches.
+#[cfg(test)]
 fn visibility(pad: &Padded, info: &[Info]) -> u64 {
+    visibility_reusing(pad, info, &mut Vec::new())
+}
+fn visibility_reusing(pad: &Padded, info: &[Info], stack: &mut Vec<usize>) -> u64 {
+    // The all-visible shortcut can leave a partially filled stack behind.
+    stack.clear();
     // Opaque cells are already visited: resolve each state's opacity once,
     // then reuse this map for the flood fill and the uniform-section shortcuts.
     let mut seen = [false; 4096];
@@ -269,7 +289,6 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
         return 0;
     }
     let mut result = 0u64;
-    let mut stack = Vec::new();
     for start in 0..4096usize {
         if seen[start] {
             continue;
@@ -699,21 +718,30 @@ fn pi(x: i32, y: i32, z: i32) -> usize {
     ((y + B) as usize * P + (z + B) as usize) * P + (x + B) as usize
 }
 /// Blocks and light of one section plus a `B`-block border.
+#[derive(Default)]
 struct Padded {
     blocks: Vec<u32>,
     light: Vec<u8>,
 }
 impl Padded {
+    #[cfg(test)]
     fn new(region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> Self {
-        let mut blocks = vec![0u32; P * P * P];
-        let mut light = vec![0u8; P * P * P];
+        let mut pad = Self::default();
+        pad.fill(region, sy, &mut Box::new([0; 4096]));
+        pad
+    }
+    fn fill(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32, own: &mut [u32; 4096]) {
+        self.blocks.resize(P * P * P, 0);
+        self.blocks.fill(0);
+        self.light.resize(P * P * P, 0);
+        let (blocks, light) = (&mut self.blocks, &mut self.light);
         let base_y = region[1][1].map_or(MIN_Y, Chunk::min_y) + sy * 16;
         // The section itself is unpacked in one pass; the border cells of the
         // neighbouring sections are read one by one.
-        let mut own = Box::new([0u32; 4096]);
+        own.fill(0);
         let center = region[1][1].map(|c| &c.sections[sy as usize]);
         if let Some(section) = center {
-            section.unpack(&mut own);
+            section.unpack(own);
         }
         for y in -B..16 + B {
             let wy = base_y + y;
@@ -745,9 +773,18 @@ impl Padded {
                 }
             }
         }
-        Self { blocks, light }
     }
 }
+/// Per-worker temporary arrays. They never hold resource-pack references or
+/// geometry still owned by the renderer, and total about 88 KiB per worker.
+#[derive(Default)]
+pub(crate) struct MeshScratch {
+    padded: Padded,
+    own: Option<Box<[u32; 4096]>>,
+    visibility: Vec<usize>,
+}
+#[cfg(test)]
+mod reuse_tests;
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
 /// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
@@ -928,14 +965,30 @@ pub struct Mesher<'a> {
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     pub fn mesh(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
-        let mut out = SectionMesh::default();
+        self.mesh_reusing(
+            region,
+            sy,
+            SectionMesh::default(),
+            &mut MeshScratch::default(),
+        )
+    }
+    pub(crate) fn mesh_reusing(
+        &mut self,
+        region: &[[Option<&Chunk>; 3]; 3],
+        sy: i32,
+        mut out: SectionMesh,
+        scratch: &mut MeshScratch,
+    ) -> SectionMesh {
+        out.clear();
         let center = region[1][1].expect("centre chunk");
         let section = &center.sections[sy as usize];
         if section.is_uniform(0) {
             return out;
         }
-        let pad = Padded::new(region, sy);
-        out.visibility = visibility(&pad, &self.tables.info);
+        let own = scratch.own.get_or_insert_with(|| Box::new([0; 4096]));
+        scratch.padded.fill(region, sy, own);
+        let pad = &scratch.padded;
+        out.visibility = visibility_reusing(pad, &self.tables.info, &mut scratch.visibility);
         let base_y = center.min_y() + sy * 16;
         let mut tints = Tints::new(
             region,
@@ -970,7 +1023,7 @@ impl Mesher<'_> {
                     if state.fluid.kind() != FluidKind::Empty {
                         let water = tints.get(Resolver::Water, x, y, z);
                         let nether = self.nether_shading;
-                        fluid::tesselate(self.tables, nether, &pad, water, &mut out, [x, y, z]);
+                        fluid::tesselate(self.tables, nether, pad, water, &mut out, [x, y, z]);
                     }
                     if !state.model {
                         continue;
@@ -1020,7 +1073,7 @@ impl Mesher<'_> {
                                 continue;
                             }
                             self.face(
-                                &pad,
+                                pad,
                                 &mut tints,
                                 &mut out,
                                 [x, y, z],
