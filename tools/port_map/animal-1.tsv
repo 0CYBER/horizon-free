@@ -12,11 +12,11 @@ Allay.setJukeboxPlaying	inline	crates/horizon-client/src/game/allays.rs::Game::t
 Allay.wantsToPickUp	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	same item within 32 blocks, mob_griefing on
 Allay.allayConsidersItemEqual	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	gap: compares item ids only, the held item keeps no potion contents
 Allay.hasNonMatchingPotion	missing		an allay holding a potion also fetches other potion types; the held item is only an id
-Allay.updateDynamicGameEventListener	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	jukebox is polled; there is no vibration listener
+Allay.updateDynamicGameEventListener	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	no listener registry: the vibration half is mobs/allay.rs::listen (game/sculk.rs dispatches each event) and the jukebox half is polled here; vanilla's re-registration on a chunk-section change has no counterpart
 Allay.setDancing	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	dancing set while a jukebox plays and not panicking
 Allay.shouldStopDancing	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	no jukebox within 10 blocks stops the dance
 Allay.isSpinning	inline	crates/horizon-client/src/mobs/allay.rs::animate	dance clock modulo 55 below 15
-Allay.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	inventory, DuplicationCooldown and liked player; vibration listener data is not written
+Allay.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	inventory, DuplicationCooldown, liked player and the vibration listener (listener)
 Allay.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	
 Allay.updateDuplicationCooldown	inline	crates/horizon-client/src/mobs/allay.rs::ai_step	egg_time counts down
 Allay.setDuplicationCooldown	inline	crates/horizon-client/src/game/allays.rs::Game::interact_allay	6000 set here; can_duplicate is derived from egg_time in mob_meta
