@@ -13306,7 +13306,12 @@ impl Game<'_> {
         let screen = if title {
             Vec::new()
         } else {
-            self.screen_quads(alpha as f32, size)
+            let scale = self
+                .player
+                .as_mut()
+                .and_then(|p| p.attribute("minecraft:scale").ok())
+                .unwrap_or(1.0) as f32;
+            self.screen_quads(alpha as f32, size, scale)
         };
         if !title {
             self.end_geometry(camera, &mut entities);
