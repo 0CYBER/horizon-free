@@ -851,7 +851,7 @@ fn login_and_configure(
     let mut brand = String::from("vanilla");
     let known_pack = loop {
         let (id, payload) = c.recv().map_err(e)?;
-        match cfg::Serverbound::decode(id, &payload).map_err(e)? {
+        match decode_config(id, &payload).map_err(e)? {
             cfg::Serverbound::ClientInformation(i) => info = i,
             cfg::Serverbound::CustomPayload(p) if p.channel == "minecraft:brand" => {
                 brand = horizon_protocol::buf::Reader::new(&p.data)
@@ -902,7 +902,7 @@ fn login_and_configure(
         let mut content_match = false;
         loop {
             let (id, payload) = c.recv().map_err(e)?;
-            match cfg::Serverbound::decode(id, &payload).map_err(e)? {
+            match decode_config(id, &payload).map_err(e)? {
                 cfg::Serverbound::CustomPayload(p)
                     if p.channel == crate::content_identity::CHANNEL =>
                 {
@@ -947,7 +947,7 @@ fn login_and_configure(
     send(c, cfg::Clientbound::FinishConfiguration(Empty))?;
     loop {
         let (id, payload) = c.recv().map_err(e)?;
-        match cfg::Serverbound::decode(id, &payload).map_err(e)? {
+        match decode_config(id, &payload).map_err(e)? {
             cfg::Serverbound::FinishConfiguration(_) => break,
             cfg::Serverbound::ClientInformation(i) => info = i,
             _ => {}
@@ -1082,9 +1082,7 @@ fn wait_alive<T>(
         });
         let result = loop {
             let packet = match c.reader.recv() {
-                Ok((id, payload)) => {
-                    cfg::Serverbound::decode(id, &payload).map_err(|e| e.to_string())
-                }
+                Ok((id, payload)) => decode_config(id, &payload).map_err(|e| e.to_string()),
                 Err(err) => break Err(err.to_string()),
             };
             if let Some(result) = answer(packet) {
@@ -1254,7 +1252,7 @@ fn read_loop(
         if let Some(average) = rate.as_mut().and_then(|r| r.received(Instant::now())) {
             return Ended::RateExceeded(average);
         }
-        match play::Serverbound::decode(id, &payload) {
+        match play::Serverbound::decode(id, &payload).and_then(checked_play) {
             Ok(play::Serverbound::KeepAlive(k)) => alive.store(k.id, Ordering::Relaxed),
             Ok(play::Serverbound::ResourcePack(r))
                 if r.action == PACK_DECLINED && required_pack =>
@@ -1272,6 +1270,43 @@ fn read_loop(
             // A malformed packet disconnects like vanilla's decoder exception.
             Err(e) => return Ended::Closed(format!("Invalid packet {id}: {e}")),
         }
+    }
+}
+
+/// ServerboundCustomPayloadPacket's codec (DiscardedPayload): a payload of at most
+/// 32767 bytes, in configuration and in play.
+const MAX_PAYLOAD: usize = horizon_protocol::quiet::MAX_PAYLOAD;
+const COMMAND_SUGGESTION: i32 = horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION;
+
+fn too_large() -> String {
+    format!("Payload may not be larger than {MAX_PAYLOAD} bytes")
+}
+
+/// A play packet as vanilla's decoders read it.
+fn checked_play(packet: play::Serverbound) -> horizon_protocol::Result<play::Serverbound> {
+    match &packet {
+        play::Serverbound::CustomPayload(p) if p.data.len() > MAX_PAYLOAD => {
+            Err(horizon_protocol::Error::new(too_large()))
+        }
+        // ServerboundCommandSuggestionPacket: a VarInt id, then the command, at most
+        // 32500 chars. The game reads it later; its codec's limits apply here.
+        play::Serverbound::Unknown(COMMAND_SUGGESTION, body) => {
+            let mut r = horizon_protocol::buf::Reader::new(body);
+            r.varint()?;
+            r.string(32500)?;
+            Ok(packet)
+        }
+        _ => Ok(packet),
+    }
+}
+
+/// A configuration packet as vanilla's decoders read it.
+fn decode_config(id: i32, payload: &[u8]) -> horizon_protocol::Result<cfg::Serverbound> {
+    match cfg::Serverbound::decode(id, payload)? {
+        cfg::Serverbound::CustomPayload(p) if p.data.len() > MAX_PAYLOAD => {
+            Err(horizon_protocol::Error::new(too_large()))
+        }
+        packet => Ok(packet),
     }
 }
 
@@ -1463,6 +1498,37 @@ mod tests {
                 other => panic!("unexpected login packet {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn payloads_and_suggestions_past_vanillas_limits_are_malformed() {
+        let payload = |len: usize| {
+            play::Serverbound::CustomPayload(cfg::CustomPayload {
+                channel: "a:b".into(),
+                data: vec![0; len],
+            })
+        };
+        assert!(checked_play(payload(MAX_PAYLOAD)).is_ok());
+        assert!(checked_play(payload(MAX_PAYLOAD + 1)).is_err());
+        let config = |len: usize| {
+            cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+                channel: "a:b".into(),
+                data: vec![0; len],
+            })
+            .encode()
+        };
+        // The body after the packet's one-byte VarInt id.
+        let id = horizon_protocol::ids::configuration::serverbound::CUSTOM_PAYLOAD;
+        assert!(decode_config(id, &config(MAX_PAYLOAD)[1..]).is_ok());
+        assert!(decode_config(id, &config(MAX_PAYLOAD + 1)[1..]).is_err());
+        let suggestion = |len: usize| {
+            let mut w = horizon_protocol::buf::Writer::new();
+            w.varint(7);
+            w.string(&"a".repeat(len));
+            play::Serverbound::Unknown(COMMAND_SUGGESTION, w.data)
+        };
+        assert!(checked_play(suggestion(32500)).is_ok());
+        assert!(checked_play(suggestion(32501)).is_err());
     }
 
     #[test]
