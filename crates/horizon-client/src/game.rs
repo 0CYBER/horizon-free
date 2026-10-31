@@ -16730,21 +16730,87 @@ fn load_world_rest(
     let facts = resources.facts();
     let biomes = resources.biomes();
     let threads = resources.threads();
-    let registry_owner = assets;
+    let registry = assets.registry;
+    let overlay = &horizon_world::loot::PackOverlay::NONE;
     progress.set(6);
-    let mob_data = horizon_client::mobs::MobData::load(root, facts);
-    horizon_client::mobs::trial_spawner::load_registry(root);
-
-    let items = Items::load(
-        root,
-        assets.registry,
-        facts,
-        &horizon_world::loot::PackOverlay::NONE,
-    )?;
-    log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
-    progress.set(7);
-    let recipes = Recipes::load(root, &items, &horizon_world::loot::PackOverlay::NONE)?;
-    let transformers = horizon_client::block_transform::Transformers::load(root, assets.registry)?;
+    // Independent tables load together, within the worker budget the settings
+    // allow. Only the recipes and the stations read another table: the items.
+    let load_items = || -> Result<_> {
+        let items = Items::load(root, registry, facts, overlay)?;
+        log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
+        progress.set(7);
+        let recipes = Recipes::load(root, &items, overlay)?;
+        let stations = horizon_client::stations::StationData::load(root, &items, overlay);
+        Ok((items, recipes, stations))
+    };
+    let load_behaviours =
+        || Behaviours::load_with_gameplay(registry, root, behaviour_json, gameplay_projection);
+    let load_block_entity_render = || {
+        horizon_client::block_entity_render::BlockEntityRenderer::load_with_visibility(
+            root, registry, visibility,
+        )
+    };
+    let load_animate = || -> Result<_> {
+        let animate = horizon_client::animate_tick::AnimateTables::load(root, registry, biomes)?;
+        Ok((animate, horizon_client::fog::FogTables::load(root, biomes)))
+    };
+    let load_mobs = || -> Result<_> {
+        let mob_types: HashMap<_, _> = MobTypes::load(root)?
+            .types
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+        let mob_data = horizon_client::mobs::MobData::load(root, facts);
+        horizon_client::mobs::trial_spawner::load_registry(root);
+        Ok((mob_types, mob_data))
+    };
+    let load_transformers = || -> Result<_> {
+        let transformers = horizon_client::block_transform::Transformers::load(root, registry)?;
+        let models = (
+            perspective::player_type(root),
+            player_arms(root, "minecraft:player#main"),
+            player_arms(root, "minecraft:player_slim#main"),
+            horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"),
+        );
+        Ok((transformers, models))
+    };
+    // The errors cross threads as text.
+    fn text<T, E: std::fmt::Display>(
+        result: std::result::Result<T, E>,
+    ) -> std::result::Result<T, String> {
+        result.map_err(|e| e.to_string())
+    }
+    let (items, behaviours, block_entity_render, animate, mobs, transformers) = if threads > 1 {
+        std::thread::scope(|scope| {
+            let items = scope.spawn(|| text(load_items()));
+            let behaviours = scope.spawn(|| text(load_behaviours()));
+            let block_entity_render = scope.spawn(|| text(load_block_entity_render()));
+            let animate = scope.spawn(|| text(load_animate()));
+            let mobs = scope.spawn(|| text(load_mobs()));
+            let transformers = text(load_transformers());
+            (
+                items.join().unwrap(),
+                behaviours.join().unwrap(),
+                block_entity_render.join().unwrap(),
+                animate.join().unwrap(),
+                mobs.join().unwrap(),
+                transformers,
+            )
+        })
+    } else {
+        (
+            text(load_items()),
+            text(load_behaviours()),
+            text(load_block_entity_render()),
+            text(load_animate()),
+            text(load_mobs()),
+            text(load_transformers()),
+        )
+    };
+    let (items, recipes, stations) = items?;
+    let (animate, fog) = animate?;
+    let (mob_types, mob_data) = mobs?;
+    let (transformers, (player_type, player_arm, player_arm_slim, spin_attack)) = transformers?;
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -16754,48 +16820,26 @@ fn load_world_rest(
         threads
     );
     progress.set(8);
-    let stations = horizon_client::stations::StationData::load(
-        root,
-        &items,
-        &horizon_world::loot::PackOverlay::NONE,
-    );
-    let animate =
-        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
-    let fog = horizon_client::fog::FogTables::load(root, biomes);
     Ok(WorldRest {
         stations,
         items,
         recipes,
         transformers,
         providers: Providers::load(root),
-        block_entity_render:
-            horizon_client::block_entity_render::BlockEntityRenderer::load_with_visibility(
-                root,
-                registry_owner.registry,
-                visibility,
-            )?,
+        block_entity_render: block_entity_render?,
         animate,
         fog,
         music: horizon_client::music::MusicTables::load(root),
         ambient: horizon_client::ambience::AmbientTables::load(root),
         nether_environment: Environment::load_dimension(root, "the_nether", false)?,
         end_environment: Environment::load_dimension(root, "the_end", false)?,
-        behaviours: Behaviours::load_with_gameplay(
-            registry_owner.registry,
-            root,
-            behaviour_json,
-            gameplay_projection,
-        )?,
-        mob_types: MobTypes::load(root)?
-            .types
-            .into_iter()
-            .map(|(k, v)| (k, Arc::new(v)))
-            .collect(),
+        behaviours: behaviours?,
+        mob_types,
         mob_data,
-        player_type: perspective::player_type(root),
-        player_arm: player_arms(root, "minecraft:player#main"),
-        player_arm_slim: player_arms(root, "minecraft:player_slim#main"),
-        spin_attack: horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"),
+        player_type,
+        player_arm,
+        player_arm_slim,
+        spin_attack,
     })
 }
 
