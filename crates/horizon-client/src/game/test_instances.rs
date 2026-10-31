@@ -47,6 +47,8 @@ pub(super) struct TestDef {
     pub(super) environment: String,
     pub(super) max_ticks: i32,
     pub(super) setup_ticks: i32,
+    /// The dimension the test runs in (`TestData.dimension`).
+    pub(super) dimension: String,
     description: Text,
 }
 
@@ -63,6 +65,7 @@ impl TestDef {
             block_based,
             function: None,
             environment: "minecraft:default".into(),
+            dimension: "minecraft:overworld".into(),
             max_ticks,
             setup_ticks,
             description: Text::literal(""),
@@ -152,6 +155,7 @@ impl Game<'_> {
             block_based,
             function: function.map(str::to_owned),
             environment: environment.clone(),
+            dimension: dimension.to_owned(),
             max_ticks: json
                 .get("max_ticks")
                 .and_then(|v| v.as_i64())
@@ -383,7 +387,7 @@ impl Game<'_> {
     }
 
     /// `resetTest`.
-    fn reset_test(&mut self, pos: Pos) {
+    pub(super) fn reset_test(&mut self, pos: Pos) {
         self.remove_test_barriers(pos);
         self.clear_error_markers(pos);
         if self.place_test_structure(pos) {
@@ -420,19 +424,7 @@ impl Game<'_> {
                 inner.min.map(|v| v - padding),
                 inner.max.map(|v| v + padding),
             );
-            let ground = area.min[1] - 1;
-            for y in area.min[1]..=area.max[1] {
-                for z in area.min[2]..=area.max[2] {
-                    for x in area.min[0]..=area.max[0] {
-                        let name = if y < ground {
-                            "minecraft:stone"
-                        } else {
-                            "minecraft:air"
-                        };
-                        self.set_test_block_state((x, y, z), name, 818);
-                    }
-                }
-            }
+            self.clear_test_space(&area);
         }
         let corner = block.start_corner(origin, padding, rotation);
         let settings = TemplateSettings {
@@ -452,6 +444,24 @@ impl Game<'_> {
             rotation,
         );
         true
+    }
+
+    /// `StructureUtils.clearSpaceForStructure`'s blocks: air in the box (stone
+    /// below the ground height, which no row of the box is).
+    pub(super) fn clear_test_space(&mut self, area: &BoundingBox) {
+        let ground = area.min[1] - 1;
+        for y in area.min[1]..=area.max[1] {
+            for z in area.min[2]..=area.max[2] {
+                for x in area.min[0]..=area.max[0] {
+                    let name = if y < ground {
+                        "minecraft:stone"
+                    } else {
+                        "minecraft:air"
+                    };
+                    self.set_test_block_state((x, y, z), name, 818);
+                }
+            }
+        }
     }
 
     /// `saveTest`: the test's structure id, saved from the world.
@@ -527,8 +537,8 @@ impl Game<'_> {
             &[Text::literal(key.clone())],
         ));
         let id = self.game_tests.next_id();
-        let info = Info::new(id, key, def, pos, self.dim, rotation);
-        self.track_and_start_runner(vec![info], false);
+        let info = Info::new(id, key, def, Some(pos), self.dim, rotation);
+        self.track_and_start_runner(vec![info], false, None);
     }
 }
 

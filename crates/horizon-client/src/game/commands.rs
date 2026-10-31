@@ -14,6 +14,7 @@ pub(super) mod pregen;
 mod profiles;
 mod raid;
 mod terrain_cmds;
+mod test_runs;
 mod text_commands;
 mod world_cmds;
 
