@@ -1887,6 +1887,7 @@ impl Game<'_> {
         self.lan_update_waypoints(&mut host, state.as_ref());
         self.lan_sync_scoreboard(&mut host);
         self.lan_sync_border(&mut host);
+        host.hub.anticheat_ping();
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
