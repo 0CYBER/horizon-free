@@ -1,10 +1,11 @@
 //! The control API (docs/server.md, section 8): HTTP and JSON on 127.0.0.1, with a random token in
 //! `.horizon/api.json` that only the server's own user can read. The CLI manages a running server through
-//! it; the web panel and the MCP server will too.
+//! it, and so does the web panel. The admin endpoints (players, moderation, text metrics) are in admin.rs.
 //!
 //! Its routes are [`ROUTES`], listed in docs/api/server-reference.md.
 
 use crate::{
+    admin::{self, Action},
     backup,
     config::Config,
     engine,
@@ -47,7 +48,7 @@ pub struct Route {
 }
 
 /// Every endpoint `start` and [`route`] answer; a test checks the two agree.
-pub const ROUTES: [Route; 11] = [
+pub const ROUTES: [Route; 23] = [
     Route {
         method: "GET",
         path: "/api/v1/status",
@@ -117,6 +118,90 @@ pub const ROUTES: [Route; 11] = [
         takes: "`{\"tag\": \"...\", \"timeout\": seconds}` (both optional)",
         answers: "`{\"ok\": true}`; `status` says how it went (`update`)",
         what: "Restart on that installed release, or download the newest first; goes back if the game isn't up within the timeout",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/metrics/prometheus",
+        takes: "",
+        answers: "the latest sample as Prometheus text: `horizon_up`, `horizon_tps`, `horizon_mspt{stat}`, `horizon_players_online`, `horizon_memory_rss_bytes`...",
+        what: "Metrics for a monitoring tool to scrape",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/players",
+        takes: "",
+        answers: "`online` (name, uuid, address, ping_ms, op_level), `max_players`, `ops`, `whitelist` (`enabled`, `players`), `bans`, `ip_bans` (with reason, source, created, expires)",
+        what: "Who is online, and vanilla's lists",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/kick",
+        takes: "`{\"name\", \"reason\"}` (reason optional)",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Kick an online player",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/ban",
+        takes: "`{\"name\", \"reason\"}` (reason optional)",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Ban a player (kicked if online)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/pardon",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Lift a player's ban",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/ban-ip",
+        takes: "`{\"ip\", \"reason\"}`, or `{\"name\"}` of an online player",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Ban an address (its players are kicked)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/pardon-ip",
+        takes: "`{\"ip\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Lift an address's ban",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/op",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Make a player an operator (op-permission-level)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/deop",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Make a player no longer an operator",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/whitelist",
+        takes: "`{\"enabled\": bool}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Turn the whitelist on or off",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/whitelist/add",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Whitelist a player",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/whitelist/remove",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Take a player off the whitelist (kicked if enforce-whitelist)",
     },
     Route {
         method: "POST",
@@ -573,6 +658,24 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
                 Ok(()) => Response::json(200, &json!({ "ok": true })),
                 Err(e) => Response::error(409, &e),
             }
+        }
+        ("GET", "/api/v1/metrics/prometheus") => admin::prometheus(shared),
+        ("GET", "/api/v1/players") => admin::players(shared),
+        ("POST", "/api/v1/players/kick") => admin::act(shared, Action::Kick, &request.body),
+        ("POST", "/api/v1/players/ban") => admin::act(shared, Action::Ban, &request.body),
+        ("POST", "/api/v1/players/pardon") => admin::act(shared, Action::Pardon, &request.body),
+        ("POST", "/api/v1/players/ban-ip") => admin::act(shared, Action::BanIp, &request.body),
+        ("POST", "/api/v1/players/pardon-ip") => {
+            admin::act(shared, Action::PardonIp, &request.body)
+        }
+        ("POST", "/api/v1/players/op") => admin::act(shared, Action::Op, &request.body),
+        ("POST", "/api/v1/players/deop") => admin::act(shared, Action::Deop, &request.body),
+        ("POST", "/api/v1/whitelist") => admin::act(shared, Action::Whitelist, &request.body),
+        ("POST", "/api/v1/whitelist/add") => {
+            admin::act(shared, Action::WhitelistAdd, &request.body)
+        }
+        ("POST", "/api/v1/whitelist/remove") => {
+            admin::act(shared, Action::WhitelistRemove, &request.body)
         }
         (_, path) if ROUTES.iter().any(|r| r.path == path) => Response::error(405, "wrong method"),
         _ => Response::error(404, "no such endpoint"),
