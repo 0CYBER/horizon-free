@@ -763,17 +763,12 @@ impl Game<'_> {
                     true,
                 );
             }
+            let pre: String = value.chars().take(edit.edit.cursor).collect();
+            let caret_x = x + HudBatch::text_width(atlas, &pre);
             if edit.edit.cursor_visible() {
-                let pre: String = value.chars().take(edit.edit.cursor).collect();
-                batch.fill(
-                    atlas,
-                    x + HudBatch::text_width(atlas, &pre),
-                    ly,
-                    1.0,
-                    line_height,
-                    color,
-                );
+                batch.fill(atlas, caret_x, ly, 1.0, line_height, color);
             }
+            horizon_client::preedit::report_caret(caret_x, ly, line_height);
         }
         let (bx, by) = done_button(w, h);
         batch.sprite_scaled(

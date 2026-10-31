@@ -64,6 +64,7 @@ pub mod poi_sections;
 pub mod post_chain;
 pub mod post_glsl;
 pub mod potent_sulfur;
+pub mod preedit;
 pub mod providers;
 pub mod screen_draw;
 pub mod screen_effects;
