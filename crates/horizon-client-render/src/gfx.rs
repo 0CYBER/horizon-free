@@ -3025,11 +3025,14 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: if read {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-                } else {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT
-                },
+                // COPY_SRC: improved transparency copies it.
+                usage: wgpu::TextureUsages::COPY_SRC
+                    | if read {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                    } else {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                    },
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -5049,10 +5052,19 @@ impl Renderer {
                 .unwrap_or([self.config.width, self.config.height]);
             let (device, layout, sprites) =
                 (&self.device, &self.terrain_layout, self.terrain_sprites);
+            let clouds = [0, 1].map(|i| self.cloud_pipeline.get_bind_group_layout(i));
             let format = self.config.format.remove_srgb_suffix();
             self.oit
-                .get_or_insert_with(|| oit::Oit::new(device, layout, sprites, format))
-                .prepare(&self.device, &self.queue, size, &views.primary().projection);
+                .get_or_insert_with(|| {
+                    oit::Oit::new(device, layout, [&clouds[0], &clouds[1]], sprites, format)
+                })
+                .prepare(
+                    &self.device,
+                    &self.queue,
+                    size,
+                    &views.primary().projection,
+                    [water_mask_quads > 0, cloud_quads > 0],
+                );
         }
         let oit = self.oit.as_ref().filter(|_| oit_on);
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
@@ -5342,7 +5354,7 @@ impl Renderer {
             }
             // BoatRenderer's water patch (RenderTypes.waterMask): depth only,
             // before translucent terrain, so no water shows inside the boat.
-            if water_mask_quads > 0 {
+            if water_mask_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.water_mask_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5403,13 +5415,60 @@ impl Renderer {
                 // follows draws over its composite in a pass of its own.
                 _ if let Some(oit) = oit => {
                     drop(pass);
-                    oit.run(&mut encoder, world_view, world_depth, &|pass, pipeline| {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, &self.group, &[]);
+                    // LevelRenderer.executeOitWaterMask and CloudRenderer.renderOit.
+                    let mask = |pass: &mut wgpu::RenderPass<'_>| {
+                        pass.set_pipeline(&self.water_mask_pipeline);
+                        pass.set_bind_group(0, &self.entity_group, &[]);
                         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.set_vertex_buffer(1, self.instances.slice(..));
-                        self.draw_sections(pass, &self.indirect, 0, solid_draws, translucent_draws);
-                    });
+                        pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                        pass.draw_indexed(
+                            0..water_mask_quads * 6,
+                            ((entity_quads
+                                + text_quads
+                                + crumbling_quads
+                                + translucent_crumbling_quads)
+                                * 4) as i32,
+                            0..1,
+                        );
+                    };
+                    let clouds =
+                        |pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline| {
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &self.entity_group, &[]);
+                            pass.set_bind_group(1, &self.cloud_group, &[]);
+                            pass.set_index_buffer(
+                                self.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
+                            pass.draw_indexed(0..cloud_quads * 6, 0, 0..1);
+                        };
+                    let extras = oit::Extras {
+                        water_mask: (water_mask_quads > 0).then_some(&mask as _),
+                        clouds: (cloud_quads > 0).then_some(&clouds as _),
+                    };
+                    oit.run(
+                        &mut encoder,
+                        world_view,
+                        world_depth,
+                        &|pass, pipeline| {
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &self.group, &[]);
+                            pass.set_index_buffer(
+                                self.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_vertex_buffer(1, self.instances.slice(..));
+                            self.draw_sections(
+                                pass,
+                                &self.indirect,
+                                0,
+                                solid_draws,
+                                translucent_draws,
+                            );
+                        },
+                        &extras,
+                    );
                     pass = world_pass_after_culling(&mut encoder, world_view, world_depth, true);
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -5480,7 +5539,7 @@ impl Renderer {
                     0..1,
                 );
             }
-            if cloud_quads > 0 && !pack_draws_clouds {
+            if cloud_quads > 0 && !pack_draws_clouds && !oit_on {
                 pass.set_pipeline(&self.cloud_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_bind_group(1, &self.cloud_group, &[]);

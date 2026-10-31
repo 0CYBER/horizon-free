@@ -344,7 +344,7 @@ impl Post {
                 "Scaled world depth",
                 size,
                 wgpu::TextureFormat::Depth32Float,
-                sampled,
+                sampled | wgpu::TextureUsages::COPY_SRC,
             )
             .create_view(&Default::default());
             let group = self.bind(device, &color);
