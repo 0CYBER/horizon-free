@@ -28,7 +28,7 @@ impl Game<'_> {
             return;
         };
         if let Some(at) = record.take_restart() {
-            g.replay = Some(Box::new(Replay::new(server, at, record.ended())));
+            g.replay = Some(Box::new(Replay::new(server, at, record)));
         }
         if held {
             g.replay = None;
@@ -37,27 +37,20 @@ impl Game<'_> {
         let Some(replay) = g.replay.as_deref_mut() else {
             return;
         };
-        // Ticks no longer kept (a server that stalled for seconds): wait for the next teleport.
-        let Some(ticks) = record.since(replay.played()) else {
-            g.replay = None;
-            return;
-        };
-        for tick in ticks {
-            let run = |body: &mut _, keys, sprinting| {
-                MotionWorld {
-                    entities: &[],
-                    player: body,
-                    scene: &mut self.world,
-                    assets: &self.pack.assets,
-                    collision_binding: self.collision,
-                    resources: self.motion,
-                }
-                .replayed_tick(keys, sprinting)
-            };
-            if replay.play(tick, server, run).is_none() {
-                g.replay = None;
-                return;
+        let run = |body: &mut _, keys, sprinting| {
+            MotionWorld {
+                entities: &[],
+                player: body,
+                scene: &mut self.world,
+                assets: &self.pack.assets,
+                collision_binding: self.collision,
+                resources: self.motion,
             }
+            .replayed_tick(keys, sprinting)
+        };
+        // Ticks no longer kept (a server that stalled for seconds): wait for the next teleport.
+        if replay.catch_up(record, server, run).is_none() {
+            g.replay = None;
         }
     }
 }
