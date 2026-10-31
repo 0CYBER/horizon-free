@@ -156,9 +156,12 @@ impl Game<'_> {
                     max_depth,
                     position: pos,
                 };
-                let placed = self.with_level(|b, level, ticks| {
+                let (placed, entities) = self.with_level(|b, level, ticks| {
                     b.place_jigsaw(level, ticks, pos, false, || terrain.jigsaw_pieces(&query))
                 });
+                for entity in entities {
+                    self.spawn_entity_from_nbt(Tag::Compound(entity));
+                }
                 self.process_level_events()
                     .map_err(|_| err("command.failed", &[]))?;
                 if !placed {
@@ -195,8 +198,11 @@ impl Game<'_> {
                     .ok_or_else(|| err("commands.place.structure.failed", &[]))?;
                 let (min, max) = (start.bounding_box.min, start.bounding_box.max);
                 self.place_check_loaded([min[0] >> 4, min[2] >> 4], [max[0] >> 4, max[2] >> 4])?;
-                let placed =
+                let (placed, entities) =
                     self.with_level(|b, level, ticks| b.place_structure(level, ticks, &start));
+                for entity in entities {
+                    self.spawn_entity_from_nbt(Tag::Compound(entity));
+                }
                 if !placed {
                     return Err(err("commands.place.structure.failed", &[]));
                 }
