@@ -22,7 +22,7 @@ use horizon_world::{
     synced_floats::{FloatValue, Observer, SyncedFloats},
 };
 use std::{fs, io, path::Path};
-pub(crate) type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
+pub(crate) type Attributes = LiveAttributes<Box<dyn horizon_world::attributes::live::Identities>>;
 pub(crate) type State = HurtState<DamageTypeId>;
 
 pub use crate::world::HealthRules;
@@ -153,6 +153,7 @@ impl Observer for Updates<'_> {
         Ok(())
     }
 }
+#[derive(Clone)]
 pub struct PlayerHealth {
     pub data: SyncedFloats,
     pub ids: PlayerFloatIds,
