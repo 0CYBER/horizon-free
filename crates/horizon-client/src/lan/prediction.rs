@@ -73,7 +73,8 @@ pub struct Played {
     /// How far the closest outcome ended from where the client said.
     pub offset: f64,
     /// Which of the unknowns it took: 1, the ground the other way (the first tick after a start); 2,
-    /// the item use before the server's change. 0 is the tick as the server heard it.
+    /// the item use before the server's change; 4, the jump delay the other way (a jump held soon
+    /// after an excuse). 0 is the tick as the server heard it.
     pub candidate: u8,
     /// The replay and the client agree about the ground (the move's flag 1).
     pub ground: bool,
@@ -98,6 +99,9 @@ pub struct Replay {
     fresh: bool,
     /// The server's item-use slowdown at the last tick played.
     using: Option<f32>,
+    /// Ticks the client's jump delay is unknown: under an excuse the replay may have jumped where the
+    /// client couldn't (on a block it hadn't received), or the other way round.
+    jump_unsure: u8,
     /// The last ticks played, oldest first, at most [`KEPT`].
     pub ticks: VecDeque<Played>,
 }
@@ -120,6 +124,7 @@ impl Replay {
             applied: restart.changed,
             fresh: true,
             using: server.item_use_speed,
+            jump_unsure: 0,
             ticks: VecDeque::new(),
         }
     }
@@ -151,7 +156,9 @@ impl Replay {
 
     /// Plays the ticks the client ended before it accepted a teleport, which the replay hasn't yet
     /// (a burst of them came with the accept): what they did to the body (its jump delay) goes on
-    /// through the teleport. Nothing counts. False when the record no longer keeps them.
+    /// through the teleport. Then applies the changes the server sent before the teleport that those
+    /// ticks hadn't seen: the client had them all when it accepted it. Nothing counts. False when the
+    /// record no longer keeps them.
     pub fn finish(
         &mut self,
         record: &Record,
@@ -159,8 +166,21 @@ impl Replay {
         restart: &Restart,
         run: impl FnMut(&mut PlayerMotion, Keys, bool) -> crate::Result<()>,
     ) -> bool {
-        self.play_to(record, server, restart.ended, f64::INFINITY, run)
-            .is_some()
+        if self
+            .play_to(record, server, restart.ended, f64::INFINITY, run)
+            .is_none()
+        {
+            return false;
+        }
+        let Some(changes) = record.changes_since(self.applied) else {
+            return false;
+        };
+        let left = usize::try_from(restart.changed.saturating_sub(self.applied)).unwrap_or(0);
+        for &(_, change) in changes.take(left) {
+            self.apply(change, server);
+            self.applied += 1;
+        }
+        true
     }
 
     fn play_to(
@@ -216,7 +236,12 @@ impl Replay {
     /// The ticks just caught up landed off for a reason the replay can't play yet: they count for
     /// nothing, and neither do the ones after until the moves agree again (at most [`DRIFT`]).
     pub fn excuse(&mut self) {
-        (self.agreed, self.drift) = (self.said, DRIFT);
+        (self.agreed, self.drift, self.jump_unsure) = (self.said, DRIFT, DRIFT);
+    }
+
+    /// Whether an excuse still covers the ticks.
+    pub fn excused(&self) -> bool {
+        self.drift > 0
     }
 
     /// Where the client was when its moves last agreed.
@@ -232,10 +257,10 @@ impl Replay {
             Change::Velocity(v) => body.velocity = vector(v),
             Change::Knockback(k) => body.velocity = body.velocity.add_vector(vector(k)),
             Change::State => {
-                // The attributes hold the server's sprint modifier: the body sprints as the server
-                // thinks until the replay sets the client's own.
+                // ClientPacketListener.handleUpdateAttributes: the client takes the server's
+                // modifiers, its sprint modifier included, and goes on sprinting or not as it was
+                // (a sprint modifier gone while it sprints stays gone until it stops).
                 body.attributes = server.attributes.clone();
-                body.sprinting = server.sprinting;
                 body.status = server.status.clone();
             }
             // `sync` takes them every tick.
@@ -272,17 +297,21 @@ impl Replay {
             // No move: the client is within 2.0E-4 of where it last said.
             None => (body.position.distance(last) - UNSENT).max(0.0),
         };
+        let jump_unsure = self.jump_unsure > 0 && keys.jump;
+        self.jump_unsure = self.jump_unsure.saturating_sub(1);
         let unknown = |candidate: u8| {
-            candidate & 1 != 0 && fresh || candidate & 2 != 0 && using != server.item_use_speed
+            candidate & 1 != 0 && fresh
+                || candidate & 2 != 0 && using != server.item_use_speed
+                || candidate & 4 != 0 && jump_unsure
         };
-        let (offset, candidate) = if !unknown(1) && !unknown(2) {
+        let (offset, candidate) = if ![1, 2, 4].into_iter().any(unknown) {
             // Nothing to try (most ticks): the body itself plays the tick.
             run(&mut self.body, keys, tick.sprinting).ok()?;
             (offset(&self.body), 0)
         } else {
             let mut best: Option<(f64, u8, Box<PlayerMotion>)> = None;
-            for candidate in
-                (0..4u8).filter(|&c| c == 0 || (1..=2).all(|b| c & b == 0 || unknown(b)))
+            for candidate in (0..8u8)
+                .filter(|&c| c == 0 || [1, 2, 4].into_iter().all(|b| c & b == 0 || unknown(b)))
             {
                 let mut body = self.body.clone();
                 if candidate & 1 != 0 {
@@ -290,6 +319,9 @@ impl Replay {
                 }
                 if candidate & 2 != 0 {
                     body.item_use_speed = using;
+                }
+                if candidate & 4 != 0 {
+                    body.no_jump_delay = i32::from(body.no_jump_delay == 0);
                 }
                 if run(&mut body, keys, tick.sprinting).is_err() {
                     continue;
