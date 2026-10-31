@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 23 adds recipes of a mod's own types (`native_recipes_of_type`,
+//! `native_recipe_ingredient`, `native_recipe_result`).
+//!
 //! API 22 adds what a mod needs to keep the world from changing blocks
 //! it guards: fluid and fire spreading (`native_block_spread`), pistons
 //! (`native_piston_move`), explosions (`native_explosion_detonate`),
@@ -95,6 +98,7 @@ use horizon_client::{
     block_entities::Pos,
     chat::ChatSource,
     containers::{BlockEntity, MOD_MENUS, ModBlockEntity, ModContainer},
+    crafting::{CustomRecipe, Ingredient, recipe_result},
     extras::Corner,
     extras_hud::Corners,
     fast_hash::FxHashMap,
@@ -117,7 +121,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 22;
+pub(crate) const NATIVE_HOOKS_API: u32 = 23;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -1150,6 +1154,27 @@ impl Game<'_> {
     ) {
         let page = RecipePage::new(title, tabs, tab, views);
         self.panel.show_recipes(mod_id, page);
+    }
+    /// The recipes of type `kind` (`mymod:crusher`), a type outside `minecraft`,
+    /// from `data/<namespace>/recipe/*.json` of the mods and the world's data
+    /// packs, in file order: each one's id and its file as JSON, for the mod to
+    /// read as it likes. A data pack changes them on `/reload`, so look them up
+    /// again when you need them. Empty for a type nobody uses. The window's own
+    /// on a client: a server doesn't send them. API 23.
+    pub(super) fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] {
+        self.recipes().custom.get(kind).map_or(&[], Vec::as_slice)
+    }
+    /// An ingredient as a recipe's JSON names it: an item, a `#tag`, or a list
+    /// of them; `test` says whether a stack fits. None when nothing fits it (an
+    /// unknown tag, for one). API 23.
+    pub(super) fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> {
+        Ingredient::parse(json, self.items())
+    }
+    /// A stack as a recipe's `result` names it: `id`, `count` (1 by default, up
+    /// to 99) and `components`. None without an `id`, for an item the game
+    /// doesn't know or a count outside that. API 23.
+    pub(super) fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> {
+        recipe_result(json).filter(|s| self.items().get(&s.item).is_some())
     }
     /// Every item and recipe the game knows, made once (the same for every
     /// call); none outside a world. They are the window's own: the world's

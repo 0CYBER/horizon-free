@@ -113,6 +113,12 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds recipes of a mod's own types, for a machine's crusher or altar. A recipe file whose `type` is outside `minecraft`
+(`mymod:crusher`) in `data/<namespace>/recipe/`, in a mod or a world's data pack, stays loaded as it is: `native_recipes_of_type`
+gives each one's id and JSON, for the mod to read as it likes, and `native_recipe_ingredient` and `native_recipe_result` read the
+usual fields, tags included. The game doesn't craft them or show them in the recipe book; `/reload` reads a data pack's again.
+Bundles that use them need `"hooks": 23`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
