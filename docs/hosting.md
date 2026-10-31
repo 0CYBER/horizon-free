@@ -181,6 +181,11 @@ keep = 12                    # automatic backups kept; backups made by hand are 
 [panel]
 bind = "127.0.0.1:8130"      # this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false
+
+[api]
+bind = ""                    # the control API: a free port on 127.0.0.1, or a fixed one like 127.0.0.1:8131
+token = ""                   # 16 characters or more; "" a new random one at every start
+allow_public = false
 ```
 
 The defaults are vanilla 26.3's. Unknown keys and values vanilla would refuse are errors, so a typo stops the
@@ -304,6 +309,23 @@ only. To reach it from your other devices:
 Any other address, such as `0.0.0.0` or a public IP, is refused unless you set `allow_public = true`, and
 even then the panel warns at every start. It has no passwords to leak: whoever can read the server folder can
 make a login link, and no one else can. Never put it on the open internet.
+
+### A bot or a tool of your own
+
+Everything the panel does goes through the control API ([api/server.md](api/server.md)), which a moderation bot
+(a Discord `!ban`), a monitoring tool or a script can call too. It listens on a free port of `127.0.0.1` and
+writes the address and a fresh token to `.horizon/api.json` at every start. For a program that runs elsewhere
+or keeps its settings, fix both in `server.toml`:
+
+```toml
+[api]
+bind = "127.0.0.1:8131"      # or your tailnet address, 100.x.y.z:8131
+token = "a long random string only the bot knows"
+```
+
+The same rules as the panel's hold: a tailnet or loopback address, unless `allow_public = true` (the token is then
+all that guards the server, and it warns at every start). The API can't change `[engine]`, `[panel]` or `[api]`,
+nor turn on RCON or another remote console.
 
 ## 7. Backups
 

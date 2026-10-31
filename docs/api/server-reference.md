@@ -122,6 +122,14 @@ Any other server.properties key, spelled as vanilla spells it, for example: spaw
 | `bind` | `"127.0.0.1:8130"` |  | the web panel: this computer only, or a tailnet address (100.x); "" turns it off |
 | `allow_public` | `false` |  | true lets bind be any address; never put the panel on the open internet |
 
+### `[api]`
+
+| Key | Default | In `server.properties` | What it does |
+| --- | --- | --- | --- |
+| `bind` | `""` |  | the control API: "" a free port on 127.0.0.1; or a fixed one, like 127.0.0.1:8131 or a tailnet address |
+| `token` | `""` |  | its token (16 characters or more); "" a new random one at every start |
+| `allow_public` | `false` |  | true lets bind be any address; the token is then all that guards the server |
+
 ## Control API (`/api/v1`)
 
 HTTP and JSON on 127.0.0.1. A running server writes its address and a random token to `.horizon/api.json`, readable only by its own user; every request sends `Authorization: Bearer <token>` and a `Host` that is that address. Errors answer `{"error": "..."}` with 400, 401, 403, 404, 405 or 409. The web panel uses the same routes with its session.
@@ -136,6 +144,22 @@ HTTP and JSON on 127.0.0.1. A running server writes its address and a random tok
 | `POST` | `/api/v1/restart` | nothing | `{"ok": true}` | Restart the game |
 | `GET` | `/api/v1/backups` | nothing | `{"backups": [{"name", "bytes"}]}` | List the backups |
 | `POST` | `/api/v1/backups` | `{"name": "..."}` (optional) | `{"name": "<file>"}` | Back up now (a running game saves first and stays up) |
+| `DELETE` | `/api/v1/backups` | `?name=<file>` (the full name `backups` lists) | `{"name": "<file>"}` | Delete a backup |
+| `GET` | `/api/v1/backups/download` | `?name=<file>` | the zip | Download a backup |
 | `POST` | `/api/v1/restore` | `{"name": "<backup>"}` | `{"name": "<backup>"}` | Restart the game with that backup's world (the current one is kept in backups/) |
 | `POST` | `/api/v1/update` | `{"tag": "...", "timeout": seconds}` (both optional) | `{"ok": true}`; `status` says how it went (`update`) | Restart on that installed release, or download the newest first; goes back if the game isn't up within the timeout |
+| `GET` | `/api/v1/metrics/prometheus` | nothing | the latest sample as Prometheus text: `horizon_up`, `horizon_tps`, `horizon_mspt{stat}`, `horizon_players_online`, `horizon_memory_rss_bytes`... | Metrics for a monitoring tool to scrape |
+| `GET` | `/api/v1/players` | nothing | `online` (name, uuid, address, ping_ms, op_level), `max_players`, `ops`, `whitelist` (`enabled`, `players`), `bans`, `ip_bans` (with reason, source, created, expires) | Who is online, and vanilla's lists |
+| `POST` | `/api/v1/players/kick` | `{"name", "reason"}` (reason optional) | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Kick an online player |
+| `POST` | `/api/v1/players/ban` | `{"name", "reason"}` (reason optional) | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Ban a player (kicked if online) |
+| `POST` | `/api/v1/players/pardon` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Lift a player's ban |
+| `POST` | `/api/v1/players/ban-ip` | `{"ip", "reason"}`, or `{"name"}` of an online player | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Ban an address (its players are kicked) |
+| `POST` | `/api/v1/players/pardon-ip` | `{"ip"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Lift an address's ban |
+| `POST` | `/api/v1/players/op` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Make a player an operator (op-permission-level) |
+| `POST` | `/api/v1/players/deop` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Make a player no longer an operator |
+| `POST` | `/api/v1/whitelist` | `{"enabled": bool}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Turn the whitelist on or off |
+| `POST` | `/api/v1/whitelist/add` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Whitelist a player |
+| `POST` | `/api/v1/whitelist/remove` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Take a player off the whitelist (kicked if enforce-whitelist) |
+| `GET` | `/api/v1/config` | nothing | `{"config": {...}}`: server.toml's settings by section (`api.token` hidden) | The settings |
+| `PATCH` | `/api/v1/config` | `{"changes": {"world.difficulty": "hard", ...}}` | `saved`, `applied` (taken by the running game at once), `restart` (from the next start), `running` | Change settings as `config set` does; not `engine.*`, `panel.*`, `api.*`, nor RCON, query or management keys |
 | `POST` | `/api/v1/panel/login` | nothing | `{"url": "..."}` | A one-time login link for the web panel (with the token only, not from the panel) |

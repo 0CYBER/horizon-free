@@ -266,7 +266,7 @@ pub struct Items {
     /// Item tags in vanilla's order (`TagLoader`: file order, nested tags in
     /// place, first occurrence kept), the order `TagSlotDisplay` resolves.
     pub item_tag_order: HashMap<String, Vec<String>>,
-    loot: HashMap<String, Value>,
+    loot: Arc<HashMap<String, Value>>,
     /// The `jukebox_song` registry.
     pub songs: HashMap<String, Song>,
     /// The `instrument` registry (goat horns).
@@ -845,51 +845,11 @@ impl Items {
             );
             order.push(id);
         }
-        let mut loot = HashMap::new();
         // Every loot table, keyed by its id (blocks/stone, entities/sheep/white,
-        // gameplay/chicken_lay, shearing/sheep/red...).
-        fn walk_loot(
-            dir: &Path,
-            base: &Path,
-            namespace: &str,
-            loot: &mut HashMap<String, Value>,
-        ) -> Result<()> {
-            for entry in fs::read_dir(dir)?.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    walk_loot(&p, base, namespace, loot)?;
-                } else if p.extension().is_some_and(|e| e == "json") {
-                    let id = p
-                        .strip_prefix(base)?
-                        .with_extension("")
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    loot.insert(
-                        format!("{namespace}:{id}"),
-                        serde_json::from_slice(&fs::read(&p)?)?,
-                    );
-                }
-            }
-            Ok(())
-        }
-        let loot_root = root.join("data/minecraft/loot_table");
-        walk_loot(&loot_root, &loot_root, "minecraft", &mut loot)?;
-        // Content mods' tables (docs/modpacks.md): `<ns>:blocks/...`.
-        for namespace in crate::content_namespaces::namespaces(root) {
-            let dir = root.join(format!("data/{namespace}/loot_table"));
-            if dir.is_dir() {
-                walk_loot(&dir, &dir, &namespace, &mut loot)?;
-            }
-        }
-        // The packs' tables over the game's own: the top pack's file for
-        // each id (`SimpleJsonResourceReloadListener` sees one resource per
-        // id, the resource stack's top).
-        for (id, files) in overlay.kind("loot_table") {
-            let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
-                continue;
-            };
-            loot.insert(id.to_owned(), v);
-        }
+        // gameplay/chicken_lay, shearing/sheep/red...), of every namespace
+        // (content mods' tables, docs/modpacks.md), with the packs' over the
+        // game's own: one map with the loot data of the same root and packs.
+        let loot = horizon_world::loot::shared_tables(root, overlay)?;
         let registry_order = registry_order(root, &order);
         Ok(Self {
             items,
@@ -928,7 +888,7 @@ impl Items {
             block_tags: load_tags(root, "block", overlay)?,
             item_tags: load_tags(root, "item", overlay)?,
             item_tag_order: load_tag_lists(root, "item", overlay)?,
-            loot: HashMap::new(),
+            loot: Default::default(),
             songs: HashMap::new(),
             instruments: HashMap::new(),
             enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
@@ -947,7 +907,7 @@ impl Items {
                 .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
                 .collect(),
             item_tags,
-            loot: HashMap::new(),
+            loot: Default::default(),
             songs: HashMap::new(),
             instruments: HashMap::new(),
             enchantments: Arc::new(crate::enchant::Enchantments::default()),

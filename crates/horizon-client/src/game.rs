@@ -16589,7 +16589,12 @@ fn load_core(
                 .map_err(|e| e.to_string());
                 Ok((render, item_renderer))
             });
+            // Nor the face visibility the mesher and the block entity
+            // renderer cull with (19 MB).
             let visibility = Step::spawn(scope, parallel, || {
+                if headless {
+                    return Ok(horizon_world::block_render::FaceVisibility::empty());
+                }
                 models::load_visibility(root, registry).map_err(|e| e.to_string())
             });
             let biomes = Step::spawn(scope, parallel, || {
@@ -16831,6 +16836,7 @@ fn load_resources(
                     visibility,
                     &progress,
                     started,
+                    true,
                 )
                 .map_err(|error| error.to_string())?;
                 resources
@@ -16859,6 +16865,7 @@ fn load_resources(
             visibility,
             progress,
             started,
+            !headless,
         )?;
         resources
             .rest
@@ -16887,6 +16894,9 @@ fn load_world_rest(
     visibility: horizon_world::block_render::FaceVisibility,
     progress: &Progress,
     started: Instant,
+    // False on a dedicated server, which draws nothing: no block entity
+    // renderer or animate tables (client-side display ticks).
+    draws: bool,
 ) -> Result<WorldRest> {
     let facts = resources.facts();
     let biomes = resources.biomes();
@@ -16907,12 +16917,19 @@ fn load_world_rest(
     let load_behaviours =
         || Behaviours::load_with_gameplay(registry, root, behaviour_json, gameplay_projection);
     let load_block_entity_render = || {
+        if !draws {
+            return Ok(Default::default());
+        }
         horizon_client::block_entity_render::BlockEntityRenderer::load_with_visibility(
             root, registry, visibility,
         )
     };
     let load_animate = || -> Result<_> {
-        let animate = horizon_client::animate_tick::AnimateTables::load(root, registry, biomes)?;
+        let animate = if draws {
+            horizon_client::animate_tick::AnimateTables::load(root, registry, biomes)?
+        } else {
+            Default::default()
+        };
         Ok((animate, horizon_client::fog::FogTables::load(root, biomes)))
     };
     let load_mobs = || -> Result<_> {

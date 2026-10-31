@@ -54,6 +54,9 @@ pub struct Response {
     pub content_type: &'static str,
     pub headers: Vec<(&'static str, String)>,
     pub body: String,
+    /// Writes the body itself instead of `body`, after the head (a file, a stream of events); the
+    /// connection's end ends the body unless it sets a Content-Length.
+    pub stream: Option<Box<dyn FnOnce(&TcpStream) + Send>>,
 }
 
 impl Response {
@@ -69,7 +72,26 @@ impl Response {
             content_type,
             headers: Vec::new(),
             body: body.into(),
+            stream: None,
         }
+    }
+    /// A file sent as it is read, for a download (`name` is what the browser saves it as).
+    pub fn file(path: std::path::PathBuf, name: &str) -> Self {
+        let Ok(length) = std::fs::metadata(&path).map(|m| m.len()) else {
+            return Self::error(404, "no such file");
+        };
+        let mut response = Self::text(200, "application/octet-stream", "")
+            .with("Content-Length", length.to_string())
+            .with(
+                "Content-Disposition",
+                format!("attachment; filename=\"{name}\""),
+            );
+        response.stream = Some(Box::new(move |mut stream: &TcpStream| {
+            if let Ok(mut file) = std::fs::File::open(&path) {
+                let _ = std::io::copy(&mut file, &mut stream);
+            }
+        }));
+        response
     }
     pub fn with(mut self, header: &'static str, value: impl Into<String>) -> Self {
         self.headers.push((header, value.into()));
@@ -159,14 +181,16 @@ fn read_request(stream: &TcpStream) -> Result<Request, Response> {
     })
 }
 
-fn write_response(mut stream: &TcpStream, response: &Response) {
+fn write_response(mut stream: &TcpStream, mut response: Response) {
     let mut head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
         response.status,
         reason(response.status),
         response.content_type,
-        response.body.len(),
     );
+    if response.stream.is_none() {
+        head.push_str(&format!("Content-Length: {}\r\n", response.body.len()));
+    }
     for (name, value) in &response.headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
@@ -175,6 +199,10 @@ fn write_response(mut stream: &TcpStream, response: &Response) {
         .write_all(head.as_bytes())
         .and_then(|()| stream.write_all(response.body.as_bytes()));
     let _ = stream.flush();
+    if let Some(body) = response.stream.take() {
+        body(stream);
+        let _ = stream.flush();
+    }
 }
 
 /// Serves `handle` on `listener` until the process ends, a thread per connection.
@@ -196,7 +224,7 @@ pub fn serve(
                             Ok(request) => handle(&request),
                             Err(response) => response,
                         };
-                        write_response(&stream, &response);
+                        write_response(&stream, response);
                     });
             }
         })?;
