@@ -5383,6 +5383,8 @@ impl Game<'_> {
             || self.boost_firework(&stack)
             || self.use_empty_map(&stack)
                 || self.use_book(&stack)
+                // KnowledgeBookItem.use: the recipes it names become known.
+                || self.use_knowledge_book(&stack)
                 // Block items (heads, carved pumpkins) aimed at a block are
                 // placed first (useItemOn before useItem).
                 || (!(info.block.is_some() && block_hit.is_some())
