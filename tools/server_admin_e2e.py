@@ -8,7 +8,8 @@ players join. Through the control API, with the token from .horizon/api.json, th
 ops and deops, whitelists, bans and pardons by name and by address, kicks, and turns the whitelist on and off,
 checking each reply (`changed`, the console's lines), vanilla's files, the server's log and `GET players`.
 It also checks the Prometheus text, and that a call without the token is refused and a name with a space is
-not run; then reads the settings and changes the difficulty live, and backs up, downloads and deletes a backup.
+not run; then reads the settings and changes the difficulty live, and backs up, downloads and deletes a backup,
+and runs the same moderation from the `horizon-server` CLI.
 The API listens on the address and with the token server.toml's [api] fixes, as a moderation bot's would.
 
 Everything runs in a fresh temporary folder with fresh HORIZON_HOME and XDG folders and no audio. Logs go
@@ -167,6 +168,21 @@ def scenario(bins, folder, server, port):
               f'the download is the zip ({len(data)} bytes)')
         api('DELETE', f'/api/v1/backups?name={name}')
         check(not (folder / 'backups' / name).exists(), 'the backup is deleted')
+
+        cli = [bins / f'horizon-server{EXE}', '--dir', folder]
+
+        def run(*words):
+            return subprocess.run([str(w) for w in cli + list(words)], capture_output=True, text=True,
+                                  env=lab.game_env(), timeout=120)
+        out = run('ban', 'Kim0', 'griefing', 'again')
+        check(out.returncode == 0 and 'Banned Kim0: griefing again' in out.stdout,
+              f'horizon-server ban ({out.stdout!r} {out.stderr!r})')
+        out = run('players')
+        check('Banned: Kim0 (griefing again)' in out.stdout, f'horizon-server players ({out.stdout!r})')
+        out = run('pardon', 'Kim0')
+        check(out.returncode == 0 and 'Unbanned Kim0' in out.stdout, f'horizon-server pardon ({out.stdout!r})')
+        out = run('players', '--json')
+        check(out.returncode == 0 and json.loads(out.stdout)['bans'] == [], 'horizon-server players --json')
     finally:
         for b in bots:
             b.kill()

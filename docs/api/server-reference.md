@@ -55,6 +55,10 @@ Usage: horizon-server [--dir DIR] <command>
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
               Who may join (on the running server, or in the files when it is stopped)
+  players [--json]
+              Who is online, the operators, the whitelist and the bans
+  kick NAME [REASON], ban NAME [REASON], pardon NAME, ban-ip ADDRESS|NAME [REASON], pardon-ip ADDRESS
+              Moderate the running server (vanilla's commands, as from its console)
 
   --dir DIR   The server folder (default: the current folder)
 
