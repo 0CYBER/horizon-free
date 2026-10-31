@@ -112,9 +112,9 @@ CommandStorage.Container.getKeys	port	crates/horizon-client/src/command_storage.
 LevelStorageSource.LevelStorageAccess.releaseTemporarilyAndRun	skip:other	-	used only by the external datafixer tool (FileFixerUpper); Horizon does not run it
 LevelStorageSource.LevelStorageAccess.safeClose	skip:other	-	closes the session lock and logs a failure; Horizon releases its lock when the session drops
 LevelStorageSource.LevelStorageAccess.getLevelPath	skip:other	-	path helper for level resources; Horizon builds these paths where they are used (save.rs::saved_data_path)
-LevelStorageSource.LevelStorageAccess.collectIssues	missing	-	player: a world with a damaged level.dat gets no recovery screen listing its data-fix issues (RecoverWorldDataScreen)
+LevelStorageSource.LevelStorageAccess.collectIssues	port	crates/horizon-client/src/save.rs::level_dat_issue	the issue line of each file on RecoverWorldDataScreen (title.rs)
 LevelStorageSource.LevelStorageAccess.fixAndGetSummaryFromTag	port	crates/horizon-client/src/title.rs::list_worlds	gap: minor: the world list reads name and last played directly, without a data fix first
-LevelStorageSource.LevelStorageAccess.getUnfixedDataTagWithFallback	missing	-	player: when level.dat is unreadable, the level.dat_old copy is not used as a fallback; the world does not load
+LevelStorageSource.LevelStorageAccess.getUnfixedDataTagWithFallback	port	crates/horizon-client/src/save.rs::fall_back_to_level_dat_old	the dedicated server (Main) takes level.dat_old and restores it; the client asks on RecoverWorldDataScreen instead (WorldOpenFlows)
 LevelStorageSource.LevelStorageAccess.getUnfixedDataTag	inline	crates/horizon-client/src/save.rs::Level::read	the Data compound of level.dat is read inside Level::read
 LevelStorageSource.LevelStorageAccess.saveDataTag	inline	crates/horizon-client/src/save.rs::Level::write	level.dat is written inside Level::write
 LevelStorageSource.LevelStorageAccess.saveLevelData	port	crates/horizon-client/src/save.rs::write_dat	the temp file, the level.dat_old swap and the write are in write_dat
@@ -124,7 +124,7 @@ LevelStorageSource.LevelStorageAccess.renameAndDropPlayer	skip:other	-	no caller
 LevelStorageSource.LevelStorageAccess.modifyLevelDataWithoutDatafix	inline	crates/horizon-client/src/title/world_management.rs::rename	read, change the Data compound and write back; rename is the only edit Horizon makes
 LevelStorageSource.LevelStorageAccess.makeWorldBackup	port	crates/horizon-client/src/title/world_management.rs::backup	-
 LevelStorageSource.LevelStorageAccess.hasWorldData	inline	crates/horizon-client/src/title.rs::list_worlds	gap: minor: a folder counts as a world only when its level.dat reads; level.dat_old is not checked
-LevelStorageSource.LevelStorageAccess.restoreLevelDataFromOld	missing	-	player: the recovery that moves a damaged level.dat aside and puts level.dat_old back is not offered (RecoverWorldDataScreen)
+LevelStorageSource.LevelStorageAccess.restoreLevelDataFromOld	port	crates/horizon-client/src/save.rs::restore_level_data_from_old	keeps the broken file as level.dat_corrupted_<time>; gap: minor: a failed move puts level.dat back and reports the failure (vanilla reports success with noRollback)
 PlayerDataStorage.backup	missing	-	minor: a player file that fails to load is not copied to a _corrupted_ backup first; Horizon leaves it in place
 SavedDataStorage.getDataFile	port	crates/horizon-client/src/save.rs::saved_data_path	gap: minor: no check that the path stays inside the data folder; the names come from fixed callers
 SavedDataStorage.computeIfAbsent	inline	crates/horizon-client/src/save.rs::compound_or_empty	the default is an empty compound when the file is absent

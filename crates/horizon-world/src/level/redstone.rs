@@ -34,7 +34,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.is_block(state, self.b.named.redstone_wire) {
             return !self.wire_signal_off.get();
         }
-        self.b.has_flag(state, state_flags::SIGNAL_SOURCE)
+        self.level
+            .adjust_signal_source(state, self.b.has_flag(state, state_flags::SIGNAL_SOURCE))
     }
     /// `BlockState.getSignal(level, pos, direction)`.
     pub(crate) fn state_signal(
@@ -43,7 +44,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         pos: BlockPos,
         direction: Direction,
     ) -> i32 {
+        let vanilla = self.vanilla_signal(state, pos, direction);
+        self.level
+            .adjust_signal(pos, state, direction, false, vanilla)
+    }
+    fn vanilla_signal(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> i32 {
         let b = self.b;
+        // BlockBehaviour.getSignal is `ownSignal` for a TestBlock, which is
+        // not an `isSignalSource`.
+        if b.data(state).class == Class::TestBlock {
+            return self.level.block_entity_signal(pos, state, direction);
+        }
         if !b.has_flag(state, state_flags::SIGNAL_SOURCE) {
             return 0;
         }
@@ -70,6 +81,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         pos: BlockPos,
         direction: Direction,
     ) -> i32 {
+        let vanilla = self.vanilla_direct_signal(state, pos, direction);
+        self.level
+            .adjust_signal(pos, state, direction, true, vanilla)
+    }
+    fn vanilla_direct_signal(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> i32 {
         let b = self.b;
         if !b.has_flag(state, state_flags::SIGNAL_SOURCE) {
             return 0;
@@ -82,7 +103,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.wire_signal(state, pos, direction)
                 }
             }
-            Class::Comparator => self.state_signal(state, pos, direction),
+            Class::Comparator => self.vanilla_signal(state, pos, direction),
             Class::TrappedChest => {
                 if direction == Direction::Up {
                     self.level.block_entity_signal(pos, state, direction)
@@ -202,7 +223,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             _ => self.is_signal_source(state) && direction.is_some(),
         }
     }
-    fn wire_can_survive_on(&self, state: BlockStateId) -> bool {
+    /// `RedstoneWireBlock.canSurvive` and `updateShape`'s down face: the block
+    /// below is read through `support_state`, since a retracting piston's
+    /// `moving_piston` block carries the extended base only through its block
+    /// entity and its exported facts call every face unsupported (#4728).
+    fn wire_can_survive_on(&self, pos: BlockPos) -> bool {
+        let state = self.support_state(pos);
         self.b.is_face_sturdy(state, Direction::Up) || self.b.is_block(state, self.b.named.hopper)
     }
     fn wire_connecting_side(
@@ -216,7 +242,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let relative = self.state(relative_pos);
         if can_connect_up {
             let placeable_above =
-                b.instance_of(relative, Class::TrapDoor) || self.wire_can_survive_on(relative);
+                b.instance_of(relative, Class::TrapDoor) || self.wire_can_survive_on(relative_pos);
             if placeable_above && self.should_wire_connect_to(self.state(above(relative_pos)), None)
             {
                 return if b.is_face_sturdy(relative, direction.opposite()) {
@@ -306,13 +332,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         state: BlockStateId,
         pos: BlockPos,
         direction: Direction,
-        _npos: BlockPos,
-        neighbour: BlockStateId,
+        npos: BlockPos,
+        _neighbour: BlockStateId,
     ) -> BlockStateId {
         let b = self.b;
         match direction {
             Direction::Down => {
-                if self.wire_can_survive_on(neighbour) {
+                if self.wire_can_survive_on(npos) {
                     state
                 } else {
                     b.air()

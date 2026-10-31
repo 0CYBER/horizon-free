@@ -856,8 +856,9 @@ impl Game<'_> {
         self.clipboard.set(text);
     }
     /// The debug renderers' gizmos for a frame (`DebugRenderer.emitGizmos`).
-    pub(super) fn debug_gizmos(&self, alpha: f32) -> Gizmos {
+    pub(super) fn debug_gizmos(&self, alpha: f32, camera: [f64; 3]) -> Gizmos {
         let mut g = Gizmos::default();
+        self.bounding_box_gizmos(camera, &mut g);
         if self.show_chunk_borders
             && let Some(p) = &self.player
         {

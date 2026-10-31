@@ -28,6 +28,7 @@ whitelist = true             # only whitelisted players and operators can join
 enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10           # chunks sent around each player
 simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
+max_view_distance = 0        # past view_distance, saved chunks only, up to this (never generated; 0: off)
 
 [world]
 name = "world"               # the world folder
@@ -69,7 +70,7 @@ allow_public = false         # true lets bind be any address; never put the pane
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-pub(crate) const TYPED: [(&str, &str, &str); 14] = [
+pub(crate) const TYPED: [(&str, &str, &str); 15] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -79,6 +80,7 @@ pub(crate) const TYPED: [(&str, &str, &str); 14] = [
     ("server", "enforce_whitelist", "enforce-whitelist"),
     ("server", "view_distance", "view-distance"),
     ("server", "simulation_distance", "simulation-distance"),
+    ("server", "max_view_distance", "horizon-max-view-distance"),
     ("world", "name", "level-name"),
     ("world", "seed", "level-seed"),
     ("world", "game_mode", "gamemode"),
@@ -124,6 +126,8 @@ pub struct Server {
     pub enforce_whitelist: bool,
     pub view_distance: u32,
     pub simulation_distance: u32,
+    /// Horizon's far ring (docs/hosting.md): saved chunks sent past `view_distance`, up to this; 0 is off.
+    pub max_view_distance: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -230,6 +234,7 @@ impl Default for Server {
             enforce_whitelist: false,
             view_distance: 10,
             simulation_distance: 10,
+            max_view_distance: 0,
         }
     }
 }
@@ -591,6 +596,11 @@ mod tests {
         let vanilla =
             ServerProperties::new(Properties::default(), &mut SystemEntropy::default()).unwrap();
         for (key, value) in Config::default().vanilla() {
+            // Horizon's own (off by default), which vanilla doesn't have.
+            if key.starts_with("horizon-") {
+                assert_eq!(value, "0", "{key}");
+                continue;
+            }
             assert_eq!(vanilla.raw.get(&key), Some(value.as_str()), "{key}");
         }
     }

@@ -168,12 +168,12 @@ impl Launcher {
             Shown::Starting => None,
             Shown::Error(_) if !configured => None,
             _ => Some(
-                shell::action("owner-sign-in", shell::Action::Main, &t)
-                    .child(shell::label(tr("Sign in").to_string()))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                microsoft::sign_in_button("owner-sign-in", &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
                         this.sign_in_to_play();
                         cx.notify();
-                    })),
+                    },
+                )),
             ),
         };
         let waiting = matches!(state, Shown::Code(..)).then(|| {

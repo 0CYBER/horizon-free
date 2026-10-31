@@ -5,8 +5,11 @@
 use super::{Game, lan::LanHost};
 use horizon_client::{
     containers::BlockEntity,
+    gizmos::{Gizmos, InvisibleBlock},
     save,
-    structure_block::{self, SCAN_CORNER_BLOCKS_RANGE, StructureBlock, StructureMode, UpdateType},
+    structure_block::{
+        self, RenderMode, SCAN_CORNER_BLOCKS_RANGE, StructureBlock, StructureMode, UpdateType,
+    },
     text::Text,
 };
 use horizon_core::position::BlockPos;
@@ -25,12 +28,12 @@ type Pos = (i32, i32, i32);
 /// gave it (the file does not keep one, so a loaded template's is `?`).
 #[derive(Clone)]
 pub(super) struct TemplateEntry {
-    tag: Tag,
-    author: String,
+    pub(super) tag: Tag,
+    pub(super) author: String,
 }
 
 /// `StructureTemplate.size` of a template's tree.
-fn template_size(tag: &Tag) -> [i32; 3] {
+pub(super) fn template_size(tag: &Tag) -> [i32; 3] {
     let mut size = [0; 3];
     if let Some(Tag::List(values)) = tag.get("size") {
         for (slot, value) in size.iter_mut().zip(values) {
@@ -50,6 +53,69 @@ fn portable_path(path: &str) -> bool {
 }
 
 impl Game<'_> {
+    /// `BlockEntityWithBoundingBoxRenderer`: for a player who may use game
+    /// master blocks (or a spectator), each structure block's box and, with
+    /// Show Invisible Blocks on, a marker for every barrier, light, structure
+    /// void and air block in it. Blocks beyond `getViewDistance` (96) are
+    /// not drawn.
+    pub(super) fn bounding_box_gizmos(&self, camera: [f64; 3], g: &mut Gizmos) {
+        let game_master = self.can_use_game_master_blocks() || self.spectator();
+        let facts = self.res.facts();
+        for (pos, entity) in &self.world.block_entities {
+            let centre = [pos.0, pos.1, pos.2].map(|v| f64::from(v) + 0.5);
+            let dist: f64 = (0..3).map(|i| (centre[i] - camera[i]).powi(2)).sum();
+            let block = [pos.0, pos.1, pos.2];
+            let (mode, area) = match entity {
+                BlockEntity::StructureBlock(b) if game_master && dist < 96.0 * 96.0 => {
+                    (b.render_mode(), b.renderable_box())
+                }
+                BlockEntity::TestInstanceBlock(b) => {
+                    if !game_master || dist >= 96.0 * 96.0 {
+                        continue;
+                    }
+                    // TestInstanceBlockEntity.renderMode: BOX.
+                    let padding = self.test_holder_padding(*pos);
+                    let (offset, size) = b.renderable_box(padding, self.test_rotation(*pos));
+                    (
+                        RenderMode::Box,
+                        horizon_client::structure_block::RenderableBox { offset, size },
+                    )
+                }
+                _ => continue,
+            };
+            if mode == RenderMode::None {
+                continue;
+            }
+            let invisible = (mode == RenderMode::BoxAndInvisibleBlocks).then(|| {
+                let [sx, sy, sz] = area.size;
+                let mut cells = vec![None; (sx.max(0) * sy.max(0) * sz.max(0)) as usize];
+                for x in 0..sx {
+                    for y in 0..sy {
+                        for z in 0..sz {
+                            let at = [0, 1, 2].map(|i| block[i] + area.offset[i] + [x, y, z][i]);
+                            let state = self.world.block(at[0], at[1], at[2]);
+                            let kind = if facts.is_air(state) {
+                                Some(InvisibleBlock::Air)
+                            } else {
+                                match &*facts.get(state).name {
+                                    "minecraft:structure_void" => {
+                                        Some(InvisibleBlock::StructureVoid)
+                                    }
+                                    "minecraft:barrier" => Some(InvisibleBlock::Barrier),
+                                    "minecraft:light" => Some(InvisibleBlock::Light),
+                                    _ => None,
+                                }
+                            };
+                            cells[(z * sx * sy + y * sx + x) as usize] = kind;
+                        }
+                    }
+                }
+                cells
+            });
+            g.bounding_box(block, area.offset, area.size, invisible.as_deref());
+        }
+    }
+
     fn structure_block_at(&self, pos: Pos) -> Option<&StructureBlock> {
         match self.world.block_entities.get(&pos)? {
             BlockEntity::StructureBlock(b) => Some(b),
@@ -76,7 +142,7 @@ impl Game<'_> {
 
     /// `StructureTemplateManager.get`: the cache (misses included), else the
     /// world's saved structures, else the game's own.
-    fn template_entry(&mut self, name: &str) -> Option<TemplateEntry> {
+    pub(super) fn template_entry(&mut self, name: &str) -> Option<TemplateEntry> {
         if let Some(cached) = self.structure_templates.get(name) {
             return cached.clone();
         }
@@ -126,16 +192,20 @@ impl Game<'_> {
         origin: [i32; 3],
         size: [i32; 3],
         include_entities: bool,
+        ignore_air: bool,
     ) -> Tag {
         let registry = self.pack.assets.registry;
         let void = registry.default_state("minecraft:structure_void");
+        let air = ignore_air
+            .then(|| registry.default_state("minecraft:air"))
+            .flatten();
         let mut blocks = Vec::new();
         for y in 0..size[1] {
             for z in 0..size[2] {
                 for x in 0..size[0] {
                     let at = (origin[0] + x, origin[1] + y, origin[2] + z);
                     let state = self.world.block(at.0, at.1, at.2);
-                    if Some(state) == void {
+                    if Some(state) == void || Some(state) == air {
                         continue;
                     }
                     let nbt = self.world.block_entities.get(&at).map(|entity| {
@@ -226,11 +296,34 @@ impl Game<'_> {
             return false;
         };
         let origin = [pos.0 + b.pos[0], pos.1 + b.pos[1], pos.2 + b.pos[2]];
-        let existing = self.template_entry(&name);
-        // `getOrCreate`, then `fillFromWorld`, which leaves a template alone
-        // when a side of the area is empty.
-        let tag = if b.size.iter().all(|s| *s >= 1) {
-            self.template_from_world(origin, b.size, !b.ignore_entities)
+        self.save_structure_area(
+            &name,
+            origin,
+            b.size,
+            b.ignore_entities,
+            &b.author,
+            to_disk,
+            false,
+        )
+    }
+
+    /// The static `StructureBlockEntity.saveStructure`: `getOrCreate`, then
+    /// `fillFromWorld`, which leaves a template alone when a side of the area
+    /// is empty; `ignore_air` is `ignoreBlocks = [AIR]`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn save_structure_area(
+        &mut self,
+        name: &str,
+        origin: [i32; 3],
+        size: [i32; 3],
+        ignore_entities: bool,
+        author: &str,
+        to_disk: bool,
+        ignore_air: bool,
+    ) -> bool {
+        let existing = self.template_entry(name);
+        let tag = if size.iter().all(|s| *s >= 1) {
+            self.template_from_world(origin, size, !ignore_entities, ignore_air)
         } else {
             existing.map_or_else(
                 || {
@@ -247,12 +340,12 @@ impl Game<'_> {
                 |e| e.tag,
             )
         };
-        let saved = !to_disk || self.write_template(&name, &tag);
+        let saved = !to_disk || self.write_template(name, &tag);
         self.structure_templates.insert(
-            name,
+            name.to_owned(),
             Some(TemplateEntry {
                 tag,
-                author: b.author,
+                author: author.to_owned(),
             }),
         );
         saved
@@ -273,34 +366,40 @@ impl Game<'_> {
         let Some(b) = self.structure_block_at(pos).cloned() else {
             return;
         };
+        let at = BlockPos::new(pos.0 + b.pos[0], pos.1 + b.pos[1], pos.2 + b.pos[2]);
+        let mut settings = load_settings(b.mirror, b.rotation, b.integrity, b.seed, b.strict);
+        settings.ignore_entities = b.ignore_entities;
+        self.place_template_entry(entry, at, settings, b.mirror, b.rotation);
+    }
+
+    /// `StructureTemplate.placeInWorld` of a template at `at`: the entities
+    /// it brings are spawned and the block entities it loaded sent to the
+    /// clients. Returns whether it placed.
+    pub(super) fn place_template_entry(
+        &mut self,
+        entry: &TemplateEntry,
+        at: BlockPos,
+        settings: TemplateSettings,
+        mirror: horizon_world::worldgen::structure::Mirror,
+        rotation: horizon_world::worldgen::structure::Rotation,
+    ) -> bool {
         let (Some(transforms), registry) = (self.state_transforms(), self.pack.assets.registry)
         else {
-            return;
+            return false;
         };
         let template = StructureTemplate::from_nbt(&entry.tag, registry, transforms);
-        let at = BlockPos::new(pos.0 + b.pos[0], pos.1 + b.pos[1], pos.2 + b.pos[2]);
-        let settings = TemplateSettings {
-            mirror: b.mirror,
-            rotation: b.rotation,
-            ignore_entities: b.ignore_entities,
-            known_shape: b.strict,
-            integrity: b.integrity,
-            seed: create_seed(b.seed),
-            // `2 | (strict ? 816 : 0)`.
-            flags: flags::UPDATE_CLIENTS | if b.strict { 816 } else { 0 },
-        };
         let placed = self.with_level(|behaviours, level, ticks| {
             behaviours.place_template(level, ticks, &template, at, settings)
         });
         let _ = self.process_level_events();
-        let Some((_, entities)) = placed else {
-            return;
+        let Some((placed, entities)) = placed else {
+            return false;
         };
         for entity in entities {
             self.spawn_entity_from_nbt(Tag::Compound(entity));
         }
         // The block entities the template loaded reach the clients.
-        let area = template.bounding_box([at.x, at.y, at.z], b.rotation, [0; 3], b.mirror);
+        let area = template.bounding_box([at.x, at.y, at.z], rotation, [0; 3], mirror);
         let keys: Vec<Pos> = self
             .world
             .block_entities
@@ -311,6 +410,7 @@ impl Game<'_> {
         for key in keys {
             self.mark_block_entity_updated(key);
         }
+        placed
     }
 
     /// `StructureBlockEntity.placeStructureIfSameSize`.
@@ -385,15 +485,19 @@ impl Game<'_> {
         if let Some(b) = self.structure_block_mut(pos) {
             b.mode = mode;
         }
+        self.set_mode_property(pos, "minecraft:structure_block", mode.serialized_name());
+    }
+
+    /// The `mode` of the block state at `pos` (if it is `block`), set with
+    /// `UPDATE_CLIENTS` and the block entity kept.
+    pub(super) fn set_mode_property(&mut self, pos: Pos, block: &str, mode: &str) {
         let registry = self.pack.assets.registry;
         let current = registry.state(self.world.block(pos.0, pos.1, pos.2));
-        let Some(current) = current.filter(|s| s.name == "minecraft:structure_block") else {
+        let Some(current) = current.filter(|s| s.name == block) else {
             return;
         };
         let mut wanted = current.clone();
-        wanted
-            .properties
-            .insert("mode".into(), mode.serialized_name().to_owned());
+        wanted.properties.insert("mode".into(), mode.to_owned());
         if wanted == *current {
             return;
         }
@@ -471,7 +575,7 @@ impl Game<'_> {
             return;
         };
         let allowed = g.creative() && g.permission >= 2;
-        self.as_guest(host, conn, |game| {
+        self.as_guest_messaged(host, conn, |game| {
             if allowed {
                 game.apply_set_structure_block(&p);
             }
@@ -550,8 +654,31 @@ impl Game<'_> {
     }
 }
 
+/// The `StructurePlaceSettings` that `StructureBlockEntity.placeStructure`
+/// and `PlaceCommand.placeTemplate` both build: mirror and rotation, the
+/// known shape when strict, the integrity and seed that `place_template`
+/// turns into `BlockRotProcessor` and `createRandom(seed)`, and the
+/// `setBlock` flags `2 | (strict ? 816 : 0)`.
+pub(super) fn load_settings(
+    mirror: horizon_world::worldgen::structure::Mirror,
+    rotation: horizon_world::worldgen::structure::Rotation,
+    integrity: f32,
+    seed: i64,
+    strict: bool,
+) -> TemplateSettings {
+    TemplateSettings {
+        mirror,
+        rotation,
+        ignore_entities: false,
+        known_shape: strict,
+        integrity,
+        seed: create_seed(seed),
+        flags: flags::UPDATE_CLIENTS | if strict { 816 } else { 0 },
+    }
+}
+
 /// `StructureBlockEntity.createRandom`'s seed: 0 is the clock.
-fn create_seed(seed: i64) -> i64 {
+pub(super) fn create_seed(seed: i64) -> i64 {
     if seed == 0 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -591,5 +718,22 @@ mod tests {
     fn a_zero_seed_is_the_clock() {
         assert_eq!(create_seed(42), 42);
         assert_ne!(create_seed(0), 0);
+    }
+
+    #[test]
+    fn template_settings_are_flags_2_and_unknown_shape_unless_strict() {
+        use horizon_world::worldgen::structure::{Mirror, Rotation};
+        let loose = load_settings(Mirror::LeftRight, Rotation::Clockwise90, 0.5, 7, false);
+        assert_eq!(loose.flags, 2);
+        assert!(!loose.known_shape);
+        assert!(!loose.ignore_entities);
+        assert_eq!((loose.integrity, loose.seed), (0.5, 7));
+        assert_eq!(
+            (loose.mirror, loose.rotation),
+            (Mirror::LeftRight, Rotation::Clockwise90)
+        );
+        let strict = load_settings(Mirror::None, Rotation::None, 1.0, 7, true);
+        assert_eq!(strict.flags, 818);
+        assert!(strict.known_shape);
     }
 }

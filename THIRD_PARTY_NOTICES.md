@@ -3,8 +3,9 @@
 ## wgpu-hal
 
 `third_party/wgpu-hal` is [wgpu-hal](https://github.com/gfx-rs/wgpu) 30.0.1 by the gfx-rs
-developers, with one upstream fix applied
-([gfx-rs/wgpu#10124](https://github.com/gfx-rs/wgpu/pull/10124)). It is licensed under MIT or
+developers, with upstream fixes applied
+([gfx-rs/wgpu#10124](https://github.com/gfx-rs/wgpu/pull/10124),
+[gfx-rs/wgpu#10714](https://github.com/gfx-rs/wgpu/pull/10714)). It is licensed under MIT or
 Apache-2.0; both licenses are in that folder (`LICENSE.MIT`, `LICENSE.APACHE`).
 
 ## Pixelify Sans
@@ -49,3 +50,12 @@ The launcher shows the logo of the mod loader an instance plays with.
 
 Each logo belongs to its project. Showing it says which loader an instance runs; it does not mean
 the project endorses Horizon.
+
+## Sign in with Microsoft
+
+The launcher's sign-in buttons follow Microsoft's published branding guidelines for apps that sign in
+with Microsoft accounts
+([Sign in with Microsoft branding](https://learn.microsoft.com/en-us/entra/identity-platform/howto-add-branding-in-apps)).
+The four-square Microsoft symbol in `launcher/src/microsoft.rs` reproduces the squares, positions and
+colours of Microsoft's official `ms-symbollockup_mssymbol_19.svg` from that page, unmodified. Microsoft
+and its logo are trademarks of the Microsoft group of companies; Horizon is not endorsed by Microsoft.

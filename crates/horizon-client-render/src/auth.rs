@@ -203,6 +203,46 @@ pub fn endpoint(doc: &serde_json::Value, service: &str, name: &str) -> Option<St
         .map(str::to_owned)
 }
 
+/// `Minecraft`'s constructor futures for the title screen: `UserApiService.fetchProperties`
+/// (the `player` service's `getAttributes`, with the bearer token) and
+/// `SessionService.fetchProfile(uuid, true)` (`getProfileById`). A failed
+/// attributes call falls back to the offline properties, a failed profile call
+/// to no actions, as vanilla does. Blocks: call it off the main thread.
+pub fn fetch_account_status(session: &AuthSession) -> crate::ban_notice::AccountStatus {
+    use crate::ban_notice::{AccountStatus, parse_profile_actions, parse_properties};
+    let Ok(doc) = discovery() else {
+        return AccountStatus::default();
+    };
+    let properties = endpoint(&doc, "player", "getAttributes")
+        .and_then(|url| {
+            agent()
+                .get(&url)
+                .set("Authorization", &format!("Bearer {}", session.access_token))
+                .call()
+                .ok()?
+                .into_string()
+                .ok()
+        })
+        .and_then(|body| parse_properties(&body))
+        .unwrap_or_default();
+    let actions = endpoint(&doc, "session", "getProfileById")
+        .and_then(|url| {
+            let url = url.replace("{profileId}", &format!("{:032x}", session.uuid));
+            agent()
+                .get(&format!("{url}?unsigned=true"))
+                .call()
+                .ok()?
+                .into_string()
+                .ok()
+        })
+        .map(|body| parse_profile_actions(&body))
+        .unwrap_or_default();
+    AccountStatus {
+        properties,
+        actions,
+    }
+}
+
 /// The JoinMinecraftServerRequest body; `selectedProfile` is the undashed UUID.
 pub fn join_request(session: &AuthSession, server_hash: &str) -> String {
     serde_json::json!({

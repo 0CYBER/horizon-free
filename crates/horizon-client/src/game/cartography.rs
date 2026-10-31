@@ -6,7 +6,7 @@
 //! screen draws the preview with its error and lock sprites.
 use super::{
     Game,
-    maps::{MapData, map_id},
+    maps::{MapData, map_id, shown_on_frame},
 };
 use horizon_client::{hud::HudBatch, items::ItemStack, menu::Maps};
 use std::{
@@ -144,14 +144,15 @@ impl Game<'_> {
     }
 }
 impl Game<'_> {
-    /// `MapRenderer.render` in a screen (`GuiGraphicsExtractor.map`): map
-    /// `id`'s decorations, all of them (not in an item frame), over its
-    /// image at `(x, y)` drawn `scale` GUI pixels per map pixel.
+    /// `GuiGraphicsExtractor.map`: map `id`'s decorations over its image at
+    /// `(x, y)` drawn `scale` GUI pixels per map pixel. Only those with
+    /// `renderOnFrame` (`MapDecorationType.showOnItemFrame`) are drawn: the
+    /// screen's `map` skips the player arrows and the two markers.
     fn draw_map_decorations(&self, batch: &mut HudBatch, id: i32, x: f32, y: f32, scale: f32) {
         let Some(map) = self.maps.data.get(&id) else {
             return;
         };
-        for d in &map.decorations {
+        for d in map.decorations.iter().filter(|d| shown_on_frame(d.sprite)) {
             let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
                 continue;
             };
@@ -220,6 +221,15 @@ mod tests {
                 "{a:?} {b:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_preview_skips_what_an_item_frame_skips() {
+        // GuiGraphicsExtractor.map: `if (decoration.renderOnFrame)`.
+        assert!(!shown_on_frame("map/decorations/player"));
+        assert!(!shown_on_frame("map/decorations/red_marker"));
+        assert!(shown_on_frame("map/decorations/frame"));
+        assert!(shown_on_frame("map/decorations/red_x"));
     }
 
     #[test]

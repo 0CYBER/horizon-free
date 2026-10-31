@@ -16,6 +16,8 @@ const NEOFORGE: &[u8] = include_bytes!("../assets/logos/neoforge.png");
 /// sites into the image cache, never shipped.
 const FABRIC: &str = "https://raw.githubusercontent.com/FabricMC/fabric-loader/master/src/main/resources/assets/fabricloader/icon.png";
 const FORGE: &str = "https://files.minecraftforge.net/static/images/favicon-32x32.png";
+/// The loaders a logo is drawn for.
+const LOADERS: [&str; 4] = ["fabric", "quilt", "forge", "neoforge"];
 
 impl Launcher {
     /// The instance's own picture, `size` points square. Whether there is one is asked once:
@@ -48,31 +50,33 @@ impl Launcher {
                 .and_then(|j| j.loader.as_ref())
                 .map(|l| l.kind.id().to_string()),
         };
+        if let Some(loader) = loader.filter(|l| LOADERS.contains(&l.as_str())) {
+            return self.loader_logo(&loader, size);
+        }
+        if instance.java.is_some() {
+            let grass = self.vanilla_icon()?;
+            return self.icon_image("mark:grass".into(), size, false, || {
+                std::fs::read(grass).ok()
+            });
+        }
+        let horizon = || Some(horizon_theme::ICON_PNG.to_vec());
+        self.icon_image("mark:horizon".into(), size, false, horizon)
+    }
+
+    /// A mod loader's logo by its id (`fabric`, `quilt`, `forge`, `neoforge`): None while a
+    /// fetched one is on its way, or for another id.
+    pub(super) fn loader_logo(&mut self, loader: &str, size: f32) -> Option<Arc<RenderImage>> {
         let bundled = |png: &'static [u8]| move || Some(png.to_vec());
-        match loader.as_deref() {
-            Some("quilt") => self.icon_image("mark:quilt".into(), size, false, bundled(QUILT)),
-            Some("neoforge") => {
-                self.icon_image("mark:neoforge".into(), size, false, bundled(NEOFORGE))
-            }
-            Some(name @ ("fabric" | "forge")) => {
-                let url = if name == "fabric" { FABRIC } else { FORGE };
+        let key = format!("mark:{loader}");
+        match loader {
+            "quilt" => self.icon_image(key, size, false, bundled(QUILT)),
+            "neoforge" => self.icon_image(key, size, false, bundled(NEOFORGE)),
+            "fabric" | "forge" => {
+                let url = if loader == "fabric" { FABRIC } else { FORGE };
                 let file = self.mods_image(url, images::ICON)?;
-                self.icon_image(format!("mark:{name}"), size, false, || {
-                    std::fs::read(file).ok()
-                })
+                self.icon_image(key, size, false, || std::fs::read(file).ok())
             }
-            _ if instance.java.is_some() => {
-                let grass = self.vanilla_icon()?;
-                self.icon_image("mark:grass".into(), size, false, || {
-                    std::fs::read(grass).ok()
-                })
-            }
-            _ => self.icon_image(
-                "mark:horizon".into(),
-                size,
-                false,
-                bundled(horizon_theme::ICON_PNG),
-            ),
+            _ => None,
         }
     }
 

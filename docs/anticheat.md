@@ -19,6 +19,11 @@ kick = 20
 decay = 0.02
 ```
 
+It lives in the server for now, in its own crate (`horizon-anticheat`) plus one file of the hub
+(`lan/anticheat.rs`), because the native mod API ([native-mods.md](native-mods.md)) has no hooks yet for a
+player's moves (the position, the on-ground claim, cancelling a move) or for packet timing. It moves into a
+native mod once those hooks exist.
+
 horizon-server checks the section before every start; the game reads it from `server.toml` when it
 starts (`horizon-client --dedicated` run by hand reads the same file from its folder, if there is one).
 
@@ -42,6 +47,8 @@ Every flag goes to `log`, with the time, the player, the check, its level, what 
 | Check | Catches | How |
 |---|---|---|
 | `timer` | a sped-up game (more ticks a second than the server's clock) | vanilla's client ends each tick with ServerboundClientTickEndPacket, at the server's tick rate. Each one spends one tick of a balance that wall-clock time fills. A client more than `tolerance_ms` (300) ahead is flagged; a quiet connection banks at most `max_lag_ms` (1000), so a lag spike's backlog isn't flagged and a pause can't be saved for a burst. A slow server tick adds its own time before its backlog is counted. |
+| `ground` | no-fall (claiming the ground to skip fall damage) and walking on water | a move that says it ends on the ground is judged only when every block around the feet (0.6 below them, 1/16 wider than the body) is air or a fluid, nothing collides a tenth of a block down, and no boat, minecart, shulker or happy ghast is near. Anything else (powder snow, scaffolding, a waterlogged slab...) isn't judged. A false claim is always dropped, so vanilla's fall damage follows; creative, spectators and gliders are skipped (no fall damage to dodge). |
+| `prediction` | speed, step, fly, jesus: any move vanilla's movement can't make from the player's own keys | each client tick (the packets between two ServerboundClientTickEndPackets: keys, sprinting, rotation, the move) is recorded, and every server tick ends with a ping so the server knows from which client tick on what it changed (a push, a teleport, an effect) was in effect. Each tick is then played again with the client's own movement code, from where the last one ended (it starts at a teleport the client accepted), and compared with where the client said it went; the replay then goes on from the client's position. What the server sent the player that changes its movement (a velocity, an explosion's knockback, attributes, effects) is applied on the first client tick that had seen it, so a client that ignores a push (anti-knockback) is off too. The keys and sprinting are the client's own, so they are never guessed; what the server can't know is tried (the ground on the first tick after a teleport, the item use on the tick the server's changed). Not played: riding, sleeping, dead, spectators. A move that lands farther than `tolerance` (0.03 blocks) from the replay flags, weighing its offset in tolerances (at most 5 a tick); the setback puts the player back where its moves last agreed. What the replay can't play yet excuses the tick, and the ticks after it until the moves agree again (2 seconds at most): another entity or player within 3 blocks (a push, a boat or shulker to stand on, a firework to fly with), an entity within 4 blocks that the server removed and the client hadn't heard of yet, a block change within 4 blocks the client hadn't seen or the server hasn't sent yet, abilities (a game mode, flight, a glider put on) the client hadn't seen, a moving piston, a chunk around the player the client doesn't have, a riptide launch, a teleport that keeps the player's motion (an End gateway's). Around a fast player (an elytra) these distances grow by two ticks of its speed, as what the server has around it is a tick or so behind. Under an excuse the replay takes the client's velocity, so it agrees again within a few ticks. With `[anticheat]` on it costs one ping and one replayed tick a tick per player. |
 
 More checks (movement, combat, world, anti-xray) come in their own pull requests; this table lists the
 ones in this version.
@@ -68,4 +75,5 @@ cargo build --profile fast -p horizon-client --bin horizon-client
 cargo build --profile fast -p horizon-bots
 python3 tools/anticheat_e2e.py --bin-dir target/fast
 python3 tools/server_bench.py --servers horizon --bots 60 --behaviour walk --anticheat   # its cost
+python3 tools/server_bench.py --servers horizon --bots 60 --behaviour walk --ground --anticheat   # survival, on the ground
 ```
