@@ -112,6 +112,7 @@ mod frames;
 mod friends;
 mod functions;
 mod game_mode;
+mod game_tests;
 mod gamemode_switcher;
 mod ghasts;
 mod glowing;
@@ -2245,6 +2246,8 @@ struct Game<'a> {
     structure_templates: HashMap<String, Option<structure_blocks::TemplateEntry>>,
     /// The game tests read so far, by id (the test instance registry).
     test_defs: std::cell::RefCell<HashMap<String, Option<test_instances::TestDef>>>,
+    /// `GameTestTicker.SINGLETON`: the game tests running on this server.
+    game_tests: game_tests::GameTests,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
@@ -6469,6 +6472,10 @@ impl Game<'_> {
             });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
             self.tick_client_ambient();
+        }
+        if running {
+            // MinecraftServer.tickServer: GameTestTicker.SINGLETON.tick().
+            self.tick_game_tests();
         }
         // ServerBossEvent broadcasts, after this level's entities have ticked.
         self.publish_boss_bars();
@@ -15585,6 +15592,7 @@ impl<'a> Game<'a> {
             block_editor: None,
             structure_templates: HashMap::new(),
             test_defs: std::cell::RefCell::new(HashMap::new()),
+            game_tests: game_tests::GameTests::default(),
             friends: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
