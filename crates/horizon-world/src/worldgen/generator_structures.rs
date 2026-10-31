@@ -8,7 +8,7 @@ use super::{
         jigsaw::PoolPiece,
         start::{
             Piece, Rings, StartContext, StructureRegistry, StructureStart, beardifier,
-            create_starts,
+            create_starts, try_generate,
         },
         stronghold::RingSearch,
     },
@@ -327,6 +327,28 @@ impl StructureState {
             .collect(),
         );
         Some(self.starts.insert_first((chunk.x, chunk.z), starts))
+    }
+    /// `Structure.generate` for `/place structure`: the start `structure`
+    /// builds in `chunk`, whether or not a structure set would place one
+    /// there (vanilla calls the structure's own generate, not the set's
+    /// placement, with its `biome -> true` predicate). Nothing is cached: the
+    /// chunk's own starts are untouched.
+    pub(super) fn structure_start(
+        &self,
+        context: &mut impl StartContext,
+        structure: &str,
+        chunk: ChunkPos,
+    ) -> Option<StructureStart> {
+        let index = (self.registry.structures.iter()).position(|s| s.name == structure)?;
+        try_generate(
+            &self.registry,
+            &self.resources,
+            &self.bindings,
+            context,
+            index,
+            chunk,
+            true,
+        )
     }
     /// Puts a saved start of `structure` in `chunk`, in place of the one
     /// this generator builds there from the same structure sets (a set

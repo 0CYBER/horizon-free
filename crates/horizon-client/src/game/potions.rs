@@ -72,22 +72,9 @@ impl PotionCloud {
         ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0])
     }
 }
-/// A mob's effect ids carry the `minecraft:` namespace.
+/// A mob's effect ids carry the `minecraft:` namespace; a mod's has its own.
 pub(super) fn mob_effect_id(id: &str) -> Option<&'static str> {
-    use std::{collections::HashMap, sync::OnceLock};
-    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    let id = id.trim_start_matches("minecraft:");
-    IDS.get_or_init(|| {
-        brewing::EFFECTS
-            .iter()
-            .map(|e| {
-                let full: &'static str = Box::leak(format!("minecraft:{}", e.id).into_boxed_str());
-                (e.id, full)
-            })
-            .collect()
-    })
-    .get(id)
-    .copied()
+    brewing::effect(id).map(|e| brewing::namespaced(e.id))
 }
 /// `LivingEntity.canBeAffected` with the mob overrides (`WitherBoss` and
 /// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,
@@ -1442,12 +1429,13 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// `EffectsInInventory`: panels to the right of survival/creative inventory.
+    /// The caller draws the returned tooltip after every other tooltip.
     pub(super) fn draw_inventory_effects(
         &self,
         batch: &mut HudBatch,
         origin: (f32, f32),
         image_width: i32,
-    ) {
+    ) -> Option<[(String, u32); 2]> {
         let panels = inventory_effects::panels(
             batch.width as i32,
             [origin.0 as i32, origin.1 as i32],
@@ -1457,14 +1445,12 @@ impl Game<'_> {
             &|key| self.pack.names.display_get(key),
             &|text| self.gui.atlas.font.width(text).ceil() as i32,
         );
-        if let Some(lines) = inventory_effects::paint(
+        inventory_effects::paint(
             batch,
             &self.gui.atlas,
             &panels,
             [self.cursor.0 as i32, self.cursor.1 as i32],
-        ) {
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
-        }
+        )
     }
     /// Effects saved in level.dat (`Player.active_effects`).
     pub(super) fn restore_effects(&mut self) {

@@ -3009,7 +3009,12 @@ impl B {
                 }
                 // findItemsToDisplay: the trades the player's item pays for.
                 let current = cx.w.player.as_ref().and_then(|p| p.main_hand.clone());
-                if player_item.as_ref() != Some(&current) {
+                // getOffers makes the trades on first use: the level rolls
+                // them, and the cost is compared from the next tick on.
+                let unset = m.extra.trade.as_ref().is_none_or(|t| t.unset);
+                if current.is_some() && unset {
+                    cx.events.push(MobEvent::VillagerOffers { mob: m.id });
+                } else if player_item.as_ref() != Some(&current) {
                     *player_item = Some(current.clone());
                     items.clear();
                     if let Some(held) = &current {

@@ -367,22 +367,14 @@ impl Game<'_> {
             return;
         };
         let at = BlockPos::new(pos.0 + b.pos[0], pos.1 + b.pos[1], pos.2 + b.pos[2]);
-        let settings = TemplateSettings {
-            mirror: b.mirror,
-            rotation: b.rotation,
-            ignore_entities: b.ignore_entities,
-            known_shape: b.strict,
-            integrity: b.integrity,
-            seed: create_seed(b.seed),
-            // `2 | (strict ? 816 : 0)`.
-            flags: flags::UPDATE_CLIENTS | if b.strict { 816 } else { 0 },
-        };
+        let mut settings = load_settings(b.mirror, b.rotation, b.integrity, b.seed, b.strict);
+        settings.ignore_entities = b.ignore_entities;
         self.place_template_entry(entry, at, settings, b.mirror, b.rotation);
     }
 
     /// `StructureTemplate.placeInWorld` of a template at `at`: the entities
     /// it brings are spawned and the block entities it loaded sent to the
-    /// clients.
+    /// clients. Returns whether it placed.
     pub(super) fn place_template_entry(
         &mut self,
         entry: &TemplateEntry,
@@ -390,18 +382,18 @@ impl Game<'_> {
         settings: TemplateSettings,
         mirror: horizon_world::worldgen::structure::Mirror,
         rotation: horizon_world::worldgen::structure::Rotation,
-    ) {
+    ) -> bool {
         let (Some(transforms), registry) = (self.state_transforms(), self.pack.assets.registry)
         else {
-            return;
+            return false;
         };
         let template = StructureTemplate::from_nbt(&entry.tag, registry, transforms);
         let placed = self.with_level(|behaviours, level, ticks| {
             behaviours.place_template(level, ticks, &template, at, settings)
         });
         let _ = self.process_level_events();
-        let Some((_, entities)) = placed else {
-            return;
+        let Some((placed, entities)) = placed else {
+            return false;
         };
         for entity in entities {
             self.spawn_entity_from_nbt(Tag::Compound(entity));
@@ -418,6 +410,7 @@ impl Game<'_> {
         for key in keys {
             self.mark_block_entity_updated(key);
         }
+        placed
     }
 
     /// `StructureBlockEntity.placeStructureIfSameSize`.
@@ -661,6 +654,29 @@ impl Game<'_> {
     }
 }
 
+/// The `StructurePlaceSettings` that `StructureBlockEntity.placeStructure`
+/// and `PlaceCommand.placeTemplate` both build: mirror and rotation, the
+/// known shape when strict, the integrity and seed that `place_template`
+/// turns into `BlockRotProcessor` and `createRandom(seed)`, and the
+/// `setBlock` flags `2 | (strict ? 816 : 0)`.
+pub(super) fn load_settings(
+    mirror: horizon_world::worldgen::structure::Mirror,
+    rotation: horizon_world::worldgen::structure::Rotation,
+    integrity: f32,
+    seed: i64,
+    strict: bool,
+) -> TemplateSettings {
+    TemplateSettings {
+        mirror,
+        rotation,
+        ignore_entities: false,
+        known_shape: strict,
+        integrity,
+        seed: create_seed(seed),
+        flags: flags::UPDATE_CLIENTS | if strict { 816 } else { 0 },
+    }
+}
+
 /// `StructureBlockEntity.createRandom`'s seed: 0 is the clock.
 pub(super) fn create_seed(seed: i64) -> i64 {
     if seed == 0 {
@@ -702,5 +718,22 @@ mod tests {
     fn a_zero_seed_is_the_clock() {
         assert_eq!(create_seed(42), 42);
         assert_ne!(create_seed(0), 0);
+    }
+
+    #[test]
+    fn template_settings_are_flags_2_and_unknown_shape_unless_strict() {
+        use horizon_world::worldgen::structure::{Mirror, Rotation};
+        let loose = load_settings(Mirror::LeftRight, Rotation::Clockwise90, 0.5, 7, false);
+        assert_eq!(loose.flags, 2);
+        assert!(!loose.known_shape);
+        assert!(!loose.ignore_entities);
+        assert_eq!((loose.integrity, loose.seed), (0.5, 7));
+        assert_eq!(
+            (loose.mirror, loose.rotation),
+            (Mirror::LeftRight, Rotation::Clockwise90)
+        );
+        let strict = load_settings(Mirror::None, Rotation::None, 1.0, 7, true);
+        assert_eq!(strict.flags, 818);
+        assert!(strict.known_shape);
     }
 }

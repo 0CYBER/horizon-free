@@ -14,6 +14,23 @@ fn occupied(extra: &Tag, key: &str) -> bool {
     matches!(extra.get(key), Some(Tag::Compound(c)) if !c.is_empty())
 }
 
+/// `ServerPlayer.extractParrotVariant` for both slots: the variant of the
+/// parrot kept there (`Parrot.Variant.byId` clamps the saved `Variant`, 0
+/// when absent), `None` for an empty slot or another entity.
+pub(super) fn shoulder_variants(extra: Option<&Tag>) -> [Option<i32>; 2] {
+    KEYS.map(|key| {
+        let parrot = extra?.get(key)?;
+        match parrot.get("id") {
+            Some(Tag::String(id)) if id.to_string_lossy() == "minecraft:parrot" => {}
+            _ => return None,
+        }
+        Some(match parrot.get("Variant") {
+            Some(Tag::Int(v)) => (*v).clamp(0, 4),
+            _ => 0,
+        })
+    })
+}
+
 impl Game<'_> {
     /// `ServerPlayer.setEntityOnShoulder` for a parrot that touched its
     /// owner: stored in the first free slot, the parrot gone from the world.
@@ -168,5 +185,29 @@ impl Game<'_> {
             c.insert("Owner".into(), Tag::IntArray(uuid.to_vec()));
             self.load_mob(tag, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod variant_tests {
+    use super::*;
+    #[test]
+    fn shoulder_slots_hold_parrots_by_variant() {
+        let parrot = |variant: Option<i32>, id: &str| {
+            let mut entries = vec![("id", Tag::String(id.into()))];
+            if let Some(v) = variant {
+                entries.push(("Variant", Tag::Int(v)));
+            }
+            Tag::compound(entries)
+        };
+        let extra = Tag::compound([
+            ("ShoulderEntityLeft", parrot(Some(9), "minecraft:parrot")),
+            ("ShoulderEntityRight", parrot(None, "minecraft:parrot")),
+        ]);
+        // Variant.byId clamps; a parrot saved without one is the first.
+        assert_eq!(shoulder_variants(Some(&extra)), [Some(4), Some(0)]);
+        let other = Tag::compound([("ShoulderEntityRight", parrot(Some(1), "minecraft:cat"))]);
+        assert_eq!(shoulder_variants(Some(&other)), [None, None]);
+        assert_eq!(shoulder_variants(None), [None, None]);
     }
 }

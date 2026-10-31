@@ -3,6 +3,7 @@
 //! the codec form. See [`super::raw`] for the rest.
 use super::*;
 use crate::buf::Reader;
+use horizon_world::snbt_text::to_snbt;
 
 const USE_ANIMATION: [&str; 12] = [
     "none",
@@ -215,9 +216,43 @@ fn kinetic_condition(r: &mut Reader) -> Option<HashCode> {
     Some(float_or(rec, "min_relative_speed", relative, 0.0).build())
 }
 
-/// `BlockPredicate.STREAM_CODEC` as `BlockPredicate.CODEC` writes it. A block
-/// entity `nbt` (a lenient SNBT string) and `predicates` (partial component
-/// matchers) have no codec form built here.
+/// The `Codec.BOOL` fields of the component predicates' codecs
+/// (`FireworkPredicate`, `WrittenBookPredicate`, `MobEffectInstancePredicate`):
+/// they travel as NBT bytes and hash as booleans. The text components inside a
+/// written book's page predicates add [`TEXT_BOOLS`].
+pub(super) const PREDICATE_BOOLS: [&str; 12] = [
+    "has_twinkle",
+    "has_trail",
+    "resolved",
+    "ambient",
+    "visible",
+    "bold",
+    "italic",
+    "underlined",
+    "strikethrough",
+    "obfuscated",
+    "interpret",
+    "plain",
+];
+/// `DataComponentPredicate.STREAM_CODEC`: each entry is a type (a predicate
+/// type, or a component type for `AnyValue`) and the predicate as the NBT its
+/// `CODEC` encodes (`fromCodecWithRegistries`), hashed as the map
+/// `DataComponentPredicate.CODEC` (`Codec.dispatchedMap`) writes.
+fn partial_predicate(r: &mut Reader, names: &dyn Names) -> Option<(HashCode, HashCode)> {
+    let registry = if boolean(r)? {
+        "minecraft:data_component_predicate_type"
+    } else {
+        "minecraft:data_component_type"
+    };
+    let key = entry(names, registry, int(r)?)?;
+    let tag = r.nbt().ok()?;
+    // The nested `components` of an item predicate (`container`,
+    // `bundle_contents`) are component values as NBT: `exact` hashes them by
+    // each component's codec.
+    Some((key, super::exact::predicate(&tag, names)?))
+}
+
+/// `BlockPredicate.STREAM_CODEC` as `BlockPredicate.CODEC` writes it.
 fn block_predicate(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
     let blocks = optional(r, |r| holder_set("minecraft:block", names, r))?;
     // StatePropertiesPredicate: a name and an exact value or a (min, max) range.
@@ -238,9 +273,12 @@ fn block_predicate(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
         })?;
         Some(HashOps::create_map(props))
     })?;
-    if boolean(r)? {
-        return None;
-    }
+    // NbtPredicate: `TagParser.LENIENT_CODEC` encodes with its flattened codec,
+    // the tag's SNBT string.
+    let nbt = optional(r, |r| match r.nbt().ok()? {
+        tag @ horizon_world::nbt::Tag::Compound(_) => Some(string(&to_snbt(&tag))),
+        _ => None,
+    })?;
     // DataComponentExactPredicate: the expected components, by type name.
     let exact = list(r, |r| {
         let kind = int(r)?;
@@ -248,17 +286,25 @@ fn block_predicate(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
         let value = Component::read(kind, r).ok()?.code(kind, names)?;
         Some((name, value))
     })?;
-    if r.count(r.remaining()).ok()? != 0 {
+    // DataComponentPredicate: the partial matchers (at most 64).
+    let partial = list(r, |r| partial_predicate(r, names))?;
+    if partial.len() > 64 {
         return None;
     }
     let rec = RecordHash::new()
         .optional("blocks", blocks)
-        .optional("state", state);
+        .optional("state", state)
+        .optional("nbt", nbt);
+    let rec = if exact.is_empty() {
+        rec
+    } else {
+        rec.field("components", HashOps::create_map(exact))
+    };
     Some(
-        if exact.is_empty() {
+        if partial.is_empty() {
             rec
         } else {
-            rec.field("components", HashOps::create_map(exact))
+            rec.field("predicates", HashOps::create_map(partial))
         }
         .build(),
     )

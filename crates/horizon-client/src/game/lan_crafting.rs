@@ -583,6 +583,13 @@ impl Game<'_> {
     /// (`window`; None closes the table whichever it is, and 0 the inventory
     /// menu) gives its grid back to the inventory, what doesn't fit is
     /// dropped. False when no such window is open.
+    /// The open crafting table's own slots (result and grid) before the
+    /// player's inventory, if the guest has one open.
+    pub(super) fn lan_crafting_table_own_slots(host: &LanHost, conn: u32) -> Option<usize> {
+        let (_, _, menu, _) = host.play.get(&conn)?.crafting.table.as_ref()?;
+        Some(menu.slot_count() - 36)
+    }
+
     pub(super) fn lan_crafting_closed(
         &mut self,
         host: &mut LanHost,

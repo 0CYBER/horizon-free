@@ -111,12 +111,13 @@ impl<'a> Reader<'a> {
         }
         Ok(n)
     }
-    /// Utf8String.read: VarInt byte length, UTF-8, at most `max` chars.
+    /// Utf8String.read: VarInt byte length, UTF-8, at most `max` chars of Java's
+    /// String (UTF-16 units: a character outside the BMP counts twice).
     pub fn string(&mut self, max: usize) -> Result<String> {
         let len = self.count(max.saturating_mul(3))?;
         let s = std::str::from_utf8(self.bytes(len)?)
             .map_err(|e| Error::new(format!("bad UTF-8: {e}")))?;
-        if s.chars().count() > max {
+        if s.encode_utf16().count() > max {
             return Err(Error::new(format!("string longer than {max} chars")));
         }
         Ok(s.to_owned())
@@ -644,6 +645,11 @@ mod tests {
         let mut w = Writer::new();
         w.string("seventeen chars!!");
         assert!(Reader::new(&w.data).string(16).is_err());
+        // Java counts UTF-16 units: 8 emoji are 16 of them, more than 15.
+        let mut w = Writer::new();
+        w.string(&"😀".repeat(8));
+        assert!(Reader::new(&w.data).string(16).is_ok());
+        assert!(Reader::new(&w.data).string(15).is_err());
         for p in [
             [0, 0, 0],
             [-1, -64, -1],

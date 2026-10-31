@@ -657,15 +657,34 @@ impl Mob {
         let b = self.bounds().inflate(Vec3::new(reach, 0.0, reach));
         b.intersects(t.bounds)
     }
-    /// `IronGolem.canAttack`: a golem a player built never attacks players.
-    pub fn spares_players(&self) -> bool {
-        self.species() == Species::IronGolem && self.extra.player_created
+    /// Whether the species is a `TamableAnimal` (not the horses and llamas,
+    /// which are tamed another way).
+    pub fn is_tamable_animal(&self) -> bool {
+        matches!(
+            self.species(),
+            Species::Wolf
+                | Species::Cat
+                | Species::Parrot
+                | Species::Nautilus
+                | Species::ZombieNautilus
+        )
+    }
+    /// `canAttack` for the player: a golem a player built never attacks
+    /// players (`IronGolem.canAttack`), and a pet never attacks its owner
+    /// (`TamableAnimal.canAttack`: `isOwnedBy`).
+    pub fn spares_players(&self, w: &MobWorld) -> bool {
+        (self.species() == Species::IronGolem && self.extra.player_created)
+            || (self.is_tamable_animal()
+                && self.extra.tame
+                && w.player
+                    .as_ref()
+                    .is_some_and(|p| super::tame::owned_by(self.extra.owner, p.uuid)))
     }
     /// TargetingConditions.forCombat().test for the player: alive, not
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
-        if self.spares_players() {
+        if self.spares_players(w) {
             return false;
         }
         // TargetingConditions.isCombat: never an ally.
@@ -678,7 +697,7 @@ impl Mob {
     /// a target the mob already has, which ignores the visibility scaling.
     pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
         let Some(p) = &w.player else { return false };
-        if self.spares_players() {
+        if self.spares_players(w) {
             return false;
         }
         if p.creative || p.allies.contains(&self.id) {
@@ -1574,7 +1593,8 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
-    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && (t.creative || m.spares_players()) {
+    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && (t.creative || m.spares_players(cx.w))
+    {
         return false;
     }
     let follow = m.attrs.follow_range * st.follow_scale;
@@ -1765,7 +1785,9 @@ impl Goal for HurtByTarget {
         let Some(t) = cx.w.target_info(by) else {
             return false;
         };
-        t.alive && t.can_be_seen_as_enemy && !(t.is_player && (t.creative || m.spares_players()))
+        t.alive
+            && t.can_be_seen_as_enemy
+            && !(t.is_player && (t.creative || m.spares_players(cx.w)))
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.bee && !super::bee::angry(m, cx.w) {
@@ -1789,14 +1811,7 @@ impl Goal for HurtByTarget {
             let pos = m.position;
             // TamableAnimal: its owner (`getOwner`, none for a wild one) and
             // whether it is a pet at all.
-            let tamable = matches!(
-                species,
-                Species::Wolf
-                    | Species::Cat
-                    | Species::Parrot
-                    | Species::Nautilus
-                    | Species::ZombieNautilus
-            );
+            let tamable = m.is_tamable_animal();
             let owner = m.extra.tame.then_some(m.extra.owner).flatten();
             let player = cx.w.player.as_ref().map(|p| p.uuid);
             let ids: Vec<u32> =

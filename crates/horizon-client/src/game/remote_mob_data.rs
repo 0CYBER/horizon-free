@@ -56,8 +56,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Entity.DATA_POSE: the pose the species animates by.
             (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
-            // off hand 2. The flag starts and stops the use; the client ticks
-            // the count itself (a bow's pull follows it).
+            // off hand 2. Bit 0 starts and stops the use; the client ticks the
+            // count itself (a bow's pull follows it). stopUsingItem clears
+            // only bit 0, so a stopped off-hand use arrives as 2.
             (8, Value::Byte(flags)) => {
                 m.extra.using_off_hand = flags & 2 != 0;
                 if flags & 1 == 0 {
@@ -155,6 +156,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
             (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
+            }
+            // SulfurCube.MAX_FUSE: onSyncedDataUpdated copies it into the fuse
+            // the client ticks for swell / white flash (#4548).
+            (Species::SulfurCube, 20, Value::Int(fuse)) => {
+                m.extra.counter2 = (*fuse).max(0) + 1;
+            }
+            (Species::SulfurCube, 19, Value::Bool(from_bucket)) => {
+                m.extra.scratch[3] = i32::from(*from_bucket);
             }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
             // and raised head of an angry enderman.
@@ -388,6 +397,13 @@ fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
             // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
             (12, Value::Int(count)) => m.extra.arrow_count = *count,
             (13, Value::Int(count)) => m.extra.stinger_count = *count,
+            // Player.DATA_SHOULDER_PARROT_LEFT and _RIGHT.
+            (19, Value::Id(v)) => {
+                m.extra.shoulder_parrots[0] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
+            (20, Value::Id(v)) => {
+                m.extra.shoulder_parrots[1] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
             _ => {}
         }
     }
@@ -816,8 +832,14 @@ mod tests {
         apply(&mut m, &[(8, s::BYTE, Value::Byte(1))]);
         assert_eq!(m.extra.using_item, 1);
         assert!(!m.extra.using_off_hand);
-        // Using in the off hand.
+        // Using in the off hand: bit 0 for the use, bit 1 for the hand.
         apply(&mut m, &[(8, s::BYTE, Value::Byte(3))]);
+        assert_eq!(m.extra.using_item, 1);
+        assert!(m.extra.using_off_hand);
+        // LivingEntity.stopUsingItem clears bit 0 only, so the stop of an
+        // off-hand use arrives as 2.
+        apply(&mut m, &[(8, s::BYTE, Value::Byte(2))]);
+        assert_eq!(m.extra.using_item, 0);
         assert!(m.extra.using_off_hand);
         apply(&mut m, &[(8, s::BYTE, Value::Byte(0))]);
         assert_eq!(m.extra.using_item, 0);
@@ -865,5 +887,20 @@ mod tests {
             &[(17, s::RESOLVABLE_PROFILE, Value::Profile(profile.clone()))],
         );
         assert_eq!(m.profile, Some(profile));
+    }
+
+    /// #4548: SulfurCube.MAX_FUSE copies into the fuse the client ticks for swell.
+    #[test]
+    fn sulfur_cube_max_fuse_sets_the_client_fuse() {
+        let Some(mut m) = mob("minecraft:sulfur_cube") else {
+            return;
+        };
+        assert_eq!(m.extra.counter2, 0);
+        apply(&mut m, &[(20, s::INT, Value::Int(40))]);
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 40);
+        assert!(horizon_client::mobs::sulfur_cube::primed(&m));
+        apply(&mut m, &[(20, s::INT, Value::Int(0))]);
+        // Last fuse tick: still primed at 0 until the server removes it.
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 0);
     }
 }

@@ -4,15 +4,14 @@
 //! `clearthat`/`these`/`all` and `stop`, with `TestFinder`'s searches.
 //!
 //! Retries are `RetryOptions(numberOfTimes, untilFailed)`.
-//!
-//! Not done: `verify`, `locate`, `pos`, `create`, tests of another dimension
-//! than the level in place.
 use super::{Arg, Context, Game, R, err};
 use crate::game::{
-    game_tests::{Grid, Info, Retry},
+    Dim,
+    game_tests::{Grid, Info, Retry, RunnerOptions, verify_batches},
     test_instances::TestDef,
 };
 use horizon_client::text::{self, Text};
+use horizon_world::worldgen::structure::BoundingBox;
 use horizon_world::worldgen::structure::Rotation;
 
 type Pos = (i32, i32, i32);
@@ -51,7 +50,7 @@ impl Game<'_> {
 
     /// `StructureUtils.findTestBlocks`: the test instance blocks within
     /// `radius` of `center` (the POI search is a sphere).
-    fn find_test_instance_blocks(&self, center: Pos, radius: i32) -> Vec<Pos> {
+    pub(super) fn find_test_instance_blocks(&self, center: Pos, radius: i32) -> Vec<Pos> {
         let limit = i64::from(radius) * i64::from(radius);
         let mut found: Vec<Pos> = self
             .world
@@ -74,7 +73,7 @@ impl Game<'_> {
     }
 
     /// The block of the source's position (`BlockPos.containing`).
-    fn test_source_block(&self) -> Pos {
+    pub(super) fn test_source_block(&self) -> Pos {
         let p = self.source_position();
         (
             p[0].floor() as i32,
@@ -211,28 +210,49 @@ impl Game<'_> {
         if !self.verify_test_structure(&def.structure) {
             return Ok(None);
         }
-        if def.dimension != self.dim.id() {
+        // `server.getLevel(dimension)`: the server's levels; a client-only
+        // game (deprecated in-frame mode) has the one it is in.
+        let dim = match def.dimension.as_str() {
+            "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end" => {
+                Some(Dim::from_id(&def.dimension))
+            }
+            _ => None,
+        }
+        .filter(|d| *d == self.dim || !self.options.execution_role.is_client());
+        let Some(dim) = dim else {
             self.test_failure(Text::literal(format!(
                 "Could not resolve level for dimension: {}",
                 def.dimension
             )));
             return Ok(None);
-        }
+        };
         let rotation = rotation_for_steps(steps).ok_or_else(|| err("command.failed", &[]))?;
         let id = self.game_tests.next_id();
         Ok(Some(
-            Info::new(id, key, def, None, self.dim, rotation).with_retry(retry),
+            Info::new(id, key, def, None, dim, rotation).with_retry(retry),
         ))
     }
 
-    /// `createTestPositionAround`: three blocks south of the source, on the
-    /// surface of the level.
-    fn test_position_around(&self) -> Pos {
+    /// The column `createTestPositionAround` starts from: the source's.
+    pub(super) fn test_around(&self) -> (i32, i32) {
         let p = self.source_position();
-        let (x, z) = (p[0].floor() as i32, p[2].floor() as i32);
+        (p[0].floor() as i32, p[2].floor() as i32)
+    }
+
+    /// `createTestPositionAround`: three blocks south of the source, on the
+    /// surface of the level in place (`playerAndTestInfo` loads the chunk of
+    /// the source's column in that level first).
+    pub(in crate::game) fn test_position_in_level(&mut self, (x, z): (i32, i32)) -> Pos {
+        self.load_test_chunks(&BoundingBox::new([x, 0, z], [x, 0, z]));
         let facts = self.res.facts();
-        let surface = self.world.world_surface(x, z + 3, |s| facts.is_air(s));
+        let surface = self.world.world_surface(x, z, |s| facts.is_air(s));
         (x, surface, z + 3)
+    }
+
+    /// `createTestPositionAround` in the level in place.
+    pub(super) fn test_position_around(&mut self) -> Pos {
+        let around = self.test_around();
+        self.test_position_in_level(around)
     }
 
     /// `TestCommand.run`.
@@ -254,8 +274,36 @@ impl Game<'_> {
             "commands.test.run.running",
             &[Text::literal(infos.len().to_string())],
         ));
-        let grid = Grid::new(self.test_position_around(), per_row);
+        let grid = Grid::new(self.test_around(), per_row);
         self.track_and_start_runner(infos, false, Some(grid));
+        Ok(1)
+    }
+
+    /// `TestCommand.verify`.
+    pub(super) fn test_verify(&mut self, ctx: &Context) -> R<i32> {
+        self.clear_game_tests();
+        let tests = match ctx.get("tests") {
+            Some(Arg::Str(pattern)) => horizon_client::command::args::select_resources(
+                self.ui.registries.ids("minecraft:test_instance"),
+                pattern,
+            )
+            .into_iter()
+            .cloned()
+            .collect(),
+            _ => Vec::new(),
+        };
+        let finder = Finder::Selection { tests, copies: 1 };
+        let mut infos = Vec::new();
+        for pos in self.finder_positions(&finder) {
+            infos.extend(self.test_info_at(pos, Retry::none()));
+        }
+        for (key, def) in self.finder_tests(&finder) {
+            infos.extend(self.test_info_for(key, def, 0, Retry::none())?);
+        }
+        self.game_tests.failed.clear();
+        let batches = verify_batches(&infos, || self.game_tests.next_id());
+        let grid = Grid::new(self.test_around(), 10).clearing();
+        self.track_and_start_batches(batches, RunnerOptions::verify(grid));
         Ok(1)
     }
 

@@ -674,36 +674,21 @@ impl Game<'_> {
     // ---- /test ----------------------------------------------------------
 
     /// `TestCommand`: running, resetting and clearing tests is
-    /// `test_runs`; `verify`, `create`, `locate` and `pos` are not ported and
-    /// answer as in a world without test instance blocks.
+    /// `test_runs`; `locate`, `pos` and `create` are `test_locate`.
     pub(super) fn cmd_test(&mut self, id: &str, ctx: &Context) -> R<i32> {
         match id {
             "test.run" | "test.run.found" | "test.clear" | "test.stop" => {
                 self.cmd_test_runs(id, ctx)
             }
-            // verify, create: not ported.
-            "test.verify" | "test.create" => Err(err("command.failed", &[])),
-            "test.locate" => {
-                // CommandSourceStack.sendSystemMessage: no feedback rule.
-                if !self.command_source.is_some_and(|s| s.silent) {
-                    self.system_message(Text::translate("commands.test.locate.started", &[]));
-                }
-                Err(err("commands.test.error.no_test_instances", &[]))
-            }
-            _ => {
-                // TestCommand.showPos: the block the player looks at (10 blocks).
-                self.source_player()?;
-                let p = self.test_pick_block();
-                Err(err(
-                    "commands.test.error.no_test_containing_pos",
-                    &[&p[0], &p[1], &p[2]],
-                ))
-            }
+            "test.verify" => self.test_verify(ctx),
+            "test.create" => self.test_create(ctx),
+            "test.locate" => self.test_locate(ctx),
+            _ => self.test_show_pos(ctx),
         }
     }
     /// `Entity.pick(10, 1, false)`: the first non-air block on the view ray,
     /// else the block at the ray's end.
-    fn test_pick_block(&self) -> [i32; 3] {
+    pub(super) fn test_pick_block(&self) -> [i32; 3] {
         use horizon_core::{
             geometry::{Vec3, traverse_blocks},
             position::BlockPos,

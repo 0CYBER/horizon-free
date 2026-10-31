@@ -321,8 +321,23 @@ pub fn smooth(smoothed: f32, progress: f32) -> f32 {
 }
 
 /// `ARGB.opaque` as the batch's RGBA.
-fn opaque(rgb: u32) -> u32 {
+pub const fn opaque(rgb: u32) -> u32 {
     0xFF00_0000 | (rgb & 0xFF) << 16 | (rgb & 0xFF00) | (rgb >> 16 & 0xFF)
+}
+
+/// `LoadingOverlay.LOGO_BACKGROUND_COLOR` (RGB: 239, 50, 61).
+pub const LOGO_BACKGROUND_COLOR: u32 = opaque(0xEF323D);
+/// `LoadingOverlay.LOGO_BACKGROUND_COLOR_DARK` (black).
+pub const LOGO_BACKGROUND_COLOR_DARK: u32 = opaque(0x000000);
+
+/// `LoadingOverlay.BRAND_BACKGROUND`: black when `darkMojangStudiosBackground` is set,
+/// Mojang red otherwise.
+pub fn brand_background(dark: bool) -> u32 {
+    if dark {
+        LOGO_BACKGROUND_COLOR_DARK
+    } else {
+        LOGO_BACKGROUND_COLOR
+    }
 }
 
 /// `LevelLoadingScreen.extractRenderState` over its background: the text,
@@ -368,6 +383,27 @@ pub fn draw(
         let done = (progress * 200.0).round();
         batch.fill(atlas, left, top, done, 2.0, opaque(0x00FF00));
     }
+}
+
+/// `LoadingOverlay.extractRenderState`: fills the frame with `BRAND_BACKGROUND`
+/// (Mojang red, or black when `darkMojangStudiosBackground` is set) and draws the
+/// progress line and bar.
+pub fn draw_loading_overlay(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    line: &str,
+    progress: f32,
+    dark: bool,
+) {
+    batch.fill(
+        atlas,
+        0.0,
+        0.0,
+        batch.width,
+        batch.height,
+        brand_background(dark),
+    );
+    draw_progress(batch, atlas, line, progress);
 }
 
 /// The startup loading screen: the stage's line and a progress bar, centred
@@ -544,6 +580,14 @@ mod tests {
         let eased = smooth(0.0, 1.0);
         assert_eq!(eased, 0.2);
         assert!((smooth(eased, 1.0) - 0.36).abs() < 1e-6);
+    }
+
+    #[test]
+    fn brand_background_matches_dark_mojang_studios_setting() {
+        assert_eq!(brand_background(true), LOGO_BACKGROUND_COLOR_DARK);
+        assert_eq!(brand_background(false), LOGO_BACKGROUND_COLOR);
+        assert_eq!(LOGO_BACKGROUND_COLOR_DARK, 0xFF00_0000);
+        assert_eq!(LOGO_BACKGROUND_COLOR, crate::hud::rgba(239, 50, 61, 255));
     }
 
     #[test]

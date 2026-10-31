@@ -93,7 +93,7 @@ use horizon_core::{
     position::{BlockPos, ChunkPos},
     random::LegacyRandom,
 };
-use std::{collections::HashMap, io, path::Path, sync::Arc, sync::Mutex};
+use std::{collections::HashMap, io, path::Path, sync::Arc, sync::RwLock};
 
 pub mod classes;
 pub mod data;
@@ -362,6 +362,24 @@ pub trait LevelAccess {
         _handled: &mut bool,
     ) {
     }
+    /// `BlockState.updateShape` for `state` at `pos` after its neighbour in
+    /// `direction` became `neighbour`, before the block computes it. `state`
+    /// may not be in the level yet (a piston landing it). A state put in
+    /// `new` is the result, and the block's own `updateShape` doesn't run;
+    /// the level may schedule ticks through `ticks`, as that would. The
+    /// default does nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn before_update_shape(
+        &self,
+        _ticks: &mut Ticks,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+        _neighbour_pos: BlockPos,
+        _neighbour: BlockStateId,
+        _new: &mut Option<BlockStateId>,
+    ) {
+    }
     /// `Level.isClientSide`: this level is a client's copy (false on a
     /// server, a host or the test harness).
     fn is_client_side(&self) -> bool {
@@ -565,7 +583,7 @@ pub struct Behaviours {
     liquid_blocks: FluidBlockBindings,
     /// Uncached (position- or block-entity-dependent) collision shapes.
     dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
-    occlusion_cache: Mutex<HashMap<(i32, i32, u8), bool>>,
+    occlusion_cache: RwLock<HashMap<(i32, i32, u8), bool>>,
     growth: growth::Growth,
 }
 
