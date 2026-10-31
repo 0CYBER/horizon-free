@@ -5,7 +5,7 @@
 //! dimension type allows.
 
 /// Section indexes of one column, 0 being the lowest.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SectionMask([u64; 4]);
 
 impl SectionMask {
