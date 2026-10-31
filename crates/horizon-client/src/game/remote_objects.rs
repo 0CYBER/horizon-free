@@ -313,12 +313,20 @@ impl Game<'_> {
     }
 
     /// One tick of interpolation: `step` moves a position a step toward
-    /// the entity's last sent one, if it has a move in progress.
-    pub(super) fn tick_remote_objects(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
+    /// the entity's last sent one, if it has a move in progress. A minecart
+    /// on `NewMinecartBehavior` is moved by `lerp_cart` (true when it did)
+    /// instead.
+    pub(super) fn tick_remote_objects(
+        &mut self,
+        mut step: impl FnMut(u32, Vec3) -> Vec3,
+        mut lerp_cart: impl FnMut(&mut super::minecarts::Minecart) -> bool,
+    ) {
         for c in &mut self.carts {
             c.previous = c.position;
             c.previous_yaw = c.yaw;
-            c.position = step(c.id, c.position);
+            if !lerp_cart(c) {
+                c.position = step(c.id, c.position);
+            }
             if c.kind == super::minecarts::CartKind::Furnace
                 && c.fuel > 0
                 && self.world.random.next_int_bound(4).unwrap_or(1) == 0
