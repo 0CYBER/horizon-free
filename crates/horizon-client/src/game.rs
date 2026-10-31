@@ -12490,7 +12490,11 @@ impl Game<'_> {
         self.save_warden_tracker();
         self.sync_level();
         self.store_owner();
-        self.level.write(&self.world_root)?;
+        if self.options.dedicated.is_some() {
+            self.level.write_without_player(&self.world_root)?;
+        } else {
+            self.level.write(&self.world_root)?;
+        }
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
