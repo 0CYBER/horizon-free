@@ -3505,6 +3505,7 @@ impl Game<'_> {
                     amount,
                     by_player,
                     horizon_client::mobs::DamageKind::Arrow,
+                    Some(&p.kind),
                 ) {
                     super::dragon::Hurt::Landed { .. } => EntityHit::Hurt,
                     super::dragon::Hurt::Refused => EntityHit::Refused,
@@ -3519,7 +3520,8 @@ impl Game<'_> {
                 return Ok(());
             }
             let amount = match p.kind {
-                ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => 6.0,
+                ProjectileKind::SmallFireball => 5.0,
+                ProjectileKind::LargeFireball { .. } => 6.0,
                 _ => 0.0,
             };
             let kind = match p.kind {
@@ -3528,13 +3530,19 @@ impl Game<'_> {
                 }
                 _ => horizon_client::mobs::DamageKind::Thrown,
             };
-            self.hit_special(id, amount, by_player, kind);
+            self.hit_special(id, amount, by_player, kind, Some(&p.kind));
             // ThrowableProjectile.onHit goes on after onHitEntity: a pearl
             // still takes its owner to where it broke (into the crystal's
-            // blast), an egg still hatches, a snowball still breaks.
+            // blast), an egg still hatches, a snowball still breaks. A large
+            // fireball still explodes (LargeFireball.onHit), whatever the
+            // part or crystal made of its hit (both refuse fire), and the
+            // blast takes the crystal.
             if !matches!(
                 p.kind,
-                ProjectileKind::EnderPearl | ProjectileKind::Egg | ProjectileKind::Snowball
+                ProjectileKind::EnderPearl
+                    | ProjectileKind::Egg
+                    | ProjectileKind::Snowball
+                    | ProjectileKind::LargeFireball { .. }
             ) {
                 return Ok(());
             }
@@ -3938,7 +3946,11 @@ impl Game<'_> {
                     self.note_attacker("minecraft:explosion", owner);
                 }
                 self.combat.explosion_owner = self.combat.projectile_owner;
+                // The blast's source names the owner, so a dragon it kills
+                // remembers the player who shot it.
+                self.set_blast_by_player(p.owner == Some(Who::Player));
                 let result = self.explode(atp, *power as f32);
+                self.set_blast_by_player(false);
                 self.combat.explosion_owner = None;
                 result?;
             }
