@@ -56,8 +56,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Entity.DATA_POSE: the pose the species animates by.
             (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
-            // off hand 2. The flag starts and stops the use; the client ticks
-            // the count itself (a bow's pull follows it).
+            // off hand 2. Bit 0 starts and stops the use; the client ticks the
+            // count itself (a bow's pull follows it). stopUsingItem clears
+            // only bit 0, so a stopped off-hand use arrives as 2.
             (8, Value::Byte(flags)) => {
                 m.extra.using_off_hand = flags & 2 != 0;
                 if flags & 1 == 0 {
@@ -831,8 +832,14 @@ mod tests {
         apply(&mut m, &[(8, s::BYTE, Value::Byte(1))]);
         assert_eq!(m.extra.using_item, 1);
         assert!(!m.extra.using_off_hand);
-        // Using in the off hand.
+        // Using in the off hand: bit 0 for the use, bit 1 for the hand.
         apply(&mut m, &[(8, s::BYTE, Value::Byte(3))]);
+        assert_eq!(m.extra.using_item, 1);
+        assert!(m.extra.using_off_hand);
+        // LivingEntity.stopUsingItem clears bit 0 only, so the stop of an
+        // off-hand use arrives as 2.
+        apply(&mut m, &[(8, s::BYTE, Value::Byte(2))]);
+        assert_eq!(m.extra.using_item, 0);
         assert!(m.extra.using_off_hand);
         apply(&mut m, &[(8, s::BYTE, Value::Byte(0))]);
         assert_eq!(m.extra.using_item, 0);

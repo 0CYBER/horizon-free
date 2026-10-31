@@ -84,9 +84,12 @@ impl Imported {
         if !self.pack.loader.is_empty() {
             parts.push(format!("{} {}", self.pack.loader, self.pack.loader_version));
         }
-        parts.push(format!(
-            "{} files",
-            self.rows.len().max(self.pack.files.len())
+        parts.push(crate::i18n::trf(
+            "{count} files",
+            &[(
+                "count",
+                &self.rows.len().max(self.pack.files.len()).to_string(),
+            )],
         ));
         parts.join("  ·  ")
     }
@@ -110,10 +113,13 @@ impl Imported {
         ] {
             let n = self.fetched.count(how);
             if n > 0 {
-                parts.push(format!("{n} {what}"));
+                parts.push(format!("{n} {}", crate::i18n::tr(what)));
             }
         }
-        Some(format!("Jars: {}.", parts.join(", ")))
+        Some(crate::i18n::trf(
+            "Jars: {summary}.",
+            &[("summary", &parts.join(", "))],
+        ))
     }
 }
 

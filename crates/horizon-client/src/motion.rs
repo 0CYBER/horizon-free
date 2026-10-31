@@ -263,6 +263,7 @@ pub enum MotionEvent {
     /// around a drowning player.
     Drown,
 }
+#[derive(Clone)]
 pub struct PlayerMotion {
     pub swimming: bool,
     pub fire_ticks: i32,
@@ -359,7 +360,7 @@ pub struct PlayerMotion {
     /// server takes it at the end of a guest's turn.
     pub teleported: bool,
     pub events: Vec<MotionEvent>,
-    pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
+    pub attributes: LiveAttributes<Box<dyn horizon_world::attributes::live::Identities>>,
     pub impulse: ImpulseContext,
     /// `ServerPlayer.spawnExtraParticlesOnFall`: a mace smash on a grounded
     /// target makes the next landing throw up the block below.
@@ -474,7 +475,7 @@ impl PlayerMotion {
             .map(|(i, _)| i as i32)
             .collect();
         let mut identity = 0i32;
-        let next: Box<dyn FnMut() -> i32> = Box::new(move || {
+        let next: Box<dyn horizon_world::attributes::live::Identities> = Box::new(move || {
             identity = identity.wrapping_add(1);
             identity
         });
@@ -485,7 +486,7 @@ impl PlayerMotion {
         resources: &MotionResources,
         position: Vec3,
         hashes: &[i32],
-        next: Box<dyn FnMut() -> i32>,
+        next: Box<dyn horizon_world::attributes::live::Identities>,
     ) -> Result<Self> {
         let mut attributes = LiveAttributes::new(
             resources.attributes.clone(),
@@ -1125,6 +1126,29 @@ impl MotionWorld<'_, '_, '_> {
         keys: crate::sprint::Keys,
         sprint_window: i32,
     ) -> Result<()> {
+        self.local_tick(keys, |player, keys| {
+            player.sprint_input_tick_with_window(keys, sprint_window)
+        })
+    }
+    /// A client's tick played again by the server's movement prediction: the
+    /// client's own keys, and the sprinting it said it had (its
+    /// ServerboundPlayerCommandPacket comes before the tick's move).
+    pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
+        self.local_tick(keys, |player, _| {
+            if player.sprinting == sprinting {
+                Ok(())
+            } else {
+                player.set_sprinting(sprinting)
+            }
+        })
+    }
+    /// `LocalPlayer.aiStep` and the travel it ends with; `sprint` is the
+    /// sprint phase.
+    fn local_tick(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
+    ) -> Result<()> {
         // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
         self.player.health.advance_clock();
         self.fluid_base_tick()?;
@@ -1137,8 +1161,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
-        self.player
-            .sprint_input_tick_with_window(keys, sprint_window)?;
+        sprint(self.player, keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
         self.player.move_vector = direction;
@@ -3924,8 +3947,9 @@ mod tests {
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let mut scene = World::test_scene(&assets, &render, 2).unwrap();
-        // Feet inside the floor block, as on a cushion seat (y - 0.35).
-        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 9.65, 20.5)).unwrap();
+        // Feet inside the floor block, as on a cushion seat (y - 0.35): away
+        // from the pyramid the scene's floor tops out at y = 4.
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 3.65, 20.5)).unwrap();
         player.swimming = true;
         player.set_pose(crate::pose::Pose::Swimming).unwrap();
         let mut w = MotionWorld {
@@ -3940,6 +3964,39 @@ mod tests {
         w.passenger_pose_tick().unwrap();
         assert!(!w.player.swimming);
         assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+    }
+    /// The movement prediction plays a tick again on a copy: what the copy
+    /// does (sprinting edits the speed attribute) stays in the copy.
+    #[test]
+    fn a_copied_player_moves_on_its_own() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        let walking = player.attribute("minecraft:movement_speed").unwrap();
+        let mut copy = player.clone();
+        copy.set_sprinting(true).unwrap();
+        copy.velocity = Vec3::new(0.2, 0.0, 0.0);
+        let sprinting = copy.attribute("minecraft:movement_speed").unwrap();
+        assert!(
+            (sprinting - walking * 1.3).abs() < 1e-6,
+            "{walking} {sprinting}"
+        );
+        assert_eq!(
+            player.attribute("minecraft:movement_speed").unwrap(),
+            walking
+        );
+        assert!(!player.sprinting);
+        assert_eq!(player.velocity, Vec3::ZERO);
+        // The copy's attributes keep working after the original changes too.
+        player.set_sprinting(true).unwrap();
+        copy.set_sprinting(false).unwrap();
+        assert_eq!(copy.attribute("minecraft:movement_speed").unwrap(), walking);
     }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {

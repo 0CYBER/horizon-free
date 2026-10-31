@@ -894,6 +894,7 @@ impl Game<'_> {
                         .is_none_or(|v| self.boats.iter().all(|b| b.id != v))
                     && keys.contains(&chunk_of(self.mobs[i].position))
                     && self.mobs[i].alive()
+                    && !self.mobs[i].removed
             })
             .collect();
         for i in mobs {

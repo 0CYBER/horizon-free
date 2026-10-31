@@ -281,6 +281,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              creative) or the villager dies, and stays open in range.
 - sulfur_cube_power: an explosive sulfur cube (TNT inside) stays calm on stone, lights its fuse when a redstone
              block is put beside it, and blows up when the fuse runs out; the guest sees it flash.
+- merchant-reselect: the host and the guest each trade three times from one offer click: Space (a key
+             repeat) and Enter press the focused offer button again and refill the payment slot.
 - parrot_follows_mob: a wild parrot (FollowMobGoal) flies to a cow standing 6 blocks away and hovers within 3.5 blocks of it (a parrot that only wanders stays about 4.5 blocks off).
 - riptide_rain: the host and the guest each launch with a Riptide trident in rain, with an elytra worn or not (#3458).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
@@ -7484,6 +7486,69 @@ def check_merchant_close(host, guest, out):
 
 CHECKS += ['merchant-close']
 CHECK_FNS.update({'merchant-close': check_merchant_close})
+
+
+def check_merchant_reselect(host, guest, out):
+    """AbstractButton.keyPressed: the offer button clicked last keeps focus through slot clicks, and Space
+    (key repeats too) or Enter presses it again, so the emptied payment slot refills after every trade."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'reselect_trade'
+    seen = {}
+    try:
+        host('command', command=f'fill {x - 4} {y - 1} {z - 2} {x + 4} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'fill {x - 4} {y} {z - 2} {x + 4} {y + 3} {z + 2} minecraft:air')
+        for game, other in ((host, guest), (guest, host)):
+            back_to_game(game)
+            back_to_game(other)
+            other('command', command=f'tp @s {x - 3.5} {y} {z + 0.5}')
+            game('command', command='gamemode survival')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            game('command', command='clear @s')
+            host('command', command=f'summon minecraft:villager {x + 2.5} {y} {z + 0.5} {{Tags:["{tag}"],'
+                 'NoAI:1b,PersistenceRequired:1b,Xp:1,VillagerData:{type:"minecraft:plains",'
+                 'profession:"minecraft:farmer",level:1},Offers:{Recipes:[{buy:{id:"minecraft:wheat",count:20},'
+                 'sell:{id:"minecraft:emerald",count:1},maxUses:16,uses:0,xp:0,priceMultiplier:0f,demand:0}]}}')
+            game.wait(20)
+            villager = next(e['id'] for e in game.raw('entities', 8, 'minecraft:villager')['entities']
+                            if math.dist(e['pos'], [x + 2.5, y, z + 0.5]) < 0.5)
+            game.raw('interact-entity', villager)
+            game.raw('wait-for', 'screen', 'station', '--timeout', 10)
+            assert game('screen')['station'] == 'Merchant', f'{game.name}: no merchant screen'
+            steps = []
+            # tryMoveItems moves all the wheat it finds, so each round gives one trade's worth.
+            for press in ('click', 'space repeat', 'enter tap'):
+                game('command', command='give @s minecraft:wheat 20')
+                game.wait(5)
+                if press == 'click':
+                    game.raw('click-gui', -1, 28)
+                else:
+                    game.raw('key', *press.split())
+                game.wait(10)
+                paid = station_slots(game).get(600)
+                steps.append({'press': press, 'paid': paid})
+                assert paid == ('minecraft:wheat', 20), f'{game.name}-{press}: payment slot {paid}'
+                game.raw('click-slot', 650, 'shift')
+                game.wait(10)
+                left = station_slots(game).get(600)
+                assert left is None, f'{game.name}-{press}: payment left after the trade: {left}'
+            game.shot(out, 'merchant-reselect')
+            game.raw('key', 'esc', 'tap')
+            game.wait(10)
+            case = {'steps': steps, 'server': {item: server_count(game, item) for item in ('wheat', 'emerald')}}
+            seen[game.name] = case
+            assert case['server'] == {'wheat': 0, 'emerald': 3}, f'{game.name}: expected 3 trades, got {case}'
+            host('command', command=f'kill @e[tag={tag}]')
+            game.wait(5)
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='clear @s')
+        host('command', command=f'kill @e[tag={tag}]')
+    return seen
+
+
+CHECKS += ['merchant-reselect']
+CHECK_FNS['merchant-reselect'] = check_merchant_reselect
 
 
 def check_riptide_rain(host, guest, out):

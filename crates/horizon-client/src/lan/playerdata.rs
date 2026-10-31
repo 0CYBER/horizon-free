@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn post_effects_are_saved_with_the_player() {
         // ServerPlayer.addAdditionalSaveData's `post_effects`, in order; none
-        // leaves the key out, and a cleared list does not come back from an
+        // is an empty list, and a cleared list does not come back from an
         // older file's copy.
         let mut g = guest();
         g.post_effects = vec!["minecraft:invert".into(), "pack:glow".into()];
@@ -296,7 +296,10 @@ mod tests {
         g.post_effects.clear();
         store(&g, &mut read, None);
         let tag = read.player_tag();
-        assert!(tag.get("post_effects").is_none());
+        assert!(matches!(
+            tag.get("post_effects"),
+            Some(horizon_world::nbt::Tag::List(l)) if l.is_empty()
+        ));
     }
 
     /// The resources the prepared game data holds, for a body to breathe with.

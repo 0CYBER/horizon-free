@@ -78,6 +78,7 @@ Horizon server settings (docs/server.md). The server writes them into server.pro
 | `enforce_whitelist` | `false` | `enforce-whitelist` | kick online players taken off the whitelist |
 | `view_distance` | `10` | `view-distance` | chunks sent around each player |
 | `simulation_distance` | `10` | `simulation-distance` | chunks around each player where mobs, crops and redstone tick |
+| `max_view_distance` | `0` | `horizon-max-view-distance` | past view_distance, saved chunks only, up to this (never generated; 0: off) |
 
 ### `[world]`
 

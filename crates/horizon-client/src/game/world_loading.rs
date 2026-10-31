@@ -325,6 +325,58 @@ pub(super) fn preload_world_data(
     }
 }
 
+/// A launch that names a world (`--world`, `--quickPlaySingleplayer`): the
+/// same preload, started as soon as the block registry and the biomes are
+/// loaded, so it overlaps the rest of the startup instead of the world's
+/// opening. Read for the world's own data packs and preset, the bundle and
+/// decoration `make_streaming` asks for; a world they don't fit (one its
+/// upgrade rewrites) reads its own when it opens.
+pub(super) fn preload_launch_world(
+    folder: &str,
+    resources: &std::path::Path,
+    registry: &'static horizon_world::registry::BlockRegistry,
+    biomes: Arc<horizon_client::biome::Biomes>,
+) {
+    let mut preload = PRELOAD.lock().unwrap_or_else(|e| e.into_inner());
+    if !matches!(*preload, Preload::Idle) {
+        return;
+    }
+    let Ok(dir) = std::env::current_dir() else {
+        return;
+    };
+    let world_root = dir.join("saves").join(folder);
+    let resources = resources.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("World data preload".into())
+        .spawn(move || {
+            // Not behind the server: the world's opening waits for it.
+            let started = std::time::Instant::now();
+            // Errors are left for the world opening to report.
+            let (overrides, _) = worldgen_overrides_of(&world_root, &biomes);
+            if let Ok(data) = horizon_client::vanillagen::shared_data_with(
+                &resources.join("worldgen"),
+                &overrides,
+                registry,
+            ) {
+                let preset = horizon_client::save::WorldGen::preset(&world_root);
+                let _ = data.prepare_decoration(preset, "minecraft:overworld");
+            }
+            let _ = horizon_client::structure_blocks::loot_data(
+                &resources,
+                &horizon_world::loot::PackOverlay::NONE,
+            );
+            let _ = super::lan::sync_data(&resources, &horizon_world::loot::PackOverlay::NONE);
+            log::info!(
+                "Horizon: world data preloaded for the launch's world in {} ms",
+                started.elapsed().as_millis()
+            );
+        });
+    match spawned {
+        Ok(thread) => *preload = Preload::Started { thread, left: None },
+        Err(e) => log::warn!("Horizon: world data preload: {e}"),
+    }
+}
+
 /// A world opens: what `preload_world_data` read is the world's from now on.
 pub(super) fn world_data_used() {
     *PRELOAD.lock().unwrap_or_else(|e| e.into_inner()) = Preload::Used;
@@ -360,18 +412,29 @@ fn world_worldgen_overrides(
     world_root: &std::path::Path,
     biomes: &horizon_client::biome::Biomes,
 ) -> horizon_world::worldgen::overrides::WorldgenOverrides {
+    let (overrides, warnings) = worldgen_overrides_of(world_root, biomes);
+    for warning in warnings {
+        log::warn!("Horizon: data pack worldgen: {warning}");
+    }
+    overrides
+}
+
+/// The worldgen entries of the world's enabled data packs, and what the
+/// generator leaves out of them.
+fn worldgen_overrides_of(
+    world_root: &std::path::Path,
+    biomes: &horizon_client::biome::Biomes,
+) -> (
+    horizon_world::worldgen::overrides::WorldgenOverrides,
+    Vec<String>,
+) {
     let packs = horizon_client::datapack::discover(world_root);
     let enabled = horizon_client::datapack::enabled_ids(world_root, &packs);
     let enabled: Vec<_> = enabled
         .iter()
         .filter_map(|id| packs.iter().find(|p| &p.id == id))
         .collect();
-    let (overrides, warnings) =
-        horizon_client::datapack::worldgen_overrides(&enabled, |b| biomes.contains(b));
-    for warning in warnings {
-        log::warn!("Horizon: data pack worldgen: {warning}");
-    }
-    overrides
+    horizon_client::datapack::worldgen_overrides(&enabled, |b| biomes.contains(b))
 }
 
 /// The shapes of the world's levels: their dimension types, the world's

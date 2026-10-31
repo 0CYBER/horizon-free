@@ -270,7 +270,7 @@ def parity_summary(output):
     return text
 
 
-# CI's verify job (.github/workflows/ci.yml): clippy over the whole workspace, and over the server build (the game
+# CI's clippy job (.github/workflows/ci.yml): clippy over the whole workspace, and over the server build (the game
 # without sound or controllers).
 CI_CLIPPY = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 CI_CLIPPY_SERVER = "cargo clippy -p horizon-client --all-targets --locked --no-default-features -- -D warnings"
