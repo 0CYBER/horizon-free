@@ -1317,12 +1317,22 @@ impl Game<'_> {
                 8 if !spectator => self.guest_jab(host, conn),
                 _ => {}
             },
+            // handleSetCarriedItem: a new slot stops a main-hand use.
             S::SetCarriedItem(p) => {
-                if (0..9).contains(&p.slot) {
-                    host.hub.guests[gi].selected = p.slot as usize;
-                    if let Some(play) = host.play.get_mut(&conn) {
-                        play.using = None;
-                    }
+                let g = &mut host.hub.guests[gi];
+                if !(0..9).contains(&p.slot) {
+                    eprintln!("{} tried to set an invalid carried item", g.name);
+                    return;
+                }
+                let changed = g.selected != p.slot as usize;
+                g.selected = p.slot as usize;
+                if let Some(play) = host.play.get_mut(&conn)
+                    && changed
+                    && play
+                        .using
+                        .is_some_and(|(slot, _)| slot != super::shield::OFFHAND_SLOT)
+                {
+                    play.using = None;
                 }
             }
             // ServerGamePacketListenerImpl.handlePunch: the main hand swings
@@ -1467,12 +1477,13 @@ impl Game<'_> {
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
-                // handleInteract: within the entity interaction range plus 3
-                // of the target's box, or nothing happens.
+                // handleInteract: a target inside the world border, within the entity
+                // interaction range plus 3 of its box, or nothing happens.
                 if let Some(target) = self.guest_target_box(host, gi, p.id)
-                    && self.as_guest(host, conn, |g| {
-                        g.within_entity_interaction_range(&target, 3.0)
-                    }) != Some(true)
+                    && (!self.inside_border(&target)
+                        || self.as_guest(host, conn, |g| {
+                            g.within_entity_interaction_range(&target, 3.0)
+                        }) != Some(true))
                 {
                     return;
                 }
@@ -1506,13 +1517,7 @@ impl Game<'_> {
                 let Some(stack) = self.item_from_network(host, &p.item) else {
                     return;
                 };
-                if stack.count
-                    > self
-                        .res
-                        .items()
-                        .get(&stack.item)
-                        .map_or(64, |i| i.max_stack)
-                {
+                if !self.creative_stack_valid(host, gi, &stack) {
                     return;
                 }
                 let play = host.play.entry(conn).or_default();
@@ -1527,11 +1532,18 @@ impl Game<'_> {
                 self.as_guest(host, conn, |g| g.player_drop(stack));
             }
             S::SetCreativeModeSlot(p) => {
+                // Slot 0 is the crafting result: not a slot to set.
                 let g = &mut host.hub.guests[gi];
-                if !g.creative() || !(0..46).contains(&p.slot) {
+                if !g.creative() || !(1..46).contains(&p.slot) {
                     return;
                 }
                 let item = self.item_from_network(host, &p.item);
+                if item
+                    .as_ref()
+                    .is_some_and(|s| !self.creative_stack_valid(host, gi, s))
+                {
+                    return;
+                }
                 let slot = p.slot as usize;
                 let g = &mut host.hub.guests[gi];
                 let old = g.menu_slot(slot);
@@ -1595,7 +1607,14 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
             S::SelectBundleItem(p) => {
-                if !spectator && let Ok(slot) = usize::try_from(p.slot) {
+                // ServerGamePacketListenerImpl.handleBundleItemSelectedPacket: the slot
+                // is the open menu's (#4436).
+                let own = Self::lan_crafting_table_own_slots(host, conn)
+                    .or_else(|| Self::lan_station_own_slots(host, conn));
+                let slot = usize::try_from(p.slot)
+                    .ok()
+                    .and_then(|slot| bundle_inventory_slot(slot, own));
+                if !spectator && let Some(slot) = slot {
                     host.hub
                         .select_bundle_item(conn, slot, p.index, &mut self.world);
                 }
@@ -1708,6 +1727,7 @@ impl Game<'_> {
             // handleTeleportToEntityPacket: a spectator goes to the player,
             // in whichever level they are.
             S::TeleportToEntity(p) if spectator => self.guest_spectate_teleport(host, gi, p.uuid),
+            S::SpectatorAction(p) => self.guest_spectator_action(host, gi, p.target),
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
@@ -1733,6 +1753,22 @@ impl Game<'_> {
                         );
                     }
                     self.send_admin_feedback(host, Some(conn));
+                }
+            }
+            S::ChangeGameMode(p) => {
+                if let Some(mode) = usize::try_from(p.mode)
+                    .ok()
+                    .and_then(|index| horizon_client::command::args::GameMode::ALL.get(index))
+                {
+                    let name = horizon_client::text::Text::translate(
+                        &format!("gameMode.{}", mode.name()),
+                        &[],
+                    );
+                    eprintln!(
+                        "Player {} tried to change game mode to {} without required permissions",
+                        host.hub.guests[gi].name,
+                        name.plain()
+                    );
                 }
             }
             // handleEntityTagQuery: a game master's F3+I on an entity of their
@@ -1791,6 +1827,10 @@ impl Game<'_> {
             // data only with infinite materials.
             S::PickItemFromBlock(p) => {
                 self.guest_pick_item(host, conn, |g| {
+                    // handlePickItemFromBlock: within reach and loaded.
+                    if !g.world.loaded(p.pos[0], p.pos[2]) {
+                        return None;
+                    }
                     let eye = g.eye_position()?;
                     let d2: f64 = (0..3)
                         .map(|a| {
@@ -1872,6 +1912,23 @@ impl Game<'_> {
                 }),
             );
         }
+    }
+
+    /// What ServerboundSetCreativeModeSlotPacket asks of a stack. Its codec
+    /// (`ItemStack.validatedStreamCodec`) encodes the stack with `ItemStack.CODEC`, whose count is
+    /// 1 to 99: more fails the packet and disconnects the player, as vanilla's decoder error does.
+    /// handleSetCreativeModeSlot's `validData` then ignores a stack beyond its own stack size.
+    fn creative_stack_valid(&self, host: &mut LanHost, gi: usize, s: &ItemStack) -> bool {
+        if s.count > 99 {
+            let g = &host.hub.guests[gi];
+            let conn = g.conn;
+            let reason = format!("Invalid packet: count {} is not in 1..99", s.count);
+            eprintln!("{} sent an invalid creative stack: {reason}", g.name);
+            host.hub
+                .kick(conn, horizon_protocol::text::literal(&reason));
+            return false;
+        }
+        s.count <= self.stack_max_size(s)
     }
 
     fn item_from_network(
@@ -2073,7 +2130,14 @@ impl Game<'_> {
     /// interaction: the host, another player, a mob, a vehicle or object, a
     /// dragon part or crystal, a projectile. None for an id the level doesn't
     /// have (the handlers then find nothing either).
-    fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
+    /// `WorldBorder.isWithinBounds(target.blockPosition())` for an entity of this box:
+    /// the block its feet are in (the box's bottom centre).
+    fn inside_border(&self, target: &Aabb) -> bool {
+        let feet = target.bottom_center();
+        self.border.contains(feet.x.floor(), feet.z.floor())
+    }
+
+    pub(super) fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
         let conn = host.hub.guests[gi].conn;
         if id == host.host_entity {
             return self.player.as_ref().map(|p| p.bounds());
@@ -2112,10 +2176,12 @@ impl Game<'_> {
         if host.hub.guests[gi].spectator() {
             return;
         }
-        // handleAttack: `isWithinAttackRange(mainHandItem, box, 3.0)` before
-        // anything else, players, mobs, objects and fireballs alike.
+        // handleAttack: a target inside the world border, then
+        // `isWithinAttackRange(mainHandItem, box, 3.0)` before anything else, players,
+        // mobs, objects and fireballs alike.
         if let Some(target) = self.guest_target_box(host, gi, id)
-            && self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true)
+            && (!self.inside_border(&target)
+                || self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true))
         {
             return;
         }
@@ -2500,7 +2566,9 @@ impl Game<'_> {
             return;
         }
         let g = &mut host.hub.guests[i];
+        // restartClientLoadTimerAfterRespawn.
         g.dead = false;
+        g.load_timeout = horizon_client::lan::guest::CLIENT_LOADED_TIMEOUT;
         g.death_time = 0;
         g.health = 20.0;
         g.food = 20;
@@ -2577,6 +2645,7 @@ impl Game<'_> {
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
+        self.tick_guest_cameras(host);
         self.lan_merchant_tick(host);
         self.lan_stations_tick(host);
         self.lan_tables_tick(host);
@@ -3057,9 +3126,13 @@ impl Game<'_> {
             // LivingEntity.aiStep: a Riptide spin counts down on the server's
             // copy too, or it would stay in the spin pose (eye 0.4) for good.
             // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
-            // ends with updatePlayerPose: a swimmer, or a player crawling
-            // under a block, takes the short box its moves are checked with.
-            let _ = w.server_player_pose_tick();
+            // ends with updatePlayerPose — or, for a passenger, the rideTick
+            // path that clears a swim (#4509 / #3308).
+            let _ = if riding {
+                w.passenger_pose_tick()
+            } else {
+                w.server_player_pose_tick()
+            };
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {
@@ -3802,6 +3875,7 @@ impl Game<'_> {
             self.combat.stuck.tick();
         }
         for g in &mut host.hub.guests {
+            g.shoulders = super::shoulders::shoulder_variants(g.saved.as_ref());
             g.stuck = match self.guest_combat.get_mut(&g.conn) {
                 Some(combat) => {
                     if !paused {
@@ -3950,5 +4024,33 @@ mod tests {
             eye_columns([205.7, 100.0, 530.5], Pose::Standing.dimensions(1.0)),
             [205..=205, 530..=530]
         );
+    }
+}
+
+/// A `ServerboundSelectBundleItemPacket` slot as the hub's `select_bundle_item` reads it.
+/// With a crafting table or a station open (`own` slots of its own first), its
+/// inventory part is the inventory menu's main inventory and hotbar from slot 9, in
+/// the same order; its own slots hold no bundle the hub can reach.
+fn bundle_inventory_slot(slot: usize, own: Option<usize>) -> Option<usize> {
+    match own {
+        Some(own) => slot.checked_sub(own).filter(|s| *s < 36).map(|s| s + 9),
+        None => Some(slot),
+    }
+}
+
+#[cfg(test)]
+mod bundle_slot_tests {
+    use super::bundle_inventory_slot;
+
+    /// A crafting table (10 slots of its own) and an enchanting table (2): the first
+    /// inventory slot and the last hotbar slot map to 9 and 44; their own slots to none.
+    #[test]
+    fn station_menus_map_to_the_inventory_menu() {
+        assert_eq!(bundle_inventory_slot(10, Some(10)), Some(9));
+        assert_eq!(bundle_inventory_slot(45, Some(10)), Some(44));
+        assert_eq!(bundle_inventory_slot(2, Some(2)), Some(9));
+        assert_eq!(bundle_inventory_slot(5, Some(10)), None);
+        assert_eq!(bundle_inventory_slot(46, Some(10)), None);
+        assert_eq!(bundle_inventory_slot(45, None), Some(45));
     }
 }

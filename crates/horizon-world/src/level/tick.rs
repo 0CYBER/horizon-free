@@ -125,6 +125,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         kind: "command_block",
                     });
                 }
+                // TestBlock.tick resets the block entity: the caller owns it.
+                Class::TestBlock => {
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "test_block_tick",
+                    });
+                }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
                     // BrushableBlock.tick checks the brush reset first (the

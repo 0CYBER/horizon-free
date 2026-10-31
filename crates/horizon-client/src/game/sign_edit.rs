@@ -334,6 +334,26 @@ impl Game<'_> {
         self.right = false;
         self.capture(false);
     }
+    /// `AbstractSignEditScreen.tick`: the editor closes (and `removed` sends
+    /// the text) once its sign is removed or the player's eyes are further
+    /// than 4 blocks beyond the block interaction range
+    /// (`SignBlockEntity.playerIsTooFarAwayToEdit`).
+    pub(super) fn tick_sign_editor(&mut self) {
+        let Some(edit) = &self.sign_edit else {
+            return;
+        };
+        let (x, y, z) = edit.pos;
+        let near = self.eye_position().is_some_and(|eye| {
+            horizon_client::lan::guest::within_block_range(eye, self.reach() + 4.0, [x, y, z])
+        });
+        let sign = matches!(
+            self.world.block_entities.get(&edit.pos),
+            Some(BlockEntity::Sign(_))
+        );
+        if !sign || !near {
+            self.close_sign_editor();
+        }
+    }
     /// `AbstractSignEditScreen.removed`: a server's client sends what it
     /// wrote (ServerboundSignUpdatePacket); the window's own world keeps it
     /// and sends it to its guests (`sendBlockUpdated`).
@@ -743,17 +763,12 @@ impl Game<'_> {
                     true,
                 );
             }
+            let pre: String = value.chars().take(edit.edit.cursor).collect();
+            let caret_x = x + HudBatch::text_width(atlas, &pre);
             if edit.edit.cursor_visible() {
-                let pre: String = value.chars().take(edit.edit.cursor).collect();
-                batch.fill(
-                    atlas,
-                    x + HudBatch::text_width(atlas, &pre),
-                    ly,
-                    1.0,
-                    line_height,
-                    color,
-                );
+                batch.fill(atlas, caret_x, ly, 1.0, line_height, color);
             }
+            horizon_client::preedit::report_caret(caret_x, ly, line_height);
         }
         let (bx, by) = done_button(w, h);
         batch.sprite_scaled(

@@ -89,6 +89,16 @@ def scenarios():
     for i, (x, seed) in enumerate([(0.5, 240), (6.5, 241)]):
         add(f'iron_golem_village_{i}', 400, VILLAGE + [f'mob minecraft:iron_golem {x} -60 3.5 0 {seed} persistent'], 'difficulty=0')
     add('iron_golem_outside_village', 400, VILLAGE + ['mob minecraft:iron_golem 30.5 -60 3.5 0 242 persistent'], 'difficulty=0')
+    # RandomStandGoal (rearing, with the ambient sound) of every equine, left alone for 800 ticks.
+    for i, species in enumerate(['horse', 'donkey', 'mule', 'zombie_horse', 'skeleton_horse', 'llama']):
+        # The zombie horse at night: by day it burns, and a burning horse's hurts are another matter.
+        add(f'{species}_rears_alone', 800, [f'mob minecraft:{species} 0.5 -60 0.5 0 {260 + i} persistent'],
+            'difficulty=0' + (' time=18000' if species == 'zombie_horse' else ''))
+    # Enough of them for the one in 400 draw to land a few times (the rearing and its sound).
+    for i, species in enumerate(['horse', 'donkey', 'mule', 'zombie_horse', 'skeleton_horse']):
+        add(f'{species}_herd_rears', 1200, [f'mob minecraft:{species} {-10.5 + 3 * k} -60 {-3.5 + 7 * (k % 2)} 0 {300 + 10 * i + k} persistent'
+                                            for k in range(8)], 'difficulty=0' + (' time=18000' if species == 'zombie_horse' else ''))
+    add('baby_horse_rears_alone', 800, ['mob minecraft:horse 0.5 -60 0.5 0 270 persistent baby'], 'difficulty=0')
     # The warden: idle, sniffing out a player, roaring and fighting (WardenAi).
     # Without finalizeSpawn's dig cooldown a warden digs straight back down. warden_player
     # and warden_cow stop before the first blow kills the player or the cow (the probe has no dying
@@ -324,12 +334,23 @@ def scenarios():
                                        f'mob minecraft:dolphin {dx} -63 0.5 0 {seed} persistent'], 'difficulty=0')
     add('dolphin_boat_far', 160, ['fill -40 -64 -40 40 -61 40 minecraft:water', 'player -20.5 -61 0.5 boat=0.1,0',
                                   'mob minecraft:dolphin 20.5 -63 0.5 0 203 persistent'], 'difficulty=0')
+    # FollowMobGoal: a parrot flies after a mob of another kind within 7 blocks and keeps about 3 away.
+    for i, (cx, seed) in enumerate([(5.5, 190), (3.5, 191), (-6.5, 192)]):
+        add(f'parrot_cow_{i}', 300, [f'mob minecraft:parrot 0.5 -59 0.5 0 {seed} persistent',
+                                      f'mob minecraft:cow {cx} -60 0.5 0 {seed + 10} persistent noai'], 'difficulty=0')
+    add('parrot_cow_far', 200, ['mob minecraft:parrot 0.5 -59 0.5 0 195 persistent',
+                                'mob minecraft:cow 12.5 -60 0.5 0 196 persistent noai'], 'difficulty=0')
     add('parrot_tree', 400, TREE + ['mob minecraft:parrot 0.5 -60 0.5 0 183 persistent'], 'difficulty=0')
     add('parrot_falling', 100, ['mob minecraft:parrot 0.5 -50 0.5 0 184 persistent'], 'difficulty=0')
     # A wolf the player hits (#3185, #2820): any wolf with a target is angry (the angry texture):
     # NeutralMob.updatePersistentAnger in Wolf.aiStep restarts the 20-39 s timer, one random draw,
     # every tick it has one, not once when hurt.
     add('wolf_hurt', 200, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 181 persistent', 'hurt 20 0'])
+    # A tamed wolf its owner hits (#4119): TamableAnimal.canAttack never lets it target its owner,
+    # so HurtByTargetGoal doesn't start and the wolf stays calm; a second wolf of the same owner
+    # isn't called either.
+    add('wolf_owner_hurt', 120, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 185 persistent owned',
+                                 'mob minecraft:wolf 0.5 -60 3.5 0 186 persistent owned', 'hurt 20 0'])
     # A wet wolf (#2885): Wolf.aiStep starts the shake of a wet wolf standing still on the ground,
     # Wolf.tick plays its sound (two draws) the same tick and cancels it again in water or rain.
     add('wolf_shake', 200, ['fill 0 -61 0 0 -61 0 minecraft:water', 'mob minecraft:wolf 0.5 -61 0.5 0 183 persistent'])

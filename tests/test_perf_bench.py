@@ -4,6 +4,78 @@ import unittest
 from tools.perf_bench import HISTOGRAM_EDGES_MS, OPTIONS, frames, rnd, summary
 
 
+class ComparisonConditionsTests(unittest.TestCase):
+    def test_rejects_incompatible_or_unknown_conditions_before_printing(self):
+        import contextlib
+        import io
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import tools.perf_bench as pb
+
+        conditions = {"scenario": "flight", "seed": "1234", "render_distance": 8, "simulation_distance": 12,
+                      "window": [1920, 1080], "vsync": False, "offscreen": False}
+        differences = {"scenario": "other", "seed": "5678", "simulation_distance": 8, "window": [1280, 720],
+                       "vsync": True, "offscreen": True, "fps_cap": 60}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "benchmarks/perf"
+            reports.mkdir(parents=True)
+            def write(label, values):
+                (reports / f"{label}-rd8.json").write_text(
+                    json.dumps({"conditions": values, "metrics": {}}), encoding="utf-8")
+            write("first", conditions)
+            with mock.patch.object(pb, "ROOT", root):
+                for key, value in differences.items():
+                    with self.subTest(key=key):
+                        write("second", dict(conditions, **{key: value}))
+                        out = io.StringIO()
+                        with contextlib.redirect_stdout(out), self.assertRaisesRegex(ValueError, key):
+                            pb.table(["first", "second"])
+                        self.assertEqual(out.getvalue(), "")
+                incomplete = dict(conditions)
+                del incomplete["window"]
+                write("second", incomplete)
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "window"):
+                    pb.table(["first", "second"])
+                stderr, stdout = io.StringIO(), io.StringIO()
+                with mock.patch("sys.argv", ["perf_bench.py", "--table", "first", "second"]), \
+                        contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                        self.assertRaises(SystemExit) as exit_error:
+                    pb.main()
+                self.assertEqual(exit_error.exception.code, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("window missing in second", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                write("second", dict(conditions, fps_cap=None))
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "fps_cap"):
+                    pb.table(["first", "second"])
+
+    def test_matching_reports_and_single_incomplete_report_remain_readable(self):
+        import contextlib
+        import io
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import tools.perf_bench as pb
+
+        conditions = {"scenario": "flight", "seed": "1234", "render_distance": 8, "simulation_distance": 12,
+                      "window": [1920, 1080], "vsync": False, "offscreen": False}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "benchmarks/perf"
+            reports.mkdir(parents=True)
+            for label, values in (("first", conditions), ("second", conditions),
+                                  ("single", {"render_distance": 8})):
+                (reports / f"{label}-rd8.json").write_text(
+                    json.dumps({"conditions": values, "metrics": {}}), encoding="utf-8")
+            with mock.patch.object(pb, "ROOT", root), contextlib.redirect_stdout(io.StringIO()) as out:
+                pb.table(["first", "second"])
+                pb.table(["single"])
+            self.assertIn("| 8 |", out.getvalue())
+
+
+
 class PerfBenchStatsTests(unittest.TestCase):
     def test_lows_average_the_slowest_frames(self):
         times = [10.0] * 990 + [100.0] * 9 + [1000.0]
@@ -49,6 +121,8 @@ class PerfBenchStatsTests(unittest.TestCase):
     def test_one_options_file_sets_the_render_distance(self):
         self.assertEqual(OPTIONS["renderDistance"].format(distance=16), "16")
         self.assertEqual(OPTIONS["graphicsPreset"], '"custom"')
+
+
 
 
 if __name__ == "__main__":

@@ -51,6 +51,17 @@ pub struct TestBlock {
     pub mode: TestBlockMode,
     pub message: String,
     pub powered: bool,
+    /// `triggered`: not saved; the game test reads and clears it.
+    pub triggered: bool,
+}
+
+/// What a `TestBlockEntity` call asks of the level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Effects {
+    /// `level.updateNeighborsAt(pos, block)`.
+    pub update_neighbors: bool,
+    /// `log()`.
+    pub log: bool,
 }
 
 impl TestBlock {
@@ -60,6 +71,63 @@ impl TestBlock {
             mode,
             message: String::new(),
             powered: false,
+            triggered: false,
+        }
+    }
+
+    /// `reset`.
+    pub fn reset(&mut self) -> Effects {
+        self.triggered = false;
+        let start = self.mode == TestBlockMode::Start;
+        if start {
+            self.powered = false;
+        }
+        Effects {
+            update_neighbors: start,
+            log: false,
+        }
+    }
+
+    /// `trigger`: a start block powers up and logs; the others log (LOG
+    /// only) and remember they were triggered.
+    pub fn trigger(&mut self) -> Effects {
+        if self.mode == TestBlockMode::Start {
+            self.powered = true;
+            return Effects {
+                update_neighbors: true,
+                log: true,
+            };
+        }
+        self.triggered = true;
+        Effects {
+            update_neighbors: false,
+            log: self.mode == TestBlockMode::Log,
+        }
+    }
+
+    /// `TestBlock.neighborChanged`: `signal` is `hasNeighborSignal`; a start
+    /// block ignores it, the others trigger on a rising signal.
+    pub fn neighbor_changed(&mut self, signal: bool) -> Option<Effects> {
+        if self.mode == TestBlockMode::Start {
+            return None;
+        }
+        if signal && !self.powered {
+            self.powered = true;
+            Some(self.trigger())
+        } else {
+            if !signal && self.powered {
+                self.powered = false;
+            }
+            None
+        }
+    }
+
+    /// `TestBlock.ownSignal`: a powered start block gives 15.
+    pub fn own_signal(&self) -> i32 {
+        if self.mode == TestBlockMode::Start && self.powered {
+            15
+        } else {
+            0
         }
     }
 
@@ -80,6 +148,7 @@ impl TestBlock {
                 .unwrap_or(TestBlockMode::Fail),
             message: text(tag.get("message")).unwrap_or_default(),
             powered: number(tag.get("powered")).is_some_and(|v| v != 0),
+            triggered: false,
         }
     }
 }
@@ -94,10 +163,32 @@ mod tests {
             mode: TestBlockMode::Accept,
             message: "all done".into(),
             powered: true,
+            triggered: false,
         };
         let tag = Tag::compound(block.save());
         assert_eq!(text(tag.get("mode")).as_deref(), Some("accept"));
         assert_eq!(TestBlock::load(&tag), block);
+    }
+
+    #[test]
+    fn start_blocks_power_up_and_the_others_trigger_on_a_rising_signal() {
+        let mut start = TestBlock::new(TestBlockMode::Start);
+        assert_eq!(start.neighbor_changed(true), None);
+        assert_eq!(start.own_signal(), 0);
+        let effects = start.trigger();
+        assert!(effects.update_neighbors && effects.log && start.own_signal() == 15);
+        assert!(start.reset().update_neighbors && start.own_signal() == 0);
+
+        let mut log = TestBlock::new(TestBlockMode::Log);
+        let effects = log.neighbor_changed(true).unwrap();
+        assert!(effects.log && !effects.update_neighbors && log.triggered && log.powered);
+        // Still powered: no second trigger; a fall clears the flag.
+        assert_eq!(log.neighbor_changed(true), None);
+        assert_eq!(log.neighbor_changed(false), None);
+        assert!(!log.powered && log.triggered);
+        assert!(!log.reset().update_neighbors && !log.triggered);
+        let mut accept = TestBlock::new(TestBlockMode::Accept);
+        assert!(!accept.neighbor_changed(true).unwrap().log);
     }
 
     #[test]

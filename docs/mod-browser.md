@@ -81,9 +81,12 @@ start); the hedge places and its recipe crafts 4.
 
 ## The Mods page
 
-The launcher's **Mods** page has the four kinds as tabs (Mods, Modpacks, Resource packs, Shader packs; the last
-searches Horizon's registry), a search field (Enter searches), **Show everything** and
-the source: Modrinth, with **CurseForge (coming soon)** beside it, disabled. Each result is an index row: its summary, author,
+The launcher's **Mods** page has three tabs: **Mods** and **Shader packs** search Horizon's registry (a Java
+instance's Mods tab searches Modrinth for its version), **Resource packs** searches Modrinth. Modrinth's Java mods and
+data packs aren't usable yet, so the Mods tab has no source switch and Data packs has no tab; the CLI still reaches
+them (`mods search --kind ...`). The Modpacks tab shows only while the sidebar's modpacks or its + button have it
+open. Resource packs and Modpacks have a search field (Enter searches), **Show everything** and the source: Modrinth or
+Horizon, with **CurseForge (coming soon)** beside it, disabled. Each result is an index row: its summary, author,
 downloads, source and licence, how well it runs (and why), **Page** (the project's page on its source) and
 **Install** (**Import** for a modpack). The Modpacks tab lists the imported packs first, with their coverage
 report, **Port** and **Play** ([modpacks.md](modpacks.md)). Installed packs are listed above the results with their version, source,

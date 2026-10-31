@@ -113,6 +113,26 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds `native_level_tick_pre` and `native_level_tick_post`, server-side observations around each
+level tick pass. Each receives the dimension ID; neither can cancel the tick. Paused and held passes fire
+neither hook, and an error skips the post hook. Bundles that use them need `"hooks": 23`.
+
+API 24 adds `native_set_block`, a server-side `Game` helper that replaces a state in the current dimension through
+`Level.setBlock`. It accepts vanilla's neighbour and shape flags and returns whether a block changed; a block with a
+block entity gets one. Horizon sends every write to players whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE`
+and `UPDATE_IMMEDIATE` change nothing yet. Hooks holding only `GameLevel` cannot call it yet. Bundles that use it need
+`"hooks": 24`.
+
+API 25 adds `GameLevel::native_play_sound` for registered vanilla sound events on an authoritative server.
+It queues the sound for nearby players in the level's dimension, including during a guest's turn.
+Pass a `SOUND_SOURCES` index, position, volume and pitch. The return value says whether the call
+was queued, not whether a player heard it. The server discards unknown sound events when it dispatches
+the queue. Bundles that use it need `"hooks": 25`.
+
+API 26 adds `Game::native_config_dir()`: the game's shared `config/` folder beside `options.txt` (beside
+`server.properties` on a dedicated server), where a mod names its own files, made when missing. It takes no `self`, so
+it works from any hook ([mods.md](mods.md#native-mods)). Bundles that use it need `"hooks": 26`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -131,7 +151,14 @@ trusting native code is the player's decision, never an agent's.
    (`rust_toolchain::MINGW`: WinLibs' GCC 16.2.0 on MinGW-w64 14.0.0, MSVCRT like `rust-mingw`, one zip pinned by
    SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring` and `hidapi` compile C,
    and `windows-sys`' `raw-dylib` imports need `dlltool` and the assembler it runs. The linker is the system's on
-   macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`).
+   macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`). On Linux the
+   game also builds against the system's ALSA (`alsa-sys`) and libudev (`libudev-sys`, `hidapi`), found with
+   `pkg-config`, whose development files desktop distributions don't install. Before downloading anything the
+   launcher checks for `cc`, the C library's headers (`cc` compiles an include of `stdint.h`), `pkg-config`,
+   `alsa` and `libudev` and names what is missing, with the install command for the distribution in
+   `/etc/os-release` (Debian, Ubuntu and Mint:
+   `sudo apt install build-essential pkg-config libasound2-dev libudev-dev`). SteamOS has GCC without the C
+   library's headers, and a read-only system: native builds don't work there yet.
    `horizon-launcher rust status|install|remove`.
 2. **horizon-mixins**, at the commit the mods name (their `.hnmod`'s `mixins`), else `native_mods::MIXINS_REV`,
    built once with that cargo (`cargo install --locked --git … --rev …`) into `native/tools/<commit>/`.

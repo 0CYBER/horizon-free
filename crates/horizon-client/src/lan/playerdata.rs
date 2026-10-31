@@ -86,6 +86,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.respawn_elsewhere = level.respawn_elsewhere.clone();
     guest.saved = level.player_extra.clone();
     guest.seen_credits = level.seen_credits;
+    guest.post_effects.clone_from(&level.post_effects);
     guest.last_death = level.last_death.clone();
     let extra = level.player_extra.as_ref();
     let short = |key: &str, default: i64| {
@@ -170,6 +171,7 @@ pub fn store(guest: &Guest, level: &mut Level, vehicle: Option<[i32; 4]>) {
     level.respawn_elsewhere = guest.respawn_elsewhere.clone();
     level.on_ground = guest.on_ground;
     level.seen_credits = guest.seen_credits;
+    level.post_effects.clone_from(&guest.post_effects);
     level.last_death = guest.last_death.clone();
     level.player_extra = guest.saved.clone();
     // The vehicle the player rides (`ServerPlayer.saveParentVehicle`).
@@ -272,6 +274,29 @@ mod tests {
         let mut back = guest();
         apply(&mut back, &read);
         assert_eq!(back.loaded_body, g.loaded_body);
+    }
+
+    #[test]
+    fn post_effects_are_saved_with_the_player() {
+        // ServerPlayer.addAdditionalSaveData's `post_effects`, in order; none
+        // leaves the key out, and a cleared list does not come back from an
+        // older file's copy.
+        let mut g = guest();
+        g.post_effects = vec!["minecraft:invert".into(), "pack:glow".into()];
+        let mut level = Level::default();
+        store(&g, &mut level, None);
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.post_effects, g.post_effects);
+        // The cleared list is written over the loaded file.
+        g.post_effects.clear();
+        store(&g, &mut read, None);
+        let tag = read.player_tag();
+        assert!(tag.get("post_effects").is_none());
     }
 
     /// The resources the prepared game data holds, for a body to breathe with.

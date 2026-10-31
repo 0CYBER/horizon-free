@@ -252,8 +252,12 @@ pub enum ArmPose {
     Brush,
 }
 /// HumanoidModel.setupAnim with empty hands (endermen).
-pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
-    humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
+/// Passes `isPassenger` so a seated enderman keeps the humanoid riding pose
+/// (vanilla EndermanModel.setupAnim calls super first, then halves/clamps xRot).
+pub fn humanoid_pub(p: &mut Poses, s: &State, m: &Mob) {
+    let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+    h.passenger = m.extra.passenger;
+    humanoid(p, s, &h);
 }
 /// `AnimationUtils.swingWeaponDown`: the main arm swings down, the other
 /// one hangs and bobs.
@@ -1038,6 +1042,72 @@ mod flight_pose_tests {
             }
         }
     }
+    /// EndermanModel.setupAnim (#4565): humanoid_pub forwards isPassenger so the
+    /// riding leg y/z survive; only xRot is halved and clamped to ±0.4 after.
+    #[test]
+    fn a_seated_enderman_keeps_the_riding_leg_twist() {
+        use super::super::enderman;
+        use super::super::{Mob, Species};
+        use horizon_core::geometry::Vec3;
+        use std::sync::Arc;
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::Enderman;
+        let mut seated = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+        seated.extra.passenger = true;
+        let state = State {
+            pos: 0.0,
+            speed: 0.0,
+            age: 0.0,
+            y_rot: 0.0,
+            x_rot: 0.0,
+            swing: 0.0,
+            baby: false,
+            partial: 0.0,
+        };
+        let mut poses = Poses {
+            map: [
+                "head",
+                "hat",
+                "body",
+                "right_arm",
+                "left_arm",
+                "right_leg",
+                "left_leg",
+            ]
+            .into_iter()
+            .map(|n| (n.to_string(), [0.0; 9]))
+            .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        enderman::anim(&seated, &state, &mut poses);
+        let right = *poses.get("right_leg");
+        let left = *poses.get("left_leg");
+        assert!((right[3] - (-0.4)).abs() < 1e-5, "right xRot {}", right[3]);
+        assert!((left[3] - (-0.4)).abs() < 1e-5, "left xRot {}", left[3]);
+        assert!(
+            (right[4] - PI / 10.0).abs() < 1e-5,
+            "right yRot {}",
+            right[4]
+        );
+        assert!(
+            (left[4] - (-PI / 10.0)).abs() < 1e-5,
+            "left yRot {}",
+            left[4]
+        );
+        assert!(
+            (right[5] - 0.078_539_82).abs() < 1e-5,
+            "right zRot {}",
+            right[5]
+        );
+        assert!(
+            (left[5] - (-0.078_539_82)).abs() < 1e-5,
+            "left zRot {}",
+            left[5]
+        );
+    }
+
     #[test]
     fn flight_slows_limbs_and_sets_the_head_pose() {
         let state = State {
