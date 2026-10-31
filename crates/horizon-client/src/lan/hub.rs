@@ -1909,6 +1909,7 @@ impl Hub {
             needs_sync: false,
             leash: None,
             spectator: false,
+            watching: false,
         }
     }
 
@@ -2002,6 +2003,7 @@ impl Hub {
                     &g.effects.list,
                 );
                 state.spectator = g.spectator();
+                state.watching = g.watching;
                 stuck_meta(&mut state, g.stuck);
                 state
             })
