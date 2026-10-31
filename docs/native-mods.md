@@ -150,6 +150,9 @@ creative. A mod that cancels it keeps the block: on the server it isn't attacked
 gets it back. The clicking player's own client still predicts the crack until then.
 Bundles that use it need `"hooks": 30`.
 
+API 31 adds a player's server tick: `native_player_tick` runs once a tick for every living player in the world, at the
+end of their `ServerPlayer.tick`, with the helpers reading that player. Bundles that use it need `"hooks": 31`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

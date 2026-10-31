@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 31 adds a player's server tick (`native_player_tick`).
+//!
 //! API 30 adds left-clicking a block (`native_left_click_block`).
 //!
 //! API 29 adds right-clicking an entity (`native_interact_entity`).
@@ -140,7 +142,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 30;
+pub(crate) const NATIVE_HOOKS_API: u32 = 31;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -562,6 +564,11 @@ impl Game<'_> {
     ) {
         let _ = (pos, face, state, canceled);
     }
+    /// A living player's server tick ends (`ServerPlayer.tick`): once a tick
+    /// for every player in the world, after their digging, item use,
+    /// cooldowns, statistics and advancements. The helpers read that player.
+    /// API 31.
+    pub(super) fn native_player_tick(&mut self) {}
     /// The player-health HUD rows, once a frame the HUD draws them
     /// (`HealthHud::layout`, not under F1): `inputs` carries the health,
     /// food, air and vehicle state the layout reads, `wi`/`hi` the screen's

@@ -2782,6 +2782,8 @@ impl Game<'_> {
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
                 g.update_player_attributes();
+                // Native mods, at the end of ServerPlayer.tick.
+                g.native_player_tick();
             });
             self.lan_map_updates(host, conn);
             host.hub.flush_progress(conn);
