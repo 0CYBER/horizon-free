@@ -2779,6 +2779,7 @@ impl Game<'_> {
                 g.tick_fishing();
                 g.tick_maps();
                 g.tick_lodestone_compasses();
+                g.native_inventory_ticks();
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
                 g.update_player_attributes();

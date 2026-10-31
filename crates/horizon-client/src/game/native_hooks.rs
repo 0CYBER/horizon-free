@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 39 adds item behaviour: a held item's hit on a mob
+//! (`native_hurt_enemy`), a carried stack's tick (`native_inventory_tick`) and
+//! an equipment slot taking a different item (`native_on_equip`).
+//!
 //! API 38 adds redstone from a mod's block (`native_block_signal`,
 //! `native_is_signal_source`, and the helper `native_update_signal_neighbors`).
 //!
@@ -180,7 +184,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 38;
+pub(crate) const NATIVE_HOOKS_API: u32 = 39;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -1044,6 +1048,36 @@ impl Game<'_> {
     ) {
         let _ = (entity, kind, pos, canceled);
     }
+    /// A player's hit landed on the mob `entity` of type `kind`
+    /// (`minecraft:zombie`), holding `stack`: where `Item.hurtEnemy` is called,
+    /// before the post-attack enchantments and the weapon's wear. It only
+    /// hears. Another player as the target isn't told yet. Server-side, for
+    /// every player of the world (the helpers read the acting one). API 39.
+    pub(super) fn native_hurt_enemy(&mut self, stack: &ItemStack, entity: u32, kind: &str) {
+        let _ = (stack, entity, kind);
+    }
+    /// A server tick of the stack a player carries in `slot`: where
+    /// `Inventory.tick` calls `Item.inventoryTick`, for every stack, each tick,
+    /// `/tick freeze` included (it stops the world, not the player). `slot` is
+    /// as `Inventory` saves it (0 to 35; the armour 100 feet to 103 head; -106
+    /// the off hand), and `selected` says it is the held slot.
+    /// `native_carried_stack` reads and changes the stack, which stays in its
+    /// slot, so the item helpers see it: a count of 0 empties the slot, and the
+    /// player's client gets the change. This runs often, so check the item
+    /// first. Server-side, for every living player of the world (the helpers
+    /// read the acting one). API 39.
+    pub(super) fn native_inventory_tick(&mut self, slot: i32, selected: bool) {
+        let _ = (slot, selected);
+    }
+    /// A player's equipment slot `slot` (`head`, `chest`, `legs`, `feet`,
+    /// `offhand`, and `mainhand` on a swap of the hands) took a different
+    /// item, `new` (none when it was emptied): `LivingEntity.onEquipItem`,
+    /// before the equip sound. It only hears. Never for a spectator.
+    /// Server-side, for every player of the world (the helpers read the
+    /// acting one). API 39.
+    pub(super) fn native_on_equip(&mut self, slot: &str, new: Option<&ItemStack>) {
+        let _ = (slot, new);
+    }
 }
 
 fn dimension_id(dimension: LevelDimension) -> &'static str {
@@ -1225,6 +1259,14 @@ impl GameLevel<'_> {
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
+    /// The stack the acting player carries in `slot`, by
+    /// `native_inventory_tick`'s numbers: none for an empty slot or another
+    /// number. Change it as you like: a count of 0 empties the slot at the end
+    /// of `native_inventory_tick`, and the player's client gets the change.
+    /// API 39.
+    pub(super) fn native_carried_stack(&mut self, slot: i32) -> Option<&mut ItemStack> {
+        self.native_carried_slot(slot)?.as_mut()
+    }
     /// Whether the player left mod `mod_id` on in Options > Mods. A mod
     /// turned off does nothing (check this first in each hook) until the
     /// launcher's next build leaves it out.
@@ -1694,6 +1736,48 @@ impl Game<'_> {
 
 /// Where the game calls the hook points.
 impl Game<'_> {
+    /// The acting player's hit landed on mob `index`, holding `stack`.
+    pub(super) fn native_hurt_enemy_event(&mut self, stack: &ItemStack, index: usize) {
+        let mob = &self.mobs[index];
+        let kind = ["minecraft:", mob.kind.id.trim_start_matches("minecraft:")].concat();
+        self.native_hurt_enemy(stack, mob.id, &kind);
+    }
+    /// `Inventory.tick` for the acting player: each carried stack goes through
+    /// `native_inventory_tick`.
+    pub(super) fn native_inventory_ticks(&mut self) {
+        if self.player.is_none() {
+            return;
+        }
+        for i in 0..self.inventory.len() {
+            self.native_slot_tick(i as i32, i == self.selected);
+        }
+        // Head first here; `Inventory` saves feet as 100 and head as 103.
+        for i in 0..self.armor.len() {
+            self.native_slot_tick(103 - i as i32, false);
+        }
+        self.native_slot_tick(-106, false);
+    }
+    fn native_slot_tick(&mut self, slot: i32, selected: bool) {
+        if self.native_carried_slot(slot).is_none_or(|s| s.is_none()) {
+            return;
+        }
+        self.native_inventory_tick(slot, selected);
+        if let Some(stack) = self.native_carried_slot(slot)
+            && stack.as_ref().is_some_and(|s| s.count == 0)
+        {
+            *stack = None;
+        }
+    }
+    /// The slot a player's carried stack is in, by `native_inventory_tick`'s
+    /// numbers: none for another number.
+    fn native_carried_slot(&mut self, slot: i32) -> Option<&mut Option<ItemStack>> {
+        match slot {
+            0.. if (slot as usize) < self.inventory.len() => self.inventory.get_mut(slot as usize),
+            100..=103 => self.armor.get_mut(103 - slot as usize),
+            -106 => Some(&mut self.offhand),
+            _ => None,
+        }
+    }
     /// `EntityBlock.newBlockEntity` of block `name`: Horizon's own, else a
     /// native mod's.
     pub(super) fn new_block_entity(&mut self, name: &str) -> Option<BlockEntity> {

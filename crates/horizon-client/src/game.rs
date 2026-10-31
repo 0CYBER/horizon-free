@@ -6198,6 +6198,7 @@ impl Game<'_> {
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
         self.tick_item_activation();
+        self.native_inventory_ticks();
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {

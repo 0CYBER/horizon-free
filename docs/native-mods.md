@@ -213,6 +213,11 @@ a face, weak or direct, and `native_is_signal_source` lets redstone wire connect
 block first and answer from the mod's own state. When the output changes, and once the block is placed (a direct signal past a conductor isn't read before), `native_update_signal_neighbors(dimension, pos)` makes the blocks around
 it read it again; it acts on the level in place and is refused for another dimension. Bundles that use them need `"hooks": 38`.
 
+API 39 adds item behaviour, on the server for every player: `native_hurt_enemy` hears a player's hit land on a mob with the
+held stack, `native_inventory_tick` runs each tick for every stack a player carries (armour and off hand included), and
+`native_carried_stack` reads and changes that stack, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
+that use them need `"hooks": 39`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

@@ -231,6 +231,21 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
     },
     {
+      "name": "hurt_enemy",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"
+    },
+    {
+      "name": "inventory_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_tick"
+    },
+    {
+      "name": "on_equip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_on_equip"
+    },
+    {
       "name": "block_signal",
       "version": 1,
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"
