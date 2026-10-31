@@ -83,7 +83,7 @@ GolemRandomStrollInVillageGoal	inline	crates/horizon-client/src/mobs/golem.rs::r
 MeleeAttackGoal.checkAndPerformAttack	inline	crates/horizon-client/src/mobs/goals.rs::MeleeAttack::tick	reset cooldown, swing, do_hurt_target
 MeleeAttackGoal.canPerformAttack	inline	crates/horizon-client/src/mobs/goals.rs::MeleeAttack::tick	cooldown over, within melee range, line of sight
 MoveBackToVillageGoal	inline	crates/horizon-client/src/mobs/golem.rs::register_iron	a named Stroll with a gate and a position; tick for tick with vanilla in mob_ai iron_golem_village_*
-MoveThroughVillageGoal	missing		player: zombies never walk purposefully through a village towards its POIs and doors at night; they only wander (priority 6 goal missing; the raider variant is separate)
+MoveThroughVillageGoal	inline	crates/horizon-client/src/mobs/undead.rs::MoveThroughVillage	zombies register it at priority 6 (the raider variant is raider.rs::MoveThroughVillage); no tick parity check yet
 MoveToBlockGoal.moveMobToBlock	inline	crates/horizon-client/src/mobs/goals.rs::MoveToBlock::start	nav_move_to the block centre one up
 MoveTowardsTargetGoal.start	inline	crates/horizon-client/src/mobs/golem.rs::MoveTowardsTarget::can_use	gap: minor: paths straight to the target entity in can_use, not to a random position towards it chosen in canUse
 OpenDoorGoal.canContinueToUse	port	crates/horizon-client/src/mobs/doors.rs::RaiderOpenDoor::can_continue	the raider goal does not close the door after, so it never continues
