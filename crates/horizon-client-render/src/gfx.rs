@@ -6403,8 +6403,18 @@ mod tests {
             &mut files,
         );
         assert!(files.len() >= 10, "{files:?}");
+        // Improved transparency's file is appended to terrain.wgsl.
+        let mut sources: Vec<(std::path::PathBuf, String)> = Vec::new();
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
+            if path.file_name().is_some_and(|n| n == "oit.wgsl") {
+                let terrain = include_str!("terrain.wgsl");
+                sources.push((path, terrain.to_owned() + &text));
+            } else {
+                sources.push((path, text));
+            }
+        }
+        for (path, text) in sources {
             // entity.wgsl comes after the overlay's constants (entity_shader).
             let module = naga::front::wgsl::parse_str(&text)
                 .or_else(|_| {
