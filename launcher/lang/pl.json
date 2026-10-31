@@ -304,7 +304,7 @@
   "No gallery images.": "Brak obrazów w galerii.",
   "Add from GitHub": "Dodaj z GitHub",
   "Add a native mod from GitHub": "Dodaj natywny mod z GitHub",
-  "A link to a repository (its latest release), a release, a branch or tag, or a commit. The launcher installs one exact release file or commit, never a branch that moves.": "Link do repozytorium (jego najnowszego wydania), wydania, gałęzi lub tagu albo commita. Program запускаjący instaluje dokładny plik wydania lub commit, nigdy ruchomą gałąź.",
+  "A link to a repository (its latest release), a release, a branch or tag, or a commit. The launcher installs one exact release file or commit, never a branch that moves.": "Link do repozytorium (jego najnowszego wydania), wydania, gałęzi lub tagu albo commita. Program uruchamiający instaluje dokładny plik wydania lub commit, nigdy ruchomą gałąź.",
   "Installed {mods} from GitHub ({source}). Build it from Settings > Native mods.": "Zainstalowano {mods} z GitHub ({source}). Zbuduj go w Ustawienia > Mody natywne.",
   "{id} is up to date.": "{id} jest aktualny.",
   "Asking GitHub about {owner}/{repo}…": "Pytanie GitHub o {owner}/{repo}…",
