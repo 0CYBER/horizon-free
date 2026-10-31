@@ -136,6 +136,8 @@ pub struct Guest {
     /// while it had a teleport to accept.
     pub landing: bool,
     pub teleport_counter: i32,
+    /// `ServerPlayer.getCamera() != this`.
+    pub watching: bool,
     /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
     pub teleport_tick: u64,
     /// Where the player was when this tick's packets began (firstGoodX/Y/Z),
@@ -331,6 +333,7 @@ impl Guest {
             awaiting_teleport: None,
             landing: false,
             teleport_counter: 0,
+            watching: false,
             teleport_tick: 0,
             first_good: position,
             received_moves: 0,
