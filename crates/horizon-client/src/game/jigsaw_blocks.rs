@@ -7,7 +7,7 @@ use horizon_client::{
     jigsaw_block::{self, JigsawBlock, JointType},
 };
 use horizon_protocol::packets::play;
-use horizon_world::worldgen::generator::JigsawQuery;
+use horizon_world::{nbt::Tag, worldgen::generator::JigsawQuery};
 
 type Pos = (i32, i32, i32);
 
@@ -128,11 +128,14 @@ impl Game<'_> {
             position,
         };
         let keep = p.keep_jigsaws;
-        self.with_level(|b, level, ticks| {
+        let (_, entities) = self.with_level(|b, level, ticks| {
             b.place_jigsaw(level, ticks, position, keep, || {
                 terrain.jigsaw_pieces(&query)
             })
         });
+        for entity in entities {
+            self.spawn_entity_from_nbt(Tag::Compound(entity));
+        }
         let _ = self.process_level_events();
     }
 }
