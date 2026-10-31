@@ -128,7 +128,6 @@ impl Opt {
                 | Opt::HideMatchedNames
                 | Opt::OnlySecureChat
                 | Opt::SaveChatDrafts
-                | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 // Saved, but no Horizon system reads them yet: no Realms, no
                 // friends list, no directional audio, no now-playing toast.
@@ -141,10 +140,7 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the creative tabs, the quit keys and the mouse
-                // don't read them yet.
-                | Opt::OperatorItemsTab
-                | Opt::QuitShortcuts
+                // Saved, but the mouse doesn't read it yet.
                 | Opt::CtrlClickEmulatesRightClick
         )
     }
@@ -204,6 +200,11 @@ impl Opt {
             Opt::MaxFps => "options.framerateLimit",
             Opt::Vsync => "options.vsync",
             Opt::Fullscreen => "options.fullscreen",
+            Opt::ExclusiveFullscreen => "options.exclusiveFullscreen",
+            Opt::ExclusiveMode => "options.fullscreen.exclusive.mode",
+            Opt::GraphicsBackend => "options.graphicsApi",
+            Opt::TextureFiltering => "options.textureFiltering",
+            Opt::MaxAnisotropy => "options.maxAnisotropy",
             Opt::SmoothLighting => "options.ao",
             Opt::Clouds => "options.renderClouds",
             Opt::CloudRange => "options.renderCloudsDistance",
@@ -335,6 +336,15 @@ impl Opt {
             Opt::BiomeBlend => unit(s.biome_blend as f32, 0.0, 7.0),
             Opt::Preset => unit(preset_index(&s.graphics_preset) as f32, 0.0, 3.0),
             Opt::Mipmaps => unit(s.mipmap_levels as f32, 0.0, 4.0),
+            Opt::MaxAnisotropy => unit(s.file.int("maxAnisotropyBit") as f32, 1.0, 3.0),
+            Opt::ExclusiveMode => {
+                let last = s.video_modes.len() as f32 - 1.0;
+                if last < 0.0 {
+                    Kind::Slider(0.0)
+                } else {
+                    unit(s.video_mode_index() as f32, -1.0, last)
+                }
+            }
             Opt::WeatherRadius => unit(s.weather_radius as f32, 3.0, 10.0),
             Opt::ChunkFade => unit(s.chunk_fade, 0.0, 2.0),
             Opt::MenuBlur => unit(s.menu_blur as f32, 0.0, 10.0),
@@ -368,6 +378,19 @@ impl Opt {
                 "options.prioritizeChunkUpdates.byPlayer",
                 "options.prioritizeChunkUpdates.nearby",
             ][usize::from(s.prioritize_chunk_updates.min(2))],
+            // Options.exclusiveFullscreen: a tooltip per value.
+            Opt::ExclusiveFullscreen => {
+                if s.file.bool("exclusiveFullscreen") {
+                    "options.exclusiveFullscreen.on"
+                } else {
+                    "options.exclusiveFullscreen.off"
+                }
+            }
+            Opt::TextureFiltering => [
+                "options.textureFiltering.none",
+                "options.textureFiltering.rgss",
+                "options.textureFiltering.anisotropic",
+            ][s.file.int("textureFiltering").clamp(0, 2) as usize],
             _ => self.caption(),
         };
         format!("{key}.tooltip")
@@ -472,6 +495,26 @@ impl Opt {
                 )),
             ),
             Opt::Preset => generic(c, tr(&format!("options.graphics.{}", s.graphics_preset))),
+            Opt::MaxAnisotropy => match s.file.int("maxAnisotropyBit") {
+                0 => generic(c, tr("options.off")),
+                bit => generic(c, Text::tr("options.multiplier", &[&(1 << bit)])),
+            },
+            Opt::ExclusiveMode => match s.video_modes.get(s.video_mode_index().max(0) as usize) {
+                None if s.video_modes.is_empty() => tr("options.fullscreen.unavailable"),
+                Some(mode) if s.video_mode_index() >= 0 => generic(
+                    c,
+                    Text::tr(
+                        "options.fullscreen.entry",
+                        &[
+                            &mode.width,
+                            &mode.height,
+                            &mode.refresh_rate_label(),
+                            &mode.bits(),
+                        ],
+                    ),
+                ),
+                _ => generic(c, tr("options.fullscreen.current")),
+            },
             Opt::Mipmaps => {
                 if s.mipmap_levels == 0 {
                     generic(c, tr("options.off"))
@@ -582,6 +625,17 @@ impl Opt {
             Opt::ViewBobbing => on_off(s.view_bobbing),
             Opt::Vsync => on_off(s.vsync),
             Opt::Fullscreen => on_off(s.fullscreen),
+            Opt::ExclusiveFullscreen => on_off(s.file.bool("exclusiveFullscreen")),
+            Opt::TextureFiltering => tr([
+                "options.textureFiltering.none",
+                "options.textureFiltering.rgss",
+                "options.textureFiltering.anisotropic",
+            ][s.file.int("textureFiltering").clamp(0, 2) as usize]),
+            Opt::GraphicsBackend => tr(match s.horizon.api {
+                crate::graphics::GraphicsApi::OpenGl => "options.graphicsApi.opengl",
+                crate::graphics::GraphicsApi::Vulkan => "options.graphicsApi.vulkan",
+                _ => "options.graphicsApi.default",
+            }),
             Opt::SmoothLighting => on_off(s.smooth_lighting),
             Opt::Clouds => tr(match s.clouds.as_str() {
                 "false" => "options.off",
@@ -733,6 +787,20 @@ impl Opt {
             Opt::BiomeBlend => s.biome_blend = step(0.0, 7.0) as i32,
             Opt::Preset => s.graphics_preset = PRESETS[step(0.0, 3.0) as usize].into(),
             Opt::Mipmaps => s.mipmap_levels = step(0.0, 4.0) as i32,
+            Opt::MaxAnisotropy => s.file.set(
+                "maxAnisotropyBit",
+                crate::options_file::V::Int(step(1.0, 3.0) as i32),
+            ),
+            Opt::ExclusiveMode => {
+                // Window.setPreferredFullscreenVideoMode: -1 is the desktop's own mode.
+                let Some(last) = s.video_modes.len().checked_sub(1) else {
+                    return;
+                };
+                let index = step(-1.0, last as f32) as i32;
+                s.file.fullscreen_resolution = usize::try_from(index)
+                    .ok()
+                    .map(|i| s.video_modes[i].write());
+            }
             Opt::WeatherRadius => s.weather_radius = step(3.0, 10.0) as i32,
             Opt::ChunkFade => s.chunk_fade = step(0.0, 40.0) / 20.0,
             Opt::MenuBlur => s.menu_blur = step(0.0, 10.0) as i32,
@@ -772,6 +840,8 @@ impl Opt {
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
                 | Opt::ChunkBuilder
+                | Opt::TextureFiltering
+                | Opt::MaxAnisotropy
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
@@ -802,6 +872,7 @@ impl Opt {
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
             | Opt::HighContrastBlockOutlines
+            | Opt::MonochromeLogo
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts
@@ -821,6 +892,45 @@ impl Opt {
             Opt::ViewBobbing => s.view_bobbing = !s.view_bobbing,
             Opt::Vsync => s.vsync = !s.vsync,
             Opt::Fullscreen => s.fullscreen = !s.fullscreen,
+            Opt::ExclusiveFullscreen => {
+                let on = s.file.bool("exclusiveFullscreen");
+                s.file
+                    .set("exclusiveFullscreen", crate::options_file::V::Bool(!on));
+            }
+            Opt::TextureFiltering => {
+                let n = next(s.file.int("textureFiltering").clamp(0, 2) as u8, 3);
+                s.file.set(
+                    "textureFiltering",
+                    crate::options_file::V::Int(i32::from(n)),
+                );
+            }
+            Opt::GraphicsBackend => {
+                // PreferredGraphicsApi: Default, OpenGL, Vulkan; a platform lacking one skips it.
+                use crate::graphics::GraphicsApi::{Auto, OpenGl, Vulkan};
+                let offered: Vec<_> = [Auto, OpenGl, Vulkan]
+                    .into_iter()
+                    .filter(|a| crate::graphics::GraphicsApi::choices().contains(a))
+                    .collect();
+                let at = offered
+                    .iter()
+                    .position(|a| *a == s.horizon.api)
+                    .unwrap_or(0);
+                let count = offered.len();
+                let api = offered[if back {
+                    (at + count - 1) % count
+                } else {
+                    (at + 1) % count
+                }];
+                s.horizon.api = api;
+                s.file.set_name(
+                    "preferredGraphicsBackend",
+                    match api {
+                        OpenGl => "opengl",
+                        Vulkan => "vulkan",
+                        _ => "default",
+                    },
+                );
+            }
             Opt::SmoothLighting => s.smooth_lighting = !s.smooth_lighting,
             Opt::Clouds => {
                 let order = ["false", "fast", "true"];
@@ -952,8 +1062,25 @@ pub fn set_slider(opt: Opt, s: &mut Settings, v: f32) {
         apply_preset(s);
     }
 }
-/// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set (texture
-/// filtering and anisotropy have no option here yet).
+/// A slider pressed or dragged to `v`: apply it live, and tell the game when
+/// a category volume changed (`Options.createSoundSliderOptionInstance`'s
+/// callback, which `OptionInstance.set` runs only for a new value).
+fn drag_slider(opt: Opt, s: &mut Settings, v: f32, events: &mut Vec<Event>) {
+    let volume = |s: &Settings| match opt {
+        Opt::Volume(0) => Some(s.master_volume),
+        Opt::Volume(i) => Some(s.volumes[i]),
+        _ => None,
+    };
+    let before = volume(s);
+    set_slider(opt, s, v);
+    events.push(Event::SliderDrag);
+    if let (Opt::Volume(source), Some(after)) = (opt, volume(s))
+        && before != Some(after)
+    {
+        events.push(Event::Volume(source, after));
+    }
+}
+/// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set.
 pub fn apply_preset(s: &mut Settings) {
     let fabulous = s.graphics_preset == "fabulous";
     match s.graphics_preset.as_str() {
@@ -973,6 +1100,7 @@ pub fn apply_preset(s: &mut Settings) {
             s.cutout_leaves = false;
             s.improved_transparency = false;
             s.weather_radius = 5;
+            set_filtering(s, 1, 0);
         }
         "fancy" | "fabulous" => {
             s.biome_blend = 2;
@@ -990,9 +1118,39 @@ pub fn apply_preset(s: &mut Settings) {
             s.cutout_leaves = true;
             s.improved_transparency = fabulous;
             s.weather_radius = 10;
+            // Fabulous takes anisotropic filtering (RGSS on a device with known issues, which
+            // wgpu does not report).
+            set_filtering(
+                s,
+                if fabulous { 2 } else { 1 },
+                if fabulous { 2 } else { 1 },
+            );
         }
         _ => {}
     }
+}
+/// The preset's `maxAnisotropyBit` and `textureFiltering` (0 none, 1 RGSS, 2 anisotropic).
+fn set_filtering(s: &mut Settings, anisotropy_bit: i32, filtering: i32) {
+    use crate::options_file::V;
+    s.file.set("maxAnisotropyBit", V::Int(anisotropy_bit));
+    s.file.set("textureFiltering", V::Int(filtering));
+}
+
+/// `Options.preferredGraphicsBackend`'s tooltip: the restart note once the choice differs from
+/// the startup one, the description, and Vulkan's warning.
+fn graphics_api_tooltip(s: &Settings) -> Text {
+    let line = |key: &str| lang::get_or(key, key);
+    let mut lines = Vec::new();
+    if s.horizon.api != s.startup_api {
+        lines.push(line("options.needsRestart"));
+        lines.push(String::new());
+    }
+    lines.push(line("options.graphicsApi.tooltip"));
+    if s.horizon.api == crate::graphics::GraphicsApi::Vulkan {
+        lines.push(String::new());
+        lines.push(line("options.graphicsApi.tooltip.vulkan"));
+    }
+    Text::literal(lines.join("\n"))
 }
 
 /// `selected_key` while a native mod's key waits (`selected_native_key`).
@@ -1106,6 +1264,9 @@ pub enum Event {
     Changed,
     /// A slider is being dragged: apply settings live but defer saving.
     SliderDrag,
+    /// A category volume slider (`SoundSource` index) moved to a new value,
+    /// after its `SliderDrag` (the sound slider's `onValueUpdate`).
+    Volume(usize, f32),
     /// The language changed (reload translations).
     Language(String),
     /// The pack selection changed (reload resources).
@@ -1188,6 +1349,9 @@ pub struct OptionsUi {
     pub resource_error: Option<String>,
     /// When the pack screen's search box took the focus (its cursor blink).
     pack_focus: Instant,
+    /// The selection carried over from a pack screen made again over a changed pack list
+    /// (`update_pack_infos`) differs from the settings'.
+    pack_reselected: bool,
     pub in_world: bool,
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
@@ -1223,6 +1387,7 @@ impl Default for OptionsUi {
             data_pack_stamp: (Vec::new(), Instant::now()),
             resource_error: None,
             pack_focus: Instant::now(),
+            pack_reselected: false,
             in_world: false,
             center_language: false,
             graphics: Default::default(),
@@ -1252,6 +1417,10 @@ fn inactive(mut w: Widget) -> Widget {
 }
 fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
     if !opt.available() {
+        return inactive(button(x, y, w, opt.label(s), Act::Cycle(opt)));
+    }
+    // VideoSettingsScreen.tick: Max Anisotropy only works with Anisotropic filtering.
+    if opt == Opt::MaxAnisotropy && s.file.int("textureFiltering") != 2 {
         return inactive(button(x, y, w, opt.label(s), Act::Cycle(opt)));
     }
     match opt.kind(s) {
@@ -1307,6 +1476,23 @@ impl OptionsUi {
     fn settings_search_active(&self) -> bool {
         self.settings_search.focused
             && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
+    }
+    /// Whether the resource pack screen is open (not Create World's data packs on the same
+    /// page).
+    pub fn resource_packs_open(&self) -> bool {
+        self.page() == Page::Packs && self.data_pack_dir.is_none()
+    }
+    /// The packs in `resourcepacks/` changed while the pack screen is open
+    /// (`PackSelectionScreen`'s directory watcher): the screen is made again over
+    /// `infos`, keeping the selection made on it so far.
+    pub fn update_pack_infos(&mut self, infos: Vec<crate::pack_screen::PackInfo>) {
+        if let Some(p) = self.pack_screen.take()
+            && p.changed
+        {
+            self.pack_selection = p.commit();
+            self.pack_reselected = true;
+        }
+        self.pack_infos = infos;
     }
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
@@ -1629,13 +1815,16 @@ impl OptionsUi {
                     )),
                 )];
                 rows.push(Row::Header("options.video.display.header"));
+                rows.push(Row::Big(Opt::ExclusiveMode));
                 rows.extend(pairs(&[
                     Opt::MaxFps,
                     Opt::Vsync,
                     Opt::InactivityFps,
                     Opt::GuiScale,
                     Opt::Fullscreen,
+                    Opt::ExclusiveFullscreen,
                     Opt::Gamma,
+                    Opt::GraphicsBackend,
                 ]));
                 rows.push(Row::Header("options.video.quality.header"));
                 rows.push(Row::Big(Opt::Preset));
@@ -1654,6 +1843,8 @@ impl OptionsUi {
                     Opt::CloudRange,
                     Opt::CutoutLeaves,
                     Opt::ImprovedTransparency,
+                    Opt::TextureFiltering,
+                    Opt::MaxAnisotropy,
                     Opt::WeatherRadius,
                 ]));
                 rows.push(Row::Header("options.video.preferences.header"));
@@ -1797,7 +1988,9 @@ impl OptionsUi {
                     .map(|(i, installed)| {
                         let mut label = Text::literal(format!("{}: ", installed.title))
                             .append(on_off(s.mods.is_on(i)));
-                        if installed.problem.is_some() {
+                        if installed.problem.as_deref() == Some(crate::mod_list::NOT_BUILT) {
+                            label = label.append(tr("horizon.mods.not_built"));
+                        } else if installed.problem.is_some() {
                             label = label.append(tr("horizon.mods.stopped"));
                         } else if installed.dev {
                             label = label.append(tr("horizon.mods.dev"));
@@ -1982,6 +2175,21 @@ impl OptionsUi {
                 });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
+                // VideoSettingsScreen.addTitle: a changed graphics API needs a restart.
+                if page == Page::Video && s.horizon.api != s.startup_api {
+                    out.push(Widget {
+                        x: 0.0,
+                        y: 15.0,
+                        w,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: tr("options.restartRequired"),
+                            color: rgba(223, 80, 80, 255),
+                            centered: true,
+                        },
+                        list: false,
+                    });
+                }
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 let mut last_category = "";
@@ -2404,6 +2612,7 @@ impl OptionsUi {
             return;
         }
         if let Some(level) = Self::graphics_level(self.page()) {
+            self.graphics.binding = self.selected_key;
             self.graphics
                 .draw(level, s, batch, atlas, cursor, self.in_world);
             return;
@@ -2472,6 +2681,13 @@ impl OptionsUi {
                     tooltip = Some(atlas.font.split(&tr(&key), 170.0));
                 }
                 if let WKind::Button {
+                    act: Act::Cycle(Opt::GraphicsBackend),
+                    ..
+                } = &wd.kind
+                {
+                    tooltip = Some(atlas.font.split(&graphics_api_tooltip(s), 170.0));
+                }
+                if let WKind::Button {
                     act: Act::Cycle(opt),
                     ..
                 } = &wd.kind
@@ -2532,6 +2748,7 @@ impl OptionsUi {
                         shown,
                         hover || dragging,
                         true,
+                        dragging,
                     );
                 }
                 WKind::Text {
@@ -2655,6 +2872,15 @@ impl OptionsUi {
         }
         if let Some(level) = Self::graphics_level(self.page()) {
             use crate::graphics_ui::Action;
+            // Waiting on a key: a mouse button binds, as on Key Binds.
+            if self.selected_key.is_some() && !drag {
+                let button = if right {
+                    winit::event::MouseButton::Right
+                } else {
+                    winit::event::MouseButton::Left
+                };
+                return self.bind_mouse(s, button);
+            }
             let mut events = Vec::new();
             for action in self
                 .graphics
@@ -2666,6 +2892,7 @@ impl OptionsUi {
                     Action::SliderDrag => events.push(Event::SliderDrag),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
                     Action::OpenHdr => self.push(Page::GraphicsHdr),
+                    Action::BindKey(name) => self.selected_key = Some(name),
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
                             && self.stack[self.stack.len() - 2] == Page::Graphics
@@ -2747,8 +2974,7 @@ impl OptionsUi {
             {
                 let v = ui::slider_value(wd.x, wd.w, x);
                 self.slider_value = Some((opt, v, Instant::now()));
-                set_slider(opt, s, v);
-                events.push(Event::SliderDrag);
+                drag_slider(opt, s, v, &mut events);
             }
             return events;
         }
@@ -2797,26 +3023,7 @@ impl OptionsUi {
                         }
                         Act::Done => events.extend(self.back(s)),
                         Act::Cycle(opt) => {
-                            opt.cycle(s, right, framebuffer);
-                            if opt == Opt::Preset {
-                                apply_preset(s);
-                            }
-                            if opt == Opt::HighContrast {
-                                // Options.highContrast: the built-in pack follows the option.
-                                let on = s.resource_packs.iter().any(|id| id == "high_contrast");
-                                if on != s.high_contrast {
-                                    s.resource_packs.retain(|id| id != "high_contrast");
-                                    if s.high_contrast {
-                                        s.resource_packs.push("high_contrast".into());
-                                    }
-                                    // PackSelectionScreen reads the repository each time it
-                                    // opens: the next one starts from this selection.
-                                    self.pack_selection = s.resource_packs.clone();
-                                    self.pack_screen = None;
-                                    events.push(Event::Packs(s.resource_packs.clone()));
-                                }
-                            }
-                            events.push(Event::Changed);
+                            events.extend(self.cycle_option(s, opt, right, framebuffer));
                         }
                         Act::Extra(item) => {
                             if let Some(name) = item.key_name() {
@@ -2880,8 +3087,7 @@ impl OptionsUi {
                     self.dragging = Some(opt);
                     let v = ui::slider_value(wd.x, wd.w, x);
                     self.slider_value = Some((opt, v, Instant::now()));
-                    set_slider(opt, s, v);
-                    events.push(Event::SliderDrag);
+                    drag_slider(opt, s, v, &mut events);
                 }
                 WKind::LanguageRow { code, .. } => {
                     if self.language_choice.as_deref() == Some(code.as_str()) {
@@ -2924,6 +3130,77 @@ impl OptionsUi {
         self.scroll -= amount * 18.0;
         self.clamp_scroll(top, bottom, content);
     }
+    /// `CycleButton.cycleValue` on an option, then what the option changes:
+    /// the preset's values, High Contrast's built-in pack.
+    fn cycle_option(
+        &mut self,
+        s: &mut Settings,
+        opt: Opt,
+        back: bool,
+        framebuffer: [i32; 2],
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        opt.cycle(s, back, framebuffer);
+        if opt == Opt::Preset {
+            apply_preset(s);
+        }
+        if opt == Opt::HighContrast {
+            // Options.highContrast: the built-in pack follows the option.
+            let on = s.resource_packs.iter().any(|id| id == "high_contrast");
+            if on != s.high_contrast {
+                s.resource_packs.retain(|id| id != "high_contrast");
+                if s.high_contrast {
+                    s.resource_packs.push("high_contrast".into());
+                }
+                // PackSelectionScreen reads the repository each time it
+                // opens: the next one starts from this selection.
+                self.pack_selection = s.resource_packs.clone();
+                self.pack_screen = None;
+                events.push(Event::Packs(s.resource_packs.clone()));
+            }
+        }
+        events.push(Event::Changed);
+        events
+    }
+    /// The mouse wheel at the cursor. Over a cycle button it takes the step
+    /// (`CycleButton.mouseScrolled`: up goes back) and the list stays put.
+    pub fn wheel(
+        &mut self,
+        s: &mut Settings,
+        size: (f32, f32),
+        cursor: (f32, f32),
+        framebuffer: [i32; 2],
+        amount: f32,
+    ) -> Vec<Event> {
+        let plain = self.resource_error.is_none()
+            && Self::graphics_level(self.page()).is_none()
+            && !(self.pack_screen.is_some() && self.stack.last() == Some(&Page::Packs));
+        if !plain {
+            self.scroll_at(s, size, cursor, amount);
+            return Vec::new();
+        }
+        let (widgets, top, bottom, _) = self.layout(s, size.0, size.1);
+        let hovered = widgets.iter().find_map(|wd| match &wd.kind {
+            WKind::Button {
+                active: true,
+                act: Act::Cycle(opt),
+                ..
+            } if ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
+                && !(wd.list && (cursor.1 < top || cursor.1 >= bottom)) =>
+            {
+                Some(*opt)
+            }
+            _ => None,
+        });
+        match hovered {
+            Some(opt) if amount != 0.0 => self.cycle_option(s, opt, amount > 0.0, framebuffer),
+            Some(_) => Vec::new(),
+            None => {
+                self.scroll_at(s, size, cursor, amount);
+                Vec::new()
+            }
+        }
+    }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
         if self.resource_error.is_some() {
@@ -2939,6 +3216,33 @@ impl OptionsUi {
             }
             _ => self.scroll(s, size, amount),
         }
+    }
+    /// `VideoSettingsScreen.mouseScrolled`: with Ctrl held the wheel steps the GUI scale
+    /// (auto counts as one past the maximum) and the list goes back to the top.
+    pub fn video_wheel_gui_scale(
+        &mut self,
+        s: &mut Settings,
+        framebuffer: [i32; 2],
+        amount: f32,
+    ) -> Vec<Event> {
+        let max = i64::from(crate::window::calculate_scale(
+            framebuffer,
+            0,
+            s.force_unicode,
+        ));
+        let old = if s.gui_scale == 0 {
+            max + 1
+        } else {
+            i64::from(s.gui_scale)
+        };
+        let step = i64::from(amount > 0.0) - i64::from(amount < 0.0);
+        let new = old + step;
+        if new == 0 || new > max {
+            return Vec::new();
+        }
+        s.gui_scale = new as u32;
+        self.scroll = 0.0;
+        vec![Event::Changed]
     }
     /// The pack screen at this GUI size, made on first use.
     fn packs(&mut self, atlas: &HudAtlas, size: (f32, f32)) -> &mut crate::pack_screen::PackScreen {
@@ -2957,7 +3261,7 @@ impl OptionsUi {
                 } else {
                     "resourcePack.title"
                 };
-                self.pack_screen = Some(crate::pack_screen::PackScreen::new(
+                let mut screen = crate::pack_screen::PackScreen::new(
                     &m,
                     crate::text::Text::translate(title, &[]),
                     w,
@@ -2965,7 +3269,9 @@ impl OptionsUi {
                     self.in_world,
                     self.pack_infos.clone(),
                     &self.pack_selection,
-                ));
+                );
+                screen.changed = std::mem::take(&mut self.pack_reselected);
+                self.pack_screen = Some(screen);
             }
         }
         self.pack_screen.as_mut().expect("made above")
@@ -3079,7 +3385,7 @@ impl OptionsUi {
             keys.insert(key.clone(), value);
             return vec![Event::Changed];
         }
-        if !s.extras.set_key(name, value.clone()) {
+        if !s.extras.set_key(name, value.clone()) && !s.horizon.set_key(name, value.clone()) {
             s.keys.set(name, &value);
         }
         vec![Event::Changed]
@@ -3196,10 +3502,12 @@ mod tests {
                 assert_eq!(loaded.file.double(opt.file_key().unwrap()), expected);
             }
         }
+        assert!(Opt::MonochromeLogo.available());
         for opt in [
             Opt::TextBackground,
             Opt::HideLightningFlashes,
             Opt::HideSplashTexts,
+            Opt::MonochromeLogo,
         ] {
             let key = opt.file_key().unwrap();
             let before = s.file.bool(key);
@@ -3334,6 +3642,27 @@ mod tests {
         assert!(!loaded.quit_shortcuts);
         assert!(loaded.ctrl_click_emulates_right_click);
         assert!(loaded.toggle_attack && loaded.toggle_use);
+    }
+
+    #[test]
+    fn quit_shortcuts_option_can_be_switched() {
+        assert!(Opt::QuitShortcuts.available());
+        let s = Settings::default();
+        assert_eq!(Opt::QuitShortcuts.caption(), "options.quitShortcuts");
+        assert_eq!(
+            Opt::QuitShortcuts.tooltip_key(&s),
+            "options.quitShortcuts.tooltip"
+        );
+    }
+
+    #[test]
+    fn operator_items_tab_option_can_be_switched() {
+        // The creative screen reads it (CreativeModeInventoryScreen.hasPermissions).
+        assert!(Opt::OperatorItemsTab.available());
+        let mut s = Settings::default();
+        assert!(!s.operator_items_tab);
+        Opt::OperatorItemsTab.cycle(&mut s, false, [854, 480]);
+        assert!(s.operator_items_tab);
     }
 
     #[test]
@@ -3564,6 +3893,246 @@ mod tests {
         // Its labels were made with the list, maybe in another language.
         assert_eq!(events.last(), Some(&Event::NativeSettings(0)));
         assert_eq!(ui.page(), Page::NativeMod(0));
+    }
+
+    #[test]
+    fn a_native_mods_key_shows_and_keeps_the_key_pressed() {
+        // #3539: Zoom's key set to R showed another key.
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "zoom".into(),
+            title: "Zoom 2.0.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                keys: vec![["zoom".into(), "Zoom key".into(), "key.keyboard.z".into()]],
+                buttons: Vec::new(),
+            }),
+        });
+        ui.show(Page::NativeMod(0));
+        let key_label = |ui: &mut OptionsUi, s: &Settings| {
+            let (widgets, ..) = ui.layout(s, size.0, size.1);
+            widgets.into_iter().find_map(|w| match w.kind {
+                WKind::Button {
+                    label,
+                    act: Act::NativeKey(0, 0),
+                    ..
+                } => Some((label.plain(), w.x, w.y)),
+                _ => None,
+            })
+        };
+        let (label, x, y) = key_label(&mut ui, &s).expect("the key's row");
+        assert_eq!(label, "Z");
+        ui.click(
+            &mut s,
+            &atlas,
+            x + 1.0,
+            y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyR, Some("r")),
+            vec![Event::Changed]
+        );
+        assert_eq!(key_label(&mut ui, &s).unwrap().0, "R");
+        let saved = crate::mod_list::ModList::parse(&s.mods.serialize());
+        assert_eq!(saved.keys_of("zoom"), vec![("zoom", "key.keyboard.r")]);
+    }
+
+    fn mode(width: i32, rate: f32) -> crate::window::VideoMode {
+        crate::window::VideoMode {
+            width,
+            height: width * 9 / 16,
+            red_bits: 8,
+            green_bits: 8,
+            blue_bits: 8,
+            refresh_rate: rate,
+        }
+    }
+
+    #[test]
+    fn video_page_lists_vanilla_display_and_quality_options_in_order() {
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        let rows = ui.list_rows(&Settings::default());
+        let opts: Vec<Opt> = rows
+            .iter()
+            .flat_map(|r| match r {
+                Row::Big(o) => vec![*o],
+                Row::Pair(a, b) => std::iter::once(*a).chain(*b).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        // VideoSettingsScreen.addOptions: the exclusive mode row, displayOptions, the preset,
+        // qualityOptions, then the preferences.
+        assert_eq!(
+            opts[..9],
+            [
+                Opt::ExclusiveMode,
+                Opt::MaxFps,
+                Opt::Vsync,
+                Opt::InactivityFps,
+                Opt::GuiScale,
+                Opt::Fullscreen,
+                Opt::ExclusiveFullscreen,
+                Opt::Gamma,
+                Opt::GraphicsBackend,
+            ]
+        );
+        let at = |o| opts.iter().position(|x| *x == o).unwrap();
+        assert_eq!(at(Opt::ImprovedTransparency) + 1, at(Opt::TextureFiltering));
+        assert_eq!(at(Opt::TextureFiltering) + 1, at(Opt::MaxAnisotropy));
+        assert_eq!(at(Opt::MaxAnisotropy) + 1, at(Opt::WeatherRadius));
+    }
+
+    #[test]
+    fn exclusive_fullscreen_mode_picks_a_monitor_mode_or_the_current_one() {
+        let mut s = Settings::default();
+        // No monitor mode: the slider changes nothing.
+        Opt::ExclusiveMode.set_slider(&mut s, 1.0);
+        assert_eq!(s.file.fullscreen_resolution, None);
+        s.video_modes = vec![mode(1280, 60.0), mode(1920, 144.0), mode(2560, 59.94)];
+        assert_eq!(s.video_mode_index(), -1);
+        // IntRange(-1, 2): the slider's thirds are -1, 0, 1, 2.
+        Opt::ExclusiveMode.set_slider(&mut s, 2.0 / 3.0);
+        assert_eq!(s.video_mode_index(), 1);
+        assert_eq!(Opt::ExclusiveMode.slider_position(&s), Some(2.0 / 3.0));
+        Opt::ExclusiveMode.set_slider(&mut s, 1.0);
+        assert_eq!(s.video_mode_index(), 2);
+        Opt::ExclusiveMode.set_slider(&mut s, 0.0);
+        assert_eq!(s.file.fullscreen_resolution, None);
+    }
+
+    #[test]
+    fn exclusive_fullscreen_and_its_tooltips_follow_the_option() {
+        let mut s = Settings::default();
+        assert!(!s.file.bool("exclusiveFullscreen"));
+        assert_eq!(
+            Opt::ExclusiveFullscreen.tooltip_key(&s),
+            "options.exclusiveFullscreen.off.tooltip"
+        );
+        Opt::ExclusiveFullscreen.cycle(&mut s, false, [854, 480]);
+        assert!(s.file.bool("exclusiveFullscreen"));
+        assert_eq!(
+            Opt::ExclusiveFullscreen.tooltip_key(&s),
+            "options.exclusiveFullscreen.on.tooltip"
+        );
+        // The mode row's own tooltip says it only matters with Exclusive Fullscreen.
+        assert_eq!(
+            Opt::ExclusiveMode.tooltip_key(&s),
+            "options.fullscreen.exclusive.mode.tooltip"
+        );
+    }
+
+    #[test]
+    fn the_graphics_api_option_cycles_default_opengl_vulkan_and_asks_for_a_restart() {
+        use crate::graphics::GraphicsApi;
+        let mut s = Settings::default();
+        s.startup_api = s.horizon.api;
+        let offered = GraphicsApi::choices();
+        let mut seen = vec![s.horizon.api];
+        for _ in 1..offered.len() {
+            Opt::GraphicsBackend.cycle(&mut s, false, [854, 480]);
+            seen.push(s.horizon.api);
+        }
+        // Dx12 is Horizon's own Graphics page's; this option has the three of vanilla.
+        assert!(!seen.contains(&GraphicsApi::Dx12));
+        assert_eq!(seen[0], GraphicsApi::Auto);
+        if offered.len() == 3 {
+            assert_eq!(seen[1..], [GraphicsApi::OpenGl, GraphicsApi::Vulkan]);
+            assert_eq!(s.file.name("preferredGraphicsBackend"), "vulkan");
+            Opt::GraphicsBackend.cycle(&mut s, false, [854, 480]);
+            assert_eq!(s.horizon.api, GraphicsApi::Auto);
+            assert_eq!(s.file.name("preferredGraphicsBackend"), "default");
+        }
+    }
+
+    #[test]
+    fn texture_filtering_rows_exist_and_the_presets_set_them() {
+        let mut s = Settings::default();
+        for (preset, bit, filtering) in [("fast", 1, 0), ("fancy", 1, 1), ("fabulous", 2, 2)] {
+            s.graphics_preset = preset.into();
+            apply_preset(&mut s);
+            assert_eq!(s.file.int("maxAnisotropyBit"), bit, "{preset}");
+            assert_eq!(s.file.int("textureFiltering"), filtering, "{preset}");
+        }
+        assert!(Opt::TextureFiltering.available());
+        assert!(Opt::MaxAnisotropy.available());
+        // The anisotropy slider only works with Anisotropic filtering (VideoSettingsScreen.tick).
+        let grey = |s: &Settings| {
+            matches!(
+                option_widget(s, Opt::MaxAnisotropy, 0.0, 0.0, 150.0).kind,
+                WKind::Button { active: false, .. }
+            )
+        };
+        s.file
+            .set("textureFiltering", crate::options_file::V::Int(1));
+        assert!(grey(&s));
+        s.file
+            .set("textureFiltering", crate::options_file::V::Int(2));
+        assert!(!grey(&s));
+    }
+
+    #[test]
+    #[ignore = "requires prepared language data in HORIZON_TEST_RESOURCES; run alone"]
+    fn the_new_video_options_read_as_vanilla_words_them() {
+        use crate::graphics::GraphicsApi;
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        lang::set(lang::Language::load(&[&root], "en_us"));
+        let mut s = Settings::default();
+        assert_eq!(Opt::ExclusiveMode.label(&s).plain(), "Setting unavailable");
+        s.video_modes = vec![mode(1280, 60.0), mode(1920, 144.0), mode(2560, 59.94)];
+        assert_eq!(
+            Opt::ExclusiveMode.label(&s).plain(),
+            "Exclusive Fullscreen Mode: Current"
+        );
+        Opt::ExclusiveMode.set_slider(&mut s, 2.0 / 3.0);
+        assert_eq!(
+            Opt::ExclusiveMode.label(&s).plain(),
+            "Exclusive Fullscreen Mode: 1920x1080@144 (24bit)"
+        );
+        Opt::ExclusiveMode.set_slider(&mut s, 1.0);
+        assert_eq!(
+            Opt::ExclusiveMode.label(&s).plain(),
+            "Exclusive Fullscreen Mode: 2560x1440@59.94 (24bit)"
+        );
+        s.horizon.api = GraphicsApi::Vulkan;
+        assert_eq!(
+            Opt::GraphicsBackend.label(&s).plain(),
+            "Graphics API: Prefer Vulkan (Experimental)"
+        );
+        assert!(
+            graphics_api_tooltip(&s)
+                .plain()
+                .starts_with("Requires a game restart to take effect.\n\n")
+        );
+        s.startup_api = GraphicsApi::Vulkan;
+        assert!(
+            graphics_api_tooltip(&s)
+                .plain()
+                .starts_with("Which graphics API")
+        );
+        s.file
+            .set("maxAnisotropyBit", crate::options_file::V::Int(2));
+        s.file
+            .set("textureFiltering", crate::options_file::V::Int(2));
+        assert_eq!(
+            Opt::MaxAnisotropy.label(&s).plain(),
+            "Anisotropic Filtering: 4x"
+        );
+        assert_eq!(
+            Opt::TextureFiltering.label(&s).plain(),
+            "Texture Filtering: Anisotropic"
+        );
     }
 
     #[test]
@@ -4014,13 +4583,42 @@ mod tests {
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
                 ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
-                vec![Event::SliderDrag]
+                vec![Event::SliderDrag, Event::Volume(0, s.master_volume)]
             );
         }
         assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_moved_volume_slider_reports_its_category_and_value() {
+        let atlas = atlas();
+        let size = (480.0, 320.0);
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Sound);
+        let hostile = SOUND_SOURCES.iter().position(|n| *n == "hostile").unwrap();
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let slider = widgets
+            .iter()
+            .find(|wd| matches!(wd.kind, WKind::Slider { opt: Opt::Volume(i), .. } if i == hostile))
+            .unwrap();
+        let y = slider.y + 1.0;
+        let x = slider.x + 4.0 + (slider.w - 8.0) * 0.5;
+        let events = ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false);
+        let volume = s.volumes[hostile];
+        assert!((volume - 0.5).abs() < 1e-3, "{volume}");
+        assert_eq!(
+            events,
+            vec![Event::SliderDrag, Event::Volume(hostile, volume)]
+        );
+        // OptionInstance.set: an unchanged value runs no callback.
+        assert_eq!(
+            ui.click(&mut s, &atlas, x, -50.0, size, [854, 480], true, false),
+            vec![Event::SliderDrag]
         );
     }
 
@@ -4381,7 +4979,7 @@ mod tests {
             MouseButton::Back,
             MouseButton::Forward,
         ] {
-            for name in [SORT_KEY, "key.jump"] {
+            for name in [SORT_KEY, crate::graphics::HDR_KEY, "key.jump"] {
                 let mut ui = OptionsUi::default();
                 let mut s = Settings::default();
                 ui.selected_key = Some(name);
@@ -4390,6 +4988,7 @@ mod tests {
                 let value = keybinds::mouse_name(button);
                 match name {
                     SORT_KEY => assert_eq!(s.extras.sort_key, value),
+                    crate::graphics::HDR_KEY => assert_eq!(s.horizon.hdr_key, value),
                     _ => assert_eq!(s.keys.get(name), value),
                 }
                 assert_eq!(Extras::parse(&s.extras.serialize()), s.extras);

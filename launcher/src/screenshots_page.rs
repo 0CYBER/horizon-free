@@ -99,8 +99,18 @@ impl Launcher {
         self.screenshots.stale();
     }
 
-    /// Home's Screenshots section, for the selected instance; None while it has none.
-    pub(super) fn screenshots_section(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+    /// How many screenshots the selected instance has.
+    pub(super) fn screenshots_count(&mut self) -> usize {
+        let Some(home) = self.selected_instance().map(|i| i.home.clone()) else {
+            return 0;
+        };
+        self.load_screenshots(home);
+        self.screenshots.list.len()
+    }
+
+    /// Home's Screenshots tab, for the selected instance: its buttons (beside the tabs) and its
+    /// pictures; None while it has none.
+    pub(super) fn screenshots_section(&mut self, cx: &mut Context<Self>) -> Option<(Div, Div)> {
         let t = self.theme;
         let home = self.selected_instance()?.home.clone();
         self.load_screenshots(home.clone());
@@ -131,13 +141,6 @@ impl Launcher {
             button("screenshots-folder", "Open folder", Kind::Ghost, &t)
                 .on_click(move |_, _, cx| cx.open_with_system(&folder)),
         );
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .mb(px(4.))
-            .child(section_title("Screenshots", "image", &t))
-            .child(buttons);
         let grid = div().flex().flex_wrap().gap(px(10.)).children(
             list.into_iter().take(shown).enumerate().map(|(i, shot)| {
                 div()
@@ -163,13 +166,13 @@ impl Launcher {
                     }))
             }),
         );
-        let mut section = div().flex().flex_col().gap(px(8.)).child(header);
+        let mut section = div().flex().flex_col().gap(px(8.));
         if self.screenshots.viewing.is_none() {
             if let Some(Err(e)) = &self.screenshots.note {
                 section = section.child(notice(e.clone(), &t));
             }
         }
-        Some(section.child(grid))
+        Some((buttons, section.child(grid)))
     }
 
     /// The viewer over the whole window, while a picture is open.

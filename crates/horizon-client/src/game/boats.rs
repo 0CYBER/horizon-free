@@ -8,12 +8,19 @@ use horizon_client::{
     collisions::{EntityCollisions, SceneCollisions},
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Part, anim::Poses, riders},
+    mobs::{
+        Part,
+        anim::Poses,
+        leash::{Holder, Pending},
+        riders,
+    },
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
+    position::BlockPos,
     random::RandomSource,
 };
+use horizon_world::collision_context::CollisionContext;
 use std::{collections::HashMap, f32::consts::PI, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +58,16 @@ pub(super) struct Boat {
     /// `ChestBoat`: a chest with 27 slots in the back seat.
     pub chest: bool,
     pub items: Vec<Option<ItemStack>>,
+    /// `AbstractBoat.leashData`: who holds its lead (`boat_leads.rs`).
+    pub leash: Option<Holder>,
+    /// The player a `Holder::Player` lead is tied to (their UUID).
+    pub leash_player: Option<[i32; 4]>,
+    /// A holder read from a save that is not in the world yet.
+    pub leash_pending: Option<Pending>,
+    /// `LeashData.angularMomentum`.
+    pub leash_spin: f64,
+    /// `Entity.tickCount`, for the 100 ticks a saved holder is waited for.
+    pub age: i32,
 }
 /// `ChestBoat.CONTAINER_SIZE`.
 pub(super) const CHEST_SLOTS: usize = 27;
@@ -81,6 +98,11 @@ impl Boat {
             on_ground: false,
             chest: false,
             items: Vec::new(),
+            leash: None,
+            leash_player: None,
+            leash_pending: None,
+            leash_spin: 0.0,
+            age: 0,
         }
     }
     /// A chest boat or chest raft.
@@ -100,6 +122,13 @@ impl Boat {
     /// `isEyeInFluid(WATER)` too.
     pub fn under_water(&self) -> bool {
         matches!(self.status, Status::UnderWater | Status::UnderFlowingWater)
+    }
+    /// `Entity.isInLiquid`, for `Leashable.angularFriction`.
+    pub fn in_liquid(&self) -> bool {
+        matches!(
+            self.status,
+            Status::InWater | Status::UnderWater | Status::UnderFlowingWater
+        )
     }
     /// `getMaxPassengers`: two, one beside a chest.
     pub fn max_passengers(&self) -> usize {
@@ -312,14 +341,37 @@ impl Game<'_> {
         if in_water {
             return Status::InWater;
         }
-        // getGroundFriction over the blocks just below the hull (corners skipped).
-        let y0 = (lo.y - 0.001).floor() as i32;
-        let (x0, x1, z0, z1) = (
-            lo.x.floor() as i32 - 1,
-            hi.x.ceil() as i32 + 1,
-            lo.z.floor() as i32 - 1,
-            hi.z.ceil() as i32 + 1,
+        let friction = self.boat_ground_friction(bb);
+        if friction > 0.0 {
+            b.land_friction = friction;
+            Status::OnLand
+        } else {
+            Status::InAir
+        }
+    }
+    /// `AbstractBoat.getGroundFriction`: average friction of the blocks whose
+    /// collision shape meets a thin slab just under the hull (lily pads skipped).
+    fn boat_ground_friction(&self, bb: Aabb) -> f32 {
+        let (lo, hi) = (bb.min_position(), bb.max_position());
+        let ground = Aabb::new(
+            Vec3::new(lo.x, lo.y - 0.001, lo.z),
+            Vec3::new(hi.x, lo.y, hi.z),
         );
+        let (g_lo, g_hi) = (ground.min_position(), ground.max_position());
+        let (x0, x1, y0, y1, z0, z1) = (
+            g_lo.x.floor() as i32 - 1,
+            g_hi.x.ceil() as i32 + 1,
+            g_lo.y.floor() as i32 - 1,
+            g_hi.y.ceil() as i32 + 1,
+            g_lo.z.floor() as i32 - 1,
+            g_hi.z.ceil() as i32 + 1,
+        );
+        let slab = VoxelShape::from_box(ground).unwrap_or_else(|_| VoxelShape::empty());
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
         let (mut friction, mut count) = (0.0f32, 0);
         for x in x0..x1 {
             for z in z0..z1 {
@@ -327,28 +379,50 @@ impl Game<'_> {
                 if edges == 2 {
                     continue;
                 }
-                let inside = f64::from(x) < hi.x
-                    && f64::from(x + 1) > lo.x
-                    && f64::from(z) < hi.z
-                    && f64::from(z + 1) > lo.z;
-                let f = self.res.facts().get(self.world.block(x, y0, z));
-                if inside && (f.full_collision || f.legacy_solid) && !f.has_class("LilyPadBlock") {
-                    friction += f.friction;
-                    count += 1;
+                for y in y0..y1 {
+                    if edges == 1 && (y == y0 || y == y1 - 1) {
+                        continue;
+                    }
+                    let state = self.world.block(x, y, z);
+                    let f = self.res.facts().get(state);
+                    if f.name.as_ref() == "minecraft:air" || f.has_class("LilyPadBlock") {
+                        continue;
+                    }
+                    let Ok(shape) = self.collision.collision_shape_with_context(
+                        &mut scene,
+                        state,
+                        BlockPos::new(x, y, z),
+                        &CollisionContext::empty(false),
+                    ) else {
+                        continue;
+                    };
+                    let world_shape =
+                        shape.moved(Vec3::new(f64::from(x), f64::from(y), f64::from(z)));
+                    if world_shape
+                        .join_is_not_empty(&slab, ShapeOp::AND)
+                        .unwrap_or(false)
+                    {
+                        friction += f.friction;
+                        count += 1;
+                    }
                 }
             }
         }
-        if count > 0 && friction > 0.0 {
-            b.land_friction = friction / count as f32;
-            Status::OnLand
+        if count > 0 {
+            friction / count as f32
         } else {
-            Status::InAir
+            0.0
         }
     }
     /// `AbstractBoat.tick` for one boat (`controlled` when the player rides it).
     pub(super) fn tick_boat(&mut self, mut b: Boat, controlled: bool) -> Boat {
         b.previous = b.position;
         b.previous_yaw = b.yaw;
+        // Entity.baseTick ends with Leashable.tickLeash, on a server only
+        // (a ridden boat's lead ticks in `tick_boats`).
+        if !controlled && self.remote.is_none() {
+            self.tick_boat_leash(&mut b);
+        }
         b.old_status = b.status;
         b.status = self.boat_status(&mut b);
         b.out_of_control = if matches!(b.status, Status::UnderWater | Status::UnderFlowingWater) {
@@ -513,6 +587,12 @@ impl Game<'_> {
                 || driven.contains(&self.boats[i].id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
+                // Its rider's client moves it, but the lead still ticks.
+                if ticking(p.x.floor() as i32, p.z.floor() as i32) && self.remote.is_none() {
+                    let mut b = self.boats[i].clone();
+                    self.tick_boat_leash(&mut b);
+                    self.boats[i] = b;
+                }
                 continue;
             }
             let b = self.boats[i].clone();
@@ -601,9 +681,10 @@ impl Game<'_> {
             self.dismount(i);
             return Ok(());
         }
-        let mut b = self.boats[i].clone();
+        // The boat steers with the input `LocalPlayer.rideTick` latched on the
+        // previous tick; this tick's keys are latched after it ticked.
+        let mut b = self.tick_boat(self.boats[i].clone(), true);
         b.input = [keys.left, keys.right, keys.forward, keys.backward];
-        let b = self.tick_boat(b, true);
         // positionRider: the seat, turned with the boat; clampRotation to 105 degrees.
         self.yaw += b.delta_rotation;
         let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
@@ -789,6 +870,11 @@ impl Game<'_> {
         if !self.before_block(d) {
             return false;
         }
+        // AbstractBoat.interact starts with Entity.interact: the lead.
+        if self.interact_boat_leash(i) {
+            self.swing_arm();
+            return true;
+        }
         // ChestBoat.interact: sneaking (or a full seat) opens the chest.
         if self.boats[i].chest && (sneaking || self.riding.is_some() || !self.boat_has_room(i)) {
             let b = &self.boats[i];
@@ -814,6 +900,8 @@ impl Game<'_> {
         }
         self.riding = Some(self.boats[i].id);
         self.yaw = self.boats[i].yaw;
+        // ServerPlayer.startRiding.
+        self.trigger_player("minecraft:started_riding");
         true
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
@@ -846,6 +934,8 @@ impl Game<'_> {
             self.eject_boat_mobs(i, true);
             let b = self.boats.remove(i);
             let at = [b.position.x, b.position.y, b.position.z];
+            // AbstractBoat.remove: a destroyed boat drops its lead.
+            self.boat_removed(&b);
             if !creative && self.ui.rules.bool("entity_drops") {
                 // ChestBoat.destroy: chestVehicleDestroyed spills the contents.
                 for stack in b.items.iter().flatten() {

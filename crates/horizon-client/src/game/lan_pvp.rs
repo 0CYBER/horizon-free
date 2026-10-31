@@ -107,6 +107,7 @@ impl Game<'_> {
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
         {
+            self.weapon_hit_player(Self::pvp_victim_on_ground(&host, Victim::Guest(conn), None));
             self.pvp_exhaustion();
             if strike.stops_sprint() {
                 self.stop_sprint_after_extra_knockback();
@@ -114,6 +115,23 @@ impl Game<'_> {
         }
         self.lan = Some(host);
         true
+    }
+
+    /// Whether the player a hit landed on stands on the ground (the host's
+    /// `ground` is passed in as `host_on_ground` when the host is the victim).
+    pub(super) fn pvp_victim_on_ground(
+        host: &LanHost,
+        victim: Victim,
+        host_on_ground: Option<bool>,
+    ) -> bool {
+        match victim {
+            Victim::Host => host_on_ground.unwrap_or(true),
+            Victim::Guest(conn) => host
+                .hub
+                .guest(conn)
+                .and_then(|g| g.motion.as_deref())
+                .is_some_and(|p| p.ground.on_ground),
+        }
     }
 
     /// The player `id` that guest `conn` attacks, if it is one.
@@ -278,8 +296,24 @@ impl Game<'_> {
         }
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
+        // CombatTracker: the attacking player is the death message's killer.
+        // Without it the message is built with one argument and a template
+        // that names a killer ("%1$s was slain by %2$s") shows as written.
+        let attacker_note = match s.attacker {
+            Some(conn) => host
+                .hub
+                .guest(conn)
+                .map(|a| (a.entity_id, self.player_text(&a.name, a.uuid))),
+            None => Some((
+                host.host_entity,
+                self.player_text(&host.host_name, host.host_uuid),
+            )),
+        };
         let land = |g: &mut Self| {
             g.combat.player_attacker = Some((s.from, s.disable_blocking));
+            if let Some((id, name)) = attacker_note.clone() {
+                g.note_named_attacker("minecraft:player_attack", id as u32, name);
+            }
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
             g.combat.player_attacker = None;
             let (strength, xd, zd) = s.knockback;

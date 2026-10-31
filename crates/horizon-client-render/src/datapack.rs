@@ -223,6 +223,35 @@ pub fn install(dir: &Path, world: &Path, selected: &[String]) -> Result<(), Stri
     let file = world.join("datapacks.json");
     std::fs::write(&file, json.to_string()).map_err(|e| err(&file, e))
 }
+/// Re-Create World's packs from a saved world: a new folder holding a copy of
+/// its `datapacks` (`CreateWorldScreen.createTempDataPackDirFromExistingWorld`; `None` when the
+/// world has none), and the selection its `datapacks.json` makes, lowest
+/// priority first (`WorldOpenFlows.recreateWorldData` keeps the world's `DataConfiguration`).
+/// The built-in pack is selected unless the world turned it off.
+pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
+    let packs = discover(world);
+    let mut selected = enabled_ids(world, &packs);
+    let vanilla_off = std::fs::read(world.join("datapacks.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["disabled"].as_array().cloned())
+        .is_some_and(|a| a.iter().any(|id| id.as_str() == Some("vanilla")));
+    if !vanilla_off {
+        selected.insert(0, "vanilla".into());
+    }
+    if packs.is_empty() {
+        return (None, selected);
+    }
+    let dir = temp_folder().ok().and_then(|dir| {
+        if copy(&world.join("datapacks"), &dir).is_ok() {
+            Some(dir)
+        } else {
+            let _ = std::fs::remove_dir_all(&dir);
+            None
+        }
+    });
+    (dir, selected)
+}
 /// A file, or a folder and everything in it.
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{} -> {}: {e}", from.display(), to.display());
@@ -423,8 +452,30 @@ pub struct DataStore {
     pub predicates: BTreeMap<String, serde_json::Value>,
     /// `item_modifier` files, for `/item modify`.
     pub item_modifiers: BTreeMap<String, serde_json::Value>,
+    /// The content tables' raw files from the packs after the built-in one:
+    /// `recipe/`, `loot_table/`, `advancement/` and `tags/…/` files, by
+    /// `<kind-dir>/<ns>:<path>`, each id's files in pack order. The tables
+    /// merge them over what they read from the resource root.
+    pub files: BTreeMap<String, Vec<Vec<u8>>>,
     /// Functions that failed to parse (id, message), for logging.
     pub errors: Vec<(String, String)>,
+}
+/// `<kind-dir>/<ns>:<path>` for a pack file the content tables read:
+/// `recipe/`, `loot_table/`, `advancement/` or `tags/<sub>/`, where the id
+/// keeps the sub path so a nested tag kind stays addressable.
+fn content_id(file: &str) -> Option<String> {
+    let rest = file.strip_prefix("data/")?;
+    let (ns, rest) = rest.split_once('/')?;
+    let (kind, rest) = rest.split_once('/')?;
+    let kind = match kind {
+        "recipe" | "loot_table" | "advancement" => kind,
+        "tags" => {
+            let (sub, name) = rest.rsplit_once('/')?;
+            return Some(format!("tags/{sub}/{ns}:{}", name.strip_suffix(".json")?));
+        }
+        _ => return None,
+    };
+    Some(format!("{kind}/{ns}:{}", rest.strip_suffix(".json")?))
 }
 /// `ns:path` for a file `data/<ns>/<kind>/<path>.<ext>`.
 fn resource_id(file: &str, kind: &str, ext: &str) -> Option<String> {
@@ -440,7 +491,22 @@ impl DataStore {
     pub fn load(packs: &[&DataPack]) -> Self {
         let mut s = Self::default();
         for pack in packs {
-            for f in pack.list_kinds(&["function", "item_modifier", "predicate", "tags/function"]) {
+            // `tags` walks the whole tags tree, so a `tags/function` file is
+            // listed by both kinds: handle every file once.
+            let mut seen = std::collections::BTreeSet::new();
+            let builtin = pack.id == "vanilla";
+            for f in pack.list_kinds(&[
+                "advancement",
+                "function",
+                "item_modifier",
+                "loot_table",
+                "predicate",
+                "recipe",
+                "tags",
+            ]) {
+                if !seen.insert(f.clone()) {
+                    continue;
+                }
                 if let Some(id) = resource_id(&f, "function", ".mcfunction")
                     && let Some(bytes) = pack.read(&f)
                 {
@@ -470,6 +536,14 @@ impl DataStore {
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.item_modifiers.insert(id, v);
+                } else if !builtin
+                    && let Some(id) = content_id(&f)
+                    && let Some(bytes) = pack.read(&f)
+                {
+                    // The built-in pack's content files are the resource
+                    // root's own, which the tables read from disk; only the
+                    // world's packs come through here.
+                    s.files.entry(id).or_default().push(bytes);
                 }
             }
         }
@@ -479,11 +553,21 @@ impl DataStore {
     /// included, each function once).
     pub fn tag_functions(&self, id: &str) -> Vec<String> {
         let mut out = Vec::new();
-        self.expand(id, &mut out, 0);
+        let mut seen_fns = std::collections::HashSet::new();
+        let mut seen_tags = std::collections::HashSet::new();
+        self.expand(id, &mut out, &mut seen_fns, &mut seen_tags);
         out
     }
-    fn expand(&self, id: &str, out: &mut Vec<String>, depth: usize) {
-        if depth > 16 {
+    /// Depth-first walk keeping first-seen order. Each tag is expanded at most
+    /// once, so reference cycles end and nesting depth is not capped.
+    fn expand<'a>(
+        &'a self,
+        id: &'a str,
+        out: &mut Vec<String>,
+        seen_fns: &mut std::collections::HashSet<&'a str>,
+        seen_tags: &mut std::collections::HashSet<&'a str>,
+    ) {
+        if !seen_tags.insert(id) {
             return;
         }
         let Some(entries) = self.function_tags.get(id) else {
@@ -491,9 +575,9 @@ impl DataStore {
         };
         for (e, required) in entries {
             match e.strip_prefix('#') {
-                Some(inner) => self.expand(inner, out, depth + 1),
+                Some(inner) => self.expand(inner, out, seen_fns, seen_tags),
                 None => {
-                    if (self.functions.contains_key(e) || *required) && !out.contains(e) {
+                    if (self.functions.contains_key(e) || *required) && seen_fns.insert(e) {
                         out.push(e.clone());
                     }
                 }
@@ -563,6 +647,37 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack]) -> Vec<String> {
     enabled
 }
 
+/// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
+/// as `enabled_ids` orders them): the id `namespace:path` and the parsed JSON, a later pack's
+/// file for an id replacing an earlier one's. This is `context.datapackDimensions()` of
+/// `WorldOpenFlows.loadWorldStem`.
+pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for pack in packs {
+        for file in pack.list_kinds(&["dimension"]) {
+            let Some(rest) = file.strip_prefix("data/") else {
+                continue;
+            };
+            let Some((namespace, rest)) = rest.split_once('/') else {
+                continue;
+            };
+            let Some(path) = rest
+                .strip_prefix("dimension/")
+                .and_then(|p| p.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Some(json) = pack
+                .read(&file)
+                .and_then(|b| serde_json::from_slice(&b).ok())
+            {
+                out.insert(format!("{namespace}:{path}"), json);
+            }
+        }
+    }
+    out
+}
+
 // ---- worldgen ----------------------------------------------------------------
 
 /// The worldgen entries of `packs` (lowest priority first, the built-in pack
@@ -581,11 +696,6 @@ pub fn worldgen_overrides(
             let read = || String::from_utf8(pack.read(&file)?).ok();
             match out.add_file(&pack.id, &file, read) {
                 PackFile::Read | PackFile::Other => {}
-                PackFile::DimensionType { id, min_y, height } => warnings.push(format!(
-                    "{}: dimension type {id} (min_y {min_y}, height {height}) is not used: \
-                     the dimension keeps its vanilla build height",
-                    pack.id
-                )),
                 PackFile::NotRead(kind) => {
                     *not_read.entry(format!("{}: {kind}", pack.id)).or_default() += 1
                 }
@@ -658,10 +768,13 @@ mod tests {
         );
         let tag_packs: Vec<&str> = o.tags("biome_tags").map(|(_, p, _)| p).collect();
         assert_eq!(tag_packs, ["file/b", "file/a"]);
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
-        assert!(warnings[0].contains("height 2096"));
-        assert!(warnings[1].contains("minecraft:new_peaks"));
-        assert!(warnings[2].contains("worldgen/world_preset"));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("minecraft:new_peaks"));
+        assert!(warnings[1].contains("worldgen/world_preset"));
+        assert_eq!(
+            o.level_height("minecraft:overworld").map(|h| h.height),
+            Some(2096)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
     use horizon_world::nbt::parse_snbt;
@@ -768,6 +881,40 @@ mod tests {
     }
 
     #[test]
+    fn tag_resolution_dedupes_fast_ends_cycles_and_nests_deeply() {
+        let mut store = DataStore::default();
+        let big: Vec<(String, bool)> = (0..50_000)
+            .map(|i| (format!("t:f{}", i % 25_000), true))
+            .collect();
+        store.function_tags.insert("t:big".into(), big);
+        let start = std::time::Instant::now();
+        let got = store.tag_functions("t:big");
+        assert_eq!(got.len(), 25_000);
+        assert_eq!(got[0], "t:f0");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        // A cycle terminates and keeps first-seen order.
+        store.function_tags.insert(
+            "t:a".into(),
+            vec![("#t:b".into(), true), ("t:x".into(), true)],
+        );
+        store.function_tags.insert(
+            "t:b".into(),
+            vec![("#t:a".into(), true), ("t:y".into(), true)],
+        );
+        assert_eq!(store.tag_functions("t:a"), ["t:y", "t:x"]);
+        // Nesting deeper than the old cap of 16 still resolves.
+        for i in 0..40 {
+            store
+                .function_tags
+                .insert(format!("d:{i}"), vec![(format!("#d:{}", i + 1), true)]);
+        }
+        store
+            .function_tags
+            .insert("d:40".into(), vec![("t:deep".into(), true)]);
+        assert_eq!(store.tag_functions("d:0"), ["t:deep"]);
+    }
+
+    #[test]
     fn folder_packs_list_the_needed_kinds_in_walk_order() {
         let dir = std::env::temp_dir().join(format!("hz-datapack-kinds-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -817,9 +964,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, t).unwrap();
         };
-        write("fns", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write(
+            "fns",
+            "pack.mcmeta",
+            r#"{"pack":{"min_format":121,"max_format":121}}"#,
+        );
         write("fns", "data/x/function/f.mcfunction", "say hi");
-        write("off", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write(
+            "off",
+            "pack.mcmeta",
+            r#"{"pack":{"min_format":121,"max_format":121}}"#,
+        );
         std::fs::create_dir_all(&dir).unwrap();
         let mut zip = zip::ZipWriter::new(std::fs::File::create(dir.join("old.zip")).unwrap());
         zip.start_file("pack.mcmeta", zip::write::SimpleFileOptions::default())

@@ -60,7 +60,7 @@ impl Game<'_> {
             })
     }
     fn piglin_max_stack(&self, item: &str) -> u32 {
-        self.res.items().get(item).map_or(64, |i| i.max_stack)
+        self.items().get(item).map_or(64, |i| i.max_stack)
     }
     /// `PiglinAi.wantsToPickup` (an adult that is not hurt-shy), without
     /// the baby rule, which babies skip entirely here.
@@ -200,14 +200,25 @@ impl Game<'_> {
                 continue;
             }
             let pos = m.position;
+            // NearestItemSensor: the nearest wanted item within 32 that the piglin
+            // sees (eye to eye); GoToWantedItem then walks to it within 9 blocks.
+            let w = self.mob_world_base(&[]);
+            let eye = Vec3::new(pos.x, m.eye_y(), pos.z);
             let best = self
                 .dropped
                 .iter()
                 .enumerate()
                 .map(|(j, e)| (j, e.position.distance_squared(pos)))
-                .filter(|(_, d)| *d <= 81.0)
+                .filter(|(_, d)| *d < 32.0 * 32.0)
                 .filter(|&(j, _)| self.piglin_wants(m, &self.dropped[j].stack))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
+                .filter(|&(j, _)| {
+                    // ItemEntity's eye height is 0.2125.
+                    let e = &self.dropped[j];
+                    let at = Vec3::new(e.position.x, e.position.y + 0.2125, e.position.z);
+                    w.line_of_sight(eye, at)
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .filter(|(_, d)| *d <= 81.0);
             let Some((j, _)) = best else {
                 self.mobs[i].extra.point = None;
                 continue;
@@ -223,10 +234,26 @@ impl Game<'_> {
             // Nuggets come whole, anything else one at a time.
             let (taken_item, id) = (e.clone(), self.mobs[i].id);
             let item = e.stack.item.clone();
+            let carried = e.stack.clone();
+            let owner = e.thrower;
             self.add_pickup(
                 super::pickups::Taken::Item(Box::new(taken_item)),
                 super::pickups::Collector::Mob(id),
             );
+            // LivingEntity.onItemPickup, before PiglinAi.pickUpItem splits the stack.
+            // The owner is the host or a guest: whoever it is gets the trigger.
+            if let Some(owner) = owner {
+                let target = self.mob_entity(&self.mobs[i]);
+                self.for_each_player(|g| {
+                    if g.acting_uuid() == owner {
+                        g.trigger_item_entity(
+                            "minecraft:thrown_item_picked_up_by_entity",
+                            &carried,
+                            &target,
+                        );
+                    }
+                });
+            }
             let stack = if &*item == "minecraft:gold_nugget" {
                 self.dropped.remove(j).stack
             } else {
@@ -261,9 +288,8 @@ impl Game<'_> {
         m.extra.using_item = ADMIRE;
         m.extra.point = None;
         m.nav_stop();
-        let at = m.center();
-        self.audio
-            .play("minecraft:entity.piglin.admiring_item", Some(at), 1.0, 1.0);
+        // The admiring grunt is `PiglinAi.updateActivity`'s: `piglin::brain_step`
+        // plays it when the activity changes.
     }
     /// `PiglinAi.mobInteract`: hand a piglin a gold ingot (only piglin
     /// currency is accepted from the hand; other loved items are passed over).
@@ -297,7 +323,7 @@ impl Game<'_> {
         let m = &self.mobs[i];
         let from = [m.position.x, m.position.y + 1.3, m.position.z];
         let items = if !m.is_baby() {
-            self.res.items().loot_table(
+            world_items!(self).loot_table(
                 "minecraft:gameplay/piglin_bartering",
                 false,
                 None,

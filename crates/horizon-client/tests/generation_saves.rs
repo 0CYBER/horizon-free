@@ -308,7 +308,10 @@ fn saved_proto_chunks_restore_exactly() {
     .unwrap();
     let dir = std::env::temp_dir().join(format!("horizon-proto-saves-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let save = Arc::new(SaveDir::new(dir.clone()));
+    let save = Arc::new(SaveDir::new(
+        dir.clone(),
+        horizon_client::save::LevelShape::OVERWORLD,
+    ));
     let generator = Persistent {
         inner: Arc::new(terrain),
         save: save.clone(),
@@ -388,7 +391,10 @@ fn saved_proto_block_entities_keep_their_id() {
     .unwrap();
     let dir = std::env::temp_dir().join(format!("horizon-proto-ids-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let save = Arc::new(SaveDir::new(dir.clone()));
+    let save = Arc::new(SaveDir::new(
+        dir.clone(),
+        horizon_client::save::LevelShape::OVERWORLD,
+    ));
     let generator = Persistent {
         inner: Arc::new(terrain),
         save: save.clone(),

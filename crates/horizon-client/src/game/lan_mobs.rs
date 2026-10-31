@@ -95,7 +95,9 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
     matches!(
         e,
         MobEvent::AttackPlayer(..)
+            | MobEvent::CubeHurtPlayer { .. }
             | MobEvent::AttackPlayerWithEffect { .. }
+            | MobEvent::StingPlayer { .. }
             | MobEvent::DamagePlayer { .. }
             | MobEvent::SonicBoom {
                 target: Who::Player,
@@ -108,6 +110,9 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
             | MobEvent::Knockback {
                 target: Who::Player,
                 ..
+            }
+            | MobEvent::StabDismount {
+                target: Who::Player,
             }
             | MobEvent::Ignite {
                 target: Who::Player,
@@ -342,6 +347,8 @@ pub(super) struct Present {
     pub creative: bool,
     pub spectator: bool,
     pub alive: bool,
+    /// Trial Omen, else Bad Omen, among the guest's effects.
+    pub omen: Option<horizon_client::mobs::trial_spawner::Omen>,
 }
 
 impl Game<'_> {
@@ -355,6 +362,12 @@ impl Game<'_> {
             .filter(|g| g.loaded)
             .map(|g| {
                 let [x, y, z] = g.position;
+                // The acting guest's effects are on the game while their turn runs.
+                let effects = if self.lan_acting == Some(g.conn) {
+                    &self.potions.effects
+                } else {
+                    &g.effects
+                };
                 Present {
                     uuid: horizon_client::lan::playerdata::uuid_ints(g.uuid),
                     position: g.position,
@@ -363,6 +376,7 @@ impl Game<'_> {
                     creative: g.creative(),
                     spectator: g.spectator(),
                     alive: !g.dead,
+                    omen: omen_of(effects),
                 }
             })
             .collect()
@@ -373,6 +387,18 @@ impl Game<'_> {
             .map(horizon_client::lan::playerdata::uuid_ints)
             .or(self.level.player_uuid)
             .unwrap_or_default()
+    }
+}
+
+/// `TrialSpawner.findPlayerWithOminousEffect`: Trial Omen first, then Bad Omen.
+pub(super) fn omen_of(
+    effects: &horizon_client::effects::PlayerEffects,
+) -> Option<horizon_client::mobs::trial_spawner::Omen> {
+    use horizon_client::mobs::trial_spawner::Omen;
+    if effects.get("trial_omen").is_some() {
+        Some(Omen::Trial)
+    } else {
+        effects.get("bad_omen").map(|_| Omen::Bad)
     }
 }
 
@@ -416,6 +442,7 @@ mod tests {
             sleeping: false,
             sleep_timer: 0,
             passenger: false,
+            vehicle: None,
         }
     }
 

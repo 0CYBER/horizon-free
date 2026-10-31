@@ -44,6 +44,9 @@ Usage: horizon-server [--dir DIR] <command>
               Up or not, TPS, MSPT, players, RAM and CPU
   cmd COMMAND...
               Run a console command on the running server and print what it answers
+  report [SECONDS]
+              Record a performance report for SECONDS (default 60): where the ticks' time goes,
+              entities, chunks, network, memory; saved in reports/ (JSON and text, no player data)
   logs [-f] [-n N]
               The last N lines of the log (default 50); -f follows it
   backup [NAME]
@@ -106,6 +109,7 @@ fn main() -> ExitCode {
         Some("restart") => cli::stop(&dir, true),
         Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
         Some("cmd") => cli::command(&dir, &args[1..]),
+        Some("report") => cli::report(&dir, &args[1..]),
         Some("logs") => logs(&dir, &args[1..]),
         Some("panel") => cli::panel(&dir),
         Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),

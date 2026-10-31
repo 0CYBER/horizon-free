@@ -173,6 +173,9 @@ pub struct GeneratorData {
     /// Data packs' level stems (`dimension/<id>.json`), by dimension id:
     /// they replace the world preset's.
     dimensions: BTreeMap<String, String>,
+    /// Data packs' dimension types (`dimension_type/<id>.json`), by id:
+    /// they replace the vanilla ones' build ranges.
+    dimension_types: BTreeMap<String, String>,
     /// What loading the data packs' entries left out, for the log.
     warnings: Vec<String>,
     conditions: MaterialConditionRegistry,
@@ -184,6 +187,9 @@ pub struct GeneratorData {
     biome_carvers: Vec<Vec<Arc<WorldCarver>>>,
     carving_blocks: CarvingBlocks,
     pub(super) block_tags: BTreeMap<String, Vec<String>>,
+    /// `block_tags` bound to block states, once for the feature bindings of
+    /// decoration, structures and live features (`feature_block_bindings`).
+    bound_block_tags: std::sync::OnceLock<super::block_feature::BoundBlockTags>,
     pub(super) biome_tags: BTreeMap<String, Vec<String>>,
     pub(super) feature_resources: Option<FeatureResources>,
     /// Templates, processor lists and per-state template transforms.
@@ -542,6 +548,7 @@ impl GeneratorData {
             settings: read_bundle(dir, ov, "settings")?,
             world_presets: read_bundle(dir, ov, "world_presets")?,
             dimensions: ov.apply(overrides::DIMENSIONS, BTreeMap::new()),
+            dimension_types: ov.apply(overrides::DIMENSION_TYPES, BTreeMap::new()),
             warnings,
             presets,
             conditions,
@@ -557,6 +564,7 @@ impl GeneratorData {
             feature_resources,
             ring_cache: Mutex::new(Vec::new()),
             decorations: Mutex::new(Vec::new()),
+            bound_block_tags: std::sync::OnceLock::new(),
         }))
     }
     /// The concentric ring positions (strongholds) of the generator for
@@ -676,6 +684,21 @@ impl GeneratorData {
     pub(super) fn integers(&self) -> &BTreeSet<(String, String)> {
         &self.integers
     }
+    /// Feature block bindings over this data's blocks and block tags. The tags'
+    /// state sets are bound once and shared: each binding held 5 MB of them.
+    pub(super) fn feature_block_bindings(
+        &self,
+    ) -> Result<super::block_feature::FeatureBlockBindings<'static>, DecodeError> {
+        use super::block_feature::FeatureBlockBindings;
+        let bound = match self.bound_block_tags.get() {
+            Some(bound) => bound.clone(),
+            None => {
+                let bound = FeatureBlockBindings::bind_tags(self.registry, &self.block_tags)?;
+                self.bound_block_tags.get_or_init(|| bound).clone()
+            }
+        };
+        FeatureBlockBindings::with_bound_tags(self.registry, self.integers.clone(), bound)
+    }
 }
 
 /// A generated chunk with its quart biomes. Blocks and heightmaps live in
@@ -764,15 +787,6 @@ impl ProtoChunk {
     }
 }
 
-/// Build range (minimum Y, height) of the vanilla dimension types.
-fn dimension_type_height(name: &str) -> Option<(i32, i32)> {
-    match name {
-        "minecraft:overworld" | "minecraft:overworld_caves" => Some((-64, 384)),
-        "minecraft:the_nether" | "minecraft:the_end" => Some((0, 256)),
-        _ => None,
-    }
-}
-
 /// Per-noise-settings values resolved from the dimension's generator JSON.
 struct Settings {
     noise_min_y: i32,
@@ -818,17 +832,24 @@ const CACHE_LIMIT: usize = 16384;
 /// Coordinates only equal missing neighbour keys. Weak entries retain no
 /// computed values across eviction or explicit invalidation. Only one work
 /// lock may be held at a time; finish shared prerequisites before acquiring it.
-pub(super) struct ChunkWork(Mutex<HashMap<(i32, i32), std::sync::Weak<Mutex<()>>>>);
+/// Sharded by key: every worker asks for the locks of the same neighbourhoods.
+pub(super) struct ChunkWork(Box<[Mutex<HashMap<(i32, i32), std::sync::Weak<Mutex<()>>>>]>);
+const WORK_SHARDS: usize = 64;
+/// The shard of `key` among `shards` (a power of two).
+pub(super) fn shard_of(key: (i32, i32), shards: usize) -> usize {
+    let hash = (key.0 as u32).wrapping_mul(0x9E37_79B9) ^ (key.1 as u32).wrapping_mul(0x85EB_CA6B);
+    (hash >> (32 - shards.trailing_zeros())) as usize
+}
 impl ChunkWork {
     pub(super) fn new() -> Self {
-        Self(Mutex::new(HashMap::new()))
+        Self((0..WORK_SHARDS).map(|_| Mutex::default()).collect())
     }
     pub(super) fn at(&self, key: (i32, i32)) -> Arc<Mutex<()>> {
-        let mut work = self.0.lock().unwrap();
+        let mut work = self.0[shard_of(key, WORK_SHARDS)].lock().unwrap();
         if let Some(lock) = work.get(&key).and_then(std::sync::Weak::upgrade) {
             return lock;
         }
-        if work.len() >= 4096 {
+        if work.len() >= 4096 / WORK_SHARDS {
             // Keep every active builder/waiter on its original lock, including
             // when the result cache was cleared while it was in flight.
             work.retain(|_, lock| lock.strong_count() > 0);
@@ -1454,6 +1475,17 @@ impl<R: RandomSource> Pipeline<R>
 where
     R::Positional: Clone + Send + Sync,
 {
+    /// WorldGenRegion's level random, positioned at the center chunk.
+    fn region_random_at(&self, center: ChunkPos) -> R {
+        self.root
+            .from_hash_of("minecraft:worldgen_region_random")
+            .fork_positional()
+            .at(BlockPos::new(
+                center.x.wrapping_shl(4),
+                0,
+                center.z.wrapping_shl(4),
+            ))
+    }
     /// ChunkGenerator.getBaseHeight: the first free Y above the noise column
     /// (with aquifers, without terrain adaptation) for a heightmap type.
     fn base_height(&self, x: i32, z: i32, kind: HeightmapType) -> i32 {
@@ -1679,8 +1711,15 @@ where
             })
             .collect()
     }
-    fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>) {
-        self.valid = biomes.clone();
+    /// `None` is `/place structure`'s `biome -> true`: every biome the bundle
+    /// knows counts as valid.
+    fn set_valid_biomes(&mut self, biomes: Option<&BTreeSet<BiomeId>>) {
+        self.valid = match biomes {
+            Some(biomes) => biomes.clone(),
+            None => (0..self.pipeline.data.biome_names().len() as u32)
+                .map(BiomeId)
+                .collect(),
+        };
     }
 }
 
@@ -2000,6 +2039,8 @@ trait SeededPipeline: Send + Sync {
     /// The exact `end_island_decorated` origins in a chunk, without terrain.
     fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]>;
     fn sea_level(&self) -> i32;
+    /// The level's build range (minimum Y, height).
+    fn level(&self) -> (i32, i32);
     fn surface_sample(
         &self,
         worker: &mut WorkerState,
@@ -2021,6 +2062,14 @@ trait SeededPipeline: Send + Sync {
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
+    /// `Structure.generate` for one structure in one chunk (`/place
+    /// structure`), outside any structure set's placement.
+    fn structure_start(
+        &self,
+        worker: &mut WorkerState,
+        structure: &str,
+        chunk: ChunkPos,
+    ) -> Option<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
     fn use_saved_start(
         &self,
@@ -2032,6 +2081,7 @@ trait SeededPipeline: Send + Sync {
     fn forget_structure_starts(&self);
     fn ring_positions(&self, worker: &mut WorkerState, set: &str) -> Option<Vec<ChunkPos>>;
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError>;
+    fn region_random(&self, center: ChunkPos) -> Box<dyn super::structure::legacy::PieceRandom>;
     fn locate(
         &self,
         worker: &mut WorkerState,
@@ -2070,17 +2120,7 @@ where
     ) -> Result<DecorateStats, GeneratorError> {
         match &self.decoration {
             Some(decoration) => {
-                let center = region[4].position();
-                // WorldGenRegion's level random, positioned at the center chunk.
-                let mut random = self
-                    .root
-                    .from_hash_of("minecraft:worldgen_region_random")
-                    .fork_positional()
-                    .at(BlockPos::new(
-                        center.x.wrapping_shl(4),
-                        0,
-                        center.z.wrapping_shl(4),
-                    ));
+                let mut random = self.region_random_at(region[4].position());
                 decoration.decorate(
                     &self.data,
                     self.seed,
@@ -2114,6 +2154,9 @@ where
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
     }
+    fn level(&self) -> (i32, i32) {
+        (self.settings.level_min_y, self.settings.level_height)
+    }
     fn structure_starts(
         &self,
         worker: &mut WorkerState,
@@ -2132,6 +2175,25 @@ where
                 .to_vec(),
             None => Vec::new(),
         }
+    }
+    fn structure_start(
+        &self,
+        worker: &mut WorkerState,
+        structure: &str,
+        chunk: ChunkPos,
+    ) -> Option<Arc<super::structure::start::StructureStart>> {
+        self.structures
+            .as_ref()?
+            .structure_start(
+                &mut StructureQueries {
+                    pipeline: self,
+                    worker,
+                    valid: BTreeSet::new(),
+                },
+                structure,
+                chunk,
+            )
+            .map(Arc::new)
     }
     fn unsupported_features(&self) -> Vec<(String, String)> {
         self.decoration
@@ -2168,6 +2230,9 @@ where
             },
             set,
         )
+    }
+    fn region_random(&self, center: ChunkPos) -> Box<dyn super::structure::legacy::PieceRandom> {
+        Box::new(self.region_random_at(center))
     }
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError> {
         if let Some(position) = self.spawn_position.get() {
@@ -2829,7 +2894,10 @@ impl OverworldGenerator {
             None => preset_json["dimensions"][dimension].clone(),
         };
         let generator = stem["generator"].clone();
-        let level = stem["type"].as_str().and_then(dimension_type_height);
+        // The level's build range: its dimension type's, a data pack's
+        // over the vanilla one.
+        let level = overrides::LevelHeight::of_type(&stem["type"], &data.dimension_types)
+            .map(|h| (h.min_y, h.height));
         if generator["type"].as_str() != Some("minecraft:noise") {
             return Err(resource(format!("{dimension} is not a noise generator")));
         }
@@ -2842,8 +2910,8 @@ impl OverworldGenerator {
             inline => inline.clone(),
         };
         // NoiseSettings.clampToHeightAccessor: noise past the build height
-        // (a data pack's taller terrain in a dimension Horizon keeps at its
-        // vanilla height) fills only the part inside it.
+        // (a data pack's taller terrain over a dimension type it left as it
+        // was) fills only the part inside it.
         let mut noise_clamped = None;
         if let Some((level_min_y, level_height)) = level
             && let (Some(min_y), Some(height)) = (
@@ -2903,6 +2971,10 @@ impl OverworldGenerator {
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
     }
+    /// The dimension's build range (minimum Y, height): what its chunks span.
+    pub fn level(&self) -> (i32, i32) {
+        self.pipeline.level()
+    }
     /// Placed features of this dimension's biomes that decoration skips because
     /// their algorithm or bindings are not implemented, with the decode error.
     pub fn unsupported_features(&self) -> Vec<(String, String)> {
@@ -2917,6 +2989,14 @@ impl OverworldGenerator {
     /// NoiseSpawnFinder.findSpawnPosition: the column `origin` is the chunk of.
     pub fn spawn_position(&self) -> Result<[i32; 2], GeneratorError> {
         self.pipeline.spawn_position()
+    }
+    /// A new `WorldGenRegion` random centred on the chunk: what its generation
+    /// steps draw from (`level.getRandom()`).
+    pub fn region_random(
+        &self,
+        center: ChunkPos,
+    ) -> Box<dyn super::structure::legacy::PieceRandom> {
+        self.pipeline.region_random(center)
     }
     /// Create per-thread state. Workers are cheap; keep one per thread.
     pub fn worker(&self) -> GeneratorWorker {
@@ -3034,6 +3114,16 @@ impl GeneratorWorker {
     ) -> Vec<Arc<super::structure::start::StructureStart>> {
         self.pipeline.structure_starts(&mut self.state, pos)
     }
+    /// `Structure.generate` for `/place structure`: the start `structure`
+    /// builds in `chunk`, whatever its placement set says about that chunk.
+    pub fn structure_start(
+        &mut self,
+        structure: &str,
+        chunk: ChunkPos,
+    ) -> Option<Arc<super::structure::start::StructureStart>> {
+        self.pipeline
+            .structure_start(&mut self.state, structure, chunk)
+    }
     /// Puts a saved start of `structure` (its pieces as a save lists them, in
     /// JSON) in `chunk`, in place of the one generation builds there, until
     /// the starts are forgotten. Harnesses place another game's layout.
@@ -3070,6 +3160,22 @@ impl GeneratorWorker {
     }
     pub fn set_structure_mobs(&mut self, mobs: Arc<dyn StructureMobs>) {
         self.state.structure_mobs = Some(mobs);
+    }
+    /// Give back the density scratch buffers and the lookup caches, which only
+    /// speed up the next chunks (a generating worker holds megabytes of them).
+    /// Results do not change: they are made again on demand.
+    pub fn release(&mut self) {
+        let state = &mut self.state;
+        for context in [
+            &mut state.terrain_context,
+            &mut state.biome_context,
+            &mut state.carver_context,
+        ] {
+            context.clear_scratch();
+        }
+        state.carver_biomes = HashMap::new();
+        state.structure_biomes = HashMap::new();
+        state.heights = HashMap::new();
     }
 }
 
@@ -3690,7 +3796,13 @@ mod tests {
         for x in 1..8192 {
             drop(work.at((x, 1)));
         }
-        assert!(work.0.lock().unwrap().len() <= 4096);
+        assert!(
+            work.0
+                .iter()
+                .map(|s| s.lock().unwrap().len())
+                .sum::<usize>()
+                <= 4096
+        );
         assert!(Arc::ptr_eq(&same, &work.at((0, 0))));
         let weak = Arc::downgrade(&first);
         drop(held);

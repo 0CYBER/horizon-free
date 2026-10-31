@@ -865,13 +865,23 @@ const VIEW_DISTANCE: f64 = 64.0;
 
 impl BlockEntityRenderer {
     pub fn load(root: &Path, registry: &BlockRegistry) -> crate::Result<Self> {
+        let visibility = crate::models::load_visibility(root, registry)?;
+        Self::load_with_visibility(root, registry, visibility)
+    }
+    /// [`BlockEntityRenderer::load`] over the face visibility the meshes use
+    /// (`MeshTables::visibility`): a clone shares its shapes and their faces.
+    pub fn load_with_visibility(
+        root: &Path,
+        registry: &BlockRegistry,
+        visibility: FaceVisibility,
+    ) -> crate::Result<Self> {
         let all: Value = serde_json::from_slice(&std::fs::read(root.join("entity-models.json"))?)?;
         let models = MODELS
             .iter()
             .filter_map(|(key, layer)| all.get(*layer).map(|v| (*key, ModelPart::parse(v))))
             .collect();
         let mut renderer = Self::new(models, registry);
-        renderer.visibility = Some(Mutex::new(crate::models::load_visibility(root, registry)?));
+        renderer.visibility = Some(Mutex::new(visibility));
         // Sherd items: provides_pottery_pattern -> decorated_pot_pattern asset id.
         if let Ok(bytes) = std::fs::read(root.join("items.json")) {
             let items: Value = serde_json::from_slice(&bytes)?;
@@ -1104,7 +1114,11 @@ impl BlockEntityRenderer {
     pub fn renders(&self, state: u32) -> bool {
         !matches!(self.kind(state), Kind::None)
     }
-    /// ChestRenderer and BannerRenderer submit their animated models for crumbling.
+    /// `submitCrumblingOverlay` of ChestRenderer.submit, BannerRenderer.submit,
+    /// SkullBlockRenderer.submitSkull, ShulkerBoxRenderer.submit,
+    /// BellRenderer.submit, LecternRenderer.submit (the book) and
+    /// CopperGolemStatueBlockRenderer.submit: the model drawn again under the
+    /// destroy stage.
     pub fn render_breaking(
         &self,
         scene: &Scene,
@@ -1113,7 +1127,16 @@ impl BlockEntityRenderer {
         stage: [f32; 2],
         out: &mut Vec<Vertex>,
     ) {
-        if !matches!(self.kind(state), Kind::Banner { .. } | Kind::Chest { .. }) {
+        if !matches!(
+            self.kind(state),
+            Kind::Banner { .. }
+                | Kind::Chest { .. }
+                | Kind::Skull { .. }
+                | Kind::Shulker { .. }
+                | Kind::Bell
+                | Kind::Lectern { .. }
+                | Kind::CopperGolem { .. }
+        ) {
             return;
         }
         let origin = (DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
@@ -1467,6 +1490,7 @@ impl BlockEntityRenderer {
                 } else {
                     None
                 };
+                let has_profile = skin.is_some();
                 let texture = skin.as_deref().unwrap_or(texture);
                 let (Some(model), Some(paint)) =
                     (self.models.get(model), paint(texture, 0xFFFFFF, packed))
@@ -1501,7 +1525,13 @@ impl BlockEntityRenderer {
                     "right_ear" => p[5] = (f64::from(t * PI * 0.2).cos() + 2.5) as f32 * 0.2,
                     _ => {}
                 };
+                let start = out.len();
                 draw_part(model, "root", m, &anim, paint, out);
+                // `SkullBlockRenderer.resolveSkullRenderType`: a head with a profile takes
+                // the player skin's `entityTranslucent` render type.
+                if has_profile {
+                    crate::gfx::mark_oit(&mut out[start..]);
+                }
             }
             Kind::Bell => {
                 let (Some(model), Some(paint)) = (
@@ -2363,6 +2393,7 @@ mod tests {
             lines: [line.into(), "two".into(), String::new(), "four".into()],
             color: 3,
             glowing,
+            ..Default::default()
         };
         let first_text = crate::signs::SignData {
             front: text("one", false),

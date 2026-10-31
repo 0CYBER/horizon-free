@@ -54,6 +54,9 @@ pub struct ItemQuad {
     /// The quad's sprite has translucent pixels (`MaterialInfo.itemRenderType`
     /// is a translucent sheet): drawn with the translucent entities.
     pub translucent: bool,
+    /// The quad's render type has an `OitPipelineSet` (`entityTranslucent`: a
+    /// player head's skin): improved transparency draws it in its stages.
+    pub oit: bool,
 }
 /// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +97,36 @@ impl Glint {
             model[0] * self.scale * cos - model[1] * self.scale * sin - offset0,
             model[0] * self.scale * sin + model[1] * self.scale * cos + offset1,
         ]
+    }
+}
+/// The glint inputs of one frame, read once: `GameRenderer.extract` snapshots
+/// `glintSpeed` and `glintStrength` into `OptionsRenderState`
+/// (`extractOptions`), and `TextureTransform.setupGlintTexturing` reads
+/// `Util.getMillis()` once per glint render-type batch, not per item.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlintFrame {
+    /// `Util.getMillis()` this frame.
+    pub millis: f32,
+    /// `OptionsRenderState.glintSpeed`.
+    pub speed: f32,
+    /// `OptionsRenderState.glintStrength`.
+    pub alpha: f32,
+    /// The atlas has `misc/enchanted_glint_item`.
+    pub sprite: bool,
+}
+impl GlintFrame {
+    /// The glint at a texturing scale, if the atlas has its sprite.
+    pub fn glint(&self, scale: f32) -> Option<Glint> {
+        self.sprite.then_some(Glint {
+            speed: self.speed,
+            alpha: self.alpha,
+            millis: self.millis,
+            scale,
+        })
+    }
+    /// [`Glint::scroll_ticks`] for this frame.
+    pub fn scroll_ticks(&self) -> f32 {
+        Glint::scroll_ticks(self.millis, self.speed)
     }
 }
 /// Which glint render type a quad uses.
@@ -301,6 +334,11 @@ fn submit_quads(
                 translucent
             }
         };
+        // Translucent item sheets draw without depth writes (ITEM_TRANSLUCENT).
+        // Without back-face cull, both sides of a jelly shell (slime/honey) stack
+        // their partial alpha and look opaque (#4508). Glass is fine either way:
+        // most of its texels discard at alpha 0.
+        let translucent = translucent || q.material.force_translucent;
         sink.quad(ItemQuad {
             pos,
             uv,
@@ -309,8 +347,9 @@ fn submit_quads(
             color: argb(color),
             foil,
             light_emission: q.light_emission,
-            cull_back: false,
-            translucent: translucent || q.material.force_translucent,
+            cull_back: translucent,
+            translucent,
+            oit: false,
         });
     }
 }
@@ -453,30 +492,40 @@ pub struct ItemRenderer {
     item_ids: HashMap<String, i32>,
 }
 
-/// Every `items/*.json` client item definition, by identifier.
+/// Every `items/**/*.json` client item definition, by identifier.
 fn load_definitions(root: &Path) -> BTreeMap<String, ClientItem> {
+    fn walk(dir: &Path, rel: &str, namespace: &str, out: &mut BTreeMap<String, ClientItem>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            let rel = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            if path.is_dir() {
+                walk(&path, &rel, namespace, out);
+            } else if let Some(id) = rel.strip_suffix(".json")
+                && let Some(item) = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|t| ClientItem::from_json(&t).ok())
+            {
+                out.insert(format!("{namespace}:{id}"), item);
+            }
+        }
+    }
     let mut out = BTreeMap::new();
     let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
         return out;
     };
     for ns in namespaces.flatten() {
         let namespace = ns.file_name().to_string_lossy().into_owned();
-        let Ok(files) = fs::read_dir(ns.path().join("items")) else {
-            continue;
-        };
-        for f in files.flatten() {
-            let path = f.path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let name = path.file_stem().unwrap_or_default().to_string_lossy();
-            if let Some(item) = fs::read_to_string(&path)
-                .ok()
-                .and_then(|t| ClientItem::from_json(&t).ok())
-            {
-                out.insert(format!("{namespace}:{name}"), item);
-            }
-        }
+        walk(&ns.path().join("items"), "", &namespace, &mut out);
     }
     out
 }
@@ -787,13 +836,19 @@ impl ItemSink for WorldSink<'_> {
             (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
             (true, false) => 7,
         };
+        // Only plain and foil quads: the translucent sheet's overlays are their own material.
+        let oit = if q.oit && matches!(overlay, 0 | 7) {
+            crate::gfx::OIT_ENTITY
+        } else {
+            0
+        };
         for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
             let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
                 normal: if q.cull_back { CULL_BACK } else { [0; 4] },
                 pos: p.to_array(),
                 uv,
-                layer: overlay,
+                layer: overlay | oit,
                 color,
                 light,
                 glint_uv,
@@ -853,6 +908,39 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 mod tests {
     use super::*;
 
+    /// One frame's glint is read once and shared: every item drawn from the
+    /// same `GlintFrame` scrolls by the same phase, and without the atlas
+    /// sprite no item gets a glint (`TextureTransform.setupGlintTexturing`
+    /// once per batch, `GameRenderer.extractOptions` once per frame).
+    #[test]
+    fn a_frame_glint_is_shared_by_every_item() {
+        let frame = GlintFrame {
+            millis: 123_456.0,
+            speed: 0.5,
+            alpha: 0.75,
+            sprite: true,
+        };
+        let world = frame.glint(0.5).expect("the atlas has the glint sprite");
+        assert_eq!(
+            (world.speed, world.alpha, world.millis),
+            (0.5, 0.75, 123_456.0)
+        );
+        assert_eq!(world.scale, 0.5);
+        let uvs: Vec<_> = (0..1000)
+            .map(|_| frame.glint(0.5).unwrap().uv([0.25, 0.75]))
+            .collect();
+        assert!(uvs.iter().all(|uv| *uv == uvs[0]));
+        assert_eq!(frame.scroll_ticks(), Glint::scroll_ticks(123_456.0, 0.5));
+        // 123456 ms * 0.5 * 8 = 493824 ticks, modulo 330000.
+        assert_eq!(frame.scroll_ticks(), 163_824.0);
+        let missing = GlintFrame {
+            sprite: false,
+            ..frame
+        };
+        assert!(missing.glint(0.5).is_none());
+        assert_eq!(missing.scroll_ticks(), frame.scroll_ticks());
+    }
+
     /// A bad item model surfaces only once items.json has loaded, so a broken
     /// items.json still reports itself first.
     #[test]
@@ -880,6 +968,26 @@ mod tests {
         Ok(())
     }
 
+    /// Definitions live at any depth (`items/<dir>/<name>.json`), as
+    /// ModelEngine's `modelengine:postman/head` does.
+    #[test]
+    fn item_definitions_load_from_nested_folders() -> crate::Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-item-definitions-nested-{}",
+            std::process::id()
+        ));
+        let definitions = root.join("assets/horizon/items");
+        fs::create_dir_all(definitions.join("postman"))?;
+        let empty = r#"{"model":{"type":"minecraft:empty"}}"#;
+        fs::write(definitions.join("top.json"), empty)?;
+        fs::write(definitions.join("postman/head.json"), empty)?;
+        let loaded = load_definitions(&root);
+        let _ = fs::remove_dir_all(&root);
+        assert!(loaded.contains_key("horizon:top"));
+        assert!(loaded.contains_key("horizon:postman/head"));
+        Ok(())
+    }
+
     #[test]
     fn rendered_amounts_follow_the_count_bands() {
         let bands: Vec<u32> = [0, 1, 2, 16, 17, 32, 33, 48, 49, 64]
@@ -900,6 +1008,29 @@ mod tests {
             serde_json::json!({"a": 3, "b": ["x"], "c": 1.5})
         );
     }
+    #[test]
+    fn palette_trns_partial_alpha_counts_as_translucent() {
+        // Slime/honey (and ice) are indexed PNGs with a tRNS chunk. Decode must
+        // keep that fractional alpha so FileSprites marks them translucent (#4508).
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x03, 0x00, 0x00,
+            0x00, 0x45, 0x68, 0xfd, 0x16, 0x00, 0x00, 0x00, 0x06, 0x50, 0x4c, 0x54, 0x45, 0x00,
+            0xff, 0x00, 0x00, 0x80, 0x00, 0x54, 0x80, 0xe6, 0x08, 0x00, 0x00, 0x00, 0x01, 0x74,
+            0x52, 0x4e, 0x53, 0xb4, 0x8c, 0xea, 0xaf, 0xf3, 0x00, 0x00, 0x00, 0x0e, 0x49, 0x44,
+            0x41, 0x54, 0x78, 0x9c, 0x63, 0x60, 0x60, 0x64, 0x60, 0x60, 0x04, 0x00, 0x00, 0x0b,
+            0x00, 0x03, 0x52, 0x29, 0x78, 0x8f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+            0xae, 0x42, 0x60, 0x82,
+        ];
+        let dir = std::env::temp_dir().join("horizon-trns-alpha");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("indexed.png");
+        std::fs::write(&path, png).unwrap();
+        let (_w, _h, rgba) = crate::hud::decode(&path).unwrap();
+        let partial = rgba.chunks(4).filter(|p| matches!(p[3], 1..=254)).count();
+        assert!(partial > 0, "tRNS alpha was stripped: {rgba:?}");
+    }
+
     #[test]
     fn normals_follow_the_inverse_transpose() {
         let m = Mat4::from_scale(Vec3::new(2.0, 1.0, 1.0));

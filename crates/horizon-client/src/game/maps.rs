@@ -284,14 +284,23 @@ impl MapData {
         })
     }
 }
-#[derive(Default)]
 pub(super) struct Maps {
     pub data: HashMap<i32, MapData>,
     /// The highest map id handed out (`maps/last_id.dat`), loaded on first use.
     last_id: Option<i32>,
-    /// (map id, atlas slot), most recently shown last.
-    slots: Vec<(i32, usize)>,
+    /// The atlas slots holding map textures.
+    pub slots: super::atlas_slots::AtlasSlots<i32>,
     missing: std::collections::HashSet<i32>,
+}
+impl Default for Maps {
+    fn default() -> Self {
+        Self {
+            data: HashMap::new(),
+            last_id: None,
+            slots: super::atlas_slots::AtlasSlots::new(MAP_SLOTS),
+            missing: Default::default(),
+        }
+    }
 }
 /// `MapColor.getColorFromPackedId` as RGBA bytes (NONE is transparent).
 fn packed_rgba(packed: u8) -> [u8; 4] {
@@ -337,7 +346,18 @@ const DECORATION_TYPES: [(&str, &str); 24] = [
     ("ocean_ruin_warm", "map/decorations/warm_ocean_ruins"),
 ];
 /// `MapDecorationType.showOnItemFrame` is false for the player arrows and the two markers.
-fn shown_on_frame(sprite: &str) -> bool {
+/// `MapRenderer.render`'s pose for decoration `d` in map pixels (0..128,
+/// y down) at depth `z`: its quad is (-1, -1) to (1, 1) under it.
+pub(super) fn decoration_pose(d: &Decoration, z: f32) -> glam::Mat4 {
+    glam::Mat4::from_translation(glam::Vec3::new(
+        f32::from(d.x) / 2.0 + 64.0,
+        f32::from(d.y) / 2.0 + 64.0,
+        z,
+    )) * glam::Mat4::from_rotation_z((f32::from(d.rot) * 360.0 / 16.0).to_radians())
+        * glam::Mat4::from_scale(glam::Vec3::splat(4.0))
+        * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.125, 0.0))
+}
+pub(super) fn shown_on_frame(sprite: &str) -> bool {
     !matches!(
         decoration_type(sprite),
         Some("player" | "red_marker" | "blue_marker" | "player_off_map" | "player_off_limits")
@@ -1074,7 +1094,7 @@ impl Game<'_> {
                         for dz in 0..scale {
                             let (x, z) = (min_x + dx, min_z + dz);
                             let mut y = self.world_surface(x, z);
-                            let min_y = super::MIN_Y;
+                            let min_y = self.world.bottom_y();
                             let mut color;
                             if y <= min_y {
                                 color = 11;
@@ -1180,23 +1200,16 @@ impl Game<'_> {
     /// The atlas slot showing map `id`, its texture uploaded when it changed.
     pub(super) fn map_texture(&mut self, id: i32) -> Option<Rect> {
         self.map(id)?;
-        let slots = &mut self.maps.slots;
-        if let Some(i) = slots.iter().position(|e| e.0 == id) {
-            let e = slots.remove(i);
-            slots.push(e);
-        } else {
-            // A free slot, else the least recently shown one.
-            let slot = if slots.len() < MAP_SLOTS {
-                slots.len()
-            } else {
-                slots.remove(0).1
-            };
-            slots.push((id, slot));
-            if let Some(m) = self.maps.data.get_mut(&id) {
-                m.texture_dirty = true;
+        let slot = match self.maps.slots.show(&id) {
+            Some(slot) => slot,
+            None => {
+                let (slot, _) = self.maps.slots.claim(id);
+                if let Some(m) = self.maps.data.get_mut(&id) {
+                    m.texture_dirty = true;
+                }
+                slot
             }
-        }
-        let slot = self.maps.slots.last()?.1;
+        };
         let rect = self
             .gui
             .atlas
@@ -1277,14 +1290,7 @@ impl Game<'_> {
             let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
                 continue;
             };
-            let dm = glam::Mat4::from_translation(glam::Vec3::new(
-                f32::from(d.x) / 2.0 + 64.0,
-                f32::from(d.y) / 2.0 + 64.0,
-                -0.02 - count as f32 * 0.001,
-            )) * glam::Mat4::from_rotation_z(
-                (f32::from(d.rot) * 360.0 / 16.0).to_radians(),
-            ) * glam::Mat4::from_scale(glam::Vec3::splat(4.0))
-                * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.125, 0.0));
+            let dm = decoration_pose(d, -0.02 - count as f32 * 0.001);
             let p = |x: f32, y: f32| dm.transform_point3(glam::Vec3::new(x, y, 0.0)).to_array();
             let mut q = |corners: [[f32; 3]; 4], uv: [[f32; 2]; 4]| {
                 for (c, uv) in corners.into_iter().zip(uv) {

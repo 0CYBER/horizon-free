@@ -16,11 +16,11 @@ use super::{
     lan::{LanSettings, Owner},
     world_loading::WorldRequest,
 };
+use horizon_client::level_loading::{STATUS_RADIUS, Stage};
 use horizon_client::{
     Result,
     audio::Audio,
-    hud::HudAtlas,
-    lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
+    lan::{Lan, MAX_PLAYERS, NetConfig, OwnerProfile, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
 };
@@ -37,6 +37,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// `LevelLoadProgressTracker.EXPECTED_PLAYER_CHUNKS`: the 7x7 chunks around the spawn.
+const PLAYER_CHUNKS: usize = 49;
+
 /// What the window tells its server thread.
 #[derive(Default)]
 struct Flags {
@@ -52,8 +55,14 @@ struct Flags {
     /// server follows while it runs (IntegratedServer.tickServer).
     render_distance: AtomicI32,
     simulation_distance: AtomicI32,
+    /// `options.entityDistanceScaling` (an `f32`'s bits), which
+    /// `IntegratedServer.getScaledTrackingDistance` reads on every call.
+    entity_distance: AtomicU32,
     /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
     saving: AtomicBool,
+    /// What the server's `LevelLoadListener` reports, for the window's
+    /// `LevelLoadingScreen` (`LevelLoadTracker.serverProgress/statusView`).
+    load: Arc<horizon_client::level_loading::ServerLoadView>,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -68,6 +77,10 @@ pub(super) struct Integrated {
     pub world_name: String,
 }
 impl Integrated {
+    /// The server's load progress and chunk status map.
+    pub fn load_view(&self) -> &Arc<horizon_client::level_loading::ServerLoadView> {
+        &self.flags.load
+    }
     pub fn smoothed_tick_ms(&self) -> f32 {
         f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
     }
@@ -79,12 +92,16 @@ impl Integrated {
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
     }
-    /// The window's render and simulation distances, for the server to follow.
-    pub fn set_distances(&self, render: i32, simulation: i32) {
+    /// The window's render and simulation distances and its Entity Distance
+    /// option, for the server to follow.
+    pub fn set_distances(&self, render: i32, simulation: i32, entity: f32) {
         self.flags.render_distance.store(render, Ordering::Relaxed);
         self.flags
             .simulation_distance
             .store(simulation, Ordering::Relaxed);
+        self.flags
+            .entity_distance
+            .store(entity.to_bits(), Ordering::Relaxed);
     }
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
@@ -153,6 +170,17 @@ pub(super) struct Serving {
     /// Open to LAN or closed from inside a player's command, while the hub
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
+    /// Where the load focus is and how far the player's chunks are.
+    load: LoadPhase,
+}
+/// The part of `LevelLoadListener` after `prepareLevels`: `PrepareSpawnTask`'s
+/// `LOAD_PLAYER_CHUNKS`.
+#[derive(Default)]
+struct LoadPhase {
+    /// `updateFocus`: the spawn chunk, once the stage started.
+    focus: Option<(i32, i32)>,
+    /// `finish(LOAD_PLAYER_CHUNKS)`.
+    done: bool,
 }
 impl Serving {
     /// The window reads this as `MinecraftServer.isCurrentlySaving`.
@@ -174,11 +202,14 @@ type Ready = std::result::Result<(Pipe, String), String>;
 /// does while its server prepares (`Minecraft.doWorldLoad`), instead of
 /// waiting for it frozen for the whole load.
 pub(super) struct Starting {
-    handle: Integrated,
+    pub(super) handle: Integrated,
     ready: Receiver<Ready>,
     player: String,
     /// The save's folder in `saves/`, for the world icon once joined.
     folder: String,
+    /// `Minecraft.doWorldLoad`'s `newWorld`: the loading screen stays 500 ms
+    /// once the level is ready.
+    new_world: bool,
 }
 
 /// The world to open and the player who owns it.
@@ -193,6 +224,8 @@ struct Launch {
     owner: u128,
     /// Its name, for the LAN's MOTD.
     player: String,
+    /// The signed-in account's profile, fetched while the world loads.
+    owner_profile: Option<Arc<OwnerProfile>>,
 }
 
 impl Game<'_> {
@@ -223,6 +256,7 @@ impl Game<'_> {
         let player = auth
             .as_ref()
             .map_or_else(|| self.options.player_name(), |a| a.name.clone());
+        let new_world = create.is_some();
         let launch = Launch {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
@@ -232,6 +266,21 @@ impl Game<'_> {
             // An offline-mode server names its players by their offline profile.
             owner: offline_uuid(&player),
             player: player.clone(),
+            owner_profile: auth.as_ref().map(|a| {
+                let id = a.uuid;
+                Arc::new(OwnerProfile::new(move || {
+                    horizon_client::skins::fetch_own_properties(id)
+                        .into_iter()
+                        .map(|(name, value, signature)| {
+                            horizon_protocol::packets::login::Property {
+                                name,
+                                value,
+                                signature,
+                            }
+                        })
+                        .collect()
+                }))
+            }),
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
@@ -255,6 +304,9 @@ impl Game<'_> {
         flags
             .simulation_distance
             .store(settings.simulation_distance, Ordering::Relaxed);
+        flags
+            .entity_distance
+            .store(settings.entity_distance.to_bits(), Ordering::Relaxed);
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
@@ -290,6 +342,7 @@ impl Game<'_> {
             ready,
             player,
             folder: folder.to_owned(),
+            new_world,
         });
         // Harnesses, control scripts and runs without a window go on with the world open.
         if self.window.is_none() || super::synchronous_startup(&self.options) {
@@ -305,6 +358,10 @@ impl Game<'_> {
 
     /// The starting server's answer, polled each frame: joined once it is ready.
     pub(super) fn poll_integrated_start(&mut self) -> Result<()> {
+        if self.integrated_starting.is_none() {
+            return Ok(());
+        }
+        self.tick_load_progress();
         let Some(starting) = &self.integrated_starting else {
             return Ok(());
         };
@@ -324,13 +381,23 @@ impl Game<'_> {
             mut handle,
             player,
             folder,
+            new_world,
             ..
         }) = self.integrated_starting.take()
         else {
             return Ok(());
         };
         handle.world_name = world_name;
+        self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
+        if let Some(r) = self.remote.as_mut() {
+            // `new LevelLoadTracker(newWorld ? 500L : 0L)`.
+            r.level_load = horizon_client::level_loading::LevelLoadTracker::new(if new_world {
+                horizon_client::level_loading::LEVEL_LOAD_CLOSE_DELAY_MS
+            } else {
+                0
+            });
+        }
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
         self.world_icon = Some(WorldIcon {
@@ -344,6 +411,77 @@ impl Game<'_> {
         Ok(())
     }
 
+    /// `PrepareSpawnTask`'s `LOAD_PLAYER_CHUNKS`, reported to the window's
+    /// loading screen: the focus moves to the spawn chunk when the stage
+    /// starts, the 7x7 chunks around it count as they are ready, and the
+    /// status map around the focus follows (`ChunkLoadStatusView.get`).
+    pub(super) fn publish_load_view(&mut self) {
+        let Some(serving) = self.serving.as_mut() else {
+            return;
+        };
+        if serving.load.done {
+            return;
+        }
+        let view = serving.flags.load.clone();
+        let focus = match serving.load.focus {
+            Some(focus) => focus,
+            None => {
+                let Some(spawn) = self.spawn else { return };
+                let focus = ((spawn.x.floor() as i32) >> 4, (spawn.z.floor() as i32) >> 4);
+                view.start(Stage::LoadPlayerChunks, PLAYER_CHUNKS);
+                serving.load.focus = Some(focus);
+                focus
+            }
+        };
+        let ready = (-3..=3)
+            .flat_map(|dz| (-3..=3).map(move |dx| (focus.0 + dx, focus.1 + dz)))
+            .filter(|&(x, z)| self.streaming.is_lit(x, z))
+            .count();
+        view.update(Stage::LoadPlayerChunks, ready, PLAYER_CHUNKS);
+        let diameter = STATUS_RADIUS * 2 + 1;
+        view.set_status(
+            (0..diameter)
+                .flat_map(|x| (0..diameter).map(move |z| (x, z)))
+                .map(|(x, z)| {
+                    self.streaming.latest_status(
+                        &self.world,
+                        focus.0 + x - STATUS_RADIUS,
+                        focus.1 + z - STATUS_RADIUS,
+                    )
+                })
+                .collect(),
+        );
+        if ready == PLAYER_CHUNKS {
+            view.finish(Stage::LoadPlayerChunks);
+            if let Some(serving) = self.serving.as_mut() {
+                serving.load.done = true;
+            }
+        }
+    }
+
+    /// `LevelLoadingScreen.tick`'s easing of the server's progress, every 50 ms
+    /// of wall time (the starting server has no client tick yet).
+    pub(super) fn tick_load_progress(&mut self) {
+        let view = match (&self.integrated_starting, &self.integrated) {
+            (Some(s), _) => s.handle.load_view().clone(),
+            (None, Some(i)) => i.load_view().clone(),
+            _ => return,
+        };
+        let now = Instant::now();
+        let at = self.loading_progress_at.get_or_insert(now);
+        let steps = (now.duration_since(*at).as_millis() / 50).min(20) as u32;
+        *at += Duration::from_millis(u64::from(steps) * 50);
+        if now.duration_since(*at) > Duration::from_secs(1) {
+            *at = now;
+        }
+        for _ in 0..steps {
+            self.loading_progress = horizon_client::level_loading::smooth(
+                self.loading_progress,
+                view.server_progress(),
+            );
+        }
+    }
+
     /// The server thread's loop (`MinecraftServer.runServer`): 20 ticks a
     /// second, the world held while the window is paused.
     fn run_integrated(
@@ -353,82 +491,28 @@ impl Game<'_> {
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
     ) -> Result<()> {
-        self.load_world(WorldRequest::new(
-            &launch.folder,
-            launch.name.as_deref(),
-            launch.seed,
-            launch.creative,
-            launch.create.as_ref(),
-        )?)?;
-        let saved = Box::new(self.level.clone());
-        // IntegratedServer runs the server mods; the window the client mods.
-        self.mods.dev = self.options.dev_mods.clone();
-        self.start_mods();
-        // Math.max(2, options.renderDistance): past vanilla's 32 when the
-        // window's render distance is (Horizon's options go to 64).
-        let view_distance = self.settings.render_distance.max(2);
-        let config = HubConfig {
-            default_game_mode: self.level.mode(),
-            // Only the owner until it is opened to the LAN.
-            guest_commands: false,
-            force_game_mode: false,
-            hardcore: self.level.hardcore,
-            view_distance,
-            simulation_distance: self.settings.simulation_distance.max(2),
-            dimension: self.dim.id().to_owned(),
-            seed: self.level.seed,
-            max_players: MAX_PLAYERS,
-            // No player of its own: the hub runs without a host.
-            dedicated: true,
-            integrated: true,
-        };
-        let owner = launch.owner;
-        let published = flags.clone();
-        let net = NetConfig {
-            // No network until it is opened to the LAN; the memory connection
-            // is not compressed (`Connection.isMemoryConnection`).
-            listen: false,
-            gate: Some(Arc::new(move |_, uuid, _| {
-                (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
-                    .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
-            })),
-            // IntegratedServer.initServer: the MOTD names the owner and the world.
-            ..NetConfig::lan(
-                0,
-                format!("{} - {}", launch.player, self.level.name),
-                MAX_PLAYERS,
-            )
-        };
-        let settings = LanSettings {
-            port: 0,
-            guest_commands: false,
-            force_game_mode: false,
-        };
-        self.lan_host(settings, net, config, None)?;
-        let commands = self.allow_commands();
-        let pipe = {
-            let host = self
-                .lan
-                .as_mut()
-                .ok_or("the integrated server did not start")?;
-            // The owner is an operator when the world allows commands
-            // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
-            host.hub.ops.insert(owner, if commands { 4 } else { 0 });
-            host.hub.singleplayer_owner = Some(owner);
-            host.owner = Some(Owner {
-                uuid: owner,
-                saved: Some(saved),
-            });
-            host.hub.lan.connect_local()?
-        };
-        self.serving = Some(Serving {
-            flags: flags.clone(),
-            tasks,
-            owner,
-            pending: None,
-        });
-        let _ = ready.send(Ok((pipe, self.level.name.clone())));
-        self.settle_spawn()?;
+        let result = self.run_integrated_inner(launch, flags, tasks, ready);
+        if let Err(error) = &result {
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_integrated_inner(
+        &mut self,
+        launch: Launch,
+        flags: Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        // The open segment runs as one unit (`integrated_open`) so its
+        // failures fire `WorldOpenFailed` with the engine's own error text.
+        if let Err(e) = self.integrated_open(&launch, &flags, tasks, ready) {
+            self.native_lifecycle_world_failed(&e.to_string());
+            return Err(e);
+        }
+        // The server thread's `WorldOpenReady` site, before the tick loop.
+        self.native_lifecycle_world_ready();
         if let (Some(script), Some(output)) = (
             std::env::var_os("HORIZON_COMMAND_SCRIPT"),
             std::env::var_os("HORIZON_COMMAND_OUTPUT"),
@@ -474,14 +558,117 @@ impl Game<'_> {
                 );
             }
             self.apply_publish();
+            self.publish_load_view();
             self.wait_for_next_server_tick(&mut next, paused);
         }
         self.stop_integrated()
     }
 
+    /// The integrated server's world open: `run_integrated`'s segment
+    /// from `load_world` through `settle_spawn`, whole so its failures are
+    /// one open failure (`WorldOpenFailed`, the engine's own error text).
+    fn integrated_open(
+        &mut self,
+        launch: &Launch,
+        flags: &Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        self.native_lifecycle_open_started();
+        self.load_world(WorldRequest::new(
+            &launch.folder,
+            launch.name.as_deref(),
+            launch.seed,
+            launch.creative,
+            launch.create.as_ref(),
+        )?)?;
+        let saved = Box::new(self.level.clone());
+        // IntegratedServer runs the server mods; the window the client mods.
+        self.mods.dev = self.options.dev_mods.clone();
+        self.start_mods();
+        // Math.max(2, options.renderDistance): past vanilla's 32 when the
+        // window's render distance is (Horizon's options go to 64).
+        let view_distance = self.settings.render_distance.max(2);
+        let config = HubConfig {
+            allow_flight: true,
+            default_game_mode: self.level.mode(),
+            // Only the owner until it is opened to the LAN.
+            guest_commands: false,
+            force_game_mode: false,
+            hardcore: self.level.hardcore,
+            view_distance,
+            simulation_distance: self.settings.simulation_distance.max(2),
+            dimension: self.dim.id().to_owned(),
+            levels: self.level_shapes,
+            seed: self.level.seed,
+            max_players: MAX_PLAYERS,
+            // No player of its own: the hub runs without a host.
+            dedicated: true,
+            integrated: true,
+        };
+        let owner = launch.owner;
+        let published = flags.clone();
+        let net = NetConfig {
+            // No network until it is opened to the LAN; the memory connection
+            // is not compressed (`Connection.isMemoryConnection`).
+            listen: false,
+            online: horizon_client::lan::OnlineMode::lan(),
+            gate: Some(Arc::new(move |_, uuid, _| {
+                (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
+                    .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
+            })),
+            levels: self.level_shapes,
+            owner_profile: launch.owner_profile.clone(),
+            // IntegratedServer.initServer: the MOTD names the owner and the world.
+            ..NetConfig::lan(
+                0,
+                format!("{} - {}", launch.player, self.level.name),
+                MAX_PLAYERS,
+            )
+        };
+        let settings = LanSettings {
+            port: 0,
+            guest_commands: false,
+            force_game_mode: false,
+        };
+        self.lan_host(settings, net, config, None)?;
+        let commands = self.allow_commands();
+        let pipe = {
+            let host = self
+                .lan
+                .as_mut()
+                .ok_or("the integrated server did not start")?;
+            // The owner is an operator when the world allows commands
+            // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
+            host.hub.ops.insert(owner, if commands { 4 } else { 0 });
+            host.hub.singleplayer_owner = Some(owner);
+            host.owner = Some(Owner {
+                uuid: owner,
+                saved: Some(saved),
+            });
+            host.hub.lan.connect_local()?
+        };
+        self.serving = Some(Serving {
+            flags: flags.clone(),
+            tasks,
+            owner,
+            pending: None,
+            load: LoadPhase::default(),
+        });
+        // MinecraftServer.prepareLevels: no forced chunks to load, so the
+        // stage is over at once; the player's chunks come after.
+        let view = &flags.load;
+        view.start(Stage::LoadInitialChunks, 0);
+        view.finish(Stage::LoadInitialChunks);
+        let _ = ready.send(Ok((pipe, self.level.name.clone())));
+        self.settle_spawn()
+    }
+
     /// `MinecraftServer.stopServer`: the players are saved and sent away,
     /// then the world is saved.
     fn stop_integrated(&mut self) -> Result<()> {
+        // The close request: lifecycle observation stops.
+        self.native_lifecycle.begin_close();
         // IntegratedServer.stopServer: teardownPublishedState.
         if let Some(s) = self.serving.take() {
             s.flags.published.store(0, Ordering::Relaxed);
@@ -507,6 +694,8 @@ impl Game<'_> {
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;
+        // `WorldCloseFinal` follows a successful final save.
+        self.native_lifecycle_world_closed();
         self.session_lock = None;
         Ok(())
     }
@@ -662,6 +851,9 @@ impl Game<'_> {
     /// IntegratedServer.tickServer: the server follows the window's render
     /// and simulation distances when they change.
     fn follow_distances(&mut self, flags: &Flags) {
+        // IntegratedServer.getScaledTrackingDistance reads the option each time.
+        self.settings.entity_distance =
+            f32::from_bits(flags.entity_distance.load(Ordering::Relaxed));
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -835,15 +1027,7 @@ fn server_game(
     options: Options,
     settings: Settings,
 ) -> Result<Game<'_>> {
-    // It draws nothing: only the font, which books and chat measure with.
-    let atlas = HudAtlas::fonts(&options.resources)?;
-    let gui = UiResources {
-        atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-            size: 1,
-            pixels: [0u8; 4].repeat(6),
-        }),
-    };
+    let gui = UiResources::server(&options.resources)?;
     let audio = Audio::silent(&options.resources);
     Game::new(res, pack, gui, options, settings, audio, None)
 }

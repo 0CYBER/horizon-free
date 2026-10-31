@@ -3,10 +3,11 @@
 //! hands immutable `Arc` snapshots to workers; results carry a sequence number
 //! so stale work is dropped.
 use crate::fast_hash::{FxHashMap, FxHashSet};
+use crate::section_mask::SectionMask;
 use crate::{
-    chunk::{Chunk, SECTIONS},
+    chunk::Chunk,
     light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
-    mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
+    mesher::{MeshScratch, MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
@@ -16,10 +17,14 @@ use std::{
     collections::{BinaryHeap, HashSet, VecDeque},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
 };
+
+/// How long a worker waits with nothing to do before it gives back its
+/// generator's scratch buffers ([`ChunkGenerator::idle`]).
+pub const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A chunk under generation, opaque to the streamer.
 pub type Proto = Box<dyn std::any::Any + Send>;
@@ -57,6 +62,9 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// What a loaded chunk needs from the generator before the game uses it,
     /// on the worker that loaded it.
     fn prepare_loaded(&self, _worker: &mut Self::Worker, _chunk: &Chunk) {}
+    /// The worker has had nothing to do for [`IDLE_RELEASE`]: give back what
+    /// it keeps between jobs only to go faster.
+    fn idle(&self, _worker: &mut Self::Worker) {}
     fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto;
     fn decorates(&self) -> bool {
         false
@@ -72,6 +80,12 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// A decorated proto chunk's blocks as a column, to light a finished
     /// neighbour against (vanilla lights with neighbours at FEATURES).
     fn light_view(&self, _proto: &Proto) -> Option<Chunk> {
+        None
+    }
+    /// A decorated proto chunk's column sections (`Chunk::sections`
+    /// indexes) holding a block other than air: what its neighbours' light
+    /// layers count once it is at INITIALIZE_LIGHT.
+    fn non_air_sections(&self, _proto: &Proto) -> Option<SectionMask> {
         None
     }
     fn saved_proto(&self, _proto: &Proto) -> Option<crate::chunk::SavedProto> {
@@ -220,7 +234,39 @@ struct Shared {
     /// packs reload; each mesh job takes the current one.
     context: RwLock<Arc<WorkerContext>>,
     done: Mailbox,
+    /// Only workers use this pool; frames never wait for its lock. Retaining
+    /// cleared buffers avoids racing the renderer for the process heap.
+    meshes: Mutex<MeshPool>,
+    /// Workers that have freed their buffers ([`IDLE_RELEASE`]) and taken no
+    /// job since: the last of them gives the freed memory back to the OS.
+    released: AtomicUsize,
 }
+#[derive(Default)]
+struct MeshPool {
+    meshes: Vec<SectionMesh>,
+    bytes: usize,
+}
+impl MeshPool {
+    const BYTES: usize = 16 << 20;
+    const COUNT: usize = 128;
+    fn take(&mut self) -> SectionMesh {
+        let mesh = self.meshes.pop().unwrap_or_default();
+        self.bytes -= mesh.capacity_bytes();
+        mesh
+    }
+    /// A rejected mesh is dropped by the caller, after releasing the lock.
+    fn put(&mut self, mut mesh: SectionMesh) -> Option<SectionMesh> {
+        let bytes = mesh.capacity_bytes();
+        if bytes == 0 || self.meshes.len() == Self::COUNT || bytes > Self::BYTES - self.bytes {
+            return Some(mesh);
+        }
+        mesh.clear();
+        self.bytes += bytes;
+        self.meshes.push(mesh);
+        None
+    }
+}
+
 /// Finished jobs, from the workers to the game thread, in the order they
 /// finished. Not an `mpsc` channel: its receiver waits for a sender it finds
 /// half way through a send, and a worker descheduled there on a busy machine
@@ -265,6 +311,7 @@ impl Mailbox {
 pub struct Streaming {
     shared: Arc<Shared>,
     light_view: Arc<dyn Fn(&Proto) -> Option<Chunk> + Send + Sync>,
+    non_air_sections: Arc<dyn Fn(&Proto) -> Option<SectionMask> + Send + Sync>,
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
     /// Ticks since the columns and protos that fell out of range were swept.
@@ -295,6 +342,9 @@ pub struct Streaming {
     decorates: bool,
     lighting: FxHashMap<(i32, i32), u64>,
     meshing: FxHashMap<(i32, i32, i32), u64>,
+    /// The sequence each section's latest accepted mesh was dispatched at
+    /// (`CompiledSectionMesh.compileTaskStartTimeNs`).
+    compile_started: FxHashMap<(i32, i32, i32), u64>,
     /// Chunks whose light is current.
     lit: FxHashSet<(i32, i32)>,
     /// Columns whose sections have been meshed at least once.
@@ -310,6 +360,8 @@ pub struct Streaming {
     deferred: Vec<Done>,
     sequence: u64,
     pub center: (i32, i32),
+    /// The view distance around `center`; below 0, no area there (a dedicated
+    /// server nobody is on).
     pub radius: i32,
     /// `/forceload`ed chunks: kept loaded whatever the distance.
     pub forced: HashSet<(i32, i32)>,
@@ -513,7 +565,10 @@ impl Streaming {
             stop: AtomicBool::new(false),
             context: RwLock::new(context.clone()),
             done: Mailbox::default(),
+            meshes: Mutex::new(MeshPool::default()),
+            released: AtomicUsize::new(0),
         });
+        let workers = threads.max(1);
         let light_tables = context.light.clone();
         let saves: Arc<dyn Saves> = generator.clone();
         let threads = (0..threads.max(1))
@@ -531,17 +586,54 @@ impl Streaming {
                         // the worker across mesh jobs, like vanilla's per-thread cache:
                         // cloning it per job copied every state and face shape.
                         let mut faces: Option<(Arc<MeshTables>, FaceVisibility)> = None;
+                        let mut mesh_scratch = MeshScratch::default();
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
+                                let mut released = false;
                                 loop {
                                     if shared.stop.load(Ordering::Relaxed) {
                                         return;
                                     }
                                     if let Some(job) = queue.pop() {
+                                        if released {
+                                            shared.released.fetch_sub(1, Ordering::Relaxed);
+                                        }
                                         break job.job;
                                     }
-                                    queue = shared.ready.wait(queue).unwrap();
+                                    if released {
+                                        queue = shared.ready.wait(queue).unwrap();
+                                        continue;
+                                    }
+                                    let (woken, wait) =
+                                        shared.ready.wait_timeout(queue, IDLE_RELEASE).unwrap();
+                                    queue = woken;
+                                    if wait.timed_out() && queue.is_empty() {
+                                        // A server nobody is on, a client standing still:
+                                        // free the generator's buffers (and the mesher's
+                                        // face cache and scratch) until the next job
+                                        // needs them.
+                                        drop(queue);
+                                        generator.idle(&mut worker);
+                                        faces = None;
+                                        mesh_scratch = MeshScratch::default();
+                                        released = true;
+                                        // The allocator keeps freed pages until memory
+                                        // runs short: once every worker has freed its own,
+                                        // hand them back.
+                                        if shared.released.fetch_add(1, Ordering::Relaxed) + 1
+                                            == workers
+                                        {
+                                            // No worker needs retained mesh capacity now.
+                                            // Drop it outside the pool lock before asking
+                                            // the allocator to return freed pages.
+                                            let meshes =
+                                                std::mem::take(&mut *shared.meshes.lock().unwrap());
+                                            drop(meshes);
+                                            horizon_threads::release_free_memory();
+                                        }
+                                        queue = shared.queue.lock().unwrap();
+                                    }
                                 }
                             };
                             let done = match job {
@@ -567,7 +659,10 @@ impl Streaming {
                                     Done::Saved(protos)
                                 }
                                 Job::Free(meshes) => {
-                                    drop(meshes);
+                                    for (_, mesh) in meshes {
+                                        let rejected = shared.meshes.lock().unwrap().put(mesh);
+                                        drop(rejected);
+                                    }
                                     continue;
                                 }
                                 Job::Light(x, z, region, seq, sky) => {
@@ -595,7 +690,13 @@ impl Streaming {
                                         biomes: &context.biomes,
                                         visibility,
                                     };
-                                    let mut mesh = mesher.mesh(&borrow(&region), sy);
+                                    let recycled = shared.meshes.lock().unwrap().take();
+                                    let mut mesh = mesher.mesh_reusing(
+                                        &borrow(&region),
+                                        sy,
+                                        recycled,
+                                        &mut mesh_scratch,
+                                    );
                                     mesh.sort_solid();
                                     faces = Some((context.tables.clone(), mesher.visibility));
                                     Done::Meshed(x, sy, z, mesh, seq)
@@ -611,9 +712,14 @@ impl Streaming {
             let generator = generator.clone();
             Arc::new(move |p: &Proto| generator.light_view(p))
         };
+        let non_air_sections = {
+            let generator = generator.clone();
+            Arc::new(move |p: &Proto| generator.non_air_sections(p))
+        };
         Self {
             shared,
             light_view,
+            non_air_sections,
             threads,
             order: 0,
             scan_age: 0,
@@ -632,6 +738,7 @@ impl Streaming {
             decorates: generator.decorates(),
             lighting: Default::default(),
             meshing: Default::default(),
+            compile_started: Default::default(),
             lit: Default::default(),
             meshed: Default::default(),
             waiting: Default::default(),
@@ -675,9 +782,10 @@ impl Streaming {
     pub fn reload_resources(&mut self, world: &mut World, context: Arc<WorkerContext>) {
         *self.shared.context.write().unwrap() = context;
         self.meshing.clear();
+        self.compile_started.clear();
         for &(x, z) in world.chunks.keys() {
             if self.lit.contains(&(x, z)) {
-                for sy in 0..SECTIONS as i32 {
+                for sy in 0..world.layout().sections() as i32 {
                     world.dirty_sections.insert((x, sy, z));
                 }
             }
@@ -695,7 +803,7 @@ impl Streaming {
         self.generated_total += 1;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                for sy in 0..SECTIONS as i32 {
+                for sy in 0..world.layout().sections() as i32 {
                     world.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
                 }
             }
@@ -710,7 +818,7 @@ impl Streaming {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let s = sy as i32 + dy;
-                        if (0..SECTIONS as i32).contains(&s) {
+                        if (0..world.layout().sections() as i32).contains(&s) {
                             world.dirty_sections.insert((x + dx, s, z + dz));
                         }
                     }
@@ -736,8 +844,9 @@ impl Streaming {
         self.lighting.remove(&(x, z));
         // By key, not by a pass over every pending section: a moved or
         // shrunk storage forgets thousands of columns in one frame.
-        for sy in 0..SECTIONS as i32 {
+        for sy in 0..world.layout().sections() as i32 {
             self.meshing.remove(&(x, sy, z));
+            self.compile_started.remove(&(x, sy, z));
             self.waiting.remove(&(x, sy, z));
         }
         world.dirty_sections.take_column(x, z);
@@ -854,7 +963,7 @@ impl Streaming {
         world.chunks.insert(key, Arc::new(chunk));
         if loaded {
             self.lit.insert(key);
-            for sy in 0..SECTIONS as i32 {
+            for sy in 0..world.layout().sections() as i32 {
                 world.dirty_sections.insert((key.0, sy, key.1));
             }
         }
@@ -897,6 +1006,21 @@ impl Streaming {
         }
         Some(Box::new(region))
     }
+    /// Whether `light_region` would find all nine columns: the same walk
+    /// without building the snapshot, so the scheduler can rank the ready
+    /// columns before any region is cloned. A proto neighbour whose light
+    /// view turns out empty is skipped when its region is built, and asked
+    /// for again, as `light_region` returning `None` always was.
+    fn light_region_ready(&self, world: &World, x: i32, z: i32) -> bool {
+        light_region_ready(
+            world,
+            |x, z| self.in_range(x, z, 1),
+            &self.decorated,
+            &self.protos,
+            x,
+            z,
+        )
+    }
     fn region(world: &World, x: i32, z: i32) -> Option<Box<Region>> {
         let mut region: Region = Default::default();
         for dz in 0..3 {
@@ -913,6 +1037,15 @@ impl Streaming {
     }
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
+    }
+    /// The non-air sections of a column that is a decorated proto chunk
+    /// here (vanilla's INITIALIZE_LIGHT and on), if it is one: a level
+    /// chunk's light layers count them (#4294).
+    pub fn proto_sections(&self, x: i32, z: i32) -> Option<SectionMask> {
+        if !self.decorated.contains(&(x, z)) {
+            return None;
+        }
+        (self.non_air_sections)(self.protos.get(&(x, z))?.as_ref()?)
     }
     /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
     /// furthest step this column has reached, `None` before it is asked for.
@@ -937,6 +1070,17 @@ impl Streaming {
         } else {
             return None;
         })
+    }
+    /// The sequence the next mesh job will be dispatched after: a clock for
+    /// `compile_start`, whose jobs all snapshot the world as they are
+    /// dispatched (`Util.getNanos()` at the start of a compile task).
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    /// When the section's latest accepted mesh started compiling, on the
+    /// `sequence` clock (`CompiledSectionMesh.getCompileTaskStartTime`).
+    pub fn compile_start(&self, section: (i32, i32, i32)) -> Option<u64> {
+        self.compile_started.get(&section).copied()
     }
     pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
         self.meshing.contains_key(&section)
@@ -1037,7 +1181,7 @@ impl Streaming {
                         if first {
                             for dz in -1..=1 {
                                 for dx in -1..=1 {
-                                    for sy in 0..SECTIONS as i32 {
+                                    for sy in 0..world.layout().sections() as i32 {
                                         world.dirty_sections.insert((x + dx, sy, z + dz));
                                     }
                                 }
@@ -1061,6 +1205,7 @@ impl Streaming {
                         continue;
                     }
                     self.meshing.remove(&(x, sy, z));
+                    self.compile_started.insert((x, sy, z), seq);
                     self.meshed_total += 1;
                     uploads.push(((x, sy, z), mesh));
                 }
@@ -1092,6 +1237,8 @@ impl Streaming {
             if !far.is_empty() {
                 let far: HashSet<(i32, i32)> = far.iter().copied().collect();
                 self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
+                self.compile_started
+                    .retain(|k, _| !far.contains(&(k.0, k.2)));
                 self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
                 world
                     .dirty_sections
@@ -1105,7 +1252,9 @@ impl Streaming {
                 .iter()
                 .filter(|&(&(x, z), p)| {
                     p.is_some()
-                        && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
+                        && (self.radius < 0
+                            || i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2)
+                                > r4 * r4)
                         && !ranges.in_extra(x, z, 4)
                         && !ranges.in_band(x, z, 4)
                         && !ranges.forced.iter().any(|f| {
@@ -1271,13 +1420,29 @@ impl Streaming {
             }
         }
         self.schedule_generation(world, workers);
-        // Lighting once all neighbours exist.
-        let light: Vec<_> = world.dirty_light.iter().copied().collect();
-        for (x, z) in light {
+        // Lighting once all neighbours exist, nearest first and only as
+        // much of it as the workers can chew. Vanilla's light engine also
+        // hands a bounded queue to its workers and reschedules what did
+        // not fit by distance; submitted whole, the light jobs of every
+        // unlit column at once — each carrying a 3x3 region snapshot —
+        // grew with the render distance and outlived the columns they
+        // were queued for (#3629). What stays in `dirty_light` is asked
+        // for again, from the current centre, as capacity frees.
+        let mut light: Vec<(i64, i32, i32)> = Vec::new();
+        let mut gone: Vec<(i32, i32)> = Vec::new();
+        for &(x, z) in world.dirty_light.iter() {
             if !world.chunks.contains_key(&(x, z)) {
-                world.dirty_light.remove(&(x, z));
-                continue;
+                gone.push((x, z));
+            } else if self.light_region_ready(world, x, z) {
+                light.push((self.distance(x, z), x, z));
             }
+        }
+        for key in gone {
+            world.dirty_light.remove(&key);
+        }
+        let room = (self.threads.len() * 4).saturating_sub(self.lighting.len());
+        nearest_first(&mut light, room);
+        for (_, x, z) in light {
             let Some(region) = self.light_region(world, x, z) else {
                 continue;
             };
@@ -1323,6 +1488,7 @@ impl Streaming {
         }
         // Column by column: the checks below hold for all of a column's
         // sections, and columns waiting for light cost one look per frame.
+        let mut candidates: Vec<(i64, i32, i32, SectionMask)> = Vec::new();
         let columns: Vec<_> = world.dirty_sections.columns().collect();
         for ((x, z), sections) in columns {
             if !world.chunks.contains_key(&(x, z)) {
@@ -1331,7 +1497,7 @@ impl Streaming {
             }
             if !self.ranges().in_view(x, z) {
                 world.dirty_sections.take_column(x, z);
-                for sy in section_indexes(sections) {
+                for sy in sections.iter().map(|sy| sy as i32) {
                     self.waiting.insert((x, sy, z));
                 }
                 continue;
@@ -1351,11 +1517,23 @@ impl Streaming {
             if !ready {
                 continue;
             }
+            candidates.push((self.distance(x, z), x, z, sections));
+        }
+        // Nearest first, and only as many sections as the workers can chew.
+        // Every ready column used to be submitted at once, so at a wide
+        // render distance the queue — and `meshing`, and each job's 3x3
+        // region snapshot — grew with the number of loaded columns and the
+        // jobs went stale long before a worker reached them (#3629). What
+        // stays dirty is asked for again, from the current centre, as
+        // capacity frees; `requeue` then has a small queue to keep close.
+        let room = (self.threads.len() * 32).saturating_sub(self.meshing.len());
+        nearest_first(&mut candidates, room);
+        for (_, x, z, sections) in candidates {
             let Some(region) = Self::region(world, x, z) else {
                 continue;
             };
             world.dirty_sections.take_column(x, z);
-            for sy in section_indexes(sections) {
+            for sy in sections.iter().map(|sy| sy as i32) {
                 let first = self.meshed.insert((x, z));
                 self.sequence += 1;
                 self.meshing.insert((x, sy, z), self.sequence);
@@ -1431,6 +1609,7 @@ impl Streaming {
             &mut changed,
         );
         Self::mark_light_changes(world, &changed);
+        Self::relight_beside_unlit(world, &changed);
         if !self.light_snapshots.is_empty() {
             for p in positions {
                 self.light_edit_sequence += 1;
@@ -1460,6 +1639,7 @@ impl Streaming {
                 &mut changed,
             );
             Self::mark_light_changes(world, &changed);
+            Self::relight_beside_unlit(world, &changed);
         }
         let oldest = self.light_snapshots.values().copied().min();
         match oldest {
@@ -1467,12 +1647,20 @@ impl Streaming {
             None => self.light_log.clear(),
         }
     }
+    /// A column whose light an edit changed beside a column not lit yet gets
+    /// a full light job ([`crate::light::beside_unlit`]).
+    fn relight_beside_unlit(world: &mut World, changed: &LightChanges) {
+        let columns = crate::light::beside_unlit(changed, |x, z| {
+            world.chunks.get(&(x, z)).is_some_and(|c| !c.lit)
+        });
+        world.dirty_light.extend(columns);
+    }
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).
     fn mark_light_changes(world: &mut World, changed: &LightChanges) {
         if let Some(log) = &mut world.light_log {
             for (x, sy, z) in changed.sections() {
-                *log.entry((x, z)).or_default() |= 1 << sy;
+                log.entry((x, z)).or_default().insert(sy as usize);
             }
         }
         changed.dirty_sections(|section| {
@@ -1555,6 +1743,16 @@ impl Streaming {
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.ranges().in_range(x, z, margin)
+    }
+    /// Rank the 3x3 a chunk loaded to FULL decorates, in one generation
+    /// task's order (`ChunkGenerationTask`: x-outer, z-inner), after every
+    /// chunk ranked before.
+    pub fn rank_full_task(&mut self, x: i32, z: i32) {
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.decoration_order.rank_or_append(x + dx, z + dz);
+            }
+        }
     }
     pub fn band(&self) -> Option<Band> {
         self.band
@@ -1861,7 +2059,7 @@ impl Ranges<'_> {
         let (dx, dz) = (gap(x - self.center.0), gap(z - self.center.1));
         let r = i64::from(self.radius + 1);
         // The extra areas are squares: their finished square grown by `reach`.
-        dx * dx + dz * dz <= r * r
+        (self.radius >= 0 && dx * dx + dz * dz <= r * r)
             || self.in_extra(x, z, 1 + reach)
             || self.in_band(x, z, 1 + reach)
     }
@@ -1894,7 +2092,7 @@ impl Ranges<'_> {
     fn in_main_range(&self, x: i32, z: i32, margin: i32) -> bool {
         let r = i64::from(self.radius + margin);
         let (dx, dz) = (i64::from(x - self.center.0), i64::from(z - self.center.1));
-        if dx * dx + dz * dz <= r * r {
+        if self.radius >= 0 && dx * dx + dz * dz <= r * r {
             return true;
         }
         // A forced chunk holds a FORCED ticket at level 31
@@ -1931,16 +2129,6 @@ impl Drop for Streaming {
         }
     }
 }
-/// The section indexes set in a column's bits, lowest first.
-fn section_indexes(mut bits: u32) -> impl Iterator<Item = i32> {
-    std::iter::from_fn(move || {
-        (bits != 0).then(|| {
-            let sy = bits.trailing_zeros() as i32;
-            bits &= bits - 1;
-            sy
-        })
-    })
-}
 /// The queued jobs' priorities computed again from each one's column
 /// `distance` (`Streaming::submit`).
 fn rank_again(queue: &mut BinaryHeap<Queued>, distance: impl Fn(i32, i32) -> i64) {
@@ -1955,9 +2143,111 @@ fn rank_again(queue: &mut BinaryHeap<Queued>, distance: impl Fn(i32, i32) -> i64
     }
     *queue = BinaryHeap::from(jobs);
 }
+/// Whether the 3x3 a light job for (x, z) reads is all there: every
+/// neighbour a finished column, or a decorated proto chunk past the area
+/// (the last FULL ring lights against neighbours at FEATURES, as
+/// `Streaming::light_region` reads them).
+fn light_region_ready(
+    world: &World,
+    in_range: impl Fn(i32, i32) -> bool,
+    decorated: &FxHashSet<(i32, i32)>,
+    protos: &FxHashMap<(i32, i32), Option<Proto>>,
+    x: i32,
+    z: i32,
+) -> bool {
+    for dz in 0..3 {
+        for dx in 0..3 {
+            let n = (x + dx - 1, z + dz - 1);
+            if world.chunks.contains_key(&n)
+                || (!in_range(n.0, n.1)
+                    && decorated.contains(&n)
+                    && matches!(protos.get(&n), Some(Some(_))))
+            {
+                continue;
+            }
+            return false;
+        }
+    }
+    true
+}
+/// The nearest `room` of the `candidates`, ordered: the light and mesh
+/// stages submit bounded work, chosen from everything that is ready each
+/// `update`, so what runs is always the nearest of what is left — chosen
+/// again, from the current centre, as capacity frees, the way vanilla's
+/// chunk task queues follow the current ticket levels. The selection is
+/// O(n); the sort orders only what is submitted.
+fn nearest_first<T: Ord>(candidates: &mut Vec<T>, room: usize) {
+    if candidates.len() > room {
+        candidates.select_nth_unstable(room);
+        candidates.truncate(room);
+    }
+    candidates.sort_unstable();
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_pool_reuses_capacity_with_clean_geometry_state() {
+        let mut mesh = SectionMesh::default();
+        mesh.solid.resize(64, bytemuck::Zeroable::zeroed());
+        mesh.translucent.resize(16, bytemuck::Zeroable::zeroed());
+        mesh.block_entities.push(([1, 2, 3], 7));
+        mesh.visibility = 0;
+        mesh.sides = crate::mesher::Sides::unsorted(16);
+        let capacities = mesh.capacity_bytes();
+        let pointers = (mesh.solid.as_ptr(), mesh.translucent.as_ptr());
+        let mut pool = MeshPool::default();
+        assert!(pool.put(mesh).is_none());
+        assert_eq!(pool.bytes, capacities);
+        let reused = pool.take();
+        assert_eq!(reused.capacity_bytes(), capacities);
+        assert_eq!(
+            pointers,
+            (reused.solid.as_ptr(), reused.translucent.as_ptr())
+        );
+        assert!(reused.solid.is_empty());
+        assert!(reused.translucent.is_empty());
+        assert!(reused.block_entities.is_empty());
+        assert_eq!(reused.visibility, crate::mesher::ALL_VISIBLE);
+        assert_eq!(reused.sides, crate::mesher::Sides::default());
+        assert_eq!(pool.bytes, 0);
+    }
+
+    #[test]
+    fn mesh_pool_caps_retained_count_and_bytes() {
+        let mut pool = MeshPool::default();
+        for _ in 0..MeshPool::COUNT {
+            let mut mesh = SectionMesh::default();
+            mesh.solid.reserve_exact(1);
+            assert!(pool.put(mesh).is_none());
+        }
+        let mut extra = SectionMesh::default();
+        extra.solid.reserve_exact(1);
+        assert!(pool.put(extra).is_some());
+        for _ in 0..MeshPool::COUNT {
+            pool.take();
+        }
+        assert_eq!(pool.bytes, 0);
+        for i in 0..2 {
+            let mut mesh = SectionMesh::default();
+            mesh.solid.reserve_exact(
+                MeshPool::BYTES / std::mem::size_of::<crate::mesher::TerrainVertex>() / 2 + 1,
+            );
+            assert_eq!(pool.put(mesh).is_some(), i == 1);
+            assert!(pool.bytes <= MeshPool::BYTES);
+            assert_eq!(pool.meshes.len(), 1);
+        }
+        pool.take();
+        assert_eq!(pool.bytes, 0);
+        let mut huge = SectionMesh::default();
+        huge.solid.reserve_exact(
+            MeshPool::BYTES / std::mem::size_of::<crate::mesher::TerrainVertex>() + 1,
+        );
+        assert!(pool.put(huge).is_some());
+        assert!(pool.meshes.is_empty());
+        assert_eq!(pool.bytes, 0);
+    }
 
     /// The frame never waits for a worker: while one holds the mailbox, the
     /// frame takes nothing and finds the results, in order, the next time.
@@ -2042,6 +2332,79 @@ mod tests {
         let moved = ranges((19, 0));
         rank_again(&mut queue, |x, z| moved.priority(x, z, false));
         assert_eq!(queue.pop().and_then(|q| q.at), Some((20, 0)));
+    }
+
+    /// The light and mesh stages submit bounded work, the nearest first:
+    /// what exceeds the room stays dirty, to be chosen again — from the
+    /// current centre — as capacity frees. Submitted whole, the queue once
+    /// held every ready column's jobs and grew with the render distance
+    /// (#3629); ties break by position, so the choice is deterministic.
+    #[test]
+    fn bounded_submission_takes_the_nearest_first() {
+        let candidates: Vec<(i64, i32, i32, u32)> = (0..40i32)
+            .map(|i| {
+                let (x, z) = (i / 8 - 2, i % 8 - 3);
+                (
+                    i64::from((x - 3).pow(2) + (z - 2).pow(2)),
+                    x,
+                    z,
+                    1 << (i % 24),
+                )
+            })
+            .collect();
+        let mut expected = candidates.clone();
+        expected.sort_unstable();
+        let mut none = candidates.clone();
+        nearest_first(&mut none, 0);
+        assert!(none.is_empty());
+        let mut nearest = candidates;
+        nearest_first(&mut nearest, 5);
+        assert_eq!(nearest, expected[..5]);
+        let mut past = expected.clone();
+        nearest_first(&mut past, expected.len() + 10);
+        assert_eq!(past, expected);
+    }
+
+    /// What the scheduler counts as ready to light: every neighbour a
+    /// finished column, or a decorated proto chunk past the area — the
+    /// walk `light_region` makes without its snapshot.
+    #[test]
+    fn light_readiness_follows_the_region_a_light_job_reads() {
+        let mut world = World::new(horizon_world::registry::BlockStateId(0), 0);
+        let chunk = Arc::new(Chunk::empty(0, 0));
+        let nine = (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (dx, dz)));
+        for key in nine {
+            world.chunks.insert(key, chunk.clone());
+        }
+        // The kept area is the cross around (0, 0); the corners of the
+        // 3x3 light reads lie past it.
+        let in_range = |x: i32, z: i32| x.abs() + z.abs() <= 1;
+        let none = FxHashSet::<(i32, i32)>::default();
+        let empty = FxHashMap::<(i32, i32), Option<Proto>>::default();
+        assert!(light_region_ready(&world, in_range, &none, &empty, 0, 0));
+        // A corner is missing, and nothing stands in for it yet.
+        world.chunks.remove(&(1, 1));
+        assert!(!light_region_ready(&world, in_range, &none, &empty, 0, 0));
+        // A decorated, checked-in proto chunk past the area lights against.
+        let decorated: FxHashSet<(i32, i32)> = [(1, 1)].into_iter().collect();
+        let mut protos: FxHashMap<(i32, i32), Option<Proto>> = Default::default();
+        protos.insert((1, 1), Some(Box::new(()) as Proto));
+        assert!(light_region_ready(
+            &world, in_range, &decorated, &protos, 0, 0
+        ));
+        // The proto is checked out to a job: it cannot be read.
+        protos.insert((1, 1), None);
+        assert!(!light_region_ready(
+            &world, in_range, &decorated, &protos, 0, 0
+        ));
+        // A neighbour inside the area waits for the chunk itself.
+        world.chunks.remove(&(1, 0));
+        let mut inside = decorated.clone();
+        inside.insert((1, 0));
+        protos.insert((1, 0), Some(Box::new(()) as Proto));
+        assert!(!light_region_ready(
+            &world, in_range, &inside, &protos, 0, 0
+        ));
     }
 
     #[test]
@@ -2527,6 +2890,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An idle dedicated server keeps no area around its centre: only a spawn
+    /// search's chunk (FULL alone: its 3x3 decorated, 5x5 generated) and the
+    /// forced chunks.
+    #[test]
+    fn no_area_around_an_idle_servers_centre() {
+        let forced = HashSet::from([(30, 30)]);
+        let extra = [((5, -3), -1)];
+        let r = Ranges {
+            center: (5, -3),
+            radius: -1,
+            extra: &extra,
+            forced: &forced,
+            cover: None,
+            band: None,
+        };
+        for x in -5i32..=15 {
+            for z in -13i32..=7 {
+                let d = (x - 5).abs().max((z + 3).abs());
+                assert_eq!(r.in_range(x, z, 1), d == 0, "({x}, {z})");
+                assert_eq!(r.chunk_kept(x, z, true), d <= 2, "({x}, {z})");
+                assert_eq!(r.requested(x, z, true), d <= 2, "({x}, {z})");
+            }
+        }
+        assert!(r.in_range(30, 30, 1));
+        let idle = Ranges { extra: &[], ..r };
+        assert!(!idle.requested(5, -3, true) && idle.unloaded(5, -3, true));
     }
 
     /// A server player's area (`lan_update_streaming`: the server view
