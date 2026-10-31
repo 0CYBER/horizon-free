@@ -597,6 +597,39 @@ impl Game<'_> {
             });
         }
     }
+    /// `KnowledgeBookItem.use`: the recipes the book names become known and it
+    /// is used up. A book naming a recipe this server does not have is
+    /// vanilla's `Invalid recipe: {}` and knows nothing. Whether the click
+    /// ends here: `InteractionResult.SUCCESS` does and swings, `FAIL` leaves
+    /// the other hand its turn (`Minecraft.startUseItem`).
+    pub(super) fn use_knowledge_book(&mut self, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:knowledge_book" {
+            return false;
+        }
+        let slot = self.held_slot();
+        let mut hand = self.stack_in(slot).cloned();
+        let infinite = self.creative;
+        let index = &world_stations!(self).recipe_index;
+        let result = self
+            .level
+            .recipe_book
+            .use_knowledge_book(index, &mut hand, infinite);
+        *self.stack_in_mut(slot) = hand;
+        match result {
+            Ok(unlocked) => {
+                self.recipe_unlocked(&unlocked);
+                self.stats.add("used", &stack.item, 1);
+                self.swing_arm();
+                true
+            }
+            Err(invalid) => {
+                if let Some(id) = invalid {
+                    log::error!("Invalid recipe: {id}");
+                }
+                false
+            }
+        }
+    }
     /// `PlayerAdvancements.award` once done: rewards, toast, announcement.
     fn award(&mut self, index: usize) {
         let tree = self.adv.tree.clone();
