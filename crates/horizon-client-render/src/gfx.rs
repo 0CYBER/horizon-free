@@ -156,19 +156,40 @@ fn world_pass_after_culling<'e>(
 }
 /// A section's instance: its camera-relative origin and its UV step, negated
 /// past its fade code while it fades in over far terrain (`lod::instance`).
-fn section_instance(origin: [f32; 3], fade: u32) -> [f32; 4] {
+fn section_instance(origin: [f32; 3], fade: u32, visibility: f32) -> [f32; 4] {
     let step = 1.0 / crate::mesher::UV_STEPS;
     [
         origin[0],
         origin[1],
         origin[2],
         if fade == 0 {
-            step
+            // The step is a power of two, so its mantissa is free: it holds the vanilla
+            // chunk fade-in's `1 - visibility` in 23 bits (terrain.wgsl's `instance_step` and
+            // `instance_visibility` read it back). A whole section is the bare step.
+            let faded = ((1.0 - visibility) * 8_388_608.0)
+                .round()
+                .clamp(0.0, 8_388_607.0) as u32;
+            f32::from_bits(step.to_bits() | faded)
         } else {
             -(fade as f32 + step)
         },
     ]
 }
+/// `SectionRenderDispatcher.RenderSection.getVisibility`: how far through its fade-in a section
+/// uploaded `elapsed_ms` ago is.
+fn chunk_visibility(elapsed_ms: u64, fade_ms: u64) -> f32 {
+    if elapsed_ms >= fade_ms {
+        1.0
+    } else {
+        elapsed_ms as f32 / fade_ms as f32
+    }
+}
+/// `Util.toMillis`: `Mth.floor(seconds * 1000.0)`.
+fn fade_millis(seconds: f32) -> u64 {
+    (f64::from(seconds) * 1000.0).floor().max(0.0) as u64
+}
+/// `LevelRenderer.CHUNK_VISIBILITY_THRESHOLD`: a section's block entities wait for it.
+const CHUNK_VISIBILITY_THRESHOLD: f32 = 0.3;
 /// A new value for `Renderer::block_entity_revision`.
 fn next_block_entity_revision() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -369,6 +390,9 @@ pub struct Frame<'a> {
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
+    /// `Options.chunkSectionFadeInTime`, in seconds: how long a section takes to fade in once
+    /// uploaded (0 draws it whole at once).
+    pub chunk_fade: f32,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -583,6 +607,9 @@ pub struct Renderer {
     shadow_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: crate::fast_hash::FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    /// When each section was first uploaded (`RenderSection.uploadedTime`): kept across meshing
+    /// it again, gone with its column. Sections that fade in over far terrain are not in it.
+    section_uploaded: crate::fast_hash::FxHashMap<SectionKey, std::time::Instant>,
     /// Changes whenever `block_entities` does (unique across renderers).
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
@@ -2852,6 +2879,7 @@ impl Renderer {
             phase2_runs: page_runs::PageRuns::default(),
             shadow_runs: page_runs::PageRuns::default(),
             block_entities: Default::default(),
+            section_uploaded: Default::default(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             layout: crate::chunk::ColumnLayout::VANILLA,
@@ -3137,6 +3165,11 @@ impl Renderer {
             Some(old) => old.fading,
             None => (!self.lods.is_empty()).then(std::time::Instant::now),
         };
+        if fading.is_none() {
+            self.section_uploaded
+                .entry(key)
+                .or_insert_with(std::time::Instant::now);
+        }
         self.release_section(key);
         let section = self
             .upload_mesh(mesh)
@@ -3296,6 +3329,28 @@ impl Renderer {
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
         self.block_entities.values().flatten()
     }
+    /// `block_entities` of the sections far enough into their fade-in to draw them
+    /// (`LevelExtractor.extractVisibleBlockEntities`: `getVisibility(now, fade) >= 0.3`).
+    pub fn visible_block_entities(
+        &self,
+        fade_seconds: f32,
+    ) -> impl Iterator<Item = &([i32; 3], u32)> {
+        let fade = fade_millis(fade_seconds);
+        let now = std::time::Instant::now();
+        self.block_entities
+            .iter()
+            .filter(move |(key, _)| {
+                chunk_visibility(self.section_elapsed_ms(**key, now), fade)
+                    >= CHUNK_VISIBILITY_THRESHOLD
+            })
+            .flat_map(|(_, blocks)| blocks)
+    }
+    /// Milliseconds since `key` was uploaded; a section not in `section_uploaded` is old.
+    fn section_elapsed_ms(&self, key: SectionKey, now: std::time::Instant) -> u64 {
+        self.section_uploaded.get(&key).map_or(u64::MAX, |t| {
+            now.saturating_duration_since(*t).as_millis() as u64
+        })
+    }
     /// A value that changes whenever `block_entities` gives something else.
     pub fn block_entity_revision(&self) -> u64 {
         self.block_entity_revision
@@ -3303,6 +3358,7 @@ impl Renderer {
     /// Drops every section, for a level whose chunks hold `layout`.
     pub fn clear_sections(&mut self, layout: crate::chunk::ColumnLayout) {
         self.block_entities.clear();
+        self.section_uploaded.clear();
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.lods.clear();
@@ -3413,6 +3469,7 @@ impl Renderer {
             for sy in 0..self.layout.sections() as i32 {
                 let key = (x, sy, z);
                 block_entities |= self.block_entities.remove(&key).is_some();
+                self.section_uploaded.remove(&key);
                 if retiring {
                     // Distant tiles still leave its column out: drawn until they don't.
                     self.lod_retiring.insert(key);
@@ -4223,15 +4280,33 @@ impl Renderer {
         }
         self.origins.clear();
         let (sections, retiring) = (&self.sections, &self.lod_retiring);
+        // `LevelRenderer.extractSectionDrawGroups`: each section's `getVisibility`.
+        let fade_ms = fade_millis(frame.chunk_fade);
+        let uploaded = &self.section_uploaded;
+        let visibility = |key: SectionKey| {
+            if fade_ms == 0 {
+                return 1.0;
+            }
+            uploaded.get(&key).map_or(1.0, |t| {
+                chunk_visibility(
+                    now.saturating_duration_since(*t).as_millis() as u64,
+                    fade_ms,
+                )
+            })
+        };
         self.origins.extend(
             visible
                 .iter()
                 .map(|v| {
                     let code = sections.get(v.slot).fade(now, retiring.contains(&v.key));
-                    section_instance(v.origin, code)
+                    section_instance(v.origin, code, visibility(v.key))
                 })
                 .chain(visible_lods.iter().map(|v| lod::instance(v.origin, v.fade)))
-                .chain(shadow_visible.iter().map(|v| section_instance(v.origin, 0))),
+                .chain(
+                    shadow_visible
+                        .iter()
+                        .map(|v| section_instance(v.origin, 0, visibility(v.key))),
+                ),
         );
         if !self.origins.is_empty() {
             self.uploads.buffer(
@@ -4837,7 +4912,10 @@ impl Renderer {
                             .filter_map(|v| {
                                 let section = sections.get(v.slot);
                                 let code = section.fade(now, retiring.contains(&v.key));
-                                Some((section.flat_id?, section_instance(v.origin, code)))
+                                Some((
+                                    section.flat_id?,
+                                    section_instance(v.origin, code, visibility(v.key)),
+                                ))
                             })
                             .chain(visible_lods.iter().filter_map(|v| {
                                 let id = lods[&v.key].drawn().flat_id?;
@@ -6248,6 +6326,36 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+    }
+    #[test]
+    fn chunk_fade_is_vanillas_get_visibility() {
+        use super::{chunk_visibility, fade_millis};
+        assert_eq!(fade_millis(0.75), 750);
+        assert_eq!(fade_millis(0.0), 0);
+        assert_eq!(chunk_visibility(0, 750), 0.0_f32);
+        assert_eq!(chunk_visibility(375, 750), 0.5);
+        assert_eq!(chunk_visibility(750, 750), 1.0);
+        assert_eq!(chunk_visibility(0, 0), 1.0, "Off: whole at once");
+        assert_eq!(chunk_visibility(u64::MAX, 750), 1.0);
+    }
+    #[test]
+    fn section_instance_carries_the_fade_in_the_step() {
+        use super::section_instance;
+        let step = 1.0 / crate::mesher::UV_STEPS;
+        // Fully visible (the option Off) is exactly the record from before the fade.
+        assert_eq!(
+            section_instance([1.0, 2.0, 3.0], 0, 1.0),
+            [1.0, 2.0, 3.0, step]
+        );
+        for visibility in [0.0_f32, 0.25, 0.5, 0.999] {
+            let w = section_instance([0.0; 3], 0, visibility)[3];
+            let bits = w.to_bits();
+            assert_eq!(f32::from_bits(bits & 0xff80_0000), step);
+            let read = 1.0 - (bits & 0x7f_ffff) as f32 / 8_388_608.0;
+            assert!((read - visibility).abs() < 1e-6, "{visibility}: {read}");
+        }
+        // A section fading in over far terrain keeps its dither code unchanged.
+        assert_eq!(section_instance([0.0; 3], 7, 0.5)[3], -(7.0 + step));
     }
     #[test]
     fn terrain_attributes_follow_the_terrain_vertex() {
