@@ -106,13 +106,55 @@ impl Game<'_> {
         self.keys.clear();
         self.screen = Screen::Options;
         self.options_from_title = from_title;
+        self.options_to_game = false;
         let ui = &mut self.ui.options;
         ui.open_at(!from_title && self.title.is_none(), page);
         let root = self.options.resources.clone();
         ui.languages = lang::available(&[&root]);
         self.refresh_pack_lists();
     }
+    /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
+    /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s
+    /// watcher).
+    fn watch_pack_folder(&mut self) {
+        if !self.ui.options.resource_packs_open() {
+            self.pack_folder = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .pack_folder
+            .as_ref()
+            .is_some_and(|(at, _)| now.duration_since(*at).as_secs_f32() < 1.0)
+        {
+            return;
+        }
+        let signature: Vec<(String, u64, Option<std::time::SystemTime>)> =
+            std::fs::read_dir(super::packs::packs_dir())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| {
+                    let meta = e.metadata().ok();
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        meta.as_ref().map_or(0, |m| m.len()),
+                        meta.and_then(|m| m.modified().ok()),
+                    )
+                })
+                .collect();
+        let changed = self
+            .pack_folder
+            .as_ref()
+            .is_some_and(|(_, seen)| *seen != signature);
+        self.pack_folder = Some((now, signature));
+        if changed {
+            let infos = super::packs::pack_infos(&self.vanilla_root());
+            self.ui.options.update_pack_infos(infos);
+        }
+    }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
+        self.watch_pack_folder();
         let mut ui = std::mem::take(&mut self.ui.options);
         ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
         self.ui.options = ui;
@@ -234,13 +276,17 @@ impl Game<'_> {
                 Event::Close if self.ui.options.resource_error.is_some() => {}
                 Event::Close => {
                     self.settings.save(&Self::options_path());
+                    let to_game = std::mem::take(&mut self.options_to_game);
                     self.screen = if std::mem::take(&mut self.options_to_world_options) {
                         Screen::WorldOptions
-                    } else if self.options_from_title {
+                    } else if self.options_from_title || to_game {
                         Screen::Playing
                     } else {
                         Screen::Paused
                     };
+                    if to_game {
+                        self.capture(true);
+                    }
                     self.dragging = false;
                 }
                 Event::Language(code) => {
@@ -327,9 +373,14 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
             r.fullbright = s.extras.fullbright;
+            r.improved_transparency = s.improved_transparency;
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
+            r.set_texture_filtering(
+                s.file.int("textureFiltering"),
+                s.file.int("maxAnisotropyBit"),
+            );
             r.set_world_post(
                 s.horizon.resolution_scale as f32 / 100.0,
                 s.horizon.fxaa,

@@ -395,6 +395,15 @@ pub(crate) fn with_test_world(
     others: &[Seen],
     f: impl FnOnce(&MobWorld<'_>, &super::MobTypes),
 ) -> bool {
+    with_built_test_world(others, |_, _| {}, f)
+}
+/// `with_test_world` with `build` placing blocks first.
+#[cfg(test)]
+pub(crate) fn with_built_test_world(
+    others: &[Seen],
+    build: impl FnOnce(&mut crate::world::World, &horizon_world::registry::BlockRegistry),
+    f: impl FnOnce(&MobWorld<'_>, &super::MobTypes),
+) -> bool {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client")
         .join(horizon_core::VANILLA_VERSION);
@@ -417,7 +426,8 @@ pub(crate) fn with_test_world(
     .unwrap();
     let collision = crate::collisions::load(&root, registry).unwrap();
     let air = registry.default_state("minecraft:air").unwrap();
-    let world = crate::world::World::new(air, 0);
+    let mut world = crate::world::World::new(air, 0);
+    build(&mut world, registry);
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
         teams: Default::default(),
@@ -431,6 +441,7 @@ pub(crate) fn with_test_world(
         player: None,
         nearest_player: None,
         others,
+        leash_boats: &[],
         others_grid: None,
         others_index: None,
         daylight: true,
@@ -454,4 +465,43 @@ pub(crate) fn with_test_world(
     };
     f(&w, &types);
     true
+}
+/// A player standing at `position` in survival, as mobs see one.
+#[cfg(test)]
+pub(crate) fn test_player(position: Vec3) -> super::PlayerView {
+    super::PlayerView {
+        position,
+        bounds: Aabb::new(
+            Vec3::new(position.x - 0.3, position.y, position.z - 0.3),
+            Vec3::new(position.x + 0.3, position.y + 1.8, position.z + 0.3),
+        ),
+        eye: [position.x, position.y + 1.62, position.z],
+        alive: true,
+        creative: false,
+        sneaking: false,
+        swimming: false,
+        look: [0.0; 3],
+        main_hand: None,
+        off_hand: None,
+        head: None,
+        armor_cover: 0.0,
+        invisible: false,
+        spectator: false,
+        gold_armor: false,
+        hurt_by: None,
+        last_hurt: None,
+        velocity: Vec3::ZERO,
+        yaw: 0.0,
+        sprinting: false,
+        riding: false,
+        hero: false,
+        effects: Vec::new(),
+        uuid: [0; 4],
+        allies: Default::default(),
+        remote: false,
+        sleeping: false,
+        sleep_timer: 0,
+        passenger: false,
+        vehicle: None,
+    }
 }

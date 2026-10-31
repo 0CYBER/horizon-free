@@ -231,6 +231,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 /// EndermanModel.setupAnim: half-speed clamped limbs, held-block arms, creepy head.
+/// Humanoid riding pose runs first (`isPassenger`); only xRot is halved/clamped after.
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     super::anim::humanoid_pub(p, s, m);
     for part in ["right_arm", "left_arm", "right_leg", "left_leg"] {
@@ -519,6 +520,7 @@ mod tests {
             assert!(!dodges(&seated, &Damage::of(kind)), "{kind:?}");
         }
     }
+
     /// Enderman.dropCustomDeathLoot (#3513): a killed enderman drops the
     /// block it carries, mined with a silk touch diamond axe, so a grass
     /// block comes back as a grass block (not dirt) and a nylium as itself.

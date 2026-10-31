@@ -38,6 +38,45 @@ pub fn scroll_offset(age: f32, speed: f32) -> f32 {
 fn scroll_u(u: f32, scroll: f32) -> f32 {
     if scroll == 0.0 { u } else { (u + scroll) % 1.0 }
 }
+/// How brightly the eyes render type's layers (spiders', endermen's and
+/// phantoms' eyes, the breeze's, the creaking's, the copper golem's) shine in
+/// HDR output, as `mesher::hdr_tier`.
+const EYES_TIER: u8 = crate::mesher::BRIGHT;
+
+/// Tags quads as drawn by a render type vanilla gives an `OitPipelineSet`
+/// (`gfx::OIT_ENTITY`): improved transparency draws them in its stages.
+fn mark_oit(quads: &mut [Vertex]) {
+    for vertex in quads {
+        vertex.layer |= crate::gfx::OIT_ENTITY;
+    }
+}
+/// Whether the species' model is built with `RenderTypes::entityTranslucent`
+/// (`Model.renderType`, which `LivingEntityRenderer.getRenderType` uses for the
+/// body): the allay, the piglins, the breeze, the vex, the player model and the
+/// sulfur cube.
+fn translucent_body(m: &Mob) -> bool {
+    matches!(
+        m.species(),
+        Species::Allay
+            | Species::Piglin
+            | Species::PiglinBrute
+            | Species::ZombifiedPiglin
+            | Species::Breeze
+            | Species::Vex
+            | Species::SulfurCube
+    ) || avatar(m)
+}
+/// Whether a layer's render type has an `OitPipelineSet`: `RenderTypes.eyes` and
+/// `entityTranslucentEmissive` (the full bright layers), `breezeWind`, and
+/// `entityTranslucent` (the slime's outer cube, the sulfur cube's inner cube
+/// and the horse's markings).
+fn translucent_layer(m: &Mob, layer: &Layer) -> bool {
+    layer.full_bright
+        || layer.model == "breeze#wind"
+        || layer.model == "slime#outer"
+        || matches!(m.species(), Species::SulfurCube)
+        || layer.texture.starts_with("entity/horse/horse_markings")
+}
 
 /// One draw of a model with a texture.
 pub struct Layer {
@@ -692,7 +731,9 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
         }
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
-        S::Sheep if !m.extra.sheared => {
+        // SheepWoolUndercoatLayer has no isSheared guard: a sheared dyed sheep
+        // keeps it, while only SheepWoolLayer stops.
+        S::Sheep => {
             // MobRenderer.checkMagicName(entity, "jeb_"): an exact custom name.
             let jeb = m.custom_name.as_deref() == Some("jeb_");
             let color = abgr(if jeb {
@@ -709,22 +750,14 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
                     false,
                 );
             }
-            if m.is_baby() {
-                push(
-                    &mut v,
-                    "sheep_baby#wool",
-                    "entity/sheep/sheep_wool_baby",
-                    color,
-                    false,
-                );
-            } else {
-                push(
-                    &mut v,
-                    "sheep#wool",
-                    "entity/sheep/sheep_wool",
-                    color,
-                    false,
-                );
+            // SheepWoolLayer: none once sheared.
+            if !m.extra.sheared {
+                let (model, texture) = if m.is_baby() {
+                    ("sheep_baby#wool", "entity/sheep/sheep_wool_baby")
+                } else {
+                    ("sheep#wool", "entity/sheep/sheep_wool")
+                };
+                push(&mut v, model, texture, color, false);
             }
         }
         S::Creaking if super::creaking::eyes_glowing(m) => push(
@@ -1511,6 +1544,54 @@ pub fn stuck_in_body(
         super::render_model(item, t, &|p| p.pose, uv, light, 0, out);
     }
 }
+/// `ParrotOnShoulderLayer.submitOnShoulder`: a parrot of `variant` on the
+/// avatar's left or right shoulder, in `ParrotModel.Pose.ON_SHOULDER` with
+/// the avatar's walk animation, age and head turn. `base` is the avatar's
+/// root transform; `parrot` the parrot's entity type (its model).
+#[allow(clippy::too_many_arguments)]
+pub fn shoulder_parrot(
+    avatar: &Mob,
+    parrot: &super::MobType,
+    variant: i32,
+    left: bool,
+    alpha: f32,
+    base: glam::Mat4,
+    atlas: Atlas,
+    light: u32,
+    out: &mut Vec<Vertex>,
+) {
+    let Some(uv) = atlas(&shoulder_parrot_texture(variant)) else {
+        return;
+    };
+    let model = parrot.layer(&parrot.model_key()).unwrap_or(&parrot.model);
+    let s = anim::State {
+        baby: false,
+        ..anim::state(avatar, alpha)
+    };
+    let mut poses = Poses::new(model);
+    // ParrotRenderState.flapAngle stays 0.
+    super::body_anim::parrot(
+        &mut poses,
+        &s,
+        super::body_anim::ParrotPose::OnShoulder,
+        0.0,
+    );
+    let y = if avatar.extra.crouching { -1.3 } else { -1.5 };
+    let x = if left { 0.4 } else { -0.4 };
+    let base = base * glam::Mat4::from_translation(glam::Vec3::new(x, y, 0.0));
+    // ParrotModel's cutout render type with OverlayTexture.NO_OVERLAY.
+    draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
+}
+/// `ParrotRenderer.getVariantTexture` for `Parrot.Variant.byId` (an id out
+/// of range is clamped).
+fn shoulder_parrot_texture(variant: i32) -> String {
+    const NAMES: [&str; 5] = ["red_blue", "blue", "green", "yellow_blue", "grey"];
+    let name = usize::try_from(variant)
+        .ok()
+        .and_then(|i| NAMES.get(i))
+        .unwrap_or(if variant < 0 { &NAMES[0] } else { &NAMES[4] });
+    format!("entity/parrot/parrot_{name}")
+}
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
@@ -1576,6 +1657,7 @@ fn render_visible(
             }
         });
         if body_visible && let Some(uv) = uv {
+            let start = out.len();
             draw(
                 &model,
                 base,
@@ -1586,6 +1668,9 @@ fn render_visible(
                 body_overlay(m, alpha),
                 out,
             );
+            if translucent_body(m) {
+                mark_oit(&mut out[start..]);
+            }
         }
     };
     // The translucent shell writes depth: draw the opaque core before it.
@@ -1659,9 +1744,15 @@ fn render_visible(
             overlay,
             out,
         );
+        if translucent_layer(m, &layer) {
+            mark_oit(&mut out[start..]);
+        }
+        // The eyes render type's glowing eyes also shine in HDR output, at
+        // `EYES_TIER` in the overlay's high bits (entity.wgsl fs_hdr_mark).
         if layer.full_bright && m.species() != Species::Warden {
             for vertex in &mut out[start..] {
                 vertex.normal = [0; 4];
+                vertex.layer |= u32::from(EYES_TIER) << 16;
             }
         }
     }
@@ -1928,6 +2019,17 @@ fn fox_item_transform(m: &Mob, alpha: f32, camera: glam::DVec3, data: &MobData) 
     }
     t
 }
+/// `CrossedArmsItemLayer.applyTranslation`: `translateToArms`, then the item's
+/// placement over the folded arms.
+fn crossed_arms_matrix(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat4> {
+    let arms = part_matrix(model, base, poses, "arms", 0.0)?;
+    Some(
+        arms * glam::Mat4::from_rotation_x(0.75)
+            * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
+            * glam::Mat4::from_rotation_x(std::f32::consts::PI),
+    )
+}
 /// The pose a mob's held item is submitted under (`ItemInHandLayer`:
 /// `translateToHand`, then the hand offset; the item model adds its own
 /// display transform), or `None` when the mob shows no held items.
@@ -1978,14 +2080,16 @@ pub fn held_item_transform(
                     * glam::Mat4::from_rotation_x(180.0f32.to_radians()),
             );
         }
-        // CrossedArmsItemLayer.applyTranslation: translateToArms, then this.
-        let arms = part_matrix(&model, base, &poses, "arms", 0.0)?;
-        return Some(
-            arms * glam::Mat4::from_rotation_x(0.75)
-                * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
-                * glam::Mat4::from_rotation_x(std::f32::consts::PI),
-        );
+        return crossed_arms_matrix(&model, base, &poses);
+    }
+    // CrossedArmsItemLayer (villagers and wandering traders): the main hand's
+    // item over the folded arms.
+    if matches!(m.species(), Species::Villager | Species::WanderingTrader) {
+        m.extra.main_hand.as_deref()?;
+        if left != m.main_arm_left() {
+            return None;
+        }
+        return crossed_arms_matrix(&model, base, &poses);
     }
     let mut t = hand_base(m, &model, base, &poses, left)?;
     // ItemInHandLayer: a STAB swing of this arm thrusts its item out
@@ -2060,6 +2164,15 @@ mod tests {
         assert_eq!(snap_to_face(0.75), 1.0);
         assert_eq!(snap_to_face(0.5), 0.5);
         assert_eq!(snap_to_face(0.1), 0.5);
+    }
+
+    #[test]
+    fn shoulder_parrot_textures_follow_the_variant() {
+        assert_eq!(shoulder_parrot_texture(0), "entity/parrot/parrot_red_blue");
+        assert_eq!(shoulder_parrot_texture(4), "entity/parrot/parrot_grey");
+        // Parrot.Variant.byId clamps an id out of range.
+        assert_eq!(shoulder_parrot_texture(5), "entity/parrot/parrot_grey");
+        assert_eq!(shoulder_parrot_texture(-1), "entity/parrot/parrot_red_blue");
     }
 
     /// VillagerProfessionLayer's textures (type, or baby for a baby;
@@ -2273,6 +2386,29 @@ mod tests {
         }
     }
 
+    /// `CrossedArmsItemLayer`: a villager and a wandering trader show their
+    /// main hand's item over the folded arms, and nothing in the off hand.
+    #[test]
+    fn villagers_and_traders_hold_items_in_crossed_arms() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let data = MobData::load(&root, &facts);
+        for id in ["minecraft:villager", "minecraft:wandering_trader"] {
+            let kind = std::sync::Arc::new(types.types[id].clone());
+            let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+            let main = mob.main_arm_left();
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, main).is_none());
+            mob.extra.set_main_hand(Some("minecraft:emerald".into()));
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, main).is_some());
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, !main).is_none());
+        }
+    }
     /// PhantomRenderer.scale moves the model down into its 0.5-high box:
     /// the model's origin ends 1.501 - 1.3125 blocks above the feet (times
     /// the size's scale), not 1.501 like other mobs (#3008).
@@ -2513,5 +2649,63 @@ mod scroll_tests {
         assert!((scroll_u(0.25, 0.5) - 0.75).abs() < 1e-6);
         assert!((scroll_u(0.75, 0.5) - 0.25).abs() < 1e-6);
         assert!((scroll_u(1.0, 0.5) - 0.5).abs() < 1e-6);
+    }
+
+    /// `SheepWoolLayer.submit` returns early on a sheared sheep, but
+    /// `SheepWoolUndercoatLayer.submit` has no isSheared guard: a sheared
+    /// dyed sheep keeps its undercoat and loses only its wool.
+    #[test]
+    fn a_sheared_dyed_sheep_keeps_its_wool_undercoat() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:sheep"].clone());
+        let sheep = |color: u8, sheared: bool, baby: bool| {
+            let mut m = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+            m.extra.color = color;
+            m.extra.sheared = sheared;
+            m.extra.age = if baby { -24000 } else { 0 };
+            m
+        };
+        // The sheep's wool layers, model, texture and colour, in submission order.
+        let wool = |m: &Mob| -> Vec<(String, String, u32)> {
+            layers(m, 0.0)
+                .into_iter()
+                .filter(|l| l.model.contains("#wool"))
+                .map(|l| (l.model, l.texture, l.color))
+                .collect()
+        };
+        let dyed = abgr(sheep_wool_rgb(1));
+        let layer = |model: &str, texture: &str| (model.to_owned(), texture.to_owned(), dyed);
+
+        // The regression: the pre-fix single `!sheared` guard skipped both
+        // layers, so a sheared dyed sheep drew nothing. It must keep the
+        // undercoat alone, in its own colour and texture.
+        assert_eq!(
+            wool(&sheep(1, true, false)),
+            [layer(
+                "sheep#wool_undercoat",
+                "entity/sheep/sheep_wool_undercoat"
+            )]
+        );
+        // Guards, already green before the fix: a sheared white sheep has no
+        // undercoat to keep, a baby has no undercoat at all, and an unsheared
+        // dyed sheep draws both layers as before.
+        assert!(wool(&sheep(0, true, false)).is_empty());
+        assert_eq!(
+            wool(&sheep(1, false, true)),
+            [layer("sheep_baby#wool", "entity/sheep/sheep_wool_baby")]
+        );
+        assert!(wool(&sheep(1, true, true)).is_empty());
+        assert_eq!(
+            wool(&sheep(1, false, false)),
+            [
+                layer("sheep#wool_undercoat", "entity/sheep/sheep_wool_undercoat"),
+                layer("sheep#wool", "entity/sheep/sheep_wool")
+            ]
+        );
     }
 }

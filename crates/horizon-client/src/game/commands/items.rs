@@ -24,6 +24,8 @@ pub(in crate::game) enum Slot {
     Stand(u32, usize),
     Frame(u32),
     Block([i32; 3], usize),
+    /// A slot of another player (`for_player`): reached with their state in place.
+    Guest(u32, Box<Slot>),
 }
 /// Whose slots a command addresses.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +75,16 @@ impl Game<'_> {
     }
     /// The slots a name (or wildcard group) addresses on an owner.
     pub(in crate::game) fn slots_named(&mut self, owner: &Owner, name: &str) -> Vec<Slot> {
+        if let Owner::Entity(Target::Guest(conn)) = *owner {
+            let slots = self.for_player(Target::Guest(conn), |g| {
+                g.slots_named(&Owner::Entity(Target::Player), name)
+            });
+            return slots
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| Slot::Guest(conn, Box::new(s)))
+                .collect();
+        }
         let mut out = Vec::new();
         let mut add = |s: Slot| out.push(s);
         match owner {
@@ -157,8 +169,11 @@ impl Game<'_> {
         }
         out
     }
-    pub(in crate::game) fn slot_get(&self, s: &Slot) -> Option<ItemStack> {
+    pub(in crate::game) fn slot_get(&mut self, s: &Slot) -> Option<ItemStack> {
         match s {
+            Slot::Guest(conn, slot) => self
+                .for_player(Target::Guest(*conn), |g| g.slot_get(slot))
+                .flatten(),
             Slot::Inv(i) => self.inventory.get(*i).cloned().flatten(),
             Slot::Armor(i) => self.armor.get(*i).cloned().flatten(),
             Slot::Offhand => self.offhand.clone(),
@@ -201,6 +216,9 @@ impl Game<'_> {
     /// Put a stack (or nothing) in a slot; false when the slot cannot take it.
     pub(in crate::game) fn slot_set(&mut self, s: &Slot, stack: Option<ItemStack>) -> bool {
         match s {
+            Slot::Guest(conn, slot) => self
+                .for_player(Target::Guest(*conn), |g| g.slot_set(slot, stack))
+                .unwrap_or(false),
             Slot::Inv(i) => match self.inventory.get_mut(*i) {
                 Some(slot) => {
                     *slot = stack;
@@ -603,7 +621,7 @@ impl Game<'_> {
     }
     /// `ItemStack.getMaxStackSize`: the max_stack_size component, else the
     /// item's.
-    pub(super) fn stack_max_size(&self, s: &ItemStack) -> u32 {
+    pub(in crate::game) fn stack_max_size(&self, s: &ItemStack) -> u32 {
         if let Some(Tag::Int(n)) = s.data().and_then(|d| d.other("minecraft:max_stack_size")) {
             return (*n).clamp(1, 99) as u32;
         }

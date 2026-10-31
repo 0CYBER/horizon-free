@@ -24,11 +24,10 @@ struct Queued {
 struct Shown {
     state: BlockStateId,
     live_until: Instant,
-    /// Whether the section mesh was seen out of date since it was added:
-    /// `SectionOcclusionGraph.schedulePropagationFrom` removes the block once
-    /// a mesh started after it is done, which is the mesh being pending and
-    /// then not.
-    seen_pending: bool,
+    /// `createTimeNs`, on the mesher's dispatch clock (`Streaming::sequence`):
+    /// `SectionOcclusionGraph.schedulePropagationFrom` removes the block once a
+    /// mesh of its section whose compile task started after this is uploaded.
+    created: u64,
 }
 
 /// `LevelExtractor.transientBlockQueue` and `LevelRenderer.transientBlocks`.
@@ -51,14 +50,14 @@ impl TransientBlocks {
 
     /// `LevelExtractor.drainTransientBlockQueue`: queued blocks go on show
     /// for their time to live from `now`.
-    fn drain(&mut self, now: Instant) {
+    fn drain(&mut self, now: Instant, created: u64) {
         while let Some(block) = self.queue.pop_front() {
             self.shown.insert(
                 block.pos,
                 Shown {
                     state: block.state,
                     live_until: now + Duration::from_secs_f64(block.time_to_live),
-                    seen_pending: false,
+                    created,
                 },
             );
         }
@@ -70,6 +69,11 @@ impl TransientBlocks {
     }
 }
 
+/// `performTransientBlockRemovals`: a section's uploaded mesh shows a block created at `created`
+/// when its compile task started after it (`state.createTimeNs > compileTaskStartTimeNs` keeps it).
+fn shows_block(created: u64, compile_start: Option<u64>, upload_pending: bool) -> bool {
+    !upload_pending && compile_start.is_some_and(|start| created < start)
+}
 impl Game<'_> {
     /// `ClientPacketListener.handleAddTransientBlockPacket`.
     pub(super) fn add_transient_block(&mut self, pos: [i32; 3], state: i32) {
@@ -78,7 +82,8 @@ impl Game<'_> {
 
     /// `LevelExtractor.drainTransientBlockQueue`, once a frame.
     pub(super) fn drain_transient_block_queue(&mut self) {
-        self.transient_blocks.drain(Instant::now());
+        self.transient_blocks
+            .drain(Instant::now(), self.streaming.sequence());
     }
 
     /// `LevelRenderer.submitTransientBlocks`: each block whose time has not
@@ -95,9 +100,15 @@ impl Game<'_> {
             if now >= block.live_until {
                 return false;
             }
-            let pending = self.section_mesh_pending(*pos);
-            block.seen_pending |= pending;
-            !(block.seen_pending && !pending)
+            // performTransientBlockRemovals: the section's uploaded mesh began compiling
+            // at or after the block was created, so it shows the block.
+            !self.section_of(*pos).is_some_and(|section| {
+                shows_block(
+                    block.created,
+                    self.streaming.compile_start(section),
+                    self.section_upload_pending(section),
+                )
+            })
         });
         for (pos, block) in &shown {
             let at = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
@@ -116,6 +127,17 @@ impl Game<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_block_is_dropped_once_a_mesh_compiled_after_it_is_uploaded() {
+        // No mesh yet, or one that began before the block existed: kept.
+        assert!(!shows_block(5, None, false));
+        assert!(!shows_block(5, Some(5), false));
+        assert!(!shows_block(5, Some(3), false));
+        // A later compile start shows it, once the mesh is uploaded.
+        assert!(shows_block(5, Some(6), false));
+        assert!(!shows_block(5, Some(6), true));
+    }
+
     /// `drainTransientBlockQueue`: a block goes on show for a second from the
     /// frame that drains it, and a second at the same place replaces it.
     #[test]
@@ -124,14 +146,15 @@ mod tests {
         blocks.queue([1, 2, 3], BlockStateId(5));
         assert!(blocks.shown.is_empty());
         let now = Instant::now();
-        blocks.drain(now);
+        blocks.drain(now, 7);
         assert!(blocks.queue.is_empty());
+        assert_eq!(blocks.shown[&[1, 2, 3]].created, 7);
         assert_eq!(
             blocks.shown[&[1, 2, 3]].live_until,
             now + Duration::from_secs(1)
         );
         blocks.queue([1, 2, 3], BlockStateId(6));
-        blocks.drain(now);
+        blocks.drain(now, 9);
         assert_eq!(blocks.shown.len(), 1);
         assert_eq!(blocks.shown[&[1, 2, 3]].state, BlockStateId(6));
     }

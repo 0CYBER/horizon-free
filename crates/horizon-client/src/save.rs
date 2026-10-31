@@ -269,42 +269,7 @@ pub const LOW_DISK_SPACE: u64 = 67_108_864;
 /// `LevelStorageAccess.estimateDiskSpace`: the usable bytes of the disk holding `dir`
 /// (`FileStore.getUsableSpace`), `u64::MAX` when it cannot be asked.
 pub fn estimate_disk_space(dir: &Path) -> u64 {
-    #[cfg(unix)]
-    {
-        match rustix::fs::statvfs(dir) {
-            Ok(stat) => stat.f_bavail.saturating_mul(stat.f_frsize),
-            Err(_) => u64::MAX,
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        unsafe extern "system" {
-            fn GetDiskFreeSpaceExW(
-                directory: *const u16,
-                available: *mut u64,
-                total: *mut u64,
-                free: *mut u64,
-            ) -> i32;
-        }
-        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut available = 0u64;
-        // SAFETY: `wide` is NUL-terminated and the out pointers are valid or null.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut available,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 { u64::MAX } else { available }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = dir;
-        u64::MAX
-    }
+    fs4::available_space(dir).unwrap_or(u64::MAX)
 }
 /// `LevelStorageAccess.checkForLowDiskSpace`.
 pub fn low_disk_space(dir: &Path) -> bool {
@@ -361,28 +326,66 @@ fn dimension_is_vanilla_like(key: &str, dimension: &Tag) -> bool {
         _ => false,
     }
 }
-/// `data.worldGenSettingsLifecycle() != Lifecycle.stable()` (`WorldDimensions.bake`): the world
-/// lacks one of the three builtin dimensions, or has one that is not the vanilla one. Data
-/// packs' own dimensions are not read.
+/// A data pack's JSON as the NBT `dimension_is_vanilla_like` reads (what a codec gets from
+/// either one is the same data).
+fn json_tag(value: &serde_json::Value) -> Tag {
+    use serde_json::Value;
+    match value {
+        Value::Null => Tag::compound(std::iter::empty::<(&str, Tag)>()),
+        Value::Bool(b) => Tag::Byte(i8::from(*b)),
+        Value::Number(n) => n.as_i64().map_or_else(
+            || Tag::Double(n.as_f64().unwrap_or_default().to_bits()),
+            Tag::Long,
+        ),
+        Value::String(s) => Tag::String(s.as_str().into()),
+        Value::Array(items) => Tag::List(items.iter().map(json_tag).collect()),
+        Value::Object(map) => Tag::compound(map.iter().map(|(k, v)| (k.as_str(), json_tag(v)))),
+    }
+}
+/// The level stems the world's enabled data packs define, as `WorldOpenFlows.loadWorldStem`'s
+/// `datapackDimensions`.
+fn datapack_dimensions(world: &Path) -> Vec<(String, Tag)> {
+    let packs = crate::datapack::discover(world);
+    let enabled = crate::datapack::enabled_ids(world, &packs);
+    let enabled: Vec<&crate::datapack::DataPack> = enabled
+        .iter()
+        .filter_map(|id| packs.iter().find(|p| &p.id == id))
+        .collect();
+    crate::datapack::dimension_stems(&enabled)
+        .into_iter()
+        .map(|(id, json)| (id, json_tag(&json)))
+        .collect()
+}
+/// `data.worldGenSettingsLifecycle() != Lifecycle.stable()` (`WorldDimensions.bake`): the known
+/// dimensions (the saved ones and the enabled data packs', a pack's replacing the saved one of
+/// its id) lack one of the three builtin ones, or have one that is not the vanilla one.
 pub fn world_gen_unstable(world: &Path) -> bool {
-    let Some(Tag::Compound(dimensions)) = world_gen_settings(world)
+    let saved = world_gen_settings(world)
         .as_ref()
         .and_then(|s| s.get("dimensions"))
-        .cloned()
-    else {
+        .cloned();
+    let stems = datapack_dimensions(world);
+    if saved.is_none() && stems.is_empty() {
         return false;
+    }
+    let mut dimensions: std::collections::BTreeMap<String, Tag> = match saved {
+        Some(Tag::Compound(saved)) => saved
+            .into_iter()
+            .map(|(key, dimension)| (key.to_string_lossy(), dimension))
+            .collect(),
+        _ => std::collections::BTreeMap::new(),
     };
+    // `baseDimensions.getOptional(key).or(saved)`.
+    dimensions.extend(stems);
     let builtin = [
         "minecraft:overworld",
         "minecraft:the_nether",
         "minecraft:the_end",
     ];
-    builtin
-        .iter()
-        .any(|key| !dimensions.contains_key(&(*key).into()))
+    builtin.iter().any(|key| !dimensions.contains_key(*key))
         || dimensions
             .iter()
-            .any(|(key, dimension)| !dimension_is_vanilla_like(&key.to_string_lossy(), dimension))
+            .any(|(key, dimension)| !dimension_is_vanilla_like(key, dimension))
 }
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
@@ -2360,7 +2363,13 @@ impl SaveDir {
             Folder::Entities => &self.entity_regions,
             Folder::Poi => &self.poi_regions,
         };
-        read_region_record(&self.root, cache, folder, x, z).ok()?
+        match read_region_record(&self.root, cache, folder, x, z) {
+            Ok(record) => record,
+            Err(e) => {
+                crate::chunk_io::report_load_failure(&self.root, x, z, &e);
+                None
+            }
+        }
     }
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
         let root = self.read_record("region", x, z)?;
@@ -2499,6 +2508,10 @@ impl SaveDir {
                         let message = format!("failed to write {folder} files: {e}");
                         log::warn!("Horizon: {message}");
                         *outstanding.error.lock().unwrap() = Some(message);
+                        // `reportChunkSaveFailure` for each chunk of the batch.
+                        for (k, _, _) in &batch {
+                            crate::chunk_io::report_save_failure(&root, k.0, k.1, e);
+                        }
                     }
                     // Keep failed snapshots readable; never report them as durable.
                     if result.is_ok()
@@ -2714,6 +2727,16 @@ pub fn restore_level_data_from_old(dir: &Path) -> bool {
 fn backup_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
 }
+/// `LevelStorageAccess.getUnfixedDataTagWithFallback`, which the dedicated server's `Main` calls:
+/// a level.dat that does not read falls back to level.dat_old, which is restored in its place
+/// (`restoreLevelDataFromOld`). Whether it did; `false` leaves the world as it was, for the
+/// caller to refuse (both files broken, or nothing to fall back to).
+pub fn fall_back_to_level_dat_old(world: &Path) -> bool {
+    level_dat_issue(world, false).is_some()
+        && world.join("level.dat_old").exists()
+        && level_dat_issue(world, true).is_none()
+        && restore_level_data_from_old(world)
+}
 /// `LevelStorageSource.readLevelDataTagFixed`: level.dat, else level.dat_old.
 fn read_level_dat(dir: &Path) -> Option<Tag> {
     read_dat(&dir.join("level.dat")).or_else(|| read_dat(&dir.join("level.dat_old")))
@@ -2796,6 +2819,11 @@ fn read_saved_data(world: &Path, name: &str) -> Option<Tag> {
 /// The world's generator settings: world_gen_settings.dat (26.3) or
 /// level.dat's Data.WorldGenSettings.
 pub fn world_gen_settings(world: &Path) -> Option<Tag> {
+    // A world still to be file-fixed has them in level.dat in an older shape: they are read as
+    // the fixes would leave them, so the questions on opening it are the same ones.
+    if let Ok(Some(settings)) = horizon_world::datafix::files::current_world_gen_settings(world) {
+        return Some(settings);
+    }
     read_saved_data(world, "world_gen_settings").or_else(|| {
         read_dat(&world.join("level.dat"))?
             .get("Data")?
@@ -3228,6 +3256,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
+    /// ServerPlayer.postEffects: the `post_effect` chains `/posteffect` set.
+    pub post_effects: Vec<String>,
     /// Player.lastDeathLocation: the dimension and block of the last death.
     pub last_death: Option<(String, [i32; 3])>,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
@@ -3460,6 +3490,16 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.post_effects = match p.get("post_effects") {
+            Some(Tag::List(list)) => list
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::String(s) => Some(s.to_string_lossy()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         self.last_death = p.get("LastDeathLocation").and_then(|d| {
             let Some(Tag::IntArray(pos)) = d.get("pos") else {
                 return None;
@@ -3573,6 +3613,7 @@ impl Level {
                 "EnderItems",
                 "equipment",
                 "active_effects",
+                "post_effects",
                 "Pos",
                 "respawn",
                 "recipeBook",
@@ -3704,6 +3745,12 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        if !self.post_effects.is_empty() {
+            entries.push((
+                "post_effects",
+                Tag::List(self.post_effects.iter().map(|e| string(e)).collect()),
+            ));
+        }
         if let Some((dimension, pos)) = &self.last_death {
             entries.push((
                 "LastDeathLocation",
@@ -3786,6 +3833,15 @@ impl Level {
     }
     /// Write every file; a world without a player UUID gets a random one.
     pub fn write(&mut self, dir: &Path) -> Result<()> {
+        self.write_internal(dir, true)
+    }
+
+    /// Dedicated servers save connected players separately.
+    pub fn write_without_player(&mut self, dir: &Path) -> Result<()> {
+        self.write_internal(dir, false)
+    }
+
+    fn write_internal(&mut self, dir: &Path, write_player: bool) -> Result<()> {
         fs::create_dir_all(dir)?;
         restore_level_dat(dir);
         let existing = read_dat(&dir.join("level.dat")).and_then(|r| r.get("Data").cloned());
@@ -3978,12 +4034,14 @@ impl Level {
             }
             write_saved_data(dir, "game_rules", rules)?;
         }
-        let player_file = dir
-            .join("players")
-            .join("data")
-            .join(format!("{}.dat", uuid_text(uuid)));
-        back_up_unreadable_player(&player_file);
-        write_dat(&player_file, self.player_tag())?;
+        if write_player {
+            let player_file = dir
+                .join("players")
+                .join("data")
+                .join(format!("{}.dat", uuid_text(uuid)));
+            back_up_unreadable_player(&player_file);
+            write_dat(&player_file, self.player_tag())?;
+        }
         write_dat(&dir.join("level.dat"), Tag::compound([("Data", data)]))?;
         Ok(())
     }
@@ -4533,6 +4591,41 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 #[cfg(test)]
 mod tests {
     use crate::mobs::spawner::SpawnDataExt;
+
+    #[test]
+    fn a_server_falls_back_to_level_dat_old_and_restores_it() {
+        let world = std::env::temp_dir().join(format!("horizon-dat-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&world);
+        fs::create_dir_all(&world).unwrap();
+        let level = |name: &str| {
+            Tag::compound([(
+                "Data",
+                Tag::compound([("LevelName", Tag::String(name.into()))]),
+            )])
+        };
+        // Both files broken, or only level.dat_old there: nothing to fall back to.
+        fs::write(world.join("level.dat"), b"cut short").unwrap();
+        assert!(!fall_back_to_level_dat_old(&world));
+        fs::write(world.join("level.dat_old"), b"cut short").unwrap();
+        assert!(!fall_back_to_level_dat_old(&world));
+        // A good level.dat_old: it takes level.dat's place and the broken file is kept.
+        write_dat(&world.join("level.dat_old"), level("old")).unwrap();
+        assert!(fall_back_to_level_dat_old(&world));
+        assert!(level_dat_issue(&world, false).is_none());
+        let kept = fs::read_dir(&world)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("level.dat_corrupted_")
+            })
+            .count();
+        assert_eq!(kept, 1);
+        // A readable level.dat is left alone.
+        assert!(!fall_back_to_level_dat_old(&world));
+        let _ = fs::remove_dir_all(&world);
+    }
 
     #[test]
     fn points_of_interest_save_as_poi_sections() {
@@ -5930,6 +6023,50 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Dedicated world saves must not overwrite separately managed player data.
+    #[test]
+    fn dedicated_world_save_preserves_player_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-dedicated-player-save-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut level = Level {
+            name: "Test".into(),
+            position: Some([12.5, 70.0, -8.25]),
+            inventory: vec![(0, "minecraft:diamond".into(), 7, 0)],
+            ..Level::default()
+        };
+
+        // Create a real player file using the existing singleplayer writer.
+        level.write(&dir).unwrap();
+        let uuid = level.player_uuid.unwrap();
+        let player_file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(uuid)));
+
+        let before = fs::read(&player_file).unwrap();
+
+        // Simulate an incomplete world-level player state.
+        level.position = None;
+        level.inventory.clear();
+        level.day_time = 12345;
+
+        // Dedicated saves must update metadata without touching player data.
+        level.write_without_player(&dir).unwrap();
+
+        let after = fs::read(&player_file).unwrap();
+        assert_eq!(before, after, "dedicated save overwrote player data");
+
+        // The world metadata must still be persisted.
+        let reopened = Level::read(&dir).unwrap();
+        assert_eq!(reopened.day_time, 12345);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn level_round_trips_through_the_vanilla_files() {
         let dir = std::env::temp_dir().join(format!("horizon-level-{}", std::process::id()));
@@ -6276,6 +6413,83 @@ mod tests {
             }
         });
         assert!(is_old_customized_world(&dir));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// `WorldOpenFlows.loadWorldStem`: the enabled data packs' level stems are the base of
+    /// `WorldDimensions.bake`, replacing the saved one of their id.
+    #[test]
+    fn world_stem_compatibility_reads_data_pack_dimensions() {
+        let dir = gen_world("stem-datapack");
+        write_world_gen_settings(&dir, 7, WorldGen::default()).unwrap();
+        assert!(!world_gen_unstable(&dir));
+        let write = |pack: &str, file: &str, text: &str| {
+            let path = dir.join("datapacks").join(pack).join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write("p", "pack.mcmeta", "{}");
+        // A pack's dimension of another id is not vanilla-like.
+        write(
+            "p",
+            "data/mypack/dimension/moon.json",
+            r#"{"type":"minecraft:the_end","generator":{"type":"minecraft:noise","settings":"minecraft:end","biome_source":{"type":"minecraft:the_end"}}}"#,
+        );
+        assert!(world_gen_unstable(&dir));
+        // Disabled, it counts for nothing.
+        fs::write(dir.join("datapacks.json"), r#"{"disabled":["file/p"]}"#).unwrap();
+        assert!(!world_gen_unstable(&dir));
+        fs::remove_file(dir.join("datapacks.json")).unwrap();
+        fs::remove_file(dir.join("datapacks/p/data/mypack/dimension/moon.json")).unwrap();
+        assert!(!world_gen_unstable(&dir));
+        // A pack's Nether with another biome source replaces the saved vanilla one.
+        write(
+            "p",
+            "data/minecraft/dimension/the_nether.json",
+            r#"{"type":"minecraft:the_nether","generator":{"type":"minecraft:noise","settings":"minecraft:nether","biome_source":{"type":"minecraft:fixed","biome":"minecraft:plains"}}}"#,
+        );
+        assert!(world_gen_unstable(&dir));
+        // And a vanilla-like one stays stable.
+        write(
+            "p",
+            "data/minecraft/dimension/the_nether.json",
+            r#"{"type":"minecraft:the_nether","generator":{"type":"minecraft:noise","settings":"minecraft:nether","biome_source":{"type":"minecraft:multi_noise","preset":"minecraft:nether"}}}"#,
+        );
+        assert!(!world_gen_unstable(&dir));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A world that still needs its file fixes keeps its generator settings in level.dat; they
+    /// are read as the fixes would leave them, so the question is asked on the first open.
+    #[test]
+    fn world_gen_settings_of_a_world_needing_file_fixes_are_read_in_memory() {
+        let dir = gen_world("stem-prefix");
+        write_world_gen_settings(&dir, 7, WorldGen::default()).unwrap();
+        let settings = world_gen_settings(&dir).unwrap();
+        let customized = {
+            let mut tag = settings.clone();
+            if let Tag::Compound(map) = &mut tag {
+                map.insert("legacy_custom_options".into(), string("{\"seaLevel\":63}"));
+            }
+            tag
+        };
+        // 26.3 layout moved back to the old one: settings in level.dat, no saved data file.
+        fs::remove_file(saved_data_path(&dir, "world_gen_settings")).unwrap();
+        write_dat(
+            &dir.join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("DataVersion", Tag::Int(4700)),
+                    ("WorldGenSettings", customized),
+                ]),
+            )]),
+        )
+        .unwrap();
+        assert!(needs_file_fixes(&dir));
+        let read = world_gen_settings(&dir).expect("settings");
+        assert!(read.get("dimensions").is_some());
+        assert!(!world_gen_unstable(&dir));
         let _ = fs::remove_dir_all(dir);
     }
 
