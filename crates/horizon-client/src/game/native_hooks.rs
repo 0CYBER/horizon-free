@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 36 adds recipes of a mod's own types (`native_recipes_of_type`,
+//! `native_recipe_ingredient`, `native_recipe_result`).
+//!
 //! API 35 adds the commands a mod owns on the client (`native_commands`), so
 //! that the chat box colours, completes and lists them like the game's own.
 //!
@@ -125,9 +128,11 @@ use super::{
     native_server::{NativeCommand, NativeServerPlayer},
 };
 use horizon_client::{
+    atlas_sources::qualified,
     block_entities::Pos,
     chat::ChatSource,
     containers::{BlockEntity, MOD_MENUS, ModBlockEntity, ModContainer},
+    crafting::{CustomRecipe, Ingredient, recipe_result},
     extras::Corner,
     extras_hud::Corners,
     fast_hash::FxHashMap,
@@ -167,7 +172,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 35;
+pub(crate) const NATIVE_HOOKS_API: u32 = 36;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -1526,6 +1531,62 @@ impl Game<'_> {
     ) {
         let page = RecipePage::new(title, tabs, tab, views);
         self.panel.show_recipes(mod_id, page);
+    }
+    /// The recipes of type `kind` (`mymod:crusher`), a type outside `minecraft`,
+    /// from `data/<namespace>/recipe/*.json` of the content mods (`.hmod`) and
+    /// the world's data packs, in file order: each one's id and its file as
+    /// JSON, for the mod to read as it likes. A data pack changes them on
+    /// `/reload`, so look them up again when you need them. Empty for a type
+    /// nobody uses and outside a world. These are the server's table on the
+    /// server thread, a dedicated server or a LAN host; a client, the
+    /// single-player window included, sees only the content mods' recipes, not
+    /// the world's data packs'. API 36.
+    pub(super) fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] {
+        if self.player.is_none() {
+            return &[];
+        }
+        self.recipes().custom.get(kind).map_or(&[], Vec::as_slice)
+    }
+    /// An ingredient as a recipe's JSON names it: an item, a `#tag`, or a list
+    /// of them, a bare id as `minecraft:` (as vanilla reads it); `test` says
+    /// whether a stack fits. Items the game doesn't know are left out; None
+    /// when nothing is left (an unknown or empty tag, for one) and outside a
+    /// world. API 36.
+    pub(super) fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> {
+        self.player.as_ref()?;
+        let qualify = |s: &str| match s.strip_prefix('#') {
+            Some(tag) => String::from("#") + &qualified(tag),
+            None => qualified(s),
+        };
+        let json = match json {
+            serde_json::Value::String(s) => serde_json::Value::String(qualify(s)),
+            serde_json::Value::Array(a) => serde_json::Value::Array(
+                a.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|s| serde_json::Value::String(qualify(s)))
+                    .collect(),
+            ),
+            _ => return None,
+        };
+        let items = self.items();
+        let known: Vec<String> = Ingredient::parse(&json, items)?
+            .1
+            .into_iter()
+            .filter(|item| items.get(item).is_some())
+            .collect();
+        (!known.is_empty()).then(|| Ingredient::of(known))
+    }
+    /// A stack as a recipe's `result` names it: `id` (a bare one as
+    /// `minecraft:`), `count` (1 by default, up to 99) and `components`. None
+    /// without an `id`, for an item the game doesn't know or a count outside
+    /// that, and outside a world. API 36.
+    pub(super) fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> {
+        self.player.as_ref()?;
+        let mut json = json.clone();
+        if let Some(id) = json["id"].as_str() {
+            json["id"] = qualified(id).into();
+        }
+        recipe_result(&json).filter(|s| self.items().get(&s.item).is_some())
     }
     /// Every item and recipe the game knows, made once (the same for every
     /// call); none outside a world. They are the window's own: the world's
