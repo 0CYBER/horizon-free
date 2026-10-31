@@ -200,6 +200,8 @@ struct Launcher {
     native_mismatch: Option<String>,
     confirm_remove: Option<String>,
     picker_open: bool,
+    /// Settings > Language's dropdown (`language_page.rs`).
+    language_menu: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
     account_menu: bool,
     /// Where the mouse went down to close a menu by pressing outside it, so that the
@@ -442,6 +444,7 @@ impl Launcher {
             native_mismatch: None,
             confirm_remove: None,
             picker_open: false,
+            language_menu: false,
             account_menu: false,
             menu_closed_at: None,
             skin: None,
@@ -585,6 +588,7 @@ impl Launcher {
             }
         }
         self.picker_open = false;
+        self.language_menu = false;
         self.account_menu = false;
     }
 
