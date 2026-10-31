@@ -161,6 +161,8 @@ pub struct Guest {
     pub position_this_tick: bool,
     /// Violation levels and the checks' state (the anticheat, when on).
     pub anticheat: horizon_anticheat::Player,
+    /// The movement prediction's replay of the client's own moves (only while it runs).
+    pub replay: Option<Box<super::prediction::Replay>>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -355,6 +357,7 @@ impl Guest {
             above_ground_ticks: 0,
             position_this_tick: false,
             anticheat: Default::default(),
+            replay: None,
             moved: false,
             loaded: false,
             load_timeout: CLIENT_LOADED_TIMEOUT,
