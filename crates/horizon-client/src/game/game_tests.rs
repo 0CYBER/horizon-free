@@ -10,7 +10,12 @@
 //! Not ported: test sequences (`GameTestSequence`: the built-in tests, only
 //! `always_pass`, do not use them), test environments other than the empty
 //! `all_of`, and removing the entities of a finished test.
-use super::{Dim, Game, structure_blocks::template_size, test_instances::TestDef};
+use super::{
+    Dim, Game,
+    structure_blocks::template_size,
+    test_entities::{aabb_of, inflate},
+    test_instances::TestDef,
+};
 use horizon_client::{
     containers::BlockEntity,
     lan::data::component_nbt,
@@ -18,7 +23,6 @@ use horizon_client::{
     test_instance_block::{ErrorMarker, Status, TestInstanceBlock},
     text::{self, Text},
 };
-use horizon_core::{position::BlockPos, ticks::TickArea};
 use horizon_world::{
     level::flags,
     worldgen::structure::{BoundingBox, Mirror, Rotation, StructureTemplate},
@@ -160,6 +164,8 @@ pub(super) struct Info {
     /// the original's for a rerun (`copyReset`).
     origin: u32,
     rerun: bool,
+    /// `succeed` removes the entities around the structure; the game does it.
+    discard_entities: bool,
 }
 
 impl Info {
@@ -190,6 +196,7 @@ impl Info {
             retry: Retry::none(),
             origin: id,
             rerun: false,
+            discard_entities: false,
         }
     }
 
@@ -247,6 +254,7 @@ impl Info {
     fn succeed(&mut self) {
         if self.error.is_none() {
             self.finish();
+            self.discard_entities = true;
         }
     }
 
@@ -630,17 +638,7 @@ impl Game<'_> {
         info.placed = true;
         self.encase_test_structure(pos);
         if let Some(bounds) = self.test_bounding_box(pos) {
-            // `getBlockTicks().clearArea`, `clearBlockEvents`.
-            let area = TickArea::new(
-                BlockPos::new(bounds.min[0], bounds.min[1], bounds.min[2]),
-                BlockPos::new(bounds.max[0], bounds.max[1], bounds.max[2]),
-            );
-            self.block_ticks.blocks.clear_area(area);
-            self.block_ticks.block_events.retain(|e| {
-                !(bounds.min[0]..=bounds.max[0]).contains(&e.pos.x)
-                    || !(bounds.min[1]..=bounds.max[1]).contains(&e.pos.y)
-                    || !(bounds.min[2]..=bounds.max[2]).contains(&e.pos.z)
-            });
+            self.clear_test_ticks(&bounds);
         }
         true
     }
@@ -687,6 +685,12 @@ impl Game<'_> {
             return;
         }
         self.tick_internal(info);
+        if std::mem::take(&mut info.discard_entities)
+            && let Some(b) = self.test_structure_box(info.pos)
+        {
+            // `GameTestInfo.succeed`: `getStructureBounds().inflate(1.0)`.
+            self.discard_entities_in(inflate(aabb_of(&b), 1.0));
+        }
         if info.done {
             self.test_finished(info);
         }
@@ -1047,6 +1051,7 @@ impl Game<'_> {
         if passed {
             self.remove_test_barriers(info.pos);
         } else if halt {
+            self.release_forced_chunks();
             self.clear_game_tests();
             return;
         }
@@ -1056,6 +1061,7 @@ impl Game<'_> {
         runner.batch_pending = runner.batch_pending.saturating_sub(1);
         if runner.batch_pending == 0 {
             let next = runner.current + 1;
+            self.release_forced_chunks();
             self.run_batch(next);
         }
     }

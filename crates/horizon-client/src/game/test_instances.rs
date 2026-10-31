@@ -6,6 +6,7 @@ use super::{
     game_tests::Info,
     lan::LanHost,
     structure_blocks::{create_seed, template_size},
+    test_entities::{aabb_of, inflate},
 };
 use horizon_client::{
     block_entity_render::vertex_light,
@@ -17,7 +18,7 @@ use horizon_client::{
     test_instance_block::{Data, Status, TestInstanceBlock},
     text::{self, Text},
 };
-use horizon_core::position::BlockPos;
+use horizon_core::{position::BlockPos, ticks::TickArea};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::{
     level::{TemplateSettings, flags},
@@ -482,13 +483,17 @@ impl Game<'_> {
             return false;
         };
         let origin = [pos.0, pos.1, pos.2];
-        // `StructureUtils.clearSpaceForStructure(getTestBoundingBox())`.
+        // `forceLoadChunks`, then `StructureUtils.clearSpaceForStructure(
+        // getTestBoundingBox())`.
         if let Some(inner) = self.test_structure_box(pos) {
+            self.force_load_test_chunks(&inner);
             let area = BoundingBox::new(
                 inner.min.map(|v| v - padding),
                 inner.max.map(|v| v + padding),
             );
             self.clear_test_space(&area);
+            // removeEntities: `getTestBounds()`, the structure's box inflated.
+            self.discard_entities_in(inflate(aabb_of(&inner), f64::from(padding)));
         }
         let corner = block.start_corner(origin, padding, rotation);
         let settings = TemplateSettings {
@@ -526,6 +531,24 @@ impl Game<'_> {
                 }
             }
         }
+        // `getBlockTicks().clearArea`, `clearBlockEvents`.
+        self.clear_test_ticks(area);
+        // The entities but the players.
+        self.discard_entities_in(aabb_of(area));
+    }
+
+    /// `getBlockTicks().clearArea(bounds)` and `clearBlockEvents(bounds)`.
+    pub(super) fn clear_test_ticks(&mut self, bounds: &BoundingBox) {
+        let area = TickArea::new(
+            BlockPos::new(bounds.min[0], bounds.min[1], bounds.min[2]),
+            BlockPos::new(bounds.max[0], bounds.max[1], bounds.max[2]),
+        );
+        self.block_ticks.blocks.clear_area(area);
+        self.block_ticks.block_events.retain(|e| {
+            !(bounds.min[0]..=bounds.max[0]).contains(&e.pos.x)
+                || !(bounds.min[1]..=bounds.max[1]).contains(&e.pos.y)
+                || !(bounds.min[2]..=bounds.max[2]).contains(&e.pos.z)
+        });
     }
 
     /// `saveTest`: the test's structure id, saved from the world.
