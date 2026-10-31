@@ -331,8 +331,11 @@ pub(super) struct Remote {
     signatures: horizon_protocol::secure_chat::SignatureCache,
     /// `ChatListener.previousMessageTime`: when a message last showed, if one has.
     chat_previous: Option<Instant>,
-    /// The server's command tree (ClientboundCommandsPacket).
-    pub commands: Option<horizon_client::command::Dispatcher>,
+    /// The tree the chat colours, completes and parses with: the server's
+    /// (ClientboundCommandsPacket) once it has sent one, else the game's own,
+    /// plus the commands native mods own (`chat::chat_tree_for`). Rebuilt where
+    /// that base changes, not at each keystroke.
+    pub chat_tree: horizon_client::command::Dispatcher,
     /// `ClientSuggestionProvider.customCompletionSuggestions`: the extra chat
     /// completions this server sent (ClientboundCustomChatCompletionsPacket).
     custom_completions: std::collections::BTreeSet<String>,
@@ -654,6 +657,9 @@ impl Game<'_> {
         self.apply_settings();
         self.clear_waypoints();
         self.boss_overlay.reset();
+        // The chat's tree until the server sends its own, or forever when it
+        // sends none: the game's own, plus the commands native mods own.
+        let chat_tree = self.chat_tree_for(None);
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
@@ -705,7 +711,7 @@ impl Game<'_> {
             chat_queue: VecDeque::new(),
             signatures: Default::default(),
             chat_previous: None,
-            commands: None,
+            chat_tree,
             custom_completions: Default::default(),
             players: HashMap::new(),
             tab_players: HashMap::new(),
@@ -3535,8 +3541,11 @@ impl Game<'_> {
                     &p,
                     horizon_client::command::vanilla::dispatcher(),
                 );
+                // The chat's tree follows the server's now; a mod's commands
+                // go into it again (`chat_tree_for`).
+                let chat_tree = self.chat_tree_for(Some(&tree));
                 if let Some(r) = self.remote.as_mut() {
-                    r.commands = Some(tree);
+                    r.chat_tree = chat_tree;
                 }
             }
             C::Cooldown(p) => {

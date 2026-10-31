@@ -51,6 +51,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_command"
     },
     {
+      "name": "commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_commands"
+    },
+    {
       "name": "zoom",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_zoom"

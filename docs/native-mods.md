@@ -107,6 +107,10 @@ output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player 
 tells a player why, even inside their own hook; and the players
 `native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
 
+API 23 adds the commands a mod owns on the client: `native_commands` is asked for their names, so the chat box
+colours, completes and lists them like the game's own, and `native_command` runs them. A name the game already has
+keeps that command. Bundles that use it need `"hooks": 23`.
+
 API 22 adds what a server mod needs to keep the world itself out of guarded land. `native_block_spread` hears a
 fluid flow or fire spread into a block, `native_piston_move` a piston's push or pull, `native_explosion_detonate` the
 blocks an explosion is about to break (a mod takes out those it spares), `native_fill_bucket` a bucket filled or
