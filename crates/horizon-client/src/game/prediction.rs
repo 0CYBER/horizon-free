@@ -59,19 +59,21 @@ impl Game<'_> {
         };
         if let Some(restart) = record.take_restart() {
             // What the client keeps through a teleport (its jump delay, a glide...) is the last
-            // replay's, once it has played the ticks before it.
+            // replay's, once it has played the ticks before it. The client's motion through the
+            // teleport is its own (an End gateway's), and a replay that was excused when the teleport
+            // came may be off in what it can't see: either way the replay finds the client again.
+            let mut excused = restart.kept_motion;
             let mut replay = g
                 .replay
                 .take()
                 .and_then(|mut replay| {
-                    replay
-                        .finish(record, server, &restart, &mut run)
-                        .then_some(replay)
+                    let finished = replay.finish(record, server, &restart, &mut run);
+                    excused |= replay.excused();
+                    finished.then_some(replay)
                 })
                 .unwrap_or_else(|| Box::new(Replay::new(server, &restart)));
             replay.restart(&restart);
-            // The client's motion through the teleport is its own: the replay finds it again.
-            if restart.kept_motion {
+            if excused {
                 replay.excuse();
             }
             g.replay = Some(replay);

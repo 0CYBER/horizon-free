@@ -20,6 +20,11 @@ Checks:
          soul sand, swims, walks into cows, has blocks changed around it, flies in creative, glides with an
          elytra and a firework, launches with riptide and rides a boat: it is never flagged. A bot, which
          moves by its own rules and sends no keys, is flagged and sent back.
+- prediction-vanilla (only with --check): the same with the real vanilla 26.3 client (tools/vanilla_client.py, from the owner's
+         own files; on macOS from the logged-in screen session, even a locked one), its keys pressed by
+         VanillaMover (mods/horizon/src/test/java): it walks, sprint-jumps, strafes and sneaks, with Speed
+         given and cleared, over packed ice, swims, walks into cows, jumps at a block set in front of it and
+         glides with an elytra and a firework, through the same relay: it is never flagged.
 
 Each server runs in a fresh folder with fresh HORIZON_HOME and XDG folders (lab.game_env), on a free port,
 in a flat world (creative unless the check says otherwise: the bots fly). Build first:
@@ -359,7 +364,142 @@ def check_prediction(bins, scratch, out, seconds):
           f'times and sent back {cheater["pulled_back"]} times')
 
 
-CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction}
+class VanillaClient:
+    """The vanilla client, joined to `address` as `name`, its keys pressed by VanillaMover from `send`."""
+
+    def __init__(self, address, name, work, log):
+        import vanilla_client  # noqa: E402 (only this check runs it)
+        classes = work / 'classes'
+        classes.mkdir(parents=True)
+        jars = os.pathsep.join(map(str, vanilla_client.classpath()))
+        release = str(lab.config()[0]['minecraft']['java_major'])
+        mover = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaMover.java'
+        subprocess.run(['javac', '--release', release, '-proc:none', '-nowarn', '-cp', jars, '-d', classes, mover],
+                       check=True, capture_output=True)
+        args = argparse.Namespace(name=name, join=address, world=None, game_dir=work / 'client', assets=None,
+                                  heap='2G', width=854, height=480, lan_port=None, backend=None)
+        args.game_dir.mkdir()
+        vanilla_client.write_options(args.game_dir, {})
+        command = vanilla_client.command(args)
+        cp = command.index('-cp') + 1
+        command[cp] = os.pathsep.join([str(classes), command[cp]])
+        command[command.index('net.minecraft.client.main.Main')] = 'dev.horizonlab.parity.VanillaMover'
+        self.log = open(log, 'w')
+        self.ready = threading.Event()
+        self.positions = []
+        self.process = subprocess.Popen(command, cwd=args.game_dir, env=vanilla_client.environment(), text=True,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        threading.Thread(target=self.pump, daemon=True).start()
+
+    def pump(self):
+        for line in self.process.stdout:
+            self.log.write(line)
+            if '[VanillaMover] ready' in line:
+                self.ready.set()
+            elif '[VanillaMover] at ' in line:
+                self.positions.append([float(v) for v in line.split('[VanillaMover] at ')[1].split()[:3]])
+
+    def __call__(self, *lines, then=0.0):
+        """Send `lines` ("down forward", "look 90 0"...), then wait `then` seconds."""
+        for line in lines:
+            self.process.stdin.write(line + '\n')
+        self.process.stdin.flush()
+        time.sleep(then)
+
+    def close(self):
+        self.process.terminate()
+        try:
+            self.process.wait(20)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+        self.log.close()
+
+
+def vanilla_play(keys, console):
+    """What the vanilla client does: a second or a few per step, as a player would."""
+    at = lambda command: console(f'execute as Vanilla at Vanilla run {command}')  # noqa: E731
+    keys('look 0 0', 'down forward', then=3)
+    keys('down sprint', 'down jump', then=4)
+    keys('up jump', 'up sprint', 'down left', 'look 45 0', then=2)
+    keys('up left', 'up forward', 'down sneak', 'down back', then=2)
+    keys('up sneak', 'up back')
+    console('effect give Vanilla minecraft:speed 30 2 true')
+    keys('down forward', 'down jump', then=4)
+    keys('up jump', 'up forward')
+    console('effect clear Vanilla')
+    at('fill ~-3 ~-1 ~-3 ~3 ~-1 ~12 minecraft:packed_ice')
+    keys('down forward', 'down sprint', 'down jump', then=3)
+    keys('up jump', 'up sprint', 'up forward', then=1)
+    at('fill ~-3 ~-2 ~-3 ~3 ~-1 ~12 minecraft:water')
+    keys('down forward', then=4)
+    keys('down jump', then=2)
+    keys('up jump', 'up forward')
+    at('fill ~-4 ~-4 ~-4 ~4 ~-1 ~13 minecraft:stone')
+    time.sleep(2)
+    at('summon minecraft:cow ^ ^ ^2')
+    keys('down forward', then=2)
+    keys('up forward')
+    console('kill @e[type=minecraft:cow]')
+    at('setblock ^ ^ ^1 minecraft:stone')
+    keys('down forward', 'down jump', then=2)
+    keys('up forward', 'up jump', then=1)
+    # An elytra from 60 blocks up (Resistance V against the landing): a jump to open it, a firework.
+    console('effect give Vanilla minecraft:resistance 60 4 true')
+    console('item replace entity Vanilla armor.chest with minecraft:elytra')
+    console('item replace entity Vanilla weapon.mainhand with minecraft:firework_rocket')
+    at('tp @s ~ ~60 ~ 0 0')
+    time.sleep(1)
+    keys('down jump', then=0.2)
+    keys('up jump', then=0.5)
+    keys('down jump', then=0.2)
+    keys('up jump', then=0.5)
+    keys('down use', then=0.2)
+    keys('up use', then=4)
+    at('tp @s ~ -60 ~')
+    time.sleep(3)
+
+
+def check_prediction_vanilla(bins, scratch, out, seconds):
+    folder = scratch / 'prediction-vanilla'
+    toml = '[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
+    server, port = start(bins, folder, toml, out, 'prediction-vanilla', gamemode='survival', difficulty='peaceful')
+    relay = Jitter(port)
+    client = None
+    try:
+        try:
+            client = VanillaClient(f'127.0.0.1:{relay.port}', 'Vanilla', folder / 'vanilla',
+                                   out / 'prediction-vanilla-client.log')
+            if not client.ready.wait(300):
+                raise Failed('prediction-vanilla: the vanilla client never got into the world')
+            time.sleep(5)
+            client('where')
+            vanilla_play(client, server.console)
+            client('where', then=1)
+        finally:
+            if client:
+                client.close()
+            relay.close()
+    finally:
+        server.stop()
+    log = folder / 'logs/anticheat.log'
+    if log.exists():
+        shutil.copy(log, out / 'prediction-vanilla-anticheat.log')
+        if 'Vanilla' in log.read_text():
+            raise Failed(f'prediction-vanilla: the vanilla client was flagged:\n{log.read_text()}')
+    if len(client.positions) < 2:
+        raise Failed('prediction-vanilla: the vanilla client did not say where it was')
+    (x0, _, z0), (x1, _, z1) = client.positions[0], client.positions[-1]
+    walked = ((x1 - x0) ** 2 + (z1 - z0) ** 2) ** 0.5
+    if walked < 20:
+        raise Failed(f'prediction-vanilla: the vanilla client only got {walked:.1f} blocks away: its keys did nothing')
+    print(f'prediction-vanilla: the vanilla client (20-120 ms jitter) was never flagged; it ended {walked:.0f} blocks '
+          'from where it joined')
+
+
+CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction,
+          'prediction-vanilla': check_prediction_vanilla}
+# Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
+DEFAULT = ['ground', 'off', 'prediction', 'timer']
 
 
 def main():
@@ -376,7 +516,7 @@ def main():
     os.environ.update(lab.game_env())
     failed = []
     with tempfile.TemporaryDirectory(prefix='anticheat-e2e-') as scratch:
-        for name in args.check or sorted(CHECKS):
+        for name in args.check or DEFAULT:
             try:
                 CHECKS[name](bins, Path(scratch), out, args.seconds)
             except (Failed, RuntimeError) as e:
