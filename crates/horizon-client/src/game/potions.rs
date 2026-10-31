@@ -18,7 +18,9 @@ use horizon_client::{
     hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
     mesher::Vertex,
+    mobs::{Damage, DamageKind, Who},
     particles::{ParticleOptions, ParticleType},
+    projectiles::{Projectile, ProjectileKind},
     text::Text,
 };
 use horizon_core::{
@@ -70,22 +72,9 @@ impl PotionCloud {
         ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0])
     }
 }
-/// A mob's effect ids carry the `minecraft:` namespace.
+/// A mob's effect ids carry the `minecraft:` namespace; a mod's has its own.
 pub(super) fn mob_effect_id(id: &str) -> Option<&'static str> {
-    use std::{collections::HashMap, sync::OnceLock};
-    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    let id = id.trim_start_matches("minecraft:");
-    IDS.get_or_init(|| {
-        brewing::EFFECTS
-            .iter()
-            .map(|e| {
-                let full: &'static str = Box::leak(format!("minecraft:{}", e.id).into_boxed_str());
-                (e.id, full)
-            })
-            .collect()
-    })
-    .get(id)
-    .copied()
+    brewing::effect(id).map(|e| brewing::namespaced(e.id))
 }
 /// `LivingEntity.canBeAffected` with the mob overrides (`WitherBoss` and
 /// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,
@@ -512,6 +501,47 @@ impl Game<'_> {
             _ => Ok(false),
         }
     }
+    /// `PotionItem.useOn`: a water bottle used on a block that turns to mud
+    /// (`#convertible_to_mud`), not on its underside, is poured out and the
+    /// block becomes mud.
+    pub(super) fn use_water_bottle_on_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        stack: &ItemStack,
+    ) -> horizon_client::Result<bool> {
+        if &*stack.item != "minecraft:potion"
+            || stack.potion() != Some("minecraft:water")
+            || face == [0, -1, 0]
+            || !self.block_in_tag("minecraft:convertible_to_mud", &self.block_name(pos))
+        {
+            return Ok(false);
+        }
+        let centre = pos.map(|v| f64::from(v) + 0.5);
+        self.audio
+            .play("minecraft:entity.generic.splash", Some(centre), 1.0, 1.0);
+        self.fill_held(ItemStack::new("minecraft:glass_bottle", 1));
+        // ServerLevel.sendParticles: five splashes above the block.
+        for _ in 0..5 {
+            let r = &mut self.world.random;
+            let at = [
+                f64::from(pos[0]) + r.next_double(),
+                f64::from(pos[1] + 1),
+                f64::from(pos[2]) + r.next_double(),
+            ];
+            self.particles
+                .add(&ParticleOptions::simple(ParticleType::Splash), at, [0.0; 3]);
+        }
+        self.audio
+            .play("minecraft:item.bottle.empty", Some(centre), 1.0, 1.0);
+        self.post_block_game_event("minecraft:fluid_place", pos, None, None);
+        if let Some(mud) = self.pack.assets.registry.default_state("minecraft:mud") {
+            self.level_set(pos, mud)?;
+        }
+        self.stats.add("used", &stack.item, 1);
+        self.swing_arm();
+        Ok(true)
+    }
     /// `ItemUtils.createFilledResult`: replace one of the held stack.
     fn fill_held(&mut self, filled: ItemStack) {
         if self.creative {
@@ -554,7 +584,12 @@ impl Game<'_> {
             self.drink_ominous_bottle(slot, stack);
             return true;
         }
-        let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
+        // PotionContents.onConsume: the potion's and the custom effects, at the
+        // stack's POTION_DURATION_SCALE.
+        let (lasting, now) = PlayerEffects::contents_effects(
+            &brewing::contents_effects(stack),
+            stack.potion_duration_scale(),
+        );
         for e in lasting {
             self.add_player_effect(e);
         }
@@ -576,6 +611,83 @@ impl Game<'_> {
             }
         }
         true
+    }
+    /// `Arrow.doPostHurtEffects` and `SpectralArrow.doPostHurtEffects`: the
+    /// arrow's item gives its target Glowing (spectral) or its potion contents
+    /// at the stack's duration scale (a tipped arrow's default is an eighth);
+    /// a mob's arrow without such an item (a stray's) carries its own effect.
+    /// Instant effects act at once: harming hurts and healing heals, the
+    /// other way round for the undead.
+    pub(super) fn arrow_post_hurt_effects(&mut self, p: &Projectile, who: Who) {
+        let from_item = p.arrow.as_ref().map(|a| &a.pickup_item);
+        let mut effects: Vec<(&'static str, i32, i32)> = match from_item {
+            Some(s) if &*s.item == "minecraft:spectral_arrow" => vec![("glowing", 200, 0)],
+            Some(s) => {
+                let scale = s.potion_duration_scale();
+                brewing::contents_effects(s)
+                    .into_iter()
+                    .map(|(id, d, amp)| {
+                        (id, horizon_client::effects::scaled_duration(d, scale), amp)
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        if effects.is_empty()
+            && let ProjectileKind::Arrow {
+                effect: Some((id, ticks)),
+                ..
+            } = p.kind
+            && let Some(e) = brewing::effect(id)
+        {
+            effects.push((e.id, ticks, 0));
+        }
+        if effects.is_empty() {
+            return;
+        }
+        match who {
+            Who::Player => {
+                for (id, duration, amp) in effects {
+                    if brewing::effect(id).is_some_and(|e| e.instant) {
+                        if let Some(a) = horizon_client::effects::instant(id, amp, 1.0) {
+                            self.apply_effect_action(a);
+                        }
+                    } else {
+                        self.add_player_effect(EffectInstance::new(id, duration, amp));
+                    }
+                }
+            }
+            Who::Mob(id) => {
+                let tags = &self.res.stations().enchantments.entity_tags;
+                let Some(m) = self.mobs.iter_mut().find(|m| m.id == id && m.alive()) else {
+                    return;
+                };
+                let inverted = tags
+                    .get("minecraft:inverted_healing_and_harm")
+                    .is_some_and(|t| t.contains(&m.kind.id));
+                for (effect, duration, amp) in effects {
+                    match effect {
+                        "instant_damage" | "instant_health" => {
+                            // `LivingEntity.addEffect` refuses nothing here; the
+                            // tick hurts with magic (6 << amp) or heals (4 << amp).
+                            if (effect == "instant_damage") != inverted {
+                                m.damage((6 << amp.min(30)) as f32, Damage::of(DamageKind::Magic));
+                            } else {
+                                m.health =
+                                    (m.health + (4 << amp.min(30)) as f32).min(m.attrs.max_health);
+                            }
+                        }
+                        _ => {
+                            if mob_can_be_affected(tags, &m.kind.id, effect)
+                                && let Some(name) = mob_effect_id(effect)
+                            {
+                                m.add_effect(name, duration, amp);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     pub(super) fn apply_effect_action(&mut self, action: EffectAction) {
         let creative = self.creative;
@@ -1317,12 +1429,13 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// `EffectsInInventory`: panels to the right of survival/creative inventory.
+    /// The caller draws the returned tooltip after every other tooltip.
     pub(super) fn draw_inventory_effects(
         &self,
         batch: &mut HudBatch,
         origin: (f32, f32),
         image_width: i32,
-    ) {
+    ) -> Option<[(String, u32); 2]> {
         let panels = inventory_effects::panels(
             batch.width as i32,
             [origin.0 as i32, origin.1 as i32],
@@ -1332,14 +1445,12 @@ impl Game<'_> {
             &|key| self.pack.names.display_get(key),
             &|text| self.gui.atlas.font.width(text).ceil() as i32,
         );
-        if let Some(lines) = inventory_effects::paint(
+        inventory_effects::paint(
             batch,
             &self.gui.atlas,
             &panels,
             [self.cursor.0 as i32, self.cursor.1 as i32],
-        ) {
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
-        }
+        )
     }
     /// Effects saved in level.dat (`Player.active_effects`).
     pub(super) fn restore_effects(&mut self) {

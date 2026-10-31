@@ -422,6 +422,7 @@ impl Game<'_> {
             Screen::ConfirmLink => "confirm-link",
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
+            Screen::BlockEditor => "block-editor",
             Screen::Win => "win",
         }
     }
@@ -548,7 +549,7 @@ impl Game<'_> {
                 selected,
             } => json!({
                 "mode": "select-world",
-                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 })).collect::<Vec<_>>(),
+                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1, "corrupted": w.corrupted })).collect::<Vec<_>>(),
                 "selected": selected,
             }),
             Mode::Create {
@@ -602,6 +603,28 @@ impl Game<'_> {
             Mode::BackupBeforeUpgrade { world, .. } => {
                 json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
             }
+            Mode::OptimizeConfirm {
+                world, erase_cache, ..
+            } => {
+                json!({ "mode": "optimize-world-confirm", "folder": world.folder, "name": world.name, "erase_cache": erase_cache })
+            }
+            Mode::Optimize { world } => {
+                json!({ "mode": "optimize-world", "folder": world.folder, "name": world.name })
+            }
+            Mode::LowDiskSpace { world } => {
+                json!({ "mode": "low-disk-space", "folder": world.folder, "name": world.name })
+            }
+            Mode::Recover { world, issues } => {
+                let issue = |i: &Option<horizon_client::save::DatIssue>| match i {
+                    None => json!(null),
+                    Some(horizon_client::save::DatIssue::Missing) => json!("missing file"),
+                    Some(horizon_client::save::DatIssue::Unreadable(why)) => json!(why),
+                };
+                json!({ "mode": "recover-world", "folder": world.folder, "level_dat": issue(&issues[0]), "level_dat_old": issue(&issues[1]) })
+            }
+            Mode::Recovered { world, success } => {
+                json!({ "mode": "recovery-done", "folder": world.folder, "success": success })
+            }
             Mode::Error { message, .. } => {
                 json!({ "mode": "world-operation-error", "message": message })
             }
@@ -614,6 +637,8 @@ impl Game<'_> {
             Mode::MultiplayerWarning { check } => {
                 json!({ "mode": "multiplayer-warning", "check": check })
             }
+            Mode::Onboarding(_) => json!({ "mode": "accessibility-onboarding" }),
+            Mode::BanNotice(_) => json!({ "mode": "ban-notice" }),
         }
     }
 

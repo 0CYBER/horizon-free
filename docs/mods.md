@@ -18,9 +18,9 @@ Mods are **off by default**. A fresh install has no `horizon-mods` folder and pl
    game folder (the one holding `options.txt`): a content mod's `.hmod` (or a folder holding `horizon-mod.toml`) in
    `horizon-mods/`. Native mods go in `horizon-native-mods/`, and the launcher builds them
    ([native-mods.md](native-mods.md)).
-2. Options > **Mods** lists them with what each may do ("May add blocks and items to your worlds") and a switch.
-   They start off. The choice is kept in `horizon-mods.txt` (`mod.<id>:true`).
-3. A content mod's blocks and items load once, when the game starts: restart the game after a switch.
+2. Options > **Mods** lists them with what each may do ("May add blocks, items and mob effects to your worlds") and a
+   switch. They start off. The choice is kept in `horizon-mods.txt` (`mod.<id>:true`).
+3. A content mod's blocks, items and mob effects load once, when the game starts: restart the game after a switch.
 4. A mod that can't load shows why, in red, on its row.
 
 Two turned-on content mods never own the same namespace: the first by file name loads, and the other stays out with
@@ -48,8 +48,8 @@ cargo horizon-mod check target/horizon-mod/my_mod.hmod   # the registry's checks
   at start, so rebuild and run again after an edit.
 - `check <file>` runs what the registry runs: the file's size and SHA-256, its manifest and content, and a signature
   with `--key <public key> --signature <file>.minisig`. It reads `.hmod`, `.hnmod`, `.hpack`, resource pack `.zip`
-  and `.hshader` files, and refuses an `.hmod` with WebAssembly code.
-- `registry build|review|check|list` is the registry repository's CI ([api/mod-index.md](api/mod-index.md)).
+  and `.hshader` files.
+- `registry build|review|check|list|release|page` is the registry repository's CI ([api/mod-index.md](api/mod-index.md)).
 
 ### The manifest
 
@@ -71,7 +71,7 @@ Unknown keys are refused, so a typo is an error, not a silently ignored permissi
 
 A content mod has capability `registries` and carries `assets/` and `data/` in the `.hmod`. It adds blocks and items
 by declaring them in `data/<id>/horizon/block/*.json` and `data/<id>/horizon/item/*.json`, each copying a vanilla
-template ([modpacks.md](modpacks.md#registries-02-data-driven-blocks-and-items)):
+template ([modpacks.md](modpacks.md#registries-02-data-driven-blocks-items-and-mob-effects)), and mob effects (below):
 
 ```json
 { "template": "minecraft:iron_block",
@@ -95,10 +95,48 @@ gets its own damage and durability, or a tool its mining speed:
     "!minecraft:repairable": {} } }
 ```
 
+A block's item takes the same `components`, over the components of its
+template block's item; a block with `"item": false` can't have them. Block files
+have no `max_stack_size` or `rarity` keys, so those two go in `components` here
+(an integer 1 to 99, and one of `common`, `uncommon`, `rare`, `epic`):
+
+```json
+{ "template": "minecraft:iron_block",
+  "components": {
+    "minecraft:max_stack_size": 16,
+    "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } } }
+```
+
 A component type no vanilla item has is refused, so a misspelt one fails
 the load instead of doing nothing. Behaviour the game ties to a vanilla
 item's id doesn't come along yet: a copy of the trident doesn't throw
 ([#3305](https://github.com/horizon-rust/horizon/issues/3305)).
+
+A mod effect is declared in `data/<id>/horizon/mob_effect/<name>.json` with what vanilla's `MobEffect` takes: its
+category (`beneficial`, `harmful` or `neutral`) and its RGB colour (0 to `0xFFFFFF`), which its particles take:
+
+```json
+{ "category": "harmful", "color": 9154528 }
+```
+
+It is the effect `<id>:<name>`: `/effect give @s ruby:glow 30` gives it, saves and mobs keep it, and it reaches LAN and
+dedicated server players who run the same mods (its network id follows vanilla's). Its name is the translation
+`effect.<id>.<name>` from the mod's `assets/<id>/lang/`. Its icon is not drawn yet: the HUD shows the effect's frame and
+the inventory its frame and name, without an icon. It does nothing on its own yet: no tick behaviour and no attribute
+modifiers. A world opened without the mod drops the effect from its players and mobs. Clients join a server only with
+the same mods' effects, as with its blocks.
+
+`crafting_remainder` names what the item leaves in the crafting grid when a
+recipe uses it, as a milk bucket leaves a bucket (vanilla's
+`Item.Properties.craftRemainder`, not a data component): a vanilla item or
+one of the mod's own, refused at load otherwise. It holds on the crafting
+table, the inventory grid and the crafter, not yet as furnace fuel or in a
+brewing stand. What the item leaves once eaten
+or drunk is the `minecraft:use_remainder` component instead:
+
+```json
+{ "template": "minecraft:mushroom_stew", "crafting_remainder": "minecraft:bowl" }
+```
 
 The fence: files go in the mod's own namespaces (`assets/<id>/`,
 `data/<id>/`, and those its manifest lists), plus additions to vanilla tags
@@ -117,7 +155,7 @@ namespaces = ["kaisyn", "towns_and_towers"]
 ```
 
 A listed namespace is the mod's as its id is: its `assets/` and `data/` files load, and the game reads its tags,
-recipes, names and loot. Blocks and items are still declared under `data/<id>/horizon/` only. `minecraft`, `c` and
+recipes, names and loot. Blocks, items and mob effects are declared in `data/<id>/horizon/` only. `minecraft`, `c` and
 `horizon` cannot be listed. Two mods that are on may not own the same namespace (one's id or listed namespace being
 the other's): the game keeps the first in load order and leaves the other's content out, with "mods A and B both use
 the namespace N; turn one of them off" in the log. Paths use vanilla's resource characters, at most 65,536 files, 16
@@ -167,32 +205,44 @@ a `horizon-mixin.toml` and a few `.rs` helpers that hook into named functions of
 [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template). How the launcher builds
 one, what it pins and why it is not sandboxed: [native-mods.md](native-mods.md).
 
+A native mod's config files go in the game's shared `config/` folder, beside `options.txt` (on a dedicated server,
+beside `server.properties`), as Fabric and NeoForge mods' do: the mod picks its own file names, such as
+`config/<mod id>.json`. It asks for the folder with `Game::native_config_dir()` (hook points API 26), which needs no
+game, so it works from any hook, and makes the folder when missing. Settings kept with `native_set_setting` stay where they were, in `horizon-mods/.horizon-mod-data/<id>/`.
+
 ## Publish your mod
 
-Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon, each reviewed before it is
-published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher (Mods, then
-**Horizon** beside Modrinth), which checks every file before it installs it.
+Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon. **A project is reviewed
+once, when it is listed; its later releases are checked by machine, not read by a person.** Players find them at
+[playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher (Mods, then **Horizon** beside Modrinth),
+which checks every file before it installs it.
 
 1. Run `cargo horizon-mod check` on the file (above): the registry runs the same checks.
-2. Put the source somewhere public, under a licence that lets players run it: reviewers read it, and the file must be
-   built from it. A native mod's `.hnmod` is its source, and a maintainer reads it before it is listed.
-3. Open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub (it reads only your
-   public profile) and fill in the page: the file, its name and summary, licence, source address, and optionally a
-   minisign public key with the file's `.minisig`.
-4. The form checks the file again and opens a pull request in
-   [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) that adds `mods/<id>.toml`, with you as its
-   owner. That repository's checks run `cargo horizon-mod check` on the file and post their report on the pull
-   request; answer the reviewers there.
-5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
-   the launcher.
+2. Put the source in a public GitHub repository, under a licence that lets players run it. A native mod's `.hnmod` is
+   its source.
+3. Publish a **GitHub release** in it with the file as an asset (`.hmod`, `.hnmod`, `.hpack`, `.hshader`, or a resource
+   pack's `.zip`), and its `.minisig` beside it if you sign. The release notes are the changelog.
+4. List the project once: open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub
+   and give the repository and the page (name, summary, licence, optionally a minisign public key). It opens a pull
+   request in [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) adding `mods/<id>.toml`, with
+   you as owner. A reviewer reads the repository and its source and merges it.
 
-Once it is published, its page and its card in the launcher show its downloads (GitHub's counts of its files,
-refreshed every hour) and its rating: players signed in with GitHub on its page give it 1 to 5 stars, one rating per
-account, which they can change. Its owners can't rate it, and nobody sees who rated.
+**Releasing a version is only step 3.** Publish a GitHub release (not a draft or a pre-release); within the hour the
+registry reads it, runs the checks a submission runs (the file's own, the signature, the id and the version in the
+file's manifest), and lists it. A release that fails is skipped and reported in an issue of the registry, never
+published. Nobody opens a pull request and nobody reviews it. The version is the one in the file's manifest (the tag
+when the file has none), the date and the changelog are the release's, the SHA-256 is computed by the registry, and
+the launcher downloads the asset from your repository and refuses any other bytes. A published file never changes:
+publish a new version. `revoked.toml` takes a bad one down.
 
-An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
-has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
-says how). The formats: [api/mod-index.md](api/mod-index.md).
+Once it is published, its page and its card in the launcher show its rating: players signed in with GitHub on its
+page give it 1 to 5 stars, one rating per account, which they can change. Its owners can't rate it, and nobody sees
+who rated.
+
+Your page can live in your repository too: a `horizon-registry.toml` at its root (on the newest release's tag) with
+`name`, `summary`, `description`, `authors` and `license` fills what the registry's entry leaves out; the entry's own
+words win. Its owners, key, kind and icon are the registry's, changed by a pull request. Projects listed before this
+(`versions` in their entry) keep their hosted versions. The formats: [api/mod-index.md](api/mod-index.md).
 
 ### Integrity and signing
 
@@ -215,24 +265,9 @@ Horizon's own mods are native. They live in
 | Keystrokes | `native/keystrokes` | Extras > Keystrokes |
 | Zoom | `native/zoom` | Extras > Zoom |
 | Minimap | `native/minimap` | Extras > Minimap |
-| Recipes | `native/recipes` | The Recipes WebAssembly mod (item panel and recipe pages, on hook points version 2) |
-| Coordinates HUD | `native/coords-hud` | The WebAssembly SDK's example mod (position and facing, `/where`, `/coords`) |
+| Recipes | `native/recipes` | The Recipes mod (item panel and recipe pages, on hook points version 2) |
+| Coordinates HUD | `native/coords-hud` | A small example mod (position and facing, `/where`, `/coords`) |
 
 The game keeps the parts that must be fast, such as drawing the minimap's map, and a native mod picks the options
 ([extras.md](extras.md)). Far View is not a mod any more: its distance and detail are Graphics > LOD Distance and Far
 Detail ([graphics.md](graphics.md)).
-
-## WebAssembly code mods (removed)
-
-Horizon used to run mods written in Rust and compiled to sandboxed WebAssembly (`.hmod` files with a `mod.wasm`).
-That runtime, its SDK, the `horizon:mods` interface and the example mods are gone.
-
-- **A player** who has such a mod sees it in Options > Mods as "Doesn't run any more: needs a native port", and reads
-  one notice in the chat. The mod's files are not deleted.
-- **The launcher** hides these mods from search and browse, and can't install one alone. A modpack that requires one
-  still installs, with the mod listed as not running and its code left out.
-- **An author** ports the mod to a native mod: copy
-  [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template), look at the official
-  ones in horizon-mods, and read [native-mods.md](native-mods.md). The registry keeps the old versions for the
-  modpacks that need them.
-- **A content mod is not affected.** Only an `.hmod` with a capability besides `registries` needs a port.

@@ -1118,6 +1118,8 @@ pub fn put_brain(map: &mut Compound, m: &Mob, dimension: &str) {
     for &(name, value, ttl) in &m.extra.memories {
         let value = match name {
             "hunted_recently" => Tag::Byte(value as i8),
+            // `Unit` memories save an empty compound.
+            "is_pregnant" => Tag::Compound(Compound::new()),
             "home" => match m.extra.home {
                 Some(p) => Tag::compound([
                     ("dimension", string(dimension)),
@@ -1536,6 +1538,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 pos: [p[0], p[1], p[2]],
             });
         }
+    }
+    if m.species() == crate::mobs::Species::Frog
+        && tag
+            .get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get("minecraft:is_pregnant"))
+            .is_some()
+    {
+        crate::mobs::frog::set_pregnant(&mut m, true);
     }
     if crate::mobs::camel::is_camel(m.species()) {
         // The tick is a game time: `camel::finish_load` puts it on the mob's
@@ -1986,6 +1997,8 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
             power: number(tag.get("ExplosionPower")).unwrap_or(1) as i32,
         },
         "minecraft:small_fireball" => ProjectileKind::SmallFireball,
+        "minecraft:wind_charge" => ProjectileKind::WindCharge,
+        "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
         _ => return None,
     };
     let owner = uuid_from_tag(tag.get("Owner"));
@@ -2936,7 +2949,11 @@ pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
     }
     data
 }
-pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
+/// `Entity.applyComponentsFromItemStack` → the spawned mob's
+/// `applyImplicitComponents`: a bucket's contents (`MobBucketItem.spawn`) and
+/// a spawn egg (`PostSpawnProcessor.apply`) both land here. Vanilla applies
+/// these after `finalizeSpawn`, so a component wins over the biome variant.
+pub fn apply_item_components(m: &mut Mob, stack: &crate::items::ItemStack) {
     let Some(components) = stack.data() else {
         return;
     };
@@ -3017,6 +3034,51 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
             m.extra.variant3 = id as u8;
         }
     }
+    // Chicken, Cow and Pig.applyImplicitComponents: their variant and sound
+    // variant components, both registry names (`minecraft:warm`,
+    // `minecraft:picky`).
+    let species = m.species();
+    let (variant, sound) = match species {
+        crate::mobs::Species::Chicken => (
+            Some("minecraft:chicken/variant"),
+            Some("minecraft:chicken/sound_variant"),
+        ),
+        crate::mobs::Species::Cow => (
+            Some("minecraft:cow/variant"),
+            Some("minecraft:cow/sound_variant"),
+        ),
+        crate::mobs::Species::Pig => (
+            Some("minecraft:pig/variant"),
+            Some("minecraft:pig/sound_variant"),
+        ),
+        _ => (None, None),
+    };
+    if let Some(name) = variant.and_then(|id| text(components.other(id))) {
+        m.extra.variant = crate::mobs::finalize::variant_index(species, &name);
+    }
+    if let Some(name) = sound.and_then(|id| text(components.other(id)))
+        && let Some(i) = crate::mobs::finalize::sound_variants(species)
+            .iter()
+            .position(|v| *v == name.trim_start_matches("minecraft:"))
+    {
+        m.extra.sound_variant = Some(i as u8);
+    }
+    // MushroomCow.applyImplicitComponents: `Variant.DEFAULT` is red, as the
+    // save's `Type` reads it.
+    if species == crate::mobs::Species::Mooshroom
+        && let Some(name) = text(components.other("minecraft:mooshroom/variant"))
+    {
+        m.extra.variant = u8::from(name.trim_start_matches("minecraft:") == "brown");
+    }
+    // Sheep.applyImplicitComponents: the wool colour, a DyeColor id.
+    if species == crate::mobs::Species::Sheep
+        && let Some(name) = text(components.other("minecraft:sheep/color"))
+        && let Some(i) = crate::mobs::render::DYE_NAMES
+            .iter()
+            .position(|c| *c == name.trim_start_matches("minecraft:"))
+    {
+        m.extra.color = i as u8;
+    }
 }
 
 #[cfg(test)]
@@ -3088,7 +3150,7 @@ mod axolotl_nbt_tests {
         assert!(bucket_data(&m).get("Variant").is_none());
         let stack = item_from_nbt(&item_to_nbt(&stack)).unwrap();
         let mut restored = Mob::new(2, kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
-        load_bucket_data(&mut restored, &stack);
+        apply_item_components(&mut restored, &stack);
         assert_eq!(
             crate::mobs::animal_brain::hunting_cooldown(&restored),
             Some(123)
@@ -3127,10 +3189,10 @@ mod axolotl_nbt_tests {
                 .data_mut()
                 .set_other("minecraft:bucket_entity_data", Some(data));
             restored.persistent = false;
-            load_bucket_data(&mut restored, &bucket);
+            apply_item_components(&mut restored, &bucket);
             assert_eq!(restored.persistent, expected);
             restored.persistent = true;
-            load_bucket_data(&mut restored, &bucket);
+            apply_item_components(&mut restored, &bucket);
             assert!(restored.persistent, "bucket data cannot clear persistence");
         }
         restored.ticks_frozen = 140;
@@ -3148,7 +3210,7 @@ mod axolotl_nbt_tests {
                 other: vec![("minecraft:axolotl/variant".into(), string(name))],
                 ..Default::default()
             }));
-            load_bucket_data(&mut restored, &vanilla);
+            apply_item_components(&mut restored, &vanilla);
             assert_eq!(
                 usize::from(restored.extra.variant),
                 id,
@@ -3163,12 +3225,12 @@ mod axolotl_nbt_tests {
             )],
             ..Default::default()
         }));
-        load_bucket_data(&mut restored, &legacy);
+        apply_item_components(&mut restored, &legacy);
         assert_eq!(restored.extra.variant, 3);
         legacy
             .data_mut()
             .set_other("minecraft:axolotl/variant", Some(string("gold")));
-        load_bucket_data(&mut restored, &legacy);
+        apply_item_components(&mut restored, &legacy);
         assert_eq!(
             restored.extra.variant, 2,
             "component wins over old Horizon data"
@@ -3226,6 +3288,37 @@ mod sheep_nbt_tests {
             .collect();
         let back = mob_from_nbt(&tag, &types, 2).unwrap();
         assert_eq!((back.extra.color, back.extra.sheared), (14, true));
+    }
+
+    /// The only lib test that registers mod effects (once per process).
+    #[test]
+    fn a_mob_keeps_a_mod_effect() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let types: HashMap<String, Arc<MobType>> = crate::mobs::MobTypes::load(&root)
+            .unwrap()
+            .types
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+        crate::brewing::register_mod_effects([(
+            "testfx:glow".to_owned(),
+            1,
+            crate::brewing::Category::Harmful,
+        )]);
+        let mut m = Mob::new(1, types["minecraft:pig"].clone(), Vec3::ZERO, 0.0);
+        m.add_effect(crate::brewing::effect("testfx:glow").unwrap().id, 200, 2);
+        let tag = mob_to_nbt(&m, [1, 2, 3, 4], None);
+        let Some(Tag::List(saved)) = tag.get("active_effects") else {
+            panic!("no active_effects");
+        };
+        assert_eq!(text(saved[0].get("id")).as_deref(), Some("testfx:glow"));
+        let back = mob_from_nbt(&tag, &types, 2).unwrap();
+        assert_eq!(back.extra.effects, [("testfx:glow", 200, 2)]);
     }
 
     #[test]
@@ -3385,6 +3478,46 @@ mod sheep_nbt_tests {
 }
 
 #[cfg(test)]
+mod item_component_tests {
+    use super::*;
+    #[test]
+    fn a_spawn_egg_beats_the_biome_variant() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let spawn = |kind: &str, id: u32| {
+            let mut m = Mob::new(
+                id,
+                Arc::new(data.types[kind].clone()),
+                Vec3::new(0.0, 4.0, 0.0),
+                0.0,
+            );
+            // What `finalizeSpawn` leaves in a temperate biome.
+            m.extra.variant = 0;
+            m
+        };
+        let mut egg = crate::items::ItemStack::new("minecraft:chicken_spawn_egg", 1);
+        egg.data_mut()
+            .set_other("minecraft:chicken/variant", Some(string("minecraft:warm")));
+        let mut hen = spawn("minecraft:chicken", 1);
+        assert_eq!(hen.extra.variant, 0);
+        apply_item_components(&mut hen, &egg);
+        assert_eq!(hen.extra.variant, 1, "minecraft:warm, not the biome's");
+        // Sheep.applyImplicitComponents: the egg's colour over the mob's.
+        let mut egg = crate::items::ItemStack::new("minecraft:sheep_spawn_egg", 1);
+        egg.data_mut()
+            .set_other("minecraft:sheep/color", Some(string("lime")));
+        let mut sheep = spawn("minecraft:sheep", 2);
+        apply_item_components(&mut sheep, &egg);
+        assert_eq!(sheep.extra.color, 5, "lime, not the white it started as");
+    }
+}
+
+#[cfg(test)]
 mod fireball_nbt_tests {
     use super::*;
     #[test]
@@ -3419,6 +3552,20 @@ mod fireball_nbt_tests {
             (p.kind, p.acceleration),
             (ProjectileKind::LargeFireball { power: 1 }, 0.1)
         );
+        // `/summon` and a saved world give back both wind charges.
+        for (id, kind) in [
+            ("minecraft:wind_charge", ProjectileKind::WindCharge),
+            (
+                "minecraft:breeze_wind_charge",
+                ProjectileKind::BreezeWindCharge,
+            ),
+        ] {
+            let tag = Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("Pos", doubles(&[0.0, 0.0, 0.0])),
+            ]);
+            assert_eq!(fireball_from_nbt(&tag, None).unwrap().kind, kind);
+        }
     }
 }
 

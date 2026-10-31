@@ -5,7 +5,7 @@
 use horizon_client::{
     chunk::{Chunk, MIN_Y},
     lan::{
-        Lan,
+        Lan, NetConfig, OwnerProfile,
         chunks::ChunkEncoder,
         data::SyncData,
         entity::EntityState,
@@ -183,9 +183,11 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            shoulders: [None; 2],
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,
+            stuck: (0, 0),
             body: Default::default(),
         };
         let mut ctx = TickCtx {
@@ -202,6 +204,7 @@ impl Server {
             tick_steps: (0, 0),
             collision: None,
             border: &horizon_client::worldborder::WorldBorder::default(),
+            streaming: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -224,10 +227,14 @@ impl Server {
 }
 
 fn server(resources: &Path) -> Server {
+    server_with(resources, NetConfig::lan(0, "Test - World".into(), 8))
+}
+
+fn server_with(resources: &Path, net: NetConfig) -> Server {
     let sync = Arc::new(
         SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
     );
-    let lan = Lan::start(sync.clone(), 0, "Test - World".into(), 8).unwrap();
+    let lan = Lan::start_with(sync.clone(), net).unwrap();
     let biomes: Vec<String> = sync
         .dynamic
         .registries
@@ -245,6 +252,7 @@ fn server(resources: &Path) -> Server {
         sync,
         encoder,
         HubConfig {
+            allow_flight: true,
             default_game_mode: 1,
             guest_commands: true,
             force_game_mode: false,
@@ -256,6 +264,7 @@ fn server(resources: &Path) -> Server {
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
+            levels: Default::default(),
         },
     );
     Server {
@@ -279,6 +288,80 @@ fn run<T: Send + 'static>(
         assert!(start.elapsed() < Duration::from_secs(40), "timed out");
     }
     handle.join().unwrap().unwrap()
+}
+
+/// An integrated server opened to LAN with a signed-in owner: a guest's
+/// player list gives the owner the account's skin (its `textures`
+/// property), and the guest itself none (an offline-mode world).
+#[test]
+fn a_lan_guest_sees_the_signed_in_owners_skin() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let textures = login::Property {
+        name: "textures".into(),
+        value: "e30=".into(),
+        signature: Some("c2lnbmVk".into()),
+    };
+    let fetched = textures.clone();
+    let profile = Arc::new(OwnerProfile::new(move || vec![fetched]));
+    let net = NetConfig {
+        announce: false,
+        owner_profile: Some(profile.clone()),
+        ..NetConfig::lan(0, "Test - World".into(), 8)
+    };
+    let mut s = server_with(&resources, net);
+    s.hub.singleplayer_owner = Some(offline_uuid("Owner"));
+    let port = s.hub.lan.port;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while profile.properties().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the profile fetch never answered"
+        );
+        thread::yield_now();
+    }
+    // The owner (the window's connection) joins first and stays.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let staying = stop.clone();
+    let owner = thread::spawn(move || -> Result<(), String> {
+        let mut bot = connect(port, "Owner", false)?;
+        bot.c
+            .reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        while !staying.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = bot.c.recv();
+        }
+        Ok(())
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.hub.guests.iter().any(|g| g.name == "Owner") {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "the owner did not join");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let listed = run(&mut s, move || {
+        let mut bot = connect(port, "Guest", false)?;
+        let (mut owner, mut guest) = (None, None);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && (owner.is_none() || guest.is_none()) {
+            if let C::PlayerInfoUpdate(p) = bot.recv_play()? {
+                for e in p.entries {
+                    if e.uuid == offline_uuid("Owner") {
+                        owner = Some(e.properties);
+                    } else if e.uuid == offline_uuid("Guest") {
+                        guest = Some(e.properties);
+                    }
+                }
+            }
+        }
+        Ok((owner, guest))
+    });
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    owner.join().unwrap().unwrap();
+    assert_eq!(listed.0, Some(vec![textures]), "the owner's entry");
+    assert_eq!(listed.1, Some(Vec::new()), "the guest's entry");
 }
 
 #[test]
@@ -328,7 +411,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 );
             }
             let mut saved = horizon_client::save::Level::default();
-            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved);
+            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved, None);
             let mut reopened = horizon_client::save::Level::default();
             reopened.read_player(&saved.player_tag());
             assert_eq!(reopened.recipe_book.open, settings.open);
@@ -366,6 +449,7 @@ fn sprint_commands_survive_keyboard_input_changes() {
     }
     let id = s.hub.guests[0].entity_id;
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     s.hub.guests[0].inbox.push_back((
         S::PlayerCommand(play::PlayerCommand {
             id,
@@ -426,6 +510,7 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
         thread::yield_now();
     }
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     let at = s.hub.guests[0].position;
     let below = [
         at[0].floor() as i32,
@@ -531,6 +616,7 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
         thread::yield_now();
     }
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     // The join's teleport accepted: the hub takes moves.
     s.hub.guests[0].awaiting_teleport = None;
     let at = s.hub.guests[0].position;
@@ -735,6 +821,8 @@ fn guests_see_each_other_and_the_world_entities() {
         precise: false,
         needs_sync: false,
         leash: None,
+        spectator: false,
+        watching: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
@@ -923,4 +1011,219 @@ fn a_spectators_container_click_is_taken_back() {
     );
     assert!(s.hub.guests[0].carried.is_none());
     run(&mut s, move || content(&mut bot));
+}
+
+/// `/fillbiome` on a server: `ChunkMap.resendBiomesForChunks` sends each
+/// player the new biomes of the columns it has been sent, and only those,
+/// in a `ClientboundChunksBiomesPacket` the client reads section by section.
+#[test]
+fn changed_biomes_reach_the_players_that_see_the_column() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let bot = run(&mut s, move || connect(port, "Gardener", true));
+    // The column at the spawn arrives, with the batch that holds it.
+    let mut bot = run(&mut s, move || {
+        let mut bot = bot;
+        let mut seen = false;
+        loop {
+            match bot.recv_play()? {
+                C::PlayerPosition(p) => {
+                    bot.send(S::AcceptTeleportation(play::AcceptTeleportation {
+                        id: p.teleport,
+                        x: p.position[0],
+                        y: p.position[1],
+                        z: p.position[2],
+                        yaw: 0.0,
+                        pitch: 0.0,
+                    }))
+                }
+                C::LevelChunkWithLight(l) if (l.x, l.z) == (0, 0) => seen = true,
+                C::ChunkBatchFinished(_) => {
+                    bot.send(S::ChunkBatchReceived(play::ChunkBatchReceived {
+                        chunks_per_tick: 20.0,
+                    }));
+                    if seen {
+                        return Ok(bot);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    assert!(s.hub.guests[0].sent_chunks.contains(&(0, 0)));
+    assert!(!s.hub.guests[0].sent_chunks.contains(&(4, 4)));
+    for key in [(0, 0), (4, 4)] {
+        let chunk = Arc::make_mut(s.world.chunks.get_mut(&key).unwrap());
+        // The quart cell at x 4..8, y 4..8, z 8..12 of the column.
+        chunk.set_biome_cell(1, 17, 2, 5);
+    }
+    s.hub.resend_biomes(&s.world, &[(0, 0), (4, 4)]);
+    let packet = run(&mut s, move || {
+        loop {
+            if let C::ChunksBiomes(p) = bot.recv_play()? {
+                return Ok(p);
+            }
+        }
+    });
+    assert_eq!(packet.chunks.len(), 1, "only the column the player sees");
+    assert_eq!(packet.chunks[0].pos, [0, 0]);
+    let sections = packet.chunks[0].biomes(24, 7).unwrap();
+    // Section 4 (y 0..16), cell (x 1, y 1, z 2).
+    assert_eq!(sections[4].get(1 << 4 | 2 << 2 | 1), 5);
+    assert_eq!(sections[4].get(0), 0);
+    assert!(
+        sections
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || b.get(25) == 0)
+    );
+}
+
+#[test]
+fn a_click_past_the_menu_is_ignored() {
+    use horizon_client::{containers::BlockEntity, items::ItemStack, lan::menu::Slots};
+    struct NoRules;
+    impl horizon_client::lan::menu::Rules for NoRules {
+        fn items(&self) -> &horizon_client::items::Items {
+            unreachable!("a click past the menu never reaches it")
+        }
+        fn max_stack(&self, _: &str) -> u32 {
+            64
+        }
+        fn armor_index(&self, _: &str) -> Option<usize> {
+            None
+        }
+    }
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Clicker", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    let conn = s.hub.guests[0].conn;
+    let at = s.hub.guests[0].position;
+    let key = (
+        at[0].floor() as i32,
+        at[1].floor() as i32,
+        at[2].floor() as i32 + 2,
+    );
+    s.world.set(key.0, key.1, key.2, BlockStateId(2)).unwrap();
+    let items = vec![None; 27];
+    s.world
+        .block_entities
+        .insert(key, BlockEntity::Chest(items.clone()));
+    s.hub.open_container(
+        conn,
+        "minecraft:generic_9x3",
+        horizon_protocol::text::translatable("container.chest", &[]),
+        key,
+        Slots::Block(key),
+        items,
+    );
+    let stone = Some(ItemStack::new("minecraft:stone", 64));
+    s.hub.guests[0].inventory[9] = stone.clone();
+    let window = s.hub.guests[0].menu.as_ref().unwrap().window;
+    // AbstractContainerMenu.isValidSlotIndex: the chest's menu has 63 slots. Throwing
+    // the whole stack (THROW, button 1) from slot 63 reached the inventory's slot 9.
+    let click = play::ContainerClick {
+        container: window,
+        state: 1,
+        slot: 63,
+        button: 1,
+        input: 4,
+        changed: Vec::new(),
+        carried: None,
+    };
+    let drops = s.hub.container_click(conn, &click, &mut s.world, &NoRules);
+    assert!(drops.is_empty(), "nothing is thrown");
+    assert_eq!(
+        s.hub.guests[0].inventory[9], stone,
+        "slot 9 keeps its stone"
+    );
+}
+
+#[test]
+fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let mut config = horizon_anticheat::Config {
+        enabled: true,
+        ..Default::default()
+    };
+    config.timer.enabled = false;
+    config.ground.enabled = false;
+    s.hub.set_anticheat(config);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Recorded", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
+    let at = s.hub.guests[0].position;
+    // The server's tick ends with a ping; the client answers it before its next tick.
+    s.hub.anticheat_ping();
+    let pinged = s.hub.ticks;
+    let inbox = &mut s.hub.guests[0].inbox;
+    inbox.push_back((
+        S::Pong(horizon_protocol::packets::configuration::Ping { id: pinged as i32 }),
+        0,
+    ));
+    inbox.push_back((S::PlayerInput(play::PlayerInput { flags: 1 }), 0));
+    inbox.push_back((
+        S::MovePlayerPosRot(play::MovePlayerPosRot {
+            x: at[0],
+            y: at[1],
+            z: at[2] + 0.1,
+            yaw: 45.0,
+            pitch: 5.0,
+            flags: 1,
+        }),
+        0,
+    ));
+    inbox.push_back((S::ClientTickEnd(Empty), 0));
+    // A tick without a move.
+    inbox.push_back((S::ClientTickEnd(Empty), 0));
+    s.tick(&[]);
+    let record = s.hub.guests[0]
+        .anticheat
+        .record
+        .as_deref()
+        .expect("the prediction records");
+    let ticks: Vec<_> = record.ticks().copied().collect();
+    assert_eq!(ticks.len(), 2);
+    assert_eq!(ticks[0].position, Some([at[0], at[1], at[2] + 0.1]));
+    assert_eq!(
+        (ticks[0].yaw, ticks[0].pitch, ticks[0].flags),
+        (45.0, 5.0, Some(1))
+    );
+    assert_eq!((ticks[0].input, ticks[0].seen), (1, Some(pinged)));
+    assert_eq!(
+        (ticks[1].position, ticks[1].input, ticks[1].yaw),
+        (None, 1, 45.0)
+    );
+    // An answer to a ping never sent changes nothing.
+    s.hub.guests[0].inbox.push_back((
+        S::Pong(horizon_protocol::packets::configuration::Ping {
+            id: (pinged + 100) as i32,
+        }),
+        0,
+    ));
+    s.tick(&[]);
+    let record = s.hub.guests[0].anticheat.record.as_deref().unwrap();
+    assert_eq!(record.seen(), Some(pinged));
 }

@@ -410,7 +410,7 @@ impl ProjectileWorld for Probe<'_, '_> {
     fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
         None
     }
-    fn in_water(&self, _: Vec3) -> bool {
+    fn in_water(&self, _: Aabb) -> bool {
         false
     }
     fn targets(&self) -> &[(Who, Aabb)] {

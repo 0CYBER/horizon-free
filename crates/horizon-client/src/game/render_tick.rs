@@ -169,7 +169,7 @@ impl Game<'_> {
     fn level_min_y(&self) -> i32 {
         match self.remote.as_ref() {
             Some(r) => r.dimension.min_y,
-            None => self.dim.min_y(),
+            None => self.world.shape.min_y,
         }
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under
@@ -191,7 +191,8 @@ impl Game<'_> {
             ) != FogType::Water
     }
     /// `ScreenEffectRenderer` + `Hud` camera overlays for this frame.
-    pub(super) fn screen_quads(&self, partial: f32, size: [u32; 2]) -> Vec<ScreenQuad> {
+    /// `scale` is the player's `LivingEntity.getScale`.
+    pub(super) fn screen_quads(&self, partial: f32, size: [u32; 2], scale: f32) -> Vec<ScreenQuad> {
         let Some(p) = self.player.as_ref() else {
             return Vec::new();
         };
@@ -200,30 +201,62 @@ impl Game<'_> {
             p.position.y + f64::from(p.dimensions.eye_height),
             p.position.z,
         ];
-        // LevelExtractor.getViewBlockingState: 8 points around the eye.
+        // `LevelExtractor.getViewBlockingState`: 8 points around the eye, each
+        // tested with `BlockState.isViewBlocking` against the near plane.
         // ScreenEffectRenderer: none of it for a spectator (noPhysics).
         let spectator = self.spectator();
         let mut block_overlay = None;
-        let w = f64::from(p.dimensions.width) * 0.8;
-        for i in (0..8).filter(|_| !spectator) {
-            let t = [
-                p.position.x + (f64::from(i & 1) - 0.5) * w,
-                eye[1] + (f64::from((i >> 1) & 1) - 0.5) * 0.1,
-                p.position.z + (f64::from((i >> 2) & 1) - 0.5) * w,
-            ];
-            let state = self.world.block(
-                t[0].floor() as i32,
-                t[1].floor() as i32,
-                t[2].floor() as i32,
+        if !spectator {
+            // Frustum.getNearPlaneBounds, moved to the eye.
+            let (near_min, near_max) = horizon_client::camera::near_plane_bounds(
+                self.fov_degrees(partial, eye),
+                size[0] as f32,
+                size[1] as f32,
+                self.yaw,
+                self.pitch,
+                horizon_client::camera::depth_far(
+                    self.terrain_distance(),
+                    self.settings.cloud_range,
+                ),
             );
-            let f = self.res.facts().get(state);
-            if f.render_shape != horizon_client::blocks::RenderShape::Invisible
-                && f.solid_render
-                && f.full_collision
-            {
-                // ScreenEffectRenderer: the block's particle material.
-                block_overlay = Self::block_particle_sprite(&self.pack, state);
-                break;
+            let near_plane = horizon_core::geometry::Aabb::new(
+                horizon_core::geometry::Vec3::new(
+                    near_min[0] + eye[0],
+                    near_min[1] + eye[1],
+                    near_min[2] + eye[2],
+                ),
+                horizon_core::geometry::Vec3::new(
+                    near_max[0] + eye[0],
+                    near_max[1] + eye[1],
+                    near_max[2] + eye[2],
+                ),
+            );
+            // The test points use float maths: `(i % 2 - 0.5F) * width * 0.8F`.
+            // The height spread is `0.1F * getScale()`: a tiny player's eye is
+            // closer to the ground than 0.05.
+            let width = p.dimensions.width;
+            for i in 0..8 {
+                let t = [
+                    p.position.x + f64::from(((i & 1) as f32 - 0.5) * width * 0.8),
+                    p.position.y
+                        + f64::from(p.dimensions.eye_height)
+                        + f64::from((((i >> 1) & 1) as f32 - 0.5) * 0.1 * scale),
+                    p.position.z + f64::from((((i >> 2) & 1) as f32 - 0.5) * width * 0.8),
+                ];
+                let pos = [
+                    t[0].floor() as i32,
+                    t[1].floor() as i32,
+                    t[2].floor() as i32,
+                ];
+                let state = self.world.block(pos[0], pos[1], pos[2]);
+                if self.res.facts().get(state).render_shape
+                    != horizon_client::blocks::RenderShape::Invisible
+                    && self.state_view_blocking(state, pos, near_plane)
+                {
+                    // ScreenEffectRenderer: the block's particle material.
+                    block_overlay = Self::block_particle_sprite(&self.pack, state);
+                    break;
+                }
             }
         }
         let in_water =
@@ -362,6 +395,9 @@ impl Game<'_> {
         // The day timeline: firefly bush sounds from 12600 to 23400.
         let firefly_bush_sounds = self.dim == Dim::Overworld
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
+        // EnvironmentAttributes.CREAKING_ACTIVE: the same overworld night.
+        let creaking_active = self.dim == Dim::Overworld
+            && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         let tables = &self.pack.context.tables;
         let model_offset = |state, x, z| tables.offset(state, x, z);
         let gateway_particles = |state, p| {
@@ -381,6 +417,7 @@ impl Game<'_> {
             raining_at: &raining_at,
             height_no_leaves: &height_no_leaves,
             firefly_bush_sounds,
+            creaking_active,
             sky_darken: self.sky_darken(),
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
             model_offset: &model_offset,
@@ -485,6 +522,20 @@ impl Game<'_> {
                 },
             );
         }
+        // SpellParticle.isCloseToScopingPlayer: the eye of a local player looking
+        // through a spyglass in first person.
+        let scope_eye = self
+            .player
+            .as_ref()
+            .filter(|_| self.camera_type.first_person() && self.scoping())
+            .map(|p| {
+                [
+                    p.position.x,
+                    p.position.y + f64::from(p.dimensions.eye_height),
+                    p.position.z,
+                ]
+            });
+        self.particles.set_scope_eye(scope_eye);
         let level = ParticleLevel {
             world,
             facts,
@@ -496,8 +547,14 @@ impl Game<'_> {
         };
         self.particles.tick(&level);
         self.tick_pickups();
-        for (name, at, volume, pitch) in std::mem::take(&mut self.particles.sounds) {
-            self.audio.play(name, Some(at), volume, pitch);
+        let camera = self.particles.camera;
+        for (name, at, volume, pitch, delayed) in std::mem::take(&mut self.particles.sounds) {
+            if delayed {
+                self.audio
+                    .play_distance_delayed(name, at, volume, pitch, camera);
+            } else {
+                self.audio.play(name, Some(at), volume, pitch);
+            }
         }
     }
 }

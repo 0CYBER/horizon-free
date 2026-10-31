@@ -46,6 +46,7 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --server HOST:PORT     default 127.0.0.1:25565
   --bots N               default 10
   --behaviour B          idle, walk, explore or mixed (60 % walk, 20 % explore, 20 % idle); default mixed.
+                         stand: stays on the ground where the server puts it (/tp), for a survival test.
                          One abusive client, to test a server's limits (run it beside a normal crowd):
                          flood-move (--flood moves a tick, each 64 to 256 blocks away, ignoring chunks),
                          flood-acks (--flood chunk batch acks asking for 64 chunks a tick, while exploring),
@@ -59,6 +60,11 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          into a writable book), flood-sign (four 384-character lines on the block
                          below), flood-recipe (recipe book placements)
   --flood N              packets a tick for the flood behaviours; default 100
+  --attack NAME          attack the player NAME twice a second, from wherever the bot is (a reach test);
+                         the report gives each bot's last health
+  --attack-after S       start attacking S seconds after joining; default 5
+  --no-loaded            never say the level is loaded (ServerboundPlayerLoadedPacket): a vanilla server
+                         ignores the player's moves and actions for its first 3 seconds
   --no-read              stop reading from the server once spawned (a client that lets the
                          server's replies pile up)
   --join-every SECONDS   default 1
@@ -67,12 +73,24 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --seed N               default 12345
   --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
   --name PREFIX          bot names: PREFIX0, PREFIX1...; default Bot
+  --brand B              the client brand sent in configuration (minecraft:brand); default none
+  --height H             blocks above spawn the bots fly at (walk, explore, idle); default 24
+  --ground               claim the ground in every move (with --height 0 on a flat world: walking
+                         on it; higher, or over water: a no-fall or jesus cheat, to test an anticheat)
+  --give SLOT:ID:COUNT,...  creative-slot packets sent once joined (inventory menu slot, item
+                         registry id, count), to test what a server takes
+  --click X,Y,Z:SLOT:BUTTON:MODE  3 s after joining, open the block at X,Y,Z (a chest), then a second later
+                         click SLOT of its window (ServerboundContainerClickPacket), to test what a server takes
+  --raw TICK:ID:HEX,...  raw serverbound play packets (id, body in hex) sent TICK ticks after joining,
+                         to test what a server takes
+  --timer F              cheat, to test an anticheat: tick F times as fast as vanilla's client (1.5: 30 Hz)
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Behaviour {
     Idle,
+    Stand,
     Walk,
     Explore,
     FloodMove,
@@ -91,6 +109,7 @@ impl Behaviour {
     fn name(self) -> &'static str {
         match self {
             Self::Idle => "idle",
+            Self::Stand => "stand",
             Self::Walk => "walk",
             Self::Explore => "explore",
             Self::FloodMove => "flood-move",
@@ -117,10 +136,26 @@ struct Options {
     view_distance: i8,
     seed: u64,
     explore_speed: f64,
+    /// The player to attack, and how long after joining to start.
+    attack: Option<String>,
+    attack_after: f64,
     flood: usize,
     no_read: bool,
+    no_loaded: bool,
+    height: f64,
+    ground: bool,
+    /// --raw: (tick after joining, packet id, body).
+    raw: Vec<(u64, i32, Vec<u8>)>,
+    /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
+    give: Vec<(i16, i32, i32)>,
+    /// --click: the block to open, then the slot, button and click type in its window.
+    click: Option<([i32; 3], i16, i8, i32)>,
     name: String,
+    /// The `minecraft:brand` to send, if any.
+    brand: Option<String>,
     report: Option<String>,
+    /// How many times as fast as vanilla's 20 Hz the bots tick (a timer cheat above 1).
+    timer: f64,
 }
 
 fn options() -> Result<Options, String> {
@@ -134,10 +169,20 @@ fn options() -> Result<Options, String> {
         view_distance: 10,
         seed: 12345,
         explore_speed: 22.0,
+        attack: None,
+        attack_after: 5.0,
         flood: 100,
         no_read: false,
+        no_loaded: false,
+        height: 24.0,
+        ground: false,
+        raw: Vec::new(),
+        give: Vec::new(),
+        click: None,
         name: "Bot".into(),
         report: None,
+        brand: None,
+        timer: 1.0,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -147,6 +192,14 @@ fn options() -> Result<Options, String> {
         }
         if arg == "--no-read" {
             o.no_read = true;
+            continue;
+        }
+        if arg == "--no-loaded" {
+            o.no_loaded = true;
+            continue;
+        }
+        if arg == "--ground" {
+            o.ground = true;
             continue;
         }
         let value = args.next().ok_or(format!("{arg} needs a value"))?;
@@ -167,16 +220,74 @@ fn options() -> Result<Options, String> {
                 o.explore_speed = value.parse().map_err(|_| number("blocks a second"))?;
             }
             "--flood" => o.flood = value.parse().map_err(|_| number("packets a tick"))?,
+            "--attack" => o.attack = Some(value),
+            "--attack-after" => o.attack_after = value.parse().map_err(|_| number("seconds"))?,
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
+            "--brand" => o.brand = Some(value),
+            "--give" => {
+                for part in value.split(',') {
+                    let n: Vec<&str> = part.split(':').collect();
+                    let parsed = match n[..] {
+                        [s, i, c] => s.parse().ok().zip(i.parse().ok()).zip(c.parse().ok()),
+                        _ => None,
+                    };
+                    let ((slot, item), count) = parsed.ok_or_else(|| number("SLOT:ID:COUNT"))?;
+                    o.give.push((slot, item, count));
+                }
+            }
+            "--click" => {
+                let bad = || number("X,Y,Z:SLOT:BUTTON:MODE");
+                let n: Vec<&str> = value.split(':').collect();
+                let [at, slot, button, mode] = n[..] else {
+                    return Err(bad());
+                };
+                let at: Vec<i32> = at
+                    .split(',')
+                    .map(str::parse)
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| bad())?;
+                let at = <[i32; 3]>::try_from(at).map_err(|_| bad())?;
+                let parse = |s: &str| s.parse::<i32>().map_err(|_| bad());
+                o.click = Some((at, parse(slot)? as i16, parse(button)? as i8, parse(mode)?));
+            }
+            "--raw" => {
+                for part in value.split(',') {
+                    let bad = || number("TICK:ID:HEX");
+                    let [tick, id, hex] = part.split(':').collect::<Vec<_>>()[..] else {
+                        return Err(bad());
+                    };
+                    let body = (0..hex.len())
+                        .step_by(2)
+                        .map(|i| {
+                            hex.get(i..i + 2)
+                                .and_then(|b| u8::from_str_radix(b, 16).ok())
+                        })
+                        .collect::<Option<Vec<u8>>>()
+                        .ok_or_else(bad)?;
+                    o.raw.push((
+                        tick.parse().map_err(|_| bad())?,
+                        id.parse().map_err(|_| bad())?,
+                        body,
+                    ));
+                }
+            }
+            "--height" => o.height = value.parse().map_err(|_| number("blocks"))?,
+            "--timer" => {
+                o.timer = value.parse().map_err(|_| number("a speed, like 1.5"))?;
+                if !(o.timer >= 0.1 && o.timer <= 20.0) {
+                    return Err(format!("--timer {value}: use 0.1 to 20"));
+                }
+            }
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
-    const BEHAVIOURS: [&str; 14] = [
+    const BEHAVIOURS: [&str; 15] = [
         "idle",
         "walk",
         "explore",
         "mixed",
+        "stand",
         "flood-move",
         "flood-acks",
         "flood-packets",
@@ -219,6 +330,11 @@ struct Bot {
     joined_after_ms: AtomicU64,
     /// The bot stopped reading (--no-read).
     deaf: AtomicBool,
+    /// `--attack`: the target's UUID and, once AddEntity showed it, its entity id.
+    target: Mutex<(Option<u128>, Option<i32>)>,
+    attacks: AtomicU64,
+    /// The last SetHealth.
+    health: Mutex<Option<f32>>,
 }
 
 /// A small deterministic generator (SplitMix64), so every run moves the bots the same way.
@@ -398,6 +514,19 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
         .encode(),
     )
     .map_err(err)?;
+    // ClientBrandRetriever: vanilla's client says "vanilla", Horizon's "horizon".
+    if let Some(brand) = &o.brand {
+        let mut w = Writer::new();
+        w.string(brand);
+        c.send(
+            &configuration::Serverbound::CustomPayload(configuration::CustomPayload {
+                channel: "minecraft:brand".into(),
+                data: w.data,
+            })
+            .encode(),
+        )
+        .map_err(err)?;
+    }
     loop {
         let (id, body) = c.recv().map_err(err)?;
         let reply = match id {
@@ -425,8 +554,9 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
                             payload: None,
                         })
                     }
-                    configuration::Clientbound::Disconnect(_) => {
-                        return Err("disconnected during configuration".into());
+                    configuration::Clientbound::Disconnect(p) => {
+                        let reason = horizon_protocol::text::plain(&p.reason, &Default::default());
+                        return Err(format!("disconnected during configuration: {reason}"));
                     }
                     configuration::Clientbound::FinishConfiguration(_) => {
                         c.send(&configuration::Serverbound::FinishConfiguration(Empty).encode())
@@ -531,6 +661,21 @@ fn read(
                 }
                 Ok(())
             }
+            cb::ADD_ENTITY => {
+                if let Ok(play::Clientbound::AddEntity(p)) = play::Clientbound::decode(id, &body) {
+                    let mut target = lock(&bot.target);
+                    if target.0 == Some(p.uuid) {
+                        target.1 = Some(p.id);
+                    }
+                }
+                Ok(())
+            }
+            cb::SET_HEALTH => {
+                if let Ok(play::Clientbound::SetHealth(p)) = play::Clientbound::decode(id, &body) {
+                    *lock(&bot.health) = Some(p.health);
+                }
+                Ok(())
+            }
             cb::CHUNK_BATCH_START => {
                 batch.started = Instant::now();
                 Ok(())
@@ -618,6 +763,7 @@ fn run_bot(
     };
     let (reader, writer) = connection.split();
     let writer = Arc::new(Mutex::new(writer));
+    lock(&bot.target).0 = o.attack.as_deref().map(offline_uuid);
     bot.online.store(true, Ordering::SeqCst);
     {
         let (writer, bot) = (writer.clone(), bot.clone());
@@ -640,7 +786,9 @@ fn run_bot(
     bot.joined_after_ms
         .store(asked.elapsed().as_millis() as u64, Ordering::SeqCst);
     let send = |body: Vec<u8>| lock(&writer).send(&body).is_ok();
-    send(raw(sb::PLAYER_LOADED, |_| {}));
+    if !o.no_loaded {
+        send(raw(sb::PLAYER_LOADED, |_| {}));
+    }
     bot.deaf.store(o.no_read, Ordering::Relaxed);
     // What the costly floods need in hand (creative: the server takes the bot's word for it).
     let tool = match behaviour {
@@ -648,6 +796,15 @@ fn run_bot(
         Behaviour::FloodBook => Some(Stack::new(WRITABLE_BOOK, 1)),
         _ => None,
     };
+    for &(slot, item, count) in &o.give {
+        send(
+            play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+                slot,
+                item: Some(Stack::new(item, count)),
+            })
+            .encode(),
+        );
+    }
     if tool.is_some() {
         send(
             play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
@@ -661,10 +818,11 @@ fn run_bot(
     let mut sequence = 0;
     let mut random = Random(o.seed ^ (index as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
     let mut pos = spawn;
-    let cruise = spawn[1] + 24.0;
+    let cruise = spawn[1] + o.height;
     let heading = random.unit() * std::f64::consts::TAU;
     let mut target = pos;
     let mut next = Instant::now();
+    let (joined, mut tick) = (Instant::now(), 0u64);
     loop {
         if lock(&until).is_some_and(|u| Instant::now() >= u) || !bot.online.load(Ordering::SeqCst) {
             break;
@@ -675,7 +833,9 @@ fn run_bot(
         }
         let here = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
         // The abusive client doesn't wait for its chunk, as a real client must.
-        if behaviour == Behaviour::FloodMove {
+        if behaviour == Behaviour::Stand {
+            // Where the server put it, on the ground.
+        } else if behaviour == Behaviour::FloodMove {
             // The last of these moves goes out below, with the tick's end.
             pos[1] = cruise;
             for _ in 1..o.flood.max(1) {
@@ -711,7 +871,7 @@ fn run_bot(
             pos[1] = (pos[1] + 0.5).min(cruise);
         } else {
             match behaviour {
-                Behaviour::Idle => {}
+                Behaviour::Idle | Behaviour::Stand => {}
                 Behaviour::Walk => {
                     let (dx, dz) = (target[0] - pos[0], target[2] - pos[2]);
                     let distance = dx.hypot(dz);
@@ -769,6 +929,43 @@ fn run_bot(
                 }
             }
         }
+        if let Some((at, slot, button, input)) = o.click {
+            // Ticks of 50 ms: the block 3 s after joining, the click a second later.
+            if tick == 60 {
+                sequence += 1;
+                send(
+                    play::Serverbound::UseItemOn(play::UseItemOn {
+                        hand: 0,
+                        pos: at,
+                        face: 1,
+                        cursor: [0.5, 1.0, 0.5],
+                        inside: false,
+                        world_border: false,
+                        sequence,
+                    })
+                    .encode(),
+                );
+            } else if tick == 80 {
+                // The first window a player opens is 1.
+                send(
+                    play::Serverbound::ContainerClick(play::ContainerClick {
+                        container: 1,
+                        state: 0,
+                        slot,
+                        button,
+                        input,
+                        changed: Vec::new(),
+                        carried: None,
+                    })
+                    .encode(),
+                );
+            }
+        }
+        for (at, id, body) in &o.raw {
+            if *at == tick {
+                send(raw(*id, |w| w.bytes(body)));
+            }
+        }
         // The costly floods go out wherever the bot is, chunks or not (--no-read gets none).
         for i in 0..o.flood {
             sequence += 1;
@@ -776,12 +973,21 @@ fn run_bot(
                 send(body);
             }
         }
+        let target = lock(&bot.target).1;
+        if let Some(id) = target
+            && joined.elapsed().as_secs_f64() >= o.attack_after
+            && tick % 10 == 0
+        {
+            send(play::Serverbound::Attack(play::Attack { id }).encode());
+            bot.attacks.fetch_add(1, Ordering::Relaxed);
+        }
+        tick += 1;
         let ok = send(
             play::Serverbound::MovePlayerPos(play::MovePlayerPos {
                 x: pos[0],
                 y: pos[1],
                 z: pos[2],
-                flags: 0,
+                flags: u8::from(behaviour == Behaviour::Stand || o.ground),
             })
             .encode(),
         ) && send(raw(sb::CLIENT_TICK_END, |_| {}));
@@ -789,7 +995,7 @@ fn run_bot(
             bot.online.store(false, Ordering::SeqCst);
             break;
         }
-        next += Duration::from_millis(50);
+        next += Duration::from_secs_f64(0.05 / o.timer);
         let now = Instant::now();
         if next > now {
             thread::sleep(next - now);
@@ -805,6 +1011,7 @@ fn run_bot(
 fn behaviour_of(mode: &str, index: usize) -> Behaviour {
     match mode {
         "idle" => Behaviour::Idle,
+        "stand" => Behaviour::Stand,
         "walk" => Behaviour::Walk,
         "explore" => Behaviour::Explore,
         "flood-move" => Behaviour::FloodMove,
@@ -918,6 +1125,8 @@ fn main() {
             "pulled_back": b.pulled_back.load(Ordering::Relaxed),
             "waited_ticks": b.waited.load(Ordering::Relaxed),
             "error": *lock(&b.error),
+            "attacks": b.attacks.load(Ordering::Relaxed),
+            "health": *lock(&b.health),
         })).collect::<Vec<_>>(),
     });
     if o.report.as_deref() == Some("-") {

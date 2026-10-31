@@ -607,7 +607,7 @@ pub fn tick(
     } else {
         ai_step(m, w, level_random, events);
     }
-    effects_from_blocks(m, w);
+    effects_from_blocks(m, w, level_random, events);
     if m.species() == Species::Rabbit {
         super::rabbit::post_tick(m);
     }
@@ -648,12 +648,30 @@ pub fn tick(
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
-/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1), the
-/// cobweb (stuck at 0.25, 0.05, 0.25) and the sweet berry bush
+/// that hurt, hold or slide a mob: the cactus (`CactusBlock.entityInside`, 1),
+/// the cobweb (stuck at 0.25, 0.05, 0.25), the sweet berry bush
 /// (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75, 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
-/// or Z this tick). The blocks are those the mob's box touches anywhere along
-/// its move this tick, from where it started to where it ended.
-fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
+/// or Z this tick) and the honey block (`honey_slide`). The blocks are those
+/// the mob's box touches anywhere along its move this tick, from where it
+/// started to where it ended.
+fn effects_from_blocks(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    // Block.stepOn for the block under a mob on the ground (`getOnPosLegacy`):
+    // MagmaBlock.stepOn's hot floor, 1 damage (a mob never sneaks).
+    if m.on_ground && m.alive() {
+        let (x, y, z) = (
+            m.position.x.floor() as i32,
+            (m.position.y - f64::from(0.2_f32)).floor() as i32,
+            m.position.z.floor() as i32,
+        );
+        if w.block_name(x, y, z) == "minecraft:magma_block" {
+            m.damage(1.0, Damage::of(DamageKind::HotFloor));
+        }
+    }
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);
     let longest = travel.x.abs().max(travel.y.abs()).max(travel.z.abs());
@@ -719,12 +737,63 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                                 m.damage(1.0, Damage::of(DamageKind::SweetBerryBush));
                             }
                         }
+                        "minecraft:honey_block" => honey_slide(m, p, level_random, events),
                         _ => continue,
                     }
                     visited.push(p);
                 }
             }
         }
+    }
+}
+/// `HoneyBlock.entityInside` for a mob: a falling mob beside the honey block at
+/// `p` slides down it (`isSlidingDown`, `doSlideMovement`, `maybeDoSlideEffects`).
+fn honey_slide(
+    m: &mut Mob,
+    p: [i32; 3],
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+    let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+    let [x, y, z] = p.map(f64::from);
+    let pos = m.position;
+    if m.on_ground || pos.y > y + 0.9375 - 1.0e-7 || old_delta_y(m.velocity.y) >= -0.08 {
+        return;
+    }
+    let dx = (x + 0.5 - pos.x).abs();
+    let dz = (z + 0.5 - pos.z).abs();
+    let overlap = 0.4375 + f64::from(m.width()) / 2.0;
+    if dx + 1.0e-7 <= overlap && dz + 1.0e-7 <= overlap {
+        return;
+    }
+    // doSlideMovement
+    let v = m.velocity;
+    let old = old_delta_y(v.y);
+    m.velocity = if old < -0.13 {
+        let factor = -0.05 / old;
+        Vec3::new(v.x * factor, new_delta_y(-0.05), v.z * factor)
+    } else {
+        Vec3::new(v.x, new_delta_y(-0.05), v.z)
+    };
+    m.fall_distance = 0.0;
+    // maybeDoSlideEffects: the slide sound (one time in five, unless silent),
+    // then the server's entity event 53 (one time in five).
+    let sound = level_random.next_int_bound(5).unwrap_or(1) == 0;
+    if sound && !m.silent {
+        events.push(MobEvent::Sound(
+            "block.honey_block.slide",
+            [pos.x, pos.y, pos.z],
+            1.0,
+            1.0,
+        ));
+    }
+    if level_random.next_int_bound(5).unwrap_or(1) == 0 {
+        events.push(MobEvent::EntityEvent {
+            mob: m.id,
+            event: 53,
+            at: [pos.x, pos.y, pos.z],
+        });
     }
 }
 /// LivingEntity.updateSwingTime.
@@ -779,7 +848,14 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // Entity.canSpawnSprintParticle / spawnSprintParticle (a dashing cat or
     // ocelot): a server level drops the particle, but its spot is drawn
     // from the mob's random first.
-    if m.extra.sprinting && !m.fluids.in_water && !m.fluids.in_lava && m.alive() {
+    // `IronGolem.canSpawnSprintParticle`: moving, and a one in five draw, sprinting or not.
+    let spawn = if m.species() == Species::IronGolem {
+        let horizontal = m.velocity.x * m.velocity.x + m.velocity.z * m.velocity.z;
+        horizontal > f64::from(2.500_000_3e-7_f32) && m.random.next_int_bound(5).unwrap_or(1) == 0
+    } else {
+        m.extra.sprinting && !m.fluids.in_water && !m.fluids.in_lava && m.alive()
+    };
+    if spawn {
         let at = m.block_on_legacy(w);
         let state = w.world.block(at[0], at[1], at[2]);
         if w.facts.get(state).render_shape != crate::blocks::RenderShape::Invisible {
@@ -932,7 +1008,7 @@ fn freeze_tick(m: &mut Mob, w: &MobWorld) {
 }
 /// Whether the mob's box (shrunk by `1.0E-5`, as in `Entity.checkInsideBlocks`)
 /// touches powder snow.
-fn in_powder_snow(m: &Mob, w: &MobWorld) -> bool {
+pub(super) fn in_powder_snow(m: &Mob, w: &MobWorld) -> bool {
     let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
     let (min, max) = (b.min_position(), b.max_position());
     for x in min.x.floor() as i32..=max.x.floor() as i32 {
@@ -1005,6 +1081,17 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         // Fox.getAmbientSound: a sleeping fox makes its sleep sound.
         Species::Fox if super::fox::flag(m, super::fox::SLEEPING) => "entity.fox.sleep",
+        // Fox.playAmbientSound: the screech at volume 2. Anything else goes to
+        // Mob.playAmbientSound, which asks getAmbientSound again (a second draw).
+        Species::Fox => {
+            if super::fox::awake_ambient(m, w) == super::fox::SCREECH {
+                let pitch = m.voice_pitch();
+                let at = [m.position.x, m.position.y, m.position.z];
+                events.push(MobEvent::Sound(super::fox::SCREECH, at, 2.0, pitch));
+                return;
+            }
+            super::fox::awake_ambient(m, w)
+        }
         // Turtle.getAmbientSound: the land ambient only on land and grown up, else silent.
         Species::Turtle if m.fluids.in_water || !m.on_ground || m.is_baby() => return,
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
@@ -1124,7 +1211,13 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         f64::from(m.ai.yya),
         f64::from(m.ai.zza),
     );
-    m.travel(w, input, events);
+    if super::equine::moved_by_client(m) {
+        // LivingEntity.travelRidden: the rider's client moves it
+        // (handleMoveVehicle), so the server only stops it.
+        m.velocity = Vec3::ZERO;
+    } else {
+        m.travel(w, input, events);
+    }
     push_entities(m, w, events);
     // Spider.tick: climbing while pressed against a wall.
     if m.kind.flags.climber {
@@ -1519,7 +1612,7 @@ fn species_ai_step(
         Species::Blaze => super::nether::blaze_ai_step(m, events),
         Species::IronGolem => super::golem::iron_ai_step(m),
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
-            super::piglin::ai_step(m, w, events)
+            super::piglin::ai_step(m, w, level_random, events)
         }
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w, events),
@@ -2009,6 +2102,13 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
             super::bee::hurt(m);
             true
         }
+        // Wolf.hurtServer, Parrot.hurtServer: a hit it isn't invulnerable to
+        // stands it up before LivingEntity.hurtServer, even one the hurt
+        // frames then turn away.
+        Species::Wolf | Species::Parrot => {
+            super::tame::stand_when_hurt(m);
+            true
+        }
         // Panda.hurtServer: up first, whatever the damage.
         Species::Panda => {
             super::panda::hurt(m);
@@ -2035,7 +2135,6 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Armadillo => super::armadillo::after_hurt(m, source),
         Species::Shulker => super::shulker::after_hurt(m),
         Species::Warden => super::warden::hurt(m, source),
-        Species::Wolf => super::tame::after_hurt(m, source),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::after_hurt(m, source),
         Species::Zombie
         | Species::Husk
@@ -2213,6 +2312,27 @@ pub fn forgive_dead_player(m: &mut Mob) {
     match m.species() {
         Species::Bee => super::bee::forgive_dead_player(m),
         Species::PolarBear => super::polar_bear::forgive_dead_player(m),
+        // The enderman's and zombified piglin's persistent anger is the
+        // target they hold (the stare goal, the hurt-by path): vanilla's
+        // `NeutralMob.playerDied` ends it through `stopBeingAngry` when it
+        // is the player who died, the last hurt by with it.
+        Species::Enderman | Species::ZombifiedPiglin => {
+            if m.ai.target == Some(Who::Player) {
+                m.ai.last_hurt_by = None;
+                m.ai.last_hurt_by_time = m.age as i32;
+                m.ai.target = None;
+            }
+        }
+        // The iron golem keeps a timer and its target (the hurt-by goal
+        // after a player's hit).
+        Species::IronGolem => {
+            if m.extra.anger > 0 && m.ai.target == Some(Who::Player) {
+                m.ai.last_hurt_by = None;
+                m.ai.last_hurt_by_time = m.age as i32;
+                m.extra.anger = 0;
+                m.ai.target = None;
+            }
+        }
         _ => super::tame::forgive_dead_player(m),
     }
 }
@@ -2628,6 +2748,51 @@ mod same_vehicle_push_tests {
 }
 
 #[cfg(test)]
+mod ridden_tests {
+    use super::*;
+    use crate::mobs::world::with_test_world;
+
+    /// #2920: a saddled horse ridden forward, ticked on the server; with
+    /// `client` its rider's client moves it (`travelRidden` without
+    /// `canSimulateMovement`): it only turns to the rider's look and stops.
+    fn ridden(client: bool) -> Option<Mob> {
+        let mut out = None;
+        with_test_world(&[], |w, types| {
+            let kind = std::sync::Arc::new(types.types["minecraft:horse"].clone());
+            let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.set_saddle(Some(crate::items::ItemStack::new("minecraft:saddle", 1)));
+            m.persistent = true;
+            m.rider = Some(super::super::equine::Rider {
+                forward: 1.0,
+                yaw: 90.0,
+                client,
+                ..Default::default()
+            });
+            let (mut random, mut events) = (LegacyRandom::new(0), Vec::new());
+            for _ in 0..5 {
+                tick(&mut m, w, &mut random, &mut events);
+            }
+            out = Some(m);
+        });
+        out
+    }
+
+    #[test]
+    fn the_server_leaves_a_horse_to_its_riders_client() {
+        let Some(moved) = ridden(false) else {
+            return;
+        };
+        // The host's own ride: the horse walks west and falls through the air.
+        assert!(moved.position.x < 0.4, "{:?}", moved.position);
+        assert!(moved.position.y < 64.0, "{:?}", moved.position);
+        let held = ridden(true).unwrap();
+        assert_eq!(held.position, Vec3::new(0.5, 64.0, 0.5));
+        assert_eq!(held.velocity, Vec3::ZERO);
+        assert_eq!(held.yaw, 90.0, "tickRidden still turns it");
+    }
+}
+
+#[cfg(test)]
 mod turtle_ambient_tests {
     use super::*;
     use std::sync::Arc;
@@ -2698,5 +2863,153 @@ mod feed_tests {
             m.extra.age = 6000;
             assert!(!takes_food(&m), "{id}: breeding cooldown");
         }
+    }
+}
+
+#[cfg(test)]
+mod forgiveness_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn mob(species: Species) -> Mob {
+        let mut t = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        t.species = species;
+        Mob::new(1, Arc::new(t), Vec3::ZERO, 0.0)
+    }
+
+    /// The enderman's and zombified piglin's persistent anger is the target
+    /// they hold: a dying player they are angry at takes it (and the last
+    /// hurt by) with them, as `NeutralMob.playerDied` does through
+    /// `stopBeingAngry`.
+    #[test]
+    fn a_target_anger_at_the_dying_player_ends() {
+        for species in [Species::Enderman, Species::ZombifiedPiglin] {
+            let mut m = mob(species);
+            m.ai.target = Some(Who::Player);
+            m.ai.last_hurt_by = Some(Who::Player);
+            forgive_dead_player(&mut m);
+            assert_eq!(m.ai.target, None, "{species:?}");
+            assert_eq!(m.ai.last_hurt_by, None, "{species:?}");
+            // Anger at something else is not the dying player's to end.
+            let mut m = mob(species);
+            m.ai.target = Some(Who::Mob(7));
+            forgive_dead_player(&mut m);
+            assert_eq!(m.ai.target, Some(Who::Mob(7)), "{species:?}");
+        }
+    }
+
+    /// The iron golem's anger is a timer and its target: the dying player
+    /// they were hurt by ends both, and anger at another mob stays.
+    #[test]
+    fn an_iron_golems_timer_and_target_end_together() {
+        let mut golem = mob(Species::IronGolem);
+        golem.extra.anger = 300;
+        golem.ai.target = Some(Who::Player);
+        golem.ai.last_hurt_by = Some(Who::Player);
+        forgive_dead_player(&mut golem);
+        assert_eq!(golem.extra.anger, 0);
+        assert_eq!(golem.ai.target, None);
+        assert_eq!(golem.ai.last_hurt_by, None);
+
+        let mut golem = mob(Species::IronGolem);
+        golem.extra.anger = 300;
+        golem.ai.target = Some(Who::Mob(7));
+        forgive_dead_player(&mut golem);
+        assert_eq!(golem.extra.anger, 300, "anger at another mob stays");
+        assert_eq!(golem.ai.target, Some(Who::Mob(7)));
+    }
+}
+
+#[cfg(test)]
+mod fox_screech_tests {
+    use super::*;
+    use crate::mobs::PlayerView;
+    use crate::mobs::world::with_test_world;
+
+    fn player_at(x: f64) -> PlayerView {
+        crate::mobs::world::test_player(Vec3::new(x, 64.0, 0.5))
+    }
+
+    /// The (sound, volume) of 200 ambient sounds from one fox in `w`.
+    fn sounds(w: &MobWorld<'_>, types: &crate::mobs::MobTypes) -> Vec<(&'static str, f32)> {
+        let kind = std::sync::Arc::new(types.types["minecraft:fox"].clone());
+        let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+        let mut events = Vec::new();
+        for _ in 0..200 {
+            play_ambient(&mut m, w, &mut events);
+        }
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                MobEvent::Sound(s, _, volume, _) => Some((s, volume)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `Fox.getAmbientSound` and `playAmbientSound`: at night with nobody
+    /// within 16 blocks, about one call in ten screeches at volume 2; by day,
+    /// in the End, or with a player near, never.
+    #[test]
+    fn a_fox_screeches_only_at_night_with_no_player_near() {
+        with_test_world(&[], |w, types| {
+            let mut night = w.clone();
+            night.daylight = false;
+            let alone = sounds(&night, types);
+            assert_eq!(alone.len(), 200);
+            let screeches: Vec<_> = alone
+                .iter()
+                .filter(|s| s.0 == "entity.fox.screech")
+                .collect();
+            assert!(!screeches.is_empty(), "no screech in 200 night calls");
+            assert!(screeches.len() < 60, "{} screeches", screeches.len());
+            // Played by playAmbientSound itself at volume 2...
+            assert!(screeches.iter().any(|s| s.1 == 2.0));
+            // ...or picked again through Mob.playAmbientSound (makeSound, volume 1).
+            assert!(screeches.iter().all(|s| s.1 == 2.0 || s.1 == 1.0));
+            assert!(
+                alone
+                    .iter()
+                    .all(|s| s.0 == "entity.fox.screech" || s.0 == "entity.fox.ambient")
+            );
+
+            let by_day = sounds(w, types);
+            assert!(by_day.iter().all(|s| s.0 == "entity.fox.ambient"));
+
+            let mut end = night.clone();
+            end.daylight = true;
+            end.end = true;
+            assert!(
+                sounds(&end, types)
+                    .iter()
+                    .any(|s| s.0 == "entity.fox.screech")
+            );
+
+            let mut near = night.clone();
+            near.player = Some(player_at(16.0));
+            assert!(
+                sounds(&near, types)
+                    .iter()
+                    .all(|s| s.0 == "entity.fox.ambient")
+            );
+
+            let mut far = night.clone();
+            far.player = Some(player_at(18.0));
+            assert!(
+                sounds(&far, types)
+                    .iter()
+                    .any(|s| s.0 == "entity.fox.screech")
+            );
+
+            let mut spectator = night.clone();
+            let mut p = player_at(2.0);
+            p.spectator = true;
+            spectator.player = Some(p);
+            assert!(
+                sounds(&spectator, types)
+                    .iter()
+                    .any(|s| s.0 == "entity.fox.screech")
+            );
+        });
     }
 }

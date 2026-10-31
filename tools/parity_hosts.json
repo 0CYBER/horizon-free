@@ -45,6 +45,7 @@
  "solo": {
   "remote_fireball": "two game windows (lan_e2e); on 4 CPUs beside other harnesses, screenshots and control requests take ticks the check needs",
   "remote_fireworks": "two game windows (lan_e2e); a screenshot took ~1.5 s beside 3 other harnesses on playhorizon's runner, past the sparks' life (2026-10-27)",
+  "return_to_sender": "a game window: an attack on a fireball and its flight to the ghast take ticks the check needs",
   "server_player_sculk": "two game windows (lan_e2e); failed on playhorizon's runner beside other harnesses, passes alone (2026-10-27)",
   "world_reopen": "a game window reopening a world: failed on playhorizon's runner beside other harnesses (2026-10-27)"
  },

@@ -22,7 +22,7 @@ pub mod tree_world;
 pub mod vanilla;
 mod vanilla_order;
 
-pub use args::{Arg, ArgType, Registries};
+pub use args::{Arg, ArgType, CustomCompletionAction, Registries, modify_custom_completions};
 use horizon_client_core::text::Text;
 
 /// The command id of a mod's command (`Dispatcher::with_mod_commands`).

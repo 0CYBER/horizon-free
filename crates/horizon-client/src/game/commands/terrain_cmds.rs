@@ -232,6 +232,16 @@ impl Game<'_> {
                 self.world.dirty_sections.insert((key.0, sy, key.1));
             }
         }
+        // ChunkMap.resendBiomesForChunks: the players who see the changed
+        // columns are sent their new biomes, in the order the columns were
+        // gathered (z, then x).
+        if let Some(host) = self.lan.as_ref() {
+            let columns: Vec<(i32, i32)> = ((lo[2] >> 4)..=(hi[2] >> 4))
+                .flat_map(|cz| ((lo[0] >> 4)..=(hi[0] >> 4)).map(move |cx| (cx, cz)))
+                .filter(|key| touched.contains(key))
+                .collect();
+            host.hub.resend_biomes(&self.world, &columns);
+        }
         self.feedback(Text::translate(
             "commands.fillbiome.success.count",
             &[

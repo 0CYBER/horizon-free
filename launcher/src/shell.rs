@@ -231,3 +231,84 @@ pub fn chip(id: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
         .child(hovered(&id, 1, t));
     keyboard(track_hover(d, id), t)
 }
+
+/// What a night button is: the one main action (accent, cut in one step), a raised one
+/// (`card_hi`), or only its label until the pointer is over it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Main,
+    Raised,
+    Quiet,
+}
+
+/// A night button, its label in the UI step: [`Action::Main`] is [`night::PLAY`] tall, the others
+/// [`theme::CONTROL`] and round at [`night::RADIUS_CONTROL`]. Icons and the label go in as
+/// children.
+pub fn action(id: impl Into<SharedString>, kind: Action, t: &Theme) -> Stateful<Div> {
+    let id = id.into();
+    let n = t.night;
+    let d = div()
+        .id(id.clone())
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(px(10.))
+        .px(px(16.))
+        .font_family(theme::FONT)
+        .font_weight(FontWeight::MEDIUM)
+        .text_size(px(night::UI.px))
+        .cursor_pointer();
+    let fill = |d: Div| d.absolute().top_0().left_0().size_full();
+    let round = move || fill(div()).rounded(px(night::RADIUS_CONTROL));
+    let d = match kind {
+        Action::Main => d
+            .h(px(night::PLAY))
+            .px(px(28.))
+            .text_size(px(night::TITLE.px))
+            .font_weight(FontWeight::BOLD)
+            .text_color(c(n.on_accent))
+            .child(fill(cut(
+                night::PIXEL_CORNER,
+                1,
+                Some(alpha(n.accent, 1.)),
+                None,
+            )))
+            .child(hover_fade(
+                &id,
+                move || {
+                    fill(cut(
+                        night::PIXEL_CORNER,
+                        1,
+                        Some(alpha(n.on_accent, 0.12)),
+                        None,
+                    ))
+                },
+                |d, a| d.opacity(a),
+            )),
+        Action::Raised => d
+            .h(px(theme::CONTROL))
+            .rounded(px(night::RADIUS_CONTROL))
+            .bg(alpha(n.card_hi, n.card_hi_alpha))
+            .border_1()
+            .border_color(alpha(n.stroke, n.stroke_alpha))
+            .text_color(c(n.ink))
+            .child(hover_fade(&id, round, move |d, a| {
+                d.bg(alpha(n.ink, 0.06 * a))
+            })),
+        Action::Quiet => d
+            .h(px(theme::CONTROL))
+            .rounded(px(night::RADIUS_CONTROL))
+            .text_color(c(n.ink_soft))
+            .child(hover_fade(&id, round, move |d, a| {
+                d.bg(alpha(n.card_hi, n.card_hi_alpha * 0.5 * a))
+            })),
+    };
+    keyboard(track_hover(d, id), t).active(|s| s.opacity(theme::PRESSED))
+}
+
+/// A label for an [`action`], over its hover layer.
+pub fn label(text_: impl Into<SharedString>) -> Div {
+    div().relative().child(text_.into())
+}

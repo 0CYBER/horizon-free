@@ -21,8 +21,11 @@ design for any new screen.
 libudev for hot-plugging), IOKit on macOS, Windows.Gaming.Input on Windows.
 Its SDL mapping database normalizes every pad to one positional layout
 (South/East/West/North face buttons, bumpers, triggers, sticks, D-pad,
-Select/Start). No second windowing or event stack: gilrs is polled once per
-loop iteration next to winit's events.
+Select/Start). Horizon also injects a few SDL rows gilrs' bundled DB still
+misses (notably the 8BitDo Ultimate 2 on Linux/Bluetooth, whose right stick
+is on ABS_Z/ABS_RX without that row), and corrects that pad by vendor/product
+when no SDL row matched. No second windowing or event stack: gilrs is polled
+once per loop iteration next to winit's events.
 
 - The pure logic (mapping table, deadzones and curves, button edges, the
   settings file, glyph choice) lives in `crates/horizon-client-input/src/gamepad.rs`
@@ -36,7 +39,10 @@ loop iteration next to winit's events.
   move vector directly (a half-tilted stick walks slowly, like Bedrock),
   instead of being rounded to WASD. The forward/back/left/right flags other
   code reads (sprint start, boats, minecarts, the server's input packet) are
-  set when the stick passes a threshold.
+  set when the stick passes a threshold. On a server (not this game's own
+  server thread) the stick moves as those keys do, in 8 directions at full
+  speed, as the server only hears the keys: an anticheat predicting from them
+  pulls back a player moving at the stick's own angle and speed.
 - The pad last touched is the active one. Several pads are not merged.
 - `horizon-ctl pad ...` injects a virtual pad (buttons, sticks, triggers) into
   a running game, for tests without hardware.
@@ -65,8 +71,9 @@ loop iteration next to winit's events.
 
 The Guide / PS / Steam button is left to the system. Sneak on a stick click
 toggles by default (holding a stick in while steering the camera is
-awkward, which is why Bedrock does the same); the controls options can make it
-hold-to-sneak.
+awkward, which is why Bedrock does the same) and acts like vanilla's toggle
+crouch: a screen stands you up while it is open and closing it crouches you
+again. The controls options can make it hold-to-sneak.
 
 ## Menus and inventories
 
