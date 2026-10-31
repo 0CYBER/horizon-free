@@ -13,9 +13,10 @@
 use super::{
     Game, Options, PackResources, Resources, UiResources, WorldIcon,
     execution_role::ExecutionRole,
-    lan::{LanSettings, Owner},
-    world_loading::WorldRequest,
+    lan::{LanSettings, Owner, SyncPreload, preload_sync_data},
+    world_loading::{WorldLoader, WorldRequest},
 };
+use horizon_client::level_loading::{STATUS_RADIUS, Stage};
 use horizon_client::{
     Result,
     audio::Audio,
@@ -35,6 +36,9 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
+
+/// `LevelLoadProgressTracker.EXPECTED_PLAYER_CHUNKS`: the 7x7 chunks around the spawn.
+const PLAYER_CHUNKS: usize = 49;
 
 /// What the window tells its server thread.
 #[derive(Default)]
@@ -56,6 +60,9 @@ struct Flags {
     entity_distance: AtomicU32,
     /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
     saving: AtomicBool,
+    /// What the server's `LevelLoadListener` reports, for the window's
+    /// `LevelLoadingScreen` (`LevelLoadTracker.serverProgress/statusView`).
+    load: Arc<horizon_client::level_loading::ServerLoadView>,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -70,6 +77,10 @@ pub(super) struct Integrated {
     pub world_name: String,
 }
 impl Integrated {
+    /// The server's load progress and chunk status map.
+    pub fn load_view(&self) -> &Arc<horizon_client::level_loading::ServerLoadView> {
+        &self.flags.load
+    }
     pub fn smoothed_tick_ms(&self) -> f32 {
         f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
     }
@@ -159,6 +170,17 @@ pub(super) struct Serving {
     /// Open to LAN or closed from inside a player's command, while the hub
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
+    /// Where the load focus is and how far the player's chunks are.
+    load: LoadPhase,
+}
+/// The part of `LevelLoadListener` after `prepareLevels`: `PrepareSpawnTask`'s
+/// `LOAD_PLAYER_CHUNKS`.
+#[derive(Default)]
+struct LoadPhase {
+    /// `updateFocus`: the spawn chunk, once the stage started.
+    focus: Option<(i32, i32)>,
+    /// `finish(LOAD_PLAYER_CHUNKS)`.
+    done: bool,
 }
 impl Serving {
     /// The window reads this as `MinecraftServer.isCurrentlySaving`.
@@ -180,11 +202,14 @@ type Ready = std::result::Result<(Pipe, String), String>;
 /// does while its server prepares (`Minecraft.doWorldLoad`), instead of
 /// waiting for it frozen for the whole load.
 pub(super) struct Starting {
-    handle: Integrated,
+    pub(super) handle: Integrated,
     ready: Receiver<Ready>,
     player: String,
     /// The save's folder in `saves/`, for the world icon once joined.
     folder: String,
+    /// `Minecraft.doWorldLoad`'s `newWorld`: the loading screen stays 500 ms
+    /// once the level is ready.
+    new_world: bool,
 }
 
 /// The world to open and the player who owns it.
@@ -231,6 +256,7 @@ impl Game<'_> {
         let player = auth
             .as_ref()
             .map_or_else(|| self.options.player_name(), |a| a.name.clone());
+        let new_world = create.is_some();
         let launch = Launch {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
@@ -316,6 +342,7 @@ impl Game<'_> {
             ready,
             player,
             folder: folder.to_owned(),
+            new_world,
         });
         // Harnesses, control scripts and runs without a window go on with the world open.
         if self.window.is_none() || super::synchronous_startup(&self.options) {
@@ -331,6 +358,10 @@ impl Game<'_> {
 
     /// The starting server's answer, polled each frame: joined once it is ready.
     pub(super) fn poll_integrated_start(&mut self) -> Result<()> {
+        if self.integrated_starting.is_none() {
+            return Ok(());
+        }
+        self.tick_load_progress();
         let Some(starting) = &self.integrated_starting else {
             return Ok(());
         };
@@ -350,6 +381,7 @@ impl Game<'_> {
             mut handle,
             player,
             folder,
+            new_world,
             ..
         }) = self.integrated_starting.take()
         else {
@@ -358,6 +390,14 @@ impl Game<'_> {
         handle.world_name = world_name;
         self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
+        if let Some(r) = self.remote.as_mut() {
+            // `new LevelLoadTracker(newWorld ? 500L : 0L)`.
+            r.level_load = horizon_client::level_loading::LevelLoadTracker::new(if new_world {
+                horizon_client::level_loading::LEVEL_LOAD_CLOSE_DELAY_MS
+            } else {
+                0
+            });
+        }
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
         self.world_icon = Some(WorldIcon {
@@ -371,6 +411,77 @@ impl Game<'_> {
         Ok(())
     }
 
+    /// `PrepareSpawnTask`'s `LOAD_PLAYER_CHUNKS`, reported to the window's
+    /// loading screen: the focus moves to the spawn chunk when the stage
+    /// starts, the 7x7 chunks around it count as they are ready, and the
+    /// status map around the focus follows (`ChunkLoadStatusView.get`).
+    pub(super) fn publish_load_view(&mut self) {
+        let Some(serving) = self.serving.as_mut() else {
+            return;
+        };
+        if serving.load.done {
+            return;
+        }
+        let view = serving.flags.load.clone();
+        let focus = match serving.load.focus {
+            Some(focus) => focus,
+            None => {
+                let Some(spawn) = self.spawn else { return };
+                let focus = ((spawn.x.floor() as i32) >> 4, (spawn.z.floor() as i32) >> 4);
+                view.start(Stage::LoadPlayerChunks, PLAYER_CHUNKS);
+                serving.load.focus = Some(focus);
+                focus
+            }
+        };
+        let ready = (-3..=3)
+            .flat_map(|dz| (-3..=3).map(move |dx| (focus.0 + dx, focus.1 + dz)))
+            .filter(|&(x, z)| self.streaming.is_lit(x, z))
+            .count();
+        view.update(Stage::LoadPlayerChunks, ready, PLAYER_CHUNKS);
+        let diameter = STATUS_RADIUS * 2 + 1;
+        view.set_status(
+            (0..diameter)
+                .flat_map(|x| (0..diameter).map(move |z| (x, z)))
+                .map(|(x, z)| {
+                    self.streaming.latest_status(
+                        &self.world,
+                        focus.0 + x - STATUS_RADIUS,
+                        focus.1 + z - STATUS_RADIUS,
+                    )
+                })
+                .collect(),
+        );
+        if ready == PLAYER_CHUNKS {
+            view.finish(Stage::LoadPlayerChunks);
+            if let Some(serving) = self.serving.as_mut() {
+                serving.load.done = true;
+            }
+        }
+    }
+
+    /// `LevelLoadingScreen.tick`'s easing of the server's progress, every 50 ms
+    /// of wall time (the starting server has no client tick yet).
+    pub(super) fn tick_load_progress(&mut self) {
+        let view = match (&self.integrated_starting, &self.integrated) {
+            (Some(s), _) => s.handle.load_view().clone(),
+            (None, Some(i)) => i.load_view().clone(),
+            _ => return,
+        };
+        let now = Instant::now();
+        let at = self.loading_progress_at.get_or_insert(now);
+        let steps = (now.duration_since(*at).as_millis() / 50).min(20) as u32;
+        *at += Duration::from_millis(u64::from(steps) * 50);
+        if now.duration_since(*at) > Duration::from_secs(1) {
+            *at = now;
+        }
+        for _ in 0..steps {
+            self.loading_progress = horizon_client::level_loading::smooth(
+                self.loading_progress,
+                view.server_progress(),
+            );
+        }
+    }
+
     /// The server thread's loop (`MinecraftServer.runServer`): 20 ticks a
     /// second, the world held while the window is paused.
     fn run_integrated(
@@ -379,8 +490,9 @@ impl Game<'_> {
         flags: Arc<Flags>,
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
+        opening: Opening,
     ) -> Result<()> {
-        let result = self.run_integrated_inner(launch, flags, tasks, ready);
+        let result = self.run_integrated_inner(launch, flags, tasks, ready, opening);
         if let Err(error) = &result {
             self.native_lifecycle_close_failed(&error.to_string());
         }
@@ -393,10 +505,11 @@ impl Game<'_> {
         flags: Arc<Flags>,
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
+        opening: Opening,
     ) -> Result<()> {
         // The open segment runs as one unit (`integrated_open`) so its
         // failures fire `WorldOpenFailed` with the engine's own error text.
-        if let Err(e) = self.integrated_open(&launch, &flags, tasks, ready) {
+        if let Err(e) = self.integrated_open(&launch, &flags, tasks, ready, opening) {
             self.native_lifecycle_world_failed(&e.to_string());
             return Err(e);
         }
@@ -447,6 +560,7 @@ impl Game<'_> {
                 );
             }
             self.apply_publish();
+            self.publish_load_view();
             self.wait_for_next_server_tick(&mut next, paused);
         }
         self.stop_integrated()
@@ -461,15 +575,16 @@ impl Game<'_> {
         flags: &Arc<Flags>,
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
+        opening: Opening,
     ) -> Result<()> {
         self.native_lifecycle_open_started();
-        self.load_world(WorldRequest::new(
-            &launch.folder,
-            launch.name.as_deref(),
-            launch.seed,
-            launch.creative,
-            launch.create.as_ref(),
-        )?)?;
+        // `load_world`, with the world `serve` started preparing.
+        self.join_world_rest()?;
+        self.perf.world_opening();
+        self.finish_open_world(opening.world?.finish()?)?;
+        if let Some(sync) = opening.sync {
+            sync.adopt(&self.pack_files());
+        }
         let saved = Box::new(self.level.clone());
         // IntegratedServer runs the server mods; the window the client mods.
         self.mods.dev = self.options.dev_mods.clone();
@@ -541,7 +656,13 @@ impl Game<'_> {
             tasks,
             owner,
             pending: None,
+            load: LoadPhase::default(),
         });
+        // MinecraftServer.prepareLevels: no forced chunks to load, so the
+        // stage is over at once; the player's chunks come after.
+        let view = &flags.load;
+        view.start(Stage::LoadInitialChunks, 0);
+        view.finish(Stage::LoadInitialChunks);
         let _ = ready.send(Ok((pipe, self.level.name.clone())));
         self.settle_spawn()
     }
@@ -867,8 +988,46 @@ fn serve(
     tasks: Receiver<Task>,
     ready: &Sender<Ready>,
 ) -> Result<()> {
-    let mut server = server_game(res, pack, options, settings)?;
-    server.run_integrated(launch, flags, tasks, ready)
+    // The world prepares, and the registries the server sends are read, on
+    // helper threads while this one builds the server's own Game: none of
+    // them reads what another makes (`integrated_open` takes them up).
+    let world = WorldRequest::new(
+        &launch.folder,
+        launch.name.as_deref(),
+        launch.seed,
+        launch.creative,
+        launch.create.as_ref(),
+    )
+    .and_then(|request| {
+        WorldLoader::start(
+            request,
+            res.clone(),
+            pack.clone(),
+            options.clone(),
+            settings.clone(),
+        )
+    });
+    let opening = Opening {
+        world,
+        sync: preload_sync_data(&options.resources),
+    };
+    let mut server = match server_game(res, pack, options, settings) {
+        Ok(server) => server,
+        Err(e) => {
+            // The world's session lock is let go before the failure is told.
+            if let Ok(world) = opening.world {
+                drop(world.finish());
+            }
+            return Err(e);
+        }
+    };
+    server.run_integrated(launch, flags, tasks, ready, opening)
+}
+
+/// What `serve` starts beside the server's own Game.
+struct Opening {
+    world: Result<WorldLoader>,
+    sync: Option<SyncPreload>,
 }
 
 /// Component oracles supply their own synthetic levels and entity phases.

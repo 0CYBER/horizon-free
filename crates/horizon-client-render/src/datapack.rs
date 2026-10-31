@@ -223,6 +223,35 @@ pub fn install(dir: &Path, world: &Path, selected: &[String]) -> Result<(), Stri
     let file = world.join("datapacks.json");
     std::fs::write(&file, json.to_string()).map_err(|e| err(&file, e))
 }
+/// Re-Create World's packs from a saved world: a new folder holding a copy of
+/// its `datapacks` (`CreateWorldScreen.createTempDataPackDirFromExistingWorld`; `None` when the
+/// world has none), and the selection its `datapacks.json` makes, lowest
+/// priority first (`WorldOpenFlows.recreateWorldData` keeps the world's `DataConfiguration`).
+/// The built-in pack is selected unless the world turned it off.
+pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
+    let packs = discover(world);
+    let mut selected = enabled_ids(world, &packs);
+    let vanilla_off = std::fs::read(world.join("datapacks.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["disabled"].as_array().cloned())
+        .is_some_and(|a| a.iter().any(|id| id.as_str() == Some("vanilla")));
+    if !vanilla_off {
+        selected.insert(0, "vanilla".into());
+    }
+    if packs.is_empty() {
+        return (None, selected);
+    }
+    let dir = temp_folder().ok().and_then(|dir| {
+        if copy(&world.join("datapacks"), &dir).is_ok() {
+            Some(dir)
+        } else {
+            let _ = std::fs::remove_dir_all(&dir);
+            None
+        }
+    });
+    (dir, selected)
+}
 /// A file, or a folder and everything in it.
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{} -> {}: {e}", from.display(), to.display());
@@ -616,6 +645,37 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack]) -> Vec<String> {
         }
     }
     enabled
+}
+
+/// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
+/// as `enabled_ids` orders them): the id `namespace:path` and the parsed JSON, a later pack's
+/// file for an id replacing an earlier one's. This is `context.datapackDimensions()` of
+/// `WorldOpenFlows.loadWorldStem`.
+pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for pack in packs {
+        for file in pack.list_kinds(&["dimension"]) {
+            let Some(rest) = file.strip_prefix("data/") else {
+                continue;
+            };
+            let Some((namespace, rest)) = rest.split_once('/') else {
+                continue;
+            };
+            let Some(path) = rest
+                .strip_prefix("dimension/")
+                .and_then(|p| p.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Some(json) = pack
+                .read(&file)
+                .and_then(|b| serde_json::from_slice(&b).ok())
+            {
+                out.insert(format!("{namespace}:{path}"), json);
+            }
+        }
+    }
+    out
 }
 
 // ---- worldgen ----------------------------------------------------------------

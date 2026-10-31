@@ -235,7 +235,7 @@ impl Game<'_> {
         // ChunkMap.resendBiomesForChunks: the players who see the changed
         // columns are sent their new biomes, in the order the columns were
         // gathered (z, then x).
-        if let Some(host) = self.lan.as_ref() {
+        if let Some(host) = self.lan.as_mut() {
             let columns: Vec<(i32, i32)> = ((lo[2] >> 4)..=(hi[2] >> 4))
                 .flat_map(|cz| ((lo[0] >> 4)..=(hi[0] >> 4)).map(move |cx| (cx, cz)))
                 .filter(|key| touched.contains(key))
