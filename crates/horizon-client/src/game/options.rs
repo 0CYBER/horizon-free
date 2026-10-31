@@ -327,6 +327,7 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
             r.fullbright = s.extras.fullbright;
+            r.improved_transparency = s.improved_transparency;
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
