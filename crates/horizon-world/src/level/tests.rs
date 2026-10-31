@@ -2051,6 +2051,50 @@ fn lever_on_piston_back_survives_extend_and_retract() {
 }
 
 #[test]
+fn dust_on_a_downward_piston_survives_extend_and_retract() {
+    // PistonBaseBlock.triggerEvent writes the retracting base as a
+    // `moving_piston` and still updates the neighbours around it, so the wire
+    // above the base is asked whether it can survive. Vanilla reads that block
+    // through its block entity, whose collision shape holds the extended base;
+    // the exported support facts see no block entity and call every face
+    // unsupported, which broke the dust (#4728).
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("piston", &[("facing", "down")]);
+    let power = w.id("redstone_block", &[]);
+    let wire = w.id("redstone_wire", &[]);
+    let air = w.b().air();
+    let base = BlockPos::new(0, 3, 0);
+    let dust = BlockPos::new(0, 4, 0);
+    w.set(base, piston);
+    w.set(dust, wire);
+    w.set(BlockPos::new(1, 3, 0), power);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(base, "extended"), "true");
+    assert!(
+        w.name(BlockPos::new(0, 2, 0)).starts_with("piston_head"),
+        "the piston pushed its head down"
+    );
+    assert!(
+        w.name(dust).starts_with("redstone_wire"),
+        "the dust stays on the extended piston, got {}",
+        w.name(dust)
+    );
+    w.set(BlockPos::new(1, 3, 0), air);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(base, "extended"), "false");
+    assert!(
+        w.name(dust).starts_with("redstone_wire"),
+        "the dust stays through the retract, got {}",
+        w.name(dust)
+    );
+}
+
+#[test]
 fn a_candle_on_an_uneaten_cake_makes_a_candle_cake() {
     // CakeBlock.useItemOn: any candle on a cake with no bites turns it into the
     // matching unlit candle cake; a bitten cake or another item does not.

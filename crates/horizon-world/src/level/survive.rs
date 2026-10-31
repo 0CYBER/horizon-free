@@ -277,8 +277,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.sturdy(rel(pos, facing.opposite()), facing)
             }
             Class::RedstoneWire => {
-                let below_state = self.below_state(pos);
-                b.is_face_sturdy(below_state, Direction::Up) || b.is_block(below_state, n.hopper)
+                // `RedstoneWireBlock.canSurvive`'s `canSurviveOn`, through
+                // `support_state` so a retracting piston's moving base still
+                // holds its dust (#4728).
+                let below = below(pos);
+                self.sturdy(below, Direction::Up) || b.is_block(self.state(below), n.hopper)
             }
             Class::Scaffolding => self.scaffolding_distance(pos) < 7,
             Class::SeaPickle => {
