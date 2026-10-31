@@ -132,6 +132,13 @@ impl Levels {
     }
 
     /// The levels that are not in place, by dimension.
+    /// The forced chunks of every level not in place, released.
+    pub(super) fn release_parked_forced_chunks(&mut self) {
+        for level in self.parked.values_mut() {
+            level.streaming.forced.clear();
+        }
+    }
+
     pub(super) fn parked_dims(&self) -> Vec<Dim> {
         self.parked.keys().copied().collect()
     }
@@ -374,6 +381,8 @@ impl Game<'_> {
         {
             self.native_lifecycle_server_tick_start(running);
         }
+        let observe_level =
+            running.is_some() && (self.serving.is_some() || self.options.dedicated.is_some());
         let dims = self.levels_to_tick();
         let n = dims.len();
         let mut result = Ok(());
@@ -387,6 +396,9 @@ impl Game<'_> {
                 last: k + 1 == n,
                 running,
             };
+            if observe_level {
+                self.native_level_tick_pre(dim.id());
+            }
             self.update_dedicated_streaming();
             self.update_world();
             result = if paused {
@@ -403,6 +415,9 @@ impl Game<'_> {
             };
             if result.is_err() {
                 break;
+            }
+            if observe_level {
+                self.native_level_tick_post(dim.id());
             }
         }
         self.level_pass = Pass::default();
@@ -516,6 +531,8 @@ impl Game<'_> {
                 guests.iter().any(|g| g.dimension == d.id())
                     || self.player_bed_levels().any(|b| b == *d)
                     || forced
+                    // A game test runs in its own level, players or not.
+                    || self.game_tests.has_tests_in(*d)
                     || self.pregen_level() == Some(*d)
                     // A pending portal arrival keeps its destination level
                     // running so it can land and tick (the portal ticket).

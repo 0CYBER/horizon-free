@@ -6,6 +6,13 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 25 adds server sound playback (`native_play_sound`).
+//!
+//! API 24 adds a server block setter (`native_set_block`).
+//!
+//! API 23 adds per-level server tick hooks (`native_level_tick_pre`,
+//! `native_level_tick_post`).
+//!
 //! API 22 adds what a mod needs to keep the world from changing blocks
 //! it guards: fluid and fire spreading (`native_block_spread`), pistons
 //! (`native_piston_move`), explosions (`native_explosion_detonate`),
@@ -117,7 +124,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 22;
+pub(crate) const NATIVE_HOOKS_API: u32 = 25;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -491,6 +498,14 @@ impl Game<'_> {
     ) {
         let _ = (context, phase);
     }
+    /// Before an authoritative server level's tick pass. `dimension` is its ID.
+    pub(super) fn native_level_tick_pre(&mut self, dimension: &str) {
+        let _ = dimension;
+    }
+    /// After a successful authoritative server level tick pass.
+    pub(super) fn native_level_tick_post(&mut self, dimension: &str) {
+        let _ = dimension;
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -807,10 +822,52 @@ impl Game<'_> {
     }
 }
 
-/// Helpers for native mods, kept as stable as the hook points.
+fn dimension_id(dimension: LevelDimension) -> &'static str {
+    match dimension {
+        LevelDimension::Overworld => "minecraft:overworld",
+        LevelDimension::Nether => "minecraft:the_nether",
+        LevelDimension::End => "minecraft:the_end",
+    }
+}
+
 /// Server-level helpers for native mods.
 #[allow(dead_code)]
 impl GameLevel<'_> {
+    /// Play a registered vanilla sound for nearby players in this server level.
+    /// The return value means queued, not heard. Unknown sound events are
+    /// rejected at dispatch when the server registry is available.
+    pub(super) fn native_play_sound(
+        &mut self,
+        sound: &str,
+        at: [f64; 3],
+        source: usize,
+        volume: f32,
+        pitch: f32,
+    ) -> bool {
+        if !self.native_authoritative || !sound.starts_with("minecraft:") {
+            return false;
+        }
+        if source >= horizon_client::settings::SOUND_SOURCES.len() {
+            return false;
+        }
+        let position_ok = at
+            .into_iter()
+            .all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX) / 8.0);
+        let gain_ok = volume.is_finite() && volume >= 0.0 && pitch.is_finite() && pitch >= 0.0;
+        if !position_ok || !gain_ok {
+            return false;
+        }
+        self.native_sounds.push(super::creatures::NativeSound {
+            dimension: dimension_id(self.dimension),
+            sound: sound.to_owned(),
+            at,
+            source: source as i32,
+            volume,
+            pitch,
+        });
+        true
+    }
+
     /// Queue particles in this authoritative level. A zero count sends one
     /// directional particle. The return value means accepted, not delivered.
     /// Block particle types require their block state; item, trail and
@@ -849,17 +906,21 @@ impl GameLevel<'_> {
         {
             return false;
         }
-        let dimension = match self.dimension {
-            LevelDimension::Overworld => "minecraft:overworld",
-            LevelDimension::Nether => "minecraft:the_nether",
-            LevelDimension::End => "minecraft:the_end",
-        };
         self.native_particles
-            .push((dimension, options.clone(), state, at, spread, speed, count));
+            .push(super::lan_particles::QueuedParticle {
+                dimension: dimension_id(self.dimension),
+                options: options.clone(),
+                state,
+                at,
+                spread,
+                speed,
+                count,
+            });
         true
     }
 }
 
+/// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
@@ -868,6 +929,42 @@ impl Game<'_> {
     /// launcher's next build leaves it out.
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
+    }
+    /// Sets a block in the current authoritative level through `Level.setBlock`.
+    /// Returns false for another dimension, an invalid state, or no change.
+    /// `flags` selects vanilla's neighbour and shape updates; Horizon sends
+    /// every write to players whatever the flags. A block entity block gets
+    /// its block entity. API 24.
+    pub(super) fn native_set_block(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
+        if (self.serving.is_none() && self.options.dedicated.is_none())
+            || dimension != self.dim.id()
+            || self.pack.assets.registry.state(state).is_none()
+        {
+            return false;
+        }
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
+        let changed =
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, at, state, flags));
+        let new = self.res.facts().get(state).name.clone();
+        let landed = self.world.block(pos[0], pos[1], pos[2]);
+        if changed
+            && self.res.facts().get(previous).name != new
+            && self.res.facts().get(landed).name == new
+            && let Some(entity) = self.new_block_entity(&new)
+        {
+            self.world
+                .block_entities
+                .insert((pos[0], pos[1], pos[2]), entity);
+        }
+        let _ = self.process_level_events();
+        changed
     }
     /// Sets property `key` of the block at `pos` to `value`, as a furnace's
     /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
@@ -1743,7 +1840,7 @@ mod tests {
             .split("/// The hook points. Each does nothing in Horizon.")
             .nth(1)
             .unwrap()
-            .split("/// Helpers for native mods")
+            .split("/// Server-level helpers for native mods.")
             .next()
             .unwrap();
         let level_section = source

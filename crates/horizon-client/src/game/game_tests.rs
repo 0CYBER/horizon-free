@@ -412,8 +412,9 @@ struct Runner {
     /// The grid is also `existingStructureSpawner` (`/test verify`): a test
     /// with a block is moved onto it.
     grid_for_existing: bool,
-    /// The tests of the batch before: their blocks, for `clearBetweenBatches`.
-    last_batch: Vec<Pos>,
+    /// The tests of the batch before: their levels and blocks, for
+    /// `clearBetweenBatches`.
+    last_batch: Vec<(Dim, Pos)>,
     /// `newStructureSpawner`: where the tests without a block go.
     grid: Option<Grid>,
     /// `ReportGameListener`'s (attempts, successes), by original test.
@@ -424,31 +425,47 @@ struct Runner {
     stopped: bool,
 }
 
-/// `StructureGridSpawner` (for one dimension) without `clearOnBatch`.
-pub(super) struct Grid {
+/// `StructureGridSpawner.DimensionGridState`.
+struct DimGrid {
     first: Pos,
     next: Pos,
-    per_row: i32,
     /// The z extent of `rowBounds` (an `AABB(BlockPos)` is one block deep).
     row_z: (i32, i32),
     count: i32,
-    /// `clearOnBatch`.
-    clear_on_batch: bool,
     /// `testsInLastBatch`: their blocks.
     last_batch: Vec<Pos>,
 }
 
-impl Grid {
-    /// `new DimensionGridState(start)`.
-    pub(super) fn new(first: Pos, per_row: i32) -> Self {
+impl DimGrid {
+    fn new(first: Pos) -> Self {
         Self {
             first,
             next: first,
-            per_row,
             row_z: (first.2, first.2 + 1),
             count: 0,
-            clear_on_batch: false,
             last_batch: Vec::new(),
+        }
+    }
+}
+
+/// `StructureGridSpawner`: a grid per dimension, made when the first test of
+/// that dimension is placed (`firstTestNorthWestCorner.apply(dimension)`).
+pub(super) struct Grid {
+    /// The column `createTestPositionAround` starts from: the source's.
+    around: (i32, i32),
+    per_row: i32,
+    /// `clearOnBatch`.
+    clear_on_batch: bool,
+    states: Vec<(Dim, DimGrid)>,
+}
+
+impl Grid {
+    pub(super) fn new(around: (i32, i32), per_row: i32) -> Self {
+        Self {
+            around,
+            per_row,
+            clear_on_batch: false,
+            states: Vec::new(),
         }
     }
 
@@ -485,6 +502,18 @@ pub(super) struct GameTests {
 }
 
 impl GameTests {
+    /// A test of the runner (placed or still to place) is in `dim`.
+    pub(super) fn has_tests_in(&self, dim: Dim) -> bool {
+        self.ticker.iter().any(|i| i.dim == dim)
+            || self.runner.as_ref().is_some_and(|r| {
+                r.batches
+                    .iter()
+                    .flat_map(|b| &b.infos)
+                    .chain(&r.scheduled)
+                    .any(|i| i.dim == dim)
+            })
+    }
+
     pub(super) fn next_id(&mut self) -> u32 {
         self.next_id += 1;
         self.next_id
@@ -568,23 +597,34 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        // StructureGridSpawner.onBatchStart (clearOnBatch).
-        let grid_cleared = runner.grid.as_mut().filter(|g| g.clear_on_batch).map(|g| {
-            g.next = g.first;
-            g.row_z = (g.first.2, g.first.2 + 1);
-            g.count = 0;
-            std::mem::take(&mut g.last_batch)
-        });
-        for pos in cleared {
-            if let Some(area) = self.test_bounding_box(pos) {
-                self.clear_test_space(&area);
+        // StructureGridSpawner.onBatchStart (clearOnBatch), every dimension.
+        let mut grid_cleared: Vec<(Dim, Pos)> = Vec::new();
+        if let Some(grid) = runner.grid.as_mut().filter(|g| g.clear_on_batch) {
+            for (dim, g) in &mut grid.states {
+                grid_cleared.extend(
+                    std::mem::take(&mut g.last_batch)
+                        .into_iter()
+                        .map(|p| (*dim, p)),
+                );
+                g.next = g.first;
+                g.row_z = (g.first.2, g.first.2 + 1);
+                g.count = 0;
             }
-            self.set_test_block_state(pos, "minecraft:air", flags::UPDATE_ALL);
         }
-        for pos in grid_cleared.into_iter().flatten() {
-            if let Some(area) = self.test_bounding_box(pos) {
-                self.clear_test_space(&area);
-            }
+        for (dim, pos) in cleared {
+            self.in_test_level(dim, |g| {
+                if let Some(area) = g.test_bounding_box(pos) {
+                    g.clear_test_space(&area);
+                }
+                g.set_test_block_state(pos, "minecraft:air", flags::UPDATE_ALL);
+            });
+        }
+        for (dim, pos) in grid_cleared {
+            self.in_test_level(dim, |g| {
+                if let Some(area) = g.test_bounding_box(pos) {
+                    g.clear_test_space(&area);
+                }
+            });
         }
         let Some(runner) = self.game_tests.runner.as_mut() else {
             return;
@@ -623,7 +663,7 @@ impl Game<'_> {
         });
         if let Some(runner) = self.game_tests.runner.as_mut() {
             runner.batch_pending = spawned.len();
-            runner.last_batch = spawned.iter().map(|i| i.pos).collect();
+            runner.last_batch = spawned.iter().map(|i| (i.dim, i.pos)).collect();
         }
         self.game_tests.ticker.extend(spawned);
     }
@@ -702,6 +742,19 @@ impl Game<'_> {
     /// the grid (`StructureGridSpawner.spawnStructure`), or is dropped
     /// (`NOT_SET`).
     fn spawn_test(&mut self, info: &mut Info) -> bool {
+        let dim = info.dim;
+        // The test's own level is in place while it is prepared.
+        match self.in_test_level(dim, |g| g.spawn_test_here(info)) {
+            Some(spawned) => spawned,
+            None => {
+                log::error!("Could not resolve level for dimension: {}", dim.id());
+                false
+            }
+        }
+    }
+
+    /// `spawn_test` with the test's level in place.
+    fn spawn_test_here(&mut self, info: &mut Info) -> bool {
         let in_place = !self
             .game_tests
             .runner
@@ -723,24 +776,35 @@ impl Game<'_> {
         else {
             return false;
         };
-        info.pos = grid.next;
+        // `gridFor`: the dimension's grid starts where the source stands.
+        let at = match grid.states.iter().position(|(d, _)| *d == info.dim) {
+            Some(at) => at,
+            None => {
+                let first = self.test_position_in_level(grid.around);
+                grid.states.push((info.dim, DimGrid::new(first)));
+                grid.states.len() - 1
+            }
+        };
+        let per_row = grid.per_row;
+        let state = &mut grid.states[at].1;
+        info.pos = state.next;
         info.has_pos = true;
         let prepared = self.prepare_test_structure(info);
         if prepared {
-            grid.last_batch.push(info.pos);
+            state.last_batch.push(info.pos);
             info.start_execution(1);
             self.test_structure_loaded(info);
             if let Some(b) = self.test_bounding_box(info.pos) {
                 // `getTestBounds()`: the structure's box and its padding.
                 let width = b.max[0] - b.min[0] + 1;
-                grid.row_z = (grid.row_z.0.min(b.min[2]), grid.row_z.1.max(b.max[2] + 1));
-                grid.next.0 += width + 5;
-                grid.count += 1;
-                if grid.count >= grid.per_row {
-                    grid.count = 0;
-                    grid.next.2 += grid.row_z.1 - grid.row_z.0 + 6;
-                    grid.next.0 = grid.first.0;
-                    grid.row_z = (grid.next.2, grid.next.2 + 1);
+                state.row_z = (state.row_z.0.min(b.min[2]), state.row_z.1.max(b.max[2] + 1));
+                state.next.0 += width + 5;
+                state.count += 1;
+                if state.count >= per_row {
+                    state.count = 0;
+                    state.next.2 += state.row_z.1 - state.row_z.0 + 6;
+                    state.next.0 = state.first.0;
+                    state.row_z = (state.next.2, state.next.2 + 1);
                 }
             }
         }
@@ -748,6 +812,44 @@ impl Game<'_> {
             runner.grid = Some(grid);
         }
         prepared
+    }
+
+    /// Run `f` with `dim`'s level in place (`enter_level`, as a command
+    /// whose source is there), then put the level back. None when the level
+    /// cannot be entered.
+    pub(super) fn in_test_level<R>(
+        &mut self,
+        dim: Dim,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if dim == self.dim {
+            return Some(f(self));
+        }
+        let back = self.enter_command_level(dim)?;
+        let result = f(self);
+        if let Err(e) = self.enter_level(None, back) {
+            log::error!("could not return to {}: {e}", back.id());
+        }
+        Some(result)
+    }
+
+    /// `level.getChunk(pos)` for the chunks of `area`: forced (the test needs
+    /// them kept) and waited for, as vanilla loads them synchronously.
+    pub(super) fn load_test_chunks(&mut self, area: &BoundingBox) {
+        let missing = |g: &Self| -> bool {
+            (area.min[0] >> 4..=area.max[0] >> 4).any(|x| {
+                (area.min[2] >> 4..=area.max[2] >> 4).any(|z| !g.world.chunks.contains_key(&(x, z)))
+            })
+        };
+        if !missing(self) {
+            return;
+        }
+        self.force_load_test_chunks(area);
+        let deadline = Instant::now() + std::time::Duration::from_secs(120);
+        while missing(self) && Instant::now() < deadline {
+            let _ = self.streaming.update(&mut self.world);
+            self.streaming.wait(std::time::Duration::from_millis(5));
+        }
     }
 
     /// `ReportGameListener.testStructureLoaded`.
@@ -761,6 +863,10 @@ impl Game<'_> {
     /// test's data, then `placeStructure`. False when the block is gone.
     fn prepare_test_structure(&mut self, info: &mut Info) -> bool {
         let pos = info.pos;
+        self.load_test_chunks(&BoundingBox::new(
+            [pos.0, pos.1, pos.2],
+            [pos.0, pos.1, pos.2],
+        ));
         self.set_test_block_state(pos, "minecraft:test_instance_block", flags::UPDATE_ALL);
         if self.test_instance_at(pos).is_none() {
             self.world.block_entities.insert(
@@ -781,6 +887,9 @@ impl Game<'_> {
         }
         self.mark_block_entity_updated(pos);
         // placeStructure
+        if let Some(area) = self.test_bounding_box(pos) {
+            self.load_test_chunks(&area);
+        }
         if !self.place_test_structure(pos) {
             let name = self.test_name(pos).plain();
             info.fail(Text::translate(
@@ -1413,6 +1522,31 @@ mod tests {
             Dim::Overworld,
             Rotation::None,
         )
+    }
+
+    #[test]
+    fn a_test_keeps_its_level_awake_until_it_is_done() {
+        let mut tests = GameTests::default();
+        assert!(!tests.has_tests_in(Dim::Nether));
+        let mut nether = info(false, 10, 0);
+        nether.dim = Dim::Nether;
+        tests.ticker.push(nether);
+        assert!(tests.has_tests_in(Dim::Nether));
+        assert!(!tests.has_tests_in(Dim::Overworld));
+        // A rerun keeps the level of the test it copies.
+        assert_eq!(tests.ticker[0].copy_reset(2).dim, Dim::Nether);
+    }
+
+    #[test]
+    fn a_grid_has_a_state_per_dimension_starting_at_its_own_corner() {
+        let mut grid = Grid::new((4, 9), 10).clearing();
+        assert!(grid.clear_on_batch);
+        grid.states
+            .push((Dim::Overworld, DimGrid::new((4, 70, 12))));
+        grid.states.push((Dim::Nether, DimGrid::new((4, 32, 12))));
+        let nether = &grid.states[1].1;
+        assert_eq!(nether.next, (4, 32, 12));
+        assert_eq!(nether.row_z, (12, 13));
     }
 
     #[test]
