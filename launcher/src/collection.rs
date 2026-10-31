@@ -374,7 +374,12 @@ impl Launcher {
                 "Each switch is off unless you turn it on. What it sends is below it; the privacy page on playhorizon.dev says how long it is kept.",
             ))
             .child(list)
-            .child(text(theme::CAPTION).text_color(t.muted).child(telemetry::NEVER))
+            .child(
+                text(theme::CAPTION)
+                    .max_w(px(600.))
+                    .text_color(t.muted)
+                    .child(telemetry::NEVER),
+            )
             .children(self.collection.note.clone().map(|n| text(theme::UI).text_color(t.ink).child(n)))
             .children(self.collection.view.as_ref().map(|v| json_view(v, &t, &self.collection.json_scroll)))
     }
