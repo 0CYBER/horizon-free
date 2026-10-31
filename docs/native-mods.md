@@ -135,8 +135,8 @@ In the window: install a native mod from the Mods page. The first one shows a no
 Rust and can take 20 to 30 minutes; later builds are faster) and turns on Settings → Game → **Native mods
 (experimental)**, which stays off for players who never install one; `mods install` does the same. Then **Build**. The launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the
 row shows each step, the error if one fails, and the build the instance plays. From the command line:
-`horizon-launcher native-build [FOLDER] [--instance NAME] --trust-native-code`. FOLDER is a bundle, an unpacked
-`.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
+`horizon-launcher native-build [FOLDER] [--instance NAME] [--update] --trust-native-code`. FOLDER is a bundle, an
+unpacked `.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
 trusting native code is the player's decision, never an agent's.
 
 1. **Rust.** The launcher's own toolchain ([`rust_toolchain`](../launcher/src/rust_toolchain.rs)): Rust 1.99.1's
@@ -164,21 +164,43 @@ trusting native code is the player's decision, never an agent's.
 4. **Mixins.** The bundles are copied first, so the build and its key use that copy whatever happens to the
    folder meanwhile. `horizon-mixins apply` stages the modded source; the launcher copies only the files that
    changed into `native/stage/`, so Cargo, which goes by file times, recompiles only the crates the mods touch.
-5. **Compile**: `cargo build --locked --profile fast --features horizon-client/mods -p horizon-client`, into
-   `native/target/`. `fast` is the workspace's `[profile.fast]` (no LTO, 16 codegen units, incremental) and the
-   default; Settings → Game → Native mods → "Release build: slower to build, slightly faster game", the setting
-   `horizon-launcher settings native-profile release` or `native-build --profile release` compile the release's own
-   profile instead (thin LTO, game-build.yml). The profile is in the build's key and each has its own folder
-   (`native/target/fast/`, `native/target/release/`), so the two never mix and may both stay. Cargo downloads the locked crates from
-   crates.io (Horizon has no git dependencies). The log is `native/build.log`; a failure shows its last lines (a
-   horizon-mixins diagnostic in one line).
+5. **Compile**: `cargo build --locked --profile fast [--features horizon-client/mods] -p horizon-client`, into
+   `native/target/`. `fast` is the workspace's own profile: the release's optimizations without its link-time
+   ones (`lto = false`, `codegen-units = 16`, incremental), so a rebuild recompiles and links only what changed.
+   A revision whose `Cargo.toml` has no `fast` builds with `release`, the release's own command (game-build.yml);
+   `native-mods.json` says which (`profile`). Settings → Game → Native mods → "Release build: slower to build,
+   slightly faster game", `horizon-launcher settings native-profile release` or `native-build --profile release`
+   compile the release's own profile instead (thin LTO). The profile is in the build's key and each has its own
+   folder (`native/target/fast/`, `native/target/release/`), so the two never mix and may both stay. The mods feature
+   is passed while the revision still has it. Cargo downloads the locked crates from crates.io (Horizon has no git
+   dependencies). The compiler and the horizon-mixins build run at the lowest priority (`rust_toolchain::low_priority`:
+   nice 19 and the idle I/O class on Linux, nice 19 on macOS, below-normal priority on Windows), so the desktop and a
+   game in play stay smooth; on an otherwise idle computer they still use every core. The log is `native/build.log`;
+   a failure shows its last lines (a horizon-mixins diagnostic in one line).
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
-   saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
-   folder built from the command line, or mods of the default home, go to the **Native mods** instance). That
-   instance gets each mod's settings from the default home the first time it plays it (its
-   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where earlier versions of
-   the mod kept them); nothing it already has is overwritten.
+   saying which release or Nightly it started from (`base`) and which commit, mods, horizon-mixins and Rust made
+   it. The instance the mods are installed in plays it, the default **Horizon** instance included: the build
+   pins its version, as picking a version does. Updates of the launcher's version leave a pinned instance where
+   it is, and their clean-up never removes a native build. An instance built before this (the **Native mods**
+   instance the default home's mods used to go to) keeps its worlds and its build.
+
+## Rebuilds stay on the instance's Horizon
+
+A build starts from the version the instance plays (`native_mods::base_for`). When that is a native build, the
+next one compiles the same commit (its `native-mods.json`'s `horizon`) from the same game files, unless a mod pins
+another, so a rebuild after a mod changes or is switched off compiles only what changed. A newer Horizon is taken
+only when the player asks: `native-build --update` starts from the newest installed release or Nightly (a full
+rebuild); `native_mods::update_for` says which one, if any, the window can offer.
+
+The compiler runs as the release's build does, whatever the player's own Rust setup: the launcher's toolchain
+drops the variables that change compiler flags or the target (`RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`,
+`RUSTDOCFLAGS`, `CARGO_INCREMENTAL`, `CARGO_PROFILE_*`, `CARGO_BUILD_*` but `CARGO_BUILD_JOBS`, `CARGO_TARGET_*`,
+rustup's and the wrappers'), and starts Cargo from the disk's root with `--manifest-path`. Cargo reads `.cargo/config.toml` from
+the folder it starts in and every one above it, whatever `CARGO_HOME` says, so from the launcher's data folder it
+would read the player's `~/.cargo/config.toml`, whose `[profile]`, `[build]` and `[target]` settings beat the
+workspace and the environment; no switch turns that search off. The source's own `.cargo/config.toml`, if it
+has one, is passed with `--config`.
 
 ## Install from GitHub
 
@@ -232,10 +254,23 @@ crate, crates done of the total (Cargo's own progress), and the time taken; afte
 incremental)". The window shows it in the Native mods row, `native-build` prints each step with its time on standard
 error; `native/build.log` keeps Cargo's output as before (without the progress bar).
 
-The timing tables below were measured with the release profile, before `fast` was the default; they are not the
-numbers of a `fast` build.
+Measured 2026-10-30 on Linux (x86_64 desktop), Zoom 2.0.0 and FPS Counter 2.0.0 on Nightly `6f8c7a0`, the `fast`
+profile, the launcher at nice 19 with `CARGO_BUILD_JOBS=10` (an empty launcher home: Rust, the crates and the
+source downloaded first):
 
-Measured 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on Nightly `83f15fa`,
+| What | Time |
+|---|---|
+| First build: Rust, horizon-mixins, the whole game (384 crates) | 4 min 29 s in all; 3 min 6 s of compiling the game; `native/target/` about 2 GB |
+| One mod switched off, rebuild | 56 s in all, 51 s of compiling (only `horizon-client`) |
+| That mod switched on again | under 1 s: the kept build plays again |
+| Nothing changed, rebuild | 1 s, nothing compiled |
+
+The same set with the `release` profile took 7 min 6 s for the first build and 2 min 34 s per rebuild (2 min 28 s of
+compiling `horizon-client`, mostly its link-time optimization). In play, a `fast` game drew the same frames per
+second as the Nightly's own `release` build (vsync-bound, about 112 FPS at 120 Hz), with about 0.1 ms more CPU per
+frame (0.57 to 0.68 ms against 0.51 to 0.54 ms).
+
+Measured before builds used `fast`, with the `release` profile, on 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on Nightly `83f15fa`,
 `CARGO_BUILD_JOBS=8` while other agents' builds ran (upper bounds):
 
 | What | Size, time |
@@ -244,7 +279,7 @@ Measured 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on N
 | horizon-mixins (`native/tools/`) | 7 MB; built once in 19 s |
 | Crates in the launcher's Cargo home (`<launcher data>/cargo/`) | 289 MB |
 | Source of one commit, and the stage | 64 MB each |
-| First build: release profile, the whole game | 9 min 10 s of compiling, 9 min 41 s in all; `native/target/` 1.5 GB |
+| First build: the whole game | 9 min 10 s of compiling, 9 min 41 s in all; `native/target/` 1.5 GB |
 | Rebuild after a helper's code changed | 2 min 46 s of compiling (only `horizon-client`), 2 min 53 s in all |
 | A change horizon-mixins ignores (a comment) | nothing compiled; 31 s, mostly the version folder's copy |
 
@@ -255,13 +290,15 @@ Measured 2026-10-29 on Windows 11 (Ryzen 7 9800X3D, 16 threads), the same mod an
 |---|---|
 | Rust 1.99.1 and MinGW-w64 (`<launcher data>/rust/`) | 1.7 GB, MinGW-w64 875 MB of it |
 | Crates in the launcher's Cargo home | 657 MB |
-| First build: release profile, the whole game | 6 min 57 s of compiling, 8 min 3 s in all; `native/target/` 2.0 GB |
+| First build: the whole game | 6 min 57 s of compiling, 8 min 3 s in all; `native/target/` 2.0 GB |
 
 Measured 2026-10-28 on Linux (an x86_64 server with no Rust of its own), Zoom on Horizon `1149c92`, 3 jobs while CI
 ran: `rust install` in 11 s (592 MB), the first build in 12 min 9 s. The built game ran Zoom's proof (under `xvfb-run`:
 the game needs a display even with `--offscreen`).
 
-Only the native builds an instance plays are kept (`native_mods::prune`); `native/target/` stays for the next one.
+The native builds an instance plays are kept, and the three newest no instance plays (`native_mods::prune`, by when
+each was built or last used): switching a mod off and on again plays the kept build again without compiling.
+`native/target/` stays for the next one.
 
 ## Trust
 
@@ -279,8 +316,9 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
   `horizon-native.json`. `revoked.toml` takes a bad release down.
   A content mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
-  player's `.hmod`; removing the mod removes both.
-- **Isolation of data.** Native mods run only in the instance built for them, with its own worlds, options and logs.
+  player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
+- **Isolation of data.** Native mods run only in the instance they are installed in, with its worlds, options and
+  logs (the default Horizon instance's, when they are installed there); other instances play their own versions.
 - What this does not do: sandbox the compiled game. horizon-mixins' checks stop mistakes, not a malicious helper
   ([security notes](https://github.com/horizon-rust/horizon-mixins/blob/main/docs/security.md)).
 
@@ -293,7 +331,8 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 
 ## Left to do
 
-- Rebuild after the mods or the Nightly change (asking first, as it compiles for minutes).
+- Rebuild after the mods change, and offer **Update** when `update_for` finds a newer Horizon (asking first, as it
+  compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
 
 ## Named hook catalog (draft)

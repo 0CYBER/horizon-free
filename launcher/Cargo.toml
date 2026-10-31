@@ -55,6 +55,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 # Microsoft account secrets in the OS keychain: the Secret Service on Linux through oo7 (the same
 # build gpui uses), Keychain and Credential Manager through keyring.
+# Native builds at low priority (rust_toolchain::low_priority); already in the lockfile.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 oo7 = { version = "0.5", default-features = false, features = ["async-std", "native_crypto"] }
 futures-lite = "2"
