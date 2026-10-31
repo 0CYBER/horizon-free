@@ -81,11 +81,11 @@ pub fn register(m: &mut Mob) {
         .add(4, NearestTarget::player(true).when(angry_at_player));
     m.ai.targets.add(
         5,
-        NearestTarget::new(Prey::Filter(wolf_prey), false).when(|m, _| !m.extra.tame),
+        NearestTarget::new(Prey::Filter(wolf_prey), false).gate(|m, _| !m.extra.tame),
     );
     m.ai.targets.add(
         6,
-        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).when(|m, _| !m.extra.tame),
+        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).gate(|m, _| !m.extra.tame),
     );
     m.ai.targets.add(
         7,
@@ -927,11 +927,11 @@ pub fn register_cat(m: &mut Mob) {
     );
     m.ai.targets.add(
         1,
-        NearestTarget::species(&[Species::Rabbit], false).when(|m, _| !m.extra.tame),
+        NearestTarget::species(&[Species::Rabbit], false).gate(|m, _| !m.extra.tame),
     );
     m.ai.targets.add(
         1,
-        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).when(|m, _| !m.extra.tame),
+        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).gate(|m, _| !m.extra.tame),
     );
 }
 /// `Ocelot.registerGoals`, then `reassessTrustingGoals` adds the player
