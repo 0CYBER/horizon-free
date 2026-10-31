@@ -73,7 +73,7 @@ CandleBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::upda
 CandleBlock.getFluidState	port	crates/horizon-world/src/level/mod.rs::Behaviours::fluid	Waterlogged fluid is read from per-state facts.
 CandleBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
 CandleBlock.placeLiquid	port	crates/horizon-world/src/level/fluids.rs::Sim::place_liquid	Water waterlogs the candle and puts out a lit one.
-CandleCakeBlock.useItemOn	port	crates/horizon-world/src/level/interact.rs::Sim::use_item_on	empty hand above half a block (candleHit) on a lit candle cake: unlit, block.candle.extinguish and block_change; gap: minor: no wick smoke, the cake arm emits no candle_smoke event
+CandleCakeBlock.useItemOn	port	crates/horizon-world/src/level/interact.rs::Sim::use_item_on	empty hand above half a block (candleHit) on a lit candle cake: unlit, wick smoke (the clicking client draws it at the cake's own offset, a block up), block.candle.extinguish and block_change
 CandleCakeBlock.useWithoutItem	port	crates/horizon-world/src/level/interact.rs::Sim::use_without_item	CandleCake arm eats the cake and drops the candle.
 CandleCakeBlock.candleHit	inline	crates/horizon-world/src/level/interact.rs::Sim::use_item_on	the hit.y - pos.y > 0.5 test inside the CandleCakeBlock.useItemOn arm, which now snuffs the candle
 CandleCakeBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::update_shape_class	Candle cake drops to air when unsupported below.

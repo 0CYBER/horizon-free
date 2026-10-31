@@ -108,7 +108,8 @@ impl Game<'_> {
             }
             let m = &mut self.mobs[index];
             let secs = (-m.extra.age / 20) as f32 * 0.1;
-            m.extra.age = (m.extra.age + (secs as i32) * 20).min(0);
+            // AgeableMob.ageUp: a grown cube is size 2 (SulfurCube.ageBoundaryReached).
+            horizon_client::mobs::ai::age_up(m, secs as i32, false);
             self.consume_held();
             self.sulfur_sound(index, "entity.small_sulfur_cube.eat");
             return true;

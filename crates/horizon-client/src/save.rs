@@ -2378,6 +2378,44 @@ impl SaveDir {
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
         Some(chunk)
     }
+    /// A saved full chunk read for a player's far ring (`lan::far`), as `load` but past the gameplay
+    /// region cache, and only where the region file lists it (no file opened where there is none).
+    pub fn load_far(
+        &self,
+        x: i32,
+        z: i32,
+        registry: &BlockRegistry,
+        biomes: &Biomes,
+    ) -> Option<Chunk> {
+        let pending = self
+            .pending
+            .lock()
+            .ok()?
+            .get(&(Folder::Region, x, z))
+            .map(|(_, record)| record.clone());
+        let root = if let Some(record) = pending {
+            record.tag().map(|tag| (*tag).clone())?
+        } else {
+            if !self.lod_saved(x, z) {
+                return None;
+            }
+            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
+            region
+                .read(ChunkPos::new(x, z))
+                .ok()??
+                .nbt(Limits::default())
+                .ok()?
+        };
+        let tables = self.tables.get().map(|t| &**t);
+        let mut chunk = decode_with(&root, registry, biomes, tables, self.shape.column())?;
+        load_light(&root.tag, &mut chunk, self.shape.sky_light);
+        // Without its saved light (`isLightOn`) it would need the light engine: not one for the far ring.
+        chunk.light_loaded.then_some(chunk)
+    }
+    /// Chunks queued for the writer thread and not yet in their region files.
+    pub fn pending_writes(&self) -> usize {
+        self.pending.lock().map_or(0, |p| p.len())
+    }
     /// A proto chunk saved before it became final (`decode_proto`).
     pub fn load_proto(
         &self,
@@ -4945,6 +4983,40 @@ mod tests {
             LevelShape::OVERWORLD,
         );
         assert_eq!(number(overworld.tag.get("yPos")), Some(-4));
+    }
+
+    /// The far ring's reads (`lan::far`): a chunk saved with its light, without the gameplay's region
+    /// cache; none for a chunk not saved, or saved without its light.
+    #[test]
+    fn far_reads_take_saved_lit_chunks_only() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        let mut lit = Chunk::empty(4, -7);
+        lit.set(1, 70, 2, stone.0);
+        let mut dark = lit.clone();
+        dark.x = 5;
+        lit.lit = true;
+        let dir = std::env::temp_dir().join(format!("horizon-far-save-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let save = SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
+        let records =
+            [&lit, &dark].map(|c| ((c.x, c.z), Some(encode(c, assets.registry, &biomes))));
+        save.write_records("region", records.into(), true).unwrap();
+        let reopened = SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
+        let far = reopened
+            .load_far(4, -7, assets.registry, &biomes)
+            .expect("saved with its light");
+        assert_eq!(far.block(1, 70, 2), stone);
+        assert!(far.lit && far.light_loaded);
+        assert!(reopened.load_far(5, -7, assets.registry, &biomes).is_none());
+        assert!(reopened.load_far(6, -7, assets.registry, &biomes).is_none());
+        assert!(reopened.regions.lock().unwrap().is_empty());
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

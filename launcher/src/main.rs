@@ -66,6 +66,7 @@ use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Upda
 use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
 use horizon_launcher::native_mods;
+use horizon_launcher::native_status;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -190,11 +191,25 @@ struct Launcher {
     disk: Vec<(String, u64)>,
     disk_for: Vec<String>,
     install_error: Option<(String, String)>,
-    /// Native mods (`native_mods`): the build's step while it runs, why it failed, and the
-    /// warning before a build while it is open, with the mods it names.
+    /// Native mods (`native_mods`, on the Mods page): the build's step while it runs, why it
+    /// failed, and the warning before a build while it is open, with the mods it names.
     native_step: Option<String>,
+    /// When the running native build started, and the whole seconds last drawn (the status shows
+    /// the time it has taken).
+    native_started: Option<(Instant, u64)>,
+    /// How the last native build ended ("Built in 42 s (fast, incremental)", or "Up to date").
+    native_done: Option<String>,
     native_error: Option<String>,
     native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
+    /// The instance (id) the build under way, or the last one's error, is for.
+    native_for: Option<String>,
+    /// The newer Horizon the open warning's build moves to (Update), else None: a build stays
+    /// on the Horizon the instance plays.
+    native_update: Option<String>,
+    /// What each installed native build was made from, by version. A build's version names its
+    /// contents, so an entry never goes stale.
+    native_builds:
+        std::cell::RefCell<std::collections::HashMap<String, Option<native_status::Build>>>,
     /// The mods of a build made for other Horizon versions (`native_mods::MISMATCH`): the build
     /// waits for "Build anyway".
     native_mismatch: Option<String>,
@@ -439,8 +454,13 @@ impl Launcher {
             disk_for: Vec::new(),
             install_error: None,
             native_step: None,
+            native_started: None,
+            native_done: None,
             native_error: None,
             native_confirm: None,
+            native_for: None,
+            native_update: None,
+            native_builds: Default::default(),
             native_mismatch: None,
             confirm_remove: None,
             picker_open: false,
@@ -649,8 +669,21 @@ impl Launcher {
         Ok((folder, found))
     }
 
+    /// What installed native build `version` was made from (`native_status::Build`), read once.
+    fn native_build_of(&self, version: &str) -> Option<native_status::Build> {
+        if !native_mods::is_native(version) {
+            return None;
+        }
+        self.native_builds
+            .borrow_mut()
+            .entry(version.to_owned())
+            .or_insert_with(|| native_status::Build::read(version))
+            .clone()
+    }
+
     /// Builds the selected instance's native mods, once the player accepted the warning. The
-    /// build stays on the Horizon the instance plays (`native_mods::base_for`).
+    /// build stays on the Horizon the instance plays (`native_mods::base_for`), unless the
+    /// warning was Update's: then it moves to that newer Horizon.
     /// `anyway`: the player agreed to build mods made for other Horizon versions together.
     fn build_native(&mut self, anyway: bool) {
         if self.native_step.is_some() {
@@ -660,8 +693,12 @@ impl Launcher {
         self.native_error = None;
         self.native_mismatch = None;
         let instance = instances::selected();
+        self.native_for = Some(instance.id.clone());
         let plays = self.version_of(&instance).cloned();
-        let base = native_mods::base_for(plays.as_deref(), &self.installed, false);
+        let base = match self.native_update.take() {
+            Some(newer) => Some(newer),
+            None => native_mods::base_for(plays.as_deref(), &self.installed, false),
+        };
         let Some(base) = base else {
             self.native_error = Some(tr("Install Horizon first.").into());
             return;
@@ -674,9 +711,12 @@ impl Launcher {
             }
         };
         self.native_step = Some(tr("Starting the build").into());
+        self.native_started = Some((Instant::now(), 0));
+        self.native_done = None;
+        let profile = native_mods::Profile::from_setting(self.settings.native_release);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = native_mods::build(&base, &folder, &instance, anyway, |step| {
+            let result = native_mods::build(&base, &folder, &instance, anyway, profile, |step| {
                 let _ = tx.send(Msg::NativeProgress(step.label()));
             });
             let _ = tx.send(Msg::Native(result));
@@ -723,6 +763,13 @@ impl Launcher {
             }
             Some(perf::Step::Quit) => cx.quit(),
             Some(perf::Step::Wait) | None => {}
+        }
+        // The running build's clock moves on each second.
+        if let Some((started, shown)) = &mut self.native_started {
+            if started.elapsed().as_secs() != *shown {
+                *shown = started.elapsed().as_secs();
+                changed = true;
+            }
         }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
@@ -911,7 +958,10 @@ impl Launcher {
                 Msg::Updates(Err(e)) => self.update_error = Some(e),
                 Msg::NativeProgress(step) => self.native_step = Some(step),
                 Msg::Native(result) => {
-                    self.native_step = None;
+                    // The last step of a build that worked says how it went.
+                    let last = self.native_step.take();
+                    self.native_started = None;
+                    self.native_done = result.is_ok().then_some(last).flatten();
                     self.installed = backend::installed();
                     self.reload_instances();
                     match result.map_err(|e| match e.strip_prefix(native_mods::MISMATCH) {
@@ -3062,7 +3112,6 @@ impl Launcher {
                     .child(self.proxy_row(n + 4, cx))
                     .child(group("Game", "gamepad"))
                     .child(self.game_args_row(n + 5, cx))
-                    .child(self.native_mods_row(n + 5, cx))
                     .child(group("AI", "terminal"))
                     .child(self.no_ai_row(n + 6, cx))
                     .child(group("About", "info-box"))
@@ -3119,62 +3168,6 @@ impl Launcher {
             .children(self.dev_options_section(cx))
     }
 
-    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
-    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
-    /// Settings' Native mods row (docs/native-mods.md): off by default. On, Build compiles the
-    /// native mods installed in the instance Play starts, after a warning that names them, and
-    /// that instance then plays the build.
-    fn native_mods_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let on = self.settings.native_mods;
-        let toggle =
-            switch("native-mods", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.settings.native_mods = !this.settings.native_mods;
-                this.native_confirm = None;
-                this.native_mismatch = None;
-                this.settings.save();
-                cx.notify();
-            }));
-        let mut detail = div().flex().flex_col().gap(px(4.)).child(
-            tr("Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.").to_string(),
-        );
-        if on {
-            let status = match (&self.native_step, &self.native_error) {
-                (Some(step), _) => Some(div().child(step.clone())),
-                (None, Some(e)) => Some(div().text_color(t.danger).child(e.clone())),
-                (None, None) => instances::selected()
-                    .version
-                    .filter(|v| native_mods::is_native(v))
-                    .map(|v| {
-                        div().child(trf("{version} plays in this instance.", &[("version", &v)]))
-                    }),
-            };
-            detail = detail.children(status);
-            if let (None, Some(list)) = (&self.native_step, &self.native_mismatch) {
-                detail = detail.child(self.native_mismatch_panel(list, cx));
-            } else if self.native_step.is_none() && self.native_confirm.is_none() {
-                detail = detail.child(div().flex().gap(px(8.)).mt(px(4.)).child(
-                    button("native-build", "Build", Kind::Primary, &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
-                            cx.notify();
-                        },
-                    )),
-                ));
-            }
-            if let Some(mods) = &self.native_confirm {
-                detail = detail.child(self.native_warning(mods, cx));
-            }
-        }
-        index_row(
-            n,
-            tr("Native mods (experimental)"),
-            Some(detail.into_any_element()),
-            Some(toggle.into_any_element()),
-            &t,
-        )
-    }
-
     /// The warning before a native build: what the mods can do and which mods. The build starts
     /// only from its button.
     fn native_warning(
@@ -3201,7 +3194,13 @@ impl Launcher {
             .child(div().text_color(t.danger).child(tr("These mods will run with full access to your computer").to_string()))
             .child(tr("They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.").to_string())
             .child(trf("Mods: {mods}", &[("mods", &list)]))
-            .child(tr("The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.").to_string());
+            .child(tr("The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.").to_string())
+            .children(self.native_update.as_ref().map(|newer| {
+                div().text_color(t.warn).child(trf(
+                    "This moves the instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a normal rebuild: up to 30 minutes.",
+                    &[("version", &native_status::horizon_label(newer))],
+                ))
+            }));
         let mut buttons = div().flex().gap(px(8.)).mt(px(4.));
         if mods.is_ok() {
             buttons = buttons.child(
@@ -3221,6 +3220,7 @@ impl Launcher {
             button("native-cancel", "Cancel", Kind::Secondary, &t).on_click(cx.listener(
                 |this, _: &ClickEvent, _, cx| {
                     this.native_confirm = None;
+                    this.native_update = None;
                     cx.notify();
                 },
             )),
@@ -3265,6 +3265,8 @@ impl Launcher {
             )
     }
 
+    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
+    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
     fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let focused = self.args_focused;

@@ -123,8 +123,7 @@ impl Launcher {
                     if result.is_ok() {
                         self.github.text.set(String::new());
                         self.github.newer.clear();
-                        // Installing a native mod turns Native mods on, so Settings offers Build.
-                        self.settings.native_mods = true;
+                        // The review above was the trust notice; the Mods page offers Build.
                         self.settings.native_mods_noticed = true;
                         self.settings.save();
                     }

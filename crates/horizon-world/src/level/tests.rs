@@ -1110,6 +1110,18 @@ impl World<'_> {
     }
     /// Right-click the north face of `pos` holding `item` in the main hand.
     fn use_item(&mut self, pos: BlockPos, item: &str) -> InteractionResult {
+        self.use_item_on(pos, Some(item), 0.5)
+    }
+    /// Right-click the north face of `pos` with an empty main hand.
+    fn use_empty_hand(&mut self, pos: BlockPos) -> InteractionResult {
+        self.use_item_on(pos, None, 0.5)
+    }
+    /// Right-click the north face of `pos` with an empty main hand, hitting
+    /// `dy` blocks above the block's floor.
+    fn use_empty_hand_at(&mut self, pos: BlockPos, dy: f64) -> InteractionResult {
+        self.use_item_on(pos, None, dy)
+    }
+    fn use_item_on(&mut self, pos: BlockPos, item: Option<&str>, dy: f64) -> InteractionResult {
         let player = PlayerContext {
             yaw: 0.0,
             pitch: 0.0,
@@ -1119,7 +1131,7 @@ impl World<'_> {
         };
         let hit = horizon_core::geometry::Vec3::new(
             f64::from(pos.x) + 0.5,
-            f64::from(pos.y) + 0.5,
+            f64::from(pos.y) + dy,
             f64::from(pos.z),
         );
         self.f.behaviours.use_item_on(
@@ -1129,7 +1141,7 @@ impl World<'_> {
             Direction::North,
             hit,
             player,
-            Some(item),
+            item,
         )
     }
 }
@@ -2475,7 +2487,7 @@ fn dust_on_a_downward_piston_survives_extend_and_retract() {
 #[test]
 fn a_candle_on_an_uneaten_cake_makes_a_candle_cake() {
     // CakeBlock.useItemOn: any candle on a cake with no bites turns it into the
-    // matching unlit candle cake; a bitten cake or another item does not.
+    // matching unlit candle cake; a bitten cake does not.
     let mut w = world!();
     let pos = BlockPos::new(0, 1, 0);
     let cake = w.id("cake", &[("bites", "0")]);
@@ -2492,8 +2504,101 @@ fn a_candle_on_an_uneaten_cake_makes_a_candle_cake() {
     w.use_item(pos, "minecraft:candle");
     assert_ne!(w.get(pos), w.id("candle_cake", &[("lit", "false")]));
     w.put(pos, cake);
-    w.use_item(pos, "minecraft:stone");
-    assert_eq!(w.get(pos), cake);
+    // Anything else answers TRY_WITH_EMPTY_HAND, and ServerPlayerGameMode
+    // then calls useWithoutItem with whatever the main hand holds, so a stone
+    // eats a slice of the cake instead of adding a candle to it.
+    assert_eq!(
+        w.use_item(pos, "minecraft:stone"),
+        InteractionResult::Success
+    );
+    assert_eq!(w.get(pos), bitten);
+}
+
+#[test]
+fn an_empty_hand_snuffs_a_lit_candle() {
+    // CandleBlock.useItemOn: an empty hand on a lit candle (`mayBuild`) runs
+    // AbstractCandleBlock.extinguish: unlit, the wick smoke, the extinguish
+    // sound, the block-change game event, and nothing drops.
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let lit = w.id("candle", &[("lit", "true")]);
+    let unlit = w.id("candle", &[("lit", "false")]);
+    w.put(pos, lit);
+    w.level.events.clear();
+    assert_eq!(w.use_empty_hand(pos), InteractionResult::Success);
+    assert_eq!(w.get(pos), unlit);
+    assert!(
+        w.level.events.iter().any(|e| matches!(
+            e,
+            LevelEvent::Sound { sound, .. } if &**sound == "minecraft:block.candle.extinguish"
+        )),
+        "the candle extinguish sound"
+    );
+    assert!(
+        w.level.events.iter().any(|e| matches!(
+            e,
+            LevelEvent::BlockEvent {
+                kind: "candle_smoke",
+                ..
+            }
+        )),
+        "the wick smoke"
+    );
+    assert!(
+        w.level.events.iter().any(|e| matches!(
+            e,
+            LevelEvent::GameEvent {
+                event: "minecraft:block_change",
+                ..
+            }
+        )),
+        "the block-change game event"
+    );
+    assert!(
+        !w.level
+            .events
+            .iter()
+            .any(|e| matches!(e, LevelEvent::DropResources { .. })),
+        "snuffing drops nothing"
+    );
+    // A held item, or a candle that is already out, leaves it alone.
+    w.put(pos, lit);
+    assert_eq!(w.use_item(pos, "minecraft:stick"), InteractionResult::Pass);
+    assert_eq!(w.get(pos), lit);
+    w.put(pos, unlit);
+    assert_eq!(w.use_empty_hand(pos), InteractionResult::Pass);
+}
+
+#[test]
+fn an_empty_hand_on_a_lit_candle_cake_eats_it_or_snuffs_its_candle() {
+    // CandleCakeBlock.useWithoutItem below the candle eats the cake body
+    // (CakeBlock.eat on a plain cake), so one bite is gone and the candle with
+    // it; on the candle above half a block, CandleCakeBlock.useItemOn snuffs it
+    // (`candleHit`) and the cake stays; flint and steel passes, so the cake is
+    // not eaten.
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let lit = w.id("candle_cake", &[("lit", "true")]);
+    w.put(pos, lit);
+    assert_eq!(w.use_empty_hand(pos), InteractionResult::Success);
+    assert_eq!(w.get(pos), w.id("cake", &[("bites", "1")]));
+    w.put(pos, lit);
+    w.level.events.clear();
+    assert_eq!(w.use_empty_hand_at(pos, 0.75), InteractionResult::Success);
+    assert_eq!(w.get(pos), w.id("candle_cake", &[("lit", "false")]));
+    assert!(
+        w.level.events.iter().any(|e| matches!(
+            e,
+            LevelEvent::Sound { sound, .. } if &**sound == "minecraft:block.candle.extinguish"
+        )),
+        "the candle extinguish sound"
+    );
+    w.put(pos, lit);
+    assert_eq!(
+        w.use_item(pos, "minecraft:flint_and_steel"),
+        InteractionResult::Pass
+    );
+    assert_eq!(w.get(pos), lit);
 }
 
 #[test]
