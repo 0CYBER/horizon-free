@@ -378,6 +378,11 @@ impl Game<'_> {
                 Some(KeyCode::PageDown) => self.turn_page(true),
                 Some(KeyCode::ArrowUp) => self.book_move_line(-1),
                 Some(KeyCode::ArrowDown) => self.book_move_line(1),
+                // MultilineTextField.keyPressed: Home and End seek the caret's
+                // line; with Ctrl they go to the page's start and end.
+                Some(edge @ (KeyCode::Home | KeyCode::End)) if !self.has_control_down() => {
+                    self.book_line_edge(edge == KeyCode::End)
+                }
                 Some(KeyCode::Enter | KeyCode::NumpadEnter) => self.page_insert("\n"),
                 Some(key) if self.book_page_key(key) => {}
                 _ => {
@@ -540,6 +545,26 @@ impl Game<'_> {
         let pos = start + self.gui.atlas.font.fit(&slice, x);
         if let Some(BookScreen::Edit { page_edit, .. }) = self.book.as_mut() {
             page_edit.set_cursor(pos, shift);
+        }
+    }
+    /// Home and End: the start or end of the visual line holding the caret
+    /// (`getCursorLineView`'s beginIndex and endIndex).
+    fn book_line_edge(&mut self, end: bool) {
+        let shift = self.has_shift_down();
+        let (text, cursor) = match self.book.as_ref() {
+            Some(BookScreen::Edit {
+                pages,
+                page,
+                page_edit,
+                ..
+            }) => (pages[*page].clone(), page_edit.cursor),
+            _ => return,
+        };
+        let rows = self.page_rows(&text);
+        let (_, line) = self.caret_on(&text, &rows, cursor);
+        let (start, stop) = rows[line];
+        if let Some(BookScreen::Edit { page_edit, .. }) = self.book.as_mut() {
+            page_edit.set_cursor(if end { stop } else { start }, shift);
         }
     }
     /// Wrapped rows of a page as character ranges, the same breaks as `font.split`.
@@ -1075,7 +1100,7 @@ impl Game<'_> {
                     self.turn_page(true);
                 } else if page > 0 && inside(left + 43.0, 159.0, 23.0, 13.0) {
                     self.turn_page(false);
-                } else if let Some(key) = lectern {
+                } else if let Some(key) = lectern.filter(|_| self.may_build()) {
                     if inside(w / 2.0 - 100.0, 196.0, 98.0, 20.0) {
                         click(self);
                         self.close_book();
@@ -1330,7 +1355,9 @@ impl Game<'_> {
                     }
                 }
                 page_buttons(batch, *page > 0, *page + 1 < pages.len());
-                if lectern.is_some() {
+                // LecternScreen.createMenuControls: Done and Take Book only with
+                // build permission, else BookViewScreen's wide Done.
+                if lectern.is_some() && self.may_build() {
                     button(batch, w / 2.0 - 100.0, 98.0, &tr("gui.done", "Done"), true);
                     button(
                         batch,

@@ -340,6 +340,10 @@ pub struct PlayerMotion {
     /// `LocalPlayer.isSlowDueToUsingItem`: an item in use whose `use_effects`
     /// do not allow sprinting.
     pub item_use_slows_sprint: bool,
+    /// `LocalPlayer.moveTowardsClosestSpace`'s new x and z speeds this tick,
+    /// worked out by the caller (which knows the blocks); applied before the
+    /// move.
+    pub nudge: [Option<f64>; 2],
     pub last_climbable: Option<BlockPos>,
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
@@ -544,6 +548,7 @@ impl PlayerMotion {
             speed: 0.0,
             item_use_speed: None,
             item_use_slows_sprint: false,
+            nudge: [None; 2],
             last_climbable: None,
             steps: MovementDistances {
                 next_step: 1.0,
@@ -1064,6 +1069,14 @@ impl MotionWorld<'_, '_, '_> {
             if ya != 0 {
                 self.player.velocity.y += f64::from(ya as f32 * self.player.flying_speed * 3.0);
             }
+        }
+        // LocalPlayer.aiStep: a player inside a block is nudged out of it.
+        let [x, z] = std::mem::take(&mut self.player.nudge);
+        if let Some(x) = x {
+            self.player.velocity.x = x;
+        }
+        if let Some(z) = z {
+            self.player.velocity.z = z;
         }
         self.dry_tick(TickInput::PreparedLocal {
             direction,
