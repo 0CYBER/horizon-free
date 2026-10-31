@@ -95,9 +95,52 @@ API 19 adds screens a mod draws for its blocks' menus: `native_screen` lays one 
 where the inventory starts; a slot it leaves out is not in the menu, so shift-clicks skip it) and `native_screen_draw` draws it with the mod's
 own GUI textures (`assets/<namespace>/textures/gui`, drawn with `native_sprite`). Bundles that use them need `"hooks": 19`.
 
-API 20 adds right-clicking an entity, on the server for every player: `native_interact_entity` hears a right click on
+API 20 adds buttons, tooltips and item icons on mod screens: `native_screen_click` and `native_screen_tooltip` (the client), `native_menu_button`
+(a button press on the server, on the mod block entity) and the helpers `native_item`, `native_screen_title`, `native_data`, `native_block`,
+`native_block_property`, `native_insert_item` and `native_cursor`. Bundles that use them need `"hooks": 20`.
+
+API 21 adds what a server mod needs to guard land and move players. `native_right_click_block` hears a player's right
+click on a block before the block's own use (a chest, a door, a lever) and the item's, and may cancel it: nothing
+happens and the player sees the block as it is. `native_acting_player` says who acts inside a player's hook (UUID,
+name, level, position, game mode, health); `native_run_command` runs a command as the server's console (level 4, no
+output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; `native_action_bar`
+tells a player why, even inside their own hook; and the players
+`native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
+
+API 22 adds what a server mod needs to keep the world itself out of guarded land. `native_block_spread` hears a
+fluid flow or fire spread into a block, `native_piston_move` a piston's push or pull, `native_explosion_detonate` the
+blocks an explosion is about to break (a mod takes out those it spares), `native_fill_bucket` a bucket filled or
+emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
+player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
+
+API 23 adds `native_level_tick_pre` and `native_level_tick_post`, server-side observations around each
+level tick pass. Each receives the dimension ID; neither can cancel the tick. Paused and held passes fire
+neither hook, and an error skips the post hook. Bundles that use them need `"hooks": 23`.
+
+API 24 adds `native_set_block`, a server-side `Game` helper that replaces a state in the current dimension through
+`Level.setBlock`. It accepts vanilla's neighbour and shape flags and returns whether a block changed; a block with a
+block entity gets one. Horizon sends every write to players whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE`
+and `UPDATE_IMMEDIATE` change nothing yet. Hooks holding only `GameLevel` cannot call it yet. Bundles that use it need
+`"hooks": 24`.
+
+API 25 adds `GameLevel::native_play_sound` for registered vanilla sound events on an authoritative server.
+It queues the sound for nearby players in the level's dimension, including during a guest's turn.
+Pass a `SOUND_SOURCES` index, position, volume and pitch. The return value says whether the call
+was queued, not whether a player heard it. The server discards unknown sound events when it dispatches
+the queue. Bundles that use it need `"hooks": 25`.
+
+API 26 adds `Game::native_config_dir()`: the game's shared `config/` folder beside `options.txt` (beside
+`server.properties` on a dedicated server), where a mod names its own files, made when missing. It takes no `self`, so
+it works from any hook ([mods.md](mods.md#native-mods)). Bundles that use it need `"hooks": 26`.
+
+API 27 adds the player-health HUD rows through `native_health_hud`: every frame the HUD draws them, the
+hook hears the layout's inputs (`HealthInputs`) and the screen's GUI size, and a mod that answers with
+draws replaces all the rows — armour, hearts, food, air and the heights above the hotbar — for that
+frame. Nothing answered draws Horizon's own. Bundles that use it need `"hooks": 27`.
+
+API 28 adds right-clicking an entity, on the server for every player: `native_interact_entity` hears a right click on
 an entity (its id and type, and the stack in the hand) where `Player.interactOn` starts, once per hand. A mod that claims
-it swings the hand instead of the entity's and the item's own interaction. Bundles that use it need `"hooks": 20`.
+it swings the hand instead of the entity's and the item's own interaction. Bundles that use it need `"hooks": 28`.
 
 ## What the launcher does
 
@@ -117,7 +160,14 @@ trusting native code is the player's decision, never an agent's.
    (`rust_toolchain::MINGW`: WinLibs' GCC 16.2.0 on MinGW-w64 14.0.0, MSVCRT like `rust-mingw`, one zip pinned by
    SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring` and `hidapi` compile C,
    and `windows-sys`' `raw-dylib` imports need `dlltool` and the assembler it runs. The linker is the system's on
-   macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`).
+   macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`). On Linux the
+   game also builds against the system's ALSA (`alsa-sys`) and libudev (`libudev-sys`, `hidapi`), found with
+   `pkg-config`, whose development files desktop distributions don't install. Before downloading anything the
+   launcher checks for `cc`, the C library's headers (`cc` compiles an include of `stdint.h`), `pkg-config`,
+   `alsa` and `libudev` and names what is missing, with the install command for the distribution in
+   `/etc/os-release` (Debian, Ubuntu and Mint:
+   `sudo apt install build-essential pkg-config libasound2-dev libudev-dev`). SteamOS has GCC without the C
+   library's headers, and a read-only system: native builds don't work there yet.
    `horizon-launcher rust status|install|remove`.
 2. **horizon-mixins**, at the commit the mods name (their `.hnmod`'s `mixins`), else `native_mods::MIXINS_REV`,
    built once with that cargo (`cargo install --locked --git … --rev …`) into `native/tools/<commit>/`.
@@ -288,6 +338,27 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
   component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
   many it counted, took or gave; the player's screen follows as for any change to their inventory.
+- API 21: `native_acting_player()`, the player whose state is swapped in (inside `native_perform_command`,
+  `native_right_click_block`, `native_use_item_on`, `native_destroy_block`...; None elsewhere);
+  `native_run_command(line)`, a command run as the server's console (level 4, no output), only where no player is
+  swapped in (`native_tick`, a menu hook): a teleport to another level (`execute in minecraft:the_nether run tp Alex 0
+  70 0`) lands at the next tick's start. `native_server_players()` and the acting player carry `health` (0 once dead).
+  `native_action_bar(uuid, text)`, a line over a player's hotbar, which also reaches the acting player inside their
+  hook (where `native_tell` reaches nobody).
+- **`native_right_click_block(pos, face, canceled)`** (API 21): a player's right click on a block, before the block's
+  own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
+  without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of
+  claimed land.
+- **`native_block_spread(dimension, kind, from, to, canceled)`** and **`native_piston_move(dimension, piston,
+  direction, push, destroy, canceled)`** (API 22, on `GameLevel`, like the block observers): a fluid flowing or fire
+  spreading (`kind` `fluid` or `fire`) from `from` into `to`, and a piston moving blocks once its structure resolved.
+  Canceled, the block at `to` stays as it is, and the piston moves nothing. Fluids ask on every flow: answer from
+  memory, fast.
+- **`native_explosion_detonate(dimension, center, blocks)`** (API 22): the positions an explosion is about to break,
+  before any is hit; take out the ones to spare. Entities are hurt as before.
+- **`native_fill_bucket(stack, pos, canceled)`** and **`native_attack_entity(entity, kind, pos, canceled)`** (API 22):
+  a player's bucket at a block, and their blow on an entity, with the acting player swapped in. Canceled, the bucket
+  does nothing and the blow does no harm.
 
 ### Server menus
 

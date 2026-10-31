@@ -6,7 +6,34 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 20 adds right-clicking an entity (`native_interact_entity`).
+//! API 28 adds right-clicking an entity (`native_interact_entity`).
+//!
+//! API 27 adds the player-health HUD rows (`native_health_hud`).
+//!
+//! API 26 adds the game's shared config folder (`native_config_dir`).
+//!
+//! API 25 adds server sound playback (`native_play_sound`).
+//!
+//! API 24 adds a server block setter (`native_set_block`).
+//!
+//! API 23 adds per-level server tick hooks (`native_level_tick_pre`,
+//! `native_level_tick_post`).
+//!
+//! API 22 adds what a mod needs to keep the world from changing blocks
+//! it guards: fluid and fire spreading (`native_block_spread`), pistons
+//! (`native_piston_move`), explosions (`native_explosion_detonate`),
+//! buckets (`native_fill_bucket`) and a player's attack on an entity
+//! (`native_attack_entity`).
+//!
+//! API 21 adds right clicking a block (`native_right_click_block`), and in
+//! `native_server.rs` the acting player (`native_acting_player`), a player's
+//! health, the action bar (`native_action_bar`) and commands run as the
+//! server (`native_run_command`).
+//!
+//! API 20 adds buttons, tooltips and item icons on mod screens
+//! (`native_screen_click`, `native_screen_tooltip`, `native_menu_button`,
+//! and `native_item`, `native_screen_title`, `native_data`, `native_block`,
+//! `native_block_property`, `native_insert_item`, `native_cursor`).
 //!
 //! API 19 adds mod-drawn screens for mod blocks (`native_screen`,
 //! `native_screen_draw`, and the `native_sprite` helpers), with the mod's own
@@ -91,19 +118,24 @@ use horizon_client::{
     particles::{ParticleOptions, ParticleType},
     text::Text,
 };
-use horizon_core::position::BlockPos;
+use horizon_core::{geometry::Direction, position::BlockPos};
 use horizon_world::{
     level::{BlockId, flags},
     nbt::Compound,
     registry::BlockStateId,
 };
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 20;
+pub(crate) const NATIVE_HOOKS_API: u32 = 28;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -132,6 +164,43 @@ impl GameLevel<'_> {
     ) {
         let _ = (dimension, pos, state, changed, moved);
     }
+
+    /// On an authoritative server, a fluid flows or fire spreads from `from`
+    /// into `to` (`kind` is `fluid` or `fire`): `FlowingFluid.spreadTo`, and
+    /// `FireBlock.tick` setting fire to `to` or burning it (`checkBurnOut`).
+    /// Set `canceled` to leave the block at `to` as it is. Fluids ask on
+    /// every flow: answer fast. API 22.
+    #[inline(always)]
+    pub(super) fn native_block_spread(
+        &self,
+        dimension: LevelDimension,
+        kind: &str,
+        from: BlockPos,
+        to: BlockPos,
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, kind, from, to, canceled);
+    }
+
+    /// On an authoritative server, the piston at `piston` is about to push
+    /// the blocks at `push` one step `direction` (`[0, 1, 0]` is up; pulling
+    /// when it retracts) and destroy those at `destroy`:
+    /// `PistonBaseBlock.moveBlocks`, once its structure resolved. Set
+    /// `canceled` and nothing moves, as when the structure can't; a sticky
+    /// piston then retracts without its block, and clients are sent the
+    /// blocks rather than the retraction to replay. API 22.
+    #[inline(always)]
+    pub(super) fn native_piston_move(
+        &self,
+        dimension: LevelDimension,
+        piston: BlockPos,
+        direction: [i32; 3],
+        push: &[BlockPos],
+        destroy: &[BlockPos],
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, piston, direction, push, destroy, canceled);
+    }
 }
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
@@ -156,17 +225,24 @@ pub(crate) struct NativeMinimap {
     pub(crate) round: bool,
 }
 
-/// A mod block's screen over its menu (`native_screen`): its height (176
-/// wide, as vanilla's container screens), where each of the container's
-/// slots is (`Slot.x`, `Slot.y`; none hides the slot, and so do slots past
-/// the list; the server's menu does not have a hidden slot either, so clicks
-/// and shift-clicks skip it), and the player inventory's first row (vanilla's is 84; the
-/// hotbar is 58 below it), from its top left.
+/// A mod block's screen over its menu (`native_screen`): its size, where
+/// each of the container's slots is (`Slot.x`, `Slot.y`; none hides the
+/// slot, and so do slots past the list; the server's menu does not have a
+/// hidden slot either, so clicks and shift-clicks skip it), and the player inventory's first
+/// row (vanilla's is 84; the hotbar is 58 below it) and left column, from
+/// its top left.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativeScreen {
+    /// Vanilla's container screens are 176 wide.
+    pub width: f32,
     pub height: f32,
     pub slots: Vec<Option<[f32; 2]>>,
     pub inventory_y: f32,
+    /// The inventory's left column (vanilla's is 8).
+    pub inventory_x: f32,
+    /// The mod draws the title and the "Inventory" label itself
+    /// (`native_screen_draw`); Horizon leaves them out.
+    pub own_labels: bool,
 }
 
 /// The mod screen open on this client: the block it is for, the key its
@@ -433,12 +509,52 @@ impl Game<'_> {
     ) {
         let _ = (context, phase);
     }
+    /// Before an authoritative server level's tick pass. `dimension` is its ID.
+    pub(super) fn native_level_tick_pre(&mut self, dimension: &str) {
+        let _ = dimension;
+    }
+    /// After a successful authoritative server level tick pass.
+    pub(super) fn native_level_tick_post(&mut self, dimension: &str) {
+        let _ = dimension;
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
     /// says is taken.
     pub(super) fn native_hud(&mut self, batch: &mut HudBatch, corners: &mut Corners) {
         let _ = (batch, corners);
+    }
+    /// A player right-clicks the entity `entity` (`Entity.getId`) of type
+    /// `kind` (`minecraft:cow`) with `self.hand`, holding `stack` (none in an
+    /// empty hand): where `Player.interactOn` starts, before the entity's own
+    /// `interact` and the item's `interactLivingEntity`. Set `claimed` to take
+    /// the click: the hand swings and neither runs. Asked once per hand, as
+    /// vanilla tries the main hand then the off hand. Server-side, for every
+    /// player of the world (the helpers read the acting one). API 28.
+    pub(super) fn native_interact_entity(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        stack: Option<&ItemStack>,
+        claimed: &mut bool,
+    ) {
+        let _ = (entity, kind, stack, claimed);
+    }
+    /// The player-health HUD rows, once a frame the HUD draws them
+    /// (`HealthHud::layout`, not under F1): `inputs` carries the health,
+    /// food, air and vehicle state the layout reads, `wi`/`hi` the screen's
+    /// GUI size. A mod that sets `draws` replaces every row — armour,
+    /// hearts, food, air and the heights (`left_height`/`right_height`)
+    /// above the hotbar are the answer's to give; `bubble_pop_sound` too.
+    /// Nothing set draws Horizon's own.
+    pub(super) fn native_health_hud(
+        &mut self,
+        inputs: &horizon_client::hud_layout::HealthInputs,
+        wi: i32,
+        hi: i32,
+        draws: &mut Option<Vec<horizon_client::hud_layout::GuiDraw>>,
+    ) {
+        let _ = (inputs, wi, hi, draws);
     }
     /// A key or mouse button went down or up, by its vanilla name
     /// (`key.keyboard.z`, `key.mouse.left`): keys on any screen (check
@@ -550,6 +666,45 @@ impl Game<'_> {
     ) {
         let _ = (block, data, batch, origin);
     }
+    /// A left or right (`right`) press at `at` (GUI pixels from the screen's
+    /// top left, so outside it too) on block `block`'s screen, a mod's, over
+    /// no slot: set `button` to a menu button id when it is on one of yours.
+    /// Horizon sends it to the server (`ContainerButtonClick`,
+    /// `native_menu_button` there) and the press goes no further. API 20.
+    pub(super) fn native_screen_click(
+        &self,
+        block: &str,
+        data: &[i32],
+        at: [f32; 2],
+        right: bool,
+        button: &mut Option<i32>,
+    ) {
+        let _ = (block, data, at, right, button);
+    }
+    /// The tooltip at `at` (as in `native_screen_click`) on block `block`'s
+    /// screen, a mod's, over no item: push its lines when it is over
+    /// something of yours. Legacy colour codes (§) work. API 20.
+    pub(super) fn native_screen_tooltip(
+        &self,
+        block: &str,
+        data: &[i32],
+        at: [f32; 2],
+        lines: &mut Vec<String>,
+    ) {
+        let _ = (block, data, at, lines);
+    }
+    /// A player pressed menu button `id` on the menu of the mod block entity
+    /// at `pos` (`AbstractContainerMenu.clickMenuButton`), on the server:
+    /// change `entity` when its id is yours. It is out of the world during
+    /// the call, as in `native_block_entity_tick`. API 20.
+    pub(super) fn native_menu_button(
+        &mut self,
+        pos: [i32; 3],
+        entity: &mut ModBlockEntity,
+        id: i32,
+    ) {
+        let _ = (pos, entity, id);
+    }
     /// The commands native mods add to the server's command tree: push
     /// yours. Asked once when a world opens to players (a dedicated
     /// server, a LAN host, single player's server thread); every player's
@@ -652,28 +807,110 @@ impl Game<'_> {
     ) {
         let _ = (stack, pos, state);
     }
-    /// A player right-clicks the entity `entity` (`Entity.getId`) of type
-    /// `kind` (`minecraft:cow`) with `self.hand`, holding `stack` (none in an
-    /// empty hand): where `Player.interactOn` starts, before the entity's own
-    /// `interact` and the item's `interactLivingEntity`. Set `claimed` to take
-    /// the click: the hand swings and neither runs. Asked once per hand, as
-    /// vanilla tries the main hand then the off hand. Server-side, for every
-    /// player of the world (the helpers read the acting one). API 20.
-    pub(super) fn native_interact_entity(
+    /// A player right clicks the block at `pos` with `self.hand`, `face` the
+    /// face clicked: where `ServerPlayerGameMode.useItemOn` starts, before
+    /// the block's own use (a chest, a door, a lever) and before
+    /// `native_use_item_on`. Set `canceled` to stop the click: neither the
+    /// block nor the item acts, the hand doesn't swing, and a guest sees the
+    /// block as it is. Server-side, for every player of the world
+    /// (`native_acting_player` says who), once per hand. API 21.
+    pub(super) fn native_right_click_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, face, canceled);
+    }
+    /// An explosion at `center` in `dimension` (`minecraft:overworld`) is
+    /// about to break `blocks`: `ServerExplosion.explode` with its `toBlow`,
+    /// before any block is hit. Take out the positions to spare; they keep
+    /// their block and get no fire. Entities are hurt as before. Server-side.
+    /// API 22.
+    pub(super) fn native_explosion_detonate(
+        &mut self,
+        dimension: &str,
+        center: [f64; 3],
+        blocks: &mut Vec<[i32; 3]>,
+    ) {
+        let _ = (dimension, center, blocks);
+    }
+    /// A player fills (`stack` an empty bucket) or empties a bucket at `pos`:
+    /// `BucketItem.use`, where it asks `Level.mayInteract`. Set `canceled`
+    /// and the bucket does nothing. Server-side, for every player of the
+    /// world (`native_acting_player` says who). API 22.
+    pub(super) fn native_fill_bucket(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (stack, pos, canceled);
+    }
+    /// A player attacks the entity `entity` (`Entity.getId`) of type `kind`
+    /// (`minecraft:item_frame`, `minecraft:cow`, `minecraft:player`) standing
+    /// at `pos`: `ServerGamePacketListenerImpl.handleInteract`'s attack, once
+    /// in reach, where `Player.attack` starts. Set `canceled` and the blow
+    /// does nothing (no damage, no knockback, the frame keeps its item).
+    /// Server-side, for every player of the world (`native_acting_player`
+    /// says who). API 22.
+    pub(super) fn native_attack_entity(
         &mut self,
         entity: i32,
         kind: &str,
-        stack: Option<&ItemStack>,
-        claimed: &mut bool,
+        pos: [f64; 3],
+        canceled: &mut bool,
     ) {
-        let _ = (entity, kind, stack, claimed);
+        let _ = (entity, kind, pos, canceled);
     }
 }
 
-/// Helpers for native mods, kept as stable as the hook points.
+fn dimension_id(dimension: LevelDimension) -> &'static str {
+    match dimension {
+        LevelDimension::Overworld => "minecraft:overworld",
+        LevelDimension::Nether => "minecraft:the_nether",
+        LevelDimension::End => "minecraft:the_end",
+    }
+}
+
 /// Server-level helpers for native mods.
 #[allow(dead_code)]
 impl GameLevel<'_> {
+    /// Play a registered vanilla sound for nearby players in this server level.
+    /// The return value means queued, not heard. Unknown sound events are
+    /// rejected at dispatch when the server registry is available.
+    pub(super) fn native_play_sound(
+        &mut self,
+        sound: &str,
+        at: [f64; 3],
+        source: usize,
+        volume: f32,
+        pitch: f32,
+    ) -> bool {
+        if !self.native_authoritative || !sound.starts_with("minecraft:") {
+            return false;
+        }
+        if source >= horizon_client::settings::SOUND_SOURCES.len() {
+            return false;
+        }
+        let position_ok = at
+            .into_iter()
+            .all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX) / 8.0);
+        let gain_ok = volume.is_finite() && volume >= 0.0 && pitch.is_finite() && pitch >= 0.0;
+        if !position_ok || !gain_ok {
+            return false;
+        }
+        self.native_sounds.push(super::creatures::NativeSound {
+            dimension: dimension_id(self.dimension),
+            sound: sound.to_owned(),
+            at,
+            source: source as i32,
+            volume,
+            pitch,
+        });
+        true
+    }
+
     /// Queue particles in this authoritative level. A zero count sends one
     /// directional particle. The return value means accepted, not delivered.
     /// Block particle types require their block state; item, trail and
@@ -712,17 +949,21 @@ impl GameLevel<'_> {
         {
             return false;
         }
-        let dimension = match self.dimension {
-            LevelDimension::Overworld => "minecraft:overworld",
-            LevelDimension::Nether => "minecraft:the_nether",
-            LevelDimension::End => "minecraft:the_end",
-        };
         self.native_particles
-            .push((dimension, options.clone(), state, at, spread, speed, count));
+            .push(super::lan_particles::QueuedParticle {
+                dimension: dimension_id(self.dimension),
+                options: options.clone(),
+                state,
+                at,
+                spread,
+                speed,
+                count,
+            });
         true
     }
 }
 
+/// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
@@ -731,6 +972,42 @@ impl Game<'_> {
     /// launcher's next build leaves it out.
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
+    }
+    /// Sets a block in the current authoritative level through `Level.setBlock`.
+    /// Returns false for another dimension, an invalid state, or no change.
+    /// `flags` selects vanilla's neighbour and shape updates; Horizon sends
+    /// every write to players whatever the flags. A block entity block gets
+    /// its block entity. API 24.
+    pub(super) fn native_set_block(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
+        if (self.serving.is_none() && self.options.dedicated.is_none())
+            || dimension != self.dim.id()
+            || self.pack.assets.registry.state(state).is_none()
+        {
+            return false;
+        }
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
+        let changed =
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, at, state, flags));
+        let new = self.res.facts().get(state).name.clone();
+        let landed = self.world.block(pos[0], pos[1], pos[2]);
+        if changed
+            && self.res.facts().get(previous).name != new
+            && self.res.facts().get(landed).name == new
+            && let Some(entity) = self.new_block_entity(&new)
+        {
+            self.world
+                .block_entities
+                .insert((pos[0], pos[1], pos[2]), entity);
+        }
+        let _ = self.process_level_events();
+        changed
     }
     /// Sets property `key` of the block at `pos` to `value`, as a furnace's
     /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
@@ -835,6 +1112,72 @@ impl Game<'_> {
         batch.rect_uv(dst[0], dst[1], dst[2], dst[3], r, u32::MAX);
         true
     }
+    /// Item `item`'s icon (`mymod:machine`) with its top left at `at`,
+    /// `size` GUI pixels square (16 in a slot); false for an unknown item.
+    /// API 20.
+    pub(super) fn native_item(
+        &self,
+        batch: &mut HudBatch,
+        item: &str,
+        at: [f32; 2],
+        size: f32,
+    ) -> bool {
+        if self.res.items().get(item).is_none() {
+            return false;
+        }
+        let start = batch.vertices.len();
+        self.draw_item_model(batch, &ItemStack::new(item, 1), at[0], at[1]);
+        batch.scale_since(start, at[0], at[1], size / 16.0, size / 16.0);
+        true
+    }
+    /// The open menu's title (the block's name, or the one it was given),
+    /// as plain text. API 20.
+    pub(super) fn native_screen_title(&self) -> Option<String> {
+        self.remote_menu_title().map(|t| t.plain())
+    }
+    /// A data file of the game's resources, content mods' included
+    /// (`data/mymod/machines.json`), when there is one: what a mod's content
+    /// says, read at runtime. Only relative paths of plain names. API 20.
+    pub(super) fn native_data(&self, path: &str) -> Option<Vec<u8>> {
+        let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && !p.contains('\\');
+        if !path.starts_with("data/") || !path.split('/').all(plain) {
+            return None;
+        }
+        fs::read(self.options.resources.join(path)).ok()
+    }
+    /// The block at `pos` (`mymod:cable`; air where nothing is loaded).
+    /// API 20.
+    pub(super) fn native_block(&self, pos: [i32; 3]) -> String {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.res.facts().get(state).name.to_string()
+    }
+    /// Property `key` of the block at `pos` (a machine's `facing`), if it
+    /// has one. API 20.
+    pub(super) fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.pack
+            .assets
+            .registry
+            .state(state)?
+            .properties
+            .get(key)
+            .cloned()
+    }
+    /// Puts `stack` into the container at `pos` (a chest, a furnace, a mod
+    /// container) through its side `face`, as a hopper would, and returns
+    /// what did not fit: a machine's auto-output. API 20.
+    pub(super) fn native_insert_item(
+        &mut self,
+        pos: [i32; 3],
+        face: Direction,
+        stack: ItemStack,
+    ) -> Option<ItemStack> {
+        self.insert_into_container((pos[0], pos[1], pos[2]), stack, face)
+    }
+    /// Where the mouse is, in GUI pixels. API 20.
+    pub(super) fn native_cursor(&self) -> [f32; 2] {
+        [self.cursor.0, self.cursor.1]
+    }
     /// The size of sprite `name` in its own pixels, if there is one. API 19.
     pub(super) fn native_sprite_size(&self, name: &str) -> Option<[f32; 2]> {
         let r = self.gui.atlas.sprites.get(name)?;
@@ -923,6 +1266,16 @@ impl Game<'_> {
     pub(super) fn native_set_setting(&self, mod_id: &str, key: &str, value: &str) {
         let dir = self.native_data_dir(mod_id);
         let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
+    }
+    /// The game's `config/` folder beside `options.txt`, shared by every mod
+    /// as on Fabric and NeoForge: a mod names its own files in it
+    /// (`config/<id>.json`, or a folder of its own). The same folder on the
+    /// window, its server thread and a LAN host; a dedicated server's is in
+    /// its own folder, beside `server.properties`. Made when missing. No
+    /// `self`, so it works from any hook (`Game::native_config_dir()`), the
+    /// level's too. API 26.
+    pub(super) fn native_config_dir() -> Result<PathBuf, String> {
+        config_dir(&Self::options_path())
     }
     /// Shows the panel beside container screens with these items (at most
     /// 8192), as the game's own slots in pages, with a search box; the
@@ -1158,6 +1511,14 @@ impl Game<'_> {
     pub(super) fn native_screen_inventory_y(&self) -> Option<f32> {
         self.shown_native_screen().map(|s| s.screen.inventory_y)
     }
+    /// The open mod screen's inventory's left column.
+    pub(super) fn native_screen_inventory_x(&self) -> Option<f32> {
+        self.shown_native_screen().map(|s| s.screen.inventory_x)
+    }
+    /// The open mod screen's width.
+    pub(super) fn native_screen_width(&self) -> Option<f32> {
+        self.shown_native_screen().map(|s| s.screen.width)
+    }
     /// The open mod screen: a plain panel with its slots' frames, the mod's
     /// drawing over it, then the title and the inventory's label. False when
     /// none is showing.
@@ -1166,7 +1527,7 @@ impl Game<'_> {
             return false;
         };
         let atlas = &self.gui.atlas;
-        let (w, h) = (176.0, s.screen.height);
+        let (w, h) = (s.screen.width, s.screen.height);
         batch.fill(atlas, ox, oy, w, h, rgba(0, 0, 0, 255));
         batch.fill(
             atlas,
@@ -1199,6 +1560,9 @@ impl Game<'_> {
             );
         }
         self.native_screen_draw(&s.block, &s.data, batch, [ox, oy]);
+        if s.screen.own_labels {
+            return true;
+        }
         let grey = rgba(64, 64, 64, 255);
         if let Some(title) = self.remote_menu_title() {
             batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
@@ -1232,6 +1596,16 @@ impl Game<'_> {
             taken.nbt.insert("Items".into(), items);
         }
         self.native_block_entity_tick([pos.0, pos.1, pos.2], &mut taken);
+        self.put_back_mod_block_entity(pos, taken, &items);
+    }
+    /// Puts back a mod block entity taken out for a call, unless the call
+    /// removed or replaced it, with what its `setChanged` does.
+    fn put_back_mod_block_entity(
+        &mut self,
+        pos: Pos,
+        mut taken: ModBlockEntity,
+        items: &[Option<ItemStack>],
+    ) {
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
             && m.id.is_empty()
         {
@@ -1255,6 +1629,77 @@ impl Game<'_> {
             self.with_level(|_, level, _| level.drop_lost_contents(at, lost));
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
         }
+    }
+    /// Menu button `id` on the mod container at `pos` (`clickMenuButton`).
+    pub(super) fn mod_menu_button(&mut self, pos: Pos, id: i32) {
+        if self.mod_menu_at(pos).is_none() {
+            return;
+        }
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) else {
+            return;
+        };
+        if m.id.is_empty() {
+            return;
+        }
+        let mut taken = std::mem::take(&mut **m);
+        let items = taken.items.clone();
+        self.native_menu_button([pos.0, pos.1, pos.2], &mut taken, id);
+        self.put_back_mod_block_entity(pos, taken, &items);
+    }
+    /// The cursor from the open mod screen's top left, with its block and
+    /// data, for its press and tooltip hooks.
+    fn native_screen_at(&self) -> Option<(String, Vec<i32>, [f32; 2])> {
+        let s = self.shown_native_screen()?;
+        let r = self.renderer.as_ref()?;
+        let batch = HudBatch::new([r.config.width, r.config.height]);
+        let (ox, oy) = self.inventory_origin(&batch);
+        let at = [self.cursor.0 - ox, self.cursor.1 - oy];
+        Some((s.block.clone(), s.data.clone(), at))
+    }
+    /// A press on the open mod screen's own button (`native_screen_click`)
+    /// goes to the server as a menu button click (true).
+    pub(super) fn native_screen_press(&mut self, right: bool) -> bool {
+        if self.inventory_target().0.is_some() {
+            return false;
+        }
+        let Some((block, data, at)) = self.native_screen_at() else {
+            return false;
+        };
+        let mut button = None;
+        self.native_screen_click(&block, &data, at, right, &mut button);
+        let Some(button) = button else {
+            return false;
+        };
+        let window = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.menu.as_ref())
+            .map(|(w, _)| *w);
+        if let Some(container) = window {
+            self.send(
+                horizon_protocol::packets::play::Serverbound::ContainerButtonClick(
+                    horizon_protocol::packets::play::ContainerButtonClick { container, button },
+                ),
+            );
+        }
+        self.audio.play_button_click();
+        true
+    }
+    /// The open mod screen's tooltip under the cursor (`native_screen_tooltip`).
+    pub(super) fn draw_native_screen_tooltip(&self, batch: &mut HudBatch) {
+        if self.carried.is_some() || self.slot_at(batch, self.cursor.0, self.cursor.1).is_some() {
+            return;
+        }
+        let Some((block, data, at)) = self.native_screen_at() else {
+            return;
+        };
+        let mut lines = Vec::new();
+        self.native_screen_tooltip(&block, &data, at, &mut lines);
+        let lines: Vec<(horizon_client::text::Text, u32)> = lines
+            .into_iter()
+            .map(|l| (horizon_client::text::Text::literal(l), u32::MAX))
+            .collect();
+        self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
     }
     /// Options > Mods' rows for the native mods, after the others.
     pub(super) fn list_native_mods(&mut self) {
@@ -1385,6 +1830,13 @@ fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
     MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
 }
 
+/// `config/` beside `options`, made when missing.
+fn config_dir(options: &Path) -> Result<PathBuf, String> {
+    let dir = options.with_file_name("config");
+    fs::create_dir_all(&dir).map_err(|e| dir.display().to_string() + ": " + &e.to_string())?;
+    Ok(dir)
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -1448,7 +1900,7 @@ mod tests {
             .split("/// The hook points. Each does nothing in Horizon.")
             .nth(1)
             .unwrap()
-            .split("/// Helpers for native mods")
+            .split("/// Server-level helpers for native mods.")
             .next()
             .unwrap();
         let level_section = source
@@ -1510,6 +1962,24 @@ mod tests {
         assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
         assert_eq!(mod_menu("minecraft:brewing_stand"), None);
         assert_eq!(mod_menu("hopper"), None);
+    }
+
+    /// The config folder is `config/` beside `options.txt`, made when
+    /// missing.
+    #[test]
+    fn config_dir_is_config_beside_options() {
+        // Callable without a game, from any hook.
+        let _: fn() -> Result<std::path::PathBuf, String> = super::Game::native_config_dir;
+        use super::config_dir;
+        let root = std::env::temp_dir().join(format!("horizon-config-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let options = root.join("options.txt");
+        assert!(!root.join("config").exists());
+        let dir = config_dir(&options).unwrap();
+        assert_eq!(dir, root.join("config"));
+        assert!(dir.is_dir());
+        assert_eq!(config_dir(&options).unwrap(), dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

@@ -95,10 +95,34 @@ gets its own damage and durability, or a tool its mining speed:
     "!minecraft:repairable": {} } }
 ```
 
+A block's item takes the same `components`, over the components of its
+template block's item; a block with `"item": false` can't have them. Block files
+have no `max_stack_size` or `rarity` keys, so those two go in `components` here
+(an integer 1 to 99, and one of `common`, `uncommon`, `rare`, `epic`):
+
+```json
+{ "template": "minecraft:iron_block",
+  "components": {
+    "minecraft:max_stack_size": 16,
+    "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } } }
+```
+
 A component type no vanilla item has is refused, so a misspelt one fails
 the load instead of doing nothing. Behaviour the game ties to a vanilla
 item's id doesn't come along yet: a copy of the trident doesn't throw
 ([#3305](https://github.com/horizon-rust/horizon/issues/3305)).
+
+`crafting_remainder` names what the item leaves in the crafting grid when a
+recipe uses it, as a milk bucket leaves a bucket (vanilla's
+`Item.Properties.craftRemainder`, not a data component): a vanilla item or
+one of the mod's own, refused at load otherwise. It holds on the crafting
+table, the inventory grid and the crafter, not yet as furnace fuel or in a
+brewing stand. What the item leaves once eaten
+or drunk is the `minecraft:use_remainder` component instead:
+
+```json
+{ "template": "minecraft:mushroom_stew", "crafting_remainder": "minecraft:bowl" }
+```
 
 The fence: files go in the mod's own namespaces (`assets/<id>/`,
 `data/<id>/`, and those its manifest lists), plus additions to vanilla tags
@@ -166,6 +190,11 @@ Behaviour that needs code (a new key, a HUD, a tool that changes how mining work
 a `horizon-mixin.toml` and a few `.rs` helpers that hook into named functions of the game. Start from
 [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template). How the launcher builds
 one, what it pins and why it is not sandboxed: [native-mods.md](native-mods.md).
+
+A native mod's config files go in the game's shared `config/` folder, beside `options.txt` (on a dedicated server,
+beside `server.properties`), as Fabric and NeoForge mods' do: the mod picks its own file names, such as
+`config/<mod id>.json`. It asks for the folder with `Game::native_config_dir()` (hook points API 26), which needs no
+game, so it works from any hook, and makes the folder when missing. Settings kept with `native_set_setting` stay where they were, in `horizon-mods/.horizon-mod-data/<id>/`.
 
 ## Publish your mod
 

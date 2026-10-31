@@ -12,7 +12,7 @@
 use super::{
     Mob, MobEvent, MobWorld, Species, Who,
     brain::{Timed, living_near},
-    path::Path,
+    path::{Path, PathNode},
     sniffer,
 };
 use horizon_core::{
@@ -206,6 +206,8 @@ pub struct Memories {
     pub play_dead_ticks: Slot<i32>,
     pub visited_block_positions: Slot<Vec<[i32; 3]>>,
     pub unreachable_transport_block_positions: Slot<Vec<[i32; 3]>>,
+    /// `DOORS_TO_CLOSE`: the doors it opened or passed through.
+    pub doors_to_close: Slot<Vec<[i32; 3]>>,
 }
 impl Memories {
     fn tick(&mut self) {
@@ -239,6 +241,7 @@ impl Memories {
         self.transport_items_cooldown_ticks.tick();
         self.visited_block_positions.tick();
         self.unreachable_transport_block_positions.tick();
+        self.doors_to_close.tick();
     }
 }
 
@@ -923,6 +926,13 @@ enum B {
     /// `SetEntityLookTargetSometimes.create(PLAYER, 6, 40..80)`: running,
     /// and the ticker's ticks until the next start.
     LookAtPlayerSometimes(bool, i32),
+    /// `InteractWithDoor.create()`: opens the doors on the path and closes
+    /// the ones it has passed.
+    InteractWithDoor {
+        running: bool,
+        last_node: Option<PathNode>,
+        cooldown: i32,
+    },
     /// `TransportItemsBetweenContainers`.
     Transport(Box<super::transport_items::Transport>),
 }
@@ -949,6 +959,7 @@ impl B {
             | B::CountDownTransport(t) => t.running,
             B::Transport(x) => x.running,
             B::LookAtPlayerSometimes(running, _) => *running,
+            B::InteractWithDoor { running, .. } => *running,
             B::AxolotlAction { running, .. }
             | B::WalkToLookTarget { running, .. }
             | B::LookAtPlayer(running)
@@ -999,6 +1010,7 @@ impl B {
                 | B::WalkToLookTarget { .. }
                 | B::LookAtPlayer(_)
                 | B::LookAtPlayerSometimes(..)
+                | B::InteractWithDoor { .. }
                 | B::Stroll { .. }
                 | B::FollowAdult { .. }
         )
@@ -1009,6 +1021,7 @@ impl B {
             | B::WalkToLookTarget { running, .. }
             | B::LookAtPlayer(running)
             | B::LookAtPlayerSometimes(running, _)
+            | B::InteractWithDoor { running, .. }
             | B::Stroll { running, .. }
             | B::FollowAdult { running, .. } => *running = on,
             _ => {}
@@ -1263,6 +1276,7 @@ impl B {
             | B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
             | B::LookAtPlayerSometimes(..)
+            | B::InteractWithDoor { .. }
             | B::Stroll { .. }
             | B::FollowAdult { .. } => unreachable!("one-shots trigger"),
         }
@@ -1305,6 +1319,34 @@ impl B {
                 });
                 let Some(t) = found else { return false };
                 mem(m).look_target.set(Tracker::entity(t, true));
+                true
+            }
+            B::InteractWithDoor {
+                ref mut last_node,
+                ref mut cooldown,
+                ..
+            } => {
+                if !mem(m).path.present() {
+                    return false;
+                }
+                let Some(path) = m.ai.nav.path.clone() else {
+                    return false;
+                };
+                if path.next == 0 || path.is_done() {
+                    return false;
+                }
+                let next = path.next_node();
+                if *last_node == Some(next) {
+                    *cooldown = 20;
+                } else {
+                    *cooldown -= 1;
+                    if *cooldown > 0 {
+                        return false;
+                    }
+                }
+                *last_node = Some(next);
+                let from = path.nodes[path.next - 1];
+                interact_with_doors(m, cx, from, next);
                 true
             }
             B::LookAtPlayerSometimes(_, ref mut ticks) => {
@@ -1658,6 +1700,7 @@ impl B {
             B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
             | B::LookAtPlayerSometimes(..)
+            | B::InteractWithDoor { .. }
             | B::Stroll { .. }
             | B::FollowAdult { .. } => {}
         }
@@ -1784,6 +1827,7 @@ impl B {
             B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
             | B::LookAtPlayerSometimes(..)
+            | B::InteractWithDoor { .. }
             | B::Stroll { .. }
             | B::FollowAdult { .. } => {}
         }
@@ -2121,8 +2165,15 @@ fn copper_golem_package(seed: i64) -> Vec<Entry> {
                 }),
             )),
         ),
-        // Priority 3 is InteractWithDoor, which only acts on doors along the
-        // path; these golems pass none.
+        // Priority 3.
+        e(
+            Act::Core,
+            B::InteractWithDoor {
+                running: false,
+                last_node: None,
+                cooldown: 0,
+            },
+        ),
         // Priorities 4 and 5.
         e(Act::Core, B::CountDownGaze(Timed::new(60, 60))),
         e(Act::Core, B::CountDownTransport(Timed::new(60, 60))),
@@ -2757,6 +2808,11 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
         |t: &i32| t.to_string()
     );
     slot!(
+        "doors_to_close",
+        mm.doors_to_close,
+        |l: &Vec<[i32; 3]>| format!("n{}", l.len())
+    );
+    slot!(
         "visited_block_positions",
         mm.visited_block_positions,
         |l: &Vec<[i32; 3]>| format!("n{}", l.len())
@@ -2847,4 +2903,64 @@ mod breeding_duration_tests {
             .unwrap();
         assert_eq!((timed.min, timed.max), (110, 110));
     }
+}
+
+/// `InteractWithDoor`: open the doors on the path, close the ones passed.
+fn interact_with_doors(m: &mut Mob, cx: &mut Bx, from: PathNode, to: PathNode) {
+    let (from, to) = ([from.x, from.y, from.z], [to.x, to.y, to.z]);
+    // The door being left is remembered even when it is open already; the
+    // one ahead only when this mob opens it.
+    for (p, always) in [(from, true), (to, false)] {
+        let Some(open) = door_open(cx.w, p) else {
+            continue;
+        };
+        if !open {
+            cx.events.push(MobEvent::SetDoorOpen { pos: p, open: true });
+        }
+        if always || !open {
+            let doors = &mut mem(m).doors_to_close;
+            let mut list = doors.get().cloned().unwrap_or_default();
+            if !list.contains(&p) {
+                list.push(p);
+                doors.set(list);
+            }
+        }
+    }
+    close_doors(m, cx, from, to);
+}
+/// Whether the block at `p` is a door mobs open (`MOB_INTERACTABLE_DOORS`),
+/// and then whether it is open.
+fn door_open(w: &MobWorld, p: [i32; 3]) -> Option<bool> {
+    let name = w.block_name(p[0], p[1], p[2]);
+    (name.ends_with("_door") && w.has_tag("minecraft:mob_interactable_doors", name))
+        .then(|| w.prop(p[0], p[1], p[2], "open") == Some("true"))
+}
+/// `InteractWithDoor.closeDoorsThatIHaveOpenedOrPassedThrough`: the remembered
+/// doors other than the two of the step being taken are forgotten, and closed
+/// when still open and within 3 blocks. (Another mob of its kind coming
+/// through the door is not looked for.)
+fn close_doors(m: &mut Mob, cx: &mut Bx, from: [i32; 3], to: [i32; 3]) {
+    let Some(doors) = mem(m).doors_to_close.get().cloned() else {
+        return;
+    };
+    let mut kept = Vec::new();
+    for door in doors {
+        if from == door || to == door {
+            kept.push(door);
+            continue;
+        }
+        let centre = Vec3::new(
+            f64::from(door[0]) + 0.5,
+            f64::from(door[1]) + 0.5,
+            f64::from(door[2]) + 0.5,
+        );
+        if centre.distance_squared(m.position) >= 9.0 || door_open(cx.w, door) != Some(true) {
+            continue;
+        }
+        cx.events.push(MobEvent::SetDoorOpen {
+            pos: door,
+            open: false,
+        });
+    }
+    mem(m).doors_to_close.set(kept);
 }

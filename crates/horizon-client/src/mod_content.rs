@@ -329,6 +329,7 @@ struct NewItem {
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
     components: Vec<(String, J)>,
+    crafting_remainder: Option<String>,
 }
 
 struct Plan<'a> {
@@ -360,6 +361,18 @@ fn patch_components(
         }
     }
     Ok(())
+}
+
+/// A declared component patch, as the overlay's JSON.
+fn component_patch(
+    id: &str,
+    components: &BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<(String, J)>> {
+    Ok(components
+        .iter()
+        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
+        .collect::<std::result::Result<_, serde_json::Error>>()
+        .map_err(|e| format!("{id}: {e}"))?)
 }
 
 fn read_json(path: &Path) -> Result<J> {
@@ -570,7 +583,8 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(item, &b.decl.id),
                     max_stack_size: None,
                     rarity: None,
-                    components: Vec::new(),
+                    components: component_patch(&b.decl.id, &b.decl.components)?,
+                    crafting_remainder: None,
                 });
             }
         }
@@ -580,12 +594,8 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(&i.template, &i.id),
                     max_stack_size: i.max_stack_size,
                     rarity: i.rarity,
-                    components: i
-                        .components
-                        .iter()
-                        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
-                        .collect::<std::result::Result<_, serde_json::Error>>()
-                        .map_err(|e| format!("{}: {e}", i.id))?,
+                    components: component_patch(&i.id, &i.components)?,
+                    crafting_remainder: i.crafting_remainder.clone(),
                 });
             }
         }
@@ -745,6 +755,19 @@ impl<'a> Plan<'a> {
                     .map_err(|e| format!("{}: {e}", i.rename.to))?;
             }
             map.set(&i.rename.to, v);
+        }
+        if components {
+            for i in &self.items {
+                if let Some(rest) = &i.crafting_remainder
+                    && map.get(rest).is_none()
+                {
+                    return Err(format!(
+                        "{}: crafting_remainder {rest:?} is not an item",
+                        i.rename.to
+                    )
+                    .into());
+                }
+            }
         }
         Ok(())
     }
@@ -1575,6 +1598,17 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
         .collect();
     namespaces.sort();
     overlay.write(MARKER, &serde_json::to_vec(&namespaces)?)?;
+    let remainders: BTreeMap<&str, &str> = plan
+        .items
+        .iter()
+        .filter_map(|i| Some((i.rename.to.as_str(), i.crafting_remainder.as_deref()?)))
+        .collect();
+    if !remainders.is_empty() {
+        overlay.write(
+            horizon_items::items::MOD_CRAFT_REMAINDERS,
+            &serde_json::to_vec(&remainders)?,
+        )?;
+    }
     if mods.iter().any(|m| !m.content.blocks.is_empty()) {
         overlay.write(crate::content_identity::MARKER, b"1")?;
     }
