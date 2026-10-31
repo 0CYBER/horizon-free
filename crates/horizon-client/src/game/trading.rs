@@ -572,6 +572,31 @@ impl Game<'_> {
         }
         false
     }
+    /// `AbstractButton.keyPressed` on the focused offer button: Enter or
+    /// Space presses it again, key repeats included, so holding Space
+    /// refills the payment slots after every trade. Focus stays on the
+    /// button through slot clicks (`ContainerEventHandler.mouseClicked`).
+    pub(super) fn merchant_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
+        use winit::keyboard::KeyCode;
+        if !matches!(key, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space) {
+            return false;
+        }
+        let Some(m) = self.station.as_ref().and_then(|s| s.merchant.as_ref()) else {
+            return false;
+        };
+        // Buttons past the last offer are hidden, and a hidden button is inactive.
+        let Some(index) = m
+            .focused
+            .map(|row| row + m.scroll)
+            .filter(|&index| index < m.session.offers.len())
+        else {
+            return false;
+        };
+        self.audio
+            .play("minecraft:ui.button.click", None, 0.25, 1.0);
+        self.try_move_items(index);
+        true
+    }
     /// The offer buttons a controller can focus (GUI origin relative).
     pub(super) fn merchant_targets(&self) -> Vec<[f32; 4]> {
         let Some(m) = self.station.as_ref().and_then(|s| s.merchant.as_ref()) else {

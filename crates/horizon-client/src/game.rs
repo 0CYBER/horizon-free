@@ -170,6 +170,8 @@ mod names;
 mod native_hooks;
 mod native_lifecycle;
 mod native_menus;
+mod native_mobs;
+mod native_net;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
@@ -200,6 +202,7 @@ mod postprocess;
 mod potent_sulfur;
 mod potions;
 mod powder_snow;
+mod prediction;
 mod pumpkin;
 mod raids;
 mod recipe_book;
@@ -797,6 +800,7 @@ struct GameLevel<'w> {
     client_side: bool,
     /// Only the integrated or dedicated server dispatches native observations.
     native_authoritative: bool,
+    native_sounds: &'w mut Vec<creatures::NativeSound>,
     native_particles: &'w mut Vec<lan_particles::QueuedParticle>,
 }
 struct PlayerCollision {
@@ -1033,6 +1037,83 @@ impl LevelAccess for GameLevel<'_> {
             self.native_piston_move(self.dimension, piston, step, push, destroy, &mut canceled);
         }
         !canceled
+    }
+    fn adjust_signal_source(&self, state: BlockStateId, vanilla: bool) -> bool {
+        let mut source = vanilla;
+        if self.native_authoritative {
+            self.native_is_signal_source(state, &mut source);
+        }
+        source
+    }
+    fn adjust_signal(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        direct: bool,
+        vanilla: i32,
+    ) -> i32 {
+        let mut signal = vanilla;
+        if self.native_authoritative {
+            let face = direction.opposite();
+            self.native_block_signal(self.dimension, pos, state, face, direct, &mut signal);
+        }
+        signal.clamp(0, 15)
+    }
+    fn before_random_tick(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: &mut BlockStateId,
+        handled: &mut bool,
+    ) {
+        if self.native_authoritative {
+            // Any block the hook writes moves the world's revision on.
+            let revision = self.world.revision;
+            self.native_random_tick(ticks, self.dimension, pos, *state, handled);
+            if !*handled && self.world.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
+    fn before_tick_block(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: &mut BlockStateId,
+        handled: &mut bool,
+    ) {
+        if self.native_authoritative {
+            // Any block the hook writes moves the world's revision on.
+            let revision = self.world.revision;
+            self.native_tick_block(ticks, self.dimension, pos, *state, handled);
+            if !*handled && self.world.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
+    fn before_update_shape(
+        &self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        neighbour_pos: BlockPos,
+        neighbour: BlockStateId,
+        new: &mut Option<BlockStateId>,
+    ) {
+        if self.native_authoritative {
+            self.native_update_shape(
+                ticks,
+                self.dimension,
+                pos,
+                state,
+                direction,
+                neighbour_pos,
+                neighbour,
+                new,
+            );
+        }
     }
     fn is_client_side(&self) -> bool {
         self.client_side
@@ -2231,6 +2312,8 @@ struct Game<'a> {
     native_shaders: native_shaders::NativeShaders,
     /// The native lifecycle bookkeeping.
     native_lifecycle: native_lifecycle::NativeLifecycle,
+    /// Native mods' messages waiting (`game/native_net.rs`).
+    native_net: native_net::NativeNet,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -3162,6 +3245,8 @@ impl Game<'_> {
         // Player.drop: the drop statistics.
         self.stats.add("dropped", &thrown.item, thrown.count as i32);
         self.stats.custom("drop", 1);
+        let player = self.native_acting_id();
+        self.native_item_dropped(player, &thrown.item, thrown.count);
         self.throw_from_eyes(thrown, eye, true);
     }
     /// `Player.createItemStackToDrop`: an item entity thrown from the eyes
@@ -3315,6 +3400,11 @@ impl Game<'_> {
                 && b.max_position().z > min[2];
             // ItemEntity.playerTouch: no pickup delay, and the target (if any) is this player.
             if touching && item.pickup_delay == 0 && item.target.is_none_or(|t| t == own) {
+                if self.native_pickup_refused(&item.stack) {
+                    item.pickup_delay = 10;
+                    kept.push(item);
+                    continue;
+                }
                 let before = item.stack.count;
                 let kind = item.stack.item.clone();
                 let thrower = item.thrower;
@@ -3504,12 +3594,14 @@ impl Game<'_> {
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
             native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
+            native_sounds: &mut self.creatures.lan_sounds,
             native_particles: &mut self.creatures.lan_particles,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
         if self.lan.is_some() {
             self.flush_lan_particles();
+            self.flush_native_sounds();
         }
         result
     }
@@ -5011,6 +5103,20 @@ impl Game<'_> {
     /// `Player.interactOn` for the entity under the crosshair with the
     /// acting hand: whether it took the click.
     fn interact_entity(&mut self) -> Result<bool> {
+        // Native mods, where Player.interactOn starts: before the entity's
+        // own interact and the item's interactLivingEntity.
+        if let Some(Some(id)) = self.pick_entity_hit()
+            && let Some(target) = self.level_entity(id)
+        {
+            let kind = self.target_type(target);
+            let stack = self.held().cloned();
+            let mut claimed = false;
+            self.native_interact_entity(id, &kind, stack.as_ref(), &mut claimed);
+            if claimed {
+                self.swing_arm();
+                return Ok(true);
+            }
+        }
         Ok(self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_cushion()
@@ -5310,6 +5416,8 @@ impl Game<'_> {
             || self.boost_firework(&stack)
             || self.use_empty_map(&stack)
                 || self.use_book(&stack)
+                // KnowledgeBookItem.use: the recipes it names become known.
+                || self.use_knowledge_book(&stack)
                 // Block items (heads, carved pumpkins) aimed at a block are
                 // placed first (useItemOn before useItem).
                 || (!(info.block.is_some() && block_hit.is_some())
@@ -6100,6 +6208,7 @@ impl Game<'_> {
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
         self.tick_item_activation();
+        self.native_inventory_ticks();
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {
@@ -7269,7 +7378,17 @@ impl Game<'_> {
                     under_water,
                     vehicle_hearts,
                 };
-                let draws = self.health_hud.layout(&inputs, wi, hi);
+                let at = [p.position.x, p.position.y, p.position.z];
+                // The native mods' health HUD (`native_health_hud`): a mod
+                // that answers draws every row instead.
+                let mut native_health_hud = None;
+                self.native_health_hud(&inputs, wi, hi, &mut native_health_hud);
+                let draws = match native_health_hud {
+                    Some(draws) => draws,
+                    None => self.health_hud.layout(&inputs, wi, hi),
+                };
+                // A fresh borrow: the hook ran with all of `self`.
+                let atlas = &self.gui.atlas;
                 hud_layout::paint(&mut batch, atlas, &draws);
                 bar_height = self
                     .health_hud
@@ -7278,7 +7397,6 @@ impl Game<'_> {
                 // Hud.playAirBubblePoppedSound: Player.playSound (PLAYERS), heard
                 // by this client only.
                 if let Some((volume, pitch)) = self.health_hud.bubble_pop_sound.take() {
-                    let at = [p.position.x, p.position.y, p.position.z];
                     let players = horizon_client::settings::SOUND_SOURCES
                         .iter()
                         .position(|s| *s == "player")
@@ -9966,6 +10084,9 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed && old_health > 0.0 && !self.mobs[index].alive() {
+            self.native_kill_event(index);
+        }
         if landed {
             let victim = self.mob_entity(&self.mobs[index]);
             self.player_hit(
@@ -15178,6 +15299,13 @@ impl ApplicationHandler for Game<'_> {
                         return Ok(());
                     };
                     self.native_key_event(key, event.state == ElementState::Pressed, event.repeat);
+                    // Screen.keyPressed sees the physical key, repeats included.
+                    if event.state == ElementState::Pressed
+                        && self.screen == Screen::Inventory
+                        && self.merchant_key(key)
+                    {
+                        return Ok(());
+                    }
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
@@ -15906,6 +16034,7 @@ impl<'a> Game<'a> {
             panel: Default::default(),
             native_shaders: Default::default(),
             native_lifecycle: Default::default(),
+            native_net: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,

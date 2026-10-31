@@ -1880,6 +1880,14 @@ impl Game<'_> {
                 .take()
                 .expect("the hub is back after the quiet commands");
         }
+        if self.native_net_waiting() {
+            self.lan = Some(host);
+            self.run_native_net();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the mod messages");
+        }
         if !host.hub.native_menu_events.is_empty() {
             self.lan = Some(host);
             self.run_native_menu_events();
@@ -1903,6 +1911,7 @@ impl Game<'_> {
         self.lan_sync_border(&mut host);
         host.hub.anticheat_ping();
         drop(holding);
+        self.flush_native_net(&mut host);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
         // A blast from a guest's attack, and a mace's wind burst.
@@ -1914,6 +1923,7 @@ impl Game<'_> {
         self.flush_hook_pulls();
         // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
         self.flush_lan_particles();
+        self.flush_native_sounds();
     }
 
     fn lan_guest_joined(
@@ -2188,8 +2198,7 @@ impl Game<'_> {
                 && let Some((source, _)) = m.last_damage
             {
                 use horizon_client::mobs::{DamageKind as K, Who};
-                let player = source.attacker == Some(Who::Player);
-                let kind = super::creatures::damage_type(source.kind, player);
+                let kind = super::creatures::source_damage_type(source);
                 // The player a mob sees is the guest acting, else the host.
                 let cause = source.attacker.map(|who| match who {
                     Who::Player => host
@@ -2400,6 +2409,7 @@ impl Game<'_> {
             m.extra.fall_flying = body.gliding;
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
+            m.extra.previous_velocity = m.velocity;
             (m.extra.arrow_count, m.extra.stinger_count) = g.stuck;
             m.extra.shoulder_parrots = g.shoulders;
             m.velocity = g
@@ -2576,7 +2586,24 @@ impl Game<'_> {
 }
 
 /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` for an item in use: 1, and 2 when
-/// it is the off hand's.
+/// it is the off hand's. A stop is 0 here; vanilla leaves bit 1 set, so its
+/// stop of an off-hand use is 2. Both mean "not using" (bit 0 is clear), and
+/// nothing reads bit 1 without bit 0.
 pub(super) fn living_flags(using: Option<(usize, u32)>) -> i8 {
     using.map_or(0, |(slot, _)| if slot == OFFHAND_SLOT { 3 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OFFHAND_SLOT, living_flags};
+
+    /// `LivingEntity.startUsingItem` sets flag 1 for the use and flag 2 for
+    /// the off hand, so an off-hand use is 3, not 2. A reader takes bit 0 as
+    /// `isUsingItem` and bit 1 as `getUsedItemHand`.
+    #[test]
+    fn an_off_hand_use_flags_both_the_use_and_the_hand() {
+        assert_eq!(living_flags(None), 0);
+        assert_eq!(living_flags(Some((0, 12))), 1);
+        assert_eq!(living_flags(Some((OFFHAND_SLOT, 12))), 3);
+    }
 }

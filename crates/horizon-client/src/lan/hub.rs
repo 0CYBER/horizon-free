@@ -823,6 +823,18 @@ impl Hub {
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
         self.send_initial_recipe_book(i);
+        // PlayerList.placeNewPlayer broadcasts the join line before
+        // players.add: the others read it, the newcomer doesn't.
+        self.broadcast_except(
+            conn,
+            &C::SystemChat(play::SystemChat {
+                content: yellow_names(
+                    "multiplayer.player.joined",
+                    vec![display_name(self.guests[i].uuid, &name)],
+                ),
+                overlay: false,
+            }),
+        );
         self.guests[i].placed = true;
         self.resend_teleport(i, None);
         let g = &self.guests[i];
@@ -866,12 +878,6 @@ impl Hub {
         // ServerPlayer.sendPostEffects and initInventoryMenu.
         self.send_post_effects(i);
         self.send_inventory(i);
-        // PlayerList.placeNewPlayer adds the player to the list, then calls
-        // broadcastSystemMessage: the newcomer reads its own join line too.
-        self.system_message(yellow_names(
-            "multiplayer.player.joined",
-            vec![display_name(uuid, &name)],
-        ));
     }
 
     /// `ServerPlayer.sendPostEffects`: the player's `/posteffect` chains.
@@ -886,7 +892,7 @@ impl Hub {
     fn send_effect(&mut self, i: usize, e: &EffectInstance, blend: bool) -> Option<SentEffect> {
         let effect = self
             .sync
-            .id("minecraft:mob_effect", &format!("minecraft:{}", e.id))?;
+            .id("minecraft:mob_effect", crate::brewing::namespaced(e.id))?;
         let flags = PlayerEffects::flags(e);
         let g = &self.guests[i];
         g.send(&C::UpdateMobEffect(play::UpdateMobEffect {
@@ -970,7 +976,7 @@ impl Hub {
         for id in removed {
             let Some(effect) = self
                 .sync
-                .id("minecraft:mob_effect", &format!("minecraft:{id}"))
+                .id("minecraft:mob_effect", crate::brewing::namespaced(id))
             else {
                 continue;
             };
@@ -2422,6 +2428,7 @@ impl Hub {
                     if !self.guests[i].client_loaded() => {}
                 // handleAcceptTeleportPacket.
                 S::AcceptTeleportation(p) => {
+                    let recording = self.recording();
                     let g = &mut self.guests[i];
                     if let Some((id, at)) = g.awaiting_teleport
                         && id == p.id
@@ -2437,6 +2444,10 @@ impl Hub {
                         }
                         g.position = at;
                         g.awaiting_teleport = None;
+                        // The prediction's replay starts again where the client now is.
+                        if recording {
+                            g.anticheat.record.get_or_insert_default().teleported(at);
+                        }
                         let rot = (p.yaw, p.pitch);
                         self.position_change(i, [p.x, p.y, p.z], rot, 0, ctx, events);
                     }

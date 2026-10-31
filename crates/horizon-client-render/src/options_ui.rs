@@ -1988,7 +1988,9 @@ impl OptionsUi {
                     .map(|(i, installed)| {
                         let mut label = Text::literal(format!("{}: ", installed.title))
                             .append(on_off(s.mods.is_on(i)));
-                        if installed.problem.is_some() {
+                        if installed.problem.as_deref() == Some(crate::mod_list::NOT_BUILT) {
+                            label = label.append(tr("horizon.mods.not_built"));
+                        } else if installed.problem.is_some() {
                             label = label.append(tr("horizon.mods.stopped"));
                         } else if installed.dev {
                             label = label.append(tr("horizon.mods.dev"));

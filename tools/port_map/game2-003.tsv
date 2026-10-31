@@ -23,7 +23,7 @@ Vex.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize
 Vex.populateDefaultEquipmentSlots	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::populate	iron sword in hand with drop chance 0
 Witch.registerGoals	port	crates/horizon-client/src/mobs/witch.rs::register	gap: minor: raiders that hurt a witch are still targeted back (vanilla ignores them)
 Witch.handleEntityEvent	missing		player: a witch shows purple magic puffs about once a minute while idle; not drawn here (the RNG draw is kept in ai_step)
-Witch.getDamageAfterMagicAbsorb	missing		player: witches take full magic, indirect magic, sonic boom and thorns damage; vanilla cuts it to 15% and ignores its own hits
+Witch.getDamageAfterMagicAbsorb	port	crates/horizon-client/src/mobs.rs::Mob::damage_with	85% less from #witch_resistant_to, nothing from its own hit
 Zoglin.initCoreActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_zoglin	gap: minor: look-at-target and move-to-target sinks are not separate; the goal set stands in for them
 Zoglin.initIdleActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_zoglin	gap: minor: idle is a stroll only; no look-target sometimes and no do-nothing pauses
 Zoglin.initFightActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_zoglin	gap: player: melee cooldown is 20 ticks; vanilla is 40 for adults and 15 for babies, so zoglins hit faster

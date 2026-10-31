@@ -3745,12 +3745,11 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
-        if !self.post_effects.is_empty() {
-            entries.push((
-                "post_effects",
-                Tag::List(self.post_effects.iter().map(|e| string(e)).collect()),
-            ));
-        }
+        // `output.store` writes the list even when it is empty.
+        entries.push((
+            "post_effects",
+            Tag::List(self.post_effects.iter().map(|e| string(e)).collect()),
+        ));
         if let Some((dimension, pos)) = &self.last_death {
             entries.push((
                 "LastDeathLocation",

@@ -15,10 +15,13 @@
 //! entered the view apart from chunks sent again while the bot still held them (`resent`), and counts the
 //! times the server pulled a bot back (`pulled_back`: a teleport after the first, as for "moved too quickly").
 
+//! The report also has wire bytes in and out (`bytes_in`, `bytes_out`, per bot and in total, after
+//! compression) and join-time percentiles (`join_time`: p50, p99 and max in milliseconds).
+
 use horizon_protocol::{
     PROTOCOL_VERSION,
     buf::{Reader, Writer},
-    connection::{ConnWriter, Connection},
+    connection::{ConnWriter, Connection, Counters},
     crypto::offline_uuid,
     ids,
     item::Stack,
@@ -33,7 +36,7 @@ use serde_json::json;
 use std::{
     collections::HashSet,
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
@@ -81,6 +84,8 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          registry id, count), to test what a server takes
   --click X,Y,Z:SLOT:BUTTON:MODE  3 s after joining, open the block at X,Y,Z (a chest), then a second later
                          click SLOT of its window (ServerboundContainerClickPacket), to test what a server takes
+  --raw TICK:ID:HEX,...  raw serverbound play packets (id, body in hex) sent TICK ticks after joining,
+                         to test what a server takes
   --timer F              cheat, to test an anticheat: tick F times as fast as vanilla's client (1.5: 30 Hz)
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
@@ -142,6 +147,8 @@ struct Options {
     no_loaded: bool,
     height: f64,
     ground: bool,
+    /// --raw: (tick after joining, packet id, body).
+    raw: Vec<(u64, i32, Vec<u8>)>,
     /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
     give: Vec<(i16, i32, i32)>,
     /// --click: the block to open, then the slot, button and click type in its window.
@@ -172,6 +179,7 @@ fn options() -> Result<Options, String> {
         no_loaded: false,
         height: 24.0,
         ground: false,
+        raw: Vec::new(),
         give: Vec::new(),
         click: None,
         name: "Bot".into(),
@@ -246,6 +254,27 @@ fn options() -> Result<Options, String> {
                 let parse = |s: &str| s.parse::<i32>().map_err(|_| bad());
                 o.click = Some((at, parse(slot)? as i16, parse(button)? as i8, parse(mode)?));
             }
+            "--raw" => {
+                for part in value.split(',') {
+                    let bad = || number("TICK:ID:HEX");
+                    let [tick, id, hex] = part.split(':').collect::<Vec<_>>()[..] else {
+                        return Err(bad());
+                    };
+                    let body = (0..hex.len())
+                        .step_by(2)
+                        .map(|i| {
+                            hex.get(i..i + 2)
+                                .and_then(|b| u8::from_str_radix(b, 16).ok())
+                        })
+                        .collect::<Option<Vec<u8>>>()
+                        .ok_or_else(bad)?;
+                    o.raw.push((
+                        tick.parse().map_err(|_| bad())?,
+                        id.parse().map_err(|_| bad())?,
+                        body,
+                    ));
+                }
+            }
             "--height" => o.height = value.parse().map_err(|_| number("blocks"))?,
             "--timer" => {
                 o.timer = value.parse().map_err(|_| number("a speed, like 1.5"))?;
@@ -302,6 +331,8 @@ struct Bot {
     teleport: Mutex<Option<[f64; 3]>>,
     error: Mutex<Option<String>>,
     joined_after_ms: AtomicU64,
+    /// The connection's byte counters (wire bytes, after compression and encryption), set once it is open.
+    counters: OnceLock<Arc<Counters>>,
     /// The bot stopped reading (--no-read).
     deaf: AtomicBool,
     /// `--attack`: the target's UUID and, once AddEntity showed it, its entity id.
@@ -309,6 +340,39 @@ struct Bot {
     attacks: AtomicU64,
     /// The last SetHealth.
     health: Mutex<Option<f32>>,
+}
+
+impl Bot {
+    fn bytes_in(&self) -> u64 {
+        self.counters
+            .get()
+            .map_or(0, |c| c.bytes_in.load(Ordering::Relaxed).max(0) as u64)
+    }
+    fn bytes_out(&self) -> u64 {
+        self.counters
+            .get()
+            .map_or(0, |c| c.bytes_out.load(Ordering::Relaxed).max(0) as u64)
+    }
+}
+
+/// Nearest-rank percentile (`p` in 0..=100) of an ascending-sorted slice; 0 when it is empty.
+fn percentile(sorted: &[u64], p: u64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = (p * sorted.len() as u64).div_ceil(100).max(1) as usize;
+    sorted[rank - 1]
+}
+
+/// Join-time summary in milliseconds over the bots that got in: count, p50, p99 and max.
+fn join_summary(mut times: Vec<u64>) -> serde_json::Value {
+    times.sort_unstable();
+    json!({
+        "count": times.len(),
+        "p50_ms": percentile(&times, 50),
+        "p99_ms": percentile(&times, 99),
+        "max_ms": times.last().copied().unwrap_or(0),
+    })
 }
 
 /// A small deterministic generator (SplitMix64), so every run moves the bots the same way.
@@ -736,6 +800,7 @@ fn run_bot(
         }
     };
     let (reader, writer) = connection.split();
+    let _ = bot.counters.set(reader.counters.clone());
     let writer = Arc::new(Mutex::new(writer));
     lock(&bot.target).0 = o.attack.as_deref().map(offline_uuid);
     bot.online.store(true, Ordering::SeqCst);
@@ -935,6 +1000,11 @@ fn run_bot(
                 );
             }
         }
+        for (at, id, body) in &o.raw {
+            if *at == tick {
+                send(raw(*id, |w| w.bytes(body)));
+            }
+        }
         // The costly floods go out wherever the bot is, chunks or not (--no-read gets none).
         for i in 0..o.flood {
             sequence += 1;
@@ -1083,10 +1153,20 @@ fn main() {
         "resent": bots.iter().map(|b| b.resent.load(Ordering::Relaxed)).sum::<u64>(),
         "pulled_back": bots.iter().map(|b| b.pulled_back.load(Ordering::Relaxed)).sum::<u64>(),
         "waited_ticks": bots.iter().map(|b| b.waited.load(Ordering::Relaxed)).sum::<u64>(),
+        "bytes_in": bots.iter().map(|b| b.bytes_in()).sum::<u64>(),
+        "bytes_out": bots.iter().map(|b| b.bytes_out()).sum::<u64>(),
+        "join_time": join_summary(
+            bots.iter()
+                .map(|b| b.joined_after_ms.load(Ordering::SeqCst))
+                .filter(|&ms| ms > 0)
+                .collect(),
+        ),
         "per_bot": bots.iter().enumerate().map(|(i, b)| json!({
             "name": format!("{}{i}", o.name),
             "behaviour": behaviour_of(&o.behaviour, i).name(),
             "joined_after_ms": b.joined_after_ms.load(Ordering::SeqCst),
+            "bytes_in": b.bytes_in(),
+            "bytes_out": b.bytes_out(),
             "chunks": b.chunks.load(Ordering::Relaxed),
             "unique_chunks": b.unique.load(Ordering::Relaxed),
             "resent": b.resent.load(Ordering::Relaxed),
@@ -1120,4 +1200,40 @@ fn main() {
         eprintln!("horizon-bots: {e}");
     }
     std::process::exit(if errors.is_empty() { 0 } else { 1 });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percentiles_use_nearest_rank() {
+        assert_eq!(percentile(&[], 50), 0);
+        assert_eq!(percentile(&[7], 99), 7);
+        let v: Vec<u64> = (1..=100).collect();
+        assert_eq!(percentile(&v, 50), 50);
+        assert_eq!(percentile(&v, 99), 99);
+        assert_eq!(percentile(&[10, 20, 30, 40], 50), 20);
+    }
+
+    #[test]
+    fn join_summary_sorts_and_reports_max() {
+        let s = join_summary(vec![300, 100, 200]);
+        assert_eq!(s["count"], 3);
+        assert_eq!(s["p50_ms"], 200);
+        assert_eq!(s["p99_ms"], 300);
+        assert_eq!(s["max_ms"], 300);
+        assert_eq!(join_summary(vec![])["count"], 0);
+    }
+
+    #[test]
+    fn bot_bytes_come_from_the_connection_counters() {
+        let bot = Bot::default();
+        assert_eq!((bot.bytes_in(), bot.bytes_out()), (0, 0));
+        let counters = Arc::new(Counters::default());
+        counters.bytes_in.store(1234, Ordering::Relaxed);
+        counters.bytes_out.store(56, Ordering::Relaxed);
+        let _ = bot.counters.set(counters);
+        assert_eq!((bot.bytes_in(), bot.bytes_out()), (1234, 56));
+    }
 }

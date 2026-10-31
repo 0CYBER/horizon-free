@@ -221,11 +221,31 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
 
+    /// `ServerLevel.tickBlock` once the block at `pos` is the tick's: the
+    /// level may handle the tick first, else `BlockState.tick`.
+    fn tick_due_block(&mut self, state: BlockStateId, pos: BlockPos) {
+        let (mut current, mut handled) = (state, false);
+        self.level
+            .before_tick_block(self.ticks, pos, &mut current, &mut handled);
+        // A block the level changed ticks as it is now, if it is still the
+        // tick's block.
+        if !handled && (current == state || self.block_of(current) == self.block_of(state)) {
+            self.tick_block(current, pos);
+        }
+    }
+
     /// `BlockState.randomTick` followed by the fluid's random tick.
     pub fn random_tick_at(&mut self, pos: BlockPos) {
         let state = self.state(pos);
         if self.b.is_randomly_ticking(state) {
-            self.random_tick_block(state, pos);
+            let (mut current, mut handled) = (state, false);
+            self.level
+                .before_random_tick(self.ticks, pos, &mut current, &mut handled);
+            // A block the level changed ticks as it is now, if it still ticks
+            // randomly.
+            if !handled && (current == state || self.b.is_randomly_ticking(current)) {
+                self.random_tick_block(current, pos);
+            }
         }
         // Only lava's fluid state ticks randomly. A lava block is ticked twice
         // (LiquidBlock.randomTick, then FluidState.randomTick), as in vanilla.
@@ -1619,7 +1639,7 @@ impl Behaviours {
             let mut sim = self.sim(level, ticks);
             let state = sim.state(tick.pos);
             if u32::from(self.block(state).0) == tick.kind.0 {
-                sim.tick_block(state, tick.pos);
+                sim.tick_due_block(state, tick.pos);
             }
         }
         let _ = ticks.blocks.finish_tick();
@@ -1698,7 +1718,7 @@ impl Behaviours {
             let mut sim = self.sim(level, ticks);
             let state = sim.state(tick.pos);
             if u32::from(self.block(state).0) == tick.kind.0 {
-                sim.tick_block(state, tick.pos);
+                sim.tick_due_block(state, tick.pos);
             }
         }
         true

@@ -22,6 +22,7 @@ pub mod guest;
 pub mod hub;
 pub mod menu;
 pub mod playerdata;
+pub mod prediction;
 mod recipes;
 pub mod scoreboard;
 pub mod tracking;

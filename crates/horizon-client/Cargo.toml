@@ -97,6 +97,10 @@ audio = ["horizon-client-render/audio"]
 controllers = ["dep:gilrs", "dep:horizon-dualsense", "horizon-client-input/controllers"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace"]
+# Compatibility with earlier experiment commands: main already uses mimalloc.
+windows-mimalloc = []
+# Opt-in Windows heap experiment; see docs/windows-allocators.md.
+windows-segment-heap = []
 
 # Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
 [[example]]
