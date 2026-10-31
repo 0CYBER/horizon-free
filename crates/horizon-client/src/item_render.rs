@@ -54,6 +54,9 @@ pub struct ItemQuad {
     /// The quad's sprite has translucent pixels (`MaterialInfo.itemRenderType`
     /// is a translucent sheet): drawn with the translucent entities.
     pub translucent: bool,
+    /// The quad's render type has an `OitPipelineSet` (`entityTranslucent`: a
+    /// player head's skin): improved transparency draws it in its stages.
+    pub oit: bool,
 }
 /// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
@@ -346,6 +349,7 @@ fn submit_quads(
             light_emission: q.light_emission,
             cull_back: translucent,
             translucent,
+            oit: false,
         });
     }
 }
@@ -832,13 +836,19 @@ impl ItemSink for WorldSink<'_> {
             (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
             (true, false) => 7,
         };
+        // Only plain and foil quads: the translucent sheet's overlays are their own material.
+        let oit = if q.oit && matches!(overlay, 0 | 7) {
+            crate::gfx::OIT_ENTITY
+        } else {
+            0
+        };
         for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
             let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
                 normal: if q.cull_back { CULL_BACK } else { [0; 4] },
                 pos: p.to_array(),
                 uv,
-                layer: overlay,
+                layer: overlay | oit,
                 color,
                 light,
                 glint_uv,
