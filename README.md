@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner.webp" alt="Horizon: Minecraft: Java Edition 26.3, rewritten in Rust and checked against vanilla by more than 300 differential harnesses" width="100%">
+  <img src="docs/media/banner.webp" alt="The Horizon website: the game you know, rebuilt in Rust" width="100%">
 </p>
 
 <p align="center">
@@ -36,8 +36,8 @@ Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: a version ready to play, its summary, Client and Server, the version picker and Play"></td>
-    <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page"></td>
+    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Home page: the selected instance ready to play, Minecraft's prepared files, the version picker and Play"></td>
+    <td width="50%"><img src="docs/media/launcher-settings.webp" alt="The launcher's Settings page: account, updates and appearance"></td>
   </tr>
 </table>
 

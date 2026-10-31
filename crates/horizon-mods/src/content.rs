@@ -1,6 +1,6 @@
 //! A content mod's `assets/` and `data/` (API 0.2, docs/modpacks.md): the
-//! files it adds to the game's resource tree, and the blocks and items it
-//! declares in `data/<id>/horizon/block/` and `data/<id>/horizon/item/`.
+//! files it adds to the game's resource tree, and the blocks, items and mob
+//! effects it declares in `data/<id>/horizon/{block,item,mob_effect}/`.
 //!
 //! Content is data, not code: nothing here runs in the sandbox. What a mod
 //! may add is fenced instead. Its own namespaces (its id and the ones its
@@ -155,6 +155,27 @@ pub struct Item {
     pub crafting_remainder: Option<String>,
 }
 
+/// `MobEffectCategory`.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EffectCategory {
+    Beneficial,
+    Harmful,
+    Neutral,
+}
+
+/// A mob effect the mod adds: what `new MobEffect(category, color)` takes.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MobEffect {
+    /// `<mod id>:<path>`.
+    #[serde(skip)]
+    pub id: String,
+    pub category: EffectCategory,
+    /// RGB, `0x000000` to `0xFFFFFF`.
+    pub color: u32,
+}
+
 #[derive(Debug)]
 enum Source {
     Dir(PathBuf),
@@ -169,6 +190,7 @@ pub struct Content {
     pub files: Vec<String>,
     pub blocks: Vec<Block>,
     pub items: Vec<Item>,
+    pub effects: Vec<MobEffect>,
     /// The namespaces it owns: the mod id, then the manifest's `namespaces`.
     pub namespaces: Vec<String>,
 }
@@ -255,6 +277,7 @@ impl Content {
             files,
             blocks: Vec::new(),
             items: Vec::new(),
+            effects: Vec::new(),
             namespaces: manifest.owned_namespaces().map(str::to_owned).collect(),
         };
         content.check(manifest)?;
@@ -297,6 +320,7 @@ impl Content {
         }
         let mut blocks = Vec::new();
         let mut items = Vec::new();
+        let mut effects = Vec::new();
         for name in &self.files {
             let mut parts = name.splitn(3, '/');
             let (top, namespace, rest) = (
@@ -317,7 +341,7 @@ impl Content {
             }
             if !own && top == "data" && rest.starts_with("horizon/") {
                 return Err(format!(
-                    "{name}: blocks and items are declared in data/{id}/horizon/"
+                    "{name}: blocks, items and mob effects are declared in data/{id}/horizon/"
                 ));
             }
             let Some(decl) = (own && top == "data")
@@ -337,9 +361,11 @@ impl Content {
                 blocks.push((block, name.clone()));
             } else if let Some(item) = parse("item") {
                 items.push((item, name.clone()));
+            } else if let Some(effect) = parse("mob_effect") {
+                effects.push((effect, name.clone()));
             } else {
                 return Err(format!(
-                    "{name}: data/{id}/horizon/ holds block/*.json and item/*.json only"
+                    "{name}: data/{id}/horizon/ holds block/, item/ and mob_effect/*.json only"
                 ));
             }
         }
@@ -390,6 +416,14 @@ impl Content {
                 components: file.components,
                 crafting_remainder: file.crafting_remainder,
             });
+        }
+        for (effect, name) in effects {
+            let file: MobEffect =
+                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+            if file.color > 0xFF_FFFF {
+                return Err(format!("{name}: color is RGB, 0 to 16777215 (0xFFFFFF)"));
+            }
+            self.effects.push(MobEffect { id: effect, ..file });
         }
         // After every item, so a remainder may be declared in a later file.
         for (name, rest) in remainders {
@@ -639,6 +673,60 @@ capabilities = ["registries"]
             ]
         );
         assert_eq!(components["minecraft:max_damage"], 900);
+    }
+
+    #[test]
+    fn mob_effects_take_a_category_and_a_colour() {
+        let files: &[(&str, &[u8])] = &[
+            (
+                "data/ruby/horizon/mob_effect/glow.json",
+                br#"{"category": "beneficial", "color": 16711680}"#,
+            ),
+            (
+                "data/ruby/horizon/mob_effect/curse/dark.json",
+                br#"{"category": "harmful", "color": 0}"#,
+            ),
+        ];
+        let content = hmod("effects", MANIFEST_TEXT, files).unwrap();
+        let effects: Vec<_> = content
+            .effects
+            .iter()
+            .map(|e| (e.id.as_str(), e.category, e.color))
+            .collect();
+        assert_eq!(
+            effects,
+            [
+                ("ruby:curse/dark", EffectCategory::Harmful, 0),
+                ("ruby:glow", EffectCategory::Beneficial, 0xFF0000),
+            ]
+        );
+        for (case, file, why) in [
+            (
+                "effect-colour",
+                r#"{"category": "neutral", "color": 16777216}"#,
+                "color is RGB",
+            ),
+            (
+                "effect-category",
+                r#"{"category": "good", "color": 1}"#,
+                "unknown variant",
+            ),
+            (
+                "effect-key",
+                r#"{"category": "neutral", "color": 1, "id": "x"}"#,
+                "unknown field",
+            ),
+            (
+                "effect-missing",
+                r#"{"category": "neutral"}"#,
+                "missing field",
+            ),
+        ] {
+            let files: &[(&str, &[u8])] =
+                &[("data/ruby/horizon/mob_effect/a.json", file.as_bytes())];
+            let e = hmod(case, MANIFEST_TEXT, files).unwrap_err();
+            assert!(e.contains(why), "{case}: {e}");
+        }
     }
 
     #[test]
