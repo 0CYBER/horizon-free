@@ -238,7 +238,7 @@
   "Local file · {file}": "本地文件 · {file}",
   "Update {version}": "更新到 {version}",
   "Choose image…": "选择图片…",
-  "Mods and shader packs made for Horizon from its own reviewed registry, and Java mods, modpacks and resource packs from Modrinth: Horizon ports what a Java mod carries (blocks, items, recipes, worldgen) and says before you install what runs. Each file is checked against its source's checksum before it reaches your game folder.": "来自 Horizon 自有审核注册表的专属模组与光影包，以及来自 Modrinth 的 Java 模组、整合包和资源包：Horizon 会移植 Java 模组包含的内容（方块、物品、配方、世界生成），并在安装前说明可运行的部分。每个文件在进入游戏文件夹前都会核对源端的校验和。",
+  "Mods and shader packs made for Horizon from its own reviewed registry, and resource packs from Modrinth. Each file is checked against its source's checksum before it reaches your game folder.": "来自 Horizon 自有审核注册表的专属模组与光影包，以及来自 Modrinth 的资源包。每个文件在进入游戏文件夹前都会核对源端的校验和。",
   "Modpacks": "整合包",
   "Resource packs": "资源包",
   "Shader packs": "光影包",

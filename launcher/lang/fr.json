@@ -238,7 +238,7 @@
   "Local file · {file}": "Fichier local · {file}",
   "Update {version}": "Mettre à jour : {version}",
   "Choose image…": "Choisir une image…",
-  "Mods and shader packs made for Horizon from its own reviewed registry, and Java mods, modpacks and resource packs from Modrinth: Horizon ports what a Java mod carries (blocks, items, recipes, worldgen) and says before you install what runs. Each file is checked against its source's checksum before it reaches your game folder.": "Mods et packs de shaders conçus pour Horizon depuis son propre registre vérifié, ainsi que mods Java, modpacks et packs de ressources de Modrinth : Horizon porte le contenu d'un mod Java (blocs, objets, recettes, génération du monde) et indique avant l'installation ce qui fonctionne. Chaque fichier est vérifié par rapport à la somme de contrôle de sa source avant d'atteindre le dossier du jeu.",
+  "Mods and shader packs made for Horizon from its own reviewed registry, and resource packs from Modrinth. Each file is checked against its source's checksum before it reaches your game folder.": "Mods et packs de shaders conçus pour Horizon depuis son propre registre vérifié, ainsi que packs de ressources de Modrinth. Chaque fichier est vérifié par rapport à la somme de contrôle de sa source avant d'atteindre le dossier du jeu.",
   "Modpacks": "Modpacks",
   "Resource packs": "Packs de ressources",
   "Shader packs": "Packs de shaders",
