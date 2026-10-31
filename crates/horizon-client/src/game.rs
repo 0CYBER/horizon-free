@@ -14331,6 +14331,11 @@ impl ApplicationHandler for Game<'_> {
                     self.focus_lost = (!focused).then(Instant::now);
                     if !focused && self.control.is_none() {
                         self.keys.clear();
+                        // Latched sneak/sprint live in `toggles`, not in the
+                        // physical keys: put them back so a short alt-tab
+                        // (no pause screen) does not drop them.
+                        self.sync_toggle(0);
+                        self.sync_toggle(1);
                         self.left = false;
                         self.right = false;
                         self.capture(false);
