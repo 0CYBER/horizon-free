@@ -1669,8 +1669,8 @@ struct DragView {
 fn equipment_modifier_applies(group: &str, slot: &str) -> bool {
     group == slot
         || group == "any"
-        || (group == "armor" && slot != "mainhand")
-        || (group == "hand" && slot == "mainhand")
+        || (group == "armor" && slot != "mainhand" && slot != "offhand")
+        || (group == "hand" && (slot == "mainhand" || slot == "offhand"))
 }
 /// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
 /// A chunk whose ticking future can complete (`ChunkMap.prepareTickingChunk`):
@@ -10877,6 +10877,7 @@ impl Game<'_> {
             .map(|(s, n)| (s.as_ref(), n))
             .collect();
         equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
+        equipped.push((self.offhand.as_ref(), "offhand"));
         for (stack, slot) in equipped {
             let Some(info) = stack.and_then(|s| world_items!(self).get(&s.item)) else {
                 continue;
@@ -17740,7 +17741,7 @@ mod tests {
     use super::*;
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
 
-    /// Held items apply their main-hand modifiers to the player (#4118).
+    /// Held items apply their main-hand and off-hand modifiers to the player (#4118, #4777).
     #[test]
     fn equipment_modifiers_follow_their_slot_group() {
         assert!(equipment_modifier_applies("mainhand", "mainhand"));
@@ -17750,6 +17751,12 @@ mod tests {
         assert!(!equipment_modifier_applies("mainhand", "head"));
         assert!(equipment_modifier_applies("armor", "chest"));
         assert!(!equipment_modifier_applies("hand", "feet"));
+        assert!(equipment_modifier_applies("offhand", "offhand"));
+        assert!(equipment_modifier_applies("hand", "offhand"));
+        assert!(equipment_modifier_applies("any", "offhand"));
+        assert!(!equipment_modifier_applies("armor", "offhand"));
+        assert!(!equipment_modifier_applies("mainhand", "offhand"));
+        assert!(!equipment_modifier_applies("offhand", "mainhand"));
     }
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
 
