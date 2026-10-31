@@ -16,7 +16,7 @@ fn num(n: impl std::fmt::Display) -> Text {
 }
 
 impl Game<'_> {
-    fn state_transforms(&self) -> Option<&'static StateTransforms> {
+    pub(in crate::game) fn state_transforms(&self) -> Option<&'static StateTransforms> {
         static TRANSFORMS: OnceLock<Option<StateTransforms>> = OnceLock::new();
         TRANSFORMS
             .get_or_init(|| {
@@ -33,6 +33,16 @@ impl Game<'_> {
     /// A template by id: a structure block's save in the world, then the
     /// vanilla templates.
     fn load_template(&self, id: &str) -> Option<Arc<StructureTemplate>> {
+        let tag = self.read_template_tag(id)?;
+        Some(Arc::new(StructureTemplate::from_nbt(
+            &tag,
+            self.pack.assets.registry,
+            self.state_transforms()?,
+        )))
+    }
+    /// A template's tree by id, as `StructureTemplateManager` reads it from
+    /// disk.
+    pub(in crate::game) fn read_template_tag(&self, id: &str) -> Option<Tag> {
         let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
         let candidates = [
             self.world_root
@@ -46,7 +56,6 @@ impl Game<'_> {
                 .join(ns)
                 .join(format!("{path}.nbt")),
         ];
-        let transforms = self.state_transforms()?;
         for file in candidates {
             let Ok(bytes) = std::fs::read(&file) else {
                 continue;
@@ -57,11 +66,7 @@ impl Game<'_> {
             let Ok((named, _)) = nbt::read_named(&raw, Limits::templates()) else {
                 continue;
             };
-            return Some(Arc::new(StructureTemplate::from_nbt(
-                &named.tag,
-                self.pack.assets.registry,
-                transforms,
-            )));
+            return Some(named.tag);
         }
         None
     }
@@ -152,7 +157,7 @@ impl Game<'_> {
                     position: pos,
                 };
                 let placed = self.with_level(|b, level, ticks| {
-                    b.place_jigsaw(level, ticks, pos, || terrain.jigsaw_pieces(&query))
+                    b.place_jigsaw(level, ticks, pos, false, || terrain.jigsaw_pieces(&query))
                 });
                 self.process_level_events()
                     .map_err(|_| err("command.failed", &[]))?;

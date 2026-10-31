@@ -618,6 +618,37 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack]) -> Vec<String> {
     enabled
 }
 
+/// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
+/// as `enabled_ids` orders them): the id `namespace:path` and the parsed JSON, a later pack's
+/// file for an id replacing an earlier one's. This is `context.datapackDimensions()` of
+/// `WorldOpenFlows.loadWorldStem`.
+pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for pack in packs {
+        for file in pack.list_kinds(&["dimension"]) {
+            let Some(rest) = file.strip_prefix("data/") else {
+                continue;
+            };
+            let Some((namespace, rest)) = rest.split_once('/') else {
+                continue;
+            };
+            let Some(path) = rest
+                .strip_prefix("dimension/")
+                .and_then(|p| p.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Some(json) = pack
+                .read(&file)
+                .and_then(|b| serde_json::from_slice(&b).ok())
+            {
+                out.insert(format!("{namespace}:{path}"), json);
+            }
+        }
+    }
+    out
+}
+
 // ---- worldgen ----------------------------------------------------------------
 
 /// The worldgen entries of `packs` (lowest priority first, the built-in pack
@@ -636,11 +667,6 @@ pub fn worldgen_overrides(
             let read = || String::from_utf8(pack.read(&file)?).ok();
             match out.add_file(&pack.id, &file, read) {
                 PackFile::Read | PackFile::Other => {}
-                PackFile::DimensionType { id, min_y, height } => warnings.push(format!(
-                    "{}: dimension type {id} (min_y {min_y}, height {height}) is not used: \
-                     the dimension keeps its vanilla build height",
-                    pack.id
-                )),
                 PackFile::NotRead(kind) => {
                     *not_read.entry(format!("{}: {kind}", pack.id)).or_default() += 1
                 }
@@ -713,10 +739,13 @@ mod tests {
         );
         let tag_packs: Vec<&str> = o.tags("biome_tags").map(|(_, p, _)| p).collect();
         assert_eq!(tag_packs, ["file/b", "file/a"]);
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
-        assert!(warnings[0].contains("height 2096"));
-        assert!(warnings[1].contains("minecraft:new_peaks"));
-        assert!(warnings[2].contains("worldgen/world_preset"));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("minecraft:new_peaks"));
+        assert!(warnings[1].contains("worldgen/world_preset"));
+        assert_eq!(
+            o.level_height("minecraft:overworld").map(|h| h.height),
+            Some(2096)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
     use horizon_world::nbt::parse_snbt;
@@ -906,9 +935,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, t).unwrap();
         };
-        write("fns", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write(
+            "fns",
+            "pack.mcmeta",
+            r#"{"pack":{"min_format":121,"max_format":121}}"#,
+        );
         write("fns", "data/x/function/f.mcfunction", "say hi");
-        write("off", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write(
+            "off",
+            "pack.mcmeta",
+            r#"{"pack":{"min_format":121,"max_format":121}}"#,
+        );
         std::fs::create_dir_all(&dir).unwrap();
         let mut zip = zip::ZipWriter::new(std::fs::File::create(dir.join("old.zip")).unwrap());
         zip.start_file("pack.mcmeta", zip::write::SimpleFileOptions::default())
