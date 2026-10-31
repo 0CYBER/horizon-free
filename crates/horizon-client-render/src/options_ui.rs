@@ -128,7 +128,6 @@ impl Opt {
                 | Opt::HideMatchedNames
                 | Opt::OnlySecureChat
                 | Opt::SaveChatDrafts
-                | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 // Saved, but no Horizon system reads them yet: no Realms, no
                 // friends list, no directional audio, no now-playing toast.
@@ -873,6 +872,7 @@ impl Opt {
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
             | Opt::HighContrastBlockOutlines
+            | Opt::MonochromeLogo
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts
@@ -3500,10 +3500,12 @@ mod tests {
                 assert_eq!(loaded.file.double(opt.file_key().unwrap()), expected);
             }
         }
+        assert!(Opt::MonochromeLogo.available());
         for opt in [
             Opt::TextBackground,
             Opt::HideLightningFlashes,
             Opt::HideSplashTexts,
+            Opt::MonochromeLogo,
         ] {
             let key = opt.file_key().unwrap();
             let before = s.file.bool(key);
