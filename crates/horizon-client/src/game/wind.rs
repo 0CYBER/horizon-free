@@ -132,6 +132,7 @@ impl Game<'_> {
                         1.0,
                         p.owner == Some(Who::Player),
                         horizon_client::mobs::DamageKind::WindCharge,
+                        Some(&p.kind),
                     );
                 }
             }
