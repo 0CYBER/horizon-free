@@ -23,14 +23,20 @@ fn padded_reuse_resets_missing_neighbors_and_matches_chunk_reads_across_layouts(
                 for z in -B..16 + B {
                     for x in -B..16 + B {
                         let chunk = current[((z + 16) >> 4) as usize][((x + 16) >> 4) as usize];
-                        assert_eq!(
-                            pad.blocks[pi(x, y, z)],
-                            chunk.map_or(0, |c| c.get(x & 15, base_y + y, z & 15))
-                        );
-                        assert_eq!(
-                            pad.light[pi(x, y, z)],
-                            chunk.map_or(0xF0, |c| c.light(x & 15, base_y + y, z & 15))
-                        );
+                        // A missing neighbour continues the centre's edge column.
+                        let (block, light) = match (chunk, current[1][1]) {
+                            (Some(c), _) => (
+                                c.get(x & 15, base_y + y, z & 15),
+                                c.light(x & 15, base_y + y, z & 15),
+                            ),
+                            (None, Some(c)) => {
+                                let (ex, ez) = (x.clamp(0, 15), z.clamp(0, 15));
+                                (c.get(ex, base_y + y, ez), c.light(ex, base_y + y, ez))
+                            }
+                            (None, None) => (0, 0xF0),
+                        };
+                        assert_eq!(pad.blocks[pi(x, y, z)], block);
+                        assert_eq!(pad.light[pi(x, y, z)], light);
                     }
                 }
             }
@@ -135,6 +141,7 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
             assert_eq!(fresh.block_entities, recycled.block_entities);
             assert_eq!(fresh.visibility, recycled.visibility);
             assert_eq!(fresh.sides, recycled.sides);
+            assert_eq!(fresh.bounds, recycled.bounds);
             if std::ptr::eq(center, &dense) {
                 assert!(!fresh.solid.is_empty());
                 assert!(!fresh.translucent.is_empty());

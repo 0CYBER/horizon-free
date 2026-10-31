@@ -141,6 +141,13 @@ impl Game<'_> {
         true
     }
 
+    /// How many slots of its own the guest's open station menu has before the
+    /// player's inventory (`slot_count - 36`), if one is open.
+    pub(super) fn lan_station_own_slots(host: &LanHost, conn: u32) -> Option<usize> {
+        let gs = host.play.get(&conn)?.station.as_ref()?;
+        Some(gs.menu.slot_count() - 36)
+    }
+
     /// `LecternBlock.openScreen` for a guest: `minecraft:lectern` over the
     /// block entity, with its book and page.
     pub(super) fn lan_open_lectern(&mut self, host: &mut LanHost, conn: u32, key: (i32, i32, i32)) {
@@ -392,6 +399,19 @@ impl Game<'_> {
         window: i32,
         id: i32,
     ) {
+        // A mod container's menu: its mod's buttons (`native_menu_button`),
+        // as handleContainerButtonClick checks them: the open menu, not a
+        // spectator, still valid.
+        if let Some(g) = host.hub.guest(conn)
+            && let Some(menu) = g.menu.as_ref().filter(|m| m.window == window)
+            && let Some(pos) = menu.pos
+            && self.mod_menu_at(pos).is_some()
+        {
+            if !g.spectator() && menu.slots.still_valid(&self.world, g, menu.pos) {
+                self.mod_menu_button(pos, id);
+            }
+            return;
+        }
         // LecternMenu's page buttons and Take Book.
         if self.lan_lectern_op(host, conn, window, |menu, env| {
             menu.button(env, id);
@@ -438,6 +458,7 @@ impl Game<'_> {
             }
         }
         host.hub.send_to(conn, &packet);
+        host.hub.guests[gi].inventory_told();
         for packet in data {
             host.hub.send_to(conn, &packet);
         }

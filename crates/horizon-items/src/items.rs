@@ -266,6 +266,8 @@ pub struct Items {
     loot: HashMap<String, Value>,
     /// The `jukebox_song` registry.
     pub songs: HashMap<String, Song>,
+    /// The `instrument` registry (goat horns).
+    pub instruments: HashMap<String, Instrument>,
     /// The enchantment registry: loot functions enchant the items they roll
     /// (`EnchantWithLevelsFunction`, `EnchantRandomlyFunction`), and the
     /// station menus share this copy.
@@ -284,6 +286,76 @@ impl Song {
     pub fn finished(&self, ticks: i64) -> bool {
         ticks >= self.length_ticks + 20
     }
+}
+/// An `Instrument`: what a goat horn plays.
+#[derive(Clone, Debug)]
+pub struct Instrument {
+    pub sound: String,
+    /// Seconds the horn stays up, and its cooldown.
+    pub use_duration: f32,
+    /// How far it carries, in blocks (`range / 16` is its volume).
+    pub range: f32,
+}
+impl Instrument {
+    /// `InstrumentItem.getUseDuration`: `Mth.floor(useDuration * 20)`.
+    pub fn use_ticks(&self) -> i32 {
+        (self.use_duration * 20.0).floor() as i32
+    }
+}
+/// The id of a goat horn's instrument (`InstrumentItem.getInstrument`): the
+/// stack's own `instrument` component, else the item's `ponder_goat_horn`.
+/// None for an inline instrument (see `inline_instrument`).
+pub fn instrument_id(stack: &ItemStack) -> Option<String> {
+    if &*stack.item != "minecraft:goat_horn" {
+        return None;
+    }
+    match stack.data().and_then(|d| d.other("minecraft:instrument")) {
+        Some(horizon_world::nbt::Tag::String(id)) => Some(id.to_string_lossy()),
+        Some(horizon_world::nbt::Tag::Compound(_)) => None,
+        _ => Some("minecraft:ponder_goat_horn".to_owned()),
+    }
+}
+/// A goat horn's inline `instrument` component (`Instrument.CODEC` also
+/// takes the instrument itself instead of a registry id).
+pub fn inline_instrument(stack: &ItemStack) -> Option<&horizon_world::nbt::Tag> {
+    if &*stack.item != "minecraft:goat_horn" {
+        return None;
+    }
+    match stack.data().and_then(|d| d.other("minecraft:instrument")) {
+        Some(tag @ horizon_world::nbt::Tag::Compound(_)) => Some(tag),
+        _ => None,
+    }
+}
+/// `Instrument.DIRECT_CODEC`: a `sound_event` that is an id or `{sound_id}`,
+/// `use_duration` and `range`.
+fn parse_instrument(v: &Value) -> Instrument {
+    let sound = match &v["sound_event"] {
+        Value::String(s) => s.clone(),
+        other => other["sound_id"].as_str().unwrap_or("").to_owned(),
+    };
+    Instrument {
+        sound,
+        use_duration: v["use_duration"].as_f64().unwrap_or(0.0) as f32,
+        range: v["range"].as_f64().unwrap_or(0.0) as f32,
+    }
+}
+fn load_instruments(root: &Path) -> HashMap<String, Instrument> {
+    let mut instruments = HashMap::new();
+    let Ok(dir) = fs::read_dir(root.join("data/minecraft/instrument")) else {
+        return instruments;
+    };
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let (Some(stem), Ok(bytes)) = (path.file_stem().and_then(|s| s.to_str()), fs::read(&path))
+        else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        instruments.insert(format!("minecraft:{stem}"), parse_instrument(&v));
+    }
+    instruments
 }
 fn load_songs(root: &Path) -> HashMap<String, Song> {
     let mut songs = HashMap::new();
@@ -816,11 +888,22 @@ impl Items {
             item_tag_order: load_tag_lists(root, "item", overlay)?,
             loot,
             songs: load_songs(root),
+            instruments: load_instruments(root),
             enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
         })
     }
     pub fn get(&self, id: &str) -> Option<&ItemInfo> {
         self.items.get(id)
+    }
+    /// The instrument a goat horn plays: its `instrument` component's
+    /// registry entry or inline instrument.
+    pub fn instrument(&self, stack: &ItemStack) -> Option<Instrument> {
+        if let Some(tag) = inline_instrument(stack) {
+            return Some(parse_instrument(
+                &horizon_client_core::scoreboard::tag_to_json(tag),
+            ));
+        }
+        self.instruments.get(&instrument_id(stack)?).cloned()
     }
     /// Only the block and item tags (and the enchantment registry, which the
     /// station rules and loot functions are built from), for tools that need
@@ -835,6 +918,7 @@ impl Items {
             item_tag_order: load_tag_lists(root, "item", overlay)?,
             loot: HashMap::new(),
             songs: HashMap::new(),
+            instruments: HashMap::new(),
             enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
         })
     }
@@ -853,6 +937,7 @@ impl Items {
             item_tags,
             loot: HashMap::new(),
             songs: HashMap::new(),
+            instruments: HashMap::new(),
             enchantments: Arc::new(crate::enchant::Enchantments::default()),
         }
     }

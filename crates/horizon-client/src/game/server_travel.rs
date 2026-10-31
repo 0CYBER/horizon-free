@@ -590,7 +590,11 @@ impl Game<'_> {
                     None => self.end_arrival(trip.target, &mut trip.finder),
                 };
                 match arrival {
-                    Ok(Some((at, turned))) => (at, turned.unwrap_or(yaw)),
+                    Ok(Some((at, turned))) => {
+                        // EndPortalBlock.getPortalDestination: PLACE_PORTAL_TICKET.
+                        self.place_portal_ticket(Self::chunk_of(at));
+                        (at, turned.unwrap_or(yaw))
+                    }
                     Ok(None) => {
                         self.server_trips.insert(k, trip);
                         k += 1;
@@ -725,6 +729,7 @@ impl Game<'_> {
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
             border: &self.border,
+            streaming: Some(&self.streaming),
         }
     }
 }

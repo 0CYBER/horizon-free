@@ -100,6 +100,8 @@ impl Game {
     fn predict_break(&mut self, pos: [i32; 3], _: u32, _: i32) { self.world.broken.push(pos); }
     fn send(&mut self, S::PlayerAction(packet): S) { self.packets.push(packet); }
     fn crack_particle(&mut self, _: [i32; 3], _: u8, _: u32) {}
+    // RedStoneOreBlock.attack's dust (sculk.rs): no particles in this fixture.
+    fn redstone_ore_particles(&mut self, _: [i32; 3]) {}
     // ClientLevel.addBreakingBlockEffects: the hit sound once, when the dig
     // starts; the server's level events play it while the block is mined.
     fn breaking_block_effects(&mut self, _: [i32; 3], _: u8, play_sound: bool) {

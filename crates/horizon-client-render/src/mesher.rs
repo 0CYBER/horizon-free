@@ -139,9 +139,48 @@ mod vertex_tests {
         assert_eq!(hdr_tier("red_candle", 3), LOW);
         assert_eq!(hdr_tier("glow_lichen", 7), 0);
         assert_eq!(hdr_tier("stone", 0), 0);
+        assert_eq!(hdr_tier("ochre_froglight", 15), LOW);
+        assert_eq!(hdr_tier("respawn_anchor", 3), INCANDESCENT);
+        assert_eq!(hdr_tier("waxed_copper_bulb", 15), LOW);
+        assert_eq!(hdr_tier("sea_pickle", 15), 0);
         // Unlisted ones by their light level.
-        assert_eq!(hdr_tier("ochre_froglight", 15), INCANDESCENT);
+        assert_eq!(hdr_tier("vault", 12), INCANDESCENT);
         assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
+    }
+}
+
+#[cfg(test)]
+mod section_mesh_tests {
+    use super::*;
+
+    #[test]
+    fn compute_bounds_empty_solid_and_translucent() {
+        let mut mesh = SectionMesh::default();
+        assert_eq!(mesh.compute_bounds(), None);
+
+        let v1 = TerrainVertex::new([1.0, 2.0, 3.0], [0.0, 0.0], 0, 0, 0);
+        let v2 = TerrainVertex::new([4.0, 5.0, 6.0], [0.0, 0.0], 0, 0, 0);
+        mesh.solid.push(v1);
+        mesh.solid.push(v2);
+
+        let pad = glam::Vec3::splat(SectionMesh::BOUNDS_PAD);
+        assert_eq!(
+            mesh.compute_bounds(),
+            Some([
+                glam::Vec3::new(1.0, 2.0, 3.0) - pad,
+                glam::Vec3::new(4.0, 5.0, 6.0) + pad,
+            ])
+        );
+
+        let v3 = TerrainVertex::new([0.5, 7.0, 8.0], [0.0, 0.0], 0, 0, 0);
+        mesh.translucent.push(v3);
+        assert_eq!(
+            mesh.compute_bounds(),
+            Some([
+                glam::Vec3::new(0.5, 2.0, 3.0) - pad,
+                glam::Vec3::new(4.0, 7.0, 8.0) + pad,
+            ])
+        );
     }
 }
 pub struct SectionMesh {
@@ -158,6 +197,8 @@ pub struct SectionMesh {
     /// each frame by `block_entity_render` like vanilla's per-section
     /// `SectionCompiler.Results.blockEntities`.
     pub block_entities: Vec<([i32; 3], u32)>,
+    /// Axis-aligned bounding box [min, max] of actual terrain mesh vertices in section-local space [0, 16].
+    pub bounds: Option<[glam::Vec3; 2]>,
 }
 impl Default for SectionMesh {
     fn default() -> Self {
@@ -167,10 +208,15 @@ impl Default for SectionMesh {
             translucent: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
+            bounds: None,
         }
     }
 }
 impl SectionMesh {
+    /// Padding applied to mesh vertex bounds to prevent clipping at the frustum
+    /// boundary when shader packs with vertex displacement (e.g. waving foliage, water) are active.
+    pub const BOUNDS_PAD: f32 = 0.5;
+
     /// Retain geometry capacity after an upload, but none of its old contents.
     pub(crate) fn clear(&mut self) {
         self.solid.clear();
@@ -178,6 +224,7 @@ impl SectionMesh {
         self.block_entities.clear();
         self.sides = Sides::default();
         self.visibility = ALL_VISIBLE;
+        self.bounds = None;
     }
     pub(crate) fn capacity_bytes(&self) -> usize {
         self.solid.capacity() * std::mem::size_of::<TerrainVertex>()
@@ -188,6 +235,28 @@ impl SectionMesh {
     /// leave out those facing away from the eye (`sides`).
     pub fn sort_solid(&mut self) {
         self.sides = sides::sort(&mut self.solid);
+        self.bounds = self.compute_bounds();
+    }
+
+    /// Computes the tight axis-aligned bounding box [min, max] of actual terrain geometry vertices.
+    pub fn compute_bounds(&self) -> Option<[glam::Vec3; 2]> {
+        if self.solid.is_empty() && self.translucent.is_empty() {
+            return None;
+        }
+        let mut min = glam::Vec3::splat(f32::INFINITY);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        for v in &self.solid {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        for v in &self.translucent {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let pad = glam::Vec3::splat(Self::BOUNDS_PAD);
+        Some([min - pad, max + pad])
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
@@ -689,6 +758,15 @@ impl Padded {
                                 c.get(x & 15, wy, z & 15)
                             };
                         light[i] = c.light(x & 15, wy, z & 15);
+                    } else if let Some(c) = region[1][1] {
+                        // A neighbour not loaded continues this chunk's edge
+                        // column. As lit air, the outermost chunks' water drew
+                        // a wall toward it (fluids show both sides), a light
+                        // sheet in the water where far terrain carries on.
+                        // Vanilla draws no chunk without its neighbours.
+                        let (ex, ez) = (x.clamp(0, 15), z.clamp(0, 15));
+                        blocks[i] = c.get(ex, wy, ez);
+                        light[i] = c.light(ex, wy, ez);
                     } else {
                         light[i] = 0xF0;
                     }
@@ -729,14 +807,25 @@ pub fn hdr_tier(name: &str, level: u8) -> u8 {
     match name {
         _ if level == 0 => 0,
         "glowstone" | "jack_o_lantern" | "campfire" | "soul_campfire" | "soul_lantern"
-        | "soul_torch" | "soul_wall_torch" | "soul_fire" => BRIGHT,
+        | "soul_torch" | "soul_wall_torch" | "soul_fire" | "beacon" | "end_rod" | "furnace"
+        | "redstone_lamp" => BRIGHT,
         "torch" | "wall_torch" | "lantern" | "lava" | "crying_obsidian" | "fire"
         | "sea_lantern" => INCANDESCENT,
-        "redstone_torch" | "redstone_wall_torch" | "magma_block" => LOW,
+        // Glowing at every charge, not only the brighter ones.
+        "respawn_anchor" => INCANDESCENT,
+        "redstone_torch"
+        | "redstone_wall_torch"
+        | "magma_block"
+        | "ochre_froglight"
+        | "verdant_froglight"
+        | "pearlescent_froglight"
+        | "shroomlight" => LOW,
         // Its flame is a particle.
         _ if name.ends_with("candle") || name.ends_with("candle_cake") => LOW,
+        // One tier at every oxidation stage, waxed or not.
+        _ if name.ends_with("copper_bulb") => LOW,
         // A faint glow in the dark, as in SDR.
-        "glow_lichen" => 0,
+        "glow_lichen" | "sea_pickle" | "brown_mushroom" | "dragon_egg" | "end_portal_frame" => 0,
         _ if level >= 10 => INCANDESCENT,
         _ => LOW,
     }

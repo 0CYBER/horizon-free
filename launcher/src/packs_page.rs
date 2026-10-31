@@ -89,39 +89,39 @@ impl Launcher {
         .detach();
     }
 
-    /// Home's Packs section, for the selected instance.
-    pub(super) fn packs_section(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    /// How many resource and shader packs the selected instance has.
+    pub(super) fn packs_count(&mut self) -> usize {
+        let Some(home) = self.selected_instance().map(|i| i.home.clone()) else {
+            return 0;
+        };
+        self.load_packs_list(home);
+        self.game_packs.resource.len() + self.game_packs.shader.len()
+    }
+
+    /// Home's Packs tab, for the selected instance: its buttons (beside the tabs) and its list.
+    pub(super) fn packs_section(&mut self, cx: &mut Context<Self>) -> Option<(Div, Stateful<Div>)> {
         let t = self.theme;
         let home = self.selected_instance()?.home.clone();
         self.load_packs_list(home.clone());
-        let header =
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .mb(px(4.))
-                .child(section_title("Packs", "package", &t))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(button("packs-add", "Add pack…", Kind::Ghost, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.choose_packs(cx);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(
-                            button("packs-folder", "Open folder", Kind::Ghost, &t).on_click(
-                                move |_, _, cx| {
-                                    let dir = home.join(PackKind::Resource.folder());
-                                    let _ = std::fs::create_dir_all(&dir);
-                                    cx.open_with_system(&dir);
-                                },
-                            ),
-                        ),
-                );
+        let actions = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                button("packs-add", "Add pack…", Kind::Ghost, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.choose_packs(cx);
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("packs-folder", "Open folder", Kind::Ghost, &t).on_click(move |_, _, cx| {
+                    let dir = home.join(PackKind::Resource.folder());
+                    let _ = std::fs::create_dir_all(&dir);
+                    cx.open_with_system(&dir);
+                }),
+            );
         let mut section = div()
             .id("packs")
             .flex()
@@ -138,8 +138,7 @@ impl Launcher {
                 // Not the window's import as well.
                 cx.stop_propagation();
                 cx.notify();
-            }))
-            .child(header);
+            }));
         match &self.game_packs.note {
             Some(Ok(m)) => {
                 section = section.child(text(theme::CAPTION).text_color(t.muted).child(m.clone()))
@@ -176,7 +175,7 @@ impl Launcher {
         for (i, pack) in shader.into_iter().enumerate() {
             section = section.child(self.pack_row(i, pack, None, cx));
         }
-        Some(section)
+        Some((actions, section))
     }
 
     fn pack_row(
