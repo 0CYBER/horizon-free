@@ -85,6 +85,7 @@ mod native_post;
 mod native_sky;
 mod occlusion;
 mod oit;
+mod oit_features;
 mod pack_atlas;
 pub mod pack_draw;
 mod pack_entities;
@@ -4956,7 +4957,7 @@ impl Renderer {
             );
         }
         // GameRenderer.useImprovedTransparency. A shader pack keeps its own
-        // path, and the translucent layer draws per section (not flat).
+        // path.
         let oit_on = self.improved_transparency
             && !frame.title
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
@@ -4965,7 +4966,6 @@ impl Renderer {
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on
-                    && !oit_on
                     && !self.draws.is_empty()
                     && (self.drawn_sections >= flat.min_sections
                         || pack_terrain
@@ -5110,9 +5110,26 @@ impl Renderer {
                 (&self.device, &self.terrain_layout, self.terrain_sprites);
             let clouds = [0, 1].map(|i| self.cloud_pipeline.get_bind_group_layout(i));
             let format = self.config.format.remove_srgb_suffix();
+            let flat = self
+                .flat
+                .as_ref()
+                .map(|f| f.translucent.get_bind_group_layout(1));
+            let features = [
+                self.entity_pipeline.get_bind_group_layout(0),
+                self.weather.pipeline().get_bind_group_layout(1),
+                self.border_pipeline.get_bind_group_layout(0),
+            ];
             self.oit
                 .get_or_insert_with(|| {
-                    oit::Oit::new(device, layout, [&clouds[0], &clouds[1]], sprites, format)
+                    oit::Oit::new(
+                        device,
+                        layout,
+                        flat.as_ref(),
+                        [&features[0], &features[1], &features[2]],
+                        [&clouds[0], &clouds[1]],
+                        sprites,
+                        format,
+                    )
                 })
                 .prepare(
                     &self.device,
@@ -5360,14 +5377,14 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if text_quads > 0 {
+            if text_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.text_polygon_offset_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..text_quads * 6, (entity_quads * 4) as i32, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if translucent_item_quads > 0 {
+            if translucent_item_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.translucent_item_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5378,11 +5395,11 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if !pack_draws_weather {
+            if !pack_draws_weather && !oit_on {
                 self.weather.draw(&mut pass, &self.entity_group);
             }
             pass.set_bind_group(0, &self.group, &[]);
-            if crumbling_quads > 0 {
+            if crumbling_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5393,7 +5410,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if shadow_quads > 0 {
+            if shadow_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.shadow_blob_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5428,7 +5445,7 @@ impl Renderer {
                 self.lightning.draw(&mut pass, &frame.lightning);
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if swirl_quads > 0 {
+            if swirl_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.energy_swirl_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5469,7 +5486,7 @@ impl Renderer {
                 _ if pack_draws_water => {}
                 // LevelRenderer.executeOit in place of the classic blend; what
                 // follows draws over its composite in a pass of its own.
-                _ if let Some(oit) = oit => {
+                flat if let Some(oit) = oit => {
                     drop(pass);
                     // LevelRenderer.executeOitWaterMask and CloudRenderer.renderOit.
                     let mask = |pass: &mut wgpu::RenderPass<'_>| {
@@ -5499,17 +5516,98 @@ impl Renderer {
                             pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
                             pass.draw_indexed(0..cloud_quads * 6, 0, 0..1);
                         };
+                    // "Features, World Border, Weather": what follows the opaque
+                    // world in the classic pass, one stage at a time.
+                    let features = |pass: &mut wgpu::RenderPass<'_>, stage: oit::Stage| {
+                        let f = oit.features();
+                        let s = stage as usize;
+                        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.set_bind_group(0, &self.entity_group, &[]);
+                        pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                        // Quads of a material, `first` quads into the buffer.
+                        let quads = |pass: &mut wgpu::RenderPass<'_>,
+                                     pipeline: &wgpu::RenderPipeline,
+                                     count: u32,
+                                     first: u32| {
+                            if count > 0 {
+                                pass.set_pipeline(pipeline);
+                                pass.draw_indexed(0..count * 6, (first * 4) as i32, 0..1);
+                            }
+                        };
+                        quads(pass, &f.text[s], text_quads, entity_quads);
+                        quads(
+                            pass,
+                            &f.crumbling[s],
+                            crumbling_quads,
+                            entity_quads + text_quads,
+                        );
+                        quads(
+                            pass,
+                            &f.crumbling[s],
+                            translucent_crumbling_quads,
+                            entity_quads + text_quads + crumbling_quads,
+                        );
+                        quads(
+                            pass,
+                            &f.swirl[s],
+                            swirl_quads,
+                            entity_quads
+                                + text_quads
+                                + crumbling_quads
+                                + translucent_crumbling_quads
+                                + water_mask_quads,
+                        );
+                        quads(
+                            pass,
+                            &f.shadow[s],
+                            shadow_quads,
+                            world_quads
+                                - translucent_item_quads
+                                - translucent_particle_quads
+                                - shadow_quads,
+                        );
+                        quads(
+                            pass,
+                            &f.entity[s],
+                            translucent_particle_quads,
+                            world_quads - translucent_item_quads - translucent_particle_quads,
+                        );
+                        quads(
+                            pass,
+                            &f.entity[s],
+                            translucent_item_quads,
+                            world_quads - translucent_item_quads,
+                        );
+                        self.weather
+                            .draw_with(pass, &f.weather[s], &self.entity_group);
+                        if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
+                            pass.set_pipeline(&f.border[s]);
+                            pass.set_bind_group(0, &self.border_group, &[]);
+                            pass.set_vertex_buffer(0, self.border_vertices.slice(..));
+                            for &side in &b.sides {
+                                let first = side as u32 * 6;
+                                pass.draw_indexed(first..first + 6, 0, 0..1);
+                            }
+                        }
+                    };
                     let extras = oit::Extras {
                         water_mask: (water_mask_quads > 0).then_some(&mask as _),
                         clouds: (cloud_quads > 0).then_some(&clouds as _),
+                        features: Some(&features),
                     };
                     oit.run(
                         &mut encoder,
                         world_view,
                         world_depth,
-                        &|pass, pipeline| {
-                            pass.set_pipeline(pipeline);
+                        &|pass, stage| {
                             pass.set_bind_group(0, &self.group, &[]);
+                            // Flat section draws take the flat pipelines.
+                            if let Some((flat, pipeline)) = flat.zip(oit.flat(stage)) {
+                                pass.set_pipeline(pipeline);
+                                flat.draw(pass, flat.translucent_calls(), |p| self.arena.buffer(p));
+                                return;
+                            }
+                            pass.set_pipeline(oit.terrain(stage));
                             pass.set_index_buffer(
                                 self.indices.slice(..),
                                 wgpu::IndexFormat::Uint32,
@@ -5554,7 +5652,7 @@ impl Renderer {
             // translucent particle layer draws after translucent terrain —
             // the quads write depth, so before it they would hide the glass
             // or water behind them.
-            if translucent_particle_quads > 0 {
+            if translucent_particle_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.entity_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -5574,7 +5672,7 @@ impl Renderer {
             }
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             // LevelRenderer: the world border after translucent terrain and weather.
-            if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
+            if let Some(b) = frame.border.as_ref().filter(|_| !frame.title && !oit_on) {
                 pass.set_pipeline(&self.border_pipeline);
                 pass.set_bind_group(0, &self.border_group, &[]);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -5585,7 +5683,7 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if translucent_crumbling_quads > 0 {
+            if translucent_crumbling_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -6471,6 +6569,12 @@ mod tests {
                 continue;
             } else if name == "oit_world.wgsl" {
                 let base = include_str!("terrain.wgsl").to_owned() + include_str!("oit.wgsl");
+                sources.push((path, base + &text));
+            } else if name == "oit_features.wgsl" {
+                let base = super::entity_shader() + include_str!("oit.wgsl");
+                sources.push((path, base + &text));
+            } else if name == "oit_border.wgsl" {
+                let base = include_str!("border.wgsl").to_owned() + include_str!("oit.wgsl");
                 sources.push((path, base + &text));
             } else if name == "oit_clouds.wgsl" {
                 let base = super::entity_shader() + include_str!("oit.wgsl");
