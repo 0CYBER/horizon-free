@@ -1,3 +1,14 @@
+> [!WARNING]
+> This repository is not in any way affiliated with Horizon original devs or Microsoft/Mojang.
+>
+> The goal of this fork is to return local account play with **YOUR** minecraft assets without Microsoft profile authentication
+>
+> You can download it's builds in [RELEASES](https://github.com/0CYBER/horizon-free/releases/latest) section
+>
+> Lower part of the README is fully original
+
+<br><br><br><br>
+
 <p align="center">
   <img src="docs/media/banner.webp" alt="The Horizon website: the game you know, rebuilt in Rust" width="100%">
 </p>
