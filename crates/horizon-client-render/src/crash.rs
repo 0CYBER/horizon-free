@@ -496,8 +496,24 @@ pub fn panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Rep
     }
 }
 
+/// Whether `name` is one of the streaming pool's threads, vanilla's `Util` worker threads.
+fn is_worker_thread(name: Option<&str>) -> bool {
+    name.is_some_and(|n| n.starts_with("horizon-worker-"))
+}
+
+/// `Util.onThreadException`: a panic on a worker thread is made a report titled "Exception on
+/// worker thread", with the thread's name, as `BlockableEventLoop.relayDelayCrash` hands it to
+/// the main thread.
+pub fn worker_panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Report {
+    Report {
+        description: "Exception on worker thread".into(),
+        ..panic_report(info, side)
+    }
+}
+
 /// Reports panics: on the main thread a crash report (the panic then ends the game, exit code
-/// 101); on other threads the error goes to the log, as vanilla's uncaught exception handler
+/// 101); on a worker thread (`Util.onThreadException`) a crash report too, and the game ends
+/// with it; on other threads the error goes to the log, as vanilla's uncaught exception handler
 /// does. The default hook still prints the panic. A panic inside `contain` is only logged.
 pub fn install(home: PathBuf, side: &'static str) {
     let default = std::panic::take_hook();
@@ -509,6 +525,10 @@ pub fn install(home: PathBuf, side: &'static str) {
         let main = std::thread::current().name() == Some("main");
         if main {
             deliver(&home, panic_report(info, side));
+        } else if is_worker_thread(std::thread::current().name()) {
+            deliver(&home, worker_panic_report(info, side));
+            // The crash ends the game, as the relayed report does on vanilla's main thread.
+            std::process::exit(101);
         } else {
             log::error!(
                 "Caught previously unhandled exception in thread {}: {}",
@@ -732,6 +752,13 @@ mod tests {
         // The stack starts where the crash was raised (DebugCrash::new, in this file).
         let first = debug.stack.lines().next().unwrap();
         assert!(first.contains("crash.rs"), "{}", debug.stack);
+    }
+
+    #[test]
+    fn worker_threads_are_the_streaming_pool() {
+        assert!(is_worker_thread(Some("horizon-worker-3")));
+        assert!(!is_worker_thread(Some("main")));
+        assert!(!is_worker_thread(None));
     }
 
     #[test]

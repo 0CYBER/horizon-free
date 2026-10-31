@@ -2,7 +2,7 @@
 //! sitting, following and defending the owner, begging, anger and shaking
 //! off water (`Wolf`, `WolfModel`).
 use super::{
-    Damage, Mob, MobEvent, MobWorld, PlayerView, Species, Who,
+    Mob, MobEvent, MobWorld, PlayerView, Species, Who,
     anim::{Poses, State},
     goals::{
         Breed, Cx, Float, Goal, HurtByTarget, JUMP, LOOK, LeapAtTarget, LookAtPlayer, MOVE,
@@ -81,11 +81,11 @@ pub fn register(m: &mut Mob) {
         .add(4, NearestTarget::player(true).when(angry_at_player));
     m.ai.targets.add(
         5,
-        NearestTarget::new(Prey::Filter(wolf_prey), false).when(|m, _| !m.extra.tame),
+        NearestTarget::new(Prey::Filter(wolf_prey), false).gate(|m, _| !m.extra.tame),
     );
     m.ai.targets.add(
         6,
-        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).when(|m, _| !m.extra.tame),
+        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).gate(|m, _| !m.extra.tame),
     );
     m.ai.targets.add(
         7,
@@ -112,6 +112,7 @@ pub fn register_parrot(m: &mut Mob) {
     g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
     g.add(2, Stroll::parrot(1.0));
     g.add(3, LandOnOwnersShoulder);
+    g.add(3, super::goals::FollowMob::new(1.0, 3.0, 7.0));
 }
 /// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
 /// the shoulder of the owner it touches; the host does the landing.
@@ -765,9 +766,10 @@ fn shake_tick(m: &mut Mob, wet: bool, server: bool, events: &mut Vec<MobEvent>) 
         }
     }
 }
-/// `Wolf.hurtServer`: stop sitting. The anger comes with the target
-/// (`HurtByTargetGoal`, then `updatePersistentAnger`).
-pub fn after_hurt(m: &mut Mob, _source: &Damage) {
+/// `Wolf.hurtServer`, `Parrot.hurtServer`: `setOrderedToSit(false)`. A
+/// wolf's anger comes with the target (`HurtByTargetGoal`, then
+/// `updatePersistentAnger`).
+pub fn stand_when_hurt(m: &mut Mob) {
     m.extra.sitting = false;
 }
 /// `Wolf.getTailAngle`.
@@ -926,11 +928,11 @@ pub fn register_cat(m: &mut Mob) {
     );
     m.ai.targets.add(
         1,
-        NearestTarget::species(&[Species::Rabbit], false).when(|m, _| !m.extra.tame),
+        NearestTarget::species(&[Species::Rabbit], false).gate(|m, _| !m.extra.tame),
     );
     m.ai.targets.add(
         1,
-        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).when(|m, _| !m.extra.tame),
+        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).gate(|m, _| !m.extra.tame),
     );
 }
 /// `Ocelot.registerGoals`, then `reassessTrustingGoals` adds the player
@@ -1663,7 +1665,8 @@ pub fn feline(p: &mut Poses, s: &State, st: &Feline) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mobs::sensor_scan_tests::kind;
+    use crate::mobs::{Damage, sensor_scan_tests::kind};
+    use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
     const WHITE: u32 = 0xFFFF_FFFF;
@@ -1811,5 +1814,45 @@ mod tests {
         assert_eq!(entity_events(&events), [8, 56]);
         assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
         assert!(m.extra.flag2, "still wet");
+    }
+
+    /// A tame mob of a species, told to sit.
+    fn sitting(species: Species, name: &str) -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = name.into();
+        k.species = species;
+        k.max_health = 20.0;
+        let mut m = Mob::new(1, kind, Vec3::new(0.0, 64.0, 0.0), 0.0);
+        m.extra.tame = true;
+        m.extra.sitting = true;
+        m
+    }
+
+    #[test]
+    fn a_hit_stands_a_sitting_wolf_or_parrot_up() {
+        // Wolf.hurtServer and Parrot.hurtServer call setOrderedToSit(false)
+        // before LivingEntity.hurtServer.
+        for (species, name) in [
+            (Species::Wolf, "minecraft:wolf"),
+            (Species::Parrot, "minecraft:parrot"),
+        ] {
+            let mut m = sitting(species, name);
+            assert!(m.damage(1.0, Damage::player([0.0, 64.0, 1.0])));
+            assert!(!m.extra.sitting, "{name} still sits after a hit");
+            // A weaker hit inside the hurt frames deals nothing, but it
+            // reached hurtServer, so it still stands the mob up.
+            m.extra.sitting = true;
+            assert!(!m.damage(0.5, Damage::player([0.0, 64.0, 1.0])));
+            assert!(!m.extra.sitting, "{name} still sits after a blocked hit");
+        }
+    }
+
+    #[test]
+    fn a_hit_leaves_a_sitting_cat_sitting() {
+        // Cat has no hurtServer override: a hit does not stand it up.
+        let mut m = sitting(Species::Cat, "minecraft:cat");
+        assert!(m.damage(1.0, Damage::player([0.0, 64.0, 1.0])));
+        assert!(m.extra.sitting);
     }
 }

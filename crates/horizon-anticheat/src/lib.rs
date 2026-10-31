@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod prediction;
 pub mod timer;
 
 /// What one check's violation level leads to.
@@ -126,6 +127,17 @@ checks! {
         /// spike's backlog arrives at once).
         max_lag_ms: f64 = 1000.0,
     }
+
+    /// Ground: a move that says it ends on the ground with nothing there to stand on: no-fall (claiming
+    /// the ground to skip fall damage) and walking on water. The claim is always dropped, so vanilla's
+    /// fall damage follows; from `setback` on the player is also sent back.
+    ground: Ground => GroundConfig [5.0, 15.0, 60.0, 2.0] {}
+
+    /// Prediction: each move played again from the client's own inputs with vanilla's movement code,
+    /// and compared (speed, step, fly, jesus...). Being built: for now it only records each player's
+    /// client ticks (`prediction::Record`), with a ping a tick to place what the server changes, and
+    /// flags nothing.
+    prediction: Prediction => PredictionConfig [5.0, 15.0, 60.0, 2.0] {}
 }
 
 /// How many checks there are.
@@ -191,6 +203,10 @@ pub struct Player {
     /// The server tick of each check's last alert.
     alerted: [Option<u64>; CHECKS],
     pub timer: timer::Balance,
+    /// The server tick and height where the ground last held the player.
+    pub ground: Option<(u64, f64)>,
+    /// The client ticks the prediction plays again (only while it runs).
+    pub record: Option<Box<prediction::Record>>,
 }
 
 impl Player {
@@ -239,6 +255,7 @@ mod tests {
         let c = Config::from_server_toml("[server]\nport = 25565\n").unwrap();
         assert_eq!(c, Config::default());
         assert!(!c.runs(Check::Timer));
+        assert!(!c.runs(Check::Ground));
     }
 
     #[test]

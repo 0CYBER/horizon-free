@@ -71,6 +71,15 @@ impl Game<'_> {
             let p = self.carts[i].position;
             hits.push((self.carts[i].id as i32, d, [p.x, p.y, p.z]));
         }
+        // Interaction.isPickable: an invisible box the server clicks through
+        // to its scripts, for both uses and attacks.
+        let reach = if self.creative { 5.0 } else { 3.0 };
+        for (&id, i) in &self.interactions {
+            if let Some(d) = ray_box(eye, dir, reach, i.bounds()) {
+                let p = i.position;
+                hits.push((id, d, [p.x, p.y, p.z]));
+            }
+        }
         if attacking {
             // EndCrystal.isPickable: its 2 x 2 box, with the server's entity
             // id, not special_targets' local projectile target id.
@@ -129,6 +138,20 @@ impl Game<'_> {
                 display.vehicle = Some(vehicle_id);
             } else if display.vehicle == Some(vehicle_id) {
                 display.vehicle = None;
+            }
+        }
+        for a in &mut self.armor_stands {
+            if passengers.contains(&(a.id as i32)) {
+                a.vehicle = Some(vehicle_id);
+            } else if a.vehicle == Some(vehicle_id) {
+                a.vehicle = None;
+            }
+        }
+        for (&id, i) in &mut self.interactions {
+            if passengers.contains(&id) {
+                i.vehicle = Some(vehicle_id);
+            } else if i.vehicle == Some(vehicle_id) {
+                i.vehicle = None;
             }
         }
         if passengers.contains(&me)
@@ -325,6 +348,8 @@ impl Game<'_> {
         mob.removed = false;
         self.world.random = random;
         self.mobs.insert(i, mob);
+        // #4821: footstep, gallop, breathe, splash and landing sounds from mob.tick
+        let _ = self.handle_mob_events(events);
     }
 }
 

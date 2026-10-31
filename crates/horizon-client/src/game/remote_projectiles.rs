@@ -317,14 +317,19 @@ impl Game<'_> {
             }
             // FishingHook.recreateFromPacket: the owner's id is the data.
             "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, velocity, data),
-            "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
-                id,
-                position: at,
-                show_bottom: true,
-                time: 0,
-                beam: None,
-                invulnerable: false,
-            }),
+            "minecraft:end_crystal" => {
+                // EndCrystal's constructor starts `time` random, so each
+                // placed crystal spins from its own phase.
+                let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+                self.crystals.push(super::dragon::Crystal {
+                    id,
+                    position: at,
+                    show_bottom: true,
+                    time,
+                    beam: None,
+                    invulnerable: false,
+                });
+            }
             _ => {
                 let Some(k) = projectile_kind(kind) else {
                     return false;
