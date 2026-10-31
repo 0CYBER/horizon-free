@@ -142,9 +142,11 @@ impl Toolchain {
 
     /// `program` (this toolchain's cargo, or a tool built with it) set up to use only this
     /// toolchain: its rustc, its MinGW-w64 where it has one, the launcher's Cargo home, and none of
-    /// the player's rustup, compiler-wrapper or compiler-flag settings ([`scrubbed`]).
+    /// the player's rustup, compiler-wrapper or compiler-flag settings ([`scrubbed`]). On Windows it
+    /// opens no console window: cargo is a console program, and the launcher has none to share, so
+    /// each build showed an empty one for as long as it ran (#4770).
     pub fn command(&self, program: &Path) -> Command {
-        let mut cmd = Command::new(program);
+        let mut cmd = crate::process::command(program);
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mingw = Some(self.mingw_bin()).filter(|bin| bin.is_dir());
         let paths = std::iter::once(self.dir.join("bin"))
@@ -200,9 +202,19 @@ pub fn scrubbed(name: &str) -> bool {
     SCRUBBED.contains(&name.as_str()) || PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// `ioprio_set`'s "which" for one process.
+#[cfg(target_os = "linux")]
+const IOPRIO_WHO_PROCESS: libc::c_long = 1;
+/// The best-effort I/O class (2) at its lowest level (7), as `ioprio_set` takes it.
+#[cfg(target_os = "linux")]
+const LOW_IO: libc::c_long = (2 << 13) | 7;
+
 /// Runs `cmd` (a build) below the player's own programs, so the desktop and a game in play stay
 /// smooth while it compiles; with the computer otherwise idle it still gets every core. Unix: nice
-/// 19, and on Linux the idle I/O class too; Windows: below-normal priority.
+/// 19, and on Linux the lowest best-effort I/O level (not the idle class, which gets the disk only
+/// when nothing else uses it, so a game streaming chunks could stall a build for minutes);
+/// Windows: below-normal priority, keeping [`crate::process::hide_console`]'s no-console flag
+/// (`creation_flags` sets the whole value, so this sets both).
 pub fn low_priority(cmd: &mut Command) -> &mut Command {
     #[cfg(unix)]
     {
@@ -214,13 +226,11 @@ pub fn low_priority(cmd: &mut Command) -> &mut Command {
                 libc::setpriority(libc::PRIO_PROCESS, 0, 19);
                 #[cfg(target_os = "linux")]
                 {
-                    const IOPRIO_WHO_PROCESS: libc::c_long = 1;
-                    const IOPRIO_CLASS_IDLE: libc::c_long = 3;
                     libc::syscall(
                         libc::SYS_ioprio_set,
                         IOPRIO_WHO_PROCESS,
                         0 as libc::c_long,
-                        IOPRIO_CLASS_IDLE << 13,
+                        LOW_IO,
                     );
                 }
                 Ok(())
@@ -231,7 +241,7 @@ pub fn low_priority(cmd: &mut Command) -> &mut Command {
     {
         use std::os::windows::process::CommandExt;
         const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
-        cmd.creation_flags(BELOW_NORMAL_PRIORITY_CLASS);
+        cmd.creation_flags(crate::process::CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     }
     cmd
 }
@@ -247,8 +257,9 @@ const SCRUBBED: [&str; 8] = [
     "CARGO_INCREMENTAL",
 ];
 
-/// Where commands run so that no player's Cargo configuration reaches them: the root of the disk
-/// the launcher's data is on. Cargo reads `.cargo/config.toml` in the folder it starts in and in
+/// Where commands run so that no player's Cargo configuration reaches them: the filesystem root
+/// above the launcher's data (`/` on Unix, whatever mount the data is on; the drive's root on
+/// Windows). Cargo reads `.cargo/config.toml` in the folder it starts in and in
 /// every folder above it, so from a folder under the player's home it would read
 /// `~/.cargo/config.toml` even with another `CARGO_HOME`: its `[profile]`, `[build]` and
 /// `[target]` settings (rustflags, linker, incremental) beat both the workspace's profile and
@@ -529,17 +540,27 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn builds_run_at_the_lowest_priority() {
-        // `nice` alone prints the niceness it runs at; ionice -p the I/O class of a process.
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "nice; ionice -p $$ 2>/dev/null || echo idle"]);
-        let out = low_priority(&mut cmd).output().unwrap();
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut lines = text.lines();
-        assert_eq!(lines.next(), Some("19"), "{text}");
-        assert!(
-            lines.next().is_some_and(|l| l.starts_with("idle")),
-            "{text}"
-        );
+        // Read back from the running child itself: its niceness and its I/O priority.
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let mut child = low_priority(&mut cmd).spawn().unwrap();
+        let pid = child.id();
+        // The priority is set between fork and exec; wait for the exec.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // SAFETY: plain system calls on a child process of this test.
+        let (nice, io) = unsafe {
+            let nice = libc::getpriority(libc::PRIO_PROCESS, pid as libc::id_t);
+            let io = libc::syscall(
+                libc::SYS_ioprio_get,
+                IOPRIO_WHO_PROCESS,
+                pid as libc::c_long,
+            );
+            (nice, io)
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(nice, 19);
+        assert_eq!(io, LOW_IO);
     }
 
     #[test]

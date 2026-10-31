@@ -132,7 +132,6 @@
   "{days} days ago": "{days} dni temu",
   "Not played yet": "Jeszcze nie grano",
   "under a minute": "mniej niż minuta",
-  "Sign in": "Zaloguj się",
   "Sign in with Microsoft": "Zaloguj się przez Microsoft",
   "Not now": "Nie teraz",
   "Cancel": "Anuluj",
@@ -249,5 +248,6 @@
   "This moves the instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a normal rebuild: up to 30 minutes.": "To przenosi instancję na Horizona {version}. Gra jest kompilowana od zera, więc trwa to dłużej niż zwykła rekompilacja: do 30 minut.",
   "Up to date: {instance} plays these mods.": "Aktualne: {instance} gra z tymi modami.",
   "{instance} doesn't play its native mods yet: build the game with them.": "{instance} nie gra jeszcze ze swoimi modami natywnymi: skompiluj grę z nimi.",
-  "{instance} is building: one build at a time.": "{instance} jest kompilowana: tylko jedna kompilacja naraz."
+  "{instance} is building: one build at a time.": "{instance} jest kompilowana: tylko jedna kompilacja naraz.",
+  "Choose image…": "Wybierz obraz…"
 }
