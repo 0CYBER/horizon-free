@@ -42,7 +42,7 @@ use entity_batch::EntityBatch;
 pub use entity_batch::{
     ENERGY_SWIRL_OVERLAY, OIT_ENTITY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
     TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
-    WATER_MASK_OVERLAY,
+    WATER_MASK_OVERLAY, mark_oit,
 };
 pub use view::{View, ViewSet};
 
@@ -4847,7 +4847,7 @@ impl Renderer {
         );
         let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
-        let additive_quads = (frame.additive.len() / 4) as u32;
+        let additive_quads = (frame.additive.len() / 4) as u32 - self.entity_batch.moved_additive;
         let see_through_quads = (frame.see_through.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
         if entity_vertices > self.entity_capacity {
@@ -5645,6 +5645,15 @@ impl Renderer {
                     pass = world_pass_after_culling(&mut encoder, world_view, world_depth, true);
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    // HDR output's mark on the eyes drawn in the stages, as the
+                    // classic pass marks them after the entities.
+                    if oit_entity_quads > 0 && self.hdr.is_some() {
+                        pass.set_pipeline(&self.hdr_mark_pipeline);
+                        pass.set_bind_group(0, &self.entity_group, &[]);
+                        pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                        pass.draw_indexed(0..oit_entity_quads * 6, (base_quads * 4) as i32, 0..1);
+                        pass.set_bind_group(0, &self.group, &[]);
+                    }
                 }
                 Some(flat) => {
                     pass.set_pipeline(pack_flat.map_or(&flat.translucent, |p| &p.1));

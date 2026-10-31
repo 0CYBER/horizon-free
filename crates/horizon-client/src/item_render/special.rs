@@ -76,6 +76,15 @@ impl ItemSink for CullBack<'_> {
     }
 }
 
+/// Marks every quad passed on as drawn with a render type that has an `OitPipelineSet`
+/// (`RenderTypes.entityTranslucent`).
+struct OitEntity<'a>(&'a mut dyn ItemSink);
+impl ItemSink for OitEntity<'_> {
+    fn quad(&mut self, quad: ItemQuad) {
+        self.0.quad(ItemQuad { oit: true, ..quad });
+    }
+}
+
 /// A pose override for a named part (`setupAnim`).
 type Adjust<'a> = &'a dyn Fn(&str, &mut [f32; 9]);
 fn none(_: &str, _: &mut [f32; 9]) {}
@@ -133,6 +142,7 @@ fn draw(
             light_emission: 0,
             cull_back: false,
             translucent: false,
+            oit: false,
         });
     }
     for (child_name, child) in &part.children {
@@ -537,7 +547,19 @@ pub(super) fn submit(
                 .then(|| host.player_skin(argument))
                 .flatten()
                 .unwrap_or_else(|| "entity/player/slim/steve".to_owned());
-            part("player", &none, &skin, white, Foil::None);
+            // `PlayerHeadSpecialRenderer`: the skin's `entityTranslucent` render type.
+            if let (Some(p), Some(r)) = (renderer.part("player"), sprites.get(&skin).copied()) {
+                draw(
+                    p,
+                    "root",
+                    pose,
+                    &none,
+                    r,
+                    white,
+                    Foil::None,
+                    &mut OitEntity(sink),
+                );
+            }
         }
         SpecialKind::Trident => {
             let foil = if has_foil { Foil::Standard } else { Foil::None };

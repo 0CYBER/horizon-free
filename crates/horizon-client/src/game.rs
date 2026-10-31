@@ -9499,7 +9499,8 @@ impl Game<'_> {
                         normal: [0; 4],
                         pos: v.to_array(),
                         uv,
-                        layer: 0,
+                        // ExperienceOrbRenderer: `RenderTypes.entityTranslucent`.
+                        layer: horizon_client::gfx::OIT_ENTITY,
                         color,
                         light: packed,
 
@@ -12194,6 +12195,12 @@ impl Game<'_> {
                 horizon_client::block_entity_render::vertex_light(light),
                 &mut out,
             );
+        }
+        // The hand has its own submit storage, which never uses improved
+        // transparency (`LevelRenderer` alone calls `setUseImprovedTransparency`):
+        // a held player head stays classic.
+        for vertex in &mut out {
+            vertex.layer &= !horizon_client::gfx::OIT_ENTITY;
         }
         out
     }

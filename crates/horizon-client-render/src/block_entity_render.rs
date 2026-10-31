@@ -1490,6 +1490,7 @@ impl BlockEntityRenderer {
                 } else {
                     None
                 };
+                let has_profile = skin.is_some();
                 let texture = skin.as_deref().unwrap_or(texture);
                 let (Some(model), Some(paint)) =
                     (self.models.get(model), paint(texture, 0xFFFFFF, packed))
@@ -1524,7 +1525,13 @@ impl BlockEntityRenderer {
                     "right_ear" => p[5] = (f64::from(t * PI * 0.2).cos() + 2.5) as f32 * 0.2,
                     _ => {}
                 };
+                let start = out.len();
                 draw_part(model, "root", m, &anim, paint, out);
+                // `SkullBlockRenderer.resolveSkullRenderType`: a head with a profile takes
+                // the player skin's `entityTranslucent` render type.
+                if has_profile {
+                    crate::gfx::mark_oit(&mut out[start..]);
+                }
             }
             Kind::Bell => {
                 let (Some(model), Some(paint)) = (
