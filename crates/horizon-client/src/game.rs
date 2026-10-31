@@ -119,6 +119,7 @@ mod glowing;
 mod golems;
 mod growth;
 mod hand;
+mod ime;
 mod initial_spawn;
 mod integrated;
 mod interactions;
@@ -1830,6 +1831,8 @@ struct Game<'a> {
     /// This view's corner in its shared window; cursor warps include the offset.
     view_at: [u32; 2],
     focused: bool,
+    /// Whether the window currently accepts input method events.
+    ime_allowed: bool,
     /// When the window lost focus, while it is still without
     /// (`Minecraft.lastActiveTime`: pausing waits 500 ms).
     focus_lost: Option<Instant>,
@@ -14145,6 +14148,7 @@ impl ApplicationHandler for Game<'_> {
             }
         }
         self.window = Some(window);
+        self.ime_allowed = false;
         self.apply_settings();
         self.previous = Instant::now();
     }
@@ -14358,6 +14362,8 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.begin_closing_save(true)?;
                 }
+                // Input method composition: the committed text types like a key's text.
+                WindowEvent::Ime(winit::event::Ime::Commit(text)) => self.ime_commit(&text),
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
@@ -14995,6 +15001,7 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();
+                    self.sync_ime();
                     let now = Instant::now();
                     let frame_cpu = self
                         .options
@@ -15434,6 +15441,7 @@ impl<'a> Game<'a> {
             keyboard_mouse: true,
             view_at: [0, 0],
             focused: true,
+            ime_allowed: false,
             focus_lost: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
