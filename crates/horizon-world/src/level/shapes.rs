@@ -42,8 +42,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             neighbour,
             &mut new,
         );
-        if let Some(new) = new {
-            debug_assert!((new.0 as usize) < self.b.table.state_count(), "{new:?}");
+        // A mod's answer: an id past the state table would panic the server.
+        if let Some(new) = new
+            && (new.0 as usize) < self.b.table.state_count()
+        {
             return new;
         }
         self.update_shape_at(0, state, pos, direction, neighbour_pos, neighbour)

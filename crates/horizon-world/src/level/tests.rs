@@ -2051,6 +2051,50 @@ fn lever_on_piston_back_survives_extend_and_retract() {
 }
 
 #[test]
+fn dust_on_a_downward_piston_survives_extend_and_retract() {
+    // PistonBaseBlock.triggerEvent writes the retracting base as a
+    // `moving_piston` and still updates the neighbours around it, so the wire
+    // above the base is asked whether it can survive. Vanilla reads that block
+    // through its block entity, whose collision shape holds the extended base;
+    // the exported support facts see no block entity and call every face
+    // unsupported, which broke the dust (#4728).
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("piston", &[("facing", "down")]);
+    let power = w.id("redstone_block", &[]);
+    let wire = w.id("redstone_wire", &[]);
+    let air = w.b().air();
+    let base = BlockPos::new(0, 3, 0);
+    let dust = BlockPos::new(0, 4, 0);
+    w.set(base, piston);
+    w.set(dust, wire);
+    w.set(BlockPos::new(1, 3, 0), power);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(base, "extended"), "true");
+    assert!(
+        w.name(BlockPos::new(0, 2, 0)).starts_with("piston_head"),
+        "the piston pushed its head down"
+    );
+    assert!(
+        w.name(dust).starts_with("redstone_wire"),
+        "the dust stays on the extended piston, got {}",
+        w.name(dust)
+    );
+    w.set(BlockPos::new(1, 3, 0), air);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(base, "extended"), "false");
+    assert!(
+        w.name(dust).starts_with("redstone_wire"),
+        "the dust stays through the retract, got {}",
+        w.name(dust)
+    );
+}
+
+#[test]
 fn a_candle_on_an_uneaten_cake_makes_a_candle_cake() {
     // CakeBlock.useItemOn: any candle on a cake with no bites turns it into the
     // matching unlit candle cake; a bitten cake or another item does not.
@@ -2086,6 +2130,8 @@ fn update_shape_hook_can_answer_for_the_block() {
         /// The state the hook answers for a fence, if any.
         answer: Option<BlockStateId>,
         seen: RefCell<Vec<(BlockPos, Direction)>>,
+        /// The `state` each call was given.
+        states: RefCell<Vec<BlockStateId>>,
     }
     impl LevelAccess for Shaper {
         fn block_state(&self, pos: BlockPos) -> BlockStateId {
@@ -2116,11 +2162,10 @@ fn update_shape_hook_can_answer_for_the_block() {
             neighbour: BlockStateId,
             new: &mut Option<BlockStateId>,
         ) {
-            // True of the calls below; a piston landing a block asks before
-            // the block is in the world.
-            assert_eq!(self.block_state(pos), state);
+            // A piston landing a block asks before the block is in the world.
             assert_eq!(self.block_state(neighbour_pos), neighbour);
             self.seen.borrow_mut().push((pos, direction));
+            self.states.borrow_mut().push(state);
             if let Some(answer) = self.answer
                 && self.b.block(state) == self.fence
             {
@@ -2145,6 +2190,7 @@ fn update_shape_hook_can_answer_for_the_block() {
         fence: b.block(fence),
         answer: Some(with("west")),
         seen: RefCell::new(Vec::new()),
+        states: RefCell::new(Vec::new()),
     };
     let mut ticks = Ticks::new(0);
     ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
@@ -2170,6 +2216,29 @@ fn update_shape_hook_can_answer_for_the_block() {
         with("west")
     );
     assert_eq!(level.seen.borrow().len(), 6);
+    // Fitted into an empty spot (a piston landing it), every call still got
+    // the incoming state first, not the air at `pos`.
+    level.seen.borrow_mut().clear();
+    level.states.borrow_mut().clear();
+    level.set_raw(pos, b.air());
+    assert_eq!(
+        b.update_from_neighbour_shapes(&mut level, &mut ticks, pos, fence),
+        with("west")
+    );
+    assert_eq!(level.seen.borrow().len(), 6);
+    assert_eq!(level.states.borrow()[0], fence);
+    // A made-up id is ignored, not trusted.
+    level.answer = Some(BlockStateId(u32::MAX));
+    level.set_raw(pos, fence);
+    b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(2, 1, 1),
+        stone,
+        flags::UPDATE_ALL,
+    );
+    assert_ne!(level.block_state(pos), BlockStateId(u32::MAX));
+    level.answer = Some(with("west"));
     // Without an answer the fence connects as vanilla's does.
     level.answer = None;
     level.set_raw(pos, fence);

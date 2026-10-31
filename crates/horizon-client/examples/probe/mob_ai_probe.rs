@@ -599,6 +599,8 @@ fn print_heart(
 fn player_damage(e: &MobEvent) -> f32 {
     match e {
         MobEvent::AttackPlayer(amount, _)
+        | MobEvent::CubeHurtPlayer { amount, .. }
+        | MobEvent::StingPlayer { amount, .. }
         | MobEvent::AttackPlayerWithEffect { amount, .. }
         | MobEvent::DamagePlayer { amount, .. } => *amount,
         MobEvent::SonicBoom {
@@ -616,6 +618,8 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
     };
     match e {
         MobEvent::AttackPlayer(amount, _)
+        | MobEvent::CubeHurtPlayer { amount, .. }
+        | MobEvent::StingPlayer { amount, .. }
         | MobEvent::AttackPlayerWithEffect { amount, .. }
         | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
         MobEvent::SonicBoom {

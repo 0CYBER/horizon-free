@@ -1368,11 +1368,7 @@ impl crate::Adapter for super::Adapter {
 
             Some(crate::SurfaceCapabilities {
                 formats,
-                present_modes: if cfg!(windows) {
-                    vec![wgt::PresentMode::Fifo, wgt::PresentMode::Immediate]
-                } else {
-                    vec![wgt::PresentMode::Fifo] //TODO
-                },
+                present_modes: vec![wgt::PresentMode::Fifo, wgt::PresentMode::Immediate],
                 composite_alpha_modes: vec![wgt::CompositeAlphaMode::Opaque], //TODO
                 maximum_frame_latency: 2..=2, //TODO, unused currently
                 current_extent: None,

@@ -6,9 +6,29 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 23 adds shape updates a mod can answer (`native_update_shape`), and
+//! API 32 adds shape updates a mod can answer (`native_update_shape`), and
 //! `native_schedule_block_tick` and `native_schedule_fluid_tick` on the
 //! level for the ticks a block's shape update schedules.
+//!
+//! API 31 adds a player's server tick (`native_player_tick`).
+//!
+//! API 30 adds left-clicking a block (`native_left_click_block`).
+//!
+//! API 29 adds right-clicking an entity (`native_interact_entity`).
+//!
+//! API 28 adds block and item tag reads for server tick hooks (`native_block_in_tag`,
+//! `native_item_in_tag`).
+//!
+//! API 27 adds the player-health HUD rows (`native_health_hud`).
+//!
+//! API 26 adds the game's shared config folder (`native_config_dir`).
+//!
+//! API 25 adds server sound playback (`native_play_sound`).
+//!
+//! API 24 adds a server block setter (`native_set_block`).
+//!
+//! API 23 adds per-level server tick hooks (`native_level_tick_pre`,
+//! `native_level_tick_post`).
 //!
 //! API 22 adds what a mod needs to keep the world from changing blocks
 //! it guards: fluid and fire spreading (`native_block_spread`), pistons
@@ -120,13 +140,18 @@ use horizon_world::{
     nbt::Compound,
     registry::BlockStateId,
 };
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 23;
+pub(crate) const NATIVE_HOOKS_API: u32 = 32;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -538,12 +563,74 @@ impl Game<'_> {
     ) {
         let _ = (context, phase);
     }
+    /// Before an authoritative server level's tick pass. `dimension` is its ID.
+    pub(super) fn native_level_tick_pre(&mut self, dimension: &str) {
+        let _ = dimension;
+    }
+    /// After a successful authoritative server level tick pass.
+    pub(super) fn native_level_tick_post(&mut self, dimension: &str) {
+        let _ = dimension;
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
     /// says is taken.
     pub(super) fn native_hud(&mut self, batch: &mut HudBatch, corners: &mut Corners) {
         let _ = (batch, corners);
+    }
+    /// A player right-clicks the entity `entity` (`Entity.getId`) of type
+    /// `kind` (`minecraft:cow`) with `self.hand`, holding `stack` (none in an
+    /// empty hand): where `Player.interactOn` starts, before the entity's own
+    /// `interact` and the item's `interactLivingEntity`. Set `claimed` to take
+    /// the click: the hand swings and neither runs. Asked once per hand, as
+    /// vanilla tries the main hand then the off hand. Server-side, for every
+    /// player of the world (the helpers read the acting one). API 29.
+    pub(super) fn native_interact_entity(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        stack: Option<&ItemStack>,
+        claimed: &mut bool,
+    ) {
+        let _ = (entity, kind, stack, claimed);
+    }
+    /// A player left-clicks the block `state` at `pos`, `face` the face hit
+    /// (`[0, 1, 0]` is the top): where `ServerPlayerGameMode.handleBlockBreakAction`
+    /// takes a dig's start, after its reach, spawn protection and world border
+    /// checks, before `Block.attack` (a note block plays) or a creative break.
+    /// Set `canceled` to ignore the click: the block isn't attacked, dug or
+    /// broken on the server, and the player's client gets it back (its own
+    /// predicted crack still shows to the clicking player). Server-side, for
+    /// every player of the world (the helpers read the acting one). API 30.
+    pub(super) fn native_left_click_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        state: BlockStateId,
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, face, state, canceled);
+    }
+    /// A living player's server tick ends (`ServerPlayer.tick`): once a tick
+    /// for every player in the world, after their digging, item use,
+    /// cooldowns, statistics and advancements. The helpers read that player.
+    /// API 31.
+    pub(super) fn native_player_tick(&mut self) {}
+    /// The player-health HUD rows, once a frame the HUD draws them
+    /// (`HealthHud::layout`, not under F1): `inputs` carries the health,
+    /// food, air and vehicle state the layout reads, `wi`/`hi` the screen's
+    /// GUI size. A mod that sets `draws` replaces every row — armour,
+    /// hearts, food, air and the heights (`left_height`/`right_height`)
+    /// above the hotbar are the answer's to give; `bubble_pop_sound` too.
+    /// Nothing set draws Horizon's own.
+    pub(super) fn native_health_hud(
+        &mut self,
+        inputs: &horizon_client::hud_layout::HealthInputs,
+        wi: i32,
+        hi: i32,
+        draws: &mut Option<Vec<horizon_client::hud_layout::GuiDraw>>,
+    ) {
+        let _ = (inputs, wi, hi, draws);
     }
     /// A key or mouse button went down or up, by its vanilla name
     /// (`key.keyboard.z`, `key.mouse.left`): keys on any screen (check
@@ -854,10 +941,52 @@ impl Game<'_> {
     }
 }
 
-/// Helpers for native mods, kept as stable as the hook points.
+fn dimension_id(dimension: LevelDimension) -> &'static str {
+    match dimension {
+        LevelDimension::Overworld => "minecraft:overworld",
+        LevelDimension::Nether => "minecraft:the_nether",
+        LevelDimension::End => "minecraft:the_end",
+    }
+}
+
 /// Server-level helpers for native mods.
 #[allow(dead_code)]
 impl GameLevel<'_> {
+    /// Play a registered vanilla sound for nearby players in this server level.
+    /// The return value means queued, not heard. Unknown sound events are
+    /// rejected at dispatch when the server registry is available.
+    pub(super) fn native_play_sound(
+        &mut self,
+        sound: &str,
+        at: [f64; 3],
+        source: usize,
+        volume: f32,
+        pitch: f32,
+    ) -> bool {
+        if !self.native_authoritative || !sound.starts_with("minecraft:") {
+            return false;
+        }
+        if source >= horizon_client::settings::SOUND_SOURCES.len() {
+            return false;
+        }
+        let position_ok = at
+            .into_iter()
+            .all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX) / 8.0);
+        let gain_ok = volume.is_finite() && volume >= 0.0 && pitch.is_finite() && pitch >= 0.0;
+        if !position_ok || !gain_ok {
+            return false;
+        }
+        self.native_sounds.push(super::creatures::NativeSound {
+            dimension: dimension_id(self.dimension),
+            sound: sound.to_owned(),
+            at,
+            source: source as i32,
+            volume,
+            pitch,
+        });
+        true
+    }
+
     /// Queue particles in this authoritative level. A zero count sends one
     /// directional particle. The return value means accepted, not delivered.
     /// Block particle types require their block state; item, trail and
@@ -896,13 +1025,16 @@ impl GameLevel<'_> {
         {
             return false;
         }
-        let dimension = match self.dimension {
-            LevelDimension::Overworld => "minecraft:overworld",
-            LevelDimension::Nether => "minecraft:the_nether",
-            LevelDimension::End => "minecraft:the_end",
-        };
         self.native_particles
-            .push((dimension, options.clone(), state, at, spread, speed, count));
+            .push(super::lan_particles::QueuedParticle {
+                dimension: dimension_id(self.dimension),
+                options: options.clone(),
+                state,
+                at,
+                spread,
+                speed,
+                count,
+            });
         true
     }
     /// Schedules a tick of `block` (a block name) at `pos` in `delay` game
@@ -910,7 +1042,7 @@ impl GameLevel<'_> {
     /// (`ScheduledTickAccess.scheduleTick(pos, block, delay)`, normal
     /// priority); false for an unknown block or a position that isn't
     /// loaded. A tick of that block already queued there is kept and counts
-    /// as scheduled. `ticks` is the hook's. API 23.
+    /// as scheduled. `ticks` is the hook's. API 32.
     pub(super) fn native_schedule_block_tick(
         &self,
         ticks: &mut Ticks,
@@ -933,7 +1065,7 @@ impl GameLevel<'_> {
     /// (`ScheduledTickAccess.scheduleTick(pos, fluid, delay)`); false for
     /// an unknown fluid or a position that isn't loaded. A tick of that
     /// fluid already queued there is kept and counts as scheduled. `ticks` is
-    /// the hook's. API 23.
+    /// the hook's. API 32.
     pub(super) fn native_schedule_fluid_tick(
         &self,
         ticks: &mut Ticks,
@@ -950,6 +1082,7 @@ impl GameLevel<'_> {
     }
 }
 
+/// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
@@ -958,6 +1091,42 @@ impl Game<'_> {
     /// launcher's next build leaves it out.
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
+    }
+    /// Sets a block in the current authoritative level through `Level.setBlock`.
+    /// Returns false for another dimension, an invalid state, or no change.
+    /// `flags` selects vanilla's neighbour and shape updates; Horizon sends
+    /// every write to players whatever the flags. A block entity block gets
+    /// its block entity. API 24.
+    pub(super) fn native_set_block(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
+        if (self.serving.is_none() && self.options.dedicated.is_none())
+            || dimension != self.dim.id()
+            || self.pack.assets.registry.state(state).is_none()
+        {
+            return false;
+        }
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
+        let changed =
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, at, state, flags));
+        let new = self.res.facts().get(state).name.clone();
+        let landed = self.world.block(pos[0], pos[1], pos[2]);
+        if changed
+            && self.res.facts().get(previous).name != new
+            && self.res.facts().get(landed).name == new
+            && let Some(entity) = self.new_block_entity(&new)
+        {
+            self.world
+                .block_entities
+                .insert((pos[0], pos[1], pos[2]), entity);
+        }
+        let _ = self.process_level_events();
+        changed
     }
     /// Sets property `key` of the block at `pos` to `value`, as a furnace's
     /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
@@ -1216,6 +1385,16 @@ impl Game<'_> {
     pub(super) fn native_set_setting(&self, mod_id: &str, key: &str, value: &str) {
         let dir = self.native_data_dir(mod_id);
         let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
+    }
+    /// The game's `config/` folder beside `options.txt`, shared by every mod
+    /// as on Fabric and NeoForge: a mod names its own files in it
+    /// (`config/<id>.json`, or a folder of its own). The same folder on the
+    /// window, its server thread and a LAN host; a dedicated server's is in
+    /// its own folder, beside `server.properties`. Made when missing. No
+    /// `self`, so it works from any hook (`Game::native_config_dir()`), the
+    /// level's too. API 26.
+    pub(super) fn native_config_dir() -> Result<PathBuf, String> {
+        config_dir(&Self::options_path())
     }
     /// Shows the panel beside container screens with these items (at most
     /// 8192), as the game's own slots in pages, with a search box; the
@@ -1770,6 +1949,13 @@ fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
     MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
 }
 
+/// `config/` beside `options`, made when missing.
+fn config_dir(options: &Path) -> Result<PathBuf, String> {
+    let dir = options.with_file_name("config");
+    fs::create_dir_all(&dir).map_err(|e| dir.display().to_string() + ": " + &e.to_string())?;
+    Ok(dir)
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -1833,7 +2019,7 @@ mod tests {
             .split("/// The hook points. Each does nothing in Horizon.")
             .nth(1)
             .unwrap()
-            .split("/// Helpers for native mods")
+            .split("/// Server-level helpers for native mods.")
             .next()
             .unwrap();
         let level_section = source
@@ -1895,6 +2081,24 @@ mod tests {
         assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
         assert_eq!(mod_menu("minecraft:brewing_stand"), None);
         assert_eq!(mod_menu("hopper"), None);
+    }
+
+    /// The config folder is `config/` beside `options.txt`, made when
+    /// missing.
+    #[test]
+    fn config_dir_is_config_beside_options() {
+        // Callable without a game, from any hook.
+        let _: fn() -> Result<std::path::PathBuf, String> = super::Game::native_config_dir;
+        use super::config_dir;
+        let root = std::env::temp_dir().join(format!("horizon-config-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let options = root.join("options.txt");
+        assert!(!root.join("config").exists());
+        let dir = config_dir(&options).unwrap();
+        assert_eq!(dir, root.join("config"));
+        assert!(dir.is_dir());
+        assert_eq!(config_dir(&options).unwrap(), dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

@@ -348,6 +348,8 @@ impl Game<'_> {
         mob.removed = false;
         self.world.random = random;
         self.mobs.insert(i, mob);
+        // #4821: footstep, gallop, breathe, splash and landing sounds from mob.tick
+        let _ = self.handle_mob_events(events);
     }
 }
 

@@ -24,7 +24,8 @@ impl Behaviours {
     /// `JigsawPlacement.generateJigsaw`: `assemble` builds the pieces (from
     /// the generation context's own random), then each piece is placed into
     /// the level with the level random, an unbounded box and `reference` as
-    /// the origin; `keep_jigsaws` skips the jigsaw replacement. Returns whether pieces were assembled.
+    /// the origin; `keep_jigsaws` skips the jigsaw replacement. Returns whether pieces were assembled
+    /// and the entities the pieces carried (their NBT, for the caller to spawn).
     pub fn place_jigsaw<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
@@ -32,16 +33,16 @@ impl Behaviours {
         reference: [i32; 3],
         keep_jigsaws: bool,
         assemble: impl FnOnce() -> Option<crate::worldgen::generator::JigsawPieces>,
-    ) -> bool {
+    ) -> (bool, Vec<crate::nbt::Compound>) {
         let Some(features) = self.live_features() else {
-            return false;
+            return (false, Vec::new());
         };
         let Some(jigsaw) = assemble() else {
-            return false;
+            return (false, Vec::new());
         };
         let mut sim = self.sim(level, ticks);
         let mut random = sim.random().clone();
-        {
+        let entities = {
             let mut world = LevelFeatureWorld {
                 sim: &mut sim,
                 features,
@@ -67,27 +68,30 @@ impl Behaviours {
                     eprintln!("Horizon: placing a jigsaw piece failed: {e}");
                 }
             }
-        }
+            world.entities
+        };
         *sim.random() = random;
-        true
+        (true, entities)
     }
     /// `/place structure`: `PlaceCommand.placeStructure` after the start is
     /// generated, `StructureStart.placeInChunk` for every chunk of the start's
     /// bounding box (`ChunkPos.rangeClosed` of its corners), each clipped to
     /// the chunk's whole height, drawing from the level random. False when the
-    /// level has no structure resources, or a piece failed to place.
+    /// level has no structure resources, or a piece failed to place. The
+    /// entities the pieces carried (villagers, guardians, template entities)
+    /// come back as NBT for the caller to spawn.
     pub fn place_structure<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut super::Ticks,
         start: &crate::worldgen::structure::start::StructureStart,
-    ) -> bool {
+    ) -> (bool, Vec<crate::nbt::Compound>) {
         let Some(features) = self.live_features() else {
-            return false;
+            return (false, Vec::new());
         };
         let (Some(resources), Some(blocks)) = (features.structures(), features.tree_blocks())
         else {
-            return false;
+            return (false, Vec::new());
         };
         let (min, max) = (start.bounding_box.min, start.bounding_box.max);
         let (cx0, cx1) = (min[0] >> 4, max[0] >> 4);
@@ -99,7 +103,7 @@ impl Behaviours {
         let (low_y, high_y) = (sim.level.min_y(), sim.level.max_y() - 1);
         let mut random = sim.random().clone();
         let mut placed = true;
-        {
+        let entities = {
             let mut world = LevelFeatureWorld {
                 sim: &mut sim,
                 features,
@@ -131,9 +135,10 @@ impl Behaviours {
                     }
                 }
             }
-        }
+            world.entities
+        };
         *sim.random() = random;
-        placed
+        (placed, entities)
     }
 }
 

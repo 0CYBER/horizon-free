@@ -130,6 +130,12 @@ impl Mesher {
                 let tint = match name.strip_prefix("minecraft:").unwrap_or(name) {
                     "spruce_leaves" => Tint::Constant(0x61_9961),
                     "birch_leaves" => Tint::Constant(0x80_A755),
+                    // Cherry (and other pre-coloured) leaves: the texture is
+                    // already pink; biome foliage tint turns a grove yellow (#4688).
+                    "cherry_leaves"
+                    | "azalea_leaves"
+                    | "flowering_azalea_leaves"
+                    | "pale_oak_leaves" => Tint::None,
                     "leaf_litter" => Tint::Dry,
                     _ if leaves => Tint::Foliage,
                     _ => Tint::Grass,

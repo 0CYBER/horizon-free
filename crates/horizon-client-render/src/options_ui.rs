@@ -128,7 +128,6 @@ impl Opt {
                 | Opt::HideMatchedNames
                 | Opt::OnlySecureChat
                 | Opt::SaveChatDrafts
-                | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 // Saved, but no Horizon system reads them yet: no Realms, no
                 // friends list, no directional audio, no now-playing toast.
@@ -873,6 +872,7 @@ impl Opt {
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
             | Opt::HighContrastBlockOutlines
+            | Opt::MonochromeLogo
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts
@@ -1988,7 +1988,9 @@ impl OptionsUi {
                     .map(|(i, installed)| {
                         let mut label = Text::literal(format!("{}: ", installed.title))
                             .append(on_off(s.mods.is_on(i)));
-                        if installed.problem.is_some() {
+                        if installed.problem.as_deref() == Some(crate::mod_list::NOT_BUILT) {
+                            label = label.append(tr("horizon.mods.not_built"));
+                        } else if installed.problem.is_some() {
                             label = label.append(tr("horizon.mods.stopped"));
                         } else if installed.dev {
                             label = label.append(tr("horizon.mods.dev"));
@@ -3500,10 +3502,12 @@ mod tests {
                 assert_eq!(loaded.file.double(opt.file_key().unwrap()), expected);
             }
         }
+        assert!(Opt::MonochromeLogo.available());
         for opt in [
             Opt::TextBackground,
             Opt::HideLightningFlashes,
             Opt::HideSplashTexts,
+            Opt::MonochromeLogo,
         ] {
             let key = opt.file_key().unwrap();
             let before = s.file.bool(key);

@@ -212,8 +212,8 @@ impl adv::World for View<'_, '_> {
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
         let items = &self.0.res.items();
         match registry {
-            "item" => items.item_tags.get(tag).is_some_and(|t| t.contains(id)),
-            "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
+            "item" => items.item_in_tag(tag, id),
+            "block" => items.block_in_tag(tag, id),
             "entity_type" => self.0.res.mob_data().entity_has(tag, id),
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
             "damage_type" => self
@@ -432,7 +432,10 @@ impl Game<'_> {
                 .effects
                 .list
                 .iter()
-                .map(|e| (format!("minecraft:{}", e.id), e.amplifier, e.duration))
+                .map(|e| {
+                    let id = horizon_client::brewing::namespaced(e.id);
+                    (id.to_owned(), e.amplifier, e.duration)
+                })
                 .collect(),
             gamemode: Some(self.mode.name().to_owned()),
             ..Default::default()

@@ -1289,6 +1289,9 @@ impl EditBox {
                 batch.text(atlas, "_", cursor_x, ty, color, true);
             }
         }
+        if self.focused {
+            crate::preedit::report_caret(cursor_x, ty, 10.0);
+        }
     }
     /// Character index under GUI x (mouse click).
     pub fn index_at(&self, atlas: &HudAtlas, x: f32) -> usize {
