@@ -87,10 +87,9 @@ fn finish(
         .iter()
         .map(|o| format!("{} {}", o.id, o.version))
         .collect();
-    Ok(format!(
-        "Installed {} from GitHub ({}). Build it from Settings > Native mods.",
-        names.join(", "),
-        found.label()
+    Ok(trf(
+        "Installed {mods} from GitHub ({source}). Build it from Settings > Native mods.",
+        &[("mods", &names.join(", ")), ("source", &found.label())],
     ))
 }
 
@@ -111,7 +110,7 @@ impl Launcher {
                     if have.is_some_and(|o| github_mods::is_update(o, &found)) {
                         self.github.newer.insert(id, found);
                     } else {
-                        self.github.message = Some(Ok(format!("{id} is up to date.")));
+                        self.github.message = Some(Ok(trf("{id} is up to date.", &[("id", &id)])));
                     }
                 }
                 Event::Fetched(found, Ok(mods)) => self.github.stage = Stage::Pick(found, mods),
@@ -144,8 +143,10 @@ impl Launcher {
             return;
         }
         self.github.message = None;
-        self.github.stage =
-            Stage::Working(format!("Asking GitHub about {}/{}…", link.owner, link.repo));
+        self.github.stage = Stage::Working(trf(
+            "Asking GitHub about {owner}/{repo}…",
+            &[("owner", &link.owner), ("repo", &link.repo)],
+        ));
         let tx = self.github.tx.clone();
         std::thread::spawn(move || {
             let _ = tx.send(Event::Resolved(
@@ -164,7 +165,8 @@ impl Launcher {
 
     /// Downloads and checks what the player agreed to; installs it unless there is a choice.
     fn github_install(&mut self, found: Resolved, only: Option<String>) {
-        self.github.stage = Stage::Working(format!("Downloading {}…", found.label()));
+        self.github.stage =
+            Stage::Working(trf("Downloading {source}…", &[("source", &found.label())]));
         let tx = self.github.tx.clone();
         let home = self.mods.home();
         std::thread::spawn(move || {
@@ -186,7 +188,7 @@ impl Launcher {
         let done = finish(&home, &found, &mods, id.as_deref(), id.is_none());
         github_mods::discard(&found);
         let _ = self.github.tx.send(Event::Installed(done));
-        self.github.stage = Stage::Working("Installing…".into());
+        self.github.stage = Stage::Working(tr("Installing…").into());
     }
 
     fn github_field(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -253,11 +255,10 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(caps("Add a native mod from GitHub").text_color(t.muted))
+            .child(caps(tr("Add a native mod from GitHub")).text_color(t.muted))
             .child(
                 text(theme::CAPTION).text_color(t.muted).child(
-                    "A link to a repository (its latest release), a release, a branch or tag, or a commit. \
-                     The launcher installs one exact release file or commit, never a branch that moves.",
+                    tr("A link to a repository (its latest release), a release, a branch or tag, or a commit. The launcher installs one exact release file or commit, never a branch that moves."),
                 ),
             )
             .child(
@@ -301,12 +302,18 @@ impl Launcher {
     fn github_review(&self, found: &Resolved, only: Option<String>, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let what = match (&found.asset, &found.content_only) {
-            (Some(asset), _) => format!("The release file {} ({}).", asset.name, found.label()),
-            (None, Some(file)) => format!(
-                "The source of {}. Its release ships {file}, a content mod: installing those from GitHub is not supported yet.",
-                found.label()
+            (Some(asset), _) => trf(
+                "The release file {file} ({source}).",
+                &[("file", &asset.name), ("source", &found.label())],
             ),
-            (None, None) => format!("The source at commit {}.", found.commit),
+            (None, Some(file)) => trf(
+                "The source of {source}. Its release ships {file}, a content mod: installing those from GitHub is not supported yet.",
+                &[("source", &found.label()), ("file", file)],
+            ),
+            (None, None) => trf(
+                "The source at commit {commit}.",
+                &[("commit", &found.commit)],
+            ),
         };
         let (url, open) = (found.source_url(), found.source_url());
         let install = found.clone();
@@ -317,10 +324,10 @@ impl Launcher {
             .p(px(16.))
             .text_size(px(theme::UI.px))
             .text_color(t.ink)
-            .child(caps("Not reviewed by the Horizon registry").text_color(t.danger))
+            .child(caps(tr("Not reviewed by the Horizon registry")).text_color(t.danger))
             .child(what)
             .child(
-                "Native mods run with full access to this computer. Read the source before you install it.",
+                tr("Native mods run with full access to this computer. Read the source before you install it."),
             )
             .child(text(theme::CAPTION).font_family(theme::MONO).text_color(t.ink_soft).child(url))
             .child(
@@ -385,10 +392,9 @@ impl Launcher {
             .p(px(16.))
             .text_size(px(theme::UI.px))
             .text_color(t.ink)
-            .child(format!(
-                "{} holds {} mods. Install which?",
-                found.name(),
-                mods.len()
+            .child(trf(
+                "{name} holds {count} mods. Install which?",
+                &[("name", &found.name()), ("count", &mods.len().to_string())],
             ))
             .child(buttons)
     }
@@ -404,7 +410,7 @@ impl Launcher {
                 let (latest, only) = (latest.clone(), id.clone());
                 button(
                     SharedString::from(format!("github-update-{id}")),
-                    format!("Update to {}", latest.label()),
+                    trf("Update to {version}", &[("version", &latest.label())]),
                     Kind::Primary,
                     &t,
                 )
@@ -463,7 +469,8 @@ impl Launcher {
                 if this.github.confirm_remove.as_ref() == Some(&target) {
                     let home = this.mods.home();
                     this.github.message = Some(
-                        github_mods::remove(&home, &target).map(|_| format!("Removed {target}.")),
+                        github_mods::remove(&home, &target)
+                            .map(|_| trf("Removed {name}.", &[("name", &target)])),
                     );
                     this.github.reread(&home);
                     this.github.confirm_remove = None;
@@ -487,7 +494,7 @@ impl Launcher {
                     .child(
                         text(theme::CAPTION)
                             .text_color(t.ink_soft)
-                            .child(format!("from GitHub: {}", origin.label())),
+                            .child(trf("from GitHub: {source}", &[("source", &origin.label())])),
                     )
                     .child(
                         text(theme::CAPTION)
