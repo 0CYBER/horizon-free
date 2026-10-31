@@ -865,6 +865,9 @@ pub struct Extra {
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
+    /// `Entity.deltaMovementOnPreviousTick`: the velocity before this tick's
+    /// move, which the elytra lean interpolates from (`getDeltaMovementLerped`).
+    pub previous_velocity: Vec3,
     /// `Entity.DATA_POSE` of another player, as the server sent it.
     pub synced_pose: u8,
     /// `LivingEntity.isAutoSpinAttack` (Riptide).

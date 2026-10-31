@@ -144,6 +144,12 @@ API 29 adds right-clicking an entity, on the server for every player: `native_in
 an entity (its id and type, and the stack in the hand) where `Player.interactOn` starts, once per hand. A mod that claims
 it swings the hand instead of the entity's and the item's own interaction. Bundles that use it need `"hooks": 29`.
 
+API 30 adds left-clicking a block, on the server for every player: `native_left_click_block` hears the start of a dig
+(the block, the face hit) once the game allowed it, before the block is attacked (a note block plays) or broken in
+creative. A mod that cancels it keeps the block: on the server it isn't attacked, dug or broken, and the player's client
+gets it back. The clicking player's own client still predicts the crack until then.
+Bundles that use it need `"hooks": 30`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
