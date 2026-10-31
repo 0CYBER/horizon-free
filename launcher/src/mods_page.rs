@@ -1391,7 +1391,13 @@ impl Launcher {
         let line = |s: String| div().child(s);
         let (status, badge) = match (step, error, state) {
             (Some(step), _, _) => (
-                line(step.clone()).text_color(t.accent),
+                line(format!(
+                    "{step} - {}",
+                    native_mods::duration_label(
+                        self.native_started.map_or(0, |(s, _)| s.elapsed().as_secs())
+                    )
+                ))
+                .text_color(t.accent),
                 Some((tr("Building"), t.accent)),
             ),
             (None, Some(e), _) => (line(e.clone()).text_color(t.danger), None),
@@ -1416,6 +1422,9 @@ impl Launcher {
             ),
         };
         let mut detail = div().flex().flex_col().gap(px(4.)).child(status);
+        if let Some(done) = self.native_done.as_ref().filter(|_| mine && step.is_none()) {
+            detail = detail.child(div().text_color(t.muted).child(done.clone()));
+        }
         if let (Some(tag), Some(build)) = (&version, &build) {
             detail = detail.child(div().text_color(t.muted).child(trf(
                 "Plays {build}, built on Horizon {version}.",
@@ -1473,6 +1482,23 @@ impl Launcher {
                 }),
             ));
         }
+        detail = detail.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    switch("native-release", self.settings.native_release, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.settings.native_release = !this.settings.native_release;
+                            this.native_done = None;
+                            this.settings.save();
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(tr("Release build: slower to build, slightly faster game").to_string()),
+        );
         if let Some(list) = mismatch {
             detail = detail.child(self.native_mismatch_panel(list, cx));
         }

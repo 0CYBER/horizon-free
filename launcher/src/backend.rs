@@ -3101,6 +3101,10 @@ pub struct Settings {
     /// Native mods are always on: an older file's `native_mods` switch is ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_mods_noticed: bool,
+    /// Native builds compile with the release profile (`native_mods::Profile`) instead of `fast`:
+    /// slower to build, slightly faster game.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_release: bool,
     /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
     /// offline names play without an account that owns the game, in the window only
     /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
