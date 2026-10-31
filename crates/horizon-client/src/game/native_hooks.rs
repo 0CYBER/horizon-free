@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 28 adds block and item tag reads for server tick hooks (`native_block_in_tag`,
+//! `native_item_in_tag`).
+//!
 //! API 27 adds the player-health HUD rows (`native_health_hud`).
 //!
 //! API 26 adds the game's shared config folder (`native_config_dir`).
@@ -133,7 +136,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 27;
+pub(crate) const NATIVE_HOOKS_API: u32 = 28;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
