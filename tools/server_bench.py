@@ -286,6 +286,8 @@ def run_once(kind, bots, behaviour, args, out):
     directory.mkdir(parents=True)
     port = lab.free_port()
     props = dict(PROPERTIES, **{'server-port': str(port), 'level-seed': str(args.seed)})
+    if args.ground:
+        props.update({'level-type': 'minecraft\\:flat', 'generate-structures': 'false', 'gamemode': 'survival'})
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (directory / 'eula.txt').write_text('eula=true\n')
     command = server_command(kind, directory, args)
@@ -309,7 +311,8 @@ def run_once(kind, bots, behaviour, args, out):
             [*bots_command(args), '--server', f'{args.connect}:{port}', '--bots', str(bots),
              '--behaviour', behaviour, '--join-every', str(args.join_every), '--seconds', str(int(total)),
              '--seed', str(args.seed), '--report', '-',
-             *(['--explore-speed', str(args.explore_speed)] if args.explore_speed else [])],
+             *(['--explore-speed', str(args.explore_speed)] if args.explore_speed else []),
+             *(['--height', '0', '--ground'] if args.ground else [])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
@@ -447,6 +450,9 @@ def main():
     parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
     parser.add_argument('--anticheat', action='store_true',
                         help="turn Horizon's anticheat on (server.toml [anticheat]); its flags are counted")
+    parser.add_argument('--ground', action='store_true',
+                        help='a flat survival world, the bots walking on its ground and saying so in every move '
+                             "(what the anticheat's ground check judges)")
     parser.add_argument('--bots-via', default='', help="a command prefix to run the bots elsewhere ('ssh host')")
     parser.add_argument('--bots-bin', default='', help='horizon-bots (on the --bots-via machine)')
     parser.add_argument('--connect', default='127.0.0.1', help='the address the bots reach the server at')

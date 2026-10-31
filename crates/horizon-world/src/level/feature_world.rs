@@ -20,6 +20,9 @@ use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource
 pub(crate) struct LevelFeatureWorld<'s, 'a, L: LevelAccess + ?Sized> {
     pub sim: &'s mut Sim<'a, L>,
     pub features: &'s LiveFeatures,
+    /// The entities a structure template placed (`add_entity`), for the caller
+    /// to spawn.
+    pub entities: Vec<crate::nbt::Compound>,
 }
 
 fn pos([x, y, z]: [i32; 3]) -> BlockPos {
@@ -59,6 +62,19 @@ impl<L: LevelAccess + ?Sized> FeatureWorld for LevelFeatureWorld<'_, '_, L> {
 }
 
 impl<L: LevelAccess + ?Sized> PlacementContext for LevelFeatureWorld<'_, '_, L> {
+    /// `BlockEntity.loadWithComponents` on the block a template just placed.
+    fn set_block_entity(
+        &mut self,
+        position: [i32; 3],
+        nbt: crate::nbt::Compound,
+    ) -> Result<(), PlacementQueryError> {
+        self.sim.level.load_block_entity(pos(position), nbt);
+        Ok(())
+    }
+    fn add_entity(&mut self, nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+        self.entities.push(nbt);
+        Ok(())
+    }
     /// `StructureTemplate.updateShapeAtEdge` for one face.
     fn update_shape_at_face(
         &mut self,

@@ -8,11 +8,14 @@
 use super::{
     Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     goals::{
-        Breed, Cx, Float, FollowParent, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround,
-        Stroll, Tempt, goal_clone,
+        Breed, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, Tempt,
+        goal_clone,
     },
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    random::RandomSource,
+};
 
 pub const IDLE: u8 = 0;
 pub const ROLLING: u8 = 1;
@@ -66,10 +69,91 @@ pub fn register(m: &mut Mob) {
     g.add(3, Idle(Breed::new(1.0)));
     let tempt = Tempt::new(1.25, m.kind.food.clone(), false);
     g.add(4, Idle(ArmadilloTempt(tempt)));
-    g.add(4, Idle(FollowParent::new(1.25)));
+    g.add(4, Idle(BabyFollowAdult::default()));
     g.add(5, Stroll::avoiding_water(1.0));
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());
+}
+
+/// `AdultSensor` and `BabyFollowAdult.create(5..16, 1.25)`: a baby with no walk
+/// target walks towards the nearest adult of its kind in sight that is 5 to 17
+/// blocks away, until it is within 4.
+#[derive(Clone, Debug, Default)]
+struct BabyFollowAdult {
+    adult: Option<u32>,
+}
+/// `UniformInt.of(5, 16)`'s bounds and `speedModifier`.
+const FOLLOW_MIN: f64 = 5.0;
+const FOLLOW_MAX: f64 = 16.0;
+const FOLLOW_SPEED: f64 = 1.25;
+impl BabyFollowAdult {
+    /// `NearestVisibleLivingEntities.findClosest(same type and not a baby)`.
+    fn nearest_adult(m: &mut Mob, cx: &mut Cx) -> Option<u32> {
+        let species = m.species();
+        let p = m.position;
+        let area = Aabb::new(
+            Vec3::new(p.x - FOLLOW_MAX, p.y - FOLLOW_MAX, p.z - FOLLOW_MAX),
+            Vec3::new(p.x + FOLLOW_MAX, p.y + FOLLOW_MAX, p.z + FOLLOW_MAX),
+        );
+        let ids: Vec<(u32, f64)> =
+            cx.w.others_near(area)
+                .filter(|s| s.alive && !s.baby && s.species == species)
+                .map(|s| (s.id, m.distance_sqr(s.position)))
+                .collect();
+        let mut best: Option<(u32, f64)> = None;
+        for (id, d) in ids {
+            if best.is_none_or(|b| d < b.1) && m.sees(cx.w, Who::Mob(id)) {
+                best = Some((id, d));
+            }
+        }
+        best.map(|b| b.0)
+    }
+    fn target(&self, m: &Mob, cx: &Cx) -> Option<([f64; 3], f64)> {
+        let s = cx.w.seen(self.adult?)?;
+        Some((
+            [s.position.x, s.position.y, s.position.z],
+            m.distance_sqr(s.position),
+        ))
+    }
+}
+impl Goal for BabyFollowAdult {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !m.is_baby() || !m.ai.nav.is_done() {
+            return false;
+        }
+        self.adult = Self::nearest_adult(m, cx);
+        self.target(m, cx).is_some_and(|(_, d)| {
+            (FOLLOW_MIN * FOLLOW_MIN..(FOLLOW_MAX + 1.0) * (FOLLOW_MAX + 1.0)).contains(&d)
+        })
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.is_baby()
+            && !m.ai.nav.is_done()
+            && self
+                .target(m, cx)
+                .is_some_and(|(_, d)| d > (FOLLOW_MIN - 1.0) * (FOLLOW_MIN - 1.0))
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some((at, _)) = self.target(m, cx) {
+            m.nav_move_to_entity(cx.w, at, FOLLOW_MIN as i32 - 1, FOLLOW_SPEED);
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.nav_stop();
+        self.adult = None;
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(s) = self.adult.and_then(|a| cx.w.seen(a)) {
+            m.look_at([s.position.x, s.eye_y, s.position.z]);
+        }
+    }
 }
 
 /// `Armadillo.isScared`.
@@ -603,16 +687,32 @@ mod tests {
     #[test]
     fn a_baby_armadillo_follows_an_adult() {
         // BabyFollowAdult(5..16, 1.25) in the idle activity.
-        let Some([mut baby, adult]) = real([[0.5, 64.0, 0.5], [6.5, 64.0, 0.5]]) else {
+        let Some([mut baby, adult]) = real([[0.5, 64.0, 0.5], [8.5, 64.0, 0.5]]) else {
             return;
         };
         baby.extra.age = -24000;
         crate::mobs::world::with_test_world(&[adult.seen(None)], |w, _| {
             run_goals(&mut baby, w, 1);
-            assert!(baby.ai.goals.is_running("FollowParent"));
+            assert!(baby.ai.goals.is_running("BabyFollowAdult"));
             set_state(&mut baby, SCARED);
             run_goals(&mut baby, w, 1);
-            assert!(!baby.ai.goals.is_running("FollowParent"), "not as a ball");
+            assert!(
+                !baby.ai.goals.is_running("BabyFollowAdult"),
+                "not as a ball"
+            );
+        });
+    }
+
+    #[test]
+    fn a_baby_stays_when_the_adult_is_within_five_blocks() {
+        // BabyFollowAdult: `!closerThan(adult, 5)`.
+        let Some([mut baby, adult]) = real([[0.5, 64.0, 0.5], [4.5, 64.0, 0.5]]) else {
+            return;
+        };
+        baby.extra.age = -24000;
+        crate::mobs::world::with_test_world(&[adult.seen(None)], |w, _| {
+            run_goals(&mut baby, w, 1);
+            assert!(!baby.ai.goals.is_running("BabyFollowAdult"));
         });
     }
 

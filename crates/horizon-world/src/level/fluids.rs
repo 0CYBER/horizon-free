@@ -1,7 +1,7 @@
 //! `FlowingFluid` (water and lava) ticking and spreading, `LiquidBlock`
 //! interactions, liquid containers (waterlogging) and bucket pickup.
 use super::{
-    Behaviours, Dimension, LevelAccess, Sim,
+    Behaviours, Dimension, LevelAccess, Sim, Spread,
     classes::{Class, Interface},
     update::{HORIZONTAL, above, below, rel},
 };
@@ -14,7 +14,6 @@ use horizon_core::{
     position::BlockPos,
     random::RandomSource,
 };
-use std::collections::HashMap;
 
 /// `LiquidBlock.POSSIBLE_FLOW_DIRECTIONS`.
 const POSSIBLE_FLOW_DIRECTIONS: [Direction; 5] = [
@@ -44,16 +43,31 @@ fn flowing_of(kind: FluidKind) -> FluidKind {
 }
 
 /// `FlowingFluid.SpreadContext`: per-spread caches keyed by horizontal offset.
+/// A spread looks at most `SPREAD_REACH` blocks away on each axis (the slope
+/// search's 4 steps after the first), so the caches are flat arrays around
+/// the origin: no hashing and no allocation on the hot path. A position
+/// outside them is read uncached.
 struct SpreadContext {
     origin: BlockPos,
-    states: HashMap<i16, BlockStateId>,
-    holes: HashMap<i16, bool>,
+    states: [Option<BlockStateId>; SPREAD_CELLS],
+    holes: [Option<bool>; SPREAD_CELLS],
 }
+const SPREAD_REACH: i32 = 5;
+const SPREAD_SIDE: i32 = 2 * SPREAD_REACH + 1;
+const SPREAD_CELLS: usize = (SPREAD_SIDE * SPREAD_SIDE) as usize;
 impl SpreadContext {
-    fn key(&self, pos: BlockPos) -> i16 {
-        let x = pos.x.wrapping_sub(self.origin.x).wrapping_add(128) & 0xff;
-        let z = pos.z.wrapping_sub(self.origin.z).wrapping_add(128) & 0xff;
-        ((x << 8) | z) as i16
+    fn new(origin: BlockPos) -> Self {
+        Self {
+            origin,
+            states: [None; SPREAD_CELLS],
+            holes: [None; SPREAD_CELLS],
+        }
+    }
+    fn index(&self, pos: BlockPos) -> Option<usize> {
+        let x = pos.x.wrapping_sub(self.origin.x) + SPREAD_REACH;
+        let z = pos.z.wrapping_sub(self.origin.z) + SPREAD_REACH;
+        ((0..SPREAD_SIDE).contains(&x) && (0..SPREAD_SIDE).contains(&z))
+            .then(|| (x * SPREAD_SIDE + z) as usize)
     }
 }
 
@@ -136,11 +150,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     // ---- shape occlusion ----
 
-    fn collision_or_empty(&self, state: BlockStateId) -> (i32, VoxelShape) {
+    fn collision_or_empty(&self, state: BlockStateId) -> (i32, &VoxelShape) {
         let index = self.b.facts(state).shape;
         match self.b.collision_shape(state) {
-            Some(shape) => (index, shape.clone()),
-            None => (-1, VoxelShape::empty()),
+            Some(shape) => (index, shape),
+            None => (-1, VoxelShape::empty_ref()),
         }
     }
     /// `FlowingFluid.canPassThroughWall`.
@@ -150,37 +164,35 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         source: BlockStateId,
         target: BlockStateId,
     ) -> bool {
+        // The shapes are compared by identity and borrowed, never cloned: a
+        // clone of the shared block or empty shape is atomic reference counts
+        // every thread contends on, and this runs for every step of a spread.
         let (target_index, target_shape) = self.collision_or_empty(target);
-        let block = VoxelShape::block();
-        if target_shape.same_identity(&block) {
+        if target_shape.is_block() {
             return false;
         }
         let (source_index, source_shape) = self.collision_or_empty(source);
-        if source_shape.same_identity(&block) {
+        if source_shape.is_block() {
             return false;
         }
-        let empty = VoxelShape::empty();
-        if source_shape.same_identity(&empty) && target_shape.same_identity(&empty) {
+        if source_shape.is_empty_identity() && target_shape.is_empty_identity() {
             return true;
         }
         let cacheable = source_index >= 0 && target_index >= 0;
         let key = (source_index, target_index, direction as u8);
-        if cacheable {
-            if let Some(result) = self
+        if cacheable
+            && let Some(result) = self
                 .b
                 .occlusion_cache
-                .lock()
+                .read()
                 .ok()
                 .and_then(|cache| cache.get(&key).copied())
-            {
-                return result;
-            }
+        {
+            return result;
         }
-        let result = !merged_face_occludes(&source_shape, &target_shape, direction);
-        if cacheable {
-            if let Ok(mut cache) = self.b.occlusion_cache.lock() {
-                cache.insert(key, result);
-            }
+        let result = !merged_face_occludes(source_shape, target_shape, direction);
+        if cacheable && let Ok(mut cache) = self.b.occlusion_cache.write() {
+            cache.insert(key, result);
         }
         result
     }
@@ -406,23 +418,27 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             && self.can_hold_specific_fluid(test, flowing_of(kind))
     }
     fn context_state(&self, context: &mut SpreadContext, pos: BlockPos) -> BlockStateId {
-        let key = context.key(pos);
-        if let Some(state) = context.states.get(&key) {
-            return *state;
+        let Some(i) = context.index(pos) else {
+            return self.state(pos);
+        };
+        if let Some(state) = context.states[i] {
+            return state;
         }
         let state = self.state(pos);
-        context.states.insert(key, state);
+        context.states[i] = Some(state);
         state
     }
     fn context_is_hole(&self, kind: FluidKind, context: &mut SpreadContext, pos: BlockPos) -> bool {
-        let key = context.key(pos);
-        if let Some(hole) = context.holes.get(&key) {
-            return *hole;
+        let index = context.index(pos);
+        if let Some(hole) = index.and_then(|i| context.holes[i]) {
+            return hole;
         }
         let state = self.context_state(context, pos);
         let below_state = self.below_state(pos);
         let hole = self.is_water_hole(kind, state, below_state);
-        context.holes.insert(key, hole);
+        if let Some(i) = index {
+            context.holes[i] = Some(hole);
+        }
         hole
     }
     fn slope_distance(
@@ -482,11 +498,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if !self.can_hold_specific_fluid(test_state, new_fluid.kind()) {
                 continue;
             }
-            let context = context.get_or_insert_with(|| SpreadContext {
-                origin: pos,
-                states: HashMap::new(),
-                holes: HashMap::new(),
-            });
+            let context = context.get_or_insert_with(|| SpreadContext::new(pos));
             let distance = if self.context_is_hole(kind, context, test_pos) {
                 0
             } else {
@@ -521,6 +533,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         target: FluidState,
     ) {
         let b = self.b;
+        if !self
+            .level
+            .allow_spread(Spread::Fluid, rel(pos, direction.opposite()), pos)
+        {
+            return;
+        }
         if !is_water(kind)
             && direction == Direction::Down
             && b.is_water_fluid(self.fluid_at(pos).kind())
@@ -743,7 +761,7 @@ pub(crate) fn merged_face_occludes(
     direction: Direction,
 ) -> bool {
     let block = VoxelShape::block();
-    if shape.same_identity(&block) || occluder.same_identity(&block) {
+    if shape.is_block() || occluder.is_block() {
         return true;
     }
     let positive = matches!(

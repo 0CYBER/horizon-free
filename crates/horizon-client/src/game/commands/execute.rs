@@ -32,6 +32,8 @@ pub(in crate::game) struct Source {
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
     pub block: Option<(i32, i32, i32)>,
+    /// The command block minecart whose output this source is.
+    pub cart: Option<u32>,
 }
 
 /// Where `execute store` writes.
@@ -94,6 +96,7 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
     /// The server as a source (function ticks and schedules): the world spawn.
@@ -108,9 +111,10 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
-    pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
+    pub(in crate::game) fn target_rotation(&self, t: Target) -> [f32; 2] {
         match t {
             Target::Player => [self.yaw, self.pitch],
             Target::Guest(conn) => self
@@ -674,7 +678,8 @@ impl Game<'_> {
                             self.target_by_uuid(horizon_client::lan::playerdata::ints_uuid(uuid))
                         }
                         horizon_client::mobs::leash::Holder::Mob(i) => Some(Target::Mob(i)),
-                        horizon_client::mobs::leash::Holder::Knot(_) => None,
+                        horizon_client::mobs::leash::Holder::Boat(_)
+                        | horizon_client::mobs::leash::Holder::Knot(_) => None,
                     })
                     .into_iter()
                     .collect(),

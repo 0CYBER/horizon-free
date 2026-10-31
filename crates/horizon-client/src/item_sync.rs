@@ -131,7 +131,7 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             Component::Text(t) | Component::Nbt(t) => t.clone(),
             Component::Ident(v) => Tag::String(v.as_str().into()),
             Component::Lore(lines) => Tag::List(lines.clone()),
-            Component::WritableBook(pages) => Tag::compound([(
+            Component::WritableBook { pages, .. } => Tag::compound([(
                 "pages",
                 Tag::List(
                     pages

@@ -40,6 +40,26 @@ const MAX_CROUCH_AMOUNT: f32 = 5.0;
 pub fn flag(m: &Mob, f: i32) -> bool {
     m.extra.ints[0] & f != 0
 }
+/// `Fox.getAmbientSound` for a fox awake: when it isn't bright outside, one
+/// time in ten, the screech if no non-spectator player's box is within 16
+/// blocks of the fox's; otherwise the ambient sound.
+pub fn awake_ambient(m: &mut Mob, w: &MobWorld) -> &'static str {
+    // Level.isBrightOutside: the End has a fixed time, so never there.
+    let bright = w.daylight && !w.end;
+    if !bright && m.random.next_float() < 0.1 {
+        let around = m.bounds().inflate(Vec3::new(16.0, 16.0, 16.0));
+        let player_near = w
+            .player
+            .as_ref()
+            .is_some_and(|p| !p.spectator && p.bounds.intersects(around));
+        if !player_near {
+            return SCREECH;
+        }
+    }
+    "entity.fox.ambient"
+}
+/// `SoundEvents.FOX_SCREECH`.
+pub const SCREECH: &str = "entity.fox.screech";
 fn set_flag(m: &mut Mob, f: i32, on: bool) {
     if on {
         m.extra.ints[0] |= f;
