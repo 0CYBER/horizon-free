@@ -5,7 +5,7 @@
 //! `sin`/`cos` per triangle, the sky pass took 10.2 ms at dawn at 1080p on an
 //! Intel UHD 730 against 0.6 ms by day; now 1.8 ms).
 //!
-//! MĂ¶ller-Trumbore from the camera reduces to triple products: with apex A
+//! Möller-Trumbore from the camera reduces to triple products: with apex A
 //! and rim vertices r0, r1, a ray d hits at barycentrics proportional to
 //! (`[d, r0, r1]`, `[A, d, r1]`, `[A, r0, d]`), each a dot of d with a
 //! constant normal, and their sum S is the negated determinant. A hit needs
@@ -15,9 +15,9 @@ use glam::Vec3;
 
 pub const TRIANGLES: usize = 16;
 
-/// Per triangle: xyz `r0 Ă— r1` (its dot with a ray is the apex's weight
+/// Per triangle: xyz `r0 × r1` (its dot with a ray is the apex's weight
 /// times S), w `[A, r0, r1]` (its sign is S's where the hit lies ahead).
-/// Then per rim vertex: xyz `r Ă— A`.
+/// Then per rim vertex: xyz `r × A`.
 pub fn normals(alpha: f32, sun: Vec3) -> [[f32; 4]; 2 * TRIANGLES] {
     let (apex, rim) = vertices(alpha, sun);
     let mut out = [[0.0; 4]; 2 * TRIANGLES];
@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    /// The shader's former per-pixel MĂ¶ller-Trumbore over the same vertices.
+    /// The shader's former per-pixel Möller-Trumbore over the same vertices.
     fn reference(alpha: f32, sun: Vec3, d: Vec3) -> f32 {
         let (apex, rim) = vertices(alpha, sun);
         let mut best = 0.0f32;
