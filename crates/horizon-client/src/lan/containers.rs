@@ -74,6 +74,11 @@ impl Hub {
             seed,
         })
     }
+    /// Draw the next seed from the server sound source.
+    pub fn next_sound_seed(&self) -> i64 {
+        next_sound_seed(&mut *self.sound_seeds.lock().unwrap())
+    }
+
     pub fn sound(
         &self,
         name: &str,
@@ -84,7 +89,7 @@ impl Hub {
         except: Option<u32>,
     ) {
         // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
-        let seed = next_sound_seed(&mut *self.sound_seeds.lock().unwrap());
+        let seed = self.next_sound_seed();
         let packet = self.sound_packet(name, at, volume, pitch, source, seed);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
