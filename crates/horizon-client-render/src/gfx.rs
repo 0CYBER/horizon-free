@@ -40,7 +40,7 @@ mod entity_outline;
 mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::{
-    ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
+    ENERGY_SWIRL_OVERLAY, OIT_ENTITY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
     TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
     WATER_MASK_OVERLAY,
 };
@@ -4768,6 +4768,13 @@ impl Renderer {
             );
             entities = &self.pack_entity_rest;
         }
+        // GameRenderer.useImprovedTransparency. A shader pack keeps its own
+        // path.
+        let oit_on = self.improved_transparency
+            && !frame.title
+            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
+            && self.native.is_none()
+            && oit::supported(&self.device);
         let [
             entity_quads,
             text_quads,
@@ -4778,9 +4785,14 @@ impl Renderer {
             shadow_quads,
             translucent_particle_quads,
             translucent_item_quads,
-        ] = self
-            .entity_batch
-            .update(entities, frame.additive, frame.hand, frame.see_through);
+            oit_entity_quads,
+        ] = self.entity_batch.update(
+            entities,
+            frame.additive,
+            frame.hand,
+            frame.see_through,
+            oit_on,
+        );
         let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads = entity_quads
             + text_quads
@@ -4790,7 +4802,11 @@ impl Renderer {
             + swirl_quads
             + shadow_quads
             + translucent_particle_quads
-            + translucent_item_quads;
+            + translucent_item_quads
+            + oit_entity_quads;
+        // Where the tail of materials the classic and the improved passes
+        // both draw ends: the shadows, particles and items count back from it.
+        let base_quads = world_quads - oit_entity_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -4956,13 +4972,6 @@ impl Renderer {
                 &self.globals,
             );
         }
-        // GameRenderer.useImprovedTransparency. A shader pack keeps its own
-        // path.
-        let oit_on = self.improved_transparency
-            && !frame.title
-            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.is_none()
-            && oit::supported(&self.device);
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on
@@ -5390,7 +5399,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..translucent_item_quads * 6,
-                    ((world_quads - translucent_item_quads) * 4) as i32,
+                    ((base_quads - translucent_item_quads) * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -5416,7 +5425,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..shadow_quads * 6,
-                    ((world_quads
+                    ((base_quads
                         - translucent_item_quads
                         - translucent_particle_quads
                         - shadow_quads)
@@ -5439,7 +5448,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if !frame.lightning.bolts.is_empty() {
+            if !frame.lightning.bolts.is_empty() && !oit_on {
                 pass.set_pipeline(&self.lightning_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 self.lightning.draw(&mut pass, &frame.lightning);
@@ -5461,7 +5470,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if additive_quads > 0 {
+            if additive_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.additive_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5561,7 +5570,7 @@ impl Renderer {
                             pass,
                             &f.shadow[s],
                             shadow_quads,
-                            world_quads
+                            base_quads
                                 - translucent_item_quads
                                 - translucent_particle_quads
                                 - shadow_quads,
@@ -5570,14 +5579,24 @@ impl Renderer {
                             pass,
                             &f.entity[s],
                             translucent_particle_quads,
-                            world_quads - translucent_item_quads - translucent_particle_quads,
+                            base_quads - translucent_item_quads - translucent_particle_quads,
                         );
                         quads(
                             pass,
                             &f.entity[s],
                             translucent_item_quads,
-                            world_quads - translucent_item_quads,
+                            base_quads - translucent_item_quads,
                         );
+                        // Translucent, emissive, eyes and breeze wind models:
+                        // the same fragment, their light and shading are in
+                        // the vertices.
+                        quads(pass, &f.entity[s], oit_entity_quads, base_quads);
+                        if !frame.lightning.bolts.is_empty() {
+                            pass.set_pipeline(&f.lightning[s]);
+                            self.lightning.draw(pass, &frame.lightning);
+                            pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                        }
+                        quads(pass, &f.additive[s], additive_quads, world_quads);
                         self.weather
                             .draw_with(pass, &f.weather[s], &self.entity_group);
                         if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
@@ -5659,8 +5678,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..translucent_particle_quads * 6,
-                    ((world_quads - translucent_item_quads - translucent_particle_quads) * 4)
-                        as i32,
+                    ((base_quads - translucent_item_quads - translucent_particle_quads) * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -6485,9 +6503,9 @@ mod tests {
         .flat_map(|(layer, id)| quad(layer, id))
         .collect();
         let mut batch = super::EntityBatch::default();
-        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
+        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8), false);
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 1, 0, 0, 1, 1, 0]);
+        assert_eq!(counts, [4, 1, 1, 1, 0, 0, 1, 1, 0, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()

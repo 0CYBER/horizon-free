@@ -43,6 +43,41 @@ fn scroll_u(u: f32, scroll: f32) -> f32 {
 /// HDR output, as `mesher::hdr_tier`.
 const EYES_TIER: u8 = crate::mesher::BRIGHT;
 
+/// Tags quads as drawn by a render type vanilla gives an `OitPipelineSet`
+/// (`gfx::OIT_ENTITY`): improved transparency draws them in its stages.
+fn mark_oit(quads: &mut [Vertex]) {
+    for vertex in quads {
+        vertex.layer |= crate::gfx::OIT_ENTITY;
+    }
+}
+/// Whether the species' model is built with `RenderTypes::entityTranslucent`
+/// (`Model.renderType`, which `LivingEntityRenderer.getRenderType` uses for the
+/// body): the allay, the piglins, the breeze, the vex, the player model and the
+/// sulfur cube.
+fn translucent_body(m: &Mob) -> bool {
+    matches!(
+        m.species(),
+        Species::Allay
+            | Species::Piglin
+            | Species::PiglinBrute
+            | Species::ZombifiedPiglin
+            | Species::Breeze
+            | Species::Vex
+            | Species::SulfurCube
+    ) || avatar(m)
+}
+/// Whether a layer's render type has an `OitPipelineSet`: `RenderTypes.eyes` and
+/// `entityTranslucentEmissive` (the full bright layers), `breezeWind`, and
+/// `entityTranslucent` (the slime's outer cube, the sulfur cube's inner cube
+/// and the horse's markings).
+fn translucent_layer(m: &Mob, layer: &Layer) -> bool {
+    layer.full_bright
+        || layer.model == "breeze#wind"
+        || layer.model == "slime#outer"
+        || matches!(m.species(), Species::SulfurCube)
+        || layer.texture.starts_with("entity/horse/horse_markings")
+}
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
@@ -1622,6 +1657,7 @@ fn render_visible(
             }
         });
         if body_visible && let Some(uv) = uv {
+            let start = out.len();
             draw(
                 &model,
                 base,
@@ -1632,6 +1668,9 @@ fn render_visible(
                 body_overlay(m, alpha),
                 out,
             );
+            if translucent_body(m) {
+                mark_oit(&mut out[start..]);
+            }
         }
     };
     // The translucent shell writes depth: draw the opaque core before it.
@@ -1705,6 +1744,9 @@ fn render_visible(
             overlay,
             out,
         );
+        if translucent_layer(m, &layer) {
+            mark_oit(&mut out[start..]);
+        }
         // The eyes render type's glowing eyes also shine in HDR output, at
         // `EYES_TIER` in the overlay's high bits (entity.wgsl fs_hdr_mark).
         if layer.full_bright && m.species() != Species::Warden {

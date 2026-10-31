@@ -132,7 +132,7 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>) -> Out {
     var out = entity_vertex(position, uv, overlay & 0xffffu, color, light, normal);
     out.glint_uv = glint_uv;
-    out.tier = overlay >> 16u;
+    out.tier = (overlay >> 16u) & 0xffu;
     return out;
 }
 // Retained bolt-local geometry, translated using the same f64 camera

@@ -46,3 +46,16 @@
     let color = energy_swirl_base(in);
     return oit_accumulate_additive(vec4(color.rgb, min(0.99, color.a)), energy_swirl_fog(in), in.clip);
 }
+// `OIT_LIGHTNING` and `OIT_DRAGON_RAYS`: additive (`OIT_ADDITIVE`), the
+// classic fragment's colour (fs_celestial) with the alpha capped.
+@fragment fn fs_oit_lightning_bounds(in: Out) -> @location(0) vec4<f32> {
+    return oit_bounds_fragment(min(0.99, celestial_color(in).a), in.clip);
+}
+@fragment fn fs_oit_lightning_transmittance(in: Out) -> OitCoefficients {
+    discard;
+    return OitCoefficients(vec4(0.0), vec4(0.0));
+}
+@fragment fn fs_oit_lightning_accumulate(in: Out) -> @location(0) vec4<f32> {
+    let color = celestial_color(in);
+    return oit_accumulate_additive(vec4(color.rgb, min(0.99, color.a)), 0.0, in.clip);
+}

@@ -20,6 +20,10 @@ pub struct Features {
     pub shadow: Set,
     /// `OIT_ENERGY_SWIRL`.
     pub swirl: Set,
+    /// `OIT_LIGHTNING`: the retained bolts.
+    pub lightning: Set,
+    /// `OIT_DRAGON_RAYS`: the additive geometry after the bolts.
+    pub additive: Set,
     /// `OIT_WEATHER`.
     pub weather: Set,
     /// `OIT_WORLD_BORDER`.
@@ -89,6 +93,15 @@ impl Features {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &border_attributes,
         })];
+        let lightning_attributes = wgpu::vertex_attr_array![7=>Float32x3];
+        let lightning_buffers = [
+            entity_buffers[0].clone(),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 3]>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &lightning_attributes,
+            }),
+        ];
         let set = |module: &wgpu::ShaderModule,
                    groups: [Option<&wgpu::BindGroupLayout>; 2],
                    buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
@@ -182,6 +195,24 @@ impl Features {
                 entities,
                 &entity_buffers,
                 kind("energy swirls", "swirl", None, PLAIN),
+            ),
+            lightning: set(
+                &entity_module,
+                entities,
+                &lightning_buffers,
+                Kind {
+                    label: "lightning",
+                    name: "lightning",
+                    vertex: "vs_lightning",
+                    cull: None,
+                    bias: PLAIN,
+                },
+            ),
+            additive: set(
+                &entity_module,
+                entities,
+                &entity_buffers,
+                kind("additive entities", "lightning", None, PLAIN),
             ),
             weather: set(
                 &entity_module,
