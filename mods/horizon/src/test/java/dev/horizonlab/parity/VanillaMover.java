@@ -12,8 +12,8 @@ import net.minecraft.client.Options;
  * The vanilla client as an honest player for the anticheat's movement prediction
  * (tools/anticheat_e2e.py --check prediction-vanilla): it runs net.minecraft.client.main.Main
  * unchanged and presses its key mappings from lines on stdin, as a player's keyboard would:
- * "down forward", "up jump", "look 90 10" (yaw, pitch). Everything the keys do is vanilla's own
- * movement code. It prints "[VanillaMover] ready" once the player is in its level with no screen
+ * "down forward", "up jump", "look 90 10" (yaw, pitch), "attack" (a click of the attack key:
+ * Minecraft.startAttack, as handleKeybinds runs it). Everything the keys do is vanilla's own code. It prints "[VanillaMover] ready" once the player is in its level with no screen
  * open, and "[VanillaMover] at x y z" after each "where".
  */
 public final class VanillaMover {
@@ -58,6 +58,16 @@ public final class VanillaMover {
             case "look" -> {
                 mc.player.setYRot(Float.parseFloat(words[1]));
                 mc.player.setXRot(Float.parseFloat(words[2]));
+            }
+            case "attack" -> {
+                try {
+                    var startAttack = Minecraft.class.getDeclaredMethod("startAttack");
+                    startAttack.setAccessible(true);
+                    startAttack.invoke(mc);
+                } catch (ReflectiveOperationException e) {
+                    throw new IllegalStateException(e);
+                }
+                System.out.println("[VanillaMover] attacked " + mc.hitResult.getType());
             }
             case "where" -> System.out.println("[VanillaMover] at " + mc.player.getX() + " " + mc.player.getY()
                     + " " + mc.player.getZ() + " screen " + mc.gui.screen());

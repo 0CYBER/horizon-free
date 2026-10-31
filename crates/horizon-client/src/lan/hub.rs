@@ -2685,6 +2685,15 @@ impl Hub {
                     g.max_unacknowledged = 10;
                 }
                 S::Pong(p) => self.anticheat_pong(i, p.id),
+                S::Attack(p) => {
+                    if !self.anticheat_attack(i, p.id, events) {
+                        events.push(HostEvent::Packet(conn, Box::new(S::Attack(p))));
+                    }
+                }
+                S::Punch(p) => {
+                    self.anticheat_swing(i);
+                    events.push(HostEvent::Packet(conn, Box::new(S::Punch(p))));
+                }
                 S::ClientTickEnd(_) => {
                     // handleClientTickEnd: no move this tick, no known movement.
                     let g = &mut self.guests[i];

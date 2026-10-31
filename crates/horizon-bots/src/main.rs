@@ -63,9 +63,12 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          into a writable book), flood-sign (four 384-character lines on the block
                          below), flood-recipe (recipe book placements)
   --flood N              packets a tick for the flood behaviours; default 100
-  --attack NAME          attack the player NAME twice a second, from wherever the bot is (a reach test);
+  --attack NAME          attack the player NAME twice a second, from wherever the bot is (a reach test),
+                         swinging after each attack as vanilla's client does. NAME,NAME...: each of them
+                         in the same tick (a multi-target kill aura, for the anticheat's tests);
                          the report gives each bot's last health
   --attack-after S       start attacking S seconds after joining; default 5
+  --no-swing             attack without swinging (a kill aura hiding its swing, for the anticheat's tests)
   --no-loaded            never say the level is loaded (ServerboundPlayerLoadedPacket): a vanilla server
                          ignores the player's moves and actions for its first 3 seconds
   --no-read              stop reading from the server once spawned (a client that lets the
@@ -142,6 +145,7 @@ struct Options {
     /// The player to attack, and how long after joining to start.
     attack: Option<String>,
     attack_after: f64,
+    no_swing: bool,
     flood: usize,
     no_read: bool,
     no_loaded: bool,
@@ -174,6 +178,7 @@ fn options() -> Result<Options, String> {
         explore_speed: 22.0,
         attack: None,
         attack_after: 5.0,
+        no_swing: false,
         flood: 100,
         no_read: false,
         no_loaded: false,
@@ -195,6 +200,10 @@ fn options() -> Result<Options, String> {
         }
         if arg == "--no-read" {
             o.no_read = true;
+            continue;
+        }
+        if arg == "--no-swing" {
+            o.no_swing = true;
             continue;
         }
         if arg == "--no-loaded" {
@@ -335,8 +344,8 @@ struct Bot {
     counters: OnceLock<Arc<Counters>>,
     /// The bot stopped reading (--no-read).
     deaf: AtomicBool,
-    /// `--attack`: the target's UUID and, once AddEntity showed it, its entity id.
-    target: Mutex<(Option<u128>, Option<i32>)>,
+    /// `--attack`: each target's UUID and, once AddEntity showed it, its entity id.
+    target: Mutex<Vec<(u128, Option<i32>)>>,
     attacks: AtomicU64,
     /// The last SetHealth.
     health: Mutex<Option<f32>>,
@@ -701,9 +710,10 @@ fn read(
             }
             cb::ADD_ENTITY => {
                 if let Ok(play::Clientbound::AddEntity(p)) = play::Clientbound::decode(id, &body) {
-                    let mut target = lock(&bot.target);
-                    if target.0 == Some(p.uuid) {
-                        target.1 = Some(p.id);
+                    for target in lock(&bot.target).iter_mut() {
+                        if target.0 == p.uuid {
+                            target.1 = Some(p.id);
+                        }
                     }
                 }
                 Ok(())
@@ -802,7 +812,12 @@ fn run_bot(
     let (reader, writer) = connection.split();
     let _ = bot.counters.set(reader.counters.clone());
     let writer = Arc::new(Mutex::new(writer));
-    lock(&bot.target).0 = o.attack.as_deref().map(offline_uuid);
+    *lock(&bot.target) = o
+        .attack
+        .iter()
+        .flat_map(|names| names.split(','))
+        .map(|name| (offline_uuid(name), None))
+        .collect();
     bot.online.store(true, Ordering::SeqCst);
     {
         let (writer, bot) = (writer.clone(), bot.clone());
@@ -1012,13 +1027,16 @@ fn run_bot(
                 send(body);
             }
         }
-        let target = lock(&bot.target).1;
-        if let Some(id) = target
-            && joined.elapsed().as_secs_f64() >= o.attack_after
-            && tick % 10 == 0
-        {
-            send(play::Serverbound::Attack(play::Attack { id }).encode());
-            bot.attacks.fetch_add(1, Ordering::Relaxed);
+        if joined.elapsed().as_secs_f64() >= o.attack_after && tick % 10 == 0 {
+            let targets: Vec<i32> = lock(&bot.target).iter().filter_map(|t| t.1).collect();
+            for id in targets {
+                send(play::Serverbound::Attack(play::Attack { id }).encode());
+                // Minecraft.startAttack swings right after the attack.
+                if !o.no_swing {
+                    send(play::Serverbound::Punch(Empty).encode());
+                }
+                bot.attacks.fetch_add(1, Ordering::Relaxed);
+            }
         }
         tick += 1;
         let ok = send(

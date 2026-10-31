@@ -6,9 +6,9 @@ and horizon-bots, legit bots beside cheating ones.
     python3 tools/anticheat_e2e.py --bin-dir target/fast --check timer
 
 Checks:
-- off:   no `[anticheat]` in server.toml: the anticheat says nothing, writes no log and kicks no one, the
-         cheating bot included (vanilla's checks only).
-- timer: `[anticheat]` on: a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
+- off:   `[anticheat] enabled = false` in server.toml: the anticheat says nothing, writes no log and kicks
+         no one, the cheating bot included (vanilla's checks only).
+- timer: `[anticheat]` on, with the timer's thresholds once trusted (it logs only by default): a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
          reported to the console and kicked; the legit bots (walking and exploring at 20 Hz) are never
          flagged.
 - ground: `[anticheat]` on, survival (allow-flight on, so vanilla's floating kick stays out of it): a bot
@@ -20,11 +20,16 @@ Checks:
          soul sand, swims, walks into cows, has blocks changed around it, flies in creative, glides with an
          elytra and a firework, launches with riptide and rides a boat: it is never flagged. A bot, which
          moves by its own rules and sends no keys, is flagged and sent back.
+- combat: no server.toml (the anticheat's defaults: `combat` acts), survival: a bot attacking a player
+         twice a second and swinging each time, as vanilla's client does, is never flagged and its hits
+         land; one that doesn't swing, and one that attacks two players in the same tick, are flagged,
+         their attacks dropped, and kicked.
 - prediction-vanilla (only with --check): the same with the real vanilla 26.3 client (tools/vanilla_client.py, from the owner's
          own files; on macOS from the logged-in screen session, even a locked one), its keys pressed by
          VanillaMover (mods/horizon/src/test/java): it walks, sprint-jumps, strafes and sneaks, with Speed
          given and cleared, over packed ice, swims, walks into cows, jumps at a block set in front of it and
-         glides with an elytra and a firework, through the same relay: it is never flagged.
+         glides with an elytra and a firework, through the same relay: it is never flagged. It hits the
+         cow too, and `combat` never flags it.
 
 Each server runs in a fresh folder with fresh HORIZON_HOME and XDG folders (lab.game_env), on a free port,
 in a flat world (creative unless the check says otherwise: the bots fly). Build first:
@@ -63,13 +68,23 @@ PROPERTIES = {
     'simulation-distance': '4',
     'max-players': '100',
 }
-# The bots move by their own rules, not vanilla's: the prediction, which plays each move again with
-# vanilla's movement code, would flag every one of them. Its own check runs real clients.
+# The timer and the ground with the thresholds they get once trusted (they log only by default). The bots
+# move by their own rules, not vanilla's: the prediction, which plays each move again with vanilla's
+# movement code, would flag every one of them. Its own check runs real clients.
 ON = '''[anticheat]
 enabled = true
+[anticheat.timer]
+setback = 2
+alert = 5
+kick = 20
+[anticheat.ground]
+setback = 5
+alert = 15
+kick = 60
 [anticheat.prediction]
 enabled = false
 '''
+OFF = '[anticheat]\nenabled = false\n'
 
 
 class Failed(Exception):
@@ -115,7 +130,7 @@ def run_pair(bins, folder, out, name, anticheat, seconds):
 
 
 def check_off(bins, scratch, out, seconds):
-    lines, legit, cheat, log = run_pair(bins, scratch / 'off', out, 'Off', None, seconds)
+    lines, legit, cheat, log = run_pair(bins, scratch / 'off', out, 'Off', OFF, seconds)
     if log is not None:
         raise Failed(f'off: an anticheat log was written:\n{log}')
     noise = [l for l in lines if 'Anticheat' in l]
@@ -325,8 +340,10 @@ def honest_play(game, console):
 
 def check_prediction(bins, scratch, out, seconds):
     folder = scratch / 'prediction'
-    # The other checks stay out of it: this one is about the prediction alone.
-    toml = '[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
+    # The other checks stay out of it: this one is about the prediction alone, with the thresholds it gets
+    # once trusted (it logs only by default).
+    toml = ('[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
+            '[anticheat.prediction]\nsetback = 5\nalert = 15\nkick = 60\n')
     server, port = start(bins, folder, toml, out, 'prediction', gamemode='survival', difficulty='peaceful')
     from lan_e2e import Game  # noqa: E402 (only this check drives a client)
     game = Game('client', bins / f'horizon-ctl{EXE}', lab.RESOURCES.resolve())
@@ -387,6 +404,7 @@ class VanillaClient:
         self.log = open(log, 'w')
         self.ready = threading.Event()
         self.positions = []
+        self.hits = 0
         self.process = subprocess.Popen(command, cwd=args.game_dir, env=vanilla_client.environment(), text=True,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         threading.Thread(target=self.pump, daemon=True).start()
@@ -396,6 +414,8 @@ class VanillaClient:
             self.log.write(line)
             if '[VanillaMover] ready' in line:
                 self.ready.set()
+            elif '[VanillaMover] attacked ENTITY' in line:
+                self.hits += 1
             elif '[VanillaMover] at ' in line:
                 self.positions.append([float(v) for v in line.split('[VanillaMover] at ')[1].split()[:3]])
 
@@ -436,8 +456,12 @@ def vanilla_play(keys, console):
     keys('up jump', 'up forward')
     at('fill ~-4 ~-4 ~-4 ~4 ~-1 ~13 minecraft:stone')
     time.sleep(2)
-    at('summon minecraft:cow ^ ^ ^2')
-    keys('down forward', then=2)
+    at('summon minecraft:cow ~ ~ ~2')
+    # Hits on it, half a second apart, looking down at it (for `combat`).
+    keys('look 0 25', then=0.5)
+    for _ in range(4):
+        keys('attack', then=0.5)
+    keys('look 0 0', 'down forward', then=2)
     keys('up forward')
     console('kill @e[type=minecraft:cow]')
     at('setblock ^ ^ ^1 minecraft:stone')
@@ -461,7 +485,8 @@ def vanilla_play(keys, console):
 
 def check_prediction_vanilla(bins, scratch, out, seconds):
     folder = scratch / 'prediction-vanilla'
-    toml = '[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
+    toml = ('[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
+            '[anticheat.prediction]\nsetback = 5\nalert = 15\nkick = 60\n')
     server, port = start(bins, folder, toml, out, 'prediction-vanilla', gamemode='survival', difficulty='peaceful')
     relay = Jitter(port)
     client = None
@@ -490,16 +515,66 @@ def check_prediction_vanilla(bins, scratch, out, seconds):
         raise Failed('prediction-vanilla: the vanilla client did not say where it was')
     (x0, _, z0), (x1, _, z1) = client.positions[0], client.positions[-1]
     walked = ((x1 - x0) ** 2 + (z1 - z0) ** 2) ** 0.5
+    if client.hits == 0:
+        raise Failed('prediction-vanilla: the vanilla client never hit the cow')
     if walked < 20:
         raise Failed(f'prediction-vanilla: the vanilla client only got {walked:.1f} blocks away: its keys did nothing')
     print(f'prediction-vanilla: the vanilla client (20-120 ms jitter) was never flagged; it ended {walked:.0f} blocks '
-          'from where it joined')
+          f'from where it joined, and its {client.hits} hits on a cow were never flagged by combat')
+
+
+
+def check_combat(bins, scratch, out, seconds):
+    folder = scratch / 'combat'
+    server, port = start(bins, folder, None, out, 'combat', gamemode='survival', difficulty='peaceful')
+    try:
+        # Everyone spawns on one spot, within reach of the others, and a hit's damage stays.
+        server.console('gamerule respawn_radius 0')
+        server.console('gamerule natural_health_regeneration false')
+        with ThreadPoolExecutor(4) as pool:
+            targets = pool.submit(bots, bins, port, out, 'Target', 3, 'stand', seconds + 10)
+            server.wait_for('Target2 joined the game', 120)
+            runs = {
+                'Fair': pool.submit(bots, bins, port, out, 'Fair', 1, 'stand', seconds, '--attack', 'Target0'),
+                'NoSwing': pool.submit(bots, bins, port, out, 'NoSwing', 1, 'stand', seconds,
+                                       '--attack', 'Target1', '--no-swing'),
+                'Aura': pool.submit(bots, bins, port, out, 'Aura', 1, 'stand', seconds,
+                                    '--attack', 'Target1,Target2'),
+            }
+            runs = {k: v.result() for k, v in runs.items()}
+            runs['Target'] = targets.result()
+    finally:
+        server.stop()
+    log = folder / 'logs/anticheat.log'
+    # The other checks only log by default, and the bots move by their own rules.
+    log = '\n'.join(l for l in (log.read_text() if log.exists() else '').splitlines() if 'failed combat' in l)
+    fair = runs['Fair']['per_bot'][0]
+    if fair['attacks'] < 10:
+        raise Failed(f'combat: the fair bot attacked {fair["attacks"]} times')
+    for bot in runs['Fair']['per_bot'] + runs['Target']['per_bot']:
+        if bot['name'] in log:
+            raise Failed(f'combat: legit {bot["name"]} was flagged:\n{log}')
+    health = {bot['name']: bot['health'] for bot in runs['Target']['per_bot']}
+    # The fair bot's hits land; the cheaters' land only until their level reaches `setback`.
+    if not health['Target0'] < 10 < min(health['Target1'], health['Target2']):
+        raise Failed(f'combat: the targets ended with {health} health')
+    for name, what in (('NoSwing', 'attacked without swinging'), ('Aura', 'in one tick')):
+        cheater = runs[name]['per_bot'][0]
+        flags = [l for l in log.splitlines() if f'{cheater["name"]} failed combat' in l]
+        if len(flags) < 3 or not all(what in l for l in flags):
+            raise Failed(f'combat: {cheater["name"]} was flagged {len(flags)} times ({what}):\n{log}')
+        if not any('attacks dropped' in l for l in flags):
+            raise Failed(f'combat: {cheater["name"]}\'s attacks were never dropped:\n{log}')
+        if 'disconnected' not in (cheater['error'] or ''):
+            raise Failed(f'combat: {cheater["name"]} was not kicked ({cheater["error"]})')
+    print(f'combat: the no-swing and two-target bots are flagged, their attacks dropped, and kicked; the fair '
+          f'bot attacked {fair["attacks"]} times, never flagged; health left: {health}')
 
 
 CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction,
-          'prediction-vanilla': check_prediction_vanilla}
+          'prediction-vanilla': check_prediction_vanilla, 'combat': check_combat}
 # Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
-DEFAULT = ['ground', 'off', 'prediction', 'timer']
+DEFAULT = ['combat', 'ground', 'off', 'prediction', 'timer']
 
 
 def main():
