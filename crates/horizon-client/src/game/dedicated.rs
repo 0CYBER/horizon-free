@@ -914,6 +914,13 @@ impl Game<'_> {
             {
                 self.finish_report(recording, state.view, state.max_players);
             }
+            // DedicatedServer.sendLowDiskSpaceWarning: the operators hear of it
+            // (no window drains the toasts here).
+            if horizon_client::chunk_io::take().low_disk_space
+                && let Some(host) = self.lan.as_ref()
+            {
+                host.hub.send_low_disk_space_warning();
+            }
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }

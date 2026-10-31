@@ -1892,6 +1892,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
     ClearTitles(Bool1) = CLEAR_TITLES,
+    LowDiskSpaceWarning(Empty) = LOW_DISK_SPACE_WARNING,
     Commands(Commands) = COMMANDS,
     RecipeBookAdd(super::recipes::RecipeBookAdd) = RECIPE_BOOK_ADD,
     RecipeBookRemove(super::recipes::RecipeBookRemove) = RECIPE_BOOK_REMOVE,
@@ -2781,6 +2782,7 @@ mod tests {
     fn clientbound_round_trips() {
         let packets = vec![
             Clientbound::BundleDelimiter(Empty),
+            Clientbound::LowDiskSpaceWarning(Empty),
             Clientbound::PongResponse(crate::packets::status::Ping { time: 1_234_567 }),
             Clientbound::SetBorderCenter(SetBorderCenter { x: 1.5, z: -2.0 }),
             Clientbound::SetBorderLerpSize(SetBorderLerpSize {
