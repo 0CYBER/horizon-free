@@ -23,8 +23,9 @@
 
 ## Other projects' code
 
-<!-- "none", or for each project you read or copied from: its link at the commit, its license (only MIT, BSD,
-     Apache-2.0, ISC, zlib, 0BSD, MIT-0, Unlicense or CC0), and what you took. CONTRIBUTING.md "Only original code". -->
+<!-- "none", or for each project you read or copied from: its link at the commit, its license (only MIT,
+     BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, zlib, 0BSD, MIT-0, Unlicense or CC0-1.0), and what you took.
+     CONTRIBUTING.md "Only original code". -->
 
 ## Self-check
 
