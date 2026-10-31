@@ -1107,6 +1107,12 @@ impl LevelAccess for GameLevel<'_> {
         _state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        // TestBlock.ownSignal.
+        if let Some(BlockEntity::TestBlock(b)) =
+            self.world.block_entities.get(&(pos.x, pos.y, pos.z))
+        {
+            return b.own_signal();
+        }
         // TrappedChestBlock.getSignal: the players with it open, at most 15.
         if let Some(count) = self.lid_openers.get(&(pos.x, pos.y, pos.z)) {
             return (*count).clamp(0, 15);
@@ -4188,6 +4194,16 @@ impl Game<'_> {
                     kind: "structure_block",
                     ..
                 } => self.structure_block_neighbor_changed((pos.x, pos.y, pos.z)),
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "test_block",
+                    ..
+                } => self.test_block_neighbor_changed((pos.x, pos.y, pos.z)),
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "test_block_tick",
+                    ..
+                } => self.reset_test_block((pos.x, pos.y, pos.z)),
                 LevelEvent::BlockEvent {
                     pos,
                     kind: "brushable",
