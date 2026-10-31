@@ -8,6 +8,7 @@ pub mod connection;
 pub mod crypto;
 pub mod entity_data;
 pub mod frame;
+pub mod hash_ops;
 pub mod ids;
 pub mod item;
 pub mod packets;

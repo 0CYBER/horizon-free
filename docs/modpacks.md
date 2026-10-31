@@ -411,7 +411,16 @@ resistance, light, tool need, friction, map colour and sounds as overrides. `--r
 <prepared>` limits templates to blocks Horizon's tables have. `carry-report.json` lists, per
 block, what the template does not reproduce (other shapes, sounds no vanilla block has, a class
 of its own), and the blocks left out: those whose vanilla class has no vanilla block with the
-same states (Macaw's garage doors, multi-part gates). Recipes get the convention tags they use
+same states (Macaw's garage doors, multi-part gates). An item of a vanilla tool or armour class
+(`SwordItem`, `PickaxeItem`, `ArmorItem`, ...) gets the iron item of that class and slot as its
+template, and the oracle's durability, attribute modifiers, tool rules, enchantability and repair
+items as a component patch over it, minus what the template already has (`--resources` gives the
+template's components); other items keep `minecraft:stick`. Armour of the mod's own material gets a
+26.3 equipment asset (`assets/<ns>/equipment/<material>.json`) made from its 1.21.1 layers, their
+`textures/models/armor/<name>_layer_1.png` and `_layer_2.png` copied to
+`textures/entity/equipment/humanoid/` and `humanoid_leggings/`, and its `equippable` names that
+asset and the material's equip sound. A material with no asset to name (layers elsewhere, another
+mod's) draws the template's armour, reported as a difference. Recipes get the convention tags they use
 (`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
 oracle, templates are guessed from the blockstate's properties: the template whose properties
 include them with the fewest left over (models often ignore `powered` or `waterlogged`), the

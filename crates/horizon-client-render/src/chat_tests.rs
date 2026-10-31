@@ -33,7 +33,7 @@ fn add(chat: &mut Chat, font: &Font, content: Text) {
             Line {
                 added: 0,
                 content,
-                indicator: None,
+                tag: None,
             },
         );
     }
@@ -557,7 +557,7 @@ fn a_deleted_message_shows_60_ticks_then_becomes_the_marker() {
     assert_eq!(lines(&chat), ["<Alex> hi".to_owned(), marker.clone()]);
     assert!(chat.deletions.is_empty());
     let line = &chat.lines[1];
-    assert_eq!(line.indicator, Some(SYSTEM_INDICATOR));
+    assert_eq!(line.tag.as_ref().map(|t| t.color), Some(SYSTEM_INDICATOR));
     assert_eq!(line.added, 100, "the marker keeps the message's time");
     assert!(
         line.content

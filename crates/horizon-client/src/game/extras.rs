@@ -79,6 +79,10 @@ impl Game<'_> {
     pub(super) fn extras_connecting(&mut self, address: &str, name: &str) {
         self.extras.reconnect.connecting(address, name);
     }
+    /// The server this game connected to last.
+    pub(super) fn server_address(&self) -> Option<&str> {
+        self.extras.reconnect.address()
+    }
     /// Auto-reconnect: the server let the player in.
     pub(super) fn extras_joined(&mut self) {
         self.extras.reconnect.joined(std::time::Instant::now());
