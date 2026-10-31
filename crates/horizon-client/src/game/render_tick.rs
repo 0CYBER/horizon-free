@@ -547,8 +547,14 @@ impl Game<'_> {
         };
         self.particles.tick(&level);
         self.tick_pickups();
-        for (name, at, volume, pitch) in std::mem::take(&mut self.particles.sounds) {
-            self.audio.play(name, Some(at), volume, pitch);
+        let camera = self.particles.camera;
+        for (name, at, volume, pitch, delayed) in std::mem::take(&mut self.particles.sounds) {
+            if delayed {
+                self.audio
+                    .play_distance_delayed(name, at, volume, pitch, camera);
+            } else {
+                self.audio.play(name, Some(at), volume, pitch);
+            }
         }
     }
 }

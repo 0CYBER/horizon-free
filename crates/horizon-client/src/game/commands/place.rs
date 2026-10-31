@@ -182,9 +182,34 @@ impl Game<'_> {
                 {
                     return Err(err("commands.place.structure.invalid", &[&structure]));
                 }
-                self.place_pos(ctx, "pos")?;
-                // Structure.generate is not wired to the live level.
-                Err(err("command.failed", &[]))
+                let pos = self.place_pos(ctx, "pos")?;
+                // PlaceCommand.placeStructure: Structure.generate for the
+                // position's chunk with its `biome -> true` predicate, then
+                // placeInChunk for every chunk of the start's box.
+                let terrain = self
+                    .end
+                    .locator()
+                    .ok_or_else(|| err("command.failed", &[]))?;
+                let start = terrain
+                    .structure_start(&structure, pos[0] >> 4, pos[2] >> 4)
+                    .ok_or_else(|| err("commands.place.structure.failed", &[]))?;
+                let (min, max) = (start.bounding_box.min, start.bounding_box.max);
+                self.place_check_loaded([min[0] >> 4, min[2] >> 4], [max[0] >> 4, max[2] >> 4])?;
+                let placed =
+                    self.with_level(|b, level, ticks| b.place_structure(level, ticks, &start));
+                if !placed {
+                    return Err(err("commands.place.structure.failed", &[]));
+                }
+                self.feedback(Text::translate(
+                    "commands.place.structure.success",
+                    &[
+                        Text::literal(structure),
+                        num(pos[0]),
+                        num(pos[1]),
+                        num(pos[2]),
+                    ],
+                ));
+                Ok(1)
             }
         }
     }

@@ -1440,7 +1440,7 @@ impl Streaming {
         }
         // Column by column: the checks below hold for all of a column's
         // sections, and columns waiting for light cost one look per frame.
-        let mut candidates: Vec<(i64, i32, i32, u32)> = Vec::new();
+        let mut candidates: Vec<(i64, i32, i32, SectionMask)> = Vec::new();
         let columns: Vec<_> = world.dirty_sections.columns().collect();
         for ((x, z), sections) in columns {
             if !world.chunks.contains_key(&(x, z)) {
