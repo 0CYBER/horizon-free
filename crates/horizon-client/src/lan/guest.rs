@@ -163,6 +163,8 @@ pub struct Guest {
     pub anticheat: horizon_anticheat::Player,
     /// The movement prediction's replay of the client's own moves (only while it runs).
     pub replay: Option<Box<super::prediction::Replay>>,
+    /// What the server sent this tick that changes how the client moves (only while it records).
+    pub changes: std::sync::Mutex<Vec<horizon_anticheat::prediction::Change>>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -176,6 +178,8 @@ pub struct Guest {
     pub center: Option<(i32, i32)>,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
+    /// The far ring's chunks still to send, past the view distance (`lan::far`), closest first.
+    pub far_queue: Vec<(i32, i32)>,
     /// PlayerChunkSender: batches sent but not yet acknowledged, how many
     /// may be (1 until the client's first acknowledgement, then 10), the
     /// rate the client asks for and the chunks the next batch may hold.
@@ -358,12 +362,14 @@ impl Guest {
             position_this_tick: false,
             anticheat: Default::default(),
             replay: None,
+            changes: Default::default(),
             moved: false,
             loaded: false,
             load_timeout: CLIENT_LOADED_TIMEOUT,
             center: None,
             sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
+            far_queue: Vec::new(),
             unacknowledged: 0,
             max_unacknowledged: 1,
             chunks_per_tick: 9.0,
@@ -429,7 +435,34 @@ impl Guest {
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {
+        if self.anticheat.record.is_some() {
+            self.note_change(packet);
+        }
         self.sender.send(packet.encode());
+    }
+    /// What `packet` changes about how the client moves, for the prediction's replay: kept until
+    /// the tick's ping places it (`Hub::anticheat_ping`).
+    fn note_change(&self, packet: &play::Clientbound) {
+        use horizon_anticheat::prediction::Change;
+        use play::Clientbound as C;
+        let own = |id: i32| id == self.entity_id;
+        let change = match packet {
+            C::SetEntityMotion(p) if own(p.id) => {
+                Change::Velocity(horizon_protocol::buf::LpVec3::quantize(p.velocity))
+            }
+            C::Explode(p) => match p.knockback {
+                Some(k) => Change::Knockback(k),
+                None => return,
+            },
+            C::UpdateAttributes(p) if own(p.id) => Change::State,
+            C::UpdateMobEffect(p) if own(p.id) => Change::State,
+            C::RemoveMobEffect(p) if own(p.id) => Change::State,
+            _ => return,
+        };
+        self.changes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(change);
     }
     /// `Entity.stopRiding`: out of the vehicle it rode.
     pub fn stop_riding(&mut self) {

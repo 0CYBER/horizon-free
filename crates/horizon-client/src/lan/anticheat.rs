@@ -167,9 +167,23 @@ impl Hub {
     /// The end of a server tick, after everything it sent: a ping whose id is the tick to each
     /// player in the world, so the prediction knows from which client tick on that tick's packets
     /// were in effect.
-    pub fn anticheat_ping(&self) {
+    pub fn anticheat_ping(&mut self) {
         if !self.recording() {
             return;
+        }
+        // What the tick sent the players that changes their movement went out before this ping.
+        let ticks = self.ticks;
+        for g in &mut self.guests {
+            let changes = std::mem::take(
+                g.changes
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            if let Some(record) = g.anticheat.record.as_deref_mut() {
+                for change in changes {
+                    record.changed(ticks, change);
+                }
+            }
         }
         let ping = horizon_protocol::packets::play::Clientbound::Ping(
             horizon_protocol::packets::configuration::Ping {

@@ -49,6 +49,40 @@ pub(super) fn forget_sync_data() {
     *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// The registries and tags a server sends without data packs over them, read
+/// on a helper thread while a server's world prepares: most worlds have no
+/// packs, so it is what `sync_data` would load once the world is open.
+pub(super) struct SyncPreload(std::thread::JoinHandle<std::result::Result<SyncData, String>>);
+
+/// Start reading the server's data beside the world's preparation; `None`
+/// when it is read already, or being read (`preload_world_data`).
+pub(super) fn preload_sync_data(root: &std::path::Path) -> Option<SyncPreload> {
+    if !SYNC.try_lock().is_ok_and(|sync| sync.is_none()) {
+        return None;
+    }
+    let root = root.to_owned();
+    std::thread::Builder::new()
+        .name("Server data preload".into())
+        .spawn(move || SyncData::load(&root, &horizon_world::loot::PackOverlay::NONE))
+        .map(SyncPreload)
+        .ok()
+}
+
+impl SyncPreload {
+    /// The world is open: without packs of its own (`overlay`), what was read
+    /// becomes `sync_data`'s; with them, `sync_data` loads them as before.
+    pub(super) fn adopt(self, overlay: &horizon_world::loot::PackOverlay) {
+        if !overlay.files.is_empty() {
+            return;
+        }
+        if let Ok(read) = self.0.join() {
+            SYNC.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert_with(|| read.map(Arc::new));
+        }
+    }
+}
+
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
 #[derive(Clone, Copy, Debug)]
 pub struct LanSettings {
@@ -1715,6 +1749,7 @@ impl Game<'_> {
             for (id, event, at) in gone {
                 host.hub.entity_event(id, event, at);
             }
+            host.hub.far_level(&self.save);
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
@@ -1880,6 +1915,14 @@ impl Game<'_> {
                 .take()
                 .expect("the hub is back after the quiet commands");
         }
+        if self.native_net_waiting() {
+            self.lan = Some(host);
+            self.run_native_net();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the mod messages");
+        }
         if !host.hub.native_menu_events.is_empty() {
             self.lan = Some(host);
             self.run_native_menu_events();
@@ -1903,6 +1946,7 @@ impl Game<'_> {
         self.lan_sync_border(&mut host);
         host.hub.anticheat_ping();
         drop(holding);
+        self.flush_native_net(&mut host);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
         // A blast from a guest's attack, and a mace's wind burst.

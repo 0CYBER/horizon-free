@@ -195,6 +195,34 @@ uses `flags::UPDATE_CLIENTS`) and set `handled` to skip the block's own tick. Wi
 its own tick as it is now, if it is still the tick's block. The deprecated in-frame path fires none. Bundles that use
 it need `"hooks": 34`.
 
+API 35 adds the commands a mod owns on the client: `native_commands` is asked for their names, so the chat box
+colours, completes and lists them like the game's own, and `native_command` runs them. A name the game already has
+keeps that command. Bundles that use it need `"hooks": 35`.
+
+API 36 adds recipes of a mod's own types, for a machine's crusher or altar. A recipe file whose `type` is outside `minecraft`
+(`mymod:crusher`) in `data/<namespace>/recipe/`, in a content mod (`.hmod`) or a world's data pack (not in a native mod's own bundle), stays loaded as it is: `native_recipes_of_type`
+gives each one's id and JSON, for the mod to read as it likes, and `native_recipe_ingredient` and `native_recipe_result` read the
+usual fields, tags included (a bare id is read as `minecraft:`; items the game doesn't know are left out, and the helper gives nothing if none is left). The recipes are the server's table: on the server thread, a dedicated server or a LAN host; a client, the single-player window included, sees only the content mods' recipes, not the world's data packs'. All three give nothing outside a world. The game doesn't craft them or show them in the recipe book; `/reload` reads a data pack's again.
+Bundles that use them need `"hooks": 36`.
+
+API 37 adds [mobs](#mobs) for server mods: spawn one, read the mobs of a level in place, and move, hurt or remove one by its id.
+Bundles that use them need `"hooks": 37`.
+
+API 38 adds redstone from a mod's block, on authoritative servers. `native_block_signal` may change the signal a block gives on
+a face, weak or direct, and `native_is_signal_source` lets redstone wire connect to it. Both are asked very often, so check the
+block first and answer from the mod's own state. When the output changes, and once the block is placed (a direct signal past a conductor isn't read before), `native_update_signal_neighbors(dimension, pos)` makes the blocks around
+it read it again; it acts on the level in place and is refused for another dimension. Bundles that use them need `"hooks": 38`.
+
+API 39 adds item behaviour, on the server for every player: `native_hurt_enemy` hears a player's hit land on a mob with the
+held stack, `native_inventory_tick` runs each tick for every stack a player carries (armour and off hand included), and
+`native_carried_stack` reads and changes that stack, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
+that use them need `"hooks": 39`.
+
+API 40 adds [mod messages](#mod-messages) between a mod's server and client halves, and hearing players and mobs on the
+server for every player: `native_player_died`, `native_mob_spawned`, `native_mob_killed` (a player's melee blow, a sweep or a spear thrust too),
+`native_item_dropped` (a throw; not the items scattered when a player dies) and `native_item_picked_up` (`canceled` leaves the stack on the ground). They name a player by UUID. Bundles that use them
+need `"hooks": 40`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -417,6 +445,40 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`native_fill_bucket(stack, pos, canceled)`** and **`native_attack_entity(entity, kind, pos, canceled)`** (API 22):
   a player's bucket at a block, and their blow on an entity, with the acting player swapped in. Canceled, the bucket
   does nothing and the blow does no harm.
+
+### Mobs
+
+API 37, `crates/horizon-client/src/game/native_mobs.rs`: helpers for server mods, for the level in place, on a server only (on a
+client they do nothing, and the readers give nothing). Each takes the `dimension` (`minecraft:overworld`) of the level it means, as
+`native_set_block` does, and is refused when another level is in place. The per-level tick hooks (API 23) run with a defined level in
+place; `native_server_tick` does not define one, so name the dimension and expect a refusal there.
+
+- `native_spawn_mob(dimension, kind, pos, &NativeSpawn)` spawns a mob and returns its id. `NativeSpawn` holds an optional name and health, and the
+  `no_ai`, `invisible`, `silent`, `invulnerable` and `no_gravity` flags; its default is a plain mob. The mob is finalized as a natural spawn
+  is, and kept when its chunk unloads. Nothing is spawned outside `/summon`'s bounds, in a chunk that isn't loaded, or a monster on peaceful.
+- `native_mob(dimension, id)` and `native_mobs(dimension)` read the living mobs: id, dimension, kind, position, yaw, health and maximum health.
+- `native_teleport_mob(dimension, id, pos)` (as `/tp`: it dismounts and drops its path), `native_push_mob(dimension, id, velocity)` and
+  `native_set_mob_health(dimension, id, health)` change one, and answer false for no such mob or a value that isn't finite. Health must be
+  above 0.
+- `native_kill_mob(dimension, id)` kills as `/kill` does, with its loot; `native_remove_mob(dimension, id)` takes the mob away with no death
+  and no loot (it is not saved either).
+- While the game ticks its mobs they are out of the level: from a hook inside that tick, a spawned mob joins after the tick, and the others
+  read as gone.
+
+### Mod messages
+
+API 40, `crates/horizon-client/src/game/native_net.rs`: bytes between a mod's server half and its client half, on the
+one custom payload channel `horizon:mod_net`. A vanilla client never gets them, and a vanilla server isn't sent any.
+
+- `native_net_send_to_player(player, channel, data)` on the server and `native_net_send_to_server(channel, data)` on the
+  client send one. The channel is `mod_id:name`: the id `[a-z0-9_]`, the name `[a-z0-9_./-]`, each 1 to 64 characters;
+  `minecraft` and `horizon` are the game's. The data is at most 30 000 bytes, and 32 messages a tick go each way per
+  player. Ok means accepted: a player who left doesn't get it. Sending to the server is an error until the player has
+  joined.
+- `native_net_from_client(player, channel, data)` and `native_net_from_server(channel, data)` hear them, all mods on every
+  message: check the channel. What a client sent is checked by nothing, so treat it as a player's own input.
+- A player's message reaches the server's hook in the tick after it arrives, when the helpers can reach every player;
+  a message to a player leaves at the end of the tick, from any server hook.
 
 ### Server menus
 

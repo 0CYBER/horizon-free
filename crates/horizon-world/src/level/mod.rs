@@ -505,6 +505,23 @@ pub trait LevelAccess {
     /// `PotentSulfurBlockEntity.resetCountdown` for the potent sulfur block
     /// entity at `pos` (`PotentSulfurBlock.validBlockState`).
     fn reset_potent_sulfur_countdown(&mut self, _pos: BlockPos) {}
+    /// `BlockState.isSignalSource` once the library answered `vanilla`: the
+    /// answer to use. The default keeps it.
+    fn adjust_signal_source(&self, _state: BlockStateId, vanilla: bool) -> bool {
+        vanilla
+    }
+    /// `BlockState.getSignal` (or `getDirectSignal` when `direct`) once the
+    /// library answered `vanilla`: the signal to use. The default keeps it.
+    fn adjust_signal(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+        _direct: bool,
+        vanilla: i32,
+    ) -> i32 {
+        vanilla
+    }
     /// Weak/strong signal of a block-entity-driven source (trapped chest
     /// openers); other sources are evaluated by the library.
     fn block_entity_signal(
