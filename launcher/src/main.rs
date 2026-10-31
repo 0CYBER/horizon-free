@@ -383,6 +383,8 @@ impl Launcher {
         })
         .detach();
         let mut settings = Settings::load();
+        // Horizon-free: allow playing without a Microsoft account that owns the game.
+        settings.dev_offline = true;
         i18n::set(settings.language());
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
@@ -2238,6 +2240,14 @@ impl Launcher {
             }
             foot = foot.child(side);
         }
+        // Horizon-Free: link to the fork's repository.
+        foot = foot.child(div().h(px(1.)).w_full().bg(t.rule).my(px(4.)));
+        foot = foot.child(link(
+            "horizon-free",
+            "Horizon-Free",
+            "globe",
+            "https://github.com/0CYBER/horizon-free".to_string(),
+        ));
         if !self.links.sponsor.is_empty() {
             foot = foot.child(link(
                 "sponsor",
