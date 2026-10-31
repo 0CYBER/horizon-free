@@ -1494,6 +1494,53 @@ fn pistons_pop_fragile_blocks_and_refuse_obsidian() {
     assert_eq!(w.get(BlockPos::new(1, 1, 0)), obsidian);
 }
 
+/// `MovingPistonBlock.getDrops`: a broken moving piston drops the block it is
+/// moving, and drops nothing at all once its moving-piston block entity is
+/// gone.
+#[test]
+fn a_broken_moving_piston_drops_the_block_it_carries() {
+    let mut w = world!();
+    let moving = w.id("moving_piston", &[("facing", "east"), ("type", "normal")]);
+    let sand = w.id("sand", &[]);
+    let carried = BlockPos::new(0, 1, 0);
+    let orphan = BlockPos::new(5, 1, 5);
+    for pos in [carried, orphan] {
+        w.put(pos, moving);
+    }
+    w.ticks.moving_pistons.push((
+        carried,
+        MovingPiston {
+            moved_state: sand,
+            direction: Direction::East,
+            extending: true,
+            source: false,
+            progress: 0.5,
+            progress_o: 0.4,
+            last_ticked: 0,
+            death_ticks: 0,
+            id: 0,
+        },
+    ));
+    w.level.events.clear();
+    for pos in [carried, orphan] {
+        w.b().destroy_block(&mut w.level, &mut w.ticks, pos, true);
+    }
+    let drops: Vec<(BlockPos, BlockStateId)> = w
+        .level
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            LevelEvent::DropResources { pos, state } => Some((*pos, *state)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        drops,
+        vec![(carried, sand)],
+        "the moving piston drops the sand it carries; without its block entity there is nothing to drop"
+    );
+}
+
 #[test]
 fn dripstone_fills_cauldrons() {
     let mut w = world!();
