@@ -127,7 +127,13 @@ impl Game<'_> {
             // not hit (`AbstractWindCharge.canHitEntity`).
             Who::Mob(id) if id >= super::dragon::SPECIAL => {
                 if id < super::dragon::SPECIAL + 8 {
-                    self.hit_special(id, 1.0, p.owner == Some(Who::Player), false);
+                    self.hit_special(
+                        id,
+                        1.0,
+                        p.owner == Some(Who::Player),
+                        horizon_client::mobs::DamageKind::WindCharge,
+                        Some(&p.kind),
+                    );
                 }
             }
             Who::Mob(id) => {
@@ -609,6 +615,7 @@ impl Game<'_> {
         poses.yrot("wind", age * 16.0_f32.to_radians());
         let base = glam::Mat4::from_translation(at)
             * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
+        let start = out.len();
         horizon_client::mobs::render::draw_scrolled(
             model,
             base,
@@ -623,6 +630,10 @@ impl Game<'_> {
             0,
             out,
         );
+        // `RenderTypes.breezeWind` has an `OitPipelineSet`.
+        for vertex in &mut out[start..] {
+            vertex.layer |= horizon_client::gfx::OIT_ENTITY;
+        }
     }
 }
 #[cfg(test)]

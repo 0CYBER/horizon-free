@@ -20,6 +20,19 @@ impl Hub {
         }
     }
 
+    /// `ChunkMap.sendToTrackingPlayers`: send to every placed guest that
+    /// tracks the entity `id`.
+    pub fn send_to_tracking(&self, id: i32, packet: &C) {
+        let body = packet.encode();
+        for g in self
+            .guests
+            .iter()
+            .filter(|g| self.here(g) && g.tracker.is_tracking(id))
+        {
+            g.sender.send(body.clone());
+        }
+    }
+
     /// Send to every placed guest within `range` blocks of `at`.
     pub fn broadcast_near(&self, at: [f64; 3], range: f64, packet: &C, except: Option<u32>) {
         let body = packet.encode();
@@ -61,6 +74,11 @@ impl Hub {
             seed,
         })
     }
+    /// Draw the next seed from the server sound source.
+    pub fn next_sound_seed(&self) -> i64 {
+        next_sound_seed(&mut *self.sound_seeds.lock().unwrap())
+    }
+
     pub fn sound(
         &self,
         name: &str,
@@ -71,7 +89,7 @@ impl Hub {
         except: Option<u32>,
     ) {
         // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
-        let seed = next_sound_seed(&mut *self.sound_seeds.lock().unwrap());
+        let seed = self.next_sound_seed();
         let packet = self.sound_packet(name, at, volume, pitch, source, seed);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
@@ -511,6 +529,15 @@ impl Hub {
         {
             return Vec::new();
         }
+        // AbstractContainerMenu.isValidSlotIndex: -999 or below the menu's slot
+        // count. A slot past the menu would reach the inventory beyond its 36 slots.
+        let slots = match self.guests[i].menu.as_ref().filter(|_| in_menu) {
+            Some(m) => m.size + 36,
+            None => 46,
+        };
+        if i32::from(p.slot) >= slots as i32 && p.slot != -999 {
+            return Vec::new();
+        }
         let source = self.guests[i].menu.as_ref().map(|m| m.slots);
         let shulker_box = self
             .sync
@@ -580,10 +607,12 @@ impl Hub {
                 .as_mut()
                 .and_then(|items| items.get_mut(slot))
                 .and_then(Option::as_mut),
-            Some((size, _)) => g
+            // setSelectedBundleItemIndex: a slot of the menu only.
+            Some((size, _)) if slot - size < 36 => g
                 .inventory
                 .get_mut(player_slot(slot - size))
                 .and_then(Option::as_mut),
+            Some(_) => None,
             None => match slot {
                 9..=35 => g.inventory.get_mut(slot).and_then(Option::as_mut),
                 36..=44 => g.inventory.get_mut(slot - 36).and_then(Option::as_mut),

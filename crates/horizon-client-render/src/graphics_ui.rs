@@ -5,6 +5,7 @@ use crate::{
     graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset, Upscaling},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
+    lang,
     settings::{Opt, Settings},
     text::Text,
     ui,
@@ -43,6 +44,8 @@ pub enum H {
     /// Opens `Level::Hdr`.
     HdrSettings,
     HdrBlackLevel,
+    /// Binds `Graphics::hdr_key`.
+    HdrKey,
     HdrPeak,
     HdrPaperWhite,
     HdrUiBrightness,
@@ -152,6 +155,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::HdrUiBrightness,
                 None,
                 "How bright the HUD and menus are, against paper white.",
+            ),
+            h(
+                H::HdrKey,
+                None,
+                "A key that opens this screen from the game. Not bound at first.",
             ),
         ],
         Level::Advanced => vec![
@@ -354,11 +362,14 @@ fn extra_rows(level: Level, settings: &Settings) -> Vec<Row> {
     rows
 }
 
-fn on_off(on: bool) -> &'static str {
-    if on { "On" } else { "Off" }
+fn on_off(on: bool) -> String {
+    lang::get(if on { "On" } else { "Off" })
 }
+/// A control's caption and its value, both through the language table: Horizon's captions are
+/// English sentences, and some of the values ("Off", "12 chunks") are words too.
 fn labelled(caption: &str, value: impl std::fmt::Display) -> Text {
-    Text::literal(format!("{caption}: {value}"))
+    let value = value.to_string();
+    Text::literal(format!("{}: {}", lang::get(caption), lang::get(&value)))
 }
 
 impl H {
@@ -396,19 +407,21 @@ impl H {
             H::Preset => labelled("Preset", g.preset.label()),
             H::LodDistance => match g.lod_distance {
                 0 => labelled("LOD Distance", "Off"),
-                n => labelled("LOD Distance", format!("{n} chunks")),
+                n => labelled("LOD Distance", lang::tr("%s chunks", &[&n])),
             },
             H::FarDetail => labelled("Far Detail", g.far_detail.label()),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
             H::ChunkUpdates => match g.chunk_updates {
                 0 => labelled("Chunk Updates", "Unlimited"),
-                n => labelled("Chunk Updates", format!("{n} per frame")),
+                n => labelled("Chunk Updates", lang::tr("%s per frame", &[&n])),
             },
             H::UploadBudget => match g.upload_budget_kib {
                 0 => labelled("Upload Budget", "Unlimited"),
-                k if k >= 1024 => labelled("Upload Budget", format!("{} MiB/frame", k / 1024)),
-                k => labelled("Upload Budget", format!("{k} KiB/frame")),
+                k if k >= 1024 => {
+                    labelled("Upload Budget", lang::tr("%s MiB/frame", &[&(k / 1024)]))
+                }
+                k => labelled("Upload Budget", lang::tr("%s KiB/frame", &[&k])),
             },
             H::Sky => labelled("Sky", on_off(g.sky)),
             H::Fog => labelled("Fog", on_off(g.fog)),
@@ -423,7 +436,10 @@ impl H {
                 },
             ),
             H::Workers => match g.workers {
-                0 => labelled("Worker Threads", format!("Auto ({})", g.worker_threads())),
+                0 => labelled(
+                    "Worker Threads",
+                    lang::tr("Auto (%s)", &[&g.worker_threads()]),
+                ),
                 n => labelled("Worker Threads", n),
             },
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
@@ -437,23 +453,32 @@ impl H {
             ),
             H::Upscaling => labelled("Upscaling", g.upscaling.label()),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
-            H::HdrSettings => Text::literal("HDR Settings..."),
+            H::HdrSettings => Text::literal(lang::get("HDR Settings...")),
             H::HdrPaperWhite => match g.hdr_paper_white {
                 0 => labelled(
                     "Paper White",
-                    format!("Auto ({} nits)", g.paper_white_nits()),
+                    lang::tr("Auto (%s nits)", &[&g.paper_white_nits()]),
                 ),
-                n => labelled("Paper White", format!("{n} nits")),
+                n => labelled("Paper White", lang::tr("%s nits", &[&n])),
             },
             H::HdrPeak => match g.hdr_peak {
-                0 => labelled("Peak Brightness", format!("Auto ({} nits)", g.peak_nits())),
-                n => labelled("Peak Brightness", format!("{n} nits")),
+                0 => labelled(
+                    "Peak Brightness",
+                    lang::tr("Auto (%s nits)", &[&g.peak_nits()]),
+                ),
+                n => labelled("Peak Brightness", lang::tr("%s nits", &[&n])),
             },
             H::HdrBlackLevel => labelled(
                 "Black Level",
-                format!("{:.2} nits", g.hdr_black_level as f32 / 100.0),
+                lang::tr(
+                    "%s nits",
+                    &[&format!("{:.2}", g.hdr_black_level as f32 / 100.0)],
+                ),
             ),
             H::HdrUiBrightness => labelled("UI Brightness", format!("{}%", g.hdr_ui_brightness)),
+            H::HdrKey => {
+                Text::literal("Shortcut: ").append(crate::keybinds::display_name(&g.hdr_key))
+            }
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -618,7 +643,7 @@ impl Item {
         match self {
             Item::Vanilla(Opt::RenderDistance) if s.horizon.lod_distance > 0 => labelled(
                 "Full Detail Distance",
-                format!("{} chunks", s.render_distance),
+                lang::tr("%s chunks", &[&s.render_distance]),
             ),
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
@@ -686,6 +711,8 @@ pub enum Action {
     OpenAdvanced,
     OpenSimple,
     OpenHdr,
+    /// Wait for a key or mouse button to bind to this name.
+    BindKey(&'static str),
     Done,
 }
 
@@ -708,6 +735,8 @@ pub struct GraphicsUi {
     /// The list's scroll amount and its held scrollbar (`AbstractScrollArea`).
     scroll: ui::Scroll,
     dragging: Option<Item>,
+    /// The key binding the options screen is waiting on (`Action::BindKey`).
+    pub binding: Option<&'static str>,
 }
 
 impl GraphicsUi {
@@ -818,7 +847,7 @@ impl GraphicsUi {
         let x = STYLE.row_x(w);
         for (y, name) in headers {
             if shown(y, STYLE.header_height) {
-                STYLE.header(batch, atlas, &Text::literal(name), x, y);
+                STYLE.header(batch, atlas, &Text::literal(lang::get(name)), x, y);
             }
         }
         let descriptions: Vec<(Cost, &'static str)> = extra_rows(level, s)
@@ -840,11 +869,17 @@ impl GraphicsUi {
                     if !shown(wd.y, 20.0) {
                         continue;
                     }
-                    let label = item.label(s);
+                    let mut label = item.label(s);
+                    if item == Item::Horizon(H::HdrKey) && self.binding.is_some() {
+                        // KeyBindsScreen: "> key <" while it waits.
+                        label = Text::literal("Shortcut: > ")
+                            .append(crate::keybinds::display_name(&s.horizon.hdr_key))
+                            .append(" <");
+                    }
                     let blocked = item.blocked(s);
                     let live = blocked.is_none();
                     if hover && let Some(why) = blocked {
-                        tooltip = Some(atlas.font.split(&Text::literal(why), 170.0));
+                        tooltip = Some(atlas.font.split(&Text::literal(lang::get(why)), 170.0));
                     }
                     match item.slider(s) {
                         Some(value) => STYLE.slider(
@@ -885,7 +920,7 @@ impl GraphicsUi {
                         batch,
                         atlas,
                         (wd.x, wd.y, wd.w),
-                        &Text::literal(label),
+                        &Text::literal(lang::get(label)),
                         hover,
                         true,
                     );
@@ -907,7 +942,7 @@ impl GraphicsUi {
             Level::Advanced => "Graphics: Advanced",
             Level::Hdr => "Graphics: HDR",
         };
-        STYLE.title(batch, atlas, &Text::literal(title));
+        STYLE.title(batch, atlas, &Text::literal(lang::get(title)));
         if let Some(lines) = tooltip {
             ui::tooltip(batch, atlas, &lines, cursor);
         }
@@ -964,6 +999,12 @@ impl GraphicsUi {
                 Target::Item(item) if item.blocked(s).is_some() => Vec::new(),
                 Target::Item(Item::Horizon(H::HdrSettings)) => {
                     vec![Action::ButtonClick, Action::OpenHdr]
+                }
+                Target::Item(Item::Horizon(H::HdrKey)) => {
+                    vec![
+                        Action::ButtonClick,
+                        Action::BindKey(crate::graphics::HDR_KEY),
+                    ]
                 }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {

@@ -384,6 +384,9 @@ impl Game<'_> {
                                 );
                             }
                             b.velocity = velocity;
+                            // AbstractBoat.readAdditionalSaveData: the lead's holder.
+                            b.leash_pending =
+                                horizon_client::mobs::leash::pending_from_nbt(tag.get("leash"));
                             self.remember(id, uuid, tag);
                             self.boats.push(b);
                             for rider in riders {
@@ -891,6 +894,7 @@ impl Game<'_> {
                         .is_none_or(|v| self.boats.iter().all(|b| b.id != v))
                     && keys.contains(&chunk_of(self.mobs[i].position))
                     && self.mobs[i].alive()
+                    && !self.mobs[i].removed
             })
             .collect();
         for i in mobs {
@@ -990,6 +994,8 @@ impl Game<'_> {
                 b.chest.then_some(&b.items[..]),
             );
             self.put_mob_passengers(&mut tag, id);
+            // AbstractBoat.addAdditionalSaveData: the lead's holder.
+            self.write_boat_leash(&mut tag, i);
             out.entry(chunk_of(at)).or_default().push(tag);
         }
         if let Some(d) = &self.dragon

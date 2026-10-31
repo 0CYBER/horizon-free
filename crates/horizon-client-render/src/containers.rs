@@ -322,6 +322,9 @@ impl BlockEntity {
                 crate::test_block::TestBlock::new(crate::test_block::TestBlockMode::Fail),
             )));
         }
+        if name == "minecraft:test_instance_block" {
+            return Some(Self::TestInstanceBlock(Box::default()));
+        }
         if name == "minecraft:jigsaw" {
             return Some(Self::JigsawBlock(Box::default()));
         }
@@ -376,6 +379,7 @@ impl BlockEntity {
             Self::StructureBlock(_) => "minecraft:structure_block",
             Self::JigsawBlock(_) => "minecraft:jigsaw",
             Self::TestBlock(_) => "minecraft:test_block",
+            Self::TestInstanceBlock(_) => "minecraft:test_instance_block",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -398,6 +402,7 @@ impl BlockEntity {
             | Self::StructureBlock(_)
             | Self::JigsawBlock(_)
             | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => Vec::new(),
             Self::Mod(m) => m.items.iter().flatten().cloned().collect(),
@@ -427,6 +432,7 @@ impl BlockEntity {
             | Self::StructureBlock(_)
             | Self::JigsawBlock(_)
             | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &[],
             Self::Crafter(c) => &c.items,
@@ -460,6 +466,7 @@ impl BlockEntity {
             | Self::StructureBlock(_)
             | Self::JigsawBlock(_)
             | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &mut [],
             Self::Crafter(c) => &mut c.items,

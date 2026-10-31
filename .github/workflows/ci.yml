@@ -1,7 +1,7 @@
 name: checks
 # verify: every pull request and every push to main, on GitHub's runners (the repository is public). It is the
-# check main requires, so it never has a condition: a skipped job counts as passed, and every run of this workflow
-# must report a real verify (a pull request that changes no Rust finishes it in seconds instead).
+# check main requires, so it always runs: a skipped job counts as passed, and every run of this workflow must report
+# a real verify. It gathers the python, clippy and tests jobs (a change to docs alone skips their Rust steps).
 # parity: the vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the
 # maintainer's own Minecraft files (Horizon never downloads the game); .github/workflows/parity.yml. Only for a pull
 # request that changes a harness, oracle, probe or the runner: the rest are checked on main by parity-main. A fork's pull
@@ -24,7 +24,10 @@ env:
   HORIZON_TELEMETRY_URL: "off"
 
 jobs:
-  verify:
+  # verify's checks run as three jobs at once (python, clippy, tests: ~4 min instead of ~8 one after another), and
+  # verify gathers them. A failed job makes its dependents skip, and a skipped required check counts as passed, so
+  # verify runs always() and fails unless all three passed.
+  python:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -34,6 +37,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # A pull request adds only its own commits to main, so it reads those; main's pushes read every ref's history.
+      - name: Keep game artifacts out of Git
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python tools/check_public_tree.py
+          if [ "$EVENT" = pull_request ]; then
+            python tools/check_public_tree.py --range "$BASE_SHA..$HEAD_SHA"
+          else
+            python tools/check_public_tree.py --history
+          fi
+      - name: Test offline research tooling
+        run: python -m unittest discover -s tests -v
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Does this pull request need Rust checks?
         if: github.event_name == 'pull_request'
         id: rust
@@ -41,22 +66,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      - name: Keep game artifacts out of Git
-        run: |
-          python tools/check_public_tree.py
-          python tools/check_public_tree.py --history
-      - name: Test offline research tooling
-        run: python -m unittest discover -s tests -v
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
         if: steps.rust.outputs.required != 'false'
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
+      # Dependencies and the workspace's own check, saved from main's runs (pull requests read main's cache).
       - uses: Swatinem/rust-cache@v2
         if: steps.rust.outputs.required != 'false'
         with:
-          shared-key: verify
+          shared-key: verify-clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check formatting and lint
         if: steps.rust.outputs.required != 'false'
@@ -65,8 +84,35 @@ jobs:
           cargo +stable clippy --workspace --all-targets -- -D warnings
           # The server build (released as horizon-engine): the game without sound or controllers.
           cargo +stable clippy -p horizon-client --all-targets --no-default-features -- -D warnings
-      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which clippy above already
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Does this pull request need Rust checks?
+        if: github.event_name == 'pull_request'
+        id: rust
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain and the ALSA and udev headers the client links against
+        if: steps.rust.outputs.required != 'false'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+          rustup toolchain install stable --profile minimal
+      # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
+      - uses: Swatinem/rust-cache@v2
+        if: steps.rust.outputs.required != 'false'
+        with:
+          shared-key: verify
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which clippy already
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
+      # cargo test, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
+      # these 4-core runners it was no faster (#4978).
       - name: Test Rust core and voxel kernel correctness
         if: steps.rust.outputs.required != 'false'
         run: |
@@ -75,6 +121,18 @@ jobs:
           # prepared vanilla data, so without it they pass at once.
           cargo +stable test --workspace --lib mod_content::tests:: -- --ignored
           cargo +stable test --workspace --doc
+  verify:
+    if: always()
+    needs: [python, clippy, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Did python, clippy and tests pass?
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "python, clippy, tests: $RESULTS"
+          for result in $RESULTS; do [ "$result" = success ] || exit 1; done
   # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
   # changes it or a crate it builds is checked here, and so is every push to main: two pull requests can each pass
   # alone and break it together (#2059 and the registry ratings did, 2026-10-26).

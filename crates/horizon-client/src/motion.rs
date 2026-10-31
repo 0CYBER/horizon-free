@@ -263,6 +263,7 @@ pub enum MotionEvent {
     /// around a drowning player.
     Drown,
 }
+#[derive(Clone)]
 pub struct PlayerMotion {
     pub swimming: bool,
     pub fire_ticks: i32,
@@ -340,6 +341,10 @@ pub struct PlayerMotion {
     /// `LocalPlayer.isSlowDueToUsingItem`: an item in use whose `use_effects`
     /// do not allow sprinting.
     pub item_use_slows_sprint: bool,
+    /// `LocalPlayer.moveTowardsClosestSpace`'s new x and z speeds this tick,
+    /// worked out by the caller (which knows the blocks); applied before the
+    /// move.
+    pub nudge: [Option<f64>; 2],
     pub last_climbable: Option<BlockPos>,
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
@@ -355,7 +360,7 @@ pub struct PlayerMotion {
     /// server takes it at the end of a guest's turn.
     pub teleported: bool,
     pub events: Vec<MotionEvent>,
-    pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
+    pub attributes: LiveAttributes<Box<dyn horizon_world::attributes::live::Identities>>,
     pub impulse: ImpulseContext,
     /// `ServerPlayer.spawnExtraParticlesOnFall`: a mace smash on a grounded
     /// target makes the next landing throw up the block below.
@@ -470,7 +475,7 @@ impl PlayerMotion {
             .map(|(i, _)| i as i32)
             .collect();
         let mut identity = 0i32;
-        let next: Box<dyn FnMut() -> i32> = Box::new(move || {
+        let next: Box<dyn horizon_world::attributes::live::Identities> = Box::new(move || {
             identity = identity.wrapping_add(1);
             identity
         });
@@ -481,7 +486,7 @@ impl PlayerMotion {
         resources: &MotionResources,
         position: Vec3,
         hashes: &[i32],
-        next: Box<dyn FnMut() -> i32>,
+        next: Box<dyn horizon_world::attributes::live::Identities>,
     ) -> Result<Self> {
         let mut attributes = LiveAttributes::new(
             resources.attributes.clone(),
@@ -544,6 +549,7 @@ impl PlayerMotion {
             speed: 0.0,
             item_use_speed: None,
             item_use_slows_sprint: false,
+            nudge: [None; 2],
             last_climbable: None,
             steps: MovementDistances {
                 next_step: 1.0,
@@ -1065,6 +1071,14 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.velocity.y += f64::from(ya as f32 * self.player.flying_speed * 3.0);
             }
         }
+        // LocalPlayer.aiStep: a player inside a block is nudged out of it.
+        let [x, z] = std::mem::take(&mut self.player.nudge);
+        if let Some(x) = x {
+            self.player.velocity.x = x;
+        }
+        if let Some(z) = z {
+            self.player.velocity.z = z;
+        }
         self.dry_tick(TickInput::PreparedLocal {
             direction,
             jumping: jumping && !self.player.flying,
@@ -1112,6 +1126,29 @@ impl MotionWorld<'_, '_, '_> {
         keys: crate::sprint::Keys,
         sprint_window: i32,
     ) -> Result<()> {
+        self.local_tick(keys, |player, keys| {
+            player.sprint_input_tick_with_window(keys, sprint_window)
+        })
+    }
+    /// A client's tick played again by the server's movement prediction: the
+    /// client's own keys, and the sprinting it said it had (its
+    /// ServerboundPlayerCommandPacket comes before the tick's move).
+    pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
+        self.local_tick(keys, |player, _| {
+            if player.sprinting == sprinting {
+                Ok(())
+            } else {
+                player.set_sprinting(sprinting)
+            }
+        })
+    }
+    /// `LocalPlayer.aiStep` and the travel it ends with; `sprint` is the
+    /// sprint phase.
+    fn local_tick(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
+    ) -> Result<()> {
         // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
         self.player.health.advance_clock();
         self.fluid_base_tick()?;
@@ -1124,8 +1161,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
-        self.player
-            .sprint_input_tick_with_window(keys, sprint_window)?;
+        sprint(self.player, keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
         self.player.move_vector = direction;
@@ -3481,6 +3517,20 @@ mod tests {
                 .count(),
             1
         );
+        // A fatal hit plays the death sound rather than a hurt sound (#4570).
+        let mut dying = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        assert!(
+            dying
+                .hurt(&resources.health, Default::default(), source, 100.0)
+                .unwrap()
+        );
+        assert!(dying.health.dead_or_dying());
+        assert!(
+            !dying
+                .events
+                .iter()
+                .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+        );
         // A shield that takes the whole arrow: onBlocked's sound, no damage
         // event, so the player hears no hurt sound.
         use horizon_world::blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction};
@@ -3881,6 +3931,72 @@ mod tests {
         assert!(!w.player.swimming);
         assert_eq!(w.player.pose, crate::pose::Pose::Standing);
         assert_eq!(w.player.dimensions.eye_height, 1.62);
+    }
+    /// #4509: a cushion seat clips the feet into the floor, so `can_fit_pose`
+    /// rejects standing and would leave a swim pose; sit up anyway.
+    #[test]
+    fn a_swimming_passenger_sits_up_even_when_standing_does_not_fit() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        // Feet inside the floor block, as on a cushion seat (y - 0.35): away
+        // from the pyramid the scene's floor tops out at y = 4.
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 3.65, 20.5)).unwrap();
+        player.swimming = true;
+        player.set_pose(crate::pose::Pose::Swimming).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        assert!(!w.can_fit_pose(crate::pose::Pose::Standing).unwrap());
+        w.passenger_pose_tick().unwrap();
+        assert!(!w.player.swimming);
+        assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+    }
+    /// The movement prediction plays a tick again on a copy: what the copy
+    /// does (sprinting edits the speed attribute) stays in the copy.
+    #[test]
+    fn a_copied_player_moves_on_its_own() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        let walking = player.attribute("minecraft:movement_speed").unwrap();
+        let mut copy = player.clone();
+        copy.set_sprinting(true).unwrap();
+        copy.velocity = Vec3::new(0.2, 0.0, 0.0);
+        let sprinting = copy.attribute("minecraft:movement_speed").unwrap();
+        assert!(
+            (sprinting - walking * 1.3).abs() < 1e-6,
+            "{walking} {sprinting}"
+        );
+        assert_eq!(
+            player.attribute("minecraft:movement_speed").unwrap(),
+            walking
+        );
+        assert!(!player.sprinting);
+        assert_eq!(player.velocity, Vec3::ZERO);
+        // The copy's attributes keep working after the original changes too.
+        player.set_sprinting(true).unwrap();
+        copy.set_sprinting(false).unwrap();
+        assert_eq!(copy.attribute("minecraft:movement_speed").unwrap(), walking);
     }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {

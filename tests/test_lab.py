@@ -199,6 +199,15 @@ class PublicationTests(unittest.TestCase):
                 self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository())
                 git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
                 self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository(history=True))
+                # A range reads only its own commits: the artifact's commit lies before it.
+                (directory / ".local" / "artifact.txt").unlink()
+                git("rm", "-q", "--cached", ".local/artifact.txt")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "removal")
+                self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository(True, ["HEAD~1..HEAD"]))
+                (directory / "README.md").write_text("public\n")
+                git("add", "README.md")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "public")
+                self.assertEqual(check_public_tree.paths_in_repository(True, ["HEAD~1..HEAD"]), ["README.md", ""])
 
 
 def library(name, os_name=None):

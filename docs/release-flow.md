@@ -13,15 +13,16 @@ reopened; labels never start it):
 
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
-| `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
+| `verify` | GitHub `ubuntu-latest` | Gathers three jobs that run at once: `python` (public-tree check, Python tests), `clippy` (rustfmt, clippy with warnings denied) and `tests` (Rust tests). Dependencies come from caches saved by main's runs | ~4 min |
 | `parity / parity` | A runner with the label `horizon-game`: the Mac mini's and playhorizon's (below) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
-`verify` is the check main requires, so it has no condition and runs in every run of `checks`: GitHub counts a
-*skipped* required check as passed, and labels used to start runs whose `verify` was skipped, which let
-auto-merge merge before the real `verify` finished. A pull request that changes no Rust (docs, tools) runs only its
-quick steps and finishes in seconds.
+`verify` is the check main requires, so it runs `always()` in every run of `checks` and fails unless `python`,
+`clippy` and `tests` all passed: GitHub counts a *skipped* required check as passed, and labels used to start runs
+whose `verify` was skipped, which let auto-merge merge before the real `verify` finished. A pull request that changes
+only documentation skips the Rust steps and finishes in about a minute. A pull request's public-tree check reads only
+its own commits (`--range base..head`); main's pushes read every ref's history.
 
 ### The parity job
 
