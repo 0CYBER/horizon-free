@@ -156,6 +156,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // SulfurCube.MAX_FUSE: onSyncedDataUpdated copies it into the fuse
+            // the client ticks for swell / white flash (#4548).
+            (Species::SulfurCube, 20, Value::Int(fuse)) => {
+                m.extra.counter2 = (*fuse).max(0) + 1;
+            }
+            (Species::SulfurCube, 19, Value::Bool(from_bucket)) => {
+                m.extra.scratch[3] = i32::from(*from_bucket);
+            }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
             // and raised head of an angry enderman.
             (Species::Enderman, 17, Value::Bool(creepy)) => m.extra.flag = *creepy,
@@ -872,5 +880,20 @@ mod tests {
             &[(17, s::RESOLVABLE_PROFILE, Value::Profile(profile.clone()))],
         );
         assert_eq!(m.profile, Some(profile));
+    }
+
+    /// #4548: SulfurCube.MAX_FUSE copies into the fuse the client ticks for swell.
+    #[test]
+    fn sulfur_cube_max_fuse_sets_the_client_fuse() {
+        let Some(mut m) = mob("minecraft:sulfur_cube") else {
+            return;
+        };
+        assert_eq!(m.extra.counter2, 0);
+        apply(&mut m, &[(20, s::INT, Value::Int(40))]);
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 40);
+        assert!(horizon_client::mobs::sulfur_cube::primed(&m));
+        apply(&mut m, &[(20, s::INT, Value::Int(0))]);
+        // Last fuse tick: still primed at 0 until the server removes it.
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 0);
     }
 }
