@@ -2,7 +2,7 @@
 //! in front, cycled by F5), the detached camera (`Camera.setup` with
 //! `getMaxZoom`), and the local player drawn as a model: in third person
 //! and in the inventory (`InventoryScreen.extractEntityInInventoryFollowsMouse`).
-use super::{Game, Screen};
+use super::{Game, Screen, shoulders::shoulder_variants};
 use horizon_client::{
     blocks::BlockFacts,
     camera::{CameraEntity, LivingCamera},
@@ -230,7 +230,12 @@ fn wrap(d: f32) -> f32 {
 impl Game<'_> {
     /// `key.togglePerspective`.
     pub(super) fn cycle_camera(&mut self) {
+        let previous = self.camera_type;
         self.camera_type = self.camera_type.cycle();
+        // Minecraft.handleKeybinds: the chain follows the first-person view.
+        if previous.first_person() != self.camera_type.first_person() {
+            self.check_entity_post_effect(self.camera_type.first_person());
+        }
     }
     /// `Camera.update` (`alignWithEntity` and `getMaxZoom`): the
     /// interpolated eye, or a point up to the camera distance behind (or in
@@ -423,6 +428,7 @@ impl Game<'_> {
         // LivingEntity.getBedOrientation: the model lies in the bed as
         // another player's does (`villager::sleep_pose`).
         let bed = self.sleeping.map_or(0, |head| self.bed_facing(head));
+        let spectator = self.spectator();
         let Some(m) = self.player_model.as_mut() else {
             return;
         };
@@ -482,12 +488,24 @@ impl Game<'_> {
         // Guests and server players take their pose from DATA_POSE, not here.
         m.extra.avatar_pose = pose;
         m.extra.passenger = riding;
+        m.extra.previous_velocity = m.velocity;
         m.velocity = velocity;
         m.extra.fall_flying = fall_flying;
         m.extra.fall_fly_ticks = fly_ticks;
         m.extra.auto_spin_attack = spinning;
+        // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID: as the
+        // server synced them, else the local body's own.
+        (m.extra.arrow_count, m.extra.stinger_count) = match &self.remote {
+            Some(r) => (r.own_arrows, r.own_stingers),
+            None => (self.combat.stuck.arrows, self.combat.stuck.stingers),
+        };
+        m.extra.shoulder_parrots = match &self.remote {
+            Some(r) => r.own_shoulders,
+            None => shoulder_variants(self.level.player_extra.as_ref()),
+        };
         m.extra.main_hand_left = self.settings.main_hand_left;
         m.extra.hidden_model_parts = !self.settings.file.model_customisation() & 0x7F;
+        m.extra.spectator = spectator;
         m.extra.using_item = using;
         m.extra.using_off_hand = using_off_hand;
         m.extra.blocking = blocking;
@@ -627,6 +645,8 @@ impl Game<'_> {
         );
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
+        self.shoulder_parrots_geometry(m, camera, alpha as f32, packed, out);
+        self.stuck_in_body_geometry(m, self.own_entity_id(), camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
         // CustomHeadLayer: a pumpkin, skull or other head item.
         self.head_item_geometry(m, camera, alpha, packed, true, out);
@@ -725,6 +745,7 @@ impl Game<'_> {
             &mut verts,
         );
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
+        self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
@@ -941,6 +962,84 @@ impl Game<'_> {
             out,
         );
     }
+    /// The entity id the local player has: the server's, else the LAN host's.
+    fn own_entity_id(&self) -> i32 {
+        match (&self.remote, &self.lan) {
+            (Some(r), _) => r.entity_id,
+            (None, Some(host)) => host.host_entity,
+            _ => 0,
+        }
+    }
+    /// `ArrowLayer` and `BeeStingerLayer` (`StuckInBodyLayer`) for a player:
+    /// the arrows and bee stingers stuck in the body, placed from the entity
+    /// id `id`.
+    pub(super) fn stuck_in_body_geometry(
+        &self,
+        m: &Mob,
+        id: i32,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let sprites = &self.gui.atlas.sprites;
+        let layers = [
+            (
+                m.extra.arrow_count,
+                false,
+                self.arrow_model.as_ref(),
+                "entity/projectiles/arrow",
+            ),
+            (
+                m.extra.stinger_count,
+                true,
+                self.bee_stinger_model.as_ref(),
+                "entity/bee/bee_stinger",
+            ),
+        ];
+        for (count, on_surface, model, texture) in layers {
+            let (true, Some(model), Some(rect)) = (count > 0, model, sprites.get(texture)) else {
+                continue;
+            };
+            horizon_client::mobs::render::stuck_in_body(
+                m,
+                id,
+                partial,
+                camera,
+                self.res.mob_data(),
+                count,
+                on_surface,
+                model,
+                [rect.u0, rect.v0, rect.u1, rect.v1],
+                light,
+                out,
+            );
+        }
+    }
+    /// `ParrotOnShoulderLayer`: the parrots the player keeps in its
+    /// `ShoulderEntityLeft` and `ShoulderEntityRight` (game/shoulders.rs).
+    pub(super) fn shoulder_parrots_geometry(
+        &self,
+        m: &Mob,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let Some(parrot) = self.res.mob_types().get("minecraft:parrot") else {
+            return;
+        };
+        let atlas = &self.gui.atlas;
+        let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let base = horizon_client::mobs::render::base_transform(m, partial, camera);
+        for left in [true, false] {
+            if let Some(variant) = m.extra.shoulder_parrots[usize::from(!left)] {
+                horizon_client::mobs::render::shoulder_parrot(
+                    m, parrot, variant, left, partial, base, &lookup, light, out,
+                );
+            }
+        }
+    }
     /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
     /// player (`SpinAttackEffectModel.setupAnim`).
     pub(super) fn spin_attack_geometry(
@@ -996,7 +1095,7 @@ fn entity_in_ui_shade(normal: glam::Vec3) -> f32 {
     (light * 0.6 + 0.4).min(1.0)
 }
 
-fn player_preview_quads(
+pub(super) fn player_preview_quads(
     mut verts: Vec<horizon_client::mesher::Vertex>,
     gui: glam::Mat4,
     fire: Option<(f32, f32)>,

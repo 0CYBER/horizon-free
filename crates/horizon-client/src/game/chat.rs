@@ -19,13 +19,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The tree the chat parses and completes with: a server's, once it has
-/// sent one (ClientPacketListener.commands), else the game's own.
+/// The tree the chat parses and completes with: `Remote::chat_tree`, which is
+/// a server's, once it has sent one (ClientPacketListener.commands), else the
+/// game's own, plus the commands native mods own (`chat_tree_for`).
 pub(super) fn chat_tree(
     remote: &Option<super::remote::Remote>,
 ) -> &horizon_client::command::Dispatcher {
-    match remote.as_ref().and_then(|r| r.commands.as_ref()) {
-        Some(tree) => tree,
+    match remote.as_ref() {
+        Some(server) => &server.chat_tree,
         None => horizon_client::command::vanilla::game_dispatcher(),
     }
 }
@@ -33,6 +34,42 @@ use winit::{
     event::KeyEvent,
     keyboard::{KeyCode, PhysicalKey},
 };
+
+/// `base` with the commands native mods own (`native_commands`) added: each a
+/// literal that takes the rest of the line as it was typed, run by
+/// `native_command` (`Dispatcher::with_mod_commands`), so the chat box colours
+/// and completes them as it does the game's own.
+pub(super) fn with_native_commands(
+    base: &horizon_client::command::Dispatcher,
+    names: &[&str],
+) -> horizon_client::command::Dispatcher {
+    // A name the tree already has keeps that command (colour, completion).
+    base.with_mod_commands(
+        names
+            .iter()
+            .copied()
+            .filter(|name| base.find(name).is_none()),
+    )
+}
+
+impl Game<'_> {
+    /// The tree the chat box colours, completes and parses with for the
+    /// world's connection: `base`, the tree the server sent, or the game's own
+    /// before it does. Built where that base changes — once per connection —
+    /// rather than at each keystroke, and asking the mods then, not per key.
+    pub(super) fn chat_tree_for(
+        &mut self,
+        base: Option<&horizon_client::command::Dispatcher>,
+    ) -> horizon_client::command::Dispatcher {
+        let mut names = Vec::new();
+        self.native_commands(&mut names);
+        let base = match base {
+            Some(tree) => tree,
+            None => horizon_client::command::vanilla::game_dispatcher(),
+        };
+        with_native_commands(base, &names)
+    }
+}
 
 /// The local player's name (offline single player).
 pub const PLAYER_NAME: &str = "Player";
@@ -82,6 +119,20 @@ impl TimeMarker {
 pub struct ChatDraft {
     pub text: String,
     pub command: bool,
+}
+/// `ChatScreen.ExitReason`: why the chat screen went away.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ChatExit {
+    /// Another screen replaced it (death, a container, a disconnect).
+    Interrupted,
+    /// The player closed it (Escape).
+    Intentional,
+    /// A message was sent.
+    Done,
+}
+/// `ChatScreen.shouldDiscardDraft`.
+fn should_discard_draft(reason: ChatExit, save_chat_drafts: bool) -> bool {
+    reason != ChatExit::Interrupted && (reason != ChatExit::Intentional || !save_chat_drafts)
 }
 /// UI and command state that lives beside the game.
 #[derive(Default)]
@@ -423,9 +474,8 @@ impl Game<'_> {
         };
         // The mob effect registry: every effect `/effect` and the
         // `mob_effect` resource arguments accept.
-        reg.effects = horizon_client::brewing::EFFECTS
-            .iter()
-            .map(|e| format!("minecraft:{}", e.id))
+        reg.effects = horizon_client::brewing::all_effects()
+            .map(|e| horizon_client::brewing::namespaced(e.id).to_owned())
             .collect();
         reg.effects.sort();
         reg.enchantments = list("data/minecraft/enchantment");
@@ -560,7 +610,7 @@ impl Game<'_> {
         self.right = false;
         self.capture(false);
     }
-    pub(super) fn close_chat(&mut self) {
+    pub(super) fn close_chat(&mut self, reason: ChatExit) {
         // InBedChatScreen.onClose: leaving the screen means getting up; the
         // screen goes once the player has woken (`tick_in_bed_chat`).
         if self.ui.in_bed_chat && self.sleeping.is_some() {
@@ -572,7 +622,7 @@ impl Game<'_> {
             .chat_screen
             .as_ref()
             .map_or_else(String::new, |s| s.value().to_owned());
-        self.keep_chat_draft(&text);
+        self.keep_chat_draft(&text, reason);
         self.ui.chat_draft_shown = false;
         self.ui.chat_screen = None;
         self.ui.chat.reset_scroll();
@@ -581,13 +631,16 @@ impl Game<'_> {
             self.capture(true);
         }
     }
-    /// `ChatScreen.removed`: the text left in the box becomes the draft when
-    /// Save Chat Drafts is on, else (and when blank) the draft is discarded. A
-    /// draft still shown unchanged stays as it is.
-    fn keep_chat_draft(&mut self, text: &str) {
+    /// `ChatScreen.removed`: the text left in the box becomes the draft unless
+    /// `shouldDiscardDraft` (closed on purpose without Save Chat Drafts, or
+    /// sent); blank text discards the draft. A draft still shown unchanged
+    /// stays as it is.
+    fn keep_chat_draft(&mut self, text: &str, reason: ChatExit) {
         let unchanged =
             self.ui.chat_draft_shown && self.ui.chat_draft.as_ref().is_some_and(|d| d.text == text);
-        if !self.settings.file.bool("saveChatDrafts") || text.trim().is_empty() {
+        if should_discard_draft(reason, self.settings.file.bool("saveChatDrafts"))
+            || text.trim().is_empty()
+        {
             self.ui.chat_draft = None;
         } else if !unchanged {
             self.ui.chat_draft = Some(ChatDraft {
@@ -600,6 +653,19 @@ impl Game<'_> {
     /// woken (`onPlayerWokeUp`) it closes, or turns into the plain chat
     /// screen if something was typed.
     pub(super) fn tick_in_bed_chat(&mut self) {
+        // Another screen took over the open chat (death, a container the
+        // server opened): `ChatScreen.removed` runs with the INTERRUPTED reason.
+        if self.screen != Screen::Chat && self.ui.chat_screen.is_some() {
+            let text = self
+                .ui
+                .chat_screen
+                .as_ref()
+                .map_or_else(String::new, |s| s.value().to_owned());
+            self.keep_chat_draft(&text, ChatExit::Interrupted);
+            self.ui.chat_draft_shown = false;
+            self.ui.chat_screen = None;
+            self.ui.chat.reset_scroll();
+        }
         if self.screen != Screen::Chat {
             self.ui.in_bed_chat = false;
         }
@@ -611,7 +677,7 @@ impl Game<'_> {
                     .chat_screen
                     .as_ref()
                     .map_or_else(String::new, |s| s.value().to_owned());
-                self.close_chat();
+                self.close_chat(ChatExit::Interrupted);
                 if !text.is_empty() {
                     self.open_chat(&text);
                 }
@@ -734,7 +800,7 @@ impl Game<'_> {
             ChatAction::Close => {
                 // Escape: the box still holds its text, which close_chat keeps as the draft.
                 self.ui.chat_screen = Some(screen);
-                self.close_chat();
+                self.close_chat(ChatExit::Intentional);
             }
             ChatAction::Submit(message) => {
                 // InBedChatScreen sends without closing (`closeOnSubmit` is
@@ -746,7 +812,7 @@ impl Game<'_> {
                 } else {
                     // The screen is taken here, so close_chat sees no text: a sent
                     // message discards the draft (DONE).
-                    self.close_chat();
+                    self.close_chat(ChatExit::Done);
                 }
                 if !message.is_empty() {
                     self.handle_chat_input(&message);
@@ -922,7 +988,7 @@ impl Game<'_> {
         if !self.settings.chat_links {
             return;
         }
-        if self.settings.file.bool("chatLinksPrompt") {
+        if self.settings.chat_links_prompt {
             self.link_prompt = Some(url);
         } else {
             super::packs::open_uri(&url);
@@ -1099,10 +1165,16 @@ impl Game<'_> {
         let height = batch.height as i32;
         let (cx, cy) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
         let wrap = (batch.width as i32 / 2).max(200);
+        // handleTagIcon: the chat-modified icons over the cursor or its message.
+        let (tag_tooltip, tag_icons) =
+            self.ui
+                .chat
+                .focused_tags(&self.gui.atlas.font, height, cx, cy);
+        horizon_client::hud_layout::paint(batch, &self.gui.atlas, &tag_icons);
         if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
-            // DrawingFocusedGraphicsAccess.handleMessage: the pointing hand over
-            // insertion text, which ChatScreen only asks for while Shift is held.
-            if style.insertion.is_some() && self.has_shift_down() {
+            // ActiveTextCollector.ClickableStyleFinder: a click event, or an
+            // insertion while Shift is held (ChatScreen.includeInsertions).
+            if style.click.is_some() || (style.insertion.is_some() && self.has_shift_down()) {
                 horizon_client::widgets::request_cursor(
                     horizon_client::widgets::Cursor::PointingHand,
                 );
@@ -1126,10 +1198,9 @@ impl Game<'_> {
                 let lines = Self::entity_tooltip_lines(entity);
                 self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
             }
-        } else if self.ui.chat.indicator_at(height, cx, cy) {
-            // GuiMessageTag.systemSinglePlayer's text, split at 210.
-            let tag = Text::translate("chat.tag.system_single_player", &[]);
-            let lines = self.wrapped_rows(&tag, 210);
+        } else if let Some(tag) = &tag_tooltip {
+            // The message tag's text, split at 210.
+            let lines = self.wrapped_rows(tag, 210);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
     }
@@ -1282,6 +1353,8 @@ impl Game<'_> {
     /// cause is known to the client).
     pub(super) fn death_message(&mut self) {
         let cause = self.ui.death_cause.take();
+        let player = self.native_acting_id();
+        self.native_player_died(player, cause.as_deref());
         self.ui.died_at = Some(std::time::Instant::now());
         self.ui.death_text = None;
         self.ui.death_confirm = None;
@@ -1416,6 +1489,16 @@ const LINK_COPY: usize = 1;
 mod tests {
     use super::*;
 
+    /// `ChatScreen.shouldDiscardDraft`.
+    #[test]
+    fn draft_discard_follows_the_exit_reason() {
+        assert!(!should_discard_draft(ChatExit::Interrupted, false));
+        assert!(!should_discard_draft(ChatExit::Interrupted, true));
+        assert!(should_discard_draft(ChatExit::Intentional, false));
+        assert!(!should_discard_draft(ChatExit::Intentional, true));
+        assert!(should_discard_draft(ChatExit::Done, true));
+    }
+
     #[test]
     fn resource_ids_are_listed_once_per_root() {
         let root = std::env::temp_dir().join(format!("horizon-ids-{}", std::process::id()));
@@ -1444,5 +1527,41 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &command_export(&dir).unwrap()));
         assert!(command_export(&dir.join("missing")).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A native mod's command is in the tree the chat box uses (#456): known
+    /// rather than red, and offered as it types. With no mod claiming one the
+    /// tree is the game's own, as it was before the mods were asked.
+    #[test]
+    fn native_mod_commands_join_the_chat_tree() {
+        let reg = Registries::default();
+        let vanilla = horizon_client::command::vanilla::game_dispatcher();
+        let plain = with_native_commands(vanilla, &[]);
+        assert_eq!(plain.nodes.len(), vanilla.nodes.len());
+        assert!(plain.find("flyspeed").is_none());
+        let tree = with_native_commands(vanilla, &["flyspeed"]);
+        assert!(tree.find("flyspeed").is_some());
+        // The rest of the line goes to the mod, as `native_command` gets it.
+        let parse = tree.parse("flyspeed 4", &reg);
+        assert_eq!(
+            parse.executable().unwrap().1,
+            horizon_client::command::MOD_COMMAND
+        );
+        let parse = tree.parse("fly", &reg);
+        let offered: Vec<String> = tree
+            .client_suggestions(&parse, 3, &reg)
+            .1
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert!(offered.contains(&"flyspeed".to_owned()), "{offered:?}");
+        // A name the game has keeps that command: the chat still knows it.
+        let shared = with_native_commands(vanilla, &["help"]);
+        assert!(shared.find("help").is_some());
+        assert_eq!(
+            shared.parse("help", &reg).executable().map(|e| e.1),
+            vanilla.parse("help", &reg).executable().map(|e| e.1)
+        );
+        assert_eq!(shared.nodes.len(), vanilla.nodes.len());
     }
 }

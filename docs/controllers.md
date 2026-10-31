@@ -21,8 +21,11 @@ design for any new screen.
 libudev for hot-plugging), IOKit on macOS, Windows.Gaming.Input on Windows.
 Its SDL mapping database normalizes every pad to one positional layout
 (South/East/West/North face buttons, bumpers, triggers, sticks, D-pad,
-Select/Start). No second windowing or event stack: gilrs is polled once per
-loop iteration next to winit's events.
+Select/Start). Horizon also injects a few SDL rows gilrs' bundled DB still
+misses (notably the 8BitDo Ultimate 2 on Linux/Bluetooth, whose right stick
+is on ABS_Z/ABS_RX without that row), and corrects that pad by vendor/product
+when no SDL row matched. No second windowing or event stack: gilrs is polled
+once per loop iteration next to winit's events.
 
 - The pure logic (mapping table, deadzones and curves, button edges, the
   settings file, glyph choice) lives in `crates/horizon-client-input/src/gamepad.rs`
@@ -68,8 +71,9 @@ loop iteration next to winit's events.
 
 The Guide / PS / Steam button is left to the system. Sneak on a stick click
 toggles by default (holding a stick in while steering the camera is
-awkward, which is why Bedrock does the same); the controls options can make it
-hold-to-sneak.
+awkward, which is why Bedrock does the same) and acts like vanilla's toggle
+crouch: a screen stands you up while it is open and closing it crouches you
+again. The controls options can make it hold-to-sneak.
 
 ## Menus and inventories
 

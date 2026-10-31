@@ -844,6 +844,12 @@ impl SkinSlots {
             kept: Default::default(),
         }
     }
+    /// The atlas was replaced (a resource pack reload): every slot is blank,
+    /// so no skin counts as stored and each uploads again.
+    pub fn forget(&mut self) {
+        self.slots.clear();
+        self.kept.clear();
+    }
     /// Whether `location` is in a slot.
     pub fn contains(&self, location: &str) -> bool {
         self.slots.iter().any(|(l, _)| l == location)
@@ -910,6 +916,23 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    /// A pack reload swaps the atlas: its skin slots are blank, so a forgotten
+    /// table holds nothing and hands out slots from the start again, even for
+    /// skins drawn in the last frame.
+    #[test]
+    fn a_new_atlas_forgets_every_skin_slot() {
+        use super::SkinSlots;
+        let mut slots = SkinSlots::new(2);
+        assert_eq!(slots.place("skins/a".into()), Some((0, None)));
+        assert_eq!(slots.place("skins/b".into()), Some((1, None)));
+        assert_eq!(slots.place("skins/c".into()), None);
+        slots.forget();
+        assert!(!slots.contains("skins/a"));
+        assert!(!slots.contains("skins/b"));
+        assert_eq!(slots.place("skins/c".into()), Some((0, None)));
+        assert_eq!(slots.place("skins/a".into()), Some((1, None)));
+    }
+
     /// The launcher's offline skin: a 64x64 or legacy 64x32 PNG laid out as
     /// a downloaded skin, slim only for the `slim` model; anything else is
     /// refused and the player keeps their default skin.

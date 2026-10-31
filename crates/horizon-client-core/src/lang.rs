@@ -66,6 +66,15 @@ impl ResourceSource for Bundled {
             "assets/horizon/lang/uk_ua.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/uk_ua.json")
             }
+            "assets/horizon/lang/es_es.json"
+            | "assets/horizon/lang/es_ar.json"
+            | "assets/horizon/lang/es_cl.json"
+            | "assets/horizon/lang/es_ec.json"
+            | "assets/horizon/lang/es_mx.json"
+            | "assets/horizon/lang/es_uy.json"
+            | "assets/horizon/lang/es_ve.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/es_es.json")
+            }
             _ => return None,
         };
         Some(body.as_bytes().to_vec())
@@ -286,6 +295,13 @@ mod tests {
         assert_eq!(
             uk.get("horizon.options.on_screen_keyboard"),
             Some("Екранна клавіатура")
+        );
+        let es = Language::load(&[&empty], "es_es");
+        assert_eq!(es.get("horizon.options.controller"), Some("Mando"));
+        let es_ve = Language::load(&[&empty], "es_ve");
+        assert_eq!(
+            es_ve.get("horizon.options.on_screen_keyboard"),
+            Some("Teclado en pantalla")
         );
     }
 

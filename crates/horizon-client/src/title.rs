@@ -8,6 +8,7 @@ use crate::{
     save::Level,
     text::{Text, format_translation},
 };
+use horizon_world::datafix::world_upgrader::{self, WorldUpgrader};
 use std::path::{Path, PathBuf};
 use std::{
     cell::{Cell, RefCell},
@@ -106,6 +107,30 @@ fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
     );
 }
 
+/// `OptimizeWorldScreen.DIMENSION_COLORS`.
+fn dimension_color(level: &str) -> u32 {
+    match level {
+        world_upgrader::OVERWORLD => rgba(0x33, 0x66, 0x22, 255),
+        world_upgrader::NETHER => rgba(0x66, 0x44, 0x33, 255),
+        world_upgrader::END => rgba(0x77, 0x88, 0x55, 255),
+        _ => rgba(0xdd, 0xdd, 0xdd, 255),
+    }
+}
+
+/// English text of the status keys `UpgradeStatusTranslator` returns.
+fn status_fallback(key: &str) -> &'static str {
+    match key {
+        "optimizeWorld.stage.failed" => "Failed! :(",
+        "optimizeWorld.stage.upgrading.chunks" => "Upgrading all chunks...",
+        "optimizeWorld.stage.upgrading.entities" => "Upgrading all entities...",
+        "optimizeWorld.stage.upgrading.poi" => "Upgrading all points of interest...",
+        "optimizeWorld.stage.finished.chunks" => "Finishing up upgrading chunks...",
+        "optimizeWorld.stage.finished.entities" => "Finishing up upgrading entities...",
+        "optimizeWorld.stage.finished.poi" => "Finishing up upgrading points of interest...",
+        _ => "Counting chunks...",
+    }
+}
+
 fn warning_top(h: f32, lines: usize) -> f32 {
     ((h.ceil() - 102.0 - lines as f32 * 9.0) / 2.0).floor()
 }
@@ -150,6 +175,15 @@ impl WorldToast {
     }
 }
 
+/// Why `WorldOpenFlows.askForBackup` asks before a world opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StemIssue {
+    /// `WorldOptions.isOldCustomizedWorld`.
+    Customized,
+    /// A `worldGenSettingsLifecycle` that is not stable.
+    Experimental,
+}
+
 #[derive(Clone, Debug)]
 pub struct WorldEntry {
     pub folder: String,
@@ -165,8 +199,36 @@ pub struct WorldEntry {
     /// `LevelSummary.CorruptedLevelSummary`: level.dat did not read, so the row
     /// only knows its folder and offers recovery instead of play.
     pub corrupted: bool,
+    /// `LevelSummary.isCompatible` false: the saved game version's name, for a world
+    /// from another series.
+    pub incompatible: Option<String>,
+    /// `LevelSummary.requiresFileFixing`: opening the world upgrades its files first.
+    pub file_fixing: bool,
+    /// `BackupStatus.DOWNGRADE`: a newer version saved the world.
+    pub downgrade: bool,
 }
 impl WorldEntry {
+    /// `LevelSummary.isCompatible`: the saved series is this build's.
+    fn compatible(&self) -> bool {
+        self.incompatible.is_none()
+    }
+    /// `LevelSummary.isDisabled`.
+    fn disabled(&self) -> bool {
+        self.locked || !self.compatible()
+    }
+    /// `LevelSummary.primaryActionActive`: a corrupted world offers recovery.
+    fn can_play(&self) -> bool {
+        self.corrupted || !self.disabled()
+    }
+    /// `LevelSummary.canEdit` and `canRecreate`.
+    fn can_edit(&self) -> bool {
+        !self.corrupted && !self.disabled() && !self.file_fixing
+    }
+    /// `BackupStatus.shouldBackup`: the world needs its files fixed or comes from
+    /// a newer version.
+    fn should_backup(&self) -> bool {
+        self.file_fixing || self.downgrade
+    }
     /// `CorruptedLevelSummary`: named after its folder, nothing else known.
     fn corrupted(folder: String, modified: std::time::SystemTime) -> Self {
         Self {
@@ -179,8 +241,19 @@ impl WorldEntry {
             version: String::new(),
             locked: false,
             corrupted: true,
+            incompatible: None,
+            file_fixing: false,
+            downgrade: false,
         }
     }
+}
+/// The AlertScreen an `Error` shows in place of the access failure.
+#[derive(Clone, Copy, Debug)]
+pub enum Alert {
+    /// The red `selectWorld.incompatible.title`.
+    Incompatible,
+    /// `selectWorld.recreate.error.title`.
+    Recreate,
 }
 #[derive(Clone, Debug)]
 pub enum Mode {
@@ -209,6 +282,24 @@ pub enum Mode {
     BackupBeforeUpgrade {
         world: WorldEntry,
         downgrade: Option<String>,
+        /// With neither of the above: `WorldOpenFlows.askForBackup` over a customized or
+        /// experimental world (`openWorldCheckWorldStemCompatibility`).
+        stem: Option<StemIssue>,
+    },
+    /// EditWorldScreen's Optimize World: BackupConfirmScreen with the Erase Cached Data box.
+    OptimizeConfirm {
+        world: WorldEntry,
+        /// The Edit World screen's name field, restored by Cancel.
+        name: String,
+        erase_cache: bool,
+    },
+    /// `OptimizeWorldScreen`: the progress of `Title.optimize`.
+    Optimize {
+        world: WorldEntry,
+    },
+    /// `openWorldCheckDiskSpace`'s ConfirmScreen: little space is left on the device.
+    LowDiskSpace {
+        world: WorldEntry,
     },
     Delete {
         world: WorldEntry,
@@ -230,8 +321,8 @@ pub enum Mode {
     Error {
         message: String,
         return_to: Box<Mode>,
-        /// AlertScreen with the red `selectWorld.incompatible.title`, not the access failure.
-        incompatible: bool,
+        /// An AlertScreen, not the access failure.
+        alert: Option<Alert>,
     },
     Multiplayer(crate::multiplayer::Screen),
     /// SafetyScreen: the warning before the first Multiplayer click, with its
@@ -251,6 +342,8 @@ pub enum Mode {
     },
     /// AccessibilityOnboardingScreen: the first screen of a first launch.
     Onboarding(Onboarding),
+    /// `BanNoticeScreens`: a ConfirmLinkScreen `Gui.addInitialScreens` queued.
+    BanNotice(crate::ban_notice::Notice),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -263,6 +356,10 @@ pub enum Action {
     Sounds,
     /// The title's bottom text (`PlainTextButton`): `CreditsAndAttributionScreen`.
     Credits,
+    /// `Blaze3D.openUri`: a ConfirmLinkScreen's Open in Browser.
+    OpenUri(String),
+    /// `ConfirmLinkScreen.copyToClipboard`.
+    CopyText(String),
     Play {
         folder: String,
     },
@@ -303,16 +400,32 @@ pub struct Title {
     warning_check: Cell<[f32; 4]>,
     /// The bottom notice's `PlainTextButton` as last drawn: x, y, width, height.
     credits_button: Cell<[f32; 4]>,
+    /// `Minecraft.allowsMultiplayer()` once the account's attributes are known.
+    pub allows_multiplayer: bool,
+    /// The ban screens `Gui.addInitialScreens` queued, shown once the title is up.
+    ban_queue: std::collections::VecDeque<crate::ban_notice::Notice>,
+    /// A ban notice's three buttons as last drawn (`ConfirmLinkScreen`'s row).
+    ban_buttons: Cell<[(f32, f32); 3]>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
-    /// The backup a `BackupBeforeUpgrade` asked for opens its world when done.
-    backup_then_open: bool,
+    /// The backup a `BackupBeforeUpgrade` asked for opens its world when done; whether it
+    /// was the question about customized or experimental settings, the last one asked.
+    backup_then_open: Option<bool>,
+    /// The backup `OptimizeConfirm` asked for starts the optimization when done (with the
+    /// Erase Cached Data choice).
+    optimize_after_backup: Option<bool>,
+    /// The running `WorldUpgrader` of `Mode::Optimize`.
+    optimize: Option<WorldUpgrader>,
+    /// The Erase Cached Data box as last drawn: x, y, width, height.
+    erase_check: Cell<[f32; 4]>,
     /// The folder to open next, once that backup has finished.
     open_request: Option<String>,
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
     toast: Option<(crate::toasts::Slide, WorldToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
+    /// `SplashManager.getSplash` rolled the player's own name instead of a list entry.
+    splash_you: bool,
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
     /// WorldCreationGameRulesScreen, over Create New World while it is open.
@@ -381,6 +494,9 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
                     .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
                 locked: crate::save::SessionLock::is_locked(&path),
                 corrupted: false,
+                incompatible: crate::save::incompatible_version(&path),
+                file_fixing: crate::save::needs_file_fixes(&path),
+                downgrade: crate::save::downgraded_from(&path).is_some(),
             })
         })
         .collect();
@@ -398,6 +514,22 @@ fn world_info(world: &WorldEntry) -> crate::text::Text {
                 "Locked by another running instance of Minecraft.",
             ),
             0xFF5555,
+        );
+    }
+    // LevelSummary.createInfo: a world from another series says so in red.
+    if let Some(version) = &world.incompatible {
+        let version = if version.is_empty() {
+            lang::get_or("selectWorld.versionUnknown", "unknown")
+        } else {
+            version.clone()
+        };
+        return crate::text::Text::colored(
+            translate(
+                "selectWorld.incompatible.info",
+                "Incompatible version: %s",
+                &[&version],
+            ),
+            crate::text::RED,
         );
     }
     // CorruptedLevelSummary.INFO: recover_world.warning in red (-65536).
@@ -423,11 +555,20 @@ fn world_info(world: &WorldEntry) -> crate::text::Text {
     } else {
         String::new()
     };
+    // A world that asks for a backup shows its version in italics, red when downgrading.
+    let version = crate::text::Text::literal(world.version.clone());
+    let version = if !world.should_backup() {
+        version
+    } else if world.downgrade {
+        version.with_color(crate::text::RED)
+    } else {
+        version.italic()
+    };
     mode.append(crate::text::Text::literal(format!(
-        "{commands}, {} {}",
+        "{commands}, {} ",
         lang::get_or("selectWorld.version", "Version:"),
-        world.version
     )))
+    .append(version)
 }
 fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
     // SplashManager checks SpecialDates before the resource list (local date).
@@ -451,10 +592,45 @@ fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
         .map(|s| (*s).to_owned())
 }
 
+/// `SplashManager.getSplash`: outside the special dates, a one in `size` roll
+/// (`nextInt(size) == 42`) shows the logged-in player's name instead of a splash.
+fn rolls_user_splash(text: &str, seed: u64, date: (u32, u32)) -> bool {
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    if matches!(date, (12, 24) | (1, 1) | (10, 31)) {
+        return false;
+    }
+    let size = text
+        .lines()
+        .map(str::trim)
+        .filter(|s| horizon_core::random::java_string_hash(s.encode_utf16()) != 125780783)
+        .count();
+    i32::try_from(size)
+        .is_ok_and(|size| size > 0 && LegacyRandom::new(seed as i64).next_int_bound(size) == Ok(42))
+}
+
 impl Title {
+    /// Names the player for the `<NAME> IS YOU` splash; `name` is only asked for when that splash was rolled.
+    pub fn with_user(mut self, name: impl FnOnce() -> String) -> Self {
+        if self.splash_you {
+            self.splash = Some(format!("{} IS YOU", name().to_uppercase()));
+        }
+        self
+    }
     pub fn new(saves: PathBuf, resources: &Path) -> Self {
         use chrono::Datelike;
         let today = chrono::Local::now();
+        let splashes =
+            std::fs::read_to_string(resources.join("assets/minecraft/texts/splashes.txt"))
+                .unwrap_or_default();
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as usize;
+        let splash_you = rolls_user_splash(
+            &splashes,
+            (seed as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((seed as u64) >> 7),
+            (today.month(), today.day()),
+        );
         let mode = Mode::Main;
         let now = std::time::Instant::now();
         Self {
@@ -472,21 +648,20 @@ impl Title {
             message_lines: Cell::new(1),
             warning_check: Cell::new([0.0; 4]),
             credits_button: Cell::new([0.0; 4]),
+            allows_multiplayer: true,
+            ban_queue: Default::default(),
+            ban_buttons: Cell::new([(0.0, 0.0); 3]),
             backup: None,
             backup_shown: Cell::new(false),
-            backup_then_open: false,
+            backup_then_open: None,
+            optimize_after_backup: None,
+            optimize: None,
+            erase_check: Cell::new([0.0; 4]),
             open_request: None,
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
-            splash: choose_splash(
-                &std::fs::read_to_string(resources.join("assets/minecraft/texts/splashes.txt"))
-                    .unwrap_or_default(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as usize,
-                (today.month(), today.day()),
-            ),
+            splash: choose_splash(&splashes, seed, (today.month(), today.day())),
+            splash_you,
             recent: std::cell::RefCell::new(None),
             rules: RefCell::new(None),
             onboarding_finished: false,
@@ -736,12 +911,14 @@ impl Title {
         self.mode = Mode::Error {
             message: error.to_string(),
             return_to,
-            incompatible: false,
+            alert: None,
         };
     }
     /// Polling is done once per rendered frame so filesystem work never blocks drawing.
     pub fn poll_backup(&mut self) {
         self.poll_onboarding(std::time::Instant::now());
+        self.poll_account();
+        self.poll_optimize();
         if !self.backup_shown.get() {
             return;
         }
@@ -755,11 +932,21 @@ impl Title {
         };
         self.backup = None;
         if let Mode::Backup { world } = &self.mode {
+            let world = world.clone();
             let folder = world.folder.clone();
-            self.return_to_list(Some(&folder));
-            // EditWorldScreen opens the world after the backup, failed or not.
-            if std::mem::take(&mut self.backup_then_open) {
-                self.open_request = Some(folder.clone());
+            if let Some(erase_cache) = self.optimize_after_backup.take() {
+                // `conditionallyMakeBackupAndShowToast(..).thenAcceptAsync(..)`: the toast shows
+                // and OptimizeWorldScreen opens, backup failed or not.
+                self.begin_optimize(world.clone(), erase_cache);
+            } else {
+                self.return_to_list(Some(&folder));
+            }
+            // EditWorldScreen opens the world after the backup, failed or not: through the
+            // checks WorldOpenFlows still has to make.
+            if let Some(stem_asked) = self.backup_then_open.take()
+                && let Action::Play { folder } = self.after_prompt(world.clone(), stem_asked)
+            {
+                self.open_request = Some(folder);
             }
             let toast = match result {
                 Ok(bytes) => WorldToast::Created { folder, bytes },
@@ -790,6 +977,24 @@ impl Title {
     /// The world a finished backup made before its upgrade opens next.
     pub fn take_open_request(&mut self) -> Option<String> {
         self.open_request.take()
+    }
+    /// `WorldOpenFlows.openWorldLoadLevelData` for a world opened without the list (the control
+    /// socket): level data that does not read shows RecoverWorldDataScreen. False when the world
+    /// reads and opens as usual.
+    pub fn open_recover(&mut self, folder: &str) -> bool {
+        let dir = self.saves.join(folder);
+        let Some(issue) = crate::save::level_data_needs_recovery(&dir) else {
+            return false;
+        };
+        let world = list_worlds(&self.saves)
+            .into_iter()
+            .find(|w| w.folder == folder)
+            .unwrap_or_else(|| {
+                WorldEntry::corrupted(folder.to_owned(), std::time::SystemTime::now())
+            });
+        let issues = [Some(issue), crate::save::level_dat_issue(&dir, true)];
+        self.mode = Mode::Recover { world, issues };
+        true
     }
     /// `WorldOpenFlows.openWorld`: a world that can't be locked, as one another
     /// instance has open, stays closed behind `onWorldAccessFailure`
@@ -829,7 +1034,7 @@ impl Title {
                     &[&version],
                 ),
                 return_to: Box::new(self.mode.clone()),
-                incompatible: true,
+                alert: Some(Alert::Incompatible),
             };
             return Action::None;
         }
@@ -837,6 +1042,7 @@ impl Title {
             self.mode = Mode::BackupBeforeUpgrade {
                 world,
                 downgrade: None,
+                stem: None,
             };
             return Action::None;
         }
@@ -850,7 +1056,38 @@ impl Title {
             self.mode = Mode::BackupBeforeUpgrade {
                 world,
                 downgrade: Some(version),
+                stem: None,
             };
+            return Action::None;
+        }
+        self.after_prompt(world, false)
+    }
+    /// What `WorldOpenFlows` does once a world's version questions are answered:
+    /// `openWorldCheckWorldStemCompatibility` (unless `stem_asked`: its backup question was
+    /// the one just answered), then `openWorldCheckDiskSpace`, then the load.
+    fn after_prompt(&mut self, world: WorldEntry, stem_asked: bool) -> Action {
+        let dir = self.saves.join(&world.folder);
+        // The generator settings of a world that still needs its file fixes are read as the
+        // fixes will leave them (`world_gen_settings`), so its question comes with this open.
+        if !stem_asked {
+            let issue = if crate::save::is_old_customized_world(&dir) {
+                Some(StemIssue::Customized)
+            } else if crate::save::world_gen_unstable(&dir) {
+                Some(StemIssue::Experimental)
+            } else {
+                None
+            };
+            if let Some(stem) = issue {
+                self.mode = Mode::BackupBeforeUpgrade {
+                    world,
+                    downgrade: None,
+                    stem: Some(stem),
+                };
+                return Action::None;
+            }
+        }
+        if crate::save::low_disk_space(&dir) {
+            self.mode = Mode::LowDiskSpace { world };
             return Action::None;
         }
         Action::Play {
@@ -875,6 +1112,147 @@ impl Title {
         }
         *self.recent.borrow_mut() = None;
         self.mode = Mode::Recovered { world, success };
+    }
+    /// `OptimizeWorldScreen.create`: a world that still needs its file fixes or whose level data
+    /// does not read can't be optimized (vanilla logs and `setScreen(null)`, the main menu here).
+    /// Horizon stamps level.dat when the run finishes, not before: opening a world with an
+    /// older DataVersion is what converts it whole.
+    fn begin_optimize(&mut self, world: WorldEntry, erase_cache: bool) {
+        let dir = self.saves.join(&world.folder);
+        // `getUnfixedDataTagWithFallback`: level.dat_old stands in for a level.dat that does not read.
+        crate::save::fall_back_to_level_dat_old(&dir);
+        if crate::save::needs_file_fixes(&dir)
+            || crate::save::level_data_needs_recovery(&dir).is_some()
+        {
+            eprintln!("Failed to load datapacks, can't optimize world");
+            self.mode = Mode::Main;
+            return;
+        }
+        let levels = world_upgrader::world_dimensions(&dir);
+        self.optimize = Some(WorldUpgrader::new(&dir, levels, erase_cache, false));
+        self.mode = Mode::Optimize { world };
+    }
+    /// `OptimizeWorldScreen.tick`: a finished upgrader ends the screen with `true`.
+    fn poll_optimize(&mut self) {
+        if matches!(self.mode, Mode::Optimize { .. })
+            && self
+                .optimize
+                .as_ref()
+                .is_some_and(WorldUpgrader::is_finished)
+        {
+            self.end_optimize(true);
+        }
+    }
+    /// The callback of `OptimizeWorldScreen`, then `removed()` (cancel and close the upgrader):
+    /// back to the refreshed world list.
+    fn end_optimize(&mut self, success: bool) {
+        let Mode::Optimize { world } = &self.mode else {
+            return;
+        };
+        let folder = world.folder.clone();
+        if let Some(mut upgrader) = self.optimize.take() {
+            upgrader.cancel();
+            if success && upgrader.status_key() != "optimizeWorld.stage.failed" {
+                // The level data at the current version, which vanilla saved in `create`.
+                if let Err(e) =
+                    horizon_world::datafix::files::fix_world_files(&self.saves.join(&folder))
+                {
+                    eprintln!("level.dat: {e}");
+                }
+            }
+        }
+        self.return_to_list(Some(&folder));
+    }
+    /// `OptimizeWorldScreen.extractRenderState`.
+    fn draw_optimize(&self, atlas: &HudAtlas, batch: &mut HudBatch, w: f32, h: f32, name: &str) {
+        let Some(upgrader) = &self.optimize else {
+            return;
+        };
+        let grey = rgba(160, 160, 160, 255);
+        centered(
+            atlas,
+            batch,
+            &translate("optimizeWorld.title", "Optimizing World '%s'", &[&name]),
+            20.0,
+            u32::MAX,
+        );
+        let (x0, x1) = ((w / 2.0).floor() - 150.0, (w / 2.0).floor() + 150.0);
+        let y0 = (h.ceil() / 4.0).floor() + 100.0;
+        let y1 = y0 + 10.0;
+        let key = upgrader.status_key();
+        centered(
+            atlas,
+            batch,
+            &lang::get_or(&key, status_fallback(&key)),
+            y0 - 9.0 - 2.0,
+            grey,
+        );
+        if upgrader.total_chunks() <= 0 {
+            return;
+        }
+        batch.fill(
+            atlas,
+            x0 - 1.0,
+            y0 - 1.0,
+            x1 - x0 + 2.0,
+            y1 - y0 + 2.0,
+            rgba(0, 0, 0, 255),
+        );
+        for (i, (key, fallback, value)) in [
+            (
+                "optimizeWorld.info.converted",
+                "Upgraded chunks: %s",
+                upgrader.converted(),
+            ),
+            (
+                "optimizeWorld.info.skipped",
+                "Skipped chunks: %s",
+                upgrader.skipped(),
+            ),
+            (
+                "optimizeWorld.info.total",
+                "Total chunks: %s",
+                upgrader.total_chunks(),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            batch.text(
+                atlas,
+                &translate(key, fallback, &[&value]),
+                x0,
+                40.0 + 12.0 * i as f32,
+                grey,
+                true,
+            );
+        }
+        let mut progress = 0.0;
+        for level in upgrader.levels() {
+            let length = (upgrader.dimension_progress(level) * (x1 - x0)).floor();
+            batch.fill(
+                atlas,
+                x0 + progress,
+                y0,
+                length,
+                y1 - y0,
+                dimension_color(level),
+            );
+            progress += length;
+        }
+        let done = upgrader.converted() + upgrader.skipped();
+        let counter = translate(
+            "optimizeWorld.progress.counter",
+            "%s / %s",
+            &[&done, &upgrader.total_chunks()],
+        );
+        let percent = translate(
+            "optimizeWorld.progress.percentage",
+            "%s%%",
+            &[&((upgrader.total_progress() * 100.0).floor() as i32)],
+        );
+        centered(atlas, batch, &counter, y0 + 2.0 * 9.0 + 2.0, grey);
+        centered(atlas, batch, &percent, y0 + 1.0, grey);
     }
     fn start_backup(&mut self, world: WorldEntry) {
         let (send, receive) = mpsc::channel();
@@ -1031,7 +1409,7 @@ impl Title {
                         y + 24.0,
                         200.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
-                        true,
+                        self.allows_multiplayer,
                         4,
                     ),
                     b(
@@ -1091,9 +1469,11 @@ impl Title {
                 let world = selected.and_then(|i| worlds.get(i));
                 // SelectWorldScreen.updateButtonStatus: primaryActionMessage, canEdit, canRecreate.
                 let corrupted = world.is_some_and(|w| w.corrupted);
-                let editable = world.is_some() && !corrupted;
+                let editable = world.is_some_and(WorldEntry::can_edit);
                 let play = if corrupted {
                     lang::get_or("recover_world.button", "Attempt to Recover")
+                } else if world.is_some_and(|w| w.file_fixing) {
+                    lang::get_or("selectWorld.upgrade_and_play", "Upgrade and Play")
                 } else {
                     lang::get_or("selectWorld.select", "Play Selected World")
                 };
@@ -1103,7 +1483,7 @@ impl Title {
                         h - 52.0,
                         150.0,
                         &play,
-                        selected.is_some(),
+                        world.is_some_and(WorldEntry::can_play),
                         10,
                     ),
                     b(
@@ -1193,7 +1573,7 @@ impl Title {
                         top + 164.0,
                         200.0,
                         &lang::get_or("selectWorld.edit.optimize", "Optimize World"),
-                        false,
+                        true,
                         34,
                     ),
                     b(
@@ -1234,6 +1614,29 @@ impl Title {
                         &lang::get_or("gui.cancel", "Cancel"),
                         true,
                         38,
+                    ),
+                ]
+            }
+            Mode::LowDiskSpace { .. } => {
+                let y = confirm_top(h, self.message_lines.get())
+                    + 41.0
+                    + self.message_lines.get() as f32 * 9.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 152.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.continue", "Continue"),
+                        true,
+                        94,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 2.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.back", "Back"),
+                        true,
+                        95,
                     ),
                 ]
             }
@@ -1297,9 +1700,9 @@ impl Title {
                     93,
                 )]
             }
-            Mode::Error { incompatible, .. } => {
+            Mode::Error { alert, .. } => {
                 let lines = self.message_lines.get();
-                let y = if *incompatible {
+                let y = if alert.is_some() {
                     // AlertScreen.init: the button follows the text, kept inside the screen.
                     (90.0 + lines as f32 * 9.0 + 12.0)
                         .max(h / 6.0 + 96.0)
@@ -1349,6 +1752,48 @@ impl Title {
                     ),
                 ]
             }
+            Mode::OptimizeConfirm { .. } => {
+                // BackupConfirmScreen.init with the Erase Cached Data box: the buttons sit
+                // under the text at fixed offsets.
+                let y = 100.0 + (self.message_lines.get() as f32 + 1.0) * 9.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 155.0,
+                        y,
+                        150.0,
+                        &lang::get_or(
+                            "optimizeWorld.confirm.proceed",
+                            "Create Backup and Optimize",
+                        ),
+                        true,
+                        43,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 5.0,
+                        y,
+                        150.0,
+                        &lang::get_or("selectWorld.backupJoinSkipButton", "I Know What I'm Doing!"),
+                        true,
+                        44,
+                    ),
+                    b(
+                        (w / 2.0).floor() - 75.0,
+                        y + 24.0,
+                        150.0,
+                        &lang::get_or("gui.cancel", "Cancel"),
+                        true,
+                        45,
+                    ),
+                ]
+            }
+            Mode::Optimize { .. } => vec![b(
+                (w / 2.0).floor() - 100.0,
+                (h / 4.0).floor() + 150.0,
+                200.0,
+                &lang::get_or("gui.cancel", "Cancel"),
+                true,
+                46,
+            )],
             Mode::MultiplayerWarning { .. } => {
                 let lines = self.message_lines.get();
                 let y = warning_top(h, lines) + 82.0 + lines as f32 * 9.0;
@@ -1372,6 +1817,28 @@ impl Title {
                 ]
             }
             Mode::Onboarding(_) => self.onboarding_buttons(w, h),
+            Mode::BanNotice(_) => {
+                // ConfirmLinkScreen.addButtons: Open in Browser, Copy to Clipboard, then the
+                // notice's Acknowledge, 100 wide each.
+                let labels = [
+                    lang::get_or("chat.link.open", "Open in Browser"),
+                    lang::get_or("chat.copy", "Copy to Clipboard"),
+                    lang::get_or("gui.acknowledge", "Acknowledge"),
+                ];
+                let positions = self.ban_buttons.get();
+                (0..3)
+                    .map(|i| {
+                        b(
+                            positions[i].0,
+                            positions[i].1,
+                            100.0,
+                            &labels[i],
+                            true,
+                            120 + i as u8,
+                        )
+                    })
+                    .collect()
+            }
             Mode::Backup { .. } => Vec::new(),
             Mode::Multiplayer(screen) => screen
                 .buttons(w, h)
@@ -1546,12 +2013,23 @@ impl Title {
                     if let Some((_, (rx, ry))) = hovered.filter(|(r, _)| *r == row) {
                         batch.fill(atlas, x, y, 32.0, 32.0, 0xA0909090);
                         let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
-                        let sprite = if on_icon {
-                            "gui/sprites/world_list/join_highlighted"
+                        // The icon says what a click does.
+                        let names: &[&str] = if world.corrupted {
+                            &["error", "marked_join"]
+                        } else if world.disabled() {
+                            &["error"]
+                        } else if world.downgrade {
+                            &["marked_join", "error"]
+                        } else if world.should_backup() {
+                            &["marked_join"]
                         } else {
-                            "gui/sprites/world_list/join"
+                            &["join"]
                         };
-                        batch.sprite_scaled(atlas, sprite, x, y, 32.0, 32.0, u32::MAX);
+                        let lit = if on_icon { "_highlighted" } else { "" };
+                        for name in names {
+                            let sprite = format!("gui/sprites/world_list/{name}{lit}");
+                            batch.sprite_scaled(atlas, &sprite, x, y, 32.0, 32.0, u32::MAX);
+                        }
                     }
                 }
                 // Clip list quads, including their UVs, to the content area.
@@ -1716,11 +2194,35 @@ impl Title {
                     centered(atlas, batch, line, text_top + i as f32 * 9.0, u32::MAX);
                 }
             }
-            Mode::BackupBeforeUpgrade { downgrade, .. } => {
+            Mode::BackupBeforeUpgrade {
+                downgrade, stem, ..
+            } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 // BackupStatus.DOWNGRADE is severe: its question is red (-2142128).
-                let (question, warning, color) = match downgrade {
-                    Some(version) => (
+                let (question, warning, color) = match (downgrade, stem) {
+                    (None, Some(StemIssue::Customized)) => (
+                        lang::get_or(
+                            "selectWorld.backupQuestion.customized",
+                            "Customized worlds are no longer supported",
+                        ),
+                        lang::get_or(
+                            "selectWorld.backupWarning.customized",
+                            "Unfortunately, we do not support customized worlds in this version of Minecraft. We can still load this world and keep everything the way it was, but any newly generated terrain will no longer be customized. We're sorry for the inconvenience!",
+                        ),
+                        u32::MAX,
+                    ),
+                    (None, Some(StemIssue::Experimental)) => (
+                        lang::get_or(
+                            "selectWorld.backupQuestion.experimental",
+                            "Worlds using Experimental Settings are not supported",
+                        ),
+                        lang::get_or(
+                            "selectWorld.backupWarning.experimental",
+                            "This world uses experimental settings that could stop working at any time. We cannot guarantee it will load or work. Here be dragons!",
+                        ),
+                        u32::MAX,
+                    ),
+                    (Some(version), _) => (
                         lang::get_or(
                             "selectWorld.backupQuestion.downgrade",
                             "Downgrading a world is not supported",
@@ -1732,7 +2234,7 @@ impl Title {
                         ),
                         rgba(223, 80, 80, 255),
                     ),
-                    None => (
+                    (None, None) => (
                         lang::get_or(
                             "selectWorld.backupQuestion.file_fixing_required",
                             "Create a backup before upgrading this world?",
@@ -1750,6 +2252,75 @@ impl Title {
                 centered(atlas, batch, &question, 50.0, color);
                 for (i, line) in lines.iter().enumerate() {
                     centered(atlas, batch, line, 70.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
+            Mode::OptimizeConfirm { erase_cache, .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let description = lang::get_or(
+                    "optimizeWorld.confirm.description",
+                    "This will attempt to optimize your world by making sure all data is stored in the most recent game format. This can take a very long time, depending on your world. Once done, your world may play faster but will no longer be compatible with older versions of the game. Are you sure you wish to proceed?",
+                );
+                let lines = wrapped(atlas, &description, w - 50.0);
+                self.message_lines.set(lines.len());
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or("optimizeWorld.confirm.title", "Optimize World"),
+                    50.0,
+                    u32::MAX,
+                );
+                for (i, line) in lines.iter().enumerate() {
+                    centered(atlas, batch, line, 70.0 + i as f32 * 9.0, u32::MAX);
+                }
+                // The Checkbox: at `width / 2 - 155 + 80`, `76 + textSize`.
+                let label = lang::get_or("selectWorld.backupEraseCache", "Erase Cached Data");
+                let width = BOX + 4.0 + HudBatch::text_width(atlas, &label).ceil();
+                let x = (w / 2.0).floor() - 155.0 + 80.0;
+                let y = 76.0 + (lines.len() as f32 + 1.0) * 9.0;
+                self.erase_check.set([x, y, width, BOX]);
+                let hover = (x..x + width).contains(&cursor.0) && (y..y + BOX).contains(&cursor.1);
+                let sprite = match (*erase_cache, hover) {
+                    (true, true) => "gui/sprites/widget/checkbox_selected_highlighted",
+                    (true, false) => "gui/sprites/widget/checkbox_selected",
+                    (false, true) => "gui/sprites/widget/checkbox_highlighted",
+                    (false, false) => "gui/sprites/widget/checkbox",
+                };
+                batch.sprite_scaled(atlas, sprite, x, y, BOX, BOX, u32::MAX);
+                batch.text(
+                    atlas,
+                    &label,
+                    x + BOX + 4.0,
+                    y + 4.0,
+                    rgba(224, 224, 224, 255),
+                    true,
+                );
+            }
+            Mode::Optimize { world } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                self.draw_optimize(atlas, batch, w, h, &world.name);
+            }
+            Mode::LowDiskSpace { .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let message = lang::get_or(
+                    "selectWorld.warning.lowDiskSpace.description",
+                    "There is not much space left on your device.\nRunning out of disk space while in game can lead to your world being damaged.",
+                );
+                let lines = wrapped(atlas, &message, w - 50.0);
+                self.message_lines.set(lines.len());
+                let top = confirm_top(h, lines.len());
+                // ChatFormatting.RED.
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or(
+                        "selectWorld.warning.lowDiskSpace.title",
+                        "Warning! Low disk space!",
+                    ),
+                    top,
+                    rgba(255, 85, 85, 255),
+                );
+                for (i, line) in lines.iter().enumerate() {
+                    centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
                 }
             }
             Mode::Backup { .. } => {
@@ -1779,26 +2350,28 @@ impl Title {
                     );
                 }
             }
-            Mode::Error {
-                message,
-                incompatible,
-                ..
-            } => {
+            Mode::Error { message, alert, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let lines: Vec<String> = message
                     .split('\n')
                     .flat_map(|line| wrapped(atlas, line, w - 50.0))
                     .collect();
                 self.message_lines.set(lines.len());
-                // AlertScreen (an incompatible world): the red title at 70, the text at 90.
-                let (top, text_top, key, fallback, color) = if *incompatible {
-                    (
-                        70.0,
-                        90.0,
-                        "selectWorld.incompatible.title",
-                        "Incompatible version",
-                        rgba(255, 0, 0, 255),
-                    )
+                // AlertScreen: the title at 70, the text at 90.
+                let (top, text_top, key, fallback, color) = if let Some(alert) = alert {
+                    let (key, fallback, color) = match alert {
+                        Alert::Incompatible => (
+                            "selectWorld.incompatible.title",
+                            "Incompatible version",
+                            rgba(255, 0, 0, 255),
+                        ),
+                        Alert::Recreate => (
+                            "selectWorld.recreate.error.title",
+                            "An error occurred!",
+                            u32::MAX,
+                        ),
+                    };
+                    (70.0, 90.0, key, fallback, color)
                 } else {
                     let top = confirm_top(h, lines.len());
                     (
@@ -1883,6 +2456,23 @@ impl Title {
                 );
             }
             Mode::Onboarding(_) => fade_from = Some(self.draw_onboarding(atlas, batch, w, h)),
+            Mode::BanNotice(notice) => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let now = chrono::Utc::now().timestamp_millis();
+                let layout = crate::confirm_screen::Choice::new(
+                    &atlas.font,
+                    (w, h),
+                    &notice.title(),
+                    &notice.message(now),
+                    3,
+                    100.0,
+                );
+                for (line, x, y) in &layout.lines {
+                    batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
+                }
+                self.ban_buttons
+                    .set([layout.buttons[0], layout.buttons[1], layout.buttons[2]]);
+            }
             Mode::Multiplayer(screen) => screen.draw(
                 atlas,
                 batch,
@@ -1967,6 +2557,9 @@ impl Title {
         {
             self.create_tooltip(atlas, batch, cursor, name, *creative, options);
         }
+        if let Mode::Select { worlds, selected } = &self.mode {
+            self.select_tooltip(atlas, batch, cursor, (w, h), worlds, *selected);
+        }
         if let Mode::Multiplayer(screen) = &self.mode {
             screen.draw_tooltip(atlas, batch, cursor);
         }
@@ -1983,6 +2576,63 @@ impl Title {
             batch.text(atlas, &title, x + 18.0, 7.0, rgba(255, 255, 0, 255), false);
             batch.text(atlas, &message, x + 18.0, 19.0, u32::MAX, false);
         }
+    }
+    /// The tooltip of a world's icon (drawn with the row, as vanilla does) or, for a
+    /// world that needs its files upgraded first, of the Play, Edit and Re-Create
+    /// buttons (`SelectWorldScreen.updateButtonStatus`).
+    fn select_tooltip(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        cursor: (f32, f32),
+        size: (f32, f32),
+        worlds: &[WorldEntry],
+        selected: Option<usize>,
+    ) {
+        let red = |key: &str| Text::translate(key, &[]).with_color(crate::text::RED);
+        if let Some((row, (rx, ry))) = self.world_row_at(worlds, cursor, size)
+            && (0.0..32.0).contains(&rx)
+            && (0.0..32.0).contains(&ry)
+            && let Some((_, world)) = self.visible_worlds(worlds).nth(row)
+        {
+            let lines = if world.corrupted {
+                Vec::new()
+            } else if world.locked {
+                atlas.font.split(&red("selectWorld.locked"), 175.0)
+            } else if world.incompatible.is_some() {
+                atlas
+                    .font
+                    .split(&red("selectWorld.incompatible.tooltip"), 175.0)
+            } else if world.downgrade {
+                vec![
+                    red("selectWorld.tooltip.fromNewerVersion1"),
+                    red("selectWorld.tooltip.fromNewerVersion2"),
+                ]
+            } else {
+                Vec::new()
+            };
+            crate::ui::tooltip(batch, atlas, &lines, cursor);
+            return;
+        }
+        if !selected
+            .and_then(|i| worlds.get(i))
+            .is_some_and(|w| w.file_fixing)
+        {
+            return;
+        }
+        let (x, y) = cursor;
+        let hovered = self
+            .buttons(size.0, size.1)
+            .into_iter()
+            .find(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + 20.0);
+        let key = match hovered.map(|b| b.id) {
+            Some(10) => "selectWorld.requiresFileFixingTooltip.play",
+            Some(13) => "selectWorld.requiresFileFixingTooltip.edit",
+            Some(15) => "selectWorld.requiresFileFixingTooltip.recreate",
+            _ => return,
+        };
+        let lines = atlas.font.split(&Text::translate(key, &[]), 170.0);
+        crate::ui::tooltip(batch, atlas, &lines, cursor);
     }
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
     /// Navigation buttons can return `Action::None` while still sounding.
@@ -2009,6 +2659,13 @@ impl Title {
             let [bx, by, bw, bh] = self.warning_check.get();
             if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
                 *check = !*check;
+                return (Action::None, true);
+            }
+        }
+        if let Mode::OptimizeConfirm { erase_cache, .. } = &mut self.mode {
+            let [bx, by, bw, bh] = self.erase_check.get();
+            if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
+                *erase_cache = !*erase_cache;
                 return (Action::None, true);
             }
         }
@@ -2039,6 +2696,16 @@ impl Title {
                 Action::None
             }
             (Mode::Main, Some(2)) => Action::Quit,
+            (Mode::BanNotice(_), Some(id @ 120..=122)) => {
+                // BanNoticeScreens' callback: Open in Browser opens the link, Copy copies it
+                // and answers no; all of them run `next`.
+                self.next_ban_notice();
+                match id {
+                    120 => Action::OpenUri(crate::ban_notice::SUSPENSION_HELP.to_owned()),
+                    121 => Action::CopyText(crate::ban_notice::SUSPENSION_HELP.to_owned()),
+                    _ => Action::None,
+                }
+            }
             (Mode::Main, Some(4)) => {
                 // TitleScreen.init: SafetyScreen first, unless it was turned off.
                 self.mode = if self.skip_multiplayer_warning {
@@ -2088,15 +2755,57 @@ impl Title {
                     None => Action::None,
                 }
             }
-            (Mode::BackupBeforeUpgrade { world, .. }, Some(40)) => {
+            (Mode::BackupBeforeUpgrade { world, stem, .. }, Some(40)) => {
                 let world = world.clone();
-                self.backup_then_open = true;
+                self.backup_then_open = Some(stem.is_some());
                 self.start_backup(world);
                 Action::None
             }
-            (Mode::BackupBeforeUpgrade { world, .. }, Some(41)) => Action::Play {
+            (Mode::BackupBeforeUpgrade { world, stem, .. }, Some(41)) => {
+                let (world, stem_asked) = (world.clone(), stem.is_some());
+                self.after_prompt(world, stem_asked)
+            }
+            // ConfirmScreen: Continue loads the world, Back (or Escape) leaves it closed.
+            (Mode::LowDiskSpace { world }, Some(94)) => Action::Play {
                 folder: world.folder.clone(),
             },
+            (Mode::LowDiskSpace { .. }, Some(95)) => {
+                self.escape();
+                Action::None
+            }
+            (
+                Mode::OptimizeConfirm {
+                    world, erase_cache, ..
+                },
+                Some(43),
+            ) => {
+                let (world, erase_cache) = (world.clone(), *erase_cache);
+                self.optimize_after_backup = Some(erase_cache);
+                self.start_backup(world);
+                Action::None
+            }
+            (
+                Mode::OptimizeConfirm {
+                    world, erase_cache, ..
+                },
+                Some(44),
+            ) => {
+                let (world, erase_cache) = (world.clone(), *erase_cache);
+                self.begin_optimize(world, erase_cache);
+                Action::None
+            }
+            (Mode::OptimizeConfirm { .. }, Some(45)) => {
+                self.escape();
+                Action::None
+            }
+            (Mode::Optimize { .. }, Some(46)) => {
+                // Cancel: `upgrader.cancel()`, then the callback with false.
+                if let Some(upgrader) = self.optimize.as_mut() {
+                    upgrader.cancel();
+                }
+                self.end_optimize(false);
+                Action::None
+            }
             (Mode::BackupBeforeUpgrade { world, .. }, Some(42)) => {
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
@@ -2121,21 +2830,33 @@ impl Title {
                     }
                     14 => self.mode = Mode::Delete { world },
                     _ => {
-                        if let Some(level) = Level::read(&self.saves.join(&world.folder)) {
-                            self.create_return_to_main = false;
-                            let options = WorldOptions::of_world(
-                                &level,
-                                world.commands,
-                                &self.saves.join(&world.folder),
-                            );
-                            self.mode = Mode::Create {
-                                name: level.name,
-                                seed: level.seed.to_string(),
-                                creative: level.creative,
-                                focus: 0,
-                                options,
+                        let level = Level::read(&self.saves.join(&world.folder));
+                        // WorldListEntry.recreateWorld: a world that will not read is an
+                        // AlertScreen over the list.
+                        let Some(level) = level else {
+                            self.mode = Mode::Error {
+                                message: lang::get_or(
+                                    "selectWorld.recreate.error.text",
+                                    "Something went wrong while trying to recreate a world.",
+                                ),
+                                return_to: Box::new(self.mode.clone()),
+                                alert: Some(Alert::Recreate),
                             };
-                        }
+                            return Action::None;
+                        };
+                        self.create_return_to_main = false;
+                        let options = WorldOptions::of_world(
+                            &level,
+                            world.commands,
+                            &self.saves.join(&world.folder),
+                        );
+                        self.mode = Mode::Create {
+                            name: level.name,
+                            seed: level.seed.to_string(),
+                            creative: level.creative,
+                            focus: 0,
+                            options,
+                        };
                     }
                 }
                 Action::None
@@ -2170,7 +2891,8 @@ impl Title {
                 if let Some((index, world, (rx, ry))) = chosen {
                     // WorldListEntry.mouseClicked: the icon joins at once.
                     let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
-                    if on_icon || *selected == Some(index) {
+                    // WorldListEntry.canInteract: only a world that can be played joins.
+                    if (on_icon || *selected == Some(index)) && world.can_play() {
                         return self.play(world);
                     }
                     if let Mode::Select { selected, .. } = &mut self.mode {
@@ -2191,6 +2913,14 @@ impl Title {
                     }
                     33 => {
                         world_management::open_folder(&world_management::backups_path(&self.saves))
+                    }
+                    34 => {
+                        self.mode = Mode::OptimizeConfirm {
+                            world,
+                            name,
+                            erase_cache: false,
+                        };
+                        return Action::None;
                     }
                     35 => world_management::rename(&self.saves, &world.folder, &name),
                     36 => {
@@ -2473,6 +3203,9 @@ impl Title {
         let Some(world) = selected.and_then(|i| worlds.get(i)).cloned() else {
             return Action::None;
         };
+        if !world.can_play() {
+            return Action::None;
+        }
         self.play(world)
     }
     pub fn tab(&mut self) {
@@ -2552,6 +3285,53 @@ impl Title {
             }
         }
     }
+    /// `Gui.buildInitialScreens`' chain: the next queued ban notice, else the title.
+    fn next_ban_notice(&mut self) {
+        self.mode = match self.ban_queue.pop_front() {
+            Some(notice) => Mode::BanNotice(notice),
+            None => Mode::Main,
+        };
+    }
+    /// The account fetches vanilla starts in `Minecraft`'s constructor
+    /// (`userPropertiesFuture`, `profileFuture`), run once per launch on a thread, only
+    /// for a real online session (offline and demo have none). Their result decides
+    /// `allowsMultiplayer` and queues `Gui.addInitialScreens`' ban notices, which open
+    /// as soon as the title is showing.
+    fn poll_account(&mut self) {
+        use crate::ban_notice::{AccountStatus, initial_notices};
+        use std::sync::{
+            OnceLock,
+            atomic::{AtomicBool, Ordering},
+        };
+        static STATUS: OnceLock<AccountStatus> = OnceLock::new();
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        static QUEUED: AtomicBool = AtomicBool::new(false);
+        let Some(session) = crate::auth::current() else {
+            return;
+        };
+        if !STARTED.swap(true, Ordering::Relaxed) {
+            let session = session.clone();
+            let spawned = std::thread::Builder::new()
+                .name("Account status".into())
+                .spawn(move || {
+                    let _ = STATUS.set(crate::auth::fetch_account_status(&session));
+                });
+            if spawned.is_err() {
+                log::warn!("Horizon: could not start the account status fetch");
+            }
+        }
+        let Some(status) = STATUS.get() else {
+            return;
+        };
+        self.allows_multiplayer = status.allows_multiplayer();
+        if !QUEUED.swap(true, Ordering::Relaxed) {
+            self.ban_queue
+                .extend(initial_notices(status, &session.name));
+        }
+        if matches!(self.mode, Mode::Main) {
+            self.next_ban_notice();
+        }
+    }
     pub fn escape(&mut self) {
         if let Some(rules) = self.rules.get_mut() {
             if let Some(exit) = rules.escape() {
@@ -2566,11 +3346,21 @@ impl Title {
             return;
         }
         match &self.mode {
-            Mode::Backup { .. } => {}
+            // OptimizeWorldScreen: `shouldCloseOnEsc` is false; the Backup wait takes no input.
+            Mode::Backup { .. } | Mode::Optimize { .. } => {}
+            // BackupConfirmScreen.keyPressed: Escape runs `onCancel`, the Edit World screen again.
+            Mode::OptimizeConfirm { world, name, .. } => {
+                self.mode = Mode::Edit {
+                    world: world.clone(),
+                    name: name.clone(),
+                    focused: true,
+                };
+            }
             Mode::Edit { world, .. }
             | Mode::Delete { world }
             | Mode::Recover { world, .. }
             | Mode::Recovered { world, .. }
+            | Mode::LowDiskSpace { world }
             | Mode::BackupBeforeUpgrade { world, .. } => {
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
@@ -2589,6 +3379,8 @@ impl Title {
             Mode::Create { .. } => self.cancel_create(),
             // Screen.keyPressed: Escape closes the screen, which fades out.
             Mode::Onboarding(_) => self.onboarding_close(),
+            // ConfirmScreen.keyPressed: Escape answers no, which runs `next`.
+            Mode::BanNotice(_) => self.next_ban_notice(),
             _ => self.mode = Mode::Main,
         }
     }
@@ -2658,6 +3450,41 @@ fn caret_field<'a>(
 #[cfg(test)]
 mod classic_tests {
     use super::*;
+
+    #[test]
+    fn ban_notices_chain_into_the_title_and_gate_multiplayer() {
+        use crate::ban_notice::{BanDetails, Notice};
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        let multiplayer = |title: &Title| {
+            title
+                .buttons(427.0, 240.0)
+                .into_iter()
+                .find(|b| b.id == 4)
+                .unwrap()
+                .enabled
+        };
+        assert!(multiplayer(&title));
+        title.allows_multiplayer = false;
+        assert!(!multiplayer(&title));
+        // Gui.buildInitialScreens: each notice runs `next`, the last one opens the title.
+        let ban = BanDetails {
+            expires_ms: None,
+            reason: None,
+            reason_message: None,
+        };
+        title.ban_queue = [Notice::Name("Steve".into()), Notice::Skin].into();
+        title.mode = Mode::BanNotice(Notice::Multiplayer(ban));
+        assert_eq!(title.buttons(427.0, 240.0).len(), 3);
+        title.escape();
+        assert!(matches!(&title.mode, Mode::BanNotice(Notice::Name(n)) if n == "Steve"));
+        title.escape();
+        assert!(matches!(title.mode, Mode::BanNotice(Notice::Skin)));
+        title.next_ban_notice();
+        assert!(matches!(title.mode, Mode::Main));
+    }
 
     #[test]
     fn the_bottom_text_button_opens_the_credits() {

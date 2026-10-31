@@ -1,7 +1,7 @@
 //! Scheduled block ticks (`BlockBehaviour.tick`), random ticks
 //! (`BlockBehaviour.randomTick`) and the per-tick drivers.
 use super::{
-    Behaviours, LevelAccess, LevelEvent, Sim, Ticks,
+    Behaviours, LevelAccess, LevelEvent, Sim, Spread, Ticks,
     classes::Class,
     data::state_flags,
     update::{HORIZONTAL, above, below, rel},
@@ -125,6 +125,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         kind: "command_block",
                     });
                 }
+                // TestBlock.tick resets the block entity: the caller owns it.
+                Class::TestBlock => {
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "test_block_tick",
+                    });
+                }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
                     // BrushableBlock.tick checks the brush reset first (the
@@ -213,11 +221,31 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
 
+    /// `ServerLevel.tickBlock` once the block at `pos` is the tick's: the
+    /// level may handle the tick first, else `BlockState.tick`.
+    fn tick_due_block(&mut self, state: BlockStateId, pos: BlockPos) {
+        let (mut current, mut handled) = (state, false);
+        self.level
+            .before_tick_block(self.ticks, pos, &mut current, &mut handled);
+        // A block the level changed ticks as it is now, if it is still the
+        // tick's block.
+        if !handled && (current == state || self.block_of(current) == self.block_of(state)) {
+            self.tick_block(current, pos);
+        }
+    }
+
     /// `BlockState.randomTick` followed by the fluid's random tick.
     pub fn random_tick_at(&mut self, pos: BlockPos) {
         let state = self.state(pos);
         if self.b.is_randomly_ticking(state) {
-            self.random_tick_block(state, pos);
+            let (mut current, mut handled) = (state, false);
+            self.level
+                .before_random_tick(self.ticks, pos, &mut current, &mut handled);
+            // A block the level changed ticks as it is now, if it still ticks
+            // randomly.
+            if !handled && (current == state || self.b.is_randomly_ticking(current)) {
+                self.random_tick_block(current, pos);
+            }
         }
         // Only lava's fluid state ticks randomly. A lava block is ticked twice
         // (LiquidBlock.randomTick, then FluidState.randomTick), as in vanilla.
@@ -583,7 +611,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             (Direction::North, 300),
             (Direction::South, 300),
         ] {
-            self.fire_check_burn_out(rel(pos, direction), chance + extra, age);
+            self.fire_check_burn_out(pos, rel(pos, direction), chance + extra, age);
         }
         for xx in -1..=1 {
             for zz in -1..=1 {
@@ -607,8 +635,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                             && (!self.level.is_raining() || !self.fire_near_rain(test))
                         {
                             let spread_age = 15.min(age + self.rand_int(5) / 4);
-                            let next = self.fire_state_with_age(test, spread_age);
-                            self.set_block_and_update(test, next);
+                            if self.level.allow_spread(Spread::Fire, pos, test) {
+                                let next = self.fire_state_with_age(test, spread_age);
+                                self.set_block_and_update(test, next);
+                            }
                         }
                     }
                 }
@@ -633,19 +663,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             || self.level.is_raining_at(rel(pos, Direction::North))
             || self.level.is_raining_at(rel(pos, Direction::South))
     }
-    fn fire_check_burn_out(&mut self, pos: BlockPos, chance: i32, age: i32) {
+    /// `FireBlock.checkBurnOut` of the block at `pos` by the fire at `fire`.
+    fn fire_check_burn_out(&mut self, fire: BlockPos, pos: BlockPos, chance: i32, age: i32) {
         let b = self.b;
         let odds = self.burn_odds(self.state(pos));
         if self.rand_int(chance) < odds {
             let old = self.state(pos);
+            let allowed = self.level.allow_spread(Spread::Fire, fire, pos);
             if self.rand_int(age + 10) < 5 && !self.level.is_raining_at(pos) {
                 let new_age = (age + self.rand_int(5) / 4).min(15);
-                let next = self.fire_state_with_age(pos, new_age);
-                self.set_block_and_update(pos, next);
-            } else {
+                if allowed {
+                    let next = self.fire_state_with_age(pos, new_age);
+                    self.set_block_and_update(pos, next);
+                }
+            } else if allowed {
                 self.remove_block(pos, false);
             }
-            if b.instance_of(old, Class::Tnt) {
+            if allowed && b.instance_of(old, Class::Tnt) {
                 self.prime_tnt(pos);
             }
         }
@@ -1605,7 +1639,7 @@ impl Behaviours {
             let mut sim = self.sim(level, ticks);
             let state = sim.state(tick.pos);
             if u32::from(self.block(state).0) == tick.kind.0 {
-                sim.tick_block(state, tick.pos);
+                sim.tick_due_block(state, tick.pos);
             }
         }
         let _ = ticks.blocks.finish_tick();
@@ -1684,7 +1718,7 @@ impl Behaviours {
             let mut sim = self.sim(level, ticks);
             let state = sim.state(tick.pos);
             if u32::from(self.block(state).0) == tick.kind.0 {
-                sim.tick_block(state, tick.pos);
+                sim.tick_due_block(state, tick.pos);
             }
         }
         true

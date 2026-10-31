@@ -69,6 +69,7 @@ impl WorldOptions {
         dir: &std::path::Path,
     ) -> Self {
         let generation = crate::save::WorldGen::read(dir).unwrap_or_default();
+        let (pack_dir, data_packs) = crate::datapack::for_recreate(dir);
         Self {
             hardcore: level.hardcore,
             difficulty: DIFFICULTIES
@@ -83,6 +84,8 @@ impl WorldOptions {
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
             rules: crate::gamerules::GameRules::load(dir),
+            data_packs,
+            pack_dir,
             ..Self::default()
         }
     }
@@ -510,6 +513,10 @@ impl Title {
             )),
             0 if over(gx, gy + 97.0, 210.0) => {
                 Some(Text::translate("selectWorld.allowCommands.info", &[]))
+            }
+            // WorldTab: the Amplified preset's help text on the type button.
+            1 if o.world_type == crate::save::WorldPreset::Amplified && over(gx, gy, 150.0) => {
+                Some(Text::translate("generator.minecraft.amplified.info", &[]))
             }
             1 if over(gx + 266.0, gy + 73.0, 44.0) => {
                 Some(Text::translate("selectWorld.mapFeatures.info", &[]))

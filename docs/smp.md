@@ -54,6 +54,7 @@ breaking and placing, item use: #4483, #4302), the SMP uses theirs.
 | 2. Trading | 10 | a vanilla chest menu the server opens and fills for a player, display only: its clicks and its closing go to the mod; an atomic exchange of two players' items; a player left or died |
 | 3. Gambling | nothing new |
 | 4. Organisation | 21 | a right click on a block that a mod can refuse (beside #4302's item use and #4483's block breaking), the acting player, a command run as the server (teleports across levels with `execute in … run tp`), a player's health (a teleport's warmup stops when it drops) |
+| 4. Claims | 22 | the world kept out of claims: fluid and fire spreading, pistons, explosions' blocks, buckets, a player's blow on an entity (frames, armor stands, animals); right-clicking an entity is #4648's |
 
 ## Mojang's rules
 
