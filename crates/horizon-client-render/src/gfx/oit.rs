@@ -38,6 +38,34 @@ pub fn supported(device: &wgpu::Device) -> bool {
         .contains(wgpu::Features::FLOAT32_BLENDABLE)
 }
 
+/// What a stage's pipelines write: `OIT_*_SNIPPET`'s colour targets.
+fn stage_targets(stage: Stage) -> Vec<Option<wgpu::ColorTargetState>> {
+    let blend = |operation| wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation,
+    };
+    let target = |format, operation| {
+        Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState {
+                color: blend(operation),
+                alpha: blend(operation),
+            }),
+            write_mask: wgpu::ColorWrites::ALL,
+        })
+    };
+    let add = wgpu::BlendOperation::Add;
+    match stage {
+        Stage::DepthBounds => vec![target(BOUNDS_FORMAT, wgpu::BlendOperation::Max)],
+        Stage::Transmittance => vec![
+            target(COEFFICIENT_FORMAT, add),
+            target(COEFFICIENT_FORMAT, add),
+        ],
+        Stage::Accumulate => vec![target(COEFFICIENT_FORMAT, add)],
+    }
+}
+
 /// `ProjMat[2][2]` and `ProjMat[3][2]`: a device depth `d` is `y / (d + x)`
 /// blocks along the view axis (`oit_linear_depth`).
 fn projection_terms(projection: &Mat4) -> [f32; 2] {
@@ -56,6 +84,52 @@ struct Targets {
     accumulate: wgpu::BindGroup,
     cull: wgpu::BindGroup,
     composite: wgpu::BindGroup,
+    /// The depth the terrain's stages test against while a water mask is
+    /// drawn (a copy of the world's, plus the masks), and the clouds' own.
+    terrain_depth: Option<Depth>,
+    cloud_depth: Option<Depth>,
+}
+
+struct Depth {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+impl Depth {
+    fn new(device: &wgpu::Device, label: &str, size: [u32; 2]) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: extent(size),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        Self {
+            view: texture.create_view(&Default::default()),
+            texture,
+        }
+    }
+}
+
+fn extent(size: [u32; 2]) -> wgpu::Extent3d {
+    wgpu::Extent3d {
+        width: size[0].max(1),
+        height: size[1].max(1),
+        depth_or_array_layers: 1,
+    }
+}
+
+/// What the translucent layer's other drawers add to a frame: each draws with
+/// a pipeline per stage where it has one.
+#[derive(Default)]
+pub struct Extras<'a> {
+    /// `executeOitWaterMask`: the boats' water patches, depth only.
+    pub water_mask: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
+    /// `CloudRenderer.renderOit`: draws the clouds with the pipeline given.
+    pub clouds: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline)>,
 }
 
 struct Views {
@@ -72,6 +146,7 @@ pub struct Oit {
     layouts: [wgpu::BindGroupLayout; 4],
     /// One per `Stage`.
     terrain: [wgpu::RenderPipeline; 3],
+    clouds: [wgpu::RenderPipeline; 3],
     cull: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     targets: Option<Targets>,
@@ -79,10 +154,12 @@ pub struct Oit {
 
 impl Oit {
     /// `terrain`: the terrain bind group layout that `vs_terrain` reads,
-    /// `sprites` its override constants, `format` the world target's.
+    /// `clouds` the cloud pipeline's two, `sprites` the terrain's override
+    /// constants, `format` the world target's.
     pub fn new(
         device: &wgpu::Device,
         terrain: &wgpu::BindGroupLayout,
+        clouds: [&wgpu::BindGroupLayout; 2],
         sprites: [f64; 2],
         format: wgpu::TextureFormat,
     ) -> Self {
@@ -103,7 +180,10 @@ impl Oit {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon improved transparency"),
             source: wgpu::ShaderSource::Wgsl(
-                (include_str!("../terrain.wgsl").to_owned() + include_str!("../oit.wgsl")).into(),
+                (include_str!("../terrain.wgsl").to_owned()
+                    + include_str!("../oit.wgsl")
+                    + include_str!("../oit_world.wgsl"))
+                .into(),
             ),
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -162,21 +242,6 @@ impl Oit {
             })
         };
         let constants = [("SPRITE_ARRAYS", sprites[0]), ("SPRITE_SPLIT", sprites[1])];
-        let blend = |operation| wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::One,
-            operation,
-        };
-        let target = |format, operation| {
-            Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState {
-                    color: blend(operation),
-                    alpha: blend(operation),
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            })
-        };
         let add = wgpu::BlendOperation::Add;
         let depth = |write| {
             Some(wgpu::DepthStencilState {
@@ -225,40 +290,25 @@ impl Oit {
                 cache: None,
             })
         };
-        let layout_for = |group| pipeline_layout(Some(terrain), group);
-        let terrain_pipeline = |label, fragment, group, targets: &[_]| {
+        let terrain_pipeline = |label, fragment, stage| {
             pipeline(
                 label,
-                &layout_for(group),
+                &pipeline_layout(Some(terrain), stage as usize),
                 "vs_terrain",
                 fragment,
                 buffers,
-                targets,
+                &stage_targets(stage),
                 depth(false),
             )
         };
         let terrain_pipelines = [
-            terrain_pipeline(
-                "OIT depth bounds",
-                "fs_oit_bounds",
-                0,
-                &[target(BOUNDS_FORMAT, wgpu::BlendOperation::Max)],
-            ),
+            terrain_pipeline("OIT depth bounds", "fs_oit_bounds", Stage::DepthBounds),
             terrain_pipeline(
                 "OIT transmittance",
                 "fs_oit_transmittance",
-                1,
-                &[
-                    target(COEFFICIENT_FORMAT, add),
-                    target(COEFFICIENT_FORMAT, add),
-                ],
+                Stage::Transmittance,
             ),
-            terrain_pipeline(
-                "OIT accumulate",
-                "fs_oit_accumulate",
-                2,
-                &[target(COEFFICIENT_FORMAT, add)],
-            ),
+            terrain_pipeline("OIT accumulate", "fs_oit_accumulate", Stage::Accumulate),
         ];
         let screen = |label, fragment, group, targets: &[_], depth_stencil| {
             pipeline(
@@ -312,10 +362,83 @@ impl Oit {
                 bias: Default::default(),
             }),
         );
+        // The clouds: entity.wgsl's vertex shader and vertex format, with the
+        // stages' fragments.
+        let cloud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon improved transparency clouds"),
+            source: wgpu::ShaderSource::Wgsl(
+                (super::entity_shader()
+                    + include_str!("../oit.wgsl")
+                    + include_str!("../oit_clouds.wgsl"))
+                .into(),
+            ),
+        });
+        let cloud_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
+        let cloud_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<super::Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &cloud_attributes,
+        })];
+        let cloud_pipeline = |label, fragment, stage: Stage| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("Improved transparency clouds"),
+                        bind_group_layouts: &[
+                            Some(clouds[0]),
+                            Some(clouds[1]),
+                            Some(&layouts[stage as usize]),
+                        ],
+                        ..Default::default()
+                    }),
+                ),
+                vertex: wgpu::VertexState {
+                    module: &cloud_shader,
+                    entry_point: Some("vs_cloud"),
+                    compilation_options: Default::default(),
+                    buffers: &cloud_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                // `OIT_CLOUDS`: only the bounds stage writes the cloud depth,
+                // so the later stages keep the nearest face of each cloud.
+                depth_stencil: depth(stage == Stage::DepthBounds),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &cloud_shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &stage_targets(stage),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let cloud_pipelines = [
+            cloud_pipeline(
+                "OIT cloud depth bounds",
+                "fs_oit_cloud_bounds",
+                Stage::DepthBounds,
+            ),
+            cloud_pipeline(
+                "OIT cloud transmittance",
+                "fs_oit_cloud_transmittance",
+                Stage::Transmittance,
+            ),
+            cloud_pipeline(
+                "OIT cloud accumulate",
+                "fs_oit_cloud_accumulate",
+                Stage::Accumulate,
+            ),
+        ];
         Self {
             uniform,
             layouts,
             terrain: terrain_pipelines,
+            clouds: cloud_pipelines,
             cull,
             composite,
             targets: None,
@@ -334,23 +457,27 @@ impl Oit {
         queue: &wgpu::Queue,
         size: [u32; 2],
         projection: &Mat4,
+        wants: [bool; 2],
     ) {
         queue.write_buffer(
             &self.uniform,
             0,
             bytemuck::cast_slice(&[projection_terms(projection), [0.0; 2]].concat()),
         );
-        if self.targets.as_ref().is_some_and(|t| t.size == size) {
+        let [mask, clouds] = wants;
+        if let Some(t) = self.targets.as_mut().filter(|t| t.size == size) {
+            if mask && t.terrain_depth.is_none() {
+                t.terrain_depth = Some(Depth::new(device, "OIT terrain depth", size));
+            }
+            if clouds && t.cloud_depth.is_none() {
+                t.cloud_depth = Some(Depth::new(device, "OIT cloud depth", size));
+            }
             return;
         }
         let make = |label, format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
-                size: wgpu::Extent3d {
-                    width: size[0].max(1),
-                    height: size[1].max(1),
-                    depth_or_array_layers: 1,
-                },
+                size: extent(size),
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -406,22 +533,26 @@ impl Oit {
                 &self.layouts[3],
                 &[&views.bounds, c0, c1, &views.accumulated],
             ),
+            terrain_depth: mask.then(|| Depth::new(device, "OIT terrain depth", size)),
+            cloud_depth: clouds.then(|| Depth::new(device, "OIT cloud depth", size)),
             bounds,
             culled,
             views,
         });
     }
 
-    /// `LevelRenderer.executeOit` for the terrain: `draw` records the
-    /// translucent layer into each stage's pass with that stage's pipeline,
-    /// then the composite goes over `color`. `depth` is the opaque world's:
-    /// the stages only read it; the cull and the composite write it.
+    /// `LevelRenderer.executeOit`: `draw` records the terrain's translucent
+    /// layer into each stage's pass with that stage's pipeline, `extras` the
+    /// water masks and clouds, then the composite goes over `color`. `depth`
+    /// is the opaque world's: the stages only read it; the cull and the
+    /// composite write it.
     pub fn run(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
         depth: &wgpu::TextureView,
         draw: &dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
+        extras: &Extras<'_>,
     ) {
         let Some(t) = &self.targets else { return };
         let attachment = |view, load| {
@@ -436,13 +567,23 @@ impl Oit {
             })
         };
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
-        let read_depth = Some(wgpu::RenderPassDepthStencilAttachment {
-            view: depth,
-            depth_ops: None,
-            stencil_ops: None,
-        });
+        let load = wgpu::LoadOp::Load;
+        let read_only = |view| {
+            Some(wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: None,
+                stencil_ops: None,
+            })
+        };
+        let water_mask = extras.water_mask.zip(t.terrain_depth.as_ref());
+        let cloud_depth = extras.clouds.zip(t.cloud_depth.as_ref());
+        if let Some((mask, _)) = water_mask {
+            self.execute_water_mask(encoder, t, color, depth, mask);
+        }
+        let terrain_depth = water_mask.map_or(depth, |(_, d)| &d.view);
         let [c0, c1] = &t.views.coefficients;
-        for (stage, label, group, targets) in [
+        let culled = &t.views.culled;
+        for (stage, label, group, first, then) in [
             (
                 Stage::DepthBounds,
                 "OIT depth bounds",
@@ -451,25 +592,29 @@ impl Oit {
                     &t.views.bounds,
                     wgpu::LoadOp::Clear(BOUNDS_CLEAR),
                 )],
+                // The clouds' bounds join the culled ones.
+                vec![attachment(culled, load)],
             ),
             (
                 Stage::Transmittance,
                 "OIT transmittance",
                 &t.sampled,
                 vec![attachment(c0, clear), attachment(c1, clear)],
+                vec![attachment(c0, load), attachment(c1, load)],
             ),
             (
                 Stage::Accumulate,
                 "OIT accumulate",
                 &t.accumulate,
                 vec![attachment(&t.views.accumulated, clear)],
+                vec![attachment(&t.views.accumulated, load)],
             ),
         ] {
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(label),
-                    color_attachments: &targets,
-                    depth_stencil_attachment: read_depth.clone(),
+                    color_attachments: &first,
+                    depth_stencil_attachment: read_only(terrain_depth),
                     ..Default::default()
                 });
                 pass.set_bind_group(GROUP, group, &[]);
@@ -477,6 +622,21 @@ impl Oit {
             }
             if stage == Stage::DepthBounds {
                 self.execute_depth_bounds_cull(encoder, t, depth);
+            }
+            if let Some((clouds, cloud_depth)) = cloud_depth {
+                self.render_clouds(
+                    encoder,
+                    t,
+                    stage,
+                    depth,
+                    (label, group, &then),
+                    (clouds, cloud_depth),
+                );
+            }
+            if stage == Stage::DepthBounds
+                && let Some((mask, _)) = water_mask
+            {
+                self.execute_water_mask(encoder, t, color, depth, mask);
             }
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -495,6 +655,92 @@ impl Oit {
         pass.set_pipeline(&self.composite);
         pass.set_bind_group(GROUP, &t.composite, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// `CloudRenderer.renderOit` for one stage. The bounds stage first copies
+    /// the world's depth (after the cull) and draws into it, so the later
+    /// stages, which only read it, keep each pixel's nearest cloud face.
+    fn render_clouds(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        t: &Targets,
+        stage: Stage,
+        depth: &wgpu::TextureView,
+        (label, group, targets): (
+            &str,
+            &wgpu::BindGroup,
+            &[Option<wgpu::RenderPassColorAttachment<'_>>],
+        ),
+        (draw, cloud_depth): (
+            &dyn Fn(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
+            &Depth,
+        ),
+    ) {
+        if stage == Stage::DepthBounds {
+            encoder.copy_texture_to_texture(
+                depth.texture().as_image_copy(),
+                cloud_depth.texture.as_image_copy(),
+                extent(t.size),
+            );
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: targets,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &cloud_depth.view,
+                depth_ops: (stage == Stage::DepthBounds).then_some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_bind_group(GROUP, group, &[]);
+        draw(&mut pass, &self.clouds[stage as usize]);
+    }
+
+    /// `LevelRenderer.executeOitWaterMask`: the terrain's depth is the world's
+    /// again, with the boats' water patches on top.
+    fn execute_water_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        t: &Targets,
+        color: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        mask: &dyn Fn(&mut wgpu::RenderPass<'_>),
+    ) {
+        let Some(terrain) = &t.terrain_depth else {
+            return;
+        };
+        encoder.copy_texture_to_texture(
+            depth.texture().as_image_copy(),
+            terrain.texture.as_image_copy(),
+            extent(t.size),
+        );
+        // The mask pipeline writes depth only but has a colour target.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("OIT water mask"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &terrain.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        mask(&mut pass);
     }
 
     /// `LevelRenderer.executeDepthBoundsCull`: the bounds are copied, then where
@@ -546,28 +792,50 @@ impl Oit {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_shader_validates() {
-        let source = include_str!("../terrain.wgsl").to_owned() + include_str!("../oit.wgsl");
-        let module = naga::front::wgsl::parse_str(&source).unwrap();
+    fn validate(source: &str, entries: &[&str]) {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
         .unwrap();
-        for entry in [
-            "fs_oit_bounds",
-            "fs_oit_transmittance",
-            "fs_oit_accumulate",
-            "fs_oit_cull",
-            "fs_oit_composite",
-        ] {
+        for entry in entries {
             assert!(
-                module.entry_points.iter().any(|e| e.name == entry),
+                module.entry_points.iter().any(|e| e.name == *entry),
                 "{entry}"
             );
         }
+    }
+
+    #[test]
+    fn the_terrain_shader_validates() {
+        validate(
+            &(include_str!("../terrain.wgsl").to_owned()
+                + include_str!("../oit.wgsl")
+                + include_str!("../oit_world.wgsl")),
+            &[
+                "fs_oit_bounds",
+                "fs_oit_transmittance",
+                "fs_oit_accumulate",
+                "fs_oit_cull",
+                "fs_oit_composite",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_cloud_shader_validates() {
+        validate(
+            &(super::super::entity_shader()
+                + include_str!("../oit.wgsl")
+                + include_str!("../oit_clouds.wgsl")),
+            &[
+                "fs_oit_cloud_bounds",
+                "fs_oit_cloud_transmittance",
+                "fs_oit_cloud_accumulate",
+            ],
+        );
     }
 
     #[test]
