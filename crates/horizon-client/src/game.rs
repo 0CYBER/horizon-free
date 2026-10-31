@@ -1834,6 +1834,8 @@ struct Game<'a> {
     focused: bool,
     /// Whether the window currently accepts input method events.
     ime_allowed: bool,
+    /// The candidate window's area last given to the window, in pixels.
+    ime_area: Option<[i32; 4]>,
     /// When the window lost focus, while it is still without
     /// (`Minecraft.lastActiveTime`: pausing waits 500 ms).
     focus_lost: Option<Instant>,
@@ -13223,6 +13225,7 @@ impl Game<'_> {
             Vec::new()
         };
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
+        self.flush_ime(&mut hud);
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
             || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other)
@@ -14164,6 +14167,7 @@ impl ApplicationHandler for Game<'_> {
         }
         self.window = Some(window);
         self.ime_allowed = false;
+        self.ime_area = None;
         self.apply_settings();
         self.previous = Instant::now();
     }
@@ -14379,6 +14383,12 @@ impl ApplicationHandler for Game<'_> {
                 }
                 // Input method composition: the committed text types like a key's text.
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => self.ime_commit(&text),
+                WindowEvent::Ime(winit::event::Ime::Preedit(text, cursor)) => {
+                    self.ime_preedit(&text, cursor)
+                }
+                WindowEvent::Ime(winit::event::Ime::Disabled) => {
+                    horizon_client::preedit::set_preedit(None)
+                }
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
@@ -15457,6 +15467,7 @@ impl<'a> Game<'a> {
             view_at: [0, 0],
             focused: true,
             ime_allowed: false,
+            ime_area: None,
             focus_lost: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),

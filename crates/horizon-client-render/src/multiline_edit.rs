@@ -579,6 +579,9 @@ impl MultiLineEdit {
         if show_cursor && !insert_cursor && self.within(cursor_y + shift, cursor_y + shift + LINE) {
             batch.text(atlas, "_", cursor_x, cursor_y, cursor_color, true);
         }
+        if self.focused {
+            crate::preedit::report_caret(cursor_x, cursor_y, 10.0);
+        }
         if self.has_selection() {
             let (sel_begin, sel_end) = self.selected();
             let draw_x = inner_left;
