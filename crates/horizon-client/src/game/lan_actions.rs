@@ -272,6 +272,32 @@ impl Game<'_> {
         Some(result)
     }
 
+    /// `as_guest`, with the system messages the guest's action earns (the
+    /// `player::sendSystemMessage` of a packet handler) sent to that guest.
+    pub(super) fn as_guest_messaged<R>(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let (result, lines) = self.as_guest(host, conn, |game| {
+            let outer = game.chat_capture.replace(Vec::new());
+            let result = f(game);
+            let lines = std::mem::replace(&mut game.chat_capture, outer).unwrap_or_default();
+            (result, lines)
+        })?;
+        for line in lines {
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        Some(result)
+    }
+
     /// The first half of `as_guest`: the guest's state in place of the
     /// game's, which the returned swap keeps until `leave_guest`. Between the
     /// two the host may go back into `self.lan`, so that what the guest does
@@ -300,10 +326,14 @@ impl Game<'_> {
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
             // The first body after joining burns, breathes and falls on as saved.
-            if let Some(saved) = host.hub.guests[i].loaded_body.take()
-                && let Some(m) = host.hub.guests[i].motion.as_mut()
+            let g = &mut host.hub.guests[i];
+            if let Some(saved) = g.loaded_body.take()
+                && let Some(m) = g.motion.as_mut()
             {
                 saved.apply(m);
+                // LivingEntity.readAdditionalSaveData: the saved attributes.
+                let _ =
+                    m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
             }
             // The saved golden hearts go on the first body of a player who
             // has been here before.
@@ -928,6 +958,8 @@ impl Game<'_> {
                 Slots::Double(other, pos)
             };
             ("minecraft:generic_9x6", halves)
+        } else if let Some(menu) = self.mod_menu_at(pos) {
+            (menu, Slots::Block(pos))
         } else {
             let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
                 return false;
@@ -949,10 +981,16 @@ impl Game<'_> {
                 horizon_client::containers::double_chest_name(custom(first), custom(second))
             }
             Slots::Block(k) => {
-                let Some(key) = horizon_client::containers::default_name_key(name) else {
-                    return false;
+                // A mod block's container is named after its block
+                // (`Block.getDescriptionId`).
+                let key = match horizon_client::containers::default_name_key(name) {
+                    Some(key) => key.to_owned(),
+                    None if self.mod_menu_at(k).is_some() => {
+                        format!("block.{}", name.replace(':', "."))
+                    }
+                    None => return false,
                 };
-                horizon_client::containers::display_name(custom(k), key)
+                horizon_client::containers::display_name(custom(k), &key)
             }
             // Opened by a mod (`native_open_menu`), never here.
             Slots::Native => return false,
@@ -973,8 +1011,12 @@ impl Game<'_> {
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
+        let hidden = self.native_hidden_slots(pos, items.len());
         host.hub
             .open_container(conn, menu, title, pos, slots, items);
+        if !hidden.is_empty() {
+            host.hub.hide_menu_slots(conn, hidden);
+        }
         true
     }
 
@@ -1068,6 +1110,44 @@ impl Game<'_> {
                 "{}, {}, {}",
                 pos[0], pos[1], pos[2]
             ))],
+        )
+        .with_color(horizon_client::text::RED);
+        host.hub.send_to(
+            conn,
+            &C::SystemChat(play::SystemChat {
+                content: horizon_client::lan::data::component_nbt(&message.component()),
+                overlay: true,
+            }),
+        );
+    }
+
+    /// `ServerGamePacketListenerImpl.wasBlockPlacementAttempt`: a block item,
+    /// or a bucket with something in it, that is not cooling down.
+    fn was_block_placement_attempt(&mut self, hand: Hand) -> bool {
+        let Some(stack) = self.with_hand(hand, |g| g.held().cloned()) else {
+            return false;
+        };
+        let Some(info) = self.items().get(&stack.item).cloned() else {
+            return false;
+        };
+        (info.block.is_some() || horizon_client::items::bucket_contents(&stack.item).is_some())
+            && !self
+                .cooldowns
+                .is_on_cooldown(&horizon_client::cooldowns::group(
+                    &stack,
+                    info.use_cooldown.as_ref(),
+                ))
+    }
+
+    /// `ServerPlayer.sendBuildLimitMessage`: the red overlay with the limit.
+    fn build_limit_message(&self, host: &LanHost, conn: u32, too_high: bool, limit: i32) {
+        let message = horizon_client::text::Text::translate(
+            if too_high {
+                "build.tooHigh"
+            } else {
+                "build.tooLow"
+            },
+            &[horizon_client::text::Text::literal(limit.to_string())],
         )
         .with_color(horizon_client::text::RED);
         host.hub.send_to(
@@ -1237,12 +1317,22 @@ impl Game<'_> {
                 8 if !spectator => self.guest_jab(host, conn),
                 _ => {}
             },
+            // handleSetCarriedItem: a new slot stops a main-hand use.
             S::SetCarriedItem(p) => {
-                if (0..9).contains(&p.slot) {
-                    host.hub.guests[gi].selected = p.slot as usize;
-                    if let Some(play) = host.play.get_mut(&conn) {
-                        play.using = None;
-                    }
+                let g = &mut host.hub.guests[gi];
+                if !(0..9).contains(&p.slot) {
+                    eprintln!("{} tried to set an invalid carried item", g.name);
+                    return;
+                }
+                let changed = g.selected != p.slot as usize;
+                g.selected = p.slot as usize;
+                if let Some(play) = host.play.get_mut(&conn)
+                    && changed
+                    && play
+                        .using
+                        .is_some_and(|(slot, _)| slot != super::shield::OFFHAND_SLOT)
+                {
+                    play.using = None;
                 }
             }
             // ServerGamePacketListenerImpl.handlePunch: the main hand swings
@@ -1293,10 +1383,21 @@ impl Game<'_> {
                     ],
                 };
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
-                // handleUseItemOn: under spawn protection nothing is used or
-                // placed; the player is told and the blocks below go back.
-                // mayInteract: nothing is used on a block outside the world
-                // border either.
+                // handleUseItemOn: above or below the world nothing is used and
+                // the player is told the limit (the blocks are not resent);
+                // under spawn protection nothing is used or placed; the player
+                // is told and the blocks below go back. mayInteract: nothing is
+                // used on a block outside the world border either.
+                let min_y = self.world.shape.min_y;
+                let max_y = self.world.shape.max_y() - 1;
+                if p.pos[1] > max_y {
+                    self.build_limit_message(host, conn, true, max_y);
+                    return;
+                }
+                if p.pos[1] < min_y {
+                    self.build_limit_message(host, conn, false, min_y);
+                    return;
+                }
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
                 } else if self
@@ -1305,17 +1406,33 @@ impl Game<'_> {
                 {
                     let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
                     let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
-                    let swung = self.as_guest(host, conn, |g| {
+                    let used = self.as_guest(host, conn, |g| {
+                        let attempt = g.was_block_placement_attempt(hand);
                         g.forced_hit = Some(hit);
                         g.guest_use = Some(GuestUse::OnBlock(hand));
                         let swings = g.swings_started;
-                        let _ = g.use_item();
+                        let consumed = matches!(g.use_item(), Ok(Some(_)));
                         g.forced_hit = None;
                         g.guest_use = None;
-                        g.swings_started != swings
+                        (g.swings_started != swings, consumed, attempt)
                     });
+                    let swung = used.map(|u| u.0);
                     self.lan_swing_back(host, conn, swung);
                     self.guest_use_sounds(host, conn, logged, heard);
+                    // A placement that did nothing at the top or bottom of the
+                    // world says why. Vanilla asks twice for the top (once
+                    // before the swing, once in the check that also has the
+                    // bottom), so a player there is told twice.
+                    if let Some((_, false, true)) = used {
+                        if p.face == 1 && p.pos[1] >= max_y {
+                            self.build_limit_message(host, conn, true, max_y);
+                            self.build_limit_message(host, conn, true, max_y);
+                        } else if p.face == 0 && p.pos[1] <= min_y {
+                            self.build_limit_message(host, conn, false, min_y);
+                        }
+                    }
+                } else {
+                    self.build_limit_message(host, conn, true, max_y);
                 }
                 // The client predicted a result: correct it with what really is.
                 for pos in [
@@ -1360,12 +1477,13 @@ impl Game<'_> {
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
-                // handleInteract: within the entity interaction range plus 3
-                // of the target's box, or nothing happens.
+                // handleInteract: a target inside the world border, within the entity
+                // interaction range plus 3 of its box, or nothing happens.
                 if let Some(target) = self.guest_target_box(host, gi, p.id)
-                    && self.as_guest(host, conn, |g| {
-                        g.within_entity_interaction_range(&target, 3.0)
-                    }) != Some(true)
+                    && (!self.inside_border(&target)
+                        || self.as_guest(host, conn, |g| {
+                            g.within_entity_interaction_range(&target, 3.0)
+                        }) != Some(true))
                 {
                     return;
                 }
@@ -1399,13 +1517,7 @@ impl Game<'_> {
                 let Some(stack) = self.item_from_network(host, &p.item) else {
                     return;
                 };
-                if stack.count
-                    > self
-                        .res
-                        .items()
-                        .get(&stack.item)
-                        .map_or(64, |i| i.max_stack)
-                {
+                if !self.creative_stack_valid(host, gi, &stack) {
                     return;
                 }
                 let play = host.play.entry(conn).or_default();
@@ -1420,11 +1532,18 @@ impl Game<'_> {
                 self.as_guest(host, conn, |g| g.player_drop(stack));
             }
             S::SetCreativeModeSlot(p) => {
+                // Slot 0 is the crafting result: not a slot to set.
                 let g = &mut host.hub.guests[gi];
-                if !g.creative() || !(0..46).contains(&p.slot) {
+                if !g.creative() || !(1..46).contains(&p.slot) {
                     return;
                 }
                 let item = self.item_from_network(host, &p.item);
+                if item
+                    .as_ref()
+                    .is_some_and(|s| !self.creative_stack_valid(host, gi, s))
+                {
+                    return;
+                }
                 let slot = p.slot as usize;
                 let g = &mut host.hub.guests[gi];
                 let old = g.menu_slot(slot);
@@ -1465,6 +1584,12 @@ impl Game<'_> {
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
             S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
+            S::SetCommandMinecart(p) => self.lan_set_command_minecart(host, conn, p),
+            S::SetStructureBlock(p) => self.lan_set_structure_block(host, conn, p),
+            S::TestInstanceBlockAction(p) => self.lan_test_instance_action(host, conn, p),
+            S::SetTestBlock(p) => self.lan_set_test_block(host, conn, p),
+            S::SetJigsawBlock(p) => self.lan_set_jigsaw_block(host, conn, p),
+            S::JigsawGenerate(p) => self.lan_jigsaw_generate(host, conn, p),
             S::EditBook(p) => self.lan_edit_book(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
@@ -1482,7 +1607,14 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
             S::SelectBundleItem(p) => {
-                if !spectator && let Ok(slot) = usize::try_from(p.slot) {
+                // ServerGamePacketListenerImpl.handleBundleItemSelectedPacket: the slot
+                // is the open menu's (#4436).
+                let own = Self::lan_crafting_table_own_slots(host, conn)
+                    .or_else(|| Self::lan_station_own_slots(host, conn));
+                let slot = usize::try_from(p.slot)
+                    .ok()
+                    .and_then(|slot| bundle_inventory_slot(slot, own));
+                if !spectator && let Some(slot) = slot {
                     host.hub
                         .select_bundle_item(conn, slot, p.index, &mut self.world);
                 }
@@ -1595,6 +1727,7 @@ impl Game<'_> {
             // handleTeleportToEntityPacket: a spectator goes to the player,
             // in whichever level they are.
             S::TeleportToEntity(p) if spectator => self.guest_spectate_teleport(host, gi, p.uuid),
+            S::SpectatorAction(p) => self.guest_spectator_action(host, gi, p.target),
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
@@ -1620,6 +1753,22 @@ impl Game<'_> {
                         );
                     }
                     self.send_admin_feedback(host, Some(conn));
+                }
+            }
+            S::ChangeGameMode(p) => {
+                if let Some(mode) = usize::try_from(p.mode)
+                    .ok()
+                    .and_then(|index| horizon_client::command::args::GameMode::ALL.get(index))
+                {
+                    let name = horizon_client::text::Text::translate(
+                        &format!("gameMode.{}", mode.name()),
+                        &[],
+                    );
+                    eprintln!(
+                        "Player {} tried to change game mode to {} without required permissions",
+                        host.hub.guests[gi].name,
+                        name.plain()
+                    );
                 }
             }
             // handleEntityTagQuery: a game master's F3+I on an entity of their
@@ -1678,6 +1827,10 @@ impl Game<'_> {
             // data only with infinite materials.
             S::PickItemFromBlock(p) => {
                 self.guest_pick_item(host, conn, |g| {
+                    // handlePickItemFromBlock: within reach and loaded.
+                    if !g.world.loaded(p.pos[0], p.pos[2]) {
+                        return None;
+                    }
                     let eye = g.eye_position()?;
                     let d2: f64 = (0..3)
                         .map(|a| {
@@ -1759,6 +1912,23 @@ impl Game<'_> {
                 }),
             );
         }
+    }
+
+    /// What ServerboundSetCreativeModeSlotPacket asks of a stack. Its codec
+    /// (`ItemStack.validatedStreamCodec`) encodes the stack with `ItemStack.CODEC`, whose count is
+    /// 1 to 99: more fails the packet and disconnects the player, as vanilla's decoder error does.
+    /// handleSetCreativeModeSlot's `validData` then ignores a stack beyond its own stack size.
+    fn creative_stack_valid(&self, host: &mut LanHost, gi: usize, s: &ItemStack) -> bool {
+        if s.count > 99 {
+            let g = &host.hub.guests[gi];
+            let conn = g.conn;
+            let reason = format!("Invalid packet: count {} is not in 1..99", s.count);
+            eprintln!("{} sent an invalid creative stack: {reason}", g.name);
+            host.hub
+                .kick(conn, horizon_protocol::text::literal(&reason));
+            return false;
+        }
+        s.count <= self.stack_max_size(s)
     }
 
     fn item_from_network(
@@ -1960,7 +2130,14 @@ impl Game<'_> {
     /// interaction: the host, another player, a mob, a vehicle or object, a
     /// dragon part or crystal, a projectile. None for an id the level doesn't
     /// have (the handlers then find nothing either).
-    fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
+    /// `WorldBorder.isWithinBounds(target.blockPosition())` for an entity of this box:
+    /// the block its feet are in (the box's bottom centre).
+    fn inside_border(&self, target: &Aabb) -> bool {
+        let feet = target.bottom_center();
+        self.border.contains(feet.x.floor(), feet.z.floor())
+    }
+
+    pub(super) fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
         let conn = host.hub.guests[gi].conn;
         if id == host.host_entity {
             return self.player.as_ref().map(|p| p.bounds());
@@ -1999,10 +2176,43 @@ impl Game<'_> {
         if host.hub.guests[gi].spectator() {
             return;
         }
-        // handleAttack: `isWithinAttackRange(mainHandItem, box, 3.0)` before
-        // anything else, players, mobs, objects and fireballs alike.
+        // handleAttack: a target inside the world border, then
+        // `isWithinAttackRange(mainHandItem, box, 3.0)` before anything else, players,
+        // mobs, objects and fireballs alike.
         if let Some(target) = self.guest_target_box(host, gi, id)
-            && self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true)
+            && (!self.inside_border(&target)
+                || self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true))
+        {
+            return;
+        }
+        // Native mods, where Player.attack starts: a canceled blow does
+        // nothing (game/native_hooks.rs).
+        let aimed = if id == host.host_entity {
+            self.player.as_ref().map(|p| {
+                let at = [p.position.x, p.position.y, p.position.z];
+                ("minecraft:player".to_owned(), at)
+            })
+        } else if let Some(g) = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g))
+        {
+            Some(("minecraft:player".to_owned(), g.position))
+        } else {
+            self.level_entity(id).map(|t| {
+                (
+                    self.target_type(t),
+                    self.target_position(t).unwrap_or_default(),
+                )
+            })
+        };
+        if let Some((kind, at)) = aimed
+            && self.as_guest(host, conn, |g| {
+                let mut canceled = false;
+                g.native_attack_entity(id, &kind, at, &mut canceled);
+                canceled
+            }) == Some(true)
         {
             return;
         }
@@ -2312,6 +2522,11 @@ impl Game<'_> {
         }
         // PlayerList.respawn removes the dead player (Player.remove).
         self.guest_drop_carried(host, i);
+        // AbstractContainerScreen.tick / ServerPlayer.closeContainer: the dead
+        // player's open container goes with it, so a chest's lid (its opener
+        // count) falls instead of staying up for a player who is gone.
+        self.guest_container_closed(host, conn);
+        host.hub.close_container(conn);
         // PlayerList.respawn: a server's player comes back in its respawn
         // point's level: the Overworld, where the world spawn and beds are,
         // or another one's anchor or forced point, which its block resolves
@@ -2351,7 +2566,9 @@ impl Game<'_> {
             return;
         }
         let g = &mut host.hub.guests[i];
+        // restartClientLoadTimerAfterRespawn.
         g.dead = false;
+        g.load_timeout = horizon_client::lan::guest::CLIENT_LOADED_TIMEOUT;
         g.death_time = 0;
         g.health = 20.0;
         g.food = 20;
@@ -2428,6 +2645,7 @@ impl Game<'_> {
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
+        self.tick_guest_cameras(host);
         self.lan_merchant_tick(host);
         self.lan_stations_tick(host);
         self.lan_tables_tick(host);
@@ -2908,9 +3126,13 @@ impl Game<'_> {
             // LivingEntity.aiStep: a Riptide spin counts down on the server's
             // copy too, or it would stay in the spin pose (eye 0.4) for good.
             // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
-            // ends with updatePlayerPose: a swimmer, or a player crawling
-            // under a block, takes the short box its moves are checked with.
-            let _ = w.server_player_pose_tick();
+            // ends with updatePlayerPose — or, for a passenger, the rideTick
+            // path that clears a swim (#4509 / #3308).
+            let _ = if riding {
+                w.passenger_pose_tick()
+            } else {
+                w.server_player_pose_tick()
+            };
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {
@@ -2991,7 +3213,13 @@ impl Game<'_> {
         });
         for event in events {
             match event {
-                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.playHurtSound: the server's `Entity.playSound`
+                // reaches every player around but the hurt one, whose own
+                // client plays it from handleDamageEvent (#4149).
+                MotionEvent::HurtSound(sound) => {
+                    let source = horizon_client::settings::sound_source(sound) as i32;
+                    host.hub.sound(sound, at, 1.0, 1.0, source, Some(conn));
+                }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,
@@ -3639,6 +3867,27 @@ impl Game<'_> {
         }
     }
 
+    /// `LivingEntity.tick`'s arrows and bee stingers falling out of the
+    /// players' bodies, and their counts for the players around
+    /// (`DATA_ARROW_COUNT_ID`, `DATA_STINGER_COUNT_ID`).
+    pub(super) fn lan_stuck(&mut self, host: &mut LanHost, paused: bool) {
+        if !paused {
+            self.combat.stuck.tick();
+        }
+        for g in &mut host.hub.guests {
+            g.shoulders = super::shoulders::shoulder_variants(g.saved.as_ref());
+            g.stuck = match self.guest_combat.get_mut(&g.conn) {
+                Some(combat) => {
+                    if !paused {
+                        combat.stuck.tick();
+                    }
+                    (combat.stuck.arrows, combat.stuck.stingers)
+                }
+                None => (0, 0),
+            };
+        }
+    }
+
     /// The guests' items in use, for the players around (`LivingEntity.startUsingItem`
     /// and `stopUsingItem` set DATA_LIVING_ENTITY_FLAGS).
     pub(super) fn lan_living_flags(&mut self, host: &mut LanHost) {
@@ -3775,5 +4024,33 @@ mod tests {
             eye_columns([205.7, 100.0, 530.5], Pose::Standing.dimensions(1.0)),
             [205..=205, 530..=530]
         );
+    }
+}
+
+/// A `ServerboundSelectBundleItemPacket` slot as the hub's `select_bundle_item` reads it.
+/// With a crafting table or a station open (`own` slots of its own first), its
+/// inventory part is the inventory menu's main inventory and hotbar from slot 9, in
+/// the same order; its own slots hold no bundle the hub can reach.
+fn bundle_inventory_slot(slot: usize, own: Option<usize>) -> Option<usize> {
+    match own {
+        Some(own) => slot.checked_sub(own).filter(|s| *s < 36).map(|s| s + 9),
+        None => Some(slot),
+    }
+}
+
+#[cfg(test)]
+mod bundle_slot_tests {
+    use super::bundle_inventory_slot;
+
+    /// A crafting table (10 slots of its own) and an enchanting table (2): the first
+    /// inventory slot and the last hotbar slot map to 9 and 44; their own slots to none.
+    #[test]
+    fn station_menus_map_to_the_inventory_menu() {
+        assert_eq!(bundle_inventory_slot(10, Some(10)), Some(9));
+        assert_eq!(bundle_inventory_slot(45, Some(10)), Some(44));
+        assert_eq!(bundle_inventory_slot(2, Some(2)), Some(9));
+        assert_eq!(bundle_inventory_slot(5, Some(10)), None);
+        assert_eq!(bundle_inventory_slot(46, Some(10)), None);
+        assert_eq!(bundle_inventory_slot(45, None), Some(45));
     }
 }

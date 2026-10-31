@@ -29,8 +29,8 @@ pub(super) enum CartKind {
     Hopper,
     Furnace,
     Tnt,
-    /// `MinecartCommandBlock`; its command block holds no command, so an
-    /// activator rail runs nothing.
+    /// `MinecartCommandBlock`: its `BaseCommandBlock` is `Minecart::command`,
+    /// run by a powered activator rail (`game/command_minecarts.rs`).
     CommandBlock,
 }
 impl CartKind {
@@ -106,6 +106,22 @@ pub(super) struct Minecart {
     pub loot: Option<horizon_client::save::RolledLoot>,
     /// `Entity.firstTick`: not ticked yet (saved as `HasTicked`).
     pub first_tick: bool,
+    /// Command block minecarts: the cart's `BaseCommandBlock` (command,
+    /// success count, last output, output tracking). The block-only flags of
+    /// `CommandBlock` stay unset.
+    pub command: horizon_client::command_block::CommandBlock,
+    /// `Entity.tickCount`, which `MinecartCommandBlock.activateMinecart`
+    /// measures its `ACTIVATION_DELAY` against.
+    pub tick_count: i32,
+    /// `MinecartCommandBlock.lastActivated`.
+    pub last_activated: i32,
+    /// An activator rail asked for the command during this tick; it runs once
+    /// the cart is back in the level (`command_minecarts.rs`).
+    pub command_due: bool,
+    /// The synched `DATA_ID_COMMAND_NAME` and `DATA_ID_LAST_OUTPUT`, which
+    /// follow the command block only at `onUpdated`.
+    pub synced_command: String,
+    pub synced_output: String,
 }
 pub(super) const WIDTH: f64 = 0.98;
 pub(super) const HEIGHT: f64 = 0.7;
@@ -214,6 +230,12 @@ impl Minecart {
             enabled: true,
             loot: None,
             first_tick: true,
+            command: horizon_client::command_block::CommandBlock::default(),
+            tick_count: 0,
+            last_activated: 0,
+            command_due: false,
+            synced_command: String::new(),
+            synced_output: String::new(),
         }
     }
     pub fn bounds(&self) -> Aabb {
@@ -563,6 +585,7 @@ impl Game<'_> {
     /// `AbstractMinecart.tick` for one cart; returns false once it is gone.
     fn tick_cart(&mut self, c: &mut Minecart, intent: [f64; 2]) -> bool {
         c.first_tick = false;
+        c.tick_count += 1;
         c.previous = c.position;
         c.previous_yaw = c.yaw;
         c.hurt_time = (c.hurt_time - 1).max(0);
@@ -651,6 +674,12 @@ impl Game<'_> {
             }
             CartKind::Tnt if powered && c.fuse < 0 => self.prime_cart(c),
             CartKind::Hopper => c.enabled = !powered,
+            // MinecartCommandBlock.activateMinecart: the command runs at most
+            // every ACTIVATION_DELAY ticks.
+            CartKind::CommandBlock if powered && c.tick_count - c.last_activated >= 4 => {
+                c.command_due = true;
+                c.last_activated = c.tick_count;
+            }
             _ => {}
         }
     }
@@ -817,8 +846,12 @@ impl Game<'_> {
                 continue;
             };
             if alive {
+                let due = std::mem::take(&mut c.command_due);
                 self.carts[i] = c;
                 self.push_from_cart(i);
+                if due {
+                    self.perform_cart_command(id);
+                }
             } else {
                 self.carts.remove(i);
             }
@@ -926,6 +959,12 @@ impl Game<'_> {
         } else {
             self.carts.remove(i);
             self.riding = None;
+        }
+        // AbstractMinecart.activateMinecart: a powered activator rail ejects
+        // the rider, and getDismountLocationForPassenger places it beside the
+        // cart instead of leaving it at the seat.
+        if alive && self.riding.is_none() {
+            self.dismount_cart(i);
         }
         true
     }
@@ -1115,8 +1154,10 @@ impl Game<'_> {
                 self.prime_cart(&mut c);
                 self.carts[i] = c;
             }
-            // BaseCommandBlock.usedBy: only an operator in creative opens it.
-            CartKind::CommandBlock => return false,
+            // MinecartCommandBlock.interact: a game master gets SUCCESS (the
+            // client opens the editor, `open_cart_command_block`), anyone else
+            // PASSes to the held item. SUCCESS swings on the client only.
+            CartKind::CommandBlock => return self.can_use_game_master_blocks(),
         }
         self.swing_arm();
         true
@@ -1537,6 +1578,11 @@ impl Minecart {
             raw,
         );
         if let Tag::Compound(map) = &mut tag {
+            if self.kind == CartKind::CommandBlock {
+                for key in ["LastOutput", "LastExecution"] {
+                    map.remove(&JavaString::from(key));
+                }
+            }
             let mut put = |k: &str, v: Tag| {
                 map.insert(JavaString::from(k), v);
             };
@@ -1558,12 +1604,13 @@ impl Minecart {
                     put("Fuel", Tag::Short(self.fuel as i16));
                 }
                 CartKind::Tnt => put("fuse", Tag::Int(self.fuse)),
-                // BaseCommandBlock.save of an empty command block.
+                // BaseCommandBlock.save (its CustomName shares the entity's key).
                 CartKind::CommandBlock => {
-                    put("Command", Tag::String(JavaString::from("")));
-                    put("SuccessCount", Tag::Int(0));
-                    put("TrackOutput", Tag::Byte(1));
-                    put("UpdateLastExecution", Tag::Byte(1));
+                    for (key, value) in self.command.save() {
+                        if !matches!(key, "CustomName" | "powered" | "conditionMet" | "auto") {
+                            put(key, value);
+                        }
+                    }
                 }
                 CartKind::Rideable => {}
             }
@@ -1603,6 +1650,12 @@ impl Minecart {
         // readAdditionalSaveData: the saved push has no y.
         c.push = Vec3::new(double("PushX"), 0.0, double("PushZ"));
         c.fuse = int("fuse").unwrap_or(-1);
+        if kind == CartKind::CommandBlock {
+            c.command = horizon_client::command_block::CommandBlock::load(tag);
+            // readAdditionalSaveData sets both synched values.
+            c.synced_command.clone_from(&c.command.command);
+            c.synced_output = c.command.last_output_string();
+        }
         Some(c)
     }
 }
@@ -1659,6 +1712,51 @@ mod tests {
         let saved = cart.to_nbt([0; 4], Some(&generated));
         assert_eq!(saved.get("HasTicked"), Some(&Tag::Byte(0)));
         assert_eq!(saved.get("Fire"), Some(&Tag::Short(0)));
+    }
+
+    #[test]
+    fn a_command_cart_saves_its_base_command_block() {
+        use horizon_world::nbt::Tag;
+        let saved = Tag::compound([
+            (
+                "Pos",
+                Tag::List(
+                    [0.5f64, 40.5, 0.5]
+                        .map(|v| Tag::Double(v.to_bits()))
+                        .to_vec(),
+                ),
+            ),
+            ("Command", Tag::String("say hi".into())),
+            ("SuccessCount", Tag::Int(3)),
+            ("TrackOutput", Tag::Byte(1)),
+            ("LastOutput", Tag::String("[12:00:00] hi".into())),
+            ("LastExecution", Tag::Long(42)),
+        ]);
+        let cart = Minecart::from_nbt(&saved, 1, CartKind::CommandBlock).unwrap();
+        assert_eq!(cart.command.command, "say hi");
+        assert_eq!(cart.command.success_count, 3);
+        // readAdditionalSaveData syncs both values.
+        assert_eq!(cart.synced_command, "say hi");
+        assert_eq!(cart.synced_output, "[12:00:00] hi");
+        let out = cart.to_nbt([0; 4], Some(&saved));
+        for key in [
+            "Command",
+            "SuccessCount",
+            "TrackOutput",
+            "LastOutput",
+            "LastExecution",
+        ] {
+            assert_eq!(out.get(key), saved.get(key), "{key}");
+        }
+        assert_eq!(out.get("UpdateLastExecution"), Some(&Tag::Byte(1)));
+        // A block-only flag never reaches the entity.
+        assert!(out.get("powered").is_none() && out.get("auto").is_none());
+        // Untracked output drops the saved last output.
+        let mut quiet = cart.clone();
+        quiet.command.track_output = false;
+        let out = quiet.to_nbt([0; 4], Some(&saved));
+        assert!(out.get("LastOutput").is_none());
+        assert_eq!(out.get("TrackOutput"), Some(&Tag::Byte(0)));
     }
 
     #[test]

@@ -490,6 +490,25 @@ impl FluidFlowWorld for TntFluidWorld<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_piston_slime_bounce_launches_primed_tnt() {
+        use horizon_core::geometry::Direction;
+        use horizon_world::piston_push::bounce_velocity;
+        let mut tnt = PrimedTnt {
+            id: 0,
+            position: Vec3::new(0.5, 1.0, 0.5),
+            previous: Vec3::new(0.5, 1.0, 0.5),
+            velocity: Vec3::ZERO,
+            fuse: 80,
+            on_ground: true,
+        };
+        tnt.velocity = bounce_velocity(Direction::Up, tnt.velocity);
+        tnt.on_ground = false;
+        assert_eq!(tnt.velocity.y, 1.0);
+        assert!(!tnt.on_ground);
+    }
+
     #[test]
     fn primed_tnt_follows_water_currents_after_moving() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -943,7 +943,7 @@ Create a server; with no options it is a new world, survival, normal, 10 players
 - `--difficulty` (peaceful, easy, normal, hard)
 - `--max-players`
 - `--open`: Let anyone in (no whitelist)
-- `--check-accounts`: Check players' Minecraft accounts (they must sign in with Microsoft)
+- `--offline`: Do not check players' Minecraft accounts (offline mode: anyone can use any name)
 - `--player`: Who may join (repeatable); the first becomes an operator
 - `--accept-eula`: Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)
 

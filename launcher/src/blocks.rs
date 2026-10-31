@@ -80,6 +80,8 @@ pub fn panel(t: &Theme) -> Div {
 
 /// A small label in a block of its colour: "Runs", "Partly", a version.
 pub fn badge(label: impl Into<SharedString>, color: Hsla, t: &Theme) -> Div {
+    let label: SharedString = label.into();
+    let label = SharedString::from(crate::i18n::tr(&label).to_string());
     let tint = if t.dark { 0.14 } else { 0.12 };
     div()
         .flex()
@@ -95,7 +97,7 @@ pub fn badge(label: impl Into<SharedString>, color: Hsla, t: &Theme) -> Div {
         .child(
             pixel(12., FontWeight::MEDIUM)
                 .text_color(color)
-                .child(label.into()),
+                .child(label),
         )
 }
 
@@ -141,7 +143,7 @@ pub fn tabs<T: Copy + PartialEq + 'static>(
                 .child(
                     pixel(15., FontWeight::MEDIUM)
                         .text_color(if open { t.ink } else { t.muted })
-                        .child(label),
+                        .child(crate::i18n::tr(label)),
                 )
                 .when(!open, |d| d.hover(move |s| s.bg(t.raised)))
                 // The open tab covers the panel's outline under it.

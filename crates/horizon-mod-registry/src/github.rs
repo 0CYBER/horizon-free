@@ -212,6 +212,26 @@ impl GitHub {
         Ok(Some((entry, file["sha"].as_str().unwrap_or("").to_owned())))
     }
 
+    /// A public repository `owner/name`: its GitHub JSON, None when it is not found (or private).
+    pub fn repository(&self, repo: &str) -> Result<Option<Value>> {
+        match self
+            .agent
+            .get(&format!("{}/repos/{repo}", self.at.api))
+            .timeout(self.call_timeout)
+            .set("Authorization", &format!("Bearer {}", self.bot_token))
+            .set("Accept", "application/vnd.github+json")
+            .set("X-GitHub-Api-Version", "2022-11-28")
+            .call()
+        {
+            Ok(r) => {
+                let repo = read(r)?;
+                Ok((repo["private"] == false).then_some(repo))
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(None),
+            Err(e) => Err(failure(e)),
+        }
+    }
+
     /// Uploads `path` as asset `name` of the `staging` prerelease, unless it
     /// is already there (the same file submitted again).
     pub fn stage(&self, name: &str, path: &Path) -> Result<()> {

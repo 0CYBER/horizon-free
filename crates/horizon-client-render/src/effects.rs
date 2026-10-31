@@ -171,6 +171,9 @@ pub enum OmenTick {
 pub struct PlayerEffects {
     pub list: Vec<EffectInstance>,
     pub tick_count: i32,
+    /// How many times `add` added or updated an effect: each is one
+    /// `onEffectAdded` or `onEffectUpdated` (`EffectsChangedTrigger`).
+    pub changes: u32,
 }
 impl PlayerEffects {
     pub fn get(&self, id: &str) -> Option<&EffectInstance> {
@@ -181,13 +184,17 @@ impl PlayerEffects {
     }
     /// `LivingEntity.addEffect`; returns whether anything changed.
     pub fn add(&mut self, effect: EffectInstance) -> bool {
-        match self.list.iter_mut().find(|e| e.id == effect.id) {
+        let changed = match self.list.iter_mut().find(|e| e.id == effect.id) {
             Some(existing) => existing.update(&effect),
             None => {
                 self.list.push(effect);
                 true
             }
+        };
+        if changed {
+            self.changes = self.changes.wrapping_add(1);
         }
+        changed
     }
     pub fn clear(&mut self) {
         self.list.clear();
@@ -481,6 +488,19 @@ pub fn effect_modifier(effect: &str) -> Option<(&'static str, &'static str, f64,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_counts_a_change_only_when_the_effect_changed() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("speed", 100, 0));
+        assert_eq!(fx.changes, 1);
+        // A longer duration updates the effect (`onEffectUpdated`).
+        fx.add(EffectInstance::new("speed", 200, 0));
+        assert_eq!(fx.changes, 2);
+        // A shorter one with the same amplifier is hidden by nothing: no change.
+        fx.add(EffectInstance::new("speed", 50, 0));
+        assert_eq!(fx.changes, 2);
+    }
 
     #[test]
     fn bad_omen_in_a_village_becomes_raid_omen_over_two_ticks() {
