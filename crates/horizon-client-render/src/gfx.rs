@@ -393,6 +393,8 @@ pub struct Frame<'a> {
     /// `Options.chunkSectionFadeInTime`, in seconds: how long a section takes to fade in once
     /// uploaded (0 draws it whole at once).
     pub chunk_fade: f32,
+    /// `GameRenderer.requestedPostEffects`: the chains that run over the world.
+    pub post_effects: crate::post_chain::Request<'a>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -645,6 +647,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
+    /// `post_effect` chains, made on first use.
+    post_effects: Option<crate::post_chain::PostEffects>,
     /// Where a screenshot's frame is drawn when the swapchain cannot be read back.
     readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
@@ -2897,6 +2901,7 @@ impl Renderer {
             pack_terrain_flat: false,
             hud,
             menu_blur: None,
+            post_effects: None,
             readback: readback::Readback::default(),
             info,
             suspended: !drawable_size(size.width, size.height, max_side),
@@ -5611,6 +5616,26 @@ impl Renderer {
             .screenshot
             .take_if(|request| request.size.is_some())
             .and_then(|request| self.take_readback(request, &mut encoder, &target_texture));
+        // GameRenderer.render: applyPostEffects, after the level and before the GUI.
+        if !frame.title
+            && !frame.post_effects.effects.is_empty()
+            && target_texture
+                .usage()
+                .contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let device = &self.device;
+            self.post_effects
+                .get_or_insert_with(|| crate::post_chain::PostEffects::new(device))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &target_texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    &frame.post_effects,
+                );
+        }
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5825,7 +5850,7 @@ fn padded_row(width: u32) -> u32 {
     (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
 }
 /// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
-fn copy_frame(
+pub(crate) fn copy_frame(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
