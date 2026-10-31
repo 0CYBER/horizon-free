@@ -5365,6 +5365,10 @@ impl Game<'_> {
                 continue;
             }
             m.previous = m.position;
+            // `Entity.deltaMovementOnPreviousTick`: the elytra's flight yaw
+            // lerps from it, so another player's model does not snap when a
+            // new tick's velocity arrives.
+            m.extra.previous_velocity = m.velocity;
             m.previous_yaw = m.yaw;
             m.previous_body_yaw = m.body_yaw;
             m.previous_head_yaw = m.head_yaw;
