@@ -324,6 +324,7 @@ horizon-server run                       supervisor + engine in the foreground; 
 horizon-server start | stop | restart    in the background (detached `run`); each waits for the game
 horizon-server status [--json]           up?, uptime, TPS, MSPT, players, RAM, CPU, crashes
 horizon-server cmd <command…>            one console command, with its output
+horizon-server console                   attach: the live log, and send commands (Ctrl-D detaches)
 horizon-server logs [-f] [-n N]
 horizon-server op|deop <player>
 horizon-server whitelist on|off|list|add|remove [player]
@@ -338,7 +339,6 @@ horizon-server update [--check] [--version vX.Y.Z] [--timeout S]     rollback [-
 horizon-server update --archive FILE --version NAME     an archive you have (your own build)
 
 Planned:
-horizon-server console                   attach: the live log, and send commands (Ctrl-D detaches)
 horizon-server import-resources <dir>      prepare --server-jar PATH
 horizon-server mcp                       MCP server on stdio (section 8)
 ```
@@ -347,7 +347,8 @@ horizon-server mcp                       MCP server on stdio (section 8)
 - While the server runs, management commands go through the control API, so the engine applies them as
   vanilla's console would and its lists stay right. While it's stopped, they edit the vanilla files directly
   with the same code the engine uses (`horizon_server_files::user_lists`).
-- **The TUI** is `horizon-server console`: the log, a one-line header (TPS, MSPT, players, RAM) that updates
+- **The TUI** is `horizon-server console` (built, `console.rs`): the recent log and then the live one (the
+  control API's event stream), a one-line header (TPS, MSPT, players, RAM) that updates
   every second, and a command line. It uses plain ANSI with no TUI framework, and falls back to plain lines
   when stdout isn't a terminal.
 

@@ -860,6 +860,40 @@ impl Client {
         self.call_within(method, path, body, Duration::from_secs(60))
     }
 
+    /// Reads a server-sent event stream (`GET /api/v1/events`), one event at a time, until the server ends
+    /// it (`Ok`) or stops answering.
+    pub fn follow(&self, path: &str, mut each: impl FnMut(&Value)) -> Result<(), String> {
+        use std::io::BufRead;
+        let mut stream =
+            std::net::TcpStream::connect_timeout(&self.address, Duration::from_secs(5))
+                .map_err(|e| e.to_string())?;
+        // The stream sends a comment every 15 s: a minute of silence is a server gone.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .map_err(|e| e.to_string())?;
+        write!(
+            stream,
+            "GET {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
+            self.address, self.token
+        )
+        .map_err(|e| e.to_string())?;
+        let mut lines = std::io::BufReader::new(stream).lines();
+        let status = lines.next().and_then(Result::ok).unwrap_or_default();
+        if status.split_whitespace().nth(1) != Some("200") {
+            return Err(format!("the server answered {status:?}"));
+        }
+        for line in lines {
+            let line = line.map_err(|e| e.to_string())?;
+            if let Some(event) = line
+                .strip_prefix("data: ")
+                .and_then(|d| serde_json::from_str(d).ok())
+            {
+                each(&event);
+            }
+        }
+        Ok(())
+    }
+
     /// A call that may take long (a backup of a big world).
     pub fn call_within(
         &self,
