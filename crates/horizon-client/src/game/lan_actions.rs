@@ -1201,6 +1201,18 @@ impl Game<'_> {
                         return;
                     }
                     let face = direction(i32::from(a.direction));
+                    // Native mods, once the dig may start: a canceled click
+                    // attacks, digs and breaks nothing (the ack puts the
+                    // block back on the client).
+                    let canceled = self.as_guest(host, conn, |g| {
+                        let state = g.world.block(a.pos[0], a.pos[1], a.pos[2]);
+                        let mut canceled = false;
+                        g.native_left_click_block(a.pos, face, state, &mut canceled);
+                        canceled
+                    });
+                    if canceled == Some(true) {
+                        return;
+                    }
                     let play = host.play.entry(conn).or_default();
                     play.digging = Some((a.pos, face));
                     play.dig_start = host.hub.ticks;
