@@ -96,6 +96,7 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
         e,
         MobEvent::AttackPlayer(..)
             | MobEvent::AttackPlayerWithEffect { .. }
+            | MobEvent::StingPlayer { .. }
             | MobEvent::DamagePlayer { .. }
             | MobEvent::SonicBoom {
                 target: Who::Player,
@@ -440,6 +441,7 @@ mod tests {
             sleeping: false,
             sleep_timer: 0,
             passenger: false,
+            vehicle: None,
         }
     }
 

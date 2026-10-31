@@ -348,7 +348,7 @@ impl Game<'_> {
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(
                     self.screen,
-                    Screen::Chat | Screen::Options | Screen::CommandBlock
+                    Screen::Chat | Screen::Options | Screen::CommandBlock | Screen::BlockEditor
                 );
                 let key = if typing && arg(2)? != "up" {
                     key
@@ -629,6 +629,7 @@ impl Game<'_> {
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::CommandBlock => self.command_block_type(text),
+                    Screen::BlockEditor => self.block_editor_type(text),
                     Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
                     // The port, or the game rules' search and number boxes.
                     Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
@@ -819,7 +820,12 @@ impl Game<'_> {
             "dragon-hurt" => {
                 // Test hook: damage the dragon's head as the player would.
                 let amount: f32 = arg(1)?.parse()?;
-                self.hit_special(super::dragon::SPECIAL, amount, true, false);
+                self.hit_special(
+                    super::dragon::SPECIAL,
+                    amount,
+                    true,
+                    horizon_client::mobs::DamageKind::PlayerAttack,
+                );
                 ok()
             }
             "quit" => {
@@ -866,6 +872,10 @@ impl Game<'_> {
             self.command_block_key_code(key, None, None);
             return Ok(());
         }
+        if self.screen == Screen::BlockEditor {
+            self.block_editor_key_code(key, None, None);
+            return Ok(());
+        }
         if self.keys.insert(key) {
             self.key_pressed(key)?;
         }
@@ -896,6 +906,7 @@ impl Game<'_> {
             Screen::ConfirmLink => "confirm-link",
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
+            Screen::BlockEditor => "block-editor",
             Screen::Win => "win",
         }
     }

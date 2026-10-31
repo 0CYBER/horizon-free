@@ -7,7 +7,7 @@ RETURN, MODIFY_ARG, OVERWRITE...; the tool's README lists them). A port such as 
 one module. Start a mod from [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template).
 
 Native mods are native code with the player's rights, not sandboxed. The launcher turns them on only when the player
-installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review; and
+installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review (its later releases are checked by machine); and
 they play in a game of their own, built for the instance they are installed in.
 
 ## Pinned to a Nightly
@@ -67,6 +67,51 @@ step ([Server menus](#server-menus)). Bundles that use them need `"hooks": 10`.
 API 12 adds item tooltips through `native_tooltip`: the hovered stack, with its components, and its tooltip's
 lines, which a mod can add to, change or take out of, wherever the game shows an item's tooltip. Bundles that use it
 need `"hooks": 12`.
+
+API 13 adds using an item, on the server for every player: `native_use_item_on` hears a right click with an item on a
+block once the block let it through (`ItemStack.useOn`), and `native_use_item` hears the item's own use, in the air or
+after `native_use_item_on` let it through (`Item.use`). Each hears a click once. A mod that claims one swings the hand
+instead of the item's use. Bundles that use them need `"hooks": 13`.
+
+API 14 adds breaking and placing a block, on the server for every player: `native_destroy_block` hears a player break a
+block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may cancel it, which keeps the block and its
+drops; `native_place_block` hears a block placed from an item (`BlockItem.place`). To stop a placement, a mod claims
+`native_use_item_on`, which runs before it. Bundles that use them need `"hooks": 14`.
+
+API 15 adds block entities for a mod's blocks (`native_block_entity`, `native_block_entity_ticks`,
+`native_block_entity_tick`): made when the block is placed, ticked on the server and saved with the chunk. Bundles that use them need `"hooks": 15`.
+
+API 16 adds item slots for those block entities (`native_block_entity_container`): hoppers, comparators and breaking the
+block use them as they use vanilla's containers, and `native_block_entity_tick` also gets the slots. Bundles that use them need `"hooks": 16`.
+
+API 17 adds menus for mod containers: the container names one of vanilla's slot-grid or furnace menus, which opens when the block is used,
+and `native_block_entity_tick` takes the whole block entity, with the data slots the menu shows. Bundles that use them need `"hooks": 17`.
+
+API 18 adds what a machine's tick reaches: `native_with_mod_block_entity` (change a neighbouring mod block entity, which marks its chunk
+and tells comparators when its items changed) and `native_set_block_property` (a property of the block's own state, through the level's
+normal update path). Bundles that use them need `"hooks": 18`.
+
+API 19 adds screens a mod draws for its blocks' menus: `native_screen` lays one out (its height, where each container slot is,
+where the inventory starts; a slot it leaves out is not in the menu, so shift-clicks skip it) and `native_screen_draw` draws it with the mod's
+own GUI textures (`assets/<namespace>/textures/gui`, drawn with `native_sprite`). Bundles that use them need `"hooks": 19`.
+
+API 20 adds buttons, tooltips and item icons on mod screens: `native_screen_click` and `native_screen_tooltip` (the client), `native_menu_button`
+(a button press on the server, on the mod block entity) and the helpers `native_item`, `native_screen_title`, `native_data`, `native_block`,
+`native_block_property`, `native_insert_item` and `native_cursor`. Bundles that use them need `"hooks": 20`.
+
+API 21 adds what a server mod needs to guard land and move players. `native_right_click_block` hears a player's right
+click on a block before the block's own use (a chest, a door, a lever) and the item's, and may cancel it: nothing
+happens and the player sees the block as it is. `native_acting_player` says who acts inside a player's hook (UUID,
+name, level, position, game mode, health); `native_run_command` runs a command as the server's console (level 4, no
+output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; `native_action_bar`
+tells a player why, even inside their own hook; and the players
+`native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
+
+API 22 adds what a server mod needs to keep the world itself out of guarded land. `native_block_spread` hears a
+fluid flow or fire spread into a block, `native_piston_move` a piston's push or pull, `native_explosion_detonate` the
+blocks an explosion is about to break (a mod takes out those it spares), `native_fill_bucket` a bucket filled or
+emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
+player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
 ## What the launcher does
 
@@ -183,9 +228,12 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
   versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
   Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
-  has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
+  has read the source and the repository they come from. Its entry names the GitHub repository (`repo`); each
+  release of it with a `.hnmod` asset is a version once the bundle passes the registry's checks, with no further
+  review (nothing is built or run by the registry; the player's launcher builds it behind its warning). The `.hnmod` contains `.rs` and `.toml` files and may contain data files under
   `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
-  The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  The file is pinned by SHA-256 like every registry file, and the version, game and pins are the bundle's own
+  `horizon-native.json`. `revoked.toml` takes a bad release down.
   A content mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod`; removing the mod removes both.
@@ -254,6 +302,27 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
   component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
   many it counted, took or gave; the player's screen follows as for any change to their inventory.
+- API 21: `native_acting_player()`, the player whose state is swapped in (inside `native_perform_command`,
+  `native_right_click_block`, `native_use_item_on`, `native_destroy_block`...; None elsewhere);
+  `native_run_command(line)`, a command run as the server's console (level 4, no output), only where no player is
+  swapped in (`native_tick`, a menu hook): a teleport to another level (`execute in minecraft:the_nether run tp Alex 0
+  70 0`) lands at the next tick's start. `native_server_players()` and the acting player carry `health` (0 once dead).
+  `native_action_bar(uuid, text)`, a line over a player's hotbar, which also reaches the acting player inside their
+  hook (where `native_tell` reaches nobody).
+- **`native_right_click_block(pos, face, canceled)`** (API 21): a player's right click on a block, before the block's
+  own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
+  without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of
+  claimed land.
+- **`native_block_spread(dimension, kind, from, to, canceled)`** and **`native_piston_move(dimension, piston,
+  direction, push, destroy, canceled)`** (API 22, on `GameLevel`, like the block observers): a fluid flowing or fire
+  spreading (`kind` `fluid` or `fire`) from `from` into `to`, and a piston moving blocks once its structure resolved.
+  Canceled, the block at `to` stays as it is, and the piston moves nothing. Fluids ask on every flow: answer from
+  memory, fast.
+- **`native_explosion_detonate(dimension, center, blocks)`** (API 22): the positions an explosion is about to break,
+  before any is hit; take out the ones to spare. Entities are hurt as before.
+- **`native_fill_bucket(stack, pos, canceled)`** and **`native_attack_entity(entity, kind, pos, canceled)`** (API 22):
+  a player's bucket at a block, and their blow on an entity, with the acting player swapped in. Canceled, the bucket
+  does nothing and the blow does no harm.
 
 ### Server menus
 

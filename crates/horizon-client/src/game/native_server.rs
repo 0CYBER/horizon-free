@@ -7,7 +7,7 @@
 //! player's plain items: count, take, give. They act on the server's own
 //! players (the hub's: a dedicated server's, a LAN host's, single player's
 //! server thread's), never on a client's.
-use super::{Game, lan::LanHost};
+use super::{Dim, Game, commands::execute, lan::LanHost};
 use horizon_client::{items::ItemStack, lan::data::component_nbt, text::Text};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 use serde_json::{Map, Value, json};
@@ -27,6 +27,8 @@ pub(crate) struct NativeServerPlayer {
     pub(crate) position: [f64; 3],
     /// 0 survival, 1 creative, 2 adventure, 3 spectator.
     pub(crate) game_mode: i32,
+    /// Health points, 20 at full; 0 once dead. API 21.
+    pub(crate) health: f32,
 }
 
 /// A command a native mod adds, as one usage: words, then arguments
@@ -249,6 +251,7 @@ impl Game<'_> {
                 dimension: g.dimension.clone(),
                 position: g.position,
                 game_mode: g.game_mode,
+                health: g.health,
             })
             .collect()
     }
@@ -261,6 +264,27 @@ impl Game<'_> {
             return false;
         };
         host.hub.send_to(g.conn, &system_chat(&line));
+        true
+    }
+    /// A line over that player's hotbar (the action bar), also inside a
+    /// player's hook for the acting player (`native_tell` reaches nobody
+    /// there); false when they aren't on. API 21.
+    pub(super) fn native_action_bar(&mut self, uuid: u128, line: Text) -> bool {
+        let packet = C::SystemChat(play::SystemChat {
+            content: component_nbt(&line.component()),
+            overlay: true,
+        });
+        if self.lan_acting_uuid == Some(uuid) {
+            self.guest_packets.push(packet);
+            return true;
+        }
+        let Some(host) = &self.lan else {
+            return false;
+        };
+        let Some(g) = host.hub.guests.iter().find(|g| g.placed && g.uuid == uuid) else {
+            return false;
+        };
+        host.hub.send_to(g.conn, &packet);
         true
     }
     /// A system line in every player's chat and the server's log.
@@ -287,6 +311,42 @@ impl Game<'_> {
             Some(lines) => lines.push(line),
             None => self.system_message(line),
         }
+    }
+    /// The player whose action or command a hook hears, as their state is
+    /// swapped in (`native_perform_command`, `native_right_click_block`,
+    /// `native_use_item_on`, `native_destroy_block`...): None outside such a
+    /// hook. API 21.
+    pub(super) fn native_acting_player(&self) -> Option<NativeServerPlayer> {
+        let p = self.player.as_ref()?;
+        Some(NativeServerPlayer {
+            uuid: self.lan_acting_uuid?,
+            name: self.lan_acting_name.clone()?,
+            permission: self.lan_acting_permission?,
+            dimension: self.dim.id().to_owned(),
+            position: [p.position.x, p.position.y, p.position.z],
+            game_mode: self.mode_id(),
+            health: p.health.health(),
+        })
+    }
+    /// Runs `line` (no slash) as the server's console does: permission
+    /// level 4, from the overworld's spawn, with no output. A teleport to
+    /// another level (`execute in minecraft:the_nether run tp Alex 0 70 0`)
+    /// happens at the next tick's start, as the console's. Whether it ran
+    /// without failing. Only where no player's state is swapped in
+    /// (`native_tick`, `native_menu_clicked`): false inside a player's hook,
+    /// where the other players are out of reach. API 21.
+    pub(super) fn native_run_command(&mut self, line: &str) -> bool {
+        if self.lan_acting.is_some() || self.lan.is_none() {
+            return false;
+        }
+        let server = execute::Source {
+            dimension: Dim::Overworld,
+            ..self.server_source()
+        };
+        let outer = self.command_source.replace(server);
+        let ok = self.as_console(|g| g.run_command(line));
+        self.command_source = outer;
+        ok
     }
     /// The open world's folder (`world/`, beside its `level.dat`): a server
     /// mod keeps its data in a folder of its own there, so the world's
@@ -547,6 +607,7 @@ impl Game<'_> {
             dimension: g.dimension.clone(),
             position: g.position,
             game_mode: g.game_mode,
+            health: g.health,
         };
         let mut ran = false;
         self.native_perform_command(&player, line, &mut ran);

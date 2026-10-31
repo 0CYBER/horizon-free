@@ -598,6 +598,11 @@ fn mob_meta(
         // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER),
         // set while `serverStillTimeout > 0` (`syncStayStillFlag`).
         "minecraft:happy_ghast" => {
+            // HappyGhast.IS_LEASH_HOLDER (`setLeashHolder` in `tick`).
+            if horizon_client::mobs::happy_ghast::is_leash_holder(m) {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
             if horizon_client::mobs::happy_ghast::on_still_timeout(m) {
                 meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
             }
@@ -964,7 +969,7 @@ fn mob_equipment(
     // slot's item (6) in `head`.
     let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
-        (0u8, &e.main_hand, None),
+        (0u8, &e.main_hand, e.main_hand_stack()),
         (1, &e.off_hand, None),
         (2, &e.feet, e.armor[3].as_ref()),
         (3, &e.legs, e.armor[2].as_ref()),
@@ -1151,6 +1156,7 @@ impl Game<'_> {
             },
         );
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             guest_commands: settings.guest_commands,
             force_game_mode: settings.force_game_mode,
@@ -1525,6 +1531,7 @@ impl Game<'_> {
             // Bit 4: Riptide's spin (LivingEntity.isAutoSpinAttack).
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
+            stuck: (self.combat.stuck.arrows, self.combat.stuck.stingers),
             bed: self.sleeping,
             body: BodyFlags {
                 gliding: p.fall_flying,
@@ -1560,7 +1567,7 @@ impl Game<'_> {
                 .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
                 Holder::Player => player_entity,
-                Holder::Mob(id) => Some(id as i32),
+                Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
                 Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
             });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());
@@ -1864,6 +1871,7 @@ impl Game<'_> {
             self.tick_guests(&mut host);
         }
         self.lan_living_flags(&mut host);
+        self.lan_stuck(&mut host, paused);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
@@ -2272,6 +2280,13 @@ impl Game<'_> {
                     // then ticks without a player.
                     .map(|chunk| (chunk, 1)),
             )
+            // A portal ticket keeps the area around the exit loaded and
+            // ticking (its entity-ticking chunks and their neighbours).
+            .chain(
+                self.portal_ticket_chunks(self.dim)
+                    .into_iter()
+                    .map(|chunk| (chunk, 1)),
+            )
             .collect();
     }
 
@@ -2354,6 +2369,7 @@ impl Game<'_> {
             m.extra.fall_flying = body.gliding;
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
+            (m.extra.arrow_count, m.extra.stinger_count) = g.stuck;
             m.velocity = g
                 .motion
                 .as_ref()
@@ -2372,6 +2388,7 @@ impl Game<'_> {
             // ClientInformation.mainHand (HumanoidArm: 0 left, 1 right).
             m.extra.main_hand_left = g.info.main_hand == 0;
             m.extra.hidden_model_parts = !g.info.model_customisation & 0x7F;
+            m.extra.spectator = g.game_mode == horizon_client::lan::guest::SPECTATOR;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
@@ -2466,7 +2483,13 @@ impl Game<'_> {
                 packed,
                 out,
             );
+            if let Some(g) = host.hub.guest(*conn) {
+                self.player_ears_geometry(m, &g.name, camera, alpha as f32, packed, out);
+            }
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
+            if let Some(g) = host.hub.guest(*conn) {
+                self.stuck_in_body_geometry(m, g.entity_id, camera, alpha as f32, packed, out);
+            }
             self.held_item_geometry(m, camera, alpha, packed, true, out);
             self.player_pumpkin_geometry(
                 m,

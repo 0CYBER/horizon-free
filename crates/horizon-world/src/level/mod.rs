@@ -134,6 +134,7 @@ mod growth_tests;
 #[cfg(test)]
 mod tests;
 
+pub use bonemeal::TemplateSettings;
 pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
@@ -302,8 +303,37 @@ pub enum LevelEvent {
     },
 }
 
+/// What spreads from one block to another (`LevelAccess::allow_spread`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spread {
+    /// A fluid flows into the block (`FlowingFluid.spreadTo`).
+    Fluid,
+    /// Fire spreads to the block or burns it (`FireBlock.tick`,
+    /// `checkBurnOut`).
+    Fire,
+}
+
 /// The world as seen by block behaviour. Implemented by the game and tests.
 pub trait LevelAccess {
+    /// Whether `kind` may spread from `from` to `to`: a native mod may refuse
+    /// (land claims), and the block at `to` stays as it is. Fire asks after
+    /// its random draws, which a refusal doesn't change. The default allows.
+    fn allow_spread(&self, _kind: Spread, _from: BlockPos, _to: BlockPos) -> bool {
+        true
+    }
+    /// Whether the piston at `piston` may push the blocks `push` one step
+    /// `direction` and destroy `destroy` (`PistonBaseBlock.moveBlocks`, once
+    /// the structure resolved). Refused, it moves nothing, as a structure
+    /// that can't move. The default allows.
+    fn allow_piston_move(
+        &self,
+        _piston: BlockPos,
+        _direction: Direction,
+        _push: &[BlockPos],
+        _destroy: &[BlockPos],
+    ) -> bool {
+        true
+    }
     /// Observe a committed `Level.setBlock` state change, before its side effects.
     fn observe_block_changed(&self, _pos: BlockPos, _old: BlockStateId, _new: BlockStateId) {}
     /// Observe `BlockState.handleNeighborChanged` before the block handles it.
