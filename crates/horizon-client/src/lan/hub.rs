@@ -2534,6 +2534,19 @@ impl Hub {
                         break;
                     }
                 }
+                // ContainerInput's codec (ByIdMap, OutOfBoundsStrategy.ZERO) reads an
+                // unknown click type as PICKUP.
+                S::ContainerClick(mut p) => {
+                    if !(0..=6).contains(&p.input) {
+                        p.input = 0;
+                    }
+                    events.push(HostEvent::Packet(conn, Box::new(S::ContainerClick(p))));
+                }
+                // ServerboundSelectBundleItemPacket's constructor: no index below -1.
+                S::SelectBundleItem(p) if p.index < -1 => {
+                    let reason = format!("Invalid selectedItemIndex: {}", p.index);
+                    self.kick(conn, literal(&reason));
+                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
