@@ -220,7 +220,7 @@ fn kinetic_condition(r: &mut Reader) -> Option<HashCode> {
 /// (`FireworkPredicate`, `WrittenBookPredicate`, `MobEffectInstancePredicate`):
 /// they travel as NBT bytes and hash as booleans. The text components inside a
 /// written book's page predicates add [`TEXT_BOOLS`].
-const PREDICATE_BOOLS: [&str; 12] = [
+pub(super) const PREDICATE_BOOLS: [&str; 12] = [
     "has_twinkle",
     "has_trail",
     "resolved",
@@ -234,17 +234,6 @@ const PREDICATE_BOOLS: [&str; 12] = [
     "interpret",
     "plain",
 ];
-/// Whether a compound anywhere in `tag` has a field `name`.
-fn has_field(tag: &horizon_world::nbt::Tag, name: &str) -> bool {
-    use horizon_world::nbt::Tag;
-    match tag {
-        Tag::Compound(map) => map
-            .iter()
-            .any(|(k, v)| k.0.iter().copied().eq(name.encode_utf16()) || has_field(v, name)),
-        Tag::List(items) => items.iter().any(|t| has_field(t, name)),
-        _ => false,
-    }
-}
 /// `DataComponentPredicate.STREAM_CODEC`: each entry is a type (a predicate
 /// type, or a component type for `AnyValue`) and the predicate as the NBT its
 /// `CODEC` encodes (`fromCodecWithRegistries`), hashed as the map
@@ -258,12 +247,9 @@ fn partial_predicate(r: &mut Reader, names: &dyn Names) -> Option<(HashCode, Has
     let key = entry(names, registry, int(r)?)?;
     let tag = r.nbt().ok()?;
     // The nested `components` of an item predicate (`container`,
-    // `bundle_contents`) are component values as NBT, whose booleans cannot be
-    // told from bytes here.
-    if has_field(&tag, "components") {
-        return None;
-    }
-    Some((key, HashOps::from_nbt(&tag, &PREDICATE_BOOLS)))
+    // `bundle_contents`) are component values as NBT: `exact` hashes them by
+    // each component's codec.
+    Some((key, super::exact::predicate(&tag, names)?))
 }
 
 /// `BlockPredicate.STREAM_CODEC` as `BlockPredicate.CODEC` writes it.
