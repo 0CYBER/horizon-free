@@ -2398,7 +2398,8 @@ impl Hub {
                 | S::ClientInformation(_)
                 | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
-                | S::KeepAlive(_) => false,
+                | S::KeepAlive(_)
+                | S::Pong(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
                 S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
                 S::PlayerInput(_) => self.guests[i].client_loaded(),
@@ -2478,6 +2479,7 @@ impl Hub {
                     }
                     g.max_unacknowledged = 10;
                 }
+                S::Pong(p) => self.anticheat_pong(i, p.id),
                 S::ClientTickEnd(_) => {
                     // handleClientTickEnd: no move this tick, no known movement.
                     let g = &mut self.guests[i];
@@ -2606,6 +2608,9 @@ impl Hub {
         {
             self.kick(conn, invalid_movement());
             return;
+        }
+        if self.anticheat.is_some() {
+            self.anticheat_moved(i, pos, rot, flags);
         }
         let g = &mut self.guests[i];
         if pos.is_some() {
