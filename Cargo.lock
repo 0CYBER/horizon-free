@@ -831,6 +831,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs4"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
+dependencies = [
+ "rustix 1.1.5",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1075,6 +1085,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-anticheat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "horizon-assets"
 version = "0.1.0"
 dependencies = [
@@ -1109,8 +1127,10 @@ dependencies = [
  "bytemuck",
  "chrono",
  "flate2",
+ "fs4",
  "gilrs",
  "glam",
+ "horizon-anticheat",
  "horizon-assets",
  "horizon-bench",
  "horizon-client-core",
@@ -1175,6 +1195,7 @@ name = "horizon-client-render"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "base64",
  "bytemuck",
  "chrono",
  "cpal",
@@ -1203,6 +1224,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "symphonia",
  "unicode-bidi",
@@ -1350,6 +1372,7 @@ name = "horizon-server"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "horizon-anticheat",
  "horizon-bench",
  "horizon-release-sign",
  "horizon-server-files",

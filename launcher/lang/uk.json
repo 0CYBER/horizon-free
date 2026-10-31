@@ -157,7 +157,6 @@
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "У цій збірці лаунчера немає входу через Microsoft (HORIZON_MSA_CLIENT_ID), тому вона не може запустити гру.",
   "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Щоб грати, увійдіть з обліковим записом Microsoft, який має Minecraft: Java Edition",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Як і іншим лаунчерам, Horizon потрібен обліковий запис Microsoft, який має Minecraft: Java Edition. З ним ви також граєте на онлайн-серверах зі своїм ім’ям і скіном.",
-  "Sign in": "Увійти",
   "Sign in with Microsoft": "Увійти через Microsoft",
   "Not now": "Не зараз",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "Як і іншим лаунчерам, Horizon потрібен обліковий запис Microsoft, який має Minecraft: Java Edition.",
@@ -237,5 +236,6 @@
   "No mod matches.": "Немає відповідних модів.",
   "{source} · needed by another mod": "{source} · потрібен іншому моду",
   "Local file · {file}": "Локальний файл · {file}",
-  "Update {version}": "Оновити до {version}"
+  "Update {version}": "Оновити до {version}",
+  "Choose image…": "Вибрати зображення…"
 }

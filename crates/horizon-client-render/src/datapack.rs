@@ -618,6 +618,37 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack]) -> Vec<String> {
     enabled
 }
 
+/// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
+/// as `enabled_ids` orders them): the id `namespace:path` and the parsed JSON, a later pack's
+/// file for an id replacing an earlier one's. This is `context.datapackDimensions()` of
+/// `WorldOpenFlows.loadWorldStem`.
+pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for pack in packs {
+        for file in pack.list_kinds(&["dimension"]) {
+            let Some(rest) = file.strip_prefix("data/") else {
+                continue;
+            };
+            let Some((namespace, rest)) = rest.split_once('/') else {
+                continue;
+            };
+            let Some(path) = rest
+                .strip_prefix("dimension/")
+                .and_then(|p| p.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Some(json) = pack
+                .read(&file)
+                .and_then(|b| serde_json::from_slice(&b).ok())
+            {
+                out.insert(format!("{namespace}:{path}"), json);
+            }
+        }
+    }
+    out
+}
+
 // ---- worldgen ----------------------------------------------------------------
 
 /// The worldgen entries of `packs` (lowest priority first, the built-in pack
@@ -904,9 +935,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, t).unwrap();
         };
-        write("fns", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write(
+            "fns",
+            "pack.mcmeta",
+            r#"{"pack":{"min_format":121,"max_format":121}}"#,
+        );
         write("fns", "data/x/function/f.mcfunction", "say hi");
-        write("off", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write(
+            "off",
+            "pack.mcmeta",
+            r#"{"pack":{"min_format":121,"max_format":121}}"#,
+        );
         std::fs::create_dir_all(&dir).unwrap();
         let mut zip = zip::ZipWriter::new(std::fs::File::create(dir.join("old.zip")).unwrap());
         zip.start_file("pack.mcmeta", zip::write::SimpleFileOptions::default())

@@ -325,6 +325,19 @@ impl Game<'_> {
         }
     }
 
+    /// Far terrain for a client in `dim`: the level in place may be another
+    /// one, the server ticking its levels in turn.
+    pub(super) fn lod_source_in(
+        &self,
+        dim: Dim,
+    ) -> Option<Arc<dyn horizon_client::streaming::LodSource>> {
+        if dim == self.dim {
+            return Some(self.streaming.lod_source());
+        }
+        let parked = self.levels.parked.get(&dim)?;
+        Some(parked.streaming.lod_source())
+    }
+
     /// Put `dim`'s level in place for a command whose source is there
     /// (`execute in`, `execute at` a player in another level), opening it if
     /// nobody is in it; returns the level to put back afterwards. Only a
@@ -507,12 +520,27 @@ impl Game<'_> {
                     // A pending portal arrival keeps its destination level
                     // running so it can land and tick (the portal ticket).
                     || !self.arrival_chunks(*d).is_empty()
+                    // A portal ticket keeps its dimension active
+                    // (`TicketType.shouldKeepDimensionActive`).
+                    || !self.portal_ticket_chunks(*d).is_empty()
             })
             .collect();
         if dims.is_empty() {
             dims.push(Dim::Overworld);
         }
         dims
+    }
+
+    /// The chunks holding a portal ticket in `dim`'s level (`placePortalTicket`).
+    pub(super) fn portal_ticket_chunks(&self, dim: Dim) -> Vec<(i32, i32)> {
+        if dim == self.dim {
+            self.tickets.portal_chunks().collect()
+        } else {
+            self.levels
+                .parked
+                .get(&dim)
+                .map_or_else(Vec::new, |p| p.tickets.portal_chunks().collect())
+        }
     }
 
     /// Count the parked levels' empty ticks, and save and close the ones

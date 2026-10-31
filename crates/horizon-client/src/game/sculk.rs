@@ -33,6 +33,10 @@ struct Tables {
     occludes: Vec<bool>,
     dampens: Vec<bool>,
     resonator: Vec<bool>,
+    /// The `minecraft:climbable` tag, and the two redstone ores: read for
+    /// every mob on every tick.
+    climbable: Vec<bool>,
+    redstone_ore: Vec<bool>,
 }
 /// `SculkSensorBlock.getAnalogOutputSignal`: the last vibration's frequency
 /// while the sensor is active.
@@ -309,10 +313,11 @@ impl Game<'_> {
                 .cloned()
                 .unwrap_or_default()
         };
-        let (wool, dampening, resonators) = (
+        let (wool, dampening, resonators, climbable) = (
             tag("minecraft:occludes_vibration_signals"),
             tag("minecraft:dampens_vibrations"),
             tag("minecraft:vibration_resonators"),
+            tag("minecraft:climbable"),
         );
         let mut t = Tables {
             built: true,
@@ -320,6 +325,8 @@ impl Game<'_> {
             occludes: vec![false; n],
             dampens: vec![false; n],
             resonator: vec![false; n],
+            climbable: vec![false; n],
+            redstone_ore: vec![false; n],
         };
         for i in 0..n {
             let facts = self.res.facts().get(BlockStateId(i as u32));
@@ -334,6 +341,11 @@ impl Game<'_> {
             t.occludes[i] = wool.contains(name);
             t.dampens[i] = dampening.contains(name);
             t.resonator[i] = resonators.contains(name);
+            t.climbable[i] = climbable.contains(name);
+            t.redstone_ore[i] = matches!(
+                name,
+                "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+            );
         }
         self.world.watched = t.kinds.iter().map(|k| *k != 0).collect();
         self.sculk.tables = t;
@@ -1583,6 +1595,7 @@ impl Game<'_> {
                 in_water,
                 crouch && on_ground,
                 flying,
+                false,
             );
             if let Some(last) = self.sculk.last_health
                 && health < last
@@ -1653,10 +1666,9 @@ impl Game<'_> {
             (at[1] - 0.2).floor() as i32,
             at[2].floor() as i32,
         ];
-        if matches!(
-            &*self.block_name(pos),
-            "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
-        ) {
+        self.sculk_prepare();
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if self.state_is(&self.sculk.tables.redstone_ore, state) {
             // The dust is the local player's client effect, not a mob's or an item's.
             if burst {
                 self.redstone_ore_particles(pos);
@@ -1726,7 +1738,16 @@ impl Game<'_> {
             self.mount_events(Who::Mob(id), vehicle, seen);
             let emits = !matches!(species, Species::Shulker);
             if emits {
-                self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);
+                let warden = species == Species::Warden;
+                self.entity_motion_events(
+                    Who::Mob(id),
+                    at,
+                    on_ground,
+                    in_water,
+                    false,
+                    false,
+                    warden,
+                );
                 // Entity.processFlappingMovement with Bee.isFlapping: a bee off
                 // the ground over air flaps on every other tick (the mob's own
                 // `MobEvent::GameEvent` is not read here).
@@ -1818,7 +1839,9 @@ impl Game<'_> {
         in_water: bool,
         discrete: bool,
         flying: bool,
+        warden: bool,
     ) {
+        self.sculk_prepare();
         let entry = self.sculk.steps.entry(who).or_insert(Steps {
             move_dist: 0.0,
             next_step: 1.0,
@@ -1855,12 +1878,7 @@ impl Game<'_> {
         );
         let state = self.world.block(block.0, block.1, block.2);
         let air = self.res.facts().is_air(state);
-        let climbable = self
-            .res
-            .items()
-            .block_tags
-            .get("minecraft:climbable")
-            .is_some_and(|t| t.contains(&*self.res.facts().get(state).name));
+        let climbable = self.state_is(&self.sculk.tables.climbable, state);
         let travelled = if climbable {
             ((dx * dx + dy * dy + dz * dz).sqrt() * f64::from(0.6f32)) as f32
         } else {
@@ -1874,8 +1892,6 @@ impl Game<'_> {
             let steps_on_block = on_ground || climbable;
             let move_dist = entry.move_dist;
             if steps_on_block {
-                let warden = matches!(who, Who::Mob(id)
-                    if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Warden));
                 entry.next_step = if warden {
                     // Warden.nextStep
                     move_dist + 0.55

@@ -72,6 +72,12 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
   --name PREFIX          bot names: PREFIX0, PREFIX1...; default Bot
   --brand B              the client brand sent in configuration (minecraft:brand); default none
+  --height H             blocks above spawn the bots fly at (walk, explore, idle); default 24
+  --ground               claim the ground in every move (with --height 0 on a flat world: walking
+                         on it; higher, or over water: a no-fall or jesus cheat, to test an anticheat)
+  --give SLOT:ID:COUNT,...  creative-slot packets sent once joined (inventory menu slot, item
+                         registry id, count), to test what a server takes
+  --timer F              cheat, to test an anticheat: tick F times as fast as vanilla's client (1.5: 30 Hz)
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
 
@@ -129,10 +135,16 @@ struct Options {
     attack_after: f64,
     flood: usize,
     no_read: bool,
+    height: f64,
+    ground: bool,
+    /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
+    give: Vec<(i16, i32, i32)>,
     name: String,
     /// The `minecraft:brand` to send, if any.
     brand: Option<String>,
     report: Option<String>,
+    /// How many times as fast as vanilla's 20 Hz the bots tick (a timer cheat above 1).
+    timer: f64,
 }
 
 fn options() -> Result<Options, String> {
@@ -150,9 +162,13 @@ fn options() -> Result<Options, String> {
         attack_after: 5.0,
         flood: 100,
         no_read: false,
+        height: 24.0,
+        ground: false,
+        give: Vec::new(),
         name: "Bot".into(),
         report: None,
         brand: None,
+        timer: 1.0,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -162,6 +178,10 @@ fn options() -> Result<Options, String> {
         }
         if arg == "--no-read" {
             o.no_read = true;
+            continue;
+        }
+        if arg == "--ground" {
+            o.ground = true;
             continue;
         }
         let value = args.next().ok_or(format!("{arg} needs a value"))?;
@@ -187,6 +207,24 @@ fn options() -> Result<Options, String> {
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
             "--brand" => o.brand = Some(value),
+            "--give" => {
+                for part in value.split(',') {
+                    let n: Vec<&str> = part.split(':').collect();
+                    let parsed = match n[..] {
+                        [s, i, c] => s.parse().ok().zip(i.parse().ok()).zip(c.parse().ok()),
+                        _ => None,
+                    };
+                    let ((slot, item), count) = parsed.ok_or_else(|| number("SLOT:ID:COUNT"))?;
+                    o.give.push((slot, item, count));
+                }
+            }
+            "--height" => o.height = value.parse().map_err(|_| number("blocks"))?,
+            "--timer" => {
+                o.timer = value.parse().map_err(|_| number("a speed, like 1.5"))?;
+                if !(o.timer >= 0.1 && o.timer <= 20.0) {
+                    return Err(format!("--timer {value}: use 0.1 to 20"));
+                }
+            }
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
@@ -702,6 +740,15 @@ fn run_bot(
         Behaviour::FloodBook => Some(Stack::new(WRITABLE_BOOK, 1)),
         _ => None,
     };
+    for &(slot, item, count) in &o.give {
+        send(
+            play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+                slot,
+                item: Some(Stack::new(item, count)),
+            })
+            .encode(),
+        );
+    }
     if tool.is_some() {
         send(
             play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
@@ -715,7 +762,7 @@ fn run_bot(
     let mut sequence = 0;
     let mut random = Random(o.seed ^ (index as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
     let mut pos = spawn;
-    let cruise = spawn[1] + 24.0;
+    let cruise = spawn[1] + o.height;
     let heading = random.unit() * std::f64::consts::TAU;
     let mut target = pos;
     let mut next = Instant::now();
@@ -847,7 +894,7 @@ fn run_bot(
                 x: pos[0],
                 y: pos[1],
                 z: pos[2],
-                flags: u8::from(behaviour == Behaviour::Stand),
+                flags: u8::from(behaviour == Behaviour::Stand || o.ground),
             })
             .encode(),
         ) && send(raw(sb::CLIENT_TICK_END, |_| {}));
@@ -855,7 +902,7 @@ fn run_bot(
             bot.online.store(false, Ordering::SeqCst);
             break;
         }
-        next += Duration::from_millis(50);
+        next += Duration::from_secs_f64(0.05 / o.timer);
         let now = Instant::now();
         if next > now {
             thread::sleep(next - now);

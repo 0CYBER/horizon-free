@@ -225,6 +225,10 @@ impl LiveFeatures {
         let resources = self.data.feature_resources.as_ref()?;
         serde_json::from_str(resources.features.get(name)?).ok()
     }
+    /// The structure templates and processor lists features place from.
+    pub fn structure_resources(&self) -> Option<Arc<super::structure::StructureResources>> {
+        self.bindings.structures.clone()
+    }
     pub fn configured(&self, name: &str) -> Option<Arc<FeatureDefinition>> {
         let mut cache = self.configured.lock().unwrap();
         cache

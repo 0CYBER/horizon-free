@@ -284,7 +284,7 @@ impl Game<'_> {
             return None;
         }
         // ServerPlayer.onExplosionHit: the blast that hit the player is theirs.
-        self.adv.marks.blast = Some((feet, false));
+        self.adv.marks.blast = Some((feet, self.combat.explosion_cause.clone()));
         let w = f64::from(p.dimensions.width) / 2.0;
         let h = f64::from(p.dimensions.height);
         let eye = [
@@ -690,6 +690,8 @@ impl Game<'_> {
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.exploded_positions(center, radius, resists);
+        let dimension = self.dim.id();
+        self.native_explosion_detonate(dimension, center, &mut targets);
         let pushed = self.explosion_hurt_entities(center, radius, damage_type, interaction);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)
