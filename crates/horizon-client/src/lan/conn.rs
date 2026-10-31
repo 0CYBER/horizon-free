@@ -804,7 +804,8 @@ fn login_and_configure(
         }
     }
     // Configuration.
-    let sync: &SyncData = &shared.sync;
+    let sync_data = shared.sync();
+    let sync: &SyncData = &sync_data;
     let send = |c: &mut Connection, p: cfg::Clientbound| c.send(&p.encode()).map_err(e);
     send(
         c,
@@ -861,6 +862,21 @@ fn login_and_configure(
             _ => {}
         }
     };
+    // horizon-clients-only: the brand the client sent ("vanilla" when it sent
+    // none) must be Horizon's.
+    if shared.config.horizon_clients_only && brand != "horizon" {
+        let text = super::HORIZON_CLIENTS_ONLY_REASON;
+        let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(text));
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        if let Some(log) = &shared.config.log {
+            let line = format!(
+                "Disconnecting {name}: its client is \"{brand}\", not Horizon (horizon-clients-only)"
+            );
+            (log.write)("Server thread", "INFO", &line);
+        }
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
+        return Ok(None);
+    }
     // A Horizon client hears that this server runs its mods' quiet commands
     // (horizon_protocol::quiet); a vanilla one is told nothing.
     if brand == "horizon" {
@@ -910,10 +926,16 @@ fn login_and_configure(
             return Ok(None);
         }
     }
-    for packet in sync.registry_packets(known_pack) {
+    for packet in sync.registry_packets(known_pack, &shared.config.levels) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    // addOptionalTasks: the code of conduct task comes first.
+    if let Some(text) =
+        super::code_of_conduct::pick(&shared.config.code_of_conducts, &info.language)
+    {
+        accept_code_of_conduct(c, text, &mut info)?;
+    }
     if let Some(pack) = &shared.config.resource_pack
         && let Some(rejected) = offer_pack(c, pack, &mut info)?
     {
@@ -997,6 +1019,54 @@ fn offer_pack(
     };
     c.send(&cfg::Clientbound::ResourcePackPush(push).encode())
         .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
+            let rejected = r.action == PACK_DECLINED && pack.required;
+            Some(Ok(rejected.then_some(r.id)))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// ServerCodeOfConductConfigurationTask: send the text, then wait for
+/// ServerboundAcceptCodeOfConductPacket (`handleAcceptCodeOfConduct`),
+/// keeping the connection alive while the player reads. Finishing the
+/// configuration first is `finishCurrentTask` of the wrong task type, an
+/// error that drops the connection.
+fn accept_code_of_conduct(
+    c: &mut Connection,
+    text: &str,
+    info: &mut ClientInformation,
+) -> Result<(), String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    c.send(&cfg::Clientbound::CodeOfConduct(cfg::CodeOfConduct { text: text.into() }).encode())
+        .map_err(e)?;
+    wait_alive(c, |packet| match packet {
+        Ok(cfg::Serverbound::AcceptCodeOfConduct(_)) => Some(Ok(())),
+        Ok(cfg::Serverbound::FinishConfiguration(_)) => {
+            Some(Err("Unexpected configuration task".to_owned()))
+        }
+        Ok(cfg::Serverbound::ClientInformation(i)) => {
+            *info = i;
+            None
+        }
+        Ok(_) => None,
+        Err(err) => Some(Err(err)),
+    })
+}
+
+/// Read configuration packets until `answer` has a result, sending a
+/// keep-alive every `KEEP_ALIVE_EVERY` meanwhile
+/// (ServerConfigurationPacketListenerImpl.tick).
+fn wait_alive<T>(
+    c: &mut Connection,
+    mut answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
+) -> Result<T, String> {
     std::thread::scope(|scope| {
         let (stop, stopped) = channel::<()>();
         let writer = &mut c.writer;
@@ -1010,23 +1080,19 @@ fn offer_pack(
                 }
             }
         });
-        let answer = loop {
-            let (id, payload) = match c.reader.recv() {
-                Ok(packet) => packet,
+        let result = loop {
+            let packet = match c.reader.recv() {
+                Ok((id, payload)) => {
+                    cfg::Serverbound::decode(id, &payload).map_err(|e| e.to_string())
+                }
                 Err(err) => break Err(err.to_string()),
             };
-            match cfg::Serverbound::decode(id, &payload) {
-                Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
-                    let rejected = r.action == PACK_DECLINED && pack.required;
-                    break Ok(rejected.then_some(r.id));
-                }
-                Ok(cfg::Serverbound::ClientInformation(i)) => *info = i,
-                Ok(_) => {}
-                Err(err) => break Err(err.to_string()),
+            if let Some(result) = answer(packet) {
+                break result;
             }
         };
         drop(stop);
-        answer
+        result
     })
 }
 
@@ -1177,7 +1243,7 @@ fn read_loop(
             // The client closed the connection: Connection.channelInactive
             // without details, multiplayer.disconnect.generic.
             Err(e)
-                if e.0 == "Connection closed by the server"
+                if e.is_end_of_stream()
                     || e.0.contains("reset by peer")
                     || e.0.contains("aborted") =>
             {
@@ -1369,6 +1435,36 @@ fn write_loop(
 mod tests {
     use super::*;
 
+    /// Logs in through `c` and answers the `LoginFinished` profile.
+    fn login_profile(mut c: Connection, name: &str) -> login::GameProfile {
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port: 0,
+                intent: handshake::LOGIN,
+            })
+            .encode(),
+        )
+        .unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: name.into(),
+                uuid: offline_uuid(name),
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            match login::Clientbound::decode(id, &payload).unwrap() {
+                login::Clientbound::Compression(p) => c.set_compression(p.threshold),
+                login::Clientbound::LoginFinished(p) => return p.profile,
+                other => panic!("unexpected login packet {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn prompts_become_the_components_vanilla_sends() {
         let tag = |json: &str| {
@@ -1385,6 +1481,34 @@ mod tests {
             tag(r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#),
             r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#
         );
+    }
+
+    /// The owner's login never waits on the profile fetch, even one that
+    /// never answers, and carries no properties.
+    #[test]
+    fn the_owners_login_never_waits_on_the_profile_fetch() {
+        let (_hold, never) = channel::<()>();
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(move || {
+                let _ = never.recv();
+                Vec::new()
+            }))),
+            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let start = Instant::now();
+        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(owner.uuid, offline_uuid("Owner"));
+        assert!(owner.properties.is_empty());
     }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {

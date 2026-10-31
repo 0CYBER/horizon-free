@@ -682,6 +682,9 @@ def scratch(mode, resources):
     (work / '.local').mkdir()
     (work / '.local/horizon-client').mkdir()
     os.symlink(resources, work / '.local/horizon-client' / lab.VERSION)
+    # A first launch shows the accessibility onboarding before the title (Gui.addInitialScreens): these
+    # scenarios start at the title, as a player does after it.
+    (work / 'options.txt').write_text('onboardAccessibility:false\n')
     # horizon-ctl reads No AI in the game home: this one, not the player's.
     env = game_env(os.environ.get('VSCREEN', 'agent-control'), home=work)
     return work, env

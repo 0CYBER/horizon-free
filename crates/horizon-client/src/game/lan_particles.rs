@@ -83,7 +83,8 @@ impl Game<'_> {
     }
 
     /// `ServerLevel.sendParticles` of a mob's particles: a packet to each
-    /// player within 32 blocks. The window draws its own copy.
+    /// player within 32 blocks. The window draws its own copy. `state` is the
+    /// block of a block particle.
     pub(super) fn lan_level_particles(
         &self,
         options: &ParticleOptions,
@@ -91,8 +92,10 @@ impl Game<'_> {
         spread: [f64; 3],
         speed: f64,
         count: u32,
+        state: Option<BlockStateId>,
     ) {
-        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, None)) else {
+        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, state))
+        else {
             return;
         };
         let packet = C::LevelParticles(play::LevelParticles {
@@ -364,24 +367,32 @@ impl Game<'_> {
     /// the players (a guest's turn through `as_guest`, a host's hit on a
     /// guest) the packet waits for the turn to end so that it reaches every
     /// player, the guest too.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn lan_send_particles(
         &mut self,
+        dimension: &'static str,
         options: &ParticleOptions,
+        state: Option<BlockStateId>,
         at: [f64; 3],
         spread: [f64; 3],
         speed: f64,
-        count: u32,
+        count: i32,
     ) {
         if self.lan.is_none() {
-            // The server is running (its sounds are captured for the guests).
-            if self.audio.capture.is_some() {
-                self.creatures
-                    .lan_particles
-                    .push((options.clone(), at, spread, speed, count));
+            if self.serving.is_some() || self.options.dedicated.is_some() {
+                self.creatures.lan_particles.push((
+                    dimension,
+                    options.clone(),
+                    state,
+                    at,
+                    spread,
+                    speed,
+                    count,
+                ));
             }
             return;
         }
-        let Some(particle) = self.network_particle(options, None) else {
+        let Some(particle) = self.network_particle(options, state) else {
             return;
         };
         let Some(host) = self.lan.as_ref() else {
@@ -394,11 +405,16 @@ impl Game<'_> {
             pos: at,
             dist: spread.map(|d| d as f32),
             max_speed: [speed as f32; 3],
-            count: count as i32,
+            count,
             randomization: 0,
         })
         .encode();
-        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+        for g in host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| g.placed && g.dimension == dimension)
+        {
             // BlockPos.closerToCenterThan(at, 32): from the centre of the
             // player's block.
             let d: f64 = (0..3)
@@ -412,21 +428,25 @@ impl Game<'_> {
 
     /// The particles guests' turns put off.
     pub(super) fn flush_lan_particles(&mut self) {
-        for (options, at, spread, speed, count) in std::mem::take(&mut self.creatures.lan_particles)
+        for (dimension, options, state, at, spread, speed, count) in
+            std::mem::take(&mut self.creatures.lan_particles)
         {
-            self.lan_send_particles(&options, at, spread, speed, count);
+            self.lan_send_particles(dimension, &options, state, at, spread, speed, count);
         }
     }
 
-    /// `ServerLevel.explode`'s packet to each player within 64 blocks. The
-    /// sound and the push reach them on their own (the level's sounds, the
-    /// motion a hurt player is sent), so the packet carries neither.
+    /// `ServerLevel.explode`'s packet to each player within 64 blocks, with
+    /// the push `pushed` holds for them (`ServerExplosion.hitPlayers`: a
+    /// creative player, whom nothing hurt). The sound reaches them on its own
+    /// (the level's sounds), and so does a hurt player's push (the motion
+    /// they are sent).
     pub(super) fn lan_explode(
         &mut self,
         center: [f64; 3],
         small: bool,
         radius: f32,
         block_count: usize,
+        pushed: Vec<(u32, [f64; 3])>,
     ) {
         // In a guest's turn (their hit on an end crystal or a minecart) the
         // host holds the players (`as_guest`): the packet waits for the turn
@@ -434,7 +454,7 @@ impl Game<'_> {
         if self.lan_acting.is_some() && self.lan.is_none() {
             self.creatures
                 .lan_explosions
-                .push((center, small, radius, block_count));
+                .push((center, small, radius, block_count, pushed));
             return;
         }
         let emitter = if small {
@@ -446,16 +466,16 @@ impl Game<'_> {
         if let Some(packet) =
             self.explosion_packet(center, radius, block_count, emitter, sound, true)
         {
-            self.send_explosion(packet, &[]);
+            self.send_explosion(packet, &pushed);
         }
     }
 
     /// The explosions guests' turns put off.
     pub(super) fn flush_lan_explosions(&mut self) {
-        for (center, small, radius, block_count) in
+        for (center, small, radius, block_count, pushed) in
             std::mem::take(&mut self.creatures.lan_explosions)
         {
-            self.lan_explode(center, small, radius, block_count);
+            self.lan_explode(center, small, radius, block_count, pushed);
         }
     }
 
