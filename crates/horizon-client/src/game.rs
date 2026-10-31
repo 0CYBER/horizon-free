@@ -10024,6 +10024,13 @@ impl Game<'_> {
             let Some(r) = atlas.sprites.get(name).copied() else {
                 return;
             };
+            // How brightly HDR output lets the body shine (mesher::hdr_tier):
+            // the moon at the low tier, not the sun's.
+            let tier = if moon {
+                horizon_client::mesher::LOW
+            } else {
+                horizon_client::mesher::VERY_BRIGHT
+            };
             let m = frame(angle);
             let corners = [(-size, -size), (size, -size), (size, size), (-size, size)];
             // buildCelestialQuad (sun) vs buildMoonPhases: the moon's UVs run
@@ -10039,7 +10046,7 @@ impl Game<'_> {
                     normal: [0; 4],
                     pos: p.to_array(),
                     uv,
-                    layer: 2,
+                    layer: 2 | u32::from(tier) << 16,
                     color: body_color,
                     light: 0,
 
