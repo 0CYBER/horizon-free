@@ -2059,13 +2059,10 @@ fn github_native(
             o.sha256
         );
     }
-    // A native mod turns Native mods on, with the window's notice, once.
+    // The window's trust notice, once. Nothing is turned on: native mods are always on.
     let mut settings = backend::Settings::load();
-    if !settings.native_mods {
-        if !settings.native_mods_noticed {
-            eprintln!("{}", native_mods::NOTICE);
-        }
-        settings.native_mods = true;
+    if !settings.native_mods_noticed {
+        eprintln!("{}", native_status::NOTICE);
         settings.native_mods_noticed = true;
         settings.save();
     }

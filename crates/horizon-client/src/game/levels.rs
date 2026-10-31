@@ -381,6 +381,8 @@ impl Game<'_> {
         {
             self.native_lifecycle_server_tick_start(running);
         }
+        let observe_level =
+            running.is_some() && (self.serving.is_some() || self.options.dedicated.is_some());
         let dims = self.levels_to_tick();
         let n = dims.len();
         let mut result = Ok(());
@@ -394,6 +396,9 @@ impl Game<'_> {
                 last: k + 1 == n,
                 running,
             };
+            if observe_level {
+                self.native_level_tick_pre(dim.id());
+            }
             self.update_dedicated_streaming();
             self.update_world();
             result = if paused {
@@ -410,6 +415,9 @@ impl Game<'_> {
             };
             if result.is_err() {
                 break;
+            }
+            if observe_level {
+                self.native_level_tick_post(dim.id());
             }
         }
         self.level_pass = Pass::default();

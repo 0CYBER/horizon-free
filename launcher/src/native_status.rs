@@ -8,8 +8,9 @@ use std::path::Path;
 /// Shown once, before the first native mod is installed.
 pub const NOTICE: &str = "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.";
 
-/// A native mod: its id and version.
-pub type Mod = (String, String);
+/// A native mod: its id, its version and a digest of its files (None for a build from before
+/// `native-mods.json` kept them).
+pub type Mod = (String, String, Option<String>);
 
 /// Whether an installed file (`installed::Entry::file`) is a native mod.
 pub fn is_native_file(file: &str) -> bool {
@@ -31,7 +32,8 @@ pub enum State {
 }
 
 /// The state for the mods turned on, `enabled`, and those of the version played, `built` (None
-/// when it is no native build). Order doesn't matter; a mod at another version needs a build.
+/// when it is no native build). Order doesn't matter; a mod at another version, or with other
+/// files at the same version (a reinstalled local `.hnmod`), needs a build.
 pub fn state(enabled: &[Mod], built: Option<&[Mod]>) -> State {
     if enabled.is_empty() {
         return State::NoMods;
@@ -42,10 +44,19 @@ pub fn state(enabled: &[Mod], built: Option<&[Mod]>) -> State {
         v.dedup();
         v
     };
+    let same = |a: &Mod, b: &Mod| {
+        a.0 == b.0 && a.1 == b.1 && (a.2.is_none() || b.2.is_none() || a.2 == b.2)
+    };
     match built {
         None => State::NotBuilt,
-        Some(built) if sorted(built) == sorted(enabled) => State::UpToDate,
-        Some(_) => State::Outdated,
+        Some(built) => {
+            let (built, enabled) = (sorted(built), sorted(enabled));
+            if built.len() == enabled.len() && built.iter().zip(&enabled).all(|(a, b)| same(a, b)) {
+                State::UpToDate
+            } else {
+                State::Outdated
+            }
+        }
     }
 }
 
@@ -88,22 +99,28 @@ pub fn horizon_label(version: &str) -> String {
 }
 
 /// The native mods turned on in game folder `home`, read from their `.hnmod`s. One that can't be
-/// read counts with its file name and no version, so it always needs a build (which says why).
+/// read always counts, with its file name and no version, so it needs a build (which says why):
+/// the on/off list is keyed by the manifest id, which an unreadable file can't give.
 pub fn enabled(home: &Path) -> Vec<Mod> {
     let mut out = Vec::new();
     for path in hnmods(home) {
-        let (id, version) = match horizon_mods::index::native::Bundle::read(&path) {
-            Ok(b) => (b.manifest.id, b.manifest.version),
-            Err(_) => (stem(&path), String::new()),
-        };
-        if java::is_enabled(home, &id) {
-            out.push((id, version));
+        match horizon_mods::index::native::Bundle::read(&path) {
+            Ok(b) => {
+                if java::is_enabled(home, &b.manifest.id) {
+                    let digest = native_mods::digest(
+                        b.files.iter().map(|(n, d)| (n.as_str(), d.as_slice())),
+                    );
+                    out.push((b.manifest.id, b.manifest.version, Some(digest)));
+                }
+            }
+            Err(_) => out.push((stem(&path), String::new(), None)),
         }
     }
     out
 }
 
-/// The mods installed version `version` was built with, or None when it isn't a native build.
+/// The mods installed version `version` was built with, or None when it isn't a native build
+/// (or its `native-mods.json` can't be read: the Mods page then offers Build).
 pub fn built(version: &str) -> Option<Vec<Mod>> {
     if !native_mods::is_native(version) {
         return None;
@@ -116,7 +133,13 @@ pub fn built(version: &str) -> Option<Vec<Mod>> {
 fn parse_built(about: &serde_json::Value) -> Vec<Mod> {
     let mods = about["mods"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     mods.iter()
-        .filter_map(|m| Some((m["id"].as_str()?.into(), m["version"].as_str()?.into())))
+        .filter_map(|m| {
+            Some((
+                m["id"].as_str()?.into(),
+                m["version"].as_str()?.into(),
+                m["sha256"].as_str().map(String::from),
+            ))
+        })
         .collect()
 }
 
@@ -154,7 +177,11 @@ mod tests {
     use super::*;
 
     fn m(id: &str, version: &str) -> Mod {
-        (id.into(), version.into())
+        (id.into(), version.into(), None)
+    }
+
+    fn d(id: &str, version: &str, digest: &str) -> Mod {
+        (id.into(), version.into(), Some(digest.into()))
     }
 
     #[test]
@@ -187,12 +214,28 @@ mod tests {
     }
 
     #[test]
+    fn the_same_version_with_other_files_needs_a_build() {
+        let on = [d("zoom", "2.1", "aa")];
+        assert_eq!(state(&on, Some(&[d("zoom", "2.1", "aa")])), State::UpToDate);
+        assert_eq!(
+            state(&on, Some(&[d("zoom", "2.1", "bb")])),
+            State::Outdated,
+            "reinstalled without a version bump"
+        );
+        assert_eq!(
+            state(&on, Some(&[m("zoom", "2.1")])),
+            State::UpToDate,
+            "a build from before the digest was kept"
+        );
+    }
+
+    #[test]
     fn native_mods_json_gives_the_built_mods() {
         let about = serde_json::json!({
             "base": "v0.1.0", "horizon": "abc", "rust": "1.99.1",
-            "mods": [{"id": "zoom", "version": "2.1"}, {"id": "x"}],
+            "mods": [{"id": "zoom", "version": "2.1"}, {"id": "x"}, {"id": "y", "version": "1", "sha256": "ab"}],
         });
-        assert_eq!(parse_built(&about), [m("zoom", "2.1")]);
+        assert_eq!(parse_built(&about), [m("zoom", "2.1"), d("y", "1", "ab")]);
         assert!(parse_built(&serde_json::json!({})).is_empty());
         assert_eq!(built("v0.1.0"), None, "not a native build");
     }

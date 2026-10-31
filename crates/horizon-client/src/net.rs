@@ -1064,7 +1064,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("facts.json"),
-            br#"{"states":[[0,0,0,0,"minecraft:stone"]]}"#,
+            br#"{"states":[["minecraft:stone",false,false,"Block{minecraft:stone}",{"id":"minecraft:stone"}]]}"#,
         )
         .unwrap();
         let expected = crate::content_identity::identity(&root).unwrap();
