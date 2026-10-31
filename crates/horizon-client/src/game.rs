@@ -249,6 +249,7 @@ mod sulfur_cubes;
 mod test_block_edit;
 mod test_blocks;
 mod test_entities;
+mod test_environments;
 mod test_instance_edit;
 mod test_instances;
 mod text_displays;
