@@ -2091,6 +2091,13 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
             super::bee::hurt(m);
             true
         }
+        // Wolf.hurtServer, Parrot.hurtServer: a hit it isn't invulnerable to
+        // stands it up before LivingEntity.hurtServer, even one the hurt
+        // frames then turn away.
+        Species::Wolf | Species::Parrot => {
+            super::tame::stand_when_hurt(m);
+            true
+        }
         // Panda.hurtServer: up first, whatever the damage.
         Species::Panda => {
             super::panda::hurt(m);
@@ -2117,7 +2124,6 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Armadillo => super::armadillo::after_hurt(m, source),
         Species::Shulker => super::shulker::after_hurt(m),
         Species::Warden => super::warden::hurt(m, source),
-        Species::Wolf => super::tame::after_hurt(m, source),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::after_hurt(m, source),
         Species::Zombie
         | Species::Husk
