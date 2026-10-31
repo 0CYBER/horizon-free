@@ -2102,6 +2102,8 @@ struct Game<'a> {
     /// `LocalPlayer.postEffects`: the chains the server has the screen run
     /// (`ClientboundPostEffectsPacket`), in order.
     post_effects: Vec<String>,
+    /// `GameRenderer.spectatedEntityPostEffect` (`checkEntityPostEffect`).
+    spectated_post_effect: Option<&'static str>,
     /// `LocalPlayer.experienceDisplayStartTick`: (last progress, seen a change, tick).
     experience_display: (f32, bool, u64),
     boats: Vec<boats::Boat>,
@@ -10602,6 +10604,7 @@ impl Game<'_> {
     fn close_world(&mut self) -> Result<()> {
         self.clear_waypoints();
         self.post_effects.clear();
+        self.spectated_post_effect = None;
         if self.external_server() {
             return self.leave_server(None);
         }
@@ -13510,6 +13513,7 @@ impl Game<'_> {
         }
         std::iter::once("minecraft:end_of_frame".to_owned())
             .chain(self.post_effects.iter().cloned())
+            .chain(self.spectated_post_effect.map(str::to_owned))
             .collect()
     }
     /// `Screen.extractBlurredBackground` over the panorama or the world and
@@ -15551,6 +15555,7 @@ impl<'a> Game<'a> {
             waypoints: Default::default(),
             locator_camera: None,
             post_effects: Vec::new(),
+            spectated_post_effect: None,
             experience_display: Default::default(),
             boats: Vec::new(),
             leash_boats: Vec::new(),
