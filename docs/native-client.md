@@ -43,6 +43,9 @@ cargo run --release -p horizon-client -- --render-distance 12
 
 Development builds that link quickly: `cargo build --profile fast -p horizon-client`.
 
+Optional Windows allocator build features are documented in
+[Windows allocator experiments](windows-allocators.md).
+
 | Option | Meaning |
 | --- | --- |
 | `--world NAME` | World folder under `saves/` (default "New World"); reopened if it exists |

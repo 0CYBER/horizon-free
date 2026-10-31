@@ -6,7 +6,8 @@ use horizon_client_core::potions;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInstance {
-    /// Effect id without namespace (`speed`, `poison`, ...).
+    /// Effect id: vanilla's without namespace (`speed`, `poison`, ...), a
+    /// content mod's `<ns>:<path>`.
     pub id: &'static str,
     /// Remaining ticks; -1 is infinite.
     pub duration: i32,
@@ -171,6 +172,9 @@ pub enum OmenTick {
 pub struct PlayerEffects {
     pub list: Vec<EffectInstance>,
     pub tick_count: i32,
+    /// How many times `add` added or updated an effect: each is one
+    /// `onEffectAdded` or `onEffectUpdated` (`EffectsChangedTrigger`).
+    pub changes: u32,
 }
 impl PlayerEffects {
     pub fn get(&self, id: &str) -> Option<&EffectInstance> {
@@ -181,13 +185,17 @@ impl PlayerEffects {
     }
     /// `LivingEntity.addEffect`; returns whether anything changed.
     pub fn add(&mut self, effect: EffectInstance) -> bool {
-        match self.list.iter_mut().find(|e| e.id == effect.id) {
+        let changed = match self.list.iter_mut().find(|e| e.id == effect.id) {
             Some(existing) => existing.update(&effect),
             None => {
                 self.list.push(effect);
                 true
             }
+        };
+        if changed {
+            self.changes = self.changes.wrapping_add(1);
         }
+        changed
     }
     pub fn clear(&mut self) {
         self.list.clear();
@@ -212,7 +220,7 @@ impl PlayerEffects {
             .iter()
             .map(|e| {
                 (
-                    format!("minecraft:{}", e.id),
+                    potions::namespaced(e.id).to_owned(),
                     e.duration,
                     e.amplifier,
                     e.ambient,
@@ -483,6 +491,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn adding_counts_a_change_only_when_the_effect_changed() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("speed", 100, 0));
+        assert_eq!(fx.changes, 1);
+        // A longer duration updates the effect (`onEffectUpdated`).
+        fx.add(EffectInstance::new("speed", 200, 0));
+        assert_eq!(fx.changes, 2);
+        // A shorter one with the same amplifier is hidden by nothing: no change.
+        fx.add(EffectInstance::new("speed", 50, 0));
+        assert_eq!(fx.changes, 2);
+    }
+
+    #[test]
     fn bad_omen_in_a_village_becomes_raid_omen_over_two_ticks() {
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new("bad_omen", 100, 1));
@@ -504,6 +525,30 @@ mod tests {
         assert!(fx.get("bad_omen").is_none());
         assert_eq!(fx.get("speed").unwrap().duration, 49);
         assert_eq!(fx.get("raid_omen").unwrap().amplifier, 1);
+    }
+    /// The only test here that registers mod effects (once per process).
+    #[test]
+    fn a_mod_effect_saves_under_its_namespace() {
+        potions::register_mod_effects([(
+            "ruby:glow".to_owned(),
+            0xFF0000,
+            potions::Category::Neutral,
+        )]);
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new(
+            potions::effect("ruby:glow").unwrap().id,
+            600,
+            1,
+        ));
+        let saved = fx.saved();
+        assert_eq!(saved, [("ruby:glow".to_owned(), 600, 1, false, true)]);
+        assert_eq!(PlayerEffects::from_saved(&saved).list, fx.list);
+        // Without its mod the saved effect is dropped, as an unknown id is.
+        assert!(
+            PlayerEffects::from_saved(&[("gone:glow".into(), 600, 1, false, true)])
+                .list
+                .is_empty()
+        );
     }
     #[test]
     fn raid_omen_acts_on_its_last_tick() {

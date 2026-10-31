@@ -9,7 +9,8 @@ pub enum Category {
     Harmful,
     Neutral,
 }
-/// A `MobEffect`: id (without namespace), colour, category, instantaneous.
+/// A `MobEffect`: id (vanilla's without namespace, a mod's `<ns>:<path>`),
+/// colour, category, instantaneous.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectDef {
     pub id: &'static str,
@@ -84,11 +85,52 @@ pub const EFFECTS: &[EffectDef] = &[
     fx("infested", 9214860, H),
     fx("breath_of_the_nautilus", 65518, B),
 ];
-pub fn effect(id: &str) -> Option<&'static EffectDef> {
-    let id = id.trim_start_matches("minecraft:");
-    EFFECTS.iter().find(|e| e.id == id)
+/// The effects content mods declare, registered after vanilla's.
+static MOD_EFFECTS: OnceLock<Vec<EffectDef>> = OnceLock::new();
+/// Registers the content mods' effects, `<ns>:<path>` ids in registry order.
+/// The list is set once per process: false when it already was, and the
+/// effects stay those of the first call until the game restarts.
+pub fn register_mod_effects(effects: impl IntoIterator<Item = (String, u32, Category)>) -> bool {
+    if MOD_EFFECTS.get().is_some() {
+        return false;
+    }
+    let defs: Vec<EffectDef> = effects
+        .into_iter()
+        .map(|(id, color, category)| {
+            debug_assert!(id.contains(':'), "{id} has no namespace");
+            fx(Box::leak(id.into_boxed_str()), color, category)
+        })
+        .collect();
+    MOD_EFFECTS.set(defs).is_ok()
 }
-/// Namespaced effect ids for mob effect storage.
+/// The content mods' effects, in registry order.
+pub fn mod_effects() -> &'static [EffectDef] {
+    MOD_EFFECTS.get().map_or(&[], Vec::as_slice)
+}
+/// Every registered effect: vanilla's, then the content mods'.
+pub fn all_effects() -> impl Iterator<Item = &'static EffectDef> {
+    EFFECTS.iter().chain(mod_effects())
+}
+pub fn effect(id: &str) -> Option<&'static EffectDef> {
+    let short = id.trim_start_matches("minecraft:");
+    match EFFECTS.iter().find(|e| e.id == short) {
+        Some(e) => Some(e),
+        None => mod_effect(id),
+    }
+}
+/// Out of line, so vanilla's lookups (every frame, every tick) stay as they were.
+#[cold]
+#[inline(never)]
+fn mod_effect(id: &str) -> Option<&'static EffectDef> {
+    mod_effects().iter().find(|e| e.id == id)
+}
+/// `MobEffect.getDescriptionId` (`Util.makeDescriptionId("effect", key)`):
+/// `effect.<namespace>.<path>`, `/` in the path as `.`.
+pub fn description_id(id: &str) -> String {
+    let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    format!("effect.{namespace}.{}", path.replace('/', "."))
+}
+/// Namespaced effect ids for mob effect storage; a mod's id already is.
 pub fn namespaced(id: &'static str) -> &'static str {
     static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     let key = id.strip_prefix("minecraft:").unwrap_or(id);
@@ -246,5 +288,42 @@ pub fn potion_color(id: Option<&str>) -> u32 {
     ) {
         (Some(r), Some(g), Some(b)) => (r << 16) | (g << 8) | b,
         _ => BASE_POTION_COLOR,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn description_ids_keep_the_namespace() {
+        assert_eq!(description_id("speed"), "effect.minecraft.speed");
+        assert_eq!(description_id("minecraft:speed"), "effect.minecraft.speed");
+        assert_eq!(description_id("ruby:curse/dark"), "effect.ruby.curse.dark");
+    }
+
+    /// The only test that registers: the registry is set once per process.
+    #[test]
+    fn mod_effects_follow_vanilla_once_registered() {
+        assert!(register_mod_effects([(
+            "ruby:glow".to_owned(),
+            0xFF0000,
+            Category::Neutral
+        )]));
+        assert!(!register_mod_effects([(
+            "ruby:late".to_owned(),
+            1,
+            Category::Harmful
+        )]));
+        let glow = effect("ruby:glow").unwrap();
+        assert_eq!(
+            (glow.color, glow.category, glow.instant),
+            (0xFF0000, Category::Neutral, false)
+        );
+        assert!(effect("glow").is_none() && effect("ruby:late").is_none());
+        assert_eq!(namespaced(glow.id), "ruby:glow");
+        assert_eq!(effect("minecraft:speed").unwrap().id, "speed");
+        let ids: Vec<_> = all_effects().map(|e| e.id).collect();
+        assert_eq!(ids.len(), EFFECTS.len() + 1);
+        assert_eq!(ids.last(), Some(&"ruby:glow"));
     }
 }

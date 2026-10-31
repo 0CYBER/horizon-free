@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version = "1.85"
-description = "Scheduling hints for the game's threads and its allocator: the OS calls the crates that forbid unsafe code can't make"
+description = "Scheduling hints for the game's threads and its allocator, and the other OS calls the crates that forbid unsafe code can't make"
 
 [dependencies]
 mimalloc = { version = "0.1.52", default-features = false }
@@ -14,7 +14,7 @@ libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["e
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_System_WindowsProgramming"] }
+windows-sys = { version = "0.61", features = ["Win32_System_IO", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
 
 [lints]
 workspace = true

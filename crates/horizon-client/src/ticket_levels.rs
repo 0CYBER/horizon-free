@@ -6,6 +6,9 @@
 //! - `PLAYER_SIMULATION` at level `31 - simulationDistance` on its own chunk.
 //!
 //! A `/forceload`ed chunk holds a `FORCED` ticket at level 31 of both kinds.
+//! An entity that came through a portal leaves a `PORTAL` ticket of radius 3
+//! (`Entity.placePortalTicket`: level 30 of both kinds, for 300 ticks) on the
+//! chunk it arrived in; it keeps that level running with no player in it.
 //! Levels rise by one per chunk away from a ticket (`ChunkTracker`) and each
 //! chunk takes the lowest. The loading level gives the chunk's
 //! `FullChunkStatus` (`ChunkLevel.fullStatus`: 31 entity ticking, 32 block
@@ -31,12 +34,20 @@ pub const BLOCK_TICKING: u8 = 32;
 /// What a chunk with no ticket near it has (`FULL` and above count as none).
 const NONE: (u8, u8) = (BLOCK_TICKING + 1, BLOCK_TICKING + 1);
 
-/// The tickets of one level: where its players are, its forced chunks, and
-/// the server's view and simulation distances.
+/// `TicketType.PORTAL`'s timeout, in ticks.
+const PORTAL_TIMEOUT: i32 = 300;
+/// `Entity.placePortalTicket`'s radius: the ticket's level is `FULL` (33)
+/// minus it.
+const PORTAL_RADIUS: i32 = 3;
+const PORTAL_LEVEL: i32 = BLOCK_TICKING as i32 + 1 - PORTAL_RADIUS;
+
+/// The tickets of one level: where its players are, its forced chunks, its
+/// portal tickets, and the server's view and simulation distances.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sources {
     pub players: Vec<(i32, i32)>,
     pub forced: Vec<(i32, i32)>,
+    pub portal: Vec<(i32, i32)>,
     pub view_distance: i32,
     pub simulation_distance: i32,
 }
@@ -130,6 +141,8 @@ impl Levels {
 pub struct ChunkTickets {
     sources: Option<Sources>,
     levels: Levels,
+    /// The `PORTAL` tickets: the chunk and the ticks it has left.
+    portal: Vec<((i32, i32), i32)>,
 }
 
 impl ChunkTickets {
@@ -139,6 +152,8 @@ impl ChunkTickets {
             s.players.sort_unstable();
             s.players.dedup();
             s.forced.sort_unstable();
+            s.portal = self.portal.iter().map(|&(c, _)| c).collect();
+            s.portal.sort_unstable();
         }
         if sources == self.sources {
             return;
@@ -148,6 +163,27 @@ impl ChunkTickets {
     }
     pub fn levels(&self) -> Levels {
         self.levels.clone()
+    }
+    /// `TicketStorage.addTicket` of a `PORTAL` ticket: one already on the
+    /// chunk only starts its timeout again.
+    pub fn add_portal(&mut self, chunk: (i32, i32)) {
+        match self.portal.iter_mut().find(|(c, _)| *c == chunk) {
+            Some((_, left)) => *left = PORTAL_TIMEOUT,
+            None => self.portal.push((chunk, PORTAL_TIMEOUT)),
+        }
+    }
+    /// `TicketStorage.purgeStaleTickets` for the `PORTAL` tickets, once a
+    /// tick: they time out after `PORTAL_TIMEOUT + 1` ticks.
+    pub fn tick_portal(&mut self) {
+        for (_, left) in &mut self.portal {
+            *left -= 1;
+        }
+        self.portal.retain(|&(_, left)| left >= 0);
+    }
+    /// A `PORTAL` ticket is held (`shouldKeepDimensionActive`), the chunks
+    /// it is on.
+    pub fn portal_chunks(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.portal.iter().map(|&(c, _)| c)
     }
 }
 
@@ -168,7 +204,8 @@ fn compute(s: &Sources) -> Map {
         .players
         .iter()
         .map(|&p| (p, reach))
-        .chain(s.forced.iter().map(|&f| (f, 1)));
+        .chain(s.forced.iter().map(|&f| (f, 1)))
+        .chain(s.portal.iter().map(|&p| (p, PORTAL_RADIUS)));
     let Some((x0, z0, x1, z1)) = boxes.fold(None, |b, ((x, z), r)| {
         let (lo_x, lo_z, hi_x, hi_z) = (
             i64::from(x) - i64::from(r),
@@ -216,6 +253,14 @@ fn compute(s: &Sources) -> Map {
             }
         }
     }
+    for &(cx, cz) in &s.portal {
+        for dz in -PORTAL_RADIUS..=PORTAL_RADIUS {
+            for dx in -PORTAL_RADIUS..=PORTAL_RADIUS {
+                let level = PORTAL_LEVEL + dx.abs().max(dz.abs());
+                lower(cx + dx, cz + dz, level, level);
+            }
+        }
+    }
     Map::Grid {
         x0,
         z0,
@@ -254,6 +299,14 @@ fn compute_sparse(s: &Sources) -> FxHashMap<(i32, i32), (u8, u8)> {
             }
         }
     }
+    for &(cx, cz) in &s.portal {
+        for dz in -PORTAL_RADIUS..=PORTAL_RADIUS {
+            for dx in -PORTAL_RADIUS..=PORTAL_RADIUS {
+                let level = PORTAL_LEVEL + dx.abs().max(dz.abs());
+                lower((cx + dx, cz + dz), level, level);
+            }
+        }
+    }
     levels.retain(|_, l| *l != NONE);
     levels
 }
@@ -267,6 +320,7 @@ mod tests {
         t.update(Some(Sources {
             players: players.to_vec(),
             forced: forced.to_vec(),
+            portal: Vec::new(),
             view_distance: view,
             simulation_distance: sim,
         }));
@@ -322,6 +376,7 @@ mod tests {
             Some(Sources {
                 players,
                 forced: Vec::new(),
+                portal: Vec::new(),
                 view_distance: 2,
                 simulation_distance: 2,
             })
@@ -360,6 +415,7 @@ mod tests {
             let s = Sources {
                 players,
                 forced,
+                portal: Vec::new(),
                 view_distance: 2 + next(12).abs(),
                 simulation_distance: 2 + next(12).abs(),
             };
@@ -405,6 +461,7 @@ mod tests {
             let s = Sources {
                 players: at.clone(),
                 forced: Vec::new(),
+                portal: Vec::new(),
                 view_distance: 10,
                 simulation_distance: 10,
             };

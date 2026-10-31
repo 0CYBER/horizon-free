@@ -9,7 +9,9 @@ use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
 // Version 4 mirrored every untouched directory file by file on Windows.
 // Version 3 could omit untouched vanilla directories on Windows (#1649, #1688).
-const VERSION: u32 = 5;
+// Version 5 read every vanilla file to stamp it on Windows.
+// Version 6 stamps vanilla's files by their metadata on Windows too.
+const VERSION: u32 = 6;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {
@@ -18,13 +20,16 @@ pub(super) struct Dependencies {
     failed: bool,
     #[serde(skip)]
     tracking: bool,
+    /// The vanilla root (absolute): its files are stamped without reading them.
+    #[serde(skip)]
+    vanilla: PathBuf,
 }
 impl Dependencies {
     fn record(&mut self, path: &Path, directory: bool) {
         if !self.tracking {
             return;
         }
-        match dependency_signature(path, directory) {
+        match dependency_signature(path, directory, &self.vanilla) {
             Ok(signature) => self.entries.push((path.into(), directory, signature)),
             Err(_) => self.failed = true,
         }
@@ -38,7 +43,7 @@ impl Dependencies {
     fn valid(&self) -> bool {
         !self.failed
             && self.entries.iter().all(|(path, directory, signature)| {
-                dependency_signature(path, *directory).is_ok_and(|s| s == *signature)
+                dependency_signature(path, *directory, &self.vanilla).is_ok_and(|s| s == *signature)
             })
     }
 }
@@ -72,13 +77,16 @@ fn content(hash: &mut Sha256, path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-fn stamp(hash: &mut Sha256, path: &Path) -> io::Result<()> {
+/// `path`'s stamp; `read` lets platforms without a change timestamp hash a file's bytes.
+fn stamp(hash: &mut Sha256, path: &Path, read: bool) -> io::Result<()> {
     let meta = fs::metadata(path)?;
     hash.update(meta.len().to_le_bytes());
     field(hash, format!("{:?}", meta.modified()?).as_bytes());
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        // The change time stands in for the bytes here.
+        let _ = read;
         hash.update(meta.dev().to_le_bytes());
         hash.update(meta.ino().to_le_bytes());
         hash.update(meta.ctime().to_le_bytes());
@@ -87,8 +95,11 @@ fn stamp(hash: &mut Sha256, path: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     {
         // Portable metadata lacks a change timestamp. Preserve content-based
-        // validation for materialized files on those platforms.
-        if meta.is_file() {
+        // validation for the packs' materialized files on those platforms;
+        // vanilla's (the launcher's, tens of thousands) keep to the size and
+        // the write and creation times: reading each costs minutes on Windows,
+        // where every open is scanned by the antivirus.
+        if read && meta.is_file() {
             return content(hash, path);
         }
         if let Ok(created) = meta.created() {
@@ -104,17 +115,18 @@ fn entries(path: &Path) -> io::Result<Vec<PathBuf>> {
     entries.sort();
     Ok(entries)
 }
-fn dependency_signature(path: &Path, directory: bool) -> io::Result<String> {
+fn dependency_signature(path: &Path, directory: bool, vanilla: &Path) -> io::Result<String> {
     let mut hash = Sha256::new();
+    let read = !(path.starts_with(vanilla) || absolute(path).is_ok_and(|p| p.starts_with(vanilla)));
     match fs::metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => field(&mut hash, b"missing"),
         Err(e) => return Err(e),
         Ok(meta) if directory && meta.is_dir() => {
             field(&mut hash, b"directory");
-            stamp(&mut hash, path)?;
+            stamp(&mut hash, path, read)?;
         }
         Ok(_) if directory => field(&mut hash, b"not-directory"),
-        Ok(_) => stamp(&mut hash, path)?,
+        Ok(_) => stamp(&mut hash, path, read)?,
     }
     Ok(finish(hash))
 }
@@ -190,7 +202,7 @@ fn tree_inner(
             if pack.is_none() {
                 return content(hash, path);
             }
-            stamp(hash, path)?;
+            stamp(hash, path, true)?;
         }
     }
     Ok(())
@@ -283,11 +295,14 @@ pub(super) fn build(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()
     let signature = pack_signature(packs);
     if let Ok(signature) = &signature
         && let Ok(bytes) = fs::read(&marker_path)
-        && let Ok(marker) = serde_json::from_slice::<Marker>(&bytes)
+        && let Ok(mut marker) = serde_json::from_slice::<Marker>(&bytes)
         && marker.version == VERSION
         && marker.vanilla == vanilla_key
         && marker.packs == *signature
-        && marker.dependencies.valid()
+        && {
+            marker.dependencies.vanilla = vanilla_key.clone();
+            marker.dependencies.valid()
+        }
         && out.is_dir()
     {
         return Ok(());
@@ -300,6 +315,7 @@ pub(super) fn build(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()
     }
     let mut dependencies = Dependencies {
         tracking: signature.is_ok(),
+        vanilla: vanilla_key.clone(),
         ..Dependencies::default()
     };
     build_overlay_uncached(vanilla, packs, out, &mut dependencies)?;

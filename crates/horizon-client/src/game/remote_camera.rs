@@ -53,13 +53,41 @@ pub(super) fn mob_camera_entity(m: &Mob) -> CameraEntity {
     }
 }
 
+/// `GameRenderer.checkEntityPostEffect`: the chain a spectated creeper, spider
+/// or enderman puts on the screen.
+pub(super) fn entity_post_effect(kind: &str) -> Option<&'static str> {
+    match kind.strip_prefix("minecraft:").unwrap_or(kind) {
+        "creeper" => Some("minecraft:creeper"),
+        // CaveSpider extends Spider.
+        "spider" | "cave_spider" => Some("minecraft:spider"),
+        "enderman" => Some("minecraft:invert"),
+        _ => None,
+    }
+}
+
 impl Game<'_> {
     /// `ClientPacketListener.handleSetCamera`.
     pub(super) fn remote_set_camera(&mut self, camera_id: i32) {
         let in_level = self.mobs.iter().any(|m| m.id == camera_id as u32);
+        let player = self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.entity_id == camera_id);
         if let Some(r) = self.remote.as_mut() {
             r.camera = camera_after_packet(r.camera, r.entity_id, camera_id, in_level);
         }
+        // Minecraft.setCameraEntity, for an entity the level holds.
+        if in_level || player {
+            self.check_entity_post_effect(true);
+        }
+    }
+    /// `GameRenderer.checkEntityPostEffect` for the camera entity, or for none
+    /// (`first_person` false: the third-person view clears it).
+    pub(super) fn check_entity_post_effect(&mut self, first_person: bool) {
+        self.spectated_post_effect = self
+            .camera_mob()
+            .filter(|_| first_person)
+            .and_then(|m| entity_post_effect(&m.kind.id));
     }
     /// The entity a server attached the view to, when it is not the player.
     pub(super) fn remote_camera_id(&self) -> Option<u32> {
@@ -94,7 +122,29 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::camera_after_packet;
+    use super::{camera_after_packet, entity_post_effect};
+
+    /// Only a creeper, spider or enderman has a spectator chain.
+    #[test]
+    fn spectated_entities_pick_their_chain() {
+        assert_eq!(
+            entity_post_effect("minecraft:creeper"),
+            Some("minecraft:creeper")
+        );
+        assert_eq!(
+            entity_post_effect("minecraft:spider"),
+            Some("minecraft:spider")
+        );
+        assert_eq!(
+            entity_post_effect("minecraft:enderman"),
+            Some("minecraft:invert")
+        );
+        assert_eq!(
+            entity_post_effect("minecraft:cave_spider"),
+            Some("minecraft:spider")
+        );
+        assert_eq!(entity_post_effect("minecraft:cow"), None);
+    }
 
     /// The camera goes to a known entity, back to the player on its own id,
     /// and stays where it is for an entity the level does not hold.
