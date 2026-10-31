@@ -61,6 +61,7 @@ pub mod packs;
 pub mod par;
 pub mod particles;
 pub mod poi_sections;
+pub mod post_chain;
 pub mod potent_sulfur;
 pub mod providers;
 pub mod screen_draw;

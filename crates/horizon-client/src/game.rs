@@ -2099,6 +2099,9 @@ struct Game<'a> {
     waypoints: horizon_client::locator_bar::ClientWaypoints,
     /// The camera the last frame drew from (position, yaw, pitch, fov), for the locator bar.
     locator_camera: Option<([f64; 3], f32, f32, f32)>,
+    /// `LocalPlayer.postEffects`: the chains the server has the screen run
+    /// (`ClientboundPostEffectsPacket`), in order.
+    post_effects: Vec<String>,
     /// `LocalPlayer.experienceDisplayStartTick`: (last progress, seen a change, tick).
     experience_display: (f32, bool, u64),
     boats: Vec<boats::Boat>,
@@ -10598,6 +10601,7 @@ impl Game<'_> {
     }
     fn close_world(&mut self) -> Result<()> {
         self.clear_waypoints();
+        self.post_effects.clear();
         if self.external_server() {
             return self.leave_server(None);
         }
@@ -13213,6 +13217,7 @@ impl Game<'_> {
         } else {
             self.spinning_matrix(camera_alpha as f32)
         };
+        let requested_post_effects = self.requested_post_effects();
         let terrain_distance = self.terrain_distance();
         let distance = (terrain_distance * 16) as f32;
         let depth_far =
@@ -13409,6 +13414,11 @@ impl Game<'_> {
                 .boss_overlay
                 .darken_amount(self.clock.fraction() as f32),
             menu_blur: self.menu_blur(),
+            post_effects: horizon_client::post_chain::Request {
+                effects: &requested_post_effects,
+                root: &self.options.resources,
+                menu_blur_radius: self.settings.menu_blur as f32,
+            },
             chunk_fade: self.settings.chunk_fade,
         };
         let result = match self.renderer.as_mut() {
@@ -13490,6 +13500,17 @@ impl Game<'_> {
             )
         };
         level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
+    }
+    /// `GameRenderer.update`'s `requestedPostEffects`: `end_of_frame` (a resource
+    /// pack's own chain), then the server's `LocalPlayer.postEffects`. Only the
+    /// world is drawn through them.
+    fn requested_post_effects(&self) -> Vec<String> {
+        if self.title.is_some() || self.player.is_none() {
+            return Vec::new();
+        }
+        std::iter::once("minecraft:end_of_frame".to_owned())
+            .chain(self.post_effects.iter().cloned())
+            .collect()
     }
     /// `Screen.extractBlurredBackground` over the panorama or the world and
     /// HUD, when `menuBackgroundBlurriness` is at least 1.
@@ -15529,6 +15550,7 @@ impl<'a> Game<'a> {
             waypoint_styles: prepared.waypoint_styles,
             waypoints: Default::default(),
             locator_camera: None,
+            post_effects: Vec::new(),
             experience_display: Default::default(),
             boats: Vec::new(),
             leash_boats: Vec::new(),
@@ -16596,6 +16618,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         block_flicker: 0.0,
         boss_darken: 0.0,
         chunk_fade: 0.0,
+        post_effects: horizon_client::post_chain::Request::none(),
         menu_blur: None,
     }
 }
