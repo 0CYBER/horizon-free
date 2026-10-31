@@ -224,6 +224,8 @@ struct Globals {
     dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
     /// The sunrise fan's triangles as the sky shader tests them (`sunrise_fan::normals`).
     sunrise_fan: [[f32; 4]; 2 * sunrise_fan::TRIANGLES],
+    /// x: `Options.textureFiltering` (0 none, 1 RGSS, 2 anisotropic); y: the sprite arrays' width.
+    filtering: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -393,6 +395,8 @@ pub struct Frame<'a> {
     /// `Options.chunkSectionFadeInTime`, in seconds: how long a section takes to fade in once
     /// uploaded (0 draws it whole at once).
     pub chunk_fade: f32,
+    /// `GameRenderer.requestedPostEffects`: the chains that run over the world.
+    pub post_effects: crate::post_chain::Request<'a>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -540,6 +544,10 @@ pub struct Renderer {
     /// terrain.wgsl's `SPRITE_ARRAYS` and `SPRITE_SPLIT`, for a shader pack's terrain.
     terrain_sprites: [f64; 2],
     sprite_sampler: wgpu::Sampler,
+    /// `Options.textureFiltering`: 0 none, 1 RGSS, 2 anisotropic.
+    texture_filtering: u32,
+    /// The anisotropic sampler's clamp (`Options.maxAnisotropyValue`); 1 unless anisotropic.
+    max_anisotropy: u16,
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: animate::SpriteAnimator,
@@ -645,6 +653,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
+    /// `post_effect` chains, made on first use.
+    post_effects: Option<crate::post_chain::PostEffects>,
     /// Where a screenshot's frame is drawn when the swapchain cannot be read back.
     readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
@@ -718,6 +728,36 @@ fn sprite_views(
             None => unused.clone(),
         })
         .collect()
+}
+/// The terrain sprites' sampler for a Texture Filtering mode. None keeps the nearest sampler;
+/// RGSS and anisotropic take LevelRenderer.chunkLayerSampler's linear one (clamped to the edge),
+/// with `anisotropy` samples when it is above 1 (wgpu then needs a linear mipmap filter too).
+fn sprite_sampler_descriptor(filtering: u32, anisotropy: u16) -> wgpu::SamplerDescriptor<'static> {
+    if filtering == 0 {
+        return wgpu::SamplerDescriptor {
+            label: Some("Block sprites"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        };
+    }
+    wgpu::SamplerDescriptor {
+        label: Some("Block sprites (filtered)"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        anisotropy_clamp: anisotropy,
+        ..Default::default()
+    }
+}
+/// `Options.maxAnisotropyValue` for a `maxAnisotropyBit`: `1 << bit`, at most wgpu's 16.
+fn sampler_anisotropy(bit: i32) -> u16 {
+    1u16 << bit.clamp(0, 4)
 }
 /// terrain.wgsl's group 0.
 #[allow(clippy::too_many_arguments)]
@@ -1697,15 +1737,7 @@ impl Renderer {
                 ..Default::default()
             });
         let sprite_views = sprite_views(&sprite_textures, &sprite_unused, None);
-        let sprite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Block sprites"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let sprite_sampler = device.create_sampler(&sprite_sampler_descriptor(0, 1));
         let lightmap = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Lightmap"),
             size: wgpu::Extent3d {
@@ -2724,7 +2756,7 @@ impl Renderer {
                 }
                 cull
             });
-        let depth = Self::depth(&device, &config, cull.as_ref());
+        let depth = Self::depth(&device, &config);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
@@ -2836,6 +2868,8 @@ impl Renderer {
             terrain_layout: bindings,
             terrain_sprites: sprite_constants.map(|(_, v)| v),
             sprite_sampler,
+            texture_filtering: 0,
+            max_anisotropy: 1,
             lightmap_view,
             lightmap_sampler,
             animations,
@@ -2897,6 +2931,7 @@ impl Renderer {
             pack_terrain_flat: false,
             hud,
             menu_blur: None,
+            post_effects: None,
             readback: readback::Readback::default(),
             info,
             suspended: !drawable_size(size.width, size.height, max_side),
@@ -2993,13 +3028,8 @@ impl Renderer {
         self.surface = Some(surface);
         Ok(())
     }
-    /// The world's depth, which occlusion culling's test may read.
-    fn depth(
-        device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
-        cull: Option<&cull::Cull>,
-    ) -> wgpu::TextureView {
-        let read = cull.is_some_and(|c| c.depth_test() == cull::DepthTest::InShader);
+    /// The world's depth, which occlusion culling's test and post effects may read.
+    fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("Horizon depth"),
@@ -3012,11 +3042,9 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: if read {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-                } else {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT
-                },
+                // TEXTURE_BINDING: a post effect may read the depth buffer.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -3080,7 +3108,7 @@ impl Renderer {
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config, self.cull.as_ref());
+        self.depth = Self::depth(&self.device, &self.config);
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -3800,6 +3828,44 @@ impl Renderer {
     pub fn shader_pack_dimension(&self) -> Option<i32> {
         self.pack_post.as_ref().map(|p| p.0)
     }
+    /// The Texture Filtering and Max Anisotropy options (`filtering`: 0 none, 1 RGSS, 2
+    /// anisotropic; `bit`: `maxAnisotropyBit`). None is the nearest sampler terrain always used;
+    /// the others take LevelRenderer's chunk layer sampler (linear, clamped, `bit` anisotropy
+    /// when anisotropic) and terrain.wgsl's sampleNearest / sampleRGSS.
+    pub fn set_texture_filtering(&mut self, filtering: i32, bit: i32) {
+        let filtering = filtering.clamp(0, 2) as u32;
+        let anisotropy = if filtering == 2 {
+            sampler_anisotropy(bit)
+        } else {
+            1
+        };
+        if filtering == self.texture_filtering && anisotropy == self.max_anisotropy {
+            return;
+        }
+        self.texture_filtering = filtering;
+        self.max_anisotropy = anisotropy;
+        self.sprite_sampler = self
+            .device
+            .create_sampler(&sprite_sampler_descriptor(filtering, anisotropy));
+        self.rebuild_terrain_group();
+    }
+    fn rebuild_terrain_group(&mut self) {
+        let views = sprite_views(
+            &self.sprite_textures,
+            &self.sprite_unused,
+            Some(self.mipmaps + 1),
+        );
+        self.group = terrain_group(
+            &self.device,
+            "Horizon terrain resources",
+            &self.terrain_layout,
+            &self.globals,
+            &views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+        );
+    }
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
@@ -3813,17 +3879,7 @@ impl Renderer {
             return;
         }
         self.mipmaps = levels;
-        let views = sprite_views(&self.sprite_textures, &self.sprite_unused, Some(levels + 1));
-        self.group = terrain_group(
-            &self.device,
-            "Horizon terrain resources",
-            &self.terrain_layout,
-            &self.globals,
-            &views,
-            &self.sprite_sampler,
-            &self.lightmap_view,
-            &self.lightmap_sampler,
-        );
+        self.rebuild_terrain_group();
     }
     /// The views `render` draws `frame` from.
     pub fn views(&self, frame: &Frame) -> ViewSet {
@@ -4143,6 +4199,12 @@ impl Renderer {
                 lights
             },
             sunrise_fan: sunrise_fan::normals(frame.sky.sunrise_color[3], sun),
+            filtering: [
+                self.texture_filtering as f32,
+                self.sprite_textures[0].width() as f32,
+                0.0,
+                0.0,
+            ],
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
@@ -5611,6 +5673,28 @@ impl Renderer {
             .screenshot
             .take_if(|request| request.size.is_some())
             .and_then(|request| self.take_readback(request, &mut encoder, &target_texture));
+        // GameRenderer.render: applyPostEffects, after the level and before the GUI.
+        if !frame.title
+            && !frame.post_effects.effects.is_empty()
+            && target_texture
+                .usage()
+                .contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let device = &self.device;
+            self.post_effects
+                .get_or_insert_with(|| crate::post_chain::PostEffects::new(device))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &target_texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    // The scaled world pass drew its own depth buffer.
+                    scaled.is_none().then_some(&self.depth),
+                    &frame.post_effects,
+                );
+        }
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5825,7 +5909,7 @@ fn padded_row(width: u32) -> u32 {
     (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
 }
 /// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
-fn copy_frame(
+pub(crate) fn copy_frame(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
@@ -6391,6 +6475,30 @@ mod tests {
         assert_eq!(
             super::hdr_screenshot_path(std::path::Path::new("screenshots/2026-10-28_12.00.00.png")),
             std::path::Path::new("screenshots/2026-10-28_12.00.00-hdr.png")
+        );
+    }
+    #[test]
+    fn texture_filtering_samplers() {
+        use super::{sampler_anisotropy, sprite_sampler_descriptor};
+        // None is the sampler terrain always used.
+        let none = sprite_sampler_descriptor(0, 1);
+        assert_eq!(none.mag_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(none.min_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(none.address_mode_u, wgpu::AddressMode::Repeat);
+        assert_eq!(none.anisotropy_clamp, 1);
+        // LevelRenderer.chunkLayerSampler: linear both ways, clamped.
+        for (mode, aniso) in [(1, 1), (2, 8)] {
+            let d = sprite_sampler_descriptor(mode, aniso);
+            assert_eq!(d.mag_filter, wgpu::FilterMode::Linear);
+            assert_eq!(d.min_filter, wgpu::FilterMode::Linear);
+            assert_eq!(d.mipmap_filter, wgpu::MipmapFilterMode::Linear);
+            assert_eq!(d.address_mode_v, wgpu::AddressMode::ClampToEdge);
+            assert_eq!(d.anisotropy_clamp, aniso);
+        }
+        assert_eq!(
+            [1, 2, 3].map(sampler_anisotropy),
+            [2, 4, 8],
+            "Options.maxAnisotropyValue is 1 << bit"
         );
     }
     #[test]

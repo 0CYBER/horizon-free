@@ -70,7 +70,6 @@ impl Game<'_> {
                     (b.render_mode(), b.renderable_box())
                 }
                 BlockEntity::TestInstanceBlock(b) => {
-                    self.test_instance_markers(b, block, camera, g);
                     if !game_master || dist >= 96.0 * 96.0 {
                         continue;
                     }

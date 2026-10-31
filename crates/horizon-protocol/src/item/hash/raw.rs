@@ -482,9 +482,26 @@ mod tests {
                 ("minecraft:entity_type", 11) => "minecraft:bee",
                 ("minecraft:entity_type", 30) => "minecraft:cow",
                 ("minecraft:block_entity_type", 1) => "minecraft:chest",
+                ("minecraft:data_component_type", 1) => "minecraft:max_stack_size",
+                ("minecraft:data_component_type", 2) => "minecraft:max_damage",
                 ("minecraft:data_component_type", 3) => "minecraft:damage",
                 ("minecraft:data_component_type", 12) => "minecraft:rarity",
                 ("minecraft:villager_type", 0) => "minecraft:desert",
+                ("minecraft:data_component_predicate_type", 0) => "minecraft:damage",
+                ("minecraft:data_component_predicate_type", 1) => "minecraft:enchantments",
+                ("minecraft:data_component_predicate_type", 2) => "minecraft:stored_enchantments",
+                ("minecraft:data_component_predicate_type", 3) => "minecraft:potion_contents",
+                ("minecraft:data_component_predicate_type", 4) => "minecraft:custom_data",
+                ("minecraft:data_component_predicate_type", 5) => "minecraft:container",
+                ("minecraft:data_component_predicate_type", 6) => "minecraft:bundle_contents",
+                ("minecraft:data_component_predicate_type", 7) => "minecraft:firework_explosion",
+                ("minecraft:data_component_predicate_type", 8) => "minecraft:fireworks",
+                ("minecraft:data_component_predicate_type", 9) => "minecraft:writable_book_content",
+                ("minecraft:data_component_predicate_type", 10) => "minecraft:written_book_content",
+                ("minecraft:data_component_predicate_type", 11) => "minecraft:attribute_modifiers",
+                ("minecraft:data_component_predicate_type", 12) => "minecraft:trim",
+                ("minecraft:data_component_predicate_type", 13) => "minecraft:jukebox_playable",
+                ("minecraft:data_component_predicate_type", 14) => "minecraft:villager/variant",
                 ("minecraft:attribute", 1) => "minecraft:armor",
                 ("minecraft:attribute", 3) => "minecraft:attack_damage",
                 ("minecraft:attribute", 23) => "minecraft:max_health",
@@ -853,5 +870,143 @@ mod tests {
         assert_eq!(Component::Raw(vec![9]).hash(88, &Pinned), None);
         // Bytes left over after the value.
         assert_eq!(Component::Raw(vec![0, 0]).hash(34, &Pinned), None);
+    }
+
+    /// Block predicates with an `nbt` or partial component predicates, and books
+    /// with filtered text: stream bytes and hashes vanilla 26.3 printed (the same
+    /// driver as above, SNBT through the component's codec). The one `None` is a
+    /// container predicate whose nested item predicate holds exact `components`.
+    #[test]
+    fn predicates_and_filtered_books_hash_as_vanilla_does() {
+        let cases: [(&str, i32, &str, Option<i32>); 21] = [
+            (
+                "stone_nbt",
+                14,
+                "0101020100010a010001610108000162000178000000",
+                Some(-359417396),
+            ),
+            (
+                "nbt_all_types",
+                14,
+                "010000010a08000361206200027122020001730007060001654202a05f20000000050001783fc000000600017940000000000000000b0001690000000200000001000000020900054974656d730a000000010800026964000e6d696e6563726166743a64697274010005436f756e7401000700017a0000000201020400016c00000000000000050c00014c0000000100000000000000030500016e00000000000000",
+                Some(18640168),
+            ),
+            (
+                "damage_partial",
+                14,
+                "010102010000000101000a0a000664616d6167650300036d696e000000010300036d6178000000050000",
+                Some(-752850259),
+            ),
+            (
+                "custom_data",
+                14,
+                "010000000001010408000d7b613a312c623a5b312c325d7d",
+                Some(-1320400474),
+            ),
+            (
+                "twinkle",
+                14,
+                "01000000000101070a080005736861706500047374617201000b6861735f7477696e6b6c650100",
+                Some(-1476889576),
+            ),
+            (
+                "trail_false",
+                14,
+                "01000000000101070a0100096861735f747261696c0000",
+                Some(-1034820270),
+            ),
+            ("any_value", 14, "01000000000100020a00", Some(-1904716790)),
+            (
+                "villager",
+                14,
+                "010000000001010e0800106d696e6563726166743a646573657274",
+                Some(1625640440),
+            ),
+            (
+                "potion_effects",
+                14,
+                "01000000000101030a0a000765666665637473090008636f6e7461696e730a000000010a000f6d696e6563726166743a73706565640a00086475726174696f6e0300036d6178000000640001000776697369626c6500030009616d706c696669657200000001010007616d6269656e740100000000",
+                Some(150754403),
+            ),
+            (
+                "container",
+                14,
+                "01000000000101050a0a00056974656d73090008636f6e7461696e730a000000010a0005636f756e740300036d696e00000002000800056974656d73000f6d696e6563726166743a73746f6e650003000473697a65000000030000",
+                Some(-820017514),
+            ),
+            (
+                "fireworks",
+                14,
+                "01000000000101080a0a000a6578706c6f73696f6e7303000473697a65000000010003000f666c696768745f6475726174696f6e0000000200",
+                Some(-551561987),
+            ),
+            (
+                "attribute_modifiers",
+                14,
+                "010000000001010b0a0a00096d6f64696669657273090008636f6e7461696e730a000000010a0006616d6f756e740600036d696e3ff800000000000000080009617474726962757465000f6d696e6563726166743a61726d6f72080004736c6f740004686561640800096f7065726174696f6e00096164645f76616c7565000000",
+                Some(-233125185),
+            ),
+            (
+                "bundle_stored",
+                14,
+                "01000000000201060a0a00056974656d73090008636f6e7461696e730a000000010800056974656d73000f6d696e6563726166743a73746f6e650000000102090a000000010300066c6576656c730000000300",
+                Some(1901599730),
+            ),
+            (
+                "writable_book",
+                14,
+                "01000000000101090a0a00057061676573090008636f6e7461696e7308000000010001780000",
+                Some(-883070685),
+            ),
+            (
+                "written_book",
+                14,
+                "010000000001010a0a03000a67656e65726174696f6e000000020a00057061676573090008636f6e7461696e730a000000010800047465787400026869010004626f6c64010000080006617574686f720001410100087265736f6c7665640000",
+                Some(1470044104),
+            ),
+            (
+                "all_fields",
+                14,
+                "010000010a0300016100000001000101050301000a03000a6475726162696c697479000000030001040800027b7d00020a00",
+                Some(808431166),
+            ),
+            (
+                "container_components",
+                14,
+                "01000000000101050a0a00056974656d73090008636f6e7461696e730a000000010a000a636f6d706f6e656e74730100246d696e6563726166743a656e6368616e746d656e745f676c696e745f6f7665727269646501000800056974656d73000f6d696e6563726166743a73746f6e65000000",
+                None,
+            ),
+            (
+                "can_break_two",
+                15,
+                "0201020100010a000000000000000100020a00",
+                Some(2146318348),
+            ),
+            (
+                "written_filtered",
+                57,
+                "01540101460161010208000170010a08000474657874000171010004626f6c640100080005706c61696e0001",
+                Some(1884774986),
+            ),
+            (
+                "written_plain",
+                57,
+                "01540001610001080001700000",
+                Some(100213250),
+            ),
+            (
+                "writable_filtered",
+                56,
+                "03036f6e6501022a2a0374776f000133010133",
+                Some(1192237218),
+            ),
+        ];
+        for (name, kind, hex, expected) in cases {
+            let bytes = unhex(hex);
+            let mut r = Reader::new(&bytes);
+            let c = Component::read(kind, &mut r).unwrap();
+            assert_eq!(r.remaining(), 0, "{name}");
+            assert_eq!(c.hash(kind, &Pinned), expected, "{name} {hex}");
+        }
     }
 }

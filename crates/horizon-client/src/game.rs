@@ -112,6 +112,7 @@ mod frames;
 mod friends;
 mod functions;
 mod game_mode;
+mod game_tests;
 mod gamemode_switcher;
 mod ghasts;
 mod glowing;
@@ -246,6 +247,7 @@ mod subtitle_hud;
 mod sulfur_cubes;
 mod test_block_edit;
 mod test_blocks;
+mod test_entities;
 mod test_instance_edit;
 mod test_instances;
 mod text_displays;
@@ -1925,6 +1927,8 @@ struct Game<'a> {
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     /// LevelLoadingScreen.smoothedProgress while the player is not placed yet.
     loading_progress: f32,
+    /// When `loading_progress` last eased (the server thread's load, 50 ms a step).
+    loading_progress_at: Option<std::time::Instant>,
     /// The world spawn search's origin chunk and fallback height, once known.
     spawn_origin: Option<((i32, i32), i32)>,
     spawn_spiral: horizon_client::world_spawn::ChunkSpiral,
@@ -2013,6 +2017,8 @@ struct Game<'a> {
     /// the attack strength tickers the hand reads.
     clicks: horizon_client::first_person::Clicks,
     attack_clicks: u32,
+    /// Use clicks since the last tick; `handleKeybinds` consumes them after the attack clicks.
+    use_clicks: u32,
     hand_strength: horizon_client::attack_strength::AttackStrength,
     settings: Settings,
     tutorial: tutorial::Tutorial,
@@ -2096,6 +2102,11 @@ struct Game<'a> {
     waypoints: horizon_client::locator_bar::ClientWaypoints,
     /// The camera the last frame drew from (position, yaw, pitch, fov), for the locator bar.
     locator_camera: Option<([f64; 3], f32, f32, f32)>,
+    /// `LocalPlayer.postEffects`: the chains the server has the screen run
+    /// (`ClientboundPostEffectsPacket`), in order.
+    post_effects: Vec<String>,
+    /// `GameRenderer.spectatedEntityPostEffect` (`checkEntityPostEffect`).
+    spectated_post_effect: Option<&'static str>,
     /// `LocalPlayer.experienceDisplayStartTick`: (last progress, seen a change, tick).
     experience_display: (f32, bool, u64),
     boats: Vec<boats::Boat>,
@@ -2245,6 +2256,8 @@ struct Game<'a> {
     structure_templates: HashMap<String, Option<structure_blocks::TemplateEntry>>,
     /// The game tests read so far, by id (the test instance registry).
     test_defs: std::cell::RefCell<HashMap<String, Option<test_instances::TestDef>>>,
+    /// `GameTestTicker.SINGLETON`: the game tests running on this server.
+    game_tests: game_tests::GameTests,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
@@ -3548,9 +3561,9 @@ impl Game<'_> {
         self.tick_chunks.recycle_added(added);
     }
     /// `DistanceManager`'s tickets of the level in place, from every player in
-    /// it (the local player, LAN guests, a server's players) and its forced
-    /// chunks. A game with neither a server nor a player (the headless
-    /// fixtures) ticks everywhere.
+    /// it (the local player, LAN guests, a server's players), its forced
+    /// chunks and its portal tickets. A game with neither a server nor a
+    /// player (the headless fixtures) ticks everywhere.
     fn update_chunk_tickets(&mut self) {
         let mut players: Vec<(i32, i32)> = self.lan.as_ref().map_or_else(Vec::new, |h| {
             h.hub
@@ -3571,6 +3584,8 @@ impl Game<'_> {
                 horizon_client::ticket_levels::Sources {
                     players,
                     forced: self.streaming.forced.iter().copied().collect(),
+                    // Filled from the `PORTAL` tickets by `update`.
+                    portal: Vec::new(),
                     view_distance: self.settings.render_distance.clamp(2, 32),
                     simulation_distance: self.settings.simulation_distance.max(2),
                 }
@@ -3597,6 +3612,8 @@ impl Game<'_> {
     /// ServerLevel.tick block phases: scheduled ticks, random ticks in the
     /// chunks the tickets simulate, block events and moving pistons.
     fn tick_blocks(&mut self) -> Result<()> {
+        // ServerChunkCache.tick: the tickets that time out.
+        self.tickets.tick_portal();
         self.sync_tick_chunks();
         self.start_ticking_chunks();
         let levels = self.tickets.levels();
@@ -6470,6 +6487,10 @@ impl Game<'_> {
             horizon_client::spans::time("tick_particles", || self.tick_particles());
             self.tick_client_ambient();
         }
+        if running {
+            // MinecraftServer.tickServer: GameTestTicker.SINGLETON.tick().
+            self.tick_game_tests();
+        }
         // ServerBossEvent broadcasts, after this level's entities have ticked.
         self.publish_boss_bars();
         // Minecraft.handleKeybinds: held use repeats only while no item is in
@@ -9116,6 +9137,7 @@ impl Game<'_> {
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.test_instance_marker_geometry(camera, &mut out, &mut see_through);
         self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
@@ -10589,6 +10611,8 @@ impl Game<'_> {
     }
     fn close_world(&mut self) -> Result<()> {
         self.clear_waypoints();
+        self.post_effects.clear();
+        self.spectated_post_effect = None;
         if self.external_server() {
             return self.leave_server(None);
         }
@@ -12905,8 +12929,7 @@ impl Game<'_> {
             self.apply_ui_settings();
         }
         // Minecraft.doWorldLoad: the LevelLoadingScreen while single player's
-        // server starts. Its chunk map and progress are the server's, which
-        // the window doesn't see yet: the title alone, over the menu background.
+        // server starts, with the server's chunk map and progress.
         if self.integrated_starting.is_some() {
             if let Some(renderer) = &mut self.renderer {
                 let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
@@ -12920,7 +12943,22 @@ impl Game<'_> {
                     h,
                     false,
                 );
-                horizon_client::level_loading::draw(&mut hud, &self.gui.atlas, None, None);
+                // The chunk map and progress are the server thread's.
+                let view = self
+                    .integrated_starting
+                    .as_ref()
+                    .map(|s| s.handle.load_view().clone());
+                let status = |x: i32, z: i32| view.as_ref().and_then(|v| v.status(x, z));
+                let progress = view
+                    .as_ref()
+                    .is_some_and(|v| v.has_progress())
+                    .then_some(self.loading_progress);
+                horizon_client::level_loading::draw(
+                    &mut hud,
+                    &self.gui.atlas,
+                    Some(&status),
+                    progress,
+                );
                 return renderer.render(&loading_frame(&hud));
             }
             return Ok(false);
@@ -13190,6 +13228,7 @@ impl Game<'_> {
         } else {
             self.spinning_matrix(camera_alpha as f32)
         };
+        let requested_post_effects = self.requested_post_effects();
         let terrain_distance = self.terrain_distance();
         let distance = (terrain_distance * 16) as f32;
         let depth_far =
@@ -13386,6 +13425,26 @@ impl Game<'_> {
                 .boss_overlay
                 .darken_amount(self.clock.fraction() as f32),
             menu_blur: self.menu_blur(),
+            post_effects: horizon_client::post_chain::Request {
+                effects: &requested_post_effects,
+                root: &self.options.resources,
+                menu_blur_radius: self.settings.menu_blur as f32,
+                // GlobalSettingsUniform.update.
+                globals: horizon_client::post_chain::Globals {
+                    camera_block_pos: [
+                        camera.x.floor() as i32,
+                        camera.y.floor() as i32,
+                        camera.z.floor() as i32,
+                    ],
+                    camera_offset: [
+                        (camera.x.floor() - camera.x) as f32,
+                        (camera.y.floor() - camera.y) as f32,
+                        (camera.z.floor() - camera.z) as f32,
+                    ],
+                    game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+                    ..Default::default()
+                },
+            },
             chunk_fade: self.settings.chunk_fade,
         };
         let result = match self.renderer.as_mut() {
@@ -13467,6 +13526,18 @@ impl Game<'_> {
             )
         };
         level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
+    }
+    /// `GameRenderer.update`'s `requestedPostEffects`: `end_of_frame` (a resource
+    /// pack's own chain), then the server's `LocalPlayer.postEffects`. Only the
+    /// world is drawn through them.
+    fn requested_post_effects(&self) -> Vec<String> {
+        if self.title.is_some() || self.player.is_none() {
+            return Vec::new();
+        }
+        std::iter::once("minecraft:end_of_frame".to_owned())
+            .chain(self.post_effects.iter().cloned())
+            .chain(self.spectated_post_effect.map(str::to_owned))
+            .collect()
     }
     /// `Screen.extractBlurredBackground` over the panorama or the world and
     /// HUD, when `menuBackgroundBlurriness` is at least 1.
@@ -13734,10 +13805,10 @@ impl Game<'_> {
                     .button(3, pressed, false, self.settings.toggle_use);
                 self.right = self.toggles.is_down(3);
                 // handleKeybinds consumes use clicks without acting while an
-                // item is in use.
+                // item is in use. Minecraft.tick runs them after the attack
+                // clicks, so a place and a break in one tick replace the block.
                 if pressed && self.using.is_none() {
-                    self.use_with_hand()?;
-                    self.use_delay = 4;
+                    self.use_clicks += 1;
                 }
             }
             MouseButton::Middle if pressed => {
@@ -13822,8 +13893,9 @@ impl Game<'_> {
             return;
         }
         self.lod_source_attempted = true;
+        let dim = self.dim;
         let source = match &self.integrated {
-            Some(server) => server.call(|game| game.streaming.lod_source()),
+            Some(server) => server.call(move |game| game.lod_source_in(dim)).flatten(),
             None => Some(self.streaming.lod_source()),
         };
         if let Some(source) = source {
@@ -14282,6 +14354,11 @@ impl ApplicationHandler for Game<'_> {
                     self.focus_lost = (!focused).then(Instant::now);
                     if !focused && self.control.is_none() {
                         self.keys.clear();
+                        // Latched sneak/sprint live in `toggles`, not in the
+                        // physical keys: put them back so a short alt-tab
+                        // (no pause screen) does not drop them.
+                        self.sync_toggle(0);
+                        self.sync_toggle(1);
                         self.left = false;
                         self.right = false;
                         self.capture(false);
@@ -15406,6 +15483,7 @@ impl<'a> Game<'a> {
             book_last_click: None,
             lectern_pulses: Vec::new(),
             loading_progress: 0.0,
+            loading_progress_at: None,
             spawn_origin: None,
             spawn_spiral: Default::default(),
             player_spawn: None,
@@ -15455,6 +15533,7 @@ impl<'a> Game<'a> {
             hands_replaced: [false; 2],
             clicks: Default::default(),
             attack_clicks: 0,
+            use_clicks: 0,
             hand_strength: Default::default(),
             settings,
             tutorial,
@@ -15505,6 +15584,8 @@ impl<'a> Game<'a> {
             waypoint_styles: prepared.waypoint_styles,
             waypoints: Default::default(),
             locator_camera: None,
+            post_effects: Vec::new(),
+            spectated_post_effect: None,
             experience_display: Default::default(),
             boats: Vec::new(),
             leash_boats: Vec::new(),
@@ -15595,6 +15676,7 @@ impl<'a> Game<'a> {
             block_editor: None,
             structure_templates: HashMap::new(),
             test_defs: std::cell::RefCell::new(HashMap::new()),
+            game_tests: game_tests::GameTests::default(),
             friends: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
@@ -16571,6 +16653,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         block_flicker: 0.0,
         boss_darken: 0.0,
         chunk_fade: 0.0,
+        post_effects: horizon_client::post_chain::Request::none(),
         menu_blur: None,
     }
 }

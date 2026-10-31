@@ -1118,8 +1118,9 @@ def social():
 
 
 def test_command():
-    # Horizon has no game test runner: `/test run|runmultiple|verify` of an
-    # existing instance and `/test create` are not compared.
+    # `/test run|runmultiple` of an existing instance start a real test (a
+    # tick-based run, not compared here); `verify`, `create`, `locate` and
+    # `pos` with test instance blocks around are not ported.
     return [
         cmd('/test clearall'),
         cmd('/test stop'),

@@ -281,6 +281,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              creative) or the villager dies, and stays open in range.
 - sulfur_cube_power: an explosive sulfur cube (TNT inside) stays calm on stone, lights its fuse when a redstone
              block is put beside it, and blows up when the fuse runs out; the guest sees it flash.
+- parrot_follows_mob: a wild parrot (FollowMobGoal) flies to a cow standing 6 blocks away and hovers within 3.5 blocks of it (a parrot that only wanders stays about 4.5 blocks off).
 - riptide_rain: the host and the guest each launch with a Riptide trident in rain, with an elytra worn or not (#3458).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
@@ -7520,6 +7521,35 @@ def check_sulfur_cube_power(host, guest, out):
 
 CHECKS += ['sulfur_cube_power']
 CHECK_FNS['sulfur_cube_power'] = check_sulfur_cube_power
+def check_parrot_follows_mob(host, guest, out):
+    """FollowMobGoal(1.0, 3.0, 7.0), priority 3 of a parrot: it flies after another kind of mob within 7 blocks
+    and stops about 3 blocks from it, instead of only wandering."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'parrot_follow'
+    host('command', command=f'fill {x - 12} {y - 1} {z - 12} {x + 12} {y - 1} {z + 12} minecraft:stone')
+    host('command', command=f'fill {x - 12} {y} {z - 12} {x + 12} {y + 8} {z + 12} minecraft:air')
+    guest('command', command=f'tp @s {x + 9.5} {y} {z + 9.5} 135 25')
+    host('command', command=f'tp @s {x - 9.5} {y} {z - 9.5}')
+    host('command', command=f'summon minecraft:cow {x + 0.5} {y} {z + 0.5} {{Tags:["{tag}"],NoAI:1b,PersistenceRequired:1b}}')
+    host('command', command=f'summon minecraft:parrot {x + 6.5} {y + 2} {z + 0.5} {{Tags:["{tag}"],PersistenceRequired:1b,Variant:0}}')
+    host.wait(60)
+    distances = []
+    for _ in range(12):
+        host.wait(20)
+        found = guest('entities', radius=24)['entities']
+        cow = next(e for e in found if e['type'] == 'minecraft:cow')
+        parrot = next(e for e in found if e['type'] == 'minecraft:parrot')
+        distances.append(round(math.dist(cow['pos'], parrot['pos']), 2))
+        if len(distances) == 6:
+            guest.shot(out, 'parrot-follows-cow')
+    distances.sort()
+    median = distances[len(distances) // 2]
+    assert median <= 3.5, f'the parrot did not stay by the cow: {distances}'
+    return {'distances_sorted': distances, 'median': median}
+
+
+CHECKS += ['parrot_follows_mob']
+CHECK_FNS['parrot_follows_mob'] = check_parrot_follows_mob
 
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})

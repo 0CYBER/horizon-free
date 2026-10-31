@@ -114,6 +114,117 @@ struct Lerp {
     steps: u32,
 }
 
+/// `NewMinecartBehavior.MinecartStep` (its xRot is not kept: a minecart here
+/// pitches along its rails).
+#[derive(Clone, Copy)]
+struct CartStep {
+    position: Vec3,
+    movement: Vec3,
+    yaw: f32,
+    weight: f32,
+}
+
+/// The client's state of a minecart on `NewMinecartBehavior`: the steps the
+/// server sent (`lerpSteps`), the ones being played over 3 ticks
+/// (`currentLerpSteps`) and where the cart was when they began (`oldLerp`).
+struct CartLerp {
+    pending: Vec<CartStep>,
+    current: Vec<CartStep>,
+    total_weight: f64,
+    delay: i32,
+    old: CartStep,
+}
+
+impl CartLerp {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            current: Vec::new(),
+            total_weight: 0.0,
+            delay: 0,
+            old: CartStep {
+                position: Vec3::ZERO,
+                movement: Vec3::ZERO,
+                yaw: 0.0,
+                weight: 0.0,
+            },
+        }
+    }
+
+    /// `NewMinecartBehavior.getCartLerpPosition`, `getCartLerpMovements` and
+    /// `getCartLerpYRot` at `partial`: the step the weights put this moment
+    /// in, and how far along it, between it and the one before.
+    fn at(&self, partial: f32) -> (Vec3, Vec3, f32) {
+        let alpha = ((3 - self.delay) as f32 + partial) / 3.0;
+        let mut count_up = 0.0f32;
+        let mut in_step = 1.0f32;
+        let mut found = None;
+        for (i, s) in self.current.iter().enumerate() {
+            if s.weight <= 0.0 {
+                continue;
+            }
+            count_up += s.weight;
+            if f64::from(count_up) >= self.total_weight * f64::from(alpha) {
+                let before = count_up - s.weight;
+                in_step = ((f64::from(alpha) * self.total_weight - f64::from(before))
+                    / f64::from(s.weight)) as f32;
+                found = Some(i);
+                break;
+            }
+        }
+        let index = found.unwrap_or(self.current.len() - 1);
+        let current = self.current[index];
+        let previous = if index > 0 {
+            self.current[index - 1]
+        } else {
+            self.old
+        };
+        let t = f64::from(in_step);
+        let lerp = |a: Vec3, b: Vec3| {
+            Vec3::new(
+                a.x + t * (b.x - a.x),
+                a.y + t * (b.y - a.y),
+                a.z + t * (b.z - a.z),
+            )
+        };
+        (
+            lerp(previous.position, current.position),
+            lerp(previous.movement, current.movement),
+            previous.yaw + in_step * wrap_degrees(current.yaw - previous.yaw),
+        )
+    }
+
+    /// `NewMinecartBehavior.lerpClientPositionAndRotation`: once the steps
+    /// being played are used up, the queued ones become the current ones;
+    /// the cart then sits where the steps put it at the end of this tick.
+    /// False when it has no steps to play.
+    fn tick(&mut self, c: &mut super::minecarts::Minecart) -> bool {
+        self.delay -= 1;
+        if self.delay <= 0 {
+            self.old = CartStep {
+                position: c.position,
+                movement: c.velocity,
+                yaw: c.yaw,
+                weight: 0.0,
+            };
+            self.current.clear();
+            if !self.pending.is_empty() {
+                self.current.append(&mut self.pending);
+                self.total_weight = self.current.iter().map(|s| f64::from(s.weight)).sum();
+                self.delay = if self.total_weight == 0.0 { 0 } else { 3 };
+            }
+        }
+        if self.current.is_empty() {
+            return false;
+        }
+        let (position, movement, yaw) = self.at(1.0);
+        c.position = position;
+        c.velocity = movement;
+        c.yaw = yaw;
+        true
+    }
+}
+
 /// `SteppedInterpolationHandler.doInterpolate`'s `setPos` and `setRot` on a
 /// mob: its yaw kept continuous (the same turn as vanilla's, without the
 /// wrap that would spin it in the frame between ticks), its pitch clamped.
@@ -188,6 +299,9 @@ pub(super) struct Remote {
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
     lerps: HashMap<i32, Lerp>,
+    /// The minecarts the server moves with `ClientboundMoveMinecartPacket`
+    /// (`NewMinecartBehavior`), which have no interpolation handler.
+    cart_lerps: HashMap<i32, CartLerp>,
     /// Living entities' `SteppedInterpolationHandler`s.
     stepped: HashMap<i32, SteppedInterpolation>,
     /// `LivingEntity.lerpHeadTo`: the head yaw and the ticks left to reach it.
@@ -577,6 +691,7 @@ impl Game<'_> {
             use_target: None,
             entities: HashMap::new(),
             lerps: HashMap::new(),
+            cart_lerps: HashMap::new(),
             stepped: HashMap::new(),
             head_lerps: HashMap::new(),
             ghast_dismount: None,
@@ -1388,6 +1503,11 @@ impl Game<'_> {
         r.game_mode = spawn.game_type;
         r.flat = spawn.flat;
         r.loaded_sent = false;
+        // A replacement LevelLoadingScreen starts its bar from nothing (the
+        // first one carries on from the server's start).
+        if self.player.is_some() {
+            self.loading_progress = 0.0;
+        }
         // startWaitingForNewLevel: `LevelLoadTracker.startClientLoad` and the
         // `LevelLoadingScreen`.
         r.level_load.start_client_load(client_millis(), reason);
@@ -1435,6 +1555,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.entities.clear();
                 r.lerps.clear();
+                r.cart_lerps.clear();
                 r.stepped.clear();
                 r.head_lerps.clear();
                 r.pending_items.clear();
@@ -1956,17 +2077,27 @@ impl Game<'_> {
                 t.on_ground = on_ground;
                 return;
             }
-            // AbstractInterpolationHandler.interpolateTo: without a rotation,
-            // the one it was heading for.
-            let rotation = rotation.or_else(|| r.lerps.get(&id).and_then(|l| l.rotation));
-            r.lerps.insert(
-                id,
-                Lerp {
-                    target: position,
-                    rotation,
-                    steps: 3,
-                },
-            );
+            if r.cart_lerps.contains_key(&id) {
+                // A minecart on NewMinecartBehavior keeps Entity's NO_OP
+                // InterpolationHandler: a teleport puts it there at once.
+                if path.is_some()
+                    && let Some(c) = self.carts.iter_mut().find(|c| c.id == id as u32)
+                {
+                    c.position = at;
+                }
+            } else {
+                // AbstractInterpolationHandler.interpolateTo: without a
+                // rotation, the one it was heading for.
+                let rotation = rotation.or_else(|| r.lerps.get(&id).and_then(|l| l.rotation));
+                r.lerps.insert(
+                    id,
+                    Lerp {
+                        target: position,
+                        rotation,
+                        steps: 3,
+                    },
+                );
+            }
         }
         self.turn_remote_object(id, rotation.map(|(yaw, _)| yaw), on_ground);
         self.move_remote_text_display(id, position, rotation);
@@ -1989,6 +2120,7 @@ impl Game<'_> {
             r.glowing.remove(&id);
             r.entities.remove(&id);
             r.lerps.remove(&id);
+            r.cart_lerps.remove(&id);
             r.stepped.remove(&id);
             r.head_lerps.remove(&id);
             r.pending_items.remove(&id);
@@ -2289,6 +2421,8 @@ impl Game<'_> {
                 self.snap_player_model_pitch();
             }
             C::PlayerLookAt(p) => self.remote_look_at(&p),
+            // ClientCommonPacketListenerImpl.handlePostEffects.
+            C::PostEffects(p) => self.post_effects = p.effects,
             C::SetCamera(p) => self.remote_set_camera(p.camera_id),
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
@@ -2545,6 +2679,7 @@ impl Game<'_> {
                 }
             }
             C::MoveVehicle(p) => self.remote_move_vehicle(p.position, p.yaw),
+            C::MoveMinecartAlongTrack(p) => self.remote_move_minecart(p),
             // ClientPacketListener.handleRotateMob: lerpHeadTo(yHeadRot, 3).
             C::RotateHead(p) => {
                 if let Some(r) = self.remote.as_mut() {
@@ -3686,6 +3821,8 @@ impl Game<'_> {
             // ClientCommonPacketListenerImpl.handleShowDialog / handleClearDialog.
             C::ShowDialog(p) => self.show_play_dialog(&p.dialog),
             C::ClearDialog(_) => self.clear_dialog(),
+            // ClientPacketListener.handleLowDiskSpaceWarning.
+            C::LowDiskSpaceWarning(_) => horizon_client::chunk_io::report_low_disk_space(),
             C::ClearTitles(p) => {
                 self.titles.clear();
                 if p.value {
@@ -4432,6 +4569,8 @@ impl Game<'_> {
             alive: player.health.health() > 0.0,
         };
         let now = client_millis();
+        // LevelLoadingScreen.tick.
+        self.tick_load_progress();
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -5054,6 +5193,7 @@ impl Game<'_> {
             return;
         };
         let mut lerps = std::mem::take(&mut r.lerps);
+        let mut cart_lerps = std::mem::take(&mut r.cart_lerps);
         let stepped = &mut r.stepped;
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
@@ -5308,7 +5448,11 @@ impl Game<'_> {
                 }
                 _ => at,
             };
-            self.tick_remote_objects(&mut step);
+            self.tick_remote_objects(&mut step, |c| {
+                cart_lerps
+                    .get_mut(&(c.id as i32))
+                    .is_some_and(|l| l.tick(c))
+            });
             self.tick_remote_projectiles(&mut step);
             // LightningBolt.tick on a client, and the sky flash fading.
             self.flash = self.flash.saturating_sub(1);
@@ -5319,7 +5463,31 @@ impl Game<'_> {
             for (id, l) in lerps {
                 r.lerps.entry(id).or_insert(l);
             }
+            for (id, l) in cart_lerps {
+                r.cart_lerps.entry(id).or_insert(l);
+            }
         }
+    }
+    /// `ClientPacketListener.handleMinecartAlongTrack`: the steps join the ones
+    /// the minecart has queued, if it runs `NewMinecartBehavior`.
+    fn remote_move_minecart(&mut self, p: play::MoveMinecartAlongTrack) {
+        if !self.carts.iter().any(|c| c.id == p.id as u32) {
+            return;
+        }
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let at = |v: [f64; 3]| Vec3::new(v[0], v[1], v[2]);
+        r.cart_lerps
+            .entry(p.id)
+            .or_insert_with(CartLerp::new)
+            .pending
+            .extend(p.steps.iter().map(|s| CartStep {
+                position: at(s.position),
+                movement: at(s.movement),
+                yaw: horizon_protocol::buf::unpack_degrees(s.yaw),
+                weight: s.weight,
+            }));
     }
     /// `Consumable.onConsumeTick` for another player using a consumable: the
     /// crumbs at their mouth every 4 ticks once 21.875% of its use has passed
@@ -6330,7 +6498,11 @@ impl Game<'_> {
         if self.with_hand(hand, |g| g.remote_use_book(&held)) {
             return true;
         }
-        self.with_hand(hand, |g| g.remote_start_held_use(&held));
+        // BowItem.use and CrossbowItem.use FAIL with nothing to shoot: no
+        // itemUsed (the hand doesn't dip) and the other hand's turn comes.
+        if !self.with_hand(hand, |g| g.remote_start_held_use(&held)) {
+            return false;
+        }
         let gliding = self.player.as_ref().is_some_and(|p| p.fall_flying);
         use_ends_click(&info, gliding)
     }
@@ -6396,9 +6568,11 @@ impl Game<'_> {
     /// the server ends the use: a bow or a trident is let go, a crossbow's
     /// charge ends, a shield is lowered, a spyglass stops scoping. Their
     /// sounds, loaded arrows and thrown tridents come from the server.
-    fn remote_start_held_use(&mut self, held: &ItemStack) {
+    /// False when the use FAILs here: a bow or an uncharged crossbow with
+    /// nothing to shoot.
+    fn remote_start_held_use(&mut self, held: &ItemStack) -> bool {
         if self.using.is_some() {
-            return;
+            return true;
         }
         let bundle = self.items().get(&held.item).is_some_and(|i| i.bundle);
         let start = match &*held.item {
@@ -6409,13 +6583,15 @@ impl Game<'_> {
             // CrossbowItem.use: charging when not charged and with ammunition;
             // a charged one shoots on the server.
             "minecraft:crossbow" => {
-                held.data().is_none_or(|d| d.charged.is_empty())
-                    && (self.creative || self.projectile_slot("minecraft:crossbow").is_some())
+                if held.data().is_some_and(|d| !d.charged.is_empty()) {
+                    return true;
+                }
+                self.creative || self.projectile_slot("minecraft:crossbow").is_some()
             }
             // TridentItem.use: not about to break, Riptide only in water or rain.
             "minecraft:trident" => {
                 self.use_trident(held);
-                return;
+                return true;
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
@@ -6423,7 +6599,7 @@ impl Game<'_> {
             // skips the player's own client), the server's copy tells the others.
             "minecraft:goat_horn" => {
                 self.remote_use_instrument(held);
-                return;
+                return true;
             }
             // EnderEyeItem.use: startUsingItem unless an End portal frame is
             // aimed at, with or without a stronghold to throw the eye at.
@@ -6433,12 +6609,13 @@ impl Game<'_> {
             // ShieldItem.use: anything that blocks attacks, off cooldown.
             _ => {
                 self.raise_shield(self.held_slot());
-                return;
+                return true;
             }
         };
         if start {
             self.using = Some((self.held_slot(), 0));
         }
+        start || !matches!(&*held.item, "minecraft:bow" | "minecraft:crossbow")
     }
     /// `InstrumentItem.use` on this client: unless the horn is on cooldown,
     /// it is held up, plays its sound at the player and starts its cooldown.
@@ -7540,7 +7717,14 @@ impl Game<'_> {
             // chunk status view and progress are the integrated server's alone
             // (`LevelLoadTracker.statusView`, `hasProgress`).
             self.draw_level_loading_background(batch, r.level_load.reason);
-            horizon_client::level_loading::draw(batch, atlas, None, None);
+            match self.integrated.as_ref().map(|i| i.load_view()) {
+                Some(view) => {
+                    let status = |x: i32, z: i32| view.status(x, z);
+                    let progress = view.has_progress().then_some(self.loading_progress);
+                    horizon_client::level_loading::draw(batch, atlas, Some(&status), progress);
+                }
+                None => horizon_client::level_loading::draw(batch, atlas, None, None),
+            }
             return true;
         }
         let cancel = self.connect_cancel((w, h)).is_some();
