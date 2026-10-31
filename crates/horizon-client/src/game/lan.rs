@@ -49,6 +49,40 @@ pub(super) fn forget_sync_data() {
     *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// The registries and tags a server sends without data packs over them, read
+/// on a helper thread while a server's world prepares: most worlds have no
+/// packs, so it is what `sync_data` would load once the world is open.
+pub(super) struct SyncPreload(std::thread::JoinHandle<std::result::Result<SyncData, String>>);
+
+/// Start reading the server's data beside the world's preparation; `None`
+/// when it is read already, or being read (`preload_world_data`).
+pub(super) fn preload_sync_data(root: &std::path::Path) -> Option<SyncPreload> {
+    if !SYNC.try_lock().is_ok_and(|sync| sync.is_none()) {
+        return None;
+    }
+    let root = root.to_owned();
+    std::thread::Builder::new()
+        .name("Server data preload".into())
+        .spawn(move || SyncData::load(&root, &horizon_world::loot::PackOverlay::NONE))
+        .map(SyncPreload)
+        .ok()
+}
+
+impl SyncPreload {
+    /// The world is open: without packs of its own (`overlay`), what was read
+    /// becomes `sync_data`'s; with them, `sync_data` loads them as before.
+    pub(super) fn adopt(self, overlay: &horizon_world::loot::PackOverlay) {
+        if !overlay.files.is_empty() {
+            return;
+        }
+        if let Ok(read) = self.0.join() {
+            SYNC.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert_with(|| read.map(Arc::new));
+        }
+    }
+}
+
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
 #[derive(Clone, Copy, Debug)]
 pub struct LanSettings {
@@ -98,7 +132,7 @@ pub(super) struct LanHost {
     pub native_commands: Option<HashMap<String, u8>>,
     /// The entities the guests track, described again every tick
     /// (`lan_entities`) over last tick's states.
-    states: lan::entity::States,
+    pub(super) states: lan::entity::States,
 }
 
 impl LanHost {
@@ -1715,6 +1749,7 @@ impl Game<'_> {
             for (id, event, at) in gone {
                 host.hub.entity_event(id, event, at);
             }
+            host.hub.far_level(&self.save);
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
@@ -1880,6 +1915,14 @@ impl Game<'_> {
                 .take()
                 .expect("the hub is back after the quiet commands");
         }
+        if self.native_net_waiting() {
+            self.lan = Some(host);
+            self.run_native_net();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the mod messages");
+        }
         if !host.hub.native_menu_events.is_empty() {
             self.lan = Some(host);
             self.run_native_menu_events();
@@ -1903,6 +1946,7 @@ impl Game<'_> {
         self.lan_sync_border(&mut host);
         host.hub.anticheat_ping();
         drop(holding);
+        self.flush_native_net(&mut host);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
         // A blast from a guest's attack, and a mace's wind burst.
@@ -2400,6 +2444,7 @@ impl Game<'_> {
             m.extra.fall_flying = body.gliding;
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
+            m.extra.previous_velocity = m.velocity;
             (m.extra.arrow_count, m.extra.stinger_count) = g.stuck;
             m.extra.shoulder_parrots = g.shoulders;
             m.velocity = g
@@ -2576,7 +2621,24 @@ impl Game<'_> {
 }
 
 /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` for an item in use: 1, and 2 when
-/// it is the off hand's.
+/// it is the off hand's. A stop is 0 here; vanilla leaves bit 1 set, so its
+/// stop of an off-hand use is 2. Both mean "not using" (bit 0 is clear), and
+/// nothing reads bit 1 without bit 0.
 pub(super) fn living_flags(using: Option<(usize, u32)>) -> i8 {
     using.map_or(0, |(slot, _)| if slot == OFFHAND_SLOT { 3 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OFFHAND_SLOT, living_flags};
+
+    /// `LivingEntity.startUsingItem` sets flag 1 for the use and flag 2 for
+    /// the off hand, so an off-hand use is 3, not 2. A reader takes bit 0 as
+    /// `isUsingItem` and bit 1 as `getUsedItemHand`.
+    #[test]
+    fn an_off_hand_use_flags_both_the_use_and_the_hand() {
+        assert_eq!(living_flags(None), 0);
+        assert_eq!(living_flags(Some((0, 12))), 1);
+        assert_eq!(living_flags(Some((OFFHAND_SLOT, 12))), 3);
+    }
 }

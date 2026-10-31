@@ -136,6 +136,8 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// The teleport awaited keeps the player's motion (`Hub::teleport_keeping_motion`).
+    pub awaiting_keeps_motion: bool,
     /// Through a portal, until `LanHub::land` gives the client its position:
     /// the moves it sent from the old level are ignored, as they would be
     /// while it had a teleport to accept.
@@ -161,6 +163,10 @@ pub struct Guest {
     pub position_this_tick: bool,
     /// Violation levels and the checks' state (the anticheat, when on).
     pub anticheat: horizon_anticheat::Player,
+    /// The movement prediction's replay of the client's own moves (only while it runs).
+    pub replay: Option<Box<super::prediction::Replay>>,
+    /// What the server sent this tick that changes how the client moves (only while it records).
+    pub changes: std::sync::Mutex<Vec<horizon_anticheat::prediction::Change>>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -174,6 +180,8 @@ pub struct Guest {
     pub center: Option<(i32, i32)>,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
+    /// The far ring's chunks still to send, past the view distance (`lan::far`), closest first.
+    pub far_queue: Vec<(i32, i32)>,
     /// PlayerChunkSender: batches sent but not yet acknowledged, how many
     /// may be (1 until the client's first acknowledgement, then 10), the
     /// rate the client asks for and the chunks the next batch may hold.
@@ -344,6 +352,7 @@ impl Guest {
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            awaiting_keeps_motion: false,
             landing: false,
             teleport_counter: 0,
             watching: false,
@@ -355,12 +364,15 @@ impl Guest {
             above_ground_ticks: 0,
             position_this_tick: false,
             anticheat: Default::default(),
+            replay: None,
+            changes: Default::default(),
             moved: false,
             loaded: false,
             load_timeout: CLIENT_LOADED_TIMEOUT,
             center: None,
             sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
+            far_queue: Vec::new(),
             unacknowledged: 0,
             max_unacknowledged: 1,
             chunks_per_tick: 9.0,
@@ -426,7 +438,38 @@ impl Guest {
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {
+        if self.anticheat.record.is_some() {
+            self.note_change(packet);
+        }
         self.sender.send(packet.encode());
+    }
+    /// What `packet` changes about how the client moves, for the prediction's replay: kept until
+    /// the tick's ping places it (`Hub::anticheat_ping`).
+    fn note_change(&self, packet: &play::Clientbound) {
+        use horizon_anticheat::prediction::Change;
+        use play::Clientbound as C;
+        let own = |id: i32| id == self.entity_id;
+        let change = match packet {
+            C::SetEntityMotion(p) if own(p.id) => {
+                Change::Velocity(horizon_protocol::buf::LpVec3::quantize(p.velocity))
+            }
+            C::Explode(p) => match p.knockback {
+                Some(k) => Change::Knockback(k),
+                None => return,
+            },
+            C::UpdateAttributes(p) if own(p.id) => Change::State,
+            C::UpdateMobEffect(p) if own(p.id) => Change::State,
+            C::RemoveMobEffect(p) if own(p.id) => Change::State,
+            C::PlayerAbilities(_) => Change::Abilities,
+            // The chest slot (InventoryMenu's slot 6): a glider.
+            C::ContainerSetSlot(p) if p.container == 0 && p.slot == 6 => Change::Abilities,
+            C::ContainerSetContent(p) if p.container == 0 => Change::Abilities,
+            _ => return,
+        };
+        self.changes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(change);
     }
     /// `Entity.stopRiding`: out of the vehicle it rode.
     pub fn stop_riding(&mut self) {

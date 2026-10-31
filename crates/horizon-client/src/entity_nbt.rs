@@ -3290,6 +3290,37 @@ mod sheep_nbt_tests {
         assert_eq!((back.extra.color, back.extra.sheared), (14, true));
     }
 
+    /// The only lib test that registers mod effects (once per process).
+    #[test]
+    fn a_mob_keeps_a_mod_effect() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let types: HashMap<String, Arc<MobType>> = crate::mobs::MobTypes::load(&root)
+            .unwrap()
+            .types
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+        crate::brewing::register_mod_effects([(
+            "testfx:glow".to_owned(),
+            1,
+            crate::brewing::Category::Harmful,
+        )]);
+        let mut m = Mob::new(1, types["minecraft:pig"].clone(), Vec3::ZERO, 0.0);
+        m.add_effect(crate::brewing::effect("testfx:glow").unwrap().id, 200, 2);
+        let tag = mob_to_nbt(&m, [1, 2, 3, 4], None);
+        let Some(Tag::List(saved)) = tag.get("active_effects") else {
+            panic!("no active_effects");
+        };
+        assert_eq!(text(saved[0].get("id")).as_deref(), Some("testfx:glow"));
+        let back = mob_from_nbt(&tag, &types, 2).unwrap();
+        assert_eq!(back.extra.effects, [("testfx:glow", 200, 2)]);
+    }
+
     #[test]
     fn farm_animals_keep_their_variant_and_sound_variant() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

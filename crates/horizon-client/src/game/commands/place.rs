@@ -1,15 +1,15 @@
 //! `/place template` (PlaceCommand): a saved structure template placed with
 //! rotation, mirroring and integrity.
-use super::{Arg, Context, Game, R, Screen, err};
-use horizon_client::{containers::BlockEntity, save, text::Text};
-use horizon_core::random::{LegacyRandom, RandomSource};
+use super::{Arg, Context, Game, R, err};
+use crate::game::structure_blocks::{load_settings, template_size};
+use horizon_client::text::Text;
+use horizon_core::position::BlockPos;
 use horizon_world::{
     compression::Compression,
     nbt::{self, Limits, Tag},
-    registry::BlockStateId,
-    worldgen::structure::{Mirror, Rotation, StateTransforms, StructureTemplate},
+    worldgen::structure::{Mirror, Rotation, StateTransforms},
 };
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
@@ -29,16 +29,6 @@ impl Game<'_> {
                 StateTransforms::from_json(&json, self.pack.assets.registry.len()).ok()
             })
             .as_ref()
-    }
-    /// A template by id: a structure block's save in the world, then the
-    /// vanilla templates.
-    fn load_template(&self, id: &str) -> Option<Arc<StructureTemplate>> {
-        let tag = self.read_template_tag(id)?;
-        Some(Arc::new(StructureTemplate::from_nbt(
-            &tag,
-            self.pack.assets.registry,
-            self.state_transforms()?,
-        )))
     }
     /// A template's tree by id, as `StructureTemplateManager` reads it from
     /// disk.
@@ -219,28 +209,6 @@ impl Game<'_> {
             }
         }
     }
-    /// The barrier step of `StructureTemplate.placeInWorld`, run where a block
-    /// with saved data goes, even over the same state: `LevelChunk.setBlockState`
-    /// removes what is there, with no side effects. A removed jukebox stops its
-    /// song (`place_state` does that itself when the block's name changes), and
-    /// a container screen open on it closes.
-    fn clear_template_block_entity(&mut self, at: [i32; 3], state: BlockStateId) {
-        let key = (at[0], at[1], at[2]);
-        self.world.block_names.remove(&key);
-        let Some(replaced) = self.world.block_entities.remove(&key) else {
-            return;
-        };
-        let previous = self.world.block(at[0], at[1], at[2]);
-        let same_name = self.res.facts().get(previous).name == self.res.facts().get(state).name;
-        if same_name && matches!(replaced, BlockEntity::Jukebox(_)) {
-            self.jukebox_removed(at);
-        }
-        if self.container == Some(key) {
-            self.container_opener_event(key, false);
-            self.container = None;
-            self.screen = Screen::Playing;
-        }
-    }
     pub(super) fn cmd_place(&mut self, ctx: &Context) -> R<i32> {
         let Some(Arg::Resource(id)) = ctx.get("template").cloned() else {
             return Ok(0);
@@ -263,76 +231,20 @@ impl Game<'_> {
             _ => 1.0,
         };
         let seed = match ctx.get("seed") {
-            Some(Arg::Int(s)) => i64::from(*s),
+            Some(Arg::Int(s)) => *s,
             _ => 0,
         };
         let strict = ctx.has("strict");
-        let template = self
-            .load_template(&id)
-            .filter(|t| !t.palettes().is_empty())
+        let entry = self
+            .template_entry(&id)
             .ok_or_else(|| err("commands.place.template.invalid", &[&id]))?;
-        let transforms = self
-            .state_transforms()
-            .ok_or_else(|| err("commands.place.template.invalid", &[&id]))?;
-        let mut random = LegacyRandom::new(if seed == 0 {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(1, |d| d.as_millis() as i64)
-        } else {
-            seed
-        });
-        let palette = template.palette_index(&mut random);
-        let blocks = template.palettes()[palette].blocks().to_vec();
-        let mut placed = 0;
-        for b in &blocks {
-            if integrity < 1.0 && random.next_float() > integrity {
-                continue;
-            }
-            let t = StructureTemplate::transform(b.pos, mirror, rotation, [0, 0, 0]);
-            let at = [pos[0] + t[0], pos[1] + t[1], pos[2] + t[2]];
-            if !self.world.chunks.contains_key(&(at[0] >> 4, at[2] >> 4)) {
-                continue;
-            }
-            let state = transforms.rotate(transforms.mirror(b.state, mirror), rotation);
-            if b.nbt.is_some() {
-                self.clear_template_block_entity(at, state);
-            }
-            if self.place_state(at, state, strict).is_ok() {
-                placed += 1;
-            }
-            if let Some(data) = &b.nbt {
-                let mut tag = Tag::Compound(data.clone());
-                if let Tag::Compound(c) = &mut tag {
-                    c.insert("x".into(), Tag::Int(at[0]));
-                    c.insert("y".into(), Tag::Int(at[1]));
-                    c.insert("z".into(), Tag::Int(at[2]));
-                }
-                if let Some((_, entity)) = save::decode_block_entity(&tag) {
-                    let key = (at[0], at[1], at[2]);
-                    self.world.block_entities.insert(key, entity);
-                    self.update_spawner_display(key);
-                }
-            }
-        }
-        // Entities saved with the template.
-        for e in &template.entities {
-            let p = StructureTemplate::transform_vec(e.pos, mirror, rotation, [0, 0, 0]);
-            let at = [
-                f64::from(pos[0]) + p[0],
-                f64::from(pos[1]) + p[1],
-                f64::from(pos[2]) + p[2],
-            ];
-            let mut tag = Tag::Compound(e.nbt.clone());
-            if let Tag::Compound(c) = &mut tag {
-                c.insert(
-                    "Pos".into(),
-                    Tag::List(at.iter().map(|v| Tag::Double(v.to_bits())).collect()),
-                );
-                c.remove(&"UUID".into());
-            }
-            self.spawn_entity_from_nbt(tag);
-        }
-        if placed == 0 {
+        let size = template_size(&entry.tag);
+        let end = [pos[0] + size[0], pos[2] + size[2]];
+        self.place_check_loaded([pos[0] >> 4, pos[2] >> 4], [end[0] >> 4, end[1] >> 4])?;
+        // `placeInWorld(level, pos, pos, settings, createRandom(seed), flags)`.
+        let settings = load_settings(mirror, rotation, integrity, i64::from(seed), strict);
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        if !self.place_template_entry(&entry, at, settings, mirror, rotation) {
             return Err(err("commands.place.template.failed", &[]));
         }
         self.feedback(Text::translate(

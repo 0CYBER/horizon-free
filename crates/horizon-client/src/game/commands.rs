@@ -1891,7 +1891,7 @@ impl Game<'_> {
         self.feedback(Text::translate(key, &[]));
         Ok(duration.unwrap_or(-1))
     }
-    fn kill_target(&mut self, t: Target) {
+    pub(super) fn kill_target(&mut self, t: Target) {
         // An entity in another level is killed in the level that holds it.
         let _ = self.in_target_level(t, |g| g.kill_target_in_level(t));
     }

@@ -435,6 +435,6 @@ mod junction_tests {
         let name = vec![b'a' as u16; 32_764];
         assert!(super::mount_point_buffer(&name).is_err());
         assert!(super::mount_point_buffer(&vec![0; 32_768]).is_err());
-        assert!(super::mount_point_buffer(&vec![0; 100]).is_ok());
+        assert!(super::mount_point_buffer(&[0; 100]).is_ok());
     }
 }

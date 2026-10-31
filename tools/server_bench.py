@@ -261,8 +261,11 @@ def server_command(kind, directory, args):
     # The same settings, without the web panel.
     toml.write_text(re.sub(r'(?m)^bind = "127\.0\.0\.1:8130"', 'bind = ""', toml.read_text()))
     if args.anticheat:
-        # Every check on with its defaults (docs/anticheat.md), to measure what it costs.
-        toml.write_text(toml.read_text() + '\n[anticheat]\nenabled = true\n')
+        # Every check on with its defaults (docs/anticheat.md), to measure what it costs. The bots move
+        # by their own rules, not vanilla's: the prediction plays every move again but, with this
+        # tolerance, flags none (an honest player's moves agree).
+        toml.write_text(toml.read_text()
+                        + '\n[anticheat]\nenabled = true\n[anticheat.prediction]\ntolerance = 1000.0\n')
     return [server, '--dir', directory, 'run']
 
 

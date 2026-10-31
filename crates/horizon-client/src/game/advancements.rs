@@ -212,8 +212,8 @@ impl adv::World for View<'_, '_> {
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
         let items = &self.0.res.items();
         match registry {
-            "item" => items.item_tags.get(tag).is_some_and(|t| t.contains(id)),
-            "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
+            "item" => items.item_in_tag(tag, id),
+            "block" => items.block_in_tag(tag, id),
             "entity_type" => self.0.res.mob_data().entity_has(tag, id),
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
             "damage_type" => self
@@ -432,7 +432,10 @@ impl Game<'_> {
                 .effects
                 .list
                 .iter()
-                .map(|e| (format!("minecraft:{}", e.id), e.amplifier, e.duration))
+                .map(|e| {
+                    let id = horizon_client::brewing::namespaced(e.id);
+                    (id.to_owned(), e.amplifier, e.duration)
+                })
                 .collect(),
             gamemode: Some(self.mode.name().to_owned()),
             ..Default::default()
@@ -592,6 +595,39 @@ impl Game<'_> {
             self.trigger_criteria(&tree, &list, |c, _| {
                 c["recipes"].as_str() == Some(r.as_str())
             });
+        }
+    }
+    /// `KnowledgeBookItem.use`: the recipes the book names become known and it
+    /// is used up. A book naming a recipe this server does not have is
+    /// vanilla's `Invalid recipe: {}` and knows nothing. Whether the click
+    /// ends here: `InteractionResult.SUCCESS` does and swings, `FAIL` leaves
+    /// the other hand its turn (`Minecraft.startUseItem`).
+    pub(super) fn use_knowledge_book(&mut self, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:knowledge_book" {
+            return false;
+        }
+        let slot = self.held_slot();
+        let mut hand = self.stack_in(slot).cloned();
+        let infinite = self.creative;
+        let index = &world_stations!(self).recipe_index;
+        let result = self
+            .level
+            .recipe_book
+            .use_knowledge_book(index, &mut hand, infinite);
+        *self.stack_in_mut(slot) = hand;
+        match result {
+            Ok(unlocked) => {
+                self.recipe_unlocked(&unlocked);
+                self.stats.add("used", &stack.item, 1);
+                self.swing_arm();
+                true
+            }
+            Err(invalid) => {
+                if let Some(id) = invalid {
+                    log::error!("Invalid recipe: {id}");
+                }
+                false
+            }
         }
     }
     /// `PlayerAdvancements.award` once done: rewards, toast, announcement.

@@ -41,6 +41,21 @@
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"
     },
     {
+      "name": "random_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_random_tick"
+    },
+    {
+      "name": "tick_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"
+    },
+    {
+      "name": "update_shape",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_update_shape"
+    },
+    {
       "name": "hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"
@@ -59,6 +74,11 @@
       "name": "command",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_command"
+    },
+    {
+      "name": "commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_commands"
     },
     {
       "name": "zoom",
@@ -209,6 +229,86 @@
       "name": "attack_entity",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
+    },
+    {
+      "name": "net_from_client",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_net_from_client"
+    },
+    {
+      "name": "net_from_server",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_net_from_server"
+    },
+    {
+      "name": "player_died",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_died"
+    },
+    {
+      "name": "mob_spawned",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_spawned"
+    },
+    {
+      "name": "mob_killed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_killed"
+    },
+    {
+      "name": "item_dropped",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_dropped"
+    },
+    {
+      "name": "item_picked_up",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_picked_up"
+    },
+    {
+      "name": "hurt_enemy",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"
+    },
+    {
+      "name": "inventory_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_tick"
+    },
+    {
+      "name": "on_equip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_on_equip"
+    },
+    {
+      "name": "block_signal",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"
+    },
+    {
+      "name": "is_signal_source",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"
+    },
+    {
+      "name": "health_hud",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud"
+    },
+    {
+      "name": "interact_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"
+    },
+    {
+      "name": "left_click_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"
+    },
+    {
+      "name": "player_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_tick"
     }
   ]
 }

@@ -576,18 +576,40 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        // The stand's box and id, before the hit may remove it.
-        let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
         let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
-        let hurt = self.punch_armor_stand(i);
-        if hurt {
-            self.attack_effects(
+        let hurt = self.hit_armor_stand(i, |g, area, id| {
+            g.attack_effects(
                 area,
                 Some(id as i32),
                 super::mace::Spared::Stand(id),
                 magic.then_some(id as i32),
             );
+        });
+        if hurt {
             self.swing_arm();
+        }
+        hurt
+    }
+    /// A player's attack on the stand `i` once it is picked: the stand's own
+    /// hurt, `before_weapon` (the attack's sounds and particles, given the
+    /// stand's box and id) and `Player.itemAttackInteraction`, which treats
+    /// the stand as a living target: the held weapon's hit and post-attack
+    /// effects.
+    pub(super) fn hit_armor_stand(
+        &mut self,
+        i: usize,
+        before_weapon: impl FnOnce(&mut Self, Aabb, u32),
+    ) -> bool {
+        // The stand's box, id and place, before the hit may remove it.
+        let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (center, on_ground) = (
+            self.armor_stands[i].position,
+            self.armor_stands[i].on_ground,
+        );
+        let hurt = self.punch_armor_stand(i);
+        if hurt {
+            before_weapon(self, area, id);
+            self.weapon_hit_stand(id, center, on_ground);
         }
         hurt
     }

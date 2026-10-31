@@ -431,6 +431,9 @@ const LEGACY_PRESET_NAMES: [(&str, horizon_client::save::WorldPreset); 2] = [
     ),
 ];
 
+/// server.properties' line for `server.toml`'s `max_view_distance` (horizon-server writes it).
+const FAR_PROPERTY: &str = "horizon-max-view-distance";
+
 /// Identifier.tryParse: `namespace:path`, or a path in `minecraft`.
 fn parse_identifier(text: &str) -> Option<String> {
     let (namespace, path) = text.split_once(':').unwrap_or(("minecraft", text));
@@ -695,6 +698,8 @@ impl Game<'_> {
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
         self.native_lifecycle_open_started();
+        // The registries the server sends are read while the world prepares.
+        let sync = super::lan::preload_sync_data(&self.options.resources);
         self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),
@@ -831,6 +836,9 @@ impl Game<'_> {
             guest_commands: true,
             force_game_mode: props.force_game_mode,
         };
+        if let Some(sync) = sync {
+            sync.adopt(&self.pack_files());
+        }
         if let Err(e) = self.lan_host(settings, net, config, None) {
             log("WARN", "**** FAILED TO BIND TO PORT!");
             log("WARN", &format!("The exception was: {e}"));
@@ -839,7 +847,22 @@ impl Game<'_> {
         }
         self.sync_ops(&lists);
         let anticheat = load_anticheat();
+        // Horizon's far ring (docs/hosting.md): server.toml's `max_view_distance`.
+        let far = props
+            .raw
+            .get(FAR_PROPERTY)
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .unwrap_or(0)
+            .clamp(0, 32);
+        let (registry, biomes) = (self.pack.assets.registry, self.res.biomes().clone());
         if let Some(host) = self.lan.as_mut() {
+            if far > host.hub.config.view_distance {
+                host.hub.far = Some(horizon_client::lan::far::Far::new(far, registry, biomes));
+                log(
+                    "INFO",
+                    &format!("Sending saved chunks up to {far} chunks away (max_view_distance)"),
+                );
+            }
             host.hub.set_anticheat(anticheat);
             host.hub.spawn_protection = props.spawn_protection;
             host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
@@ -882,6 +905,7 @@ impl Game<'_> {
         let mut next = Instant::now();
         self.fns.permission = Some(props.function_permission_level.clamp(0, 4) as u8);
         let watchdog = Watchdog::start(props.max_tick_time);
+        let mut braked = Instant::now();
         while !state.stop {
             let tick_start = Instant::now();
             if let Some(watchdog) = &watchdog {
@@ -941,6 +965,15 @@ impl Game<'_> {
             }
             // MinecraftServer.tickServer records each tick's time, for /tick query (and the status).
             self.clock.record(tick_start.elapsed());
+            // The far ring's brake, once a second on the average tick.
+            if braked.elapsed() >= Duration::from_secs(1)
+                && let Some(host) = self.lan.as_mut()
+                && let Some(far) = host.hub.far.as_mut()
+            {
+                braked = Instant::now();
+                let mspt = self.clock.average_nanos() as f64 / 1e6;
+                far.brake(mspt, host.hub.config.view_distance);
+            }
             state.ticked(Instant::now());
             self.wait_for_next_server_tick(&mut next, paused);
         }
