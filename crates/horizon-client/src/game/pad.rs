@@ -8,7 +8,7 @@ use horizon_client::{
     Result,
     gamepad::{self, Button, Edges, GlyphStyle, HealthWatch, PadState, Rumble},
     keybinds::{KeyBinds, key_code, mouse_button},
-    mouse::Rotation,
+    keymapping::SNEAK,
 };
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -214,12 +214,16 @@ impl Game<'_> {
             "key.sneak"
                 if self.settings.controller.toggle_sneak && !self.settings.toggle_crouch =>
             {
-                // A stick click flips sneaking instead of holding it.
-                if down {
-                    let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
-                    self.mapped_key(KeyCode::ShiftLeft, !sneaking, false)?;
+                // A stick click flips sneaking instead of holding it, as
+                // vanilla's toggle crouch does: a screen opening releases it
+                // and closing restores it (ToggleKeyMapping).
+                if !down {
+                    return Ok(());
                 }
-                Ok(())
+                let screen_open = self.screen != Screen::Playing || self.title.is_some();
+                self.toggles.pad_toggle(SNEAK, screen_open);
+                self.sync_toggle(SNEAK);
+                self.key_pressed(KeyCode::ShiftLeft)
             }
             _ => {
                 let default = KeyBinds::default_of(action);
@@ -285,15 +289,7 @@ impl Game<'_> {
         if yaw == 0.0 && pitch == 0.0 {
             return;
         }
-        let mut rotation = Rotation {
-            x_rot: self.pitch,
-            y_rot: self.yaw,
-            x_rot_o: self.pitch,
-            y_rot_o: self.yaw,
-        };
-        rotation.turn(f64::from(yaw / 0.15), f64::from(pitch / 0.15));
-        self.yaw = rotation.y_rot;
-        self.pitch = rotation.x_rot;
+        self.turn_player(f64::from(yaw / 0.15), f64::from(pitch / 0.15));
     }
 
     /// Vibrate the active pad, when vibration is on and the pad is the one

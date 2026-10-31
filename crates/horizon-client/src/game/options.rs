@@ -181,11 +181,23 @@ impl Game<'_> {
             .options
             .shortcut(&self.gui.atlas, shortcut, &mut self.clipboard)
     }
-    pub(super) fn options_scroll(&mut self, amount: f32) {
+    pub(super) fn options_scroll(&mut self, amount: f32) -> Result<()> {
+        let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
+            [r.config.width as i32, r.config.height as i32]
+        });
+        if self.ui.options.page() == Page::Video && self.has_control_down() {
+            // VideoSettingsScreen.mouseScrolled: Ctrl with the wheel steps the GUI scale.
+            let mut ui = std::mem::take(&mut self.ui.options);
+            let events = ui.video_wheel_gui_scale(&mut self.settings, framebuffer, amount);
+            self.ui.options = ui;
+            return self.handle_option_events(events);
+        }
         let size = self.gui_size();
-        self.ui
-            .options
-            .scroll_at(&self.settings, size, self.cursor, amount);
+        let events =
+            self.ui
+                .options
+                .wheel(&mut self.settings, size, self.cursor, framebuffer, amount);
+        self.handle_option_events(events)
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {
@@ -208,6 +220,12 @@ impl Game<'_> {
                 Event::SliderDrag => {
                     self.apply_settings();
                 }
+                // Options.createSoundSliderOptionInstance: the preview plays
+                // only without a level (on the title screen's options).
+                Event::Volume(source, volume) if self.title.is_some() => {
+                    self.audio.preview(source, volume);
+                }
+                Event::Volume(..) => {}
                 Event::CopyAgentDetails => {
                     use horizon_client::clipboard::Clipboard;
                     let text = self.agent_details();
@@ -277,8 +295,34 @@ impl Game<'_> {
         self.ui.chat.rescale(&self.gui.atlas);
         self.creative_screen.forget_items();
     }
+    /// Window.updateFullscreenIfChanged: only a changed option asks the
+    /// window to change, so applying settings never undoes a fullscreen
+    /// the compositor set up.
+    fn apply_fullscreen(&mut self) {
+        if let Some(w) = self.window.clone() {
+            let modes = w
+                .current_monitor()
+                .or_else(|| w.primary_monitor())
+                .map(|m| horizon_client::window::monitor_video_modes(&m))
+                .unwrap_or_default();
+            let in_video_screen = self.screen == Screen::Options
+                && self.ui.options.page() == horizon_client::options_ui::Page::Video;
+            let wanted = self.settings.fullscreen;
+            let exclusive = self.settings.file.bool("exclusiveFullscreen");
+            let preferred = self
+                .settings
+                .file
+                .fullscreen_resolution
+                .as_deref()
+                .and_then(horizon_client::window::VideoMode::read);
+            self.fullscreen
+                .apply(&w, wanted, exclusive, preferred, in_video_screen);
+            self.settings.video_modes = modes;
+        }
+    }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
     pub(super) fn apply_ui_settings(&mut self) {
+        self.apply_fullscreen();
         let s = &self.settings;
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
@@ -286,6 +330,10 @@ impl Game<'_> {
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
+            r.set_texture_filtering(
+                s.file.int("textureFiltering"),
+                s.file.int("maxAnisotropyBit"),
+            );
             r.set_world_post(
                 s.horizon.resolution_scale as f32 / 100.0,
                 s.horizon.fxaa,
@@ -300,14 +348,6 @@ impl Game<'_> {
                 s.horizon.hdr_ui_brightness as f32 / 100.0,
                 &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
-        }
-        // Window.updateFullscreenIfChanged: only a changed option asks the
-        // window to change, so applying settings never undoes a fullscreen
-        // the compositor set up.
-        if let Some(w) = &self.window
-            && let Some(want) = self.fullscreen.request(s.fullscreen)
-        {
-            w.set_fullscreen(want.then_some(Fullscreen::Borderless(None)));
         }
         let mut volumes = s.volumes;
         volumes[0] = 1.0;
@@ -360,7 +400,11 @@ impl Game<'_> {
                 .as_ref()
                 .is_some_and(|w| w.is_minimized().unwrap_or(false)),
             focused: self.focused,
-            exclusive_fullscreen: false,
+            // Window.isExclusiveFullscreen.
+            exclusive_fullscreen: self
+                .window
+                .as_ref()
+                .is_some_and(|w| matches!(w.fullscreen(), Some(Fullscreen::Exclusive(_)))),
             now_ms: self.started.elapsed().as_millis() as i64,
             latest_input_ms: self.last_input.duration_since(self.started).as_millis() as i64,
             has_level: self.title.is_none(),

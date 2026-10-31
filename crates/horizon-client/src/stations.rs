@@ -9,6 +9,7 @@ use crate::{
     items::{ItemStack, Items},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_world::loot::PackOverlay;
 use serde_json::Value;
 use std::{fs, path::Path, sync::Arc};
 
@@ -24,14 +25,14 @@ pub struct StationData {
     pub recipe_index: crate::recipe_book::RecipeIndex,
 }
 impl StationData {
-    pub fn load(root: &Path, items: &Items) -> Self {
+    pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
         Self {
             enchantments: std::sync::Arc::clone(&items.enchantments),
-            recipes: StationRecipes::load(root, items),
-            brewing: crate::brewing::Brewing::load(root, items),
+            recipes: StationRecipes::load(root, items, overlay),
+            brewing: crate::brewing::Brewing::load(root, items, overlay),
             trades: crate::merchant::Trades::load(root),
             banners: crate::banner::Banners::load(root),
-            recipe_index: crate::recipe_book::RecipeIndex::load(root),
+            recipe_index: crate::recipe_book::RecipeIndex::load(root, overlay),
         }
     }
 }
@@ -483,7 +484,7 @@ fn ingredient(v: &Value, items: &Items) -> Ingredient {
     Ingredient::parse(v, items).unwrap_or_else(|| Ingredient::of(Vec::new()))
 }
 impl StationRecipes {
-    pub fn load(root: &Path, items: &Items) -> Self {
+    pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
         // Vanilla's recipes, then the content mods' (docs/modpacks.md).
         let mut files = Vec::new();
         let namespaces =
@@ -499,17 +500,32 @@ impl StationRecipes {
             more.sort();
             files.extend(more.into_iter().map(|p| (namespace.clone(), p)));
         }
-        let mut smithing = Vec::new();
-        let mut stonecutting = Vec::new();
-        for (namespace, p) in files {
-            let Ok(bytes) = fs::read(&p) else { continue };
-            let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+        let mut sources: Vec<(String, Value)> = files
+            .iter()
+            .filter_map(|(namespace, p)| {
+                let bytes = fs::read(p).ok()?;
+                let v = serde_json::from_slice::<Value>(&bytes).ok()?;
+                let id = format!(
+                    "{namespace}:{}",
+                    p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+                );
+                Some((id, v))
+            })
+            .collect();
+        // The world's packs' recipes over the game's own: the top pack's
+        // file for each id replaces it (`SimpleJsonResourceReloadListener`).
+        for (id, files) in overlay.kind("recipe") {
+            let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
                 continue;
             };
-            let id = format!(
-                "{namespace}:{}",
-                p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
-            );
+            match sources.iter_mut().find(|(n, _)| n == id) {
+                Some(slot) => slot.1 = v,
+                None => sources.push((id.to_owned(), v)),
+            }
+        }
+        let mut smithing = Vec::new();
+        let mut stonecutting = Vec::new();
+        for (id, v) in sources {
             match v["type"].as_str().unwrap_or("") {
                 "minecraft:smithing_transform" => smithing.push(Smithing::Transform {
                     id,
@@ -905,8 +921,8 @@ mod tests {
         if !root.join("items.json").exists() {
             return;
         }
-        let items = Items::tags_only(&root).unwrap();
-        let data = StationData::load(&root, &items);
+        let items = Items::tags_only(&root, &PackOverlay::NONE).unwrap();
+        let data = StationData::load(&root, &items, &PackOverlay::NONE);
         let e = &data.enchantments;
         assert_eq!(e.list.len(), 43);
         assert_eq!(

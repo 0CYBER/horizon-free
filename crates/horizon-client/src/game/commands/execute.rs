@@ -32,6 +32,8 @@ pub(in crate::game) struct Source {
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
     pub block: Option<(i32, i32, i32)>,
+    /// The command block minecart whose output this source is.
+    pub cart: Option<u32>,
 }
 
 /// Where `execute store` writes.
@@ -94,6 +96,7 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
     /// The server as a source (function ticks and schedules): the world spawn.
@@ -108,9 +111,10 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
-    pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
+    pub(in crate::game) fn target_rotation(&self, t: Target) -> [f32; 2] {
         match t {
             Target::Player => [self.yaw, self.pitch],
             Target::Guest(conn) => self
@@ -674,7 +678,8 @@ impl Game<'_> {
                             self.target_by_uuid(horizon_client::lan::playerdata::ints_uuid(uuid))
                         }
                         horizon_client::mobs::leash::Holder::Mob(i) => Some(Target::Mob(i)),
-                        horizon_client::mobs::leash::Holder::Knot(_) => None,
+                        horizon_client::mobs::leash::Holder::Boat(_)
+                        | horizon_client::mobs::leash::Holder::Knot(_) => None,
                     })
                     .into_iter()
                     .collect(),
@@ -785,8 +790,8 @@ impl Game<'_> {
     }
     /// The highest block of a heightmap type at a column (`Level.getHeight`).
     fn heightmap_at(&self, kind: &str, x: i32, z: i32) -> i32 {
-        let top = horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT;
-        for y in (horizon_client::chunk::MIN_Y..top).rev() {
+        let top = self.world.top_y();
+        for y in (self.world.bottom_y()..top).rev() {
             let state = self.world.block(x, y, z);
             if state == self.world.air {
                 continue;
@@ -809,7 +814,7 @@ impl Game<'_> {
                 return y + 1;
             }
         }
-        horizon_client::chunk::MIN_Y
+        self.world.bottom_y()
     }
     /// A `store` modifier: a new callback in the source's chain.
     fn store_source(&mut self, c: &Context, s: Source) -> R<Source> {

@@ -310,12 +310,19 @@ impl Game<'_> {
             None => (0, None),
         };
         let count = Self::int(ctx, "count").unwrap_or(1).max(1) as u32;
-        Ok(Some(ItemStack {
+        let stack = ItemStack {
             item: id.as_str().into(),
             count,
             damage,
             extra,
-        }))
+        };
+        // ItemInput.createItemStack: a count above the stack's max (its
+        // max_stack_size component, else the item's) is refused.
+        let max_stack = self.stack_max_size(&stack);
+        if count > max_stack {
+            return Err(err("arguments.item.overstacked", &[&id, &max_stack]));
+        }
+        Ok(Some(stack))
     }
     /// One item modifier (a typed object, a list or a datapack reference)
     /// applied to a stack; `None` when the stack ends up empty.
@@ -596,11 +603,11 @@ impl Game<'_> {
     }
     /// `ItemStack.getMaxStackSize`: the max_stack_size component, else the
     /// item's.
-    pub(super) fn stack_max_size(&self, s: &ItemStack) -> u32 {
+    pub(in crate::game) fn stack_max_size(&self, s: &ItemStack) -> u32 {
         if let Some(Tag::Int(n)) = s.data().and_then(|d| d.other("minecraft:max_stack_size")) {
             return (*n).clamp(1, 99) as u32;
         }
-        self.res.items().get(&s.item).map_or(64, |i| i.max_stack)
+        self.items().get(&s.item).map_or(64, |i| i.max_stack)
     }
     /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
     /// a registered one.
