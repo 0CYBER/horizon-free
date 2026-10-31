@@ -175,6 +175,7 @@ impl Game<'_> {
         });
         self.clicks.destroying = destroying;
         self.attack_clicks = 0;
+        self.use_clicks = 0;
         self.request_remote_mining_stop();
         self.mining = None;
     }
@@ -203,12 +204,18 @@ impl Game<'_> {
     /// attack clicks since the last tick and the held attack button.
     pub(super) fn tick_local_hand(&mut self) -> Result<()> {
         let attack_clicks = std::mem::take(&mut self.attack_clicks);
+        let use_clicks = std::mem::take(&mut self.use_clicks);
         if self.screen == Screen::Playing && self.title.is_none() && self.sleeping.is_none() {
             let mut clicks = std::mem::take(&mut self.clicks);
             // keyAttack.isDown(); playing implies the grabbed mouse here
             // (scripts under --control hold buttons without grabbing it).
             let down = self.left;
             let ticks = self.clicks.destroying.ticks;
+            // Minecraft.hitResult is picked once per frame: a creative break
+            // does not move the use that follows it past the broken block.
+            if use_clicks > 0 && attack_clicks > 0 {
+                self.tick_hit = Some(self.pick());
+            }
             let mut world = GameHands {
                 game: self,
                 error: None,
@@ -217,8 +224,24 @@ impl Game<'_> {
             let error = world.error.take();
             self.clicks = clicks;
             if let Some(e) = error {
+                self.tick_hit = None;
                 return Err(e);
             }
+            // Use clicks follow the attack clicks within the tick, against
+            // the block the attack may just have broken.
+            let mut used = Ok(());
+            for _ in 0..use_clicks {
+                if self.using.is_some() {
+                    break;
+                }
+                used = self.use_with_hand();
+                self.use_delay = 4;
+                if used.is_err() {
+                    break;
+                }
+            }
+            self.tick_hit = None;
+            used?;
             // A tick of breaking: the hit sound every fourth tick and the
             // cracking particles.
             let d = &self.clicks.destroying;

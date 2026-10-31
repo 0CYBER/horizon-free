@@ -1,8 +1,9 @@
 // The built-in stand-ins for the vanilla post shaders a `post_effect` chain can
 // name (`core/screenquad`, `post/rotscale`, `post/invert`, `post/blit`,
 // `post/bits`, `post/color_convolve`, `post/box_blur`, `post/spiderclip`).
-// Coordinates stay in the chain's own convention (v up from the bottom edge) and
-// are flipped only where a texture is read.
+// Targets keep GL's rows (row 0 is the bottom edge): the passes draw with clip y
+// negated (`vs_quad_gl`, `vs_rotscale`) and read their textures as they are;
+// `vs_quad` with `fs_blit` is the flip between the frame and a chain's `main`.
 
 // OutSize, InSize | BlurSize, menu blur radius.
 @group(0) @binding(0) var<uniform> info: array<vec4<f32>, 2>;
@@ -27,10 +28,10 @@ fn fcf(i: u32) -> f32 {
     return fs_cfg[i / 4u][i % 4u];
 }
 fn read_in(uv: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(in_tex, in_smp, vec2(uv.x, 1.0 - uv.y), 0.0);
+    return textureSampleLevel(in_tex, in_smp, uv, 0.0);
 }
 fn read_blur(uv: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(blur_tex, blur_smp, vec2(uv.x, 1.0 - uv.y), 0.0);
+    return textureSampleLevel(blur_tex, blur_smp, uv, 0.0);
 }
 
 fn corner(i: u32) -> vec2<f32> {
@@ -46,10 +47,19 @@ fn corner(i: u32) -> vec2<f32> {
     return out;
 }
 
+@vertex fn vs_quad_gl(@builtin(vertex_index) i: u32) -> Out {
+    let p = corner(i);
+    var out: Out;
+    out.clip = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
+    out.uv = p;
+    out.scaled = p;
+    return out;
+}
+
 @vertex fn vs_rotscale(@builtin(vertex_index) i: u32) -> Out {
     let p = corner(i);
     var out: Out;
-    out.clip = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    out.clip = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
     out.uv = p;
     let radians = vcf(4u) * 0.0174532925;
     let c = cos(radians);

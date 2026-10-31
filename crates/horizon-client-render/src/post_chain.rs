@@ -5,12 +5,20 @@
 //! frame drawn so far, before the HUD.
 //!
 //! The JSON is read at run time from the active resource root, so a resource pack
-//! can replace or add chains. The shaders the passes name are Horizon's own
-//! stand-ins (`post_chain.wgsl`) for the vanilla `core/screenquad`, `post/rotscale`,
-//! `post/invert`, `post/blit`, `post/bits`, `post/color_convolve`, `post/box_blur`
-//! and `post/spiderclip`; a chain that names any other shader, a texture or depth
-//! input, or a target the frame has no equivalent of fails like a chain that does
-//! not compile (`GameRenderer.failedPostEffects`), once, and is skipped.
+//! can replace or add chains. So are the shaders the passes name: their GLSL
+//! (`shaders/<path>.vsh` / `.fsh`, vanilla's or a pack's own) is translated to naga
+//! by `post_glsl` and bound as vanilla binds it (`SamplerInfo`, `Globals`, the pass's
+//! own uniform blocks, a sampler per input: a target's colour or depth, or a
+//! `textures/effect/` image). Horizon's own WGSL stand-ins (`post_chain.wgsl`) for the
+//! vanilla `core/screenquad`, `post/rotscale`, `post/invert`, `post/blit`, `post/bits`,
+//! `post/color_convolve`, `post/box_blur` and `post/spiderclip` are only the fallback
+//! for a pass whose GLSL is missing or does not translate. A chain that cannot load
+//! (an unknown shader without a stand-in, a target the frame has no equivalent of)
+//! fails like a chain that does not compile (`GameRenderer.failedPostEffects`), once,
+//! and is skipped.
+//!
+//! Every target keeps GL's rows (row 0 is the bottom edge): the frame is flipped into
+//! the chain's `main` and back, and each pass draws with clip y negated.
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,6 +27,9 @@ use std::path::{Path, PathBuf};
 const MAIN: &str = "minecraft:main";
 /// `PostPass`'s uniform buffers are 128 bytes.
 const BLOCK_BYTES: usize = 128;
+/// Our uniform buffers are bigger than the blocks they feed, so a shader that declares
+/// more than vanilla writes still binds.
+const UNIFORM_BYTES: u64 = 256;
 
 /// `ResourceLocation.withDefaultNamespace` on an id read from a chain.
 fn normalise(id: &str) -> String {
@@ -104,11 +115,20 @@ pub struct InternalTarget {
     pub clear: [f32; 4],
 }
 
-/// `PostChainConfig.TargetInput` (the only input kind Horizon draws).
+/// What an input reads: `PostChainConfig.TargetInput` or `TextureInput`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    /// A target's colour, or its depth buffer (`use_depth_buffer`).
+    Target { id: String, depth: bool },
+    /// `textures/effect/<location>.png`.
+    Texture { location: String },
+}
+
+/// `PostChainConfig.Input`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Input {
     pub sampler: String,
-    pub target: String,
+    pub source: Source,
     pub bilinear: bool,
 }
 
@@ -233,24 +253,40 @@ impl Config {
                 .into_iter()
                 .flatten()
             {
-                if i.get("location").is_some()
-                    || i.get("use_depth_buffer").and_then(Value::as_bool) == Some(true)
-                {
-                    return Err(format!("pass {n}: texture and depth inputs are not drawn"));
-                }
                 let sampler = i["sampler_name"]
                     .as_str()
                     .ok_or(format!("pass {n}: an input without sampler_name"))?;
                 if inputs.iter().any(|x| x.sampler == sampler) {
                     return Err(format!("Encountered repeated sampler name: {sampler}"));
                 }
+                // Codec.xor(TextureInput, TargetInput): exactly one of them parses.
+                let source = match (i.get("location"), i.get("target")) {
+                    (Some(location), None) => {
+                        for key in ["width", "height"] {
+                            if !i.get(key).and_then(Value::as_u64).is_some_and(|v| v > 0) {
+                                return Err(format!("pass {n}: a texture input needs a {key}"));
+                            }
+                        }
+                        Source::Texture {
+                            location: normalise(
+                                location
+                                    .as_str()
+                                    .ok_or(format!("pass {n}: a bad location"))?,
+                            ),
+                        }
+                    }
+                    (None, Some(target)) => Source::Target {
+                        id: normalise(target.as_str().ok_or(format!("pass {n}: a bad target"))?),
+                        depth: i
+                            .get("use_depth_buffer")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    },
+                    _ => return Err(format!("pass {n}: an input needs a location or a target")),
+                };
                 inputs.push(Input {
                     sampler: sampler.to_owned(),
-                    target: normalise(
-                        i["target"]
-                            .as_str()
-                            .ok_or(format!("pass {n}: an input without a target"))?,
-                    ),
+                    source,
                     bilinear: i.get("bilinear").and_then(Value::as_bool).unwrap_or(false),
                 });
             }
@@ -281,7 +317,11 @@ impl Config {
     pub fn external_targets(&self) -> HashSet<&str> {
         let mut out = HashSet::new();
         for p in &self.passes {
-            for id in p.inputs.iter().map(|i| &i.target).chain([&p.output]) {
+            let targets = p.inputs.iter().filter_map(|i| match &i.source {
+                Source::Target { id, .. } => Some(id),
+                Source::Texture { .. } => None,
+            });
+            for id in targets.chain([&p.output]) {
                 if !self.targets.contains_key(id) {
                     out.insert(id.as_str());
                 }
@@ -293,9 +333,10 @@ impl Config {
 
 /// A stand-in for a vanilla vertex shader: its entry point and uniform block.
 const VERTEX: [(&str, &str, &str); 2] = [
-    ("minecraft:core/screenquad", "vs_quad", ""),
+    ("minecraft:core/screenquad", "vs_quad_gl", ""),
     ("minecraft:post/rotscale", "vs_rotscale", "RotScaleConfig"),
 ];
+// The stand-ins are the fallback for a pass whose GLSL is missing or does not translate.
 /// A stand-in for a vanilla fragment shader: entry point, uniform block and the
 /// samplers it reads (`In`, then `Blur`).
 const FRAGMENT: [(&str, &str, &str, usize); 6] = [
@@ -318,7 +359,85 @@ const FRAGMENT: [(&str, &str, &str, usize); 6] = [
 ];
 const SAMPLERS: [&str; 2] = ["In", "Blur"];
 
+/// A pass input resolved against the chain's targets.
+#[derive(Clone, Copy)]
+enum Src {
+    Target {
+        index: usize,
+        depth: bool,
+    },
+    /// `Chain::images`.
+    Image(usize),
+}
+
+#[derive(Clone, Copy)]
+struct InputRef {
+    src: Src,
+    bilinear: bool,
+}
+
+/// What a translated shader's uniform block is bound to.
+enum Block {
+    /// `SamplerInfo`: `OutSize`, then each input's size.
+    Info,
+    /// `Globals` (`GlobalSettingsUniform`).
+    Globals,
+    /// One of the pass's `uniforms` groups.
+    Custom(wgpu::Buffer),
+}
+
+/// A pass running the resources' own GLSL, translated by `post_glsl`.
+struct Translated {
+    layout: wgpu::BindGroupLayout,
+    vertex: wgpu::ShaderModule,
+    fragment: wgpu::ShaderModule,
+    pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// Binding and what it holds.
+    blocks: Vec<(u32, Block)>,
+    /// A sampler's texture binding (the sampler object follows) and the input it reads.
+    samplers: Vec<(u32, usize)>,
+}
+
+impl Translated {
+    fn ensure_pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if self.pipelines.contains_key(&format) {
+            return;
+        }
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Post effect"),
+            bind_group_layouts: &[Some(&self.layout)],
+            ..Default::default()
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Post effect pass"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &self.vertex,
+                entry_point: Some("main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.fragment,
+                entry_point: Some("main"),
+                // ColorTargetState.DEFAULT: no blending.
+                targets: &[Some(format.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.pipelines.insert(format, pipeline);
+    }
+}
+
 struct Pass {
+    /// Every input in the chain's order (translated passes).
+    refs: Vec<InputRef>,
+    translated: Option<Translated>,
     vs: &'static str,
     fs: &'static str,
     /// Per sampler slot: the target read and its filter.
@@ -336,6 +455,11 @@ struct Chain {
     passes: Vec<Pass>,
     /// Textures for `targets[1..]`, with the size they were made at.
     textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    /// A depth buffer per target a pass reads the depth of (`DEFAULT_DEPTH`, cleared to 1;
+    /// the frame's own when it has one).
+    depths: Vec<Option<(wgpu::Texture, wgpu::TextureView)>>,
+    /// The `textures/effect/` images the passes read, with their size.
+    images: Vec<(wgpu::Texture, wgpu::TextureView, [u32; 2])>,
     size: [u32; 2],
 }
 
@@ -347,6 +471,40 @@ pub struct Request<'a> {
     pub root: &'a Path,
     /// `menuBackgroundBlurriness`, the radius of a `box_blur` pass with `Radius` 0.
     pub menu_blur_radius: f32,
+    /// What the `Globals` block holds besides the screen size and the blur radius.
+    pub globals: Globals,
+}
+
+/// `GlobalSettingsUniform.update`'s other values.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Globals {
+    pub camera_block_pos: [i32; 3],
+    pub glint_alpha: f32,
+    /// The camera's offset inside its block.
+    pub camera_offset: [f32; 3],
+    /// `(gameTime % 24000 + partialTick) / 24000`.
+    pub game_time: f32,
+    pub use_rgss: bool,
+}
+
+impl Globals {
+    /// The std140 block: `ivec3, float, vec3, float, vec2, int, int`.
+    fn bytes(&self, size: [u32; 2], menu_blur_radius: i32) -> [u8; 48] {
+        let mut out = Vec::with_capacity(48);
+        for v in self.camera_block_pos {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&self.glint_alpha.to_le_bytes());
+        for v in self.camera_offset {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&self.game_time.to_le_bytes());
+        out.extend_from_slice(&(size[0] as f32).to_le_bytes());
+        out.extend_from_slice(&(size[1] as f32).to_le_bytes());
+        out.extend_from_slice(&menu_blur_radius.to_le_bytes());
+        out.extend_from_slice(&i32::from(self.use_rgss).to_le_bytes());
+        out.try_into().expect("48 bytes")
+    }
 }
 
 impl<'a> Request<'a> {
@@ -356,6 +514,7 @@ impl<'a> Request<'a> {
             effects: &[],
             root: Path::new(""),
             menu_blur_radius: 0.0,
+            globals: Globals::default(),
         }
     }
 }
@@ -374,8 +533,12 @@ pub struct PostEffects {
     root: PathBuf,
     /// The frame as the chains see `minecraft:main`.
     work: Option<(wgpu::Texture, wgpu::TextureView)>,
-    /// The pass that puts the work texture back on the frame.
+    /// The frame as copied, before it is flipped into `work`.
+    staging: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// The flip between the frame and GL's rows.
     blit: Option<Pass>,
+    /// The `Globals` block.
+    globals: wgpu::Buffer,
 }
 
 fn resource_path(root: &Path, id: &str) -> PathBuf {
@@ -451,7 +614,14 @@ impl PostEffects {
             failed: HashSet::new(),
             root: PathBuf::new(),
             work: None,
+            staging: None,
             blit: None,
+            globals: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Post effect globals"),
+                size: UNIFORM_BYTES,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
         }
     }
 
@@ -537,51 +707,279 @@ impl PostEffects {
         .chain(config.targets.iter().map(|(k, v)| (k.clone(), v.clone())))
         .collect();
         let index = |name: &str| targets.iter().position(|(t, _)| t == name);
+        let mut images = Vec::new();
         let mut passes = Vec::new();
         for (n, p) in config.passes.iter().enumerate() {
-            let &(_, vs, vs_block) = VERTEX
-                .iter()
-                .find(|v| v.0 == p.vertex)
-                .ok_or(format!("pass {n}: no vertex shader {}", p.vertex))?;
-            let &(_, fs, fs_block, samplers) = FRAGMENT
-                .iter()
-                .find(|f| f.0 == p.fragment)
-                .ok_or(format!("pass {n}: no fragment shader {}", p.fragment))?;
             let output = index(&p.output).ok_or("a target is missing")?;
-            let mut inputs = [(0, false); 2];
-            for (slot, name) in SAMPLERS.iter().enumerate().take(samplers) {
-                let input = p
-                    .inputs
-                    .iter()
-                    .find(|i| i.sampler == *name)
-                    .ok_or(format!("pass {n}: {} needs the sampler {name}", p.fragment))?;
-                let target = index(&input.target).ok_or("a target is missing")?;
-                if target == output {
-                    return Err(format!("pass {n}: reads the target it writes"));
-                }
-                inputs[slot] = (target, input.bilinear);
-            }
-            // A shader reading one sampler binds the same texture to the other,
-            // never the target it writes.
-            if samplers == 1 {
-                inputs[1] = inputs[0];
-            }
-            let block = |name: &str| match p.uniforms.get(name) {
-                Some(values) => pack_block(values),
-                None if name.is_empty() => Ok([0; BLOCK_BYTES]),
-                None => Err(format!("pass {n}: the uniform block {name} is missing")),
+            let pass = match self.translated_pass(device, queue, n, p, output, &index, &mut images)
+            {
+                Ok(pass) => pass,
+                Err(e) => match self.standin_pass(device, queue, n, p, output, &index) {
+                    Ok(pass) => {
+                        log::debug!("post effect {id} pass {n} uses the built-in shaders: {e}");
+                        pass
+                    }
+                    Err(_) => return Err(e),
+                },
             };
-            let pass = Pass::new(device, vs, fs, inputs, output);
-            queue.write_buffer(&pass.vs_block, 0, &block(vs_block)?);
-            queue.write_buffer(&pass.fs_block, 0, &block(fs_block)?);
             passes.push(pass);
         }
         Ok(Some(Chain {
             targets,
             passes,
             textures: Vec::new(),
+            depths: Vec::new(),
+            images,
             size: [0, 0],
         }))
+    }
+
+    /// A pass over the resources' own GLSL (`PostChain.createPass`).
+    #[allow(clippy::too_many_arguments)]
+    fn translated_pass(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        n: usize,
+        p: &PassConfig,
+        output: usize,
+        index: &dyn Fn(&str) -> Option<usize>,
+        images: &mut Vec<(wgpu::Texture, wgpu::TextureView, [u32; 2])>,
+    ) -> Result<Pass, String> {
+        let program = crate::post_glsl::translate(&self.root, &p.vertex, &p.fragment)?;
+        let mut refs = Vec::new();
+        for input in &p.inputs {
+            let src = match &input.source {
+                Source::Target { id, depth } => {
+                    let target = index(id).ok_or("a target is missing")?;
+                    if target == output && !depth {
+                        return Err(format!("pass {n}: reads the target it writes"));
+                    }
+                    Src::Target {
+                        index: target,
+                        depth: *depth,
+                    }
+                }
+                Source::Texture { location } => {
+                    images.push(self.image(device, queue, location)?);
+                    Src::Image(images.len() - 1)
+                }
+            };
+            refs.push(InputRef {
+                src,
+                bilinear: input.bilinear,
+            });
+        }
+        let mut pass = Pass::new(device, "", "", [(0, false); 2], output);
+        let mut entries = Vec::new();
+        let mut blocks = Vec::new();
+        for (name, binding) in &program.blocks {
+            let block = match name.as_str() {
+                "SamplerInfo" => Block::Info,
+                "Globals" => Block::Globals,
+                other => {
+                    let values = p
+                        .uniforms
+                        .get(other)
+                        .ok_or(format!("pass {n}: the uniform block {other} is missing"))?;
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Post effect uniforms"),
+                        size: UNIFORM_BYTES,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    queue.write_buffer(&buffer, 0, &pack_block(values)?);
+                    Block::Custom(buffer)
+                }
+            };
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: *binding,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            });
+            blocks.push((*binding, block));
+        }
+        let mut samplers = Vec::new();
+        for (name, texture) in &program.samplers {
+            let input = name.strip_suffix("Sampler").unwrap_or(name);
+            let slot = p
+                .inputs
+                .iter()
+                .position(|i| i.sampler == input)
+                .ok_or(format!("pass {n}: no input for the sampler {name}"))?;
+            // A depth buffer is read unfiltered.
+            let depth = matches!(refs[slot].src, Src::Target { depth: true, .. });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: *texture,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: !depth },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: texture + 1,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Sampler(if depth {
+                    wgpu::SamplerBindingType::NonFiltering
+                } else {
+                    wgpu::SamplerBindingType::Filtering
+                }),
+                count: None,
+            });
+            samplers.push((*texture, slot));
+        }
+        let module = |module: naga::Module| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Post effect shader"),
+                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+            })
+        };
+        pass.refs = refs;
+        pass.translated = Some(Translated {
+            layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Post effect bindings"),
+                entries: &entries,
+            }),
+            vertex: module(program.vertex),
+            fragment: module(program.fragment),
+            pipelines: HashMap::new(),
+            blocks,
+            samplers,
+        });
+        Ok(pass)
+    }
+
+    /// A pass over Horizon's WGSL stand-ins for the vanilla post shaders.
+    fn standin_pass(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        n: usize,
+        p: &PassConfig,
+        output: usize,
+        index: &dyn Fn(&str) -> Option<usize>,
+    ) -> Result<Pass, String> {
+        let &(_, vs, vs_block) = VERTEX
+            .iter()
+            .find(|v| v.0 == p.vertex)
+            .ok_or(format!("pass {n}: no vertex shader {}", p.vertex))?;
+        let &(_, fs, fs_block, samplers) = FRAGMENT
+            .iter()
+            .find(|f| f.0 == p.fragment)
+            .ok_or(format!("pass {n}: no fragment shader {}", p.fragment))?;
+        let mut inputs = [(0, false); 2];
+        for (slot, name) in SAMPLERS.iter().enumerate().take(samplers) {
+            let input = p
+                .inputs
+                .iter()
+                .find(|i| i.sampler == *name)
+                .ok_or(format!("pass {n}: {} needs the sampler {name}", p.fragment))?;
+            let Source::Target { id, depth: false } = &input.source else {
+                return Err(format!(
+                    "pass {n}: the built-in shaders read target colours"
+                ));
+            };
+            let target = index(id).ok_or("a target is missing")?;
+            if target == output {
+                return Err(format!("pass {n}: reads the target it writes"));
+            }
+            inputs[slot] = (target, input.bilinear);
+        }
+        // A shader reading one sampler binds the same texture to the other,
+        // never the target it writes.
+        if samplers == 1 {
+            inputs[1] = inputs[0];
+        }
+        let block = |name: &str| match p.uniforms.get(name) {
+            Some(values) => pack_block(values),
+            None if name.is_empty() => Ok([0; BLOCK_BYTES]),
+            None => Err(format!("pass {n}: the uniform block {name} is missing")),
+        };
+        let pass = Pass::new(device, vs, fs, inputs, output);
+        queue.write_buffer(&pass.vs_block, 0, &block(vs_block)?);
+        queue.write_buffer(&pass.fs_block, 0, &block(fs_block)?);
+        Ok(pass)
+    }
+
+    /// `textures/effect/<location>.png` as a texture (`PostChain.createPass`'s `TextureInput`).
+    fn image(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        location: &str,
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, [u32; 2]), String> {
+        let (ns, path) = location.split_once(':').unwrap_or(("minecraft", location));
+        let file = self
+            .root
+            .join("assets")
+            .join(ns)
+            .join("textures/effect")
+            .join(format!("{path}.png"));
+        let mut decoder = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&file).map_err(|e| format!("{}: {e}", file.display()))?,
+        ));
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+        let mut data = vec![0; reader.output_buffer_size().ok_or("a huge image")?];
+        let info = reader.next_frame(&mut data).map_err(|e| e.to_string())?;
+        let rgba: Vec<u8> = match info.color_type {
+            png::ColorType::Rgba => data[..info.buffer_size()].to_vec(),
+            png::ColorType::Rgb => data[..info.buffer_size()]
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect(),
+            png::ColorType::Grayscale => data[..info.buffer_size()]
+                .iter()
+                .flat_map(|g| [*g, *g, *g, 255])
+                .collect(),
+            png::ColorType::GrayscaleAlpha => data[..info.buffer_size()]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[0], p[0], p[1]])
+                .collect(),
+            png::ColorType::Indexed => return Err("an indexed image".into()),
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Post effect image"),
+            size: wgpu::Extent3d {
+                width: info.width,
+                height: info.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(info.width * 4),
+                rows_per_image: Some(info.height),
+            },
+            wgpu::Extent3d {
+                width: info.width,
+                height: info.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&Default::default());
+        Ok((texture, view, [info.width, info.height]))
     }
 
     fn texture(
@@ -611,8 +1009,10 @@ impl PostEffects {
 
     /// Runs the chains `req` names over `frame` (the frame's texture, copied from)
     /// and puts the result on `target` (its view): `GameRenderer.preparePostEffects`
-    /// then `applyPostEffects`. `frame` must allow `COPY_SRC`. Returns whether any
-    /// chain ran.
+    /// then `applyPostEffects`. `frame` must allow `COPY_SRC`. `depth` is the frame's
+    /// depth buffer, for a pass that reads the depth of `minecraft:main` (it must
+    /// allow `TEXTURE_BINDING`; without it that depth reads as 1). Returns whether
+    /// any chain ran.
     #[allow(clippy::too_many_arguments)]
     pub fn apply(
         &mut self,
@@ -622,6 +1022,7 @@ impl PostEffects {
         frame: &wgpu::Texture,
         target: &wgpu::TextureView,
         size: [u32; 2],
+        depth: Option<&wgpu::TextureView>,
         req: &Request,
     ) -> bool {
         self.use_root(req.root);
@@ -655,6 +1056,16 @@ impl PostEffects {
         }) {
             self.work = Some(Self::texture(device, format, size));
         }
+        if self.staging.as_ref().is_none_or(|(t, _)| {
+            t.size().width != size[0] || t.size().height != size[1] || t.format() != format
+        }) {
+            self.staging = Some(Self::texture(device, format, size));
+        }
+        queue.write_buffer(
+            &self.globals,
+            0,
+            &req.globals.bytes(size, req.menu_blur_radius as i32),
+        );
         if self.blit.is_none() {
             let pass = Pass::new(device, "vs_quad", "fs_blit", [(0, false); 2], 0);
             queue.write_buffer(&pass.vs_block, 0, &[0; BLOCK_BYTES]);
@@ -671,7 +1082,25 @@ impl PostEffects {
             depth_or_array_layers: 1,
         };
         let work = self.work.take().expect("made above");
-        encoder.copy_texture_to_texture(frame.as_image_copy(), work.0.as_image_copy(), copy_size);
+        let staging = self.staging.take().expect("made above");
+        let blit = self.blit.take().expect("made above");
+        // The chains see GL's rows: flip the frame in, and back out below.
+        encoder.copy_texture_to_texture(
+            frame.as_image_copy(),
+            staging.0.as_image_copy(),
+            copy_size,
+        );
+        self.run_pass(
+            device,
+            queue,
+            encoder,
+            &blit,
+            [(&staging.1, size), (&staging.1, size)],
+            (&work.1, size),
+            0.0,
+            format,
+        );
+        self.staging = Some(staging);
         for id in &applied {
             let mut chain = self.chains.remove(id).flatten().expect("loaded above");
             self.run_chain(
@@ -681,13 +1110,13 @@ impl PostEffects {
                 &work.1,
                 &mut chain,
                 size,
+                depth,
                 req.menu_blur_radius,
                 format,
             );
             self.chains.insert(id.clone(), Some(chain));
         }
         // The frame, as the chains left it.
-        let blit = self.blit.take().expect("made above");
         self.run_pass(
             device,
             queue,
@@ -712,9 +1141,15 @@ impl PostEffects {
         main: &wgpu::TextureView,
         chain: &mut Chain,
         size: [u32; 2],
+        main_depth: Option<&wgpu::TextureView>,
         menu_radius: f32,
         format: wgpu::TextureFormat,
     ) {
+        for pass in &mut chain.passes {
+            if let Some(translated) = &mut pass.translated {
+                translated.ensure_pipeline(device, format);
+            }
+        }
         let sizes: Vec<[u32; 2]> = chain
             .targets
             .iter()
@@ -729,6 +1164,57 @@ impl PostEffects {
                 .iter()
                 .map(|s| Self::texture(device, format, *s))
                 .collect();
+            let mut wanted = vec![false; chain.targets.len()];
+            for r in chain.passes.iter().flat_map(|p| &p.refs) {
+                if let Src::Target { index, depth: true } = r.src {
+                    wanted[index] = true;
+                }
+            }
+            chain.depths = wanted
+                .iter()
+                .zip(&sizes)
+                .map(|(wanted, s)| {
+                    wanted.then(|| {
+                        let texture = device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("Post effect depth"),
+                            size: wgpu::Extent3d {
+                                width: s[0],
+                                height: s[1],
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Depth32Float,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                            view_formats: &[],
+                        });
+                        let view = texture.create_view(&Default::default());
+                        (texture, view)
+                    })
+                })
+                .collect();
+        }
+        // The depth of a target nothing draws depth into stays at the far plane.
+        for (i, depth) in chain.depths.iter().enumerate() {
+            if let Some((_, view)) = depth
+                && !(i == 0 && main_depth.is_some())
+            {
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Post effect depth clear"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+            }
         }
         for (i, (_, t)) in chain.targets.iter().enumerate().skip(1) {
             if remade || !t.persistent {
@@ -753,6 +1239,7 @@ impl PostEffects {
                 });
             }
         }
+        let chain = &*chain;
         let view = |i: usize| {
             if i == 0 {
                 main
@@ -760,7 +1247,36 @@ impl PostEffects {
                 &chain.textures[i - 1].1
             }
         };
+        let depth_view = |i: usize| match (i, main_depth) {
+            (0, Some(depth)) => depth,
+            _ => &chain.depths[i].as_ref().expect("made for the pass").1,
+        };
         for pass in &chain.passes {
+            if let Some(translated) = &pass.translated {
+                let inputs: Vec<(&wgpu::TextureView, [u32; 2])> = pass
+                    .refs
+                    .iter()
+                    .map(|r| match r.src {
+                        Src::Target {
+                            index,
+                            depth: false,
+                        } => (view(index), sizes[index]),
+                        Src::Target { index, depth: true } => (depth_view(index), sizes[index]),
+                        Src::Image(i) => (&chain.images[i].1, chain.images[i].2),
+                    })
+                    .collect();
+                self.draw_translated(
+                    device,
+                    queue,
+                    encoder,
+                    pass,
+                    translated,
+                    &inputs,
+                    (view(pass.output), sizes[pass.output]),
+                    format,
+                );
+                continue;
+            }
             let [a, b] = pass.inputs.map(|(t, _)| (view(t), sizes[t]));
             self.run_pass(
                 device,
@@ -773,6 +1289,84 @@ impl PostEffects {
                 format,
             );
         }
+    }
+
+    /// `PostPass.addToFrame`'s execution for a translated pass.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_translated(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &Pass,
+        translated: &Translated,
+        inputs: &[(&wgpu::TextureView, [u32; 2])],
+        output: (&wgpu::TextureView, [u32; 2]),
+        format: wgpu::TextureFormat,
+    ) {
+        let Some(pipeline) = translated.pipelines.get(&format) else {
+            return;
+        };
+        // SamplerInfo: OutSize, then each input's size.
+        let sizes = std::iter::once(output.1).chain(inputs.iter().map(|i| i.1));
+        let info: Vec<u8> = sizes
+            .flat_map(|s| s.map(|v| (v as f32).to_le_bytes()))
+            .flatten()
+            .collect();
+        queue.write_buffer(
+            &pass.info,
+            0,
+            &info[..info.len().min(UNIFORM_BYTES as usize)],
+        );
+        let mut entries = Vec::new();
+        for (binding, block) in &translated.blocks {
+            let buffer = match block {
+                Block::Info => &pass.info,
+                Block::Globals => &self.globals,
+                Block::Custom(buffer) => buffer,
+            };
+            entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: buffer.as_entire_binding(),
+            });
+        }
+        for (binding, slot) in &translated.samplers {
+            let ref_ = &pass.refs[*slot];
+            let depth = matches!(ref_.src, Src::Target { depth: true, .. });
+            entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: wgpu::BindingResource::TextureView(inputs[*slot].0),
+            });
+            entries.push(wgpu::BindGroupEntry {
+                binding: binding + 1,
+                resource: wgpu::BindingResource::Sampler(if ref_.bilinear && !depth {
+                    &self.bilinear
+                } else {
+                    &self.nearest
+                }),
+            });
+        }
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Post effect pass"),
+            layout: &translated.layout,
+            entries: &entries,
+        });
+        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Post effect pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output.0,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        rp.set_pipeline(pipeline);
+        rp.set_bind_group(0, &group, &[]);
+        rp.draw(0..3, 0..1);
     }
 
     /// `PostPass.addToFrame`'s execution: one fullscreen triangle.
@@ -885,9 +1479,11 @@ impl Pass {
             fs,
             inputs,
             output,
-            info: buffer("Post effect sampler info", 32),
+            info: buffer("Post effect sampler info", UNIFORM_BYTES),
             vs_block: buffer("Post effect vertex uniforms", BLOCK_BYTES as u64),
             fs_block: buffer("Post effect fragment uniforms", BLOCK_BYTES as u64),
+            refs: Vec::new(),
+            translated: None,
         }
     }
 }
@@ -937,7 +1533,10 @@ mod tests {
             config.passes[1].inputs,
             [Input {
                 sampler: "In".into(),
-                target: "minecraft:swap".into(),
+                source: Source::Target {
+                    id: "minecraft:swap".into(),
+                    depth: false
+                },
                 bilinear: true
             }]
         );
@@ -976,18 +1575,36 @@ mod tests {
             ))
             .is_err()
         );
-        // Texture and depth inputs are not drawn.
+        // A texture input needs its size; an input is a target or a texture, not both.
+        assert!(Config::parse(&pass(r#"[{"sampler_name":"In","location":"noise"}]"#)).is_err());
         assert!(
             Config::parse(&pass(
-                r#"[{"sampler_name":"In","location":"noise","width":4,"height":4}]"#
+                r#"[{"sampler_name":"In","location":"noise","target":"x","width":4,"height":4}]"#
             ))
             .is_err()
         );
-        assert!(
-            Config::parse(&pass(
-                r#"[{"sampler_name":"In","target":"x","use_depth_buffer":true}]"#
-            ))
-            .is_err()
+        let config = Config::parse(&pass(
+            r#"[{"sampler_name":"A","location":"noise","width":4,"height":4,"bilinear":true},
+                {"sampler_name":"B","target":"x","use_depth_buffer":true}]"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            config.passes[0].inputs[0].source,
+            Source::Texture {
+                location: "minecraft:noise".into()
+            }
+        );
+        assert_eq!(
+            config.passes[0].inputs[1].source,
+            Source::Target {
+                id: "minecraft:x".into(),
+                depth: true
+            }
+        );
+        // Only targets can be external.
+        assert_eq!(
+            config.external_targets(),
+            HashSet::from(["minecraft:x", "minecraft:o"])
         );
     }
 
@@ -1091,10 +1708,12 @@ mod tests {
             &frame,
             &view,
             [8, 4],
+            None,
             &Request {
                 effects: names,
                 root,
                 menu_blur_radius: 5.0,
+                globals: Globals::default(),
             },
         );
         let buffer = crate::gfx::copy_frame(device, &mut encoder, &frame, [8, 4]);
@@ -1164,6 +1783,218 @@ mod tests {
 
     /// The chains the prepared vanilla resources hold all load (skipped without
     /// them): none names a shader Horizon lacks.
+    /// Renders `names` over a frame whose top half is red and bottom half green,
+    /// returning the pixel rows 0 and 3 of the 8x4 result.
+    fn run_halves(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        effects: &mut PostEffects,
+        root: &Path,
+        names: &[String],
+    ) -> [[u8; 4]; 2] {
+        let frame = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 8,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut pixels = Vec::new();
+        for y in 0..4 {
+            for _ in 0..8 {
+                pixels.extend_from_slice(if y < 2 {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 255, 0, 255]
+                });
+            }
+        }
+        queue.write_texture(
+            frame.as_image_copy(),
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(32),
+                rows_per_image: Some(4),
+            },
+            frame.size(),
+        );
+        let view = frame.create_view(&Default::default());
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(effects.apply(
+            device,
+            queue,
+            &mut encoder,
+            &frame,
+            &view,
+            [8, 4],
+            None,
+            &Request {
+                effects: names,
+                root,
+                menu_blur_radius: 0.0,
+                globals: Globals::default(),
+            },
+        ));
+        let buffer = crate::gfx::copy_frame(device, &mut encoder, &frame, [8, 4]);
+        queue.submit([encoder.finish()]);
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            panic!("{error}");
+        }
+        buffer.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = buffer.get_mapped_range(..).unwrap();
+        let row = |y: usize| {
+            let at = y * 256;
+            [data[at], data[at + 1], data[at + 2], data[at + 3]]
+        };
+        [row(0), row(3)]
+    }
+
+    /// Frame orientation survives a chain through an intermediate target.
+    #[test]
+    fn a_chain_keeps_the_frame_upright() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let root = scratch(
+            "upright",
+            r#"{"targets":{"swap":{}},"passes":[
+            {"vertex_shader":"minecraft:core/screenquad","fragment_shader":"minecraft:post/blit",
+             "inputs":[{"sampler_name":"In","target":"minecraft:main"}],"output":"swap",
+             "uniforms":{"BlitConfig":[{"name":"ColorModulate","type":"vec4","value":[1.0,1.0,1.0,1.0]}]}},
+            {"vertex_shader":"minecraft:core/screenquad","fragment_shader":"minecraft:post/blit",
+             "inputs":[{"sampler_name":"In","target":"swap"}],"output":"minecraft:main",
+             "uniforms":{"BlitConfig":[{"name":"ColorModulate","type":"vec4","value":[1.0,1.0,1.0,1.0]}]}}]}"#,
+        );
+        let mut effects = PostEffects::new(&device);
+        let [top, bottom] = run_halves(
+            &device,
+            &queue,
+            &mut effects,
+            &root,
+            &["minecraft:upright".to_owned()],
+        );
+        assert_eq!(top, [255, 0, 0, 255]);
+        assert_eq!(bottom, [0, 255, 0, 255]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A chain with its own GLSL, a target read twice, a depth input and a
+    /// `textures/effect` image: nothing here is one of vanilla's shaders.
+    #[test]
+    fn a_chain_runs_its_own_glsl() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let root = scratch(
+            "custom",
+            r#"{"targets":{"half":{"width":4,"height":2}},"passes":[
+            {"vertex_shader":"minecraft:core/quad","fragment_shader":"minecraft:post/mine",
+             "inputs":[{"sampler_name":"In","target":"minecraft:main","bilinear":true},
+                       {"sampler_name":"Depth","target":"minecraft:main","use_depth_buffer":true},
+                       {"sampler_name":"Tint","location":"tint","width":1,"height":1}],
+             "output":"half",
+             "uniforms":{"MineConfig":[{"name":"Scale","type":"float","value":0.5}]}},
+            {"vertex_shader":"minecraft:core/quad","fragment_shader":"minecraft:post/mine",
+             "inputs":[{"sampler_name":"In","target":"half"},
+                       {"sampler_name":"Depth","target":"half","use_depth_buffer":true},
+                       {"sampler_name":"Tint","location":"tint","width":1,"height":1}],
+             "output":"minecraft:main",
+             "uniforms":{"MineConfig":[{"name":"Scale","type":"float","value":1.0}]}}]}"#,
+        );
+        let shaders = root.join("assets/minecraft/shaders");
+        std::fs::create_dir_all(shaders.join("core")).unwrap();
+        std::fs::create_dir_all(shaders.join("post")).unwrap();
+        std::fs::write(
+            shaders.join("core/quad.vsh"),
+            "#version 330\nlayout(location = 0) out vec2 texCoord;\nvoid main() {\n  vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n  gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);\n  texCoord = uv;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            shaders.join("post/mine.fsh"),
+            "#version 330\nuniform sampler2D InSampler;\nuniform sampler2D DepthSampler;\nuniform sampler2D TintSampler;\n\
+             layout(std140) uniform SamplerInfo { vec2 OutSize; vec2 InSize; };\n\
+             layout(std140) uniform MineConfig { float Scale; };\n\
+             layout(location = 0) in vec2 texCoord;\nlayout(location = 0) out vec4 fragColor;\n\
+             void main() {\n  vec4 c = texture(InSampler, texCoord);\n  float d = texture(DepthSampler, texCoord).r;\n\
+               vec4 t = texture(TintSampler, texCoord);\n  fragColor = vec4(c.rgb * t.rgb * Scale * d, 1.0);\n}\n",
+        )
+        .unwrap();
+        // A 1x1 image, (0.5, 1, 1).
+        let effect = root.join("assets/minecraft/textures/effect");
+        std::fs::create_dir_all(&effect).unwrap();
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[128, 255, 255, 255]).unwrap();
+        }
+        std::fs::write(effect.join("tint.png"), png_bytes).unwrap();
+        let mut effects = PostEffects::new(&device);
+        let [top, bottom] = run_halves(
+            &device,
+            &queue,
+            &mut effects,
+            &root,
+            &["minecraft:custom".to_owned()],
+        );
+        // Red (1, 0, 0) * the image (0.5, 1, 1) * 0.5 * depth 1, then again * 1: 0.125.
+        let near = |a: u8, b: u8| a.abs_diff(b) <= 3;
+        assert!(near(top[0], 32) && top[1] == 0 && top[3] == 255, "{top:?}");
+        // Green stays below it: 0.5 * 1 * 1.
+        assert!(bottom[0] == 0 && near(bottom[1], 128), "{bottom:?}");
+        assert!(effects.failed.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Vanilla's own chains run on the GPU without a validation error (skipped
+    /// without the prepared resources).
+    #[test]
+    fn vanilla_chains_run() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root
+            .join("assets/minecraft/post_effect/invert.json")
+            .exists()
+        {
+            return;
+        }
+        for name in ["blur", "creeper", "invert", "spider"] {
+            let mut effects = PostEffects::new(&device);
+            run_halves(
+                &device,
+                &queue,
+                &mut effects,
+                &root,
+                &[format!("minecraft:{name}")],
+            );
+            assert!(effects.failed.is_empty(), "{name}");
+            // The chain ran on the resources' own GLSL, not the stand-ins.
+            let chain = effects.chains[&format!("minecraft:{name}")]
+                .as_ref()
+                .unwrap();
+            assert!(
+                chain.passes.iter().all(|p| p.translated.is_some()),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn vanilla_chains_load() {
         let Some((device, queue)) = device() else {

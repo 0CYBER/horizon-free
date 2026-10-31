@@ -68,8 +68,9 @@ loop iteration next to winit's events.
 
 The Guide / PS / Steam button is left to the system. Sneak on a stick click
 toggles by default (holding a stick in while steering the camera is
-awkward, which is why Bedrock does the same); the controls options can make it
-hold-to-sneak.
+awkward, which is why Bedrock does the same) and acts like vanilla's toggle
+crouch: a screen stands you up while it is open and closing it crouches you
+again. The controls options can make it hold-to-sneak.
 
 ## Menus and inventories
 
