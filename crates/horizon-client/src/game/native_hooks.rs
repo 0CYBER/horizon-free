@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 26 adds the game's shared config folder (`native_config_dir`).
+//!
 //! API 25 adds server sound playback (`native_play_sound`).
 //!
 //! API 24 adds a server block setter (`native_set_block`).
@@ -118,13 +120,18 @@ use horizon_world::{
     nbt::Compound,
     registry::BlockStateId,
 };
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 25;
+pub(crate) const NATIVE_HOOKS_API: u32 = 26;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -1224,6 +1231,16 @@ impl Game<'_> {
         let dir = self.native_data_dir(mod_id);
         let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
     }
+    /// The game's `config/` folder beside `options.txt`, shared by every mod
+    /// as on Fabric and NeoForge: a mod names its own files in it
+    /// (`config/<id>.json`, or a folder of its own). The same folder on the
+    /// window, its server thread and a LAN host; a dedicated server's is in
+    /// its own folder, beside `server.properties`. Made when missing. No
+    /// `self`, so it works from any hook (`Game::native_config_dir()`), the
+    /// level's too. API 26.
+    pub(super) fn native_config_dir() -> Result<PathBuf, String> {
+        config_dir(&Self::options_path())
+    }
     /// Shows the panel beside container screens with these items (at most
     /// 8192), as the game's own slots in pages, with a search box; the
     /// player's clicks, searches and keys over items come back as
@@ -1777,6 +1794,13 @@ fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
     MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
 }
 
+/// `config/` beside `options`, made when missing.
+fn config_dir(options: &Path) -> Result<PathBuf, String> {
+    let dir = options.with_file_name("config");
+    fs::create_dir_all(&dir).map_err(|e| dir.display().to_string() + ": " + &e.to_string())?;
+    Ok(dir)
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -1902,6 +1926,24 @@ mod tests {
         assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
         assert_eq!(mod_menu("minecraft:brewing_stand"), None);
         assert_eq!(mod_menu("hopper"), None);
+    }
+
+    /// The config folder is `config/` beside `options.txt`, made when
+    /// missing.
+    #[test]
+    fn config_dir_is_config_beside_options() {
+        // Callable without a game, from any hook.
+        let _: fn() -> Result<std::path::PathBuf, String> = super::Game::native_config_dir;
+        use super::config_dir;
+        let root = std::env::temp_dir().join(format!("horizon-config-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let options = root.join("options.txt");
+        assert!(!root.join("config").exists());
+        let dir = config_dir(&options).unwrap();
+        assert_eq!(dir, root.join("config"));
+        assert!(dir.is_dir());
+        assert_eq!(config_dir(&options).unwrap(), dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left
