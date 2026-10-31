@@ -680,7 +680,12 @@ impl Game<'_> {
         // `load_world` restored difficulty from level.dat; server.properties wins
         // (vanilla's forceDifficulty), including health_rules used for despawn (#4694).
         self.set_default_game_mode(game_mode);
-        self.ui.difficulty = props.difficulty as u8;
+        // MinecraftServer.setDifficulty: a hardcore world is always hard.
+        self.ui.difficulty = if self.level.hardcore {
+            3
+        } else {
+            props.difficulty as u8
+        };
         self.level.set_difficulty(self.ui.difficulty);
         self.sync_rules();
         if self.ui.difficulty == 0 {
