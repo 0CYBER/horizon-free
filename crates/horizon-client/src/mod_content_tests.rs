@@ -220,6 +220,22 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
         assert_eq!(id("minecraft:mob_effect", "alpha:dull"), 26);
         assert_eq!(id("minecraft:mob_effect", "alpha:zap"), 27);
         assert_eq!(id("minecraft:mob_effect", "ruby:glow"), 28);
+
+        // `/effect` and the mob_effect arguments check ids against this table.
+        let mut commands: J = serde_json::from_str(
+            r#"{"blocks":[],"items":[],"effects":["minecraft:speed"],
+                "by_registry":{"minecraft:mob_effect":{"ids":["minecraft:speed"]}}}"#,
+        )
+        .unwrap();
+        plan.json("command-registries.json", &mut commands).unwrap();
+        let commands: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&commands).unwrap()).unwrap();
+        let want = ["minecraft:speed", "alpha:dull", "alpha:zap", "ruby:glow"];
+        assert_eq!(commands["effects"], serde_json::json!(want));
+        assert_eq!(
+            commands["by_registry"]["minecraft:mob_effect"]["ids"],
+            serde_json::json!(want)
+        );
         drop(plan);
 
         let output = scratch.join(format!("output-{index}"));

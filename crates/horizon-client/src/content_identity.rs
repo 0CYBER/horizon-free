@@ -54,16 +54,16 @@ fn hash_facts(bytes: &[u8]) -> Result<[u8; 32], String> {
 
 /// The content mods' mob effects in `registries.json`, by network id.
 fn mod_effects(bytes: &[u8]) -> Result<Vec<(u64, String)>, String> {
-    let report: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    let mut effects: Vec<(u64, String)> = report["minecraft:mob_effect"]["entries"]
-        .as_object()
+    let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let report = horizon_protocol::registry::Builtin::parse(text).map_err(|e| e.to_string())?;
+    // Names come indexed by network id, so they are already in order.
+    Ok(report
+        .get("minecraft:mob_effect")
         .into_iter()
-        .flatten()
-        .filter(|(name, _)| !name.starts_with("minecraft:"))
-        .filter_map(|(name, e)| Some((e["protocol_id"].as_u64()?, name.clone())))
-        .collect();
-    effects.sort();
-    Ok(effects)
+        .flat_map(|ids| ids.names.iter().enumerate())
+        .filter(|(_, name)| !name.is_empty() && !name.starts_with("minecraft:"))
+        .map(|(id, name)| (id as u64, name.clone()))
+        .collect())
 }
 
 /// The block identity extended with the mods' effects; a root without them
