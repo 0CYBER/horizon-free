@@ -454,7 +454,9 @@ runtime or new dependency. Server-sent events can replace the polling later if a
     not `engine.*`, `panel.*`, `api.*`, nor the RCON, query and management keys, so the API can't widen who
     reaches the server or change what program runs), `DELETE backups?name=`, `GET backups/download?name=`
     (the zip, streamed);
-  - planned: `GET events` (SSE: log lines and metrics).
+  - built (server-admin): `GET events` (server-sent events: log lines, the phase, and the engine's typed join,
+    leave, kick, chat and death events, which the supervisor fetches with `server-events SINCE` on the
+    engine's control endpoint every 250 ms; JSON when the client doesn't ask for a stream).
 - **Auth.** Every call needs `Authorization: Bearer <token from .horizon/api.json>` (file mode 0600), and the
   `Host` header must name the address it listens on (as the panel's). `[api] bind` and `[api] token` fix the
   address and the token for a program that runs elsewhere (a moderation bot); `bind` takes loopback or a

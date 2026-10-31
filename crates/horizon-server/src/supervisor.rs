@@ -37,7 +37,7 @@ pub fn note(shared: &Shared, level: &str, message: &str) {
         chrono::Local::now().format("%H:%M:%S")
     );
     println!("{line}");
-    shared.log.lock().unwrap().push(line);
+    shared.log_line(line);
 }
 
 /// The folder's lock: one supervisor per server folder. Released when the process ends, even by a crash.
@@ -115,6 +115,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
         Err(e) => note(&shared, "WARN", &e),
     }
     sample(shared.clone());
+    crate::events::poll_game(shared.clone());
     schedule_backups(shared.clone());
     check_updates(shared.clone());
     let console = console_lines();
@@ -461,13 +462,20 @@ fn pump(shared: &Arc<Shared>, from: impl Read + Send + 'static, to_stderr: bool)
                 } else {
                     println!("{line}");
                     if line.contains("/INFO]: Done (") {
-                        let mut state = shared.state.lock().unwrap();
-                        if state.phase == Phase::Starting {
-                            state.phase = Phase::Running;
+                        let up = {
+                            let mut state = shared.state.lock().unwrap();
+                            let starting = state.phase == Phase::Starting;
+                            if starting {
+                                state.phase = Phase::Running;
+                            }
+                            starting
+                        };
+                        if up {
+                            shared.emit("phase", serde_json::json!({ "phase": "running" }));
                         }
                     }
                 }
-                shared.log.lock().unwrap().push(line);
+                shared.log_line(line);
             }
         });
 }

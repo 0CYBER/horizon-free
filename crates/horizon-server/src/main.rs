@@ -7,6 +7,7 @@ mod backup;
 mod cli;
 mod config;
 mod engine;
+mod events;
 mod http;
 mod init;
 mod lists;

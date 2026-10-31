@@ -2850,6 +2850,12 @@ impl Game<'_> {
                     horizon_client::scoreboard::death_message_reaches(board, &name, other)
                 });
                 if self.options.dedicated.is_some() {
+                    super::dedicated::events::record(
+                        "death",
+                        &name,
+                        uuid,
+                        serde_json::json!({ "message": text.plain() }),
+                    );
                     // Only a message for everyone is logged (`broadcastSystemMessage`).
                     if board.players_team(&name).is_none_or(|t| {
                         t.death_message_visibility == horizon_client::scoreboard::Visibility::Always
