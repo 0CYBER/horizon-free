@@ -544,7 +544,8 @@ impl Step {
 }
 
 /// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
-/// An error ends with the last lines.
+/// An error ends with its first `error` lines and the last lines: a failed build script's output
+/// alone could push the line naming its crate out of the last ones.
 fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), String> {
     let mut log = fs::OpenOptions::new()
         .create(true)
@@ -559,12 +560,16 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         .spawn()
         .map_err(|e| format!("Could not start {what}: {e}"))?;
     let mut tail = std::collections::VecDeque::new();
+    let mut errors = Vec::new();
     for text in BufReader::new(child.stderr.take().expect("piped"))
         .lines()
         .map_while(Result::ok)
     {
         let _ = writeln!(log, "{text}");
         line(&text);
+        if text.starts_with("error") && errors.len() < 4 {
+            errors.push(text.clone());
+        }
         if tail.len() == 12 {
             tail.pop_front();
         }
@@ -575,11 +580,29 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         return Ok(());
     }
     let tail: Vec<String> = tail.into();
-    Err(format!(
-        "{what} failed ({status}). The end of its output, the whole of it in {}:\n{}",
-        log_path().display(),
-        diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"))
-    ))
+    Err(failure(what, &status.to_string(), &errors, &tail))
+}
+
+/// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
+fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
+    let end = diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"));
+    let first: Vec<&str> = errors
+        .iter()
+        .filter(|e| !tail.contains(e))
+        .map(String::as_str)
+        .collect();
+    let (shown, first) = if first.is_empty() {
+        ("The end of its output", String::new())
+    } else {
+        (
+            "Its first errors and the end of its output",
+            format!("{}\n…\n", first.join("\n")),
+        )
+    };
+    format!(
+        "{what} failed ({status}). {shown}, the whole of it in {}:\n{first}{end}",
+        log_path().display()
+    )
 }
 
 /// A horizon-mixins diagnostic (`{"code", "message", "file"}`) in one line.
@@ -1421,5 +1444,28 @@ mod tests {
             diagnostic(err).as_deref(),
             Some("E_REVISION: requires exact Horizon revision a (m.toml)")
         );
+    }
+
+    #[test]
+    fn a_failed_build_names_the_crate_its_output_pushed_out() {
+        // cargo's output on Linux without ALSA's development files (Rust 1.99.1, 2026-10-31):
+        // the build script's report fills the last lines.
+        let errors = ["error: failed to run custom build command for `alsa-sys v0.3.1`".to_owned()];
+        let tail: Vec<String> = [
+            "  The system library `alsa` required by crate `alsa-sys` was not found.",
+            "  HINT: you may need to install a package such as alsa, alsa-dev or alsa-devel.",
+            "warning: build failed, waiting for other jobs to finish...",
+        ]
+        .map(str::to_owned)
+        .into();
+        let e = failure("Compiling the game", "exit status: 101", &errors, &tail);
+        assert!(e.starts_with("Compiling the game failed (exit status: 101). Its first errors"));
+        assert!(
+            e.ends_with(&format!("{}\n…\n{}", errors[0], tail.join("\n"))),
+            "{e}"
+        );
+        // An error still among the last lines isn't said twice.
+        let e = failure("horizon-mixins", "exit status: 1", &errors, &errors);
+        assert!(e.contains("The end of its output") && e.matches("alsa-sys").count() == 1);
     }
 }
