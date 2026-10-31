@@ -818,6 +818,7 @@ fn guests_see_each_other_and_the_world_entities() {
         needs_sync: false,
         leash: None,
         spectator: false,
+        watching: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;

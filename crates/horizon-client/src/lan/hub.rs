@@ -520,6 +520,14 @@ impl Hub {
             g.sender.send(body.clone());
         }
     }
+    /// `DedicatedServer.sendLowDiskSpaceWarning`: the players with
+    /// `PermissionLevel.ADMINS` (3) or more get `ClientboundLowDiskSpaceWarningPacket`.
+    pub fn send_low_disk_space_warning(&self) {
+        let body = C::LowDiskSpaceWarning(horizon_protocol::packets::Empty).encode();
+        for g in self.guests.iter().filter(|g| g.placed && g.permission >= 3) {
+            g.sender.send(body.clone());
+        }
+    }
     pub fn broadcast_except(&self, conn: u32, packet: &C) {
         let body = packet.encode();
         for g in self.guests.iter().filter(|g| g.placed && g.conn != conn) {
@@ -1901,6 +1909,7 @@ impl Hub {
             needs_sync: false,
             leash: None,
             spectator: false,
+            watching: false,
         }
     }
 
@@ -1994,6 +2003,7 @@ impl Hub {
                     &g.effects.list,
                 );
                 state.spectator = g.spectator();
+                state.watching = g.watching;
                 stuck_meta(&mut state, g.stuck);
                 state
             })

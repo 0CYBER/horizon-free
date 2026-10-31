@@ -3686,6 +3686,8 @@ impl Game<'_> {
             // ClientCommonPacketListenerImpl.handleShowDialog / handleClearDialog.
             C::ShowDialog(p) => self.show_play_dialog(&p.dialog),
             C::ClearDialog(_) => self.clear_dialog(),
+            // ClientPacketListener.handleLowDiskSpaceWarning.
+            C::LowDiskSpaceWarning(_) => horizon_client::chunk_io::report_low_disk_space(),
             C::ClearTitles(p) => {
                 self.titles.clear();
                 if p.value {

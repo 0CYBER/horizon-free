@@ -981,6 +981,15 @@ impl Game<'_> {
             .find(|(s, _)| *s == CRYSTAL_IDS + i as u32)
             .map(|(_, b)| b)
     }
+    /// `ServerLevel.dragonParts`: where the part with that entity id is
+    /// and its box.
+    pub(super) fn dragon_part(&self, id: u32) -> Option<(Vec3, Aabb)> {
+        let d = self.dragon.as_ref().filter(|d| d.alive() && d.id != 0)?;
+        (d.id + 1..=d.id + 8).contains(&id).then(|| {
+            let i = (id - d.id - 1) as usize;
+            (d.parts[i].0, d.part_box(i))
+        })
+    }
     /// Damage to a special id (from projectiles and melee): what the
     /// dragon part or crystal made of it. `arrow` for a direct arrow.
     pub(super) fn hit_special(
@@ -2918,6 +2927,7 @@ impl Game<'_> {
             needs_sync: false,
             leash: None,
             spectator: false,
+            watching: false,
         })
     }
 }
