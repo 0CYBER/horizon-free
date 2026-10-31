@@ -2756,7 +2756,7 @@ impl Renderer {
                 }
                 cull
             });
-        let depth = Self::depth(&device, &config, cull.as_ref());
+        let depth = Self::depth(&device, &config);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
@@ -3028,13 +3028,8 @@ impl Renderer {
         self.surface = Some(surface);
         Ok(())
     }
-    /// The world's depth, which occlusion culling's test may read.
-    fn depth(
-        device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
-        cull: Option<&cull::Cull>,
-    ) -> wgpu::TextureView {
-        let read = cull.is_some_and(|c| c.depth_test() == cull::DepthTest::InShader);
+    /// The world's depth, which occlusion culling's test and post effects may read.
+    fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("Horizon depth"),
@@ -3047,11 +3042,9 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: if read {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-                } else {
-                    wgpu::TextureUsages::RENDER_ATTACHMENT
-                },
+                // TEXTURE_BINDING: a post effect may read the depth buffer.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -3115,7 +3108,7 @@ impl Renderer {
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config, self.cull.as_ref());
+        self.depth = Self::depth(&self.device, &self.config);
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -5697,6 +5690,8 @@ impl Renderer {
                     &target_texture,
                     &view_target,
                     [self.config.width, self.config.height],
+                    // The scaled world pass drew its own depth buffer.
+                    scaled.is_none().then_some(&self.depth),
                     &frame.post_effects,
                 );
         }
