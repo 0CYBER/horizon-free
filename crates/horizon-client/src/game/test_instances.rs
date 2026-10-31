@@ -3,6 +3,7 @@
 //! the structure's placement), over the game tests the registry holds.
 use super::{
     Game,
+    game_tests::Info,
     lan::LanHost,
     structure_blocks::{create_seed, template_size},
 };
@@ -38,7 +39,35 @@ pub(super) struct TestDef {
     pub(super) padding: i32,
     pub(super) required: bool,
     pub(super) sky_access: bool,
+    /// `BlockBasedTestInstance` (else a `FunctionGameTestInstance`).
+    pub(super) block_based: bool,
+    /// The function a function test runs.
+    pub(super) function: Option<String>,
+    /// The test environment's id (`batch()`).
+    pub(super) environment: String,
+    pub(super) max_ticks: i32,
+    pub(super) setup_ticks: i32,
     description: Text,
+}
+
+#[cfg(test)]
+impl TestDef {
+    /// A test with the timing and type a runner test needs.
+    pub(super) fn sample(block_based: bool, max_ticks: i32, setup_ticks: i32) -> Self {
+        Self {
+            structure: "minecraft:empty".into(),
+            rotation: Rotation::None,
+            padding: 0,
+            required: true,
+            sky_access: false,
+            block_based,
+            function: None,
+            environment: "minecraft:default".into(),
+            max_ticks,
+            setup_ticks,
+            description: Text::literal(""),
+        }
+    }
 }
 
 /// `GameTestInstance.descriptionRow`: the row's value in blue, then a line break.
@@ -120,18 +149,31 @@ impl Game<'_> {
                 .get("sky_access")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            block_based,
+            function: function.map(str::to_owned),
+            environment: environment.clone(),
+            max_ticks: json
+                .get("max_ticks")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .clamp(1, i64::from(i32::MAX)) as i32,
+            setup_ticks: json
+                .get("setup_ticks")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .clamp(0, i64::from(i32::MAX)) as i32,
             description,
         })
     }
 
-    fn test_instance_at(&self, pos: Pos) -> Option<&TestInstanceBlock> {
+    pub(super) fn test_instance_at(&self, pos: Pos) -> Option<&TestInstanceBlock> {
         match self.world.block_entities.get(&pos)? {
             BlockEntity::TestInstanceBlock(b) => Some(b),
             _ => None,
         }
     }
 
-    fn test_instance_mut(&mut self, pos: Pos) -> Option<&mut TestInstanceBlock> {
+    pub(super) fn test_instance_mut(&mut self, pos: Pos) -> Option<&mut TestInstanceBlock> {
         match self.world.block_entities.get_mut(&pos)? {
             BlockEntity::TestInstanceBlock(b) => Some(b),
             _ => None,
@@ -139,7 +181,7 @@ impl Game<'_> {
     }
 
     /// `getTestHolder`.
-    fn test_holder(&self, pos: Pos) -> Option<TestDef> {
+    pub(super) fn test_holder(&self, pos: Pos) -> Option<TestDef> {
         let key = self.test_instance_at(pos)?.data.test.clone()?;
         self.test_def(&key)
     }
@@ -185,7 +227,7 @@ impl Game<'_> {
     }
 
     /// `getTestName`.
-    fn test_name(&self, pos: Pos) -> Text {
+    pub(super) fn test_name(&self, pos: Pos) -> Text {
         match self.test_instance_at(pos).and_then(|b| b.data.test.clone()) {
             Some(key) => Text::literal(key),
             None => Text::translate("test_instance_block.invalid_test", &[]),
@@ -277,7 +319,7 @@ impl Game<'_> {
     }
 
     /// `getStructureBoundingBox`.
-    fn test_structure_box(&self, pos: Pos) -> Option<BoundingBox> {
+    pub(super) fn test_structure_box(&self, pos: Pos) -> Option<BoundingBox> {
         let padding = self.test_holder(pos).map_or(0, |t| t.padding);
         let rotation = self.test_rotation(pos);
         Some(
@@ -288,7 +330,7 @@ impl Game<'_> {
 
     /// `processStructureBoundary`: the floor and walls (and the ceiling,
     /// unless the test has sky access) of the box around the structure.
-    fn structure_boundary(&self, pos: Pos) -> Vec<Pos> {
+    pub(super) fn structure_boundary(&self, pos: Pos) -> Vec<Pos> {
         let Some(bounds) = self.test_structure_box(pos) else {
             return Vec::new();
         };
@@ -312,7 +354,7 @@ impl Game<'_> {
     }
 
     /// `setBlockAndUpdate(pos, state)`.
-    fn set_test_block_state(&mut self, at: Pos, name: &str, flags: i32) {
+    pub(super) fn set_test_block_state(&mut self, at: Pos, name: &str, flags: i32) {
         let Some(id) = self.pack.assets.registry.default_state(name) else {
             return;
         };
@@ -321,7 +363,7 @@ impl Game<'_> {
     }
 
     /// `removeBarriers`.
-    fn remove_test_barriers(&mut self, pos: Pos) {
+    pub(super) fn remove_test_barriers(&mut self, pos: Pos) {
         let barrier = self.pack.assets.registry.default_state("minecraft:barrier");
         for at in self.structure_boundary(pos) {
             if Some(self.world.block(at.0, at.1, at.2)) == barrier {
@@ -332,7 +374,7 @@ impl Game<'_> {
     }
 
     /// `clearErrorMarkers`.
-    fn clear_error_markers(&mut self, pos: Pos) {
+    pub(super) fn clear_error_markers(&mut self, pos: Pos) {
         if let Some(b) = self.test_instance_mut(pos)
             && !b.error_markers.is_empty()
         {
@@ -359,7 +401,7 @@ impl Game<'_> {
     }
 
     /// `placeStructure()`: the test's structure, cleared space first.
-    fn place_test_structure(&mut self, pos: Pos) -> bool {
+    pub(super) fn place_test_structure(&mut self, pos: Pos) -> bool {
         let Some(def) = self.test_holder(pos) else {
             return false;
         };
@@ -452,20 +494,41 @@ impl Game<'_> {
         }
     }
 
-    /// `runTest`: the checks and the structure's placement. Horizon has no
-    /// game test runner, so the test itself does not start.
+    /// `runTest`: the checks, the structure's placement and the test.
     fn run_test(&mut self, pos: Pos) {
         let coordinates = [pos.0, pos.1, pos.2].map(|v| Text::literal(v.to_string()));
-        if self.test_holder(pos).is_none() {
+        let Some(def) = self.test_holder(pos) else {
             self.system_message(red("test_instance_block.error.no_test", &coordinates));
-        } else if !self.place_test_structure(pos) {
+            return;
+        };
+        if !self.place_test_structure(pos) {
             self.system_message(red(
                 "test_instance_block.error.no_test_structure",
                 &coordinates,
             ));
-        } else {
-            self.clear_error_markers(pos);
+            return;
         }
+        self.clear_error_markers(pos);
+        // GameTestTicker.SINGLETON.clear(), FailedTestTracker.forgetFailedTests().
+        self.clear_game_tests();
+        self.game_tests.failed.clear();
+        let Some(block) = self.test_instance_at(pos) else {
+            return;
+        };
+        let key = block.data.test.clone().unwrap_or_default();
+        let rotation = block.data.rotation;
+        let key = if key.contains(':') {
+            key
+        } else {
+            format!("minecraft:{key}")
+        };
+        self.system_message(Text::translate(
+            "test_instance_block.starting",
+            &[Text::literal(key.clone())],
+        ));
+        let id = self.game_tests.next_id();
+        let info = Info::new(id, key, def, pos, self.dim, rotation);
+        self.track_and_start_runner(vec![info], false);
     }
 }
 

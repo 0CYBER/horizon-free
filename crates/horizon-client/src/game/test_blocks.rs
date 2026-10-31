@@ -48,6 +48,17 @@ impl Game<'_> {
         }
     }
 
+    /// `TestBlockEntity.hasTriggered`.
+    pub(super) fn test_block_triggered(&self, pos: Pos) -> bool {
+        self.test_block_at(pos).is_some_and(|b| b.triggered)
+    }
+
+    /// `TestBlockEntity.getMessage`.
+    pub(super) fn test_block_message(&self, pos: Pos) -> String {
+        self.test_block_at(pos)
+            .map_or_else(String::new, |b| b.message.clone())
+    }
+
     /// What a `TestBlockEntity` call asked of the level: its neighbours
     /// update (`level.updateNeighborsAt`) and the log line.
     fn apply_test_block_effects(&mut self, pos: Pos, effects: Effects) {
@@ -75,7 +86,6 @@ impl Game<'_> {
     }
 
     /// `TestBlockEntity.trigger`.
-    #[expect(dead_code, reason = "the game test runner starts the test with it")]
     pub(super) fn trigger_test_block(&mut self, pos: Pos) {
         let Some(effects) = self.test_block_mut(pos).map(TestBlock::trigger) else {
             return;
