@@ -8,7 +8,11 @@ use super::{
     structure_blocks::{create_seed, template_size},
 };
 use horizon_client::{
+    block_entity_render::vertex_light,
+    component::name_text,
     containers::BlockEntity,
+    hud::HudBatch,
+    mesher::Vertex,
     structure_block::rotation_from_ordinal,
     test_instance_block::{Data, Status, TestInstanceBlock},
     text::{self, Text},
@@ -47,6 +51,11 @@ pub(super) struct TestDef {
     pub(super) environment: String,
     pub(super) max_ticks: i32,
     pub(super) setup_ticks: i32,
+    /// `TestData.maxAttempts` and `requiredSuccesses`.
+    pub(super) max_attempts: i32,
+    pub(super) required_successes: i32,
+    /// The dimension the test runs in (`TestData.dimension`).
+    pub(super) dimension: String,
     description: Text,
 }
 
@@ -63,8 +72,11 @@ impl TestDef {
             block_based,
             function: None,
             environment: "minecraft:default".into(),
+            dimension: "minecraft:overworld".into(),
             max_ticks,
             setup_ticks,
+            max_attempts: 1,
+            required_successes: 1,
             description: Text::literal(""),
         }
     }
@@ -108,6 +120,13 @@ impl Game<'_> {
         let environment = string("environment")?.to_owned();
         let dimension = string("dimension").unwrap_or("minecraft:overworld");
         let function = string("function");
+        // `ExtraCodecs.POSITIVE_INT`, 1 when absent.
+        let positive = |key: &str| {
+            json.get(key)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .clamp(1, i64::from(i32::MAX)) as i32
+        };
         // GameTestInstance.describe: the type, the function (function tests
         // only), then the structure, batch and dimension.
         let block_based = string("type") == Some("minecraft:block_based");
@@ -152,6 +171,7 @@ impl Game<'_> {
             block_based,
             function: function.map(str::to_owned),
             environment: environment.clone(),
+            dimension: dimension.to_owned(),
             max_ticks: json
                 .get("max_ticks")
                 .and_then(|v| v.as_i64())
@@ -162,6 +182,8 @@ impl Game<'_> {
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0)
                 .clamp(0, i64::from(i32::MAX)) as i32,
+            max_attempts: positive("max_attempts"),
+            required_successes: positive("required_successes"),
             description,
         })
     }
@@ -191,29 +213,75 @@ impl Game<'_> {
         self.test_holder(pos).map_or(0, |t| t.padding)
     }
 
-    /// `TestInstanceRenderer.submit`'s error markers: each marked block in a
-    /// translucent red box, for any player near the block.
-    pub(super) fn test_instance_markers(
-        &self,
-        b: &TestInstanceBlock,
-        block: [i32; 3],
-        camera: [f64; 3],
-        g: &mut horizon_client::gizmos::Gizmos,
+    /// `TestInstanceRenderer.submit`'s error markers, for any player within
+    /// the beacon's view distance of the block: each marked block in a
+    /// translucent red box (`out`, blending) and its text as a billboard over
+    /// everything (`see_through`).
+    pub(super) fn test_instance_marker_geometry(
+        &mut self,
+        camera: glam::DVec3,
+        out: &mut Vec<Vertex>,
+        see_through: &mut Vec<Vertex>,
     ) {
-        // BeaconRenderer.getViewDistance: 256, by the horizontal distance.
-        let dx = f64::from(block[0]) + 0.5 - camera[0];
-        let dz = f64::from(block[2]) + 0.5 - camera[2];
-        if dx * dx + dz * dz >= 256.0 * 256.0 {
+        use horizon_client::gizmos as g;
+        let mut markers = Vec::new();
+        for (pos, entity) in &self.world.block_entities {
+            let BlockEntity::TestInstanceBlock(b) = entity else {
+                continue;
+            };
+            // BeaconRenderer.getViewDistance: 256, by the horizontal distance.
+            let dx = f64::from(pos.0) + 0.5 - camera.x;
+            let dz = f64::from(pos.2) + 0.5 - camera.z;
+            if dx * dx + dz * dz >= 256.0 * 256.0 {
+                continue;
+            }
+            for marker in &b.error_markers {
+                markers.push((marker.pos, name_text(&marker.text).plain()));
+            }
+        }
+        if markers.is_empty() {
             return;
         }
-        for marker in &b.error_markers {
-            // `new AABB(pos).inflate(0.02F)`, filled with
-            // `colorFromFloat(0.375, 1, 0, 0)`.
-            let pad = f64::from(0.02f32);
-            let min = marker.pos.map(|v| f64::from(v) - pad);
-            let max = marker.pos.map(|v| f64::from(v) + 1.0 + pad);
-            g.cuboid(min, max, 0x5FFF_0000, horizon_client::gizmos::STROKE_WIDTH);
+        // A plain colour: the atlas's white pixel at the fill's colour.
+        let mut fill = HudBatch::new([1, 1]);
+        fill.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, g::ERROR_MARKER_FILL);
+        let Some(v) = fill.vertices.first().copied() else {
+            return;
+        };
+        let light = vertex_light(0xFF);
+        self.mark_translucent_entity(out.len(), "minecraft:test_instance_block");
+        let mut patches = Vec::new();
+        for (pos, text) in markers {
+            let (min, max, text_at) = g::error_marker_shape(pos);
+            for quad in g::cuboid_fill_quads(min, max) {
+                for corner in quad {
+                    out.push(Vertex {
+                        normal: [0; 4],
+                        pos: (glam::DVec3::from_array(corner) - camera)
+                            .as_vec3()
+                            .to_array(),
+                        uv: v.uv,
+                        layer: 0,
+                        color: v.color,
+                        light,
+                        glint_uv: [0.0, 0.0],
+                    });
+                }
+            }
+            // `Gizmos.billboardText(..).setAlwaysOnTop()`: white, centred,
+            // without a background.
+            patches.extend(self.name_tag_quads(
+                glam::DVec3::from_array(text_at) - camera,
+                &[(Text::literal(text), 0.0)],
+                0xFF,
+                false,
+                2,
+                0,
+                g::billboard_text_unit(g::ERROR_MARKER_TEXT_SCALE),
+                see_through,
+            ));
         }
+        self.map_patches.extend(patches);
     }
 
     /// `getRotation`: the test's rotation turned by the block's.
@@ -383,7 +451,7 @@ impl Game<'_> {
     }
 
     /// `resetTest`.
-    fn reset_test(&mut self, pos: Pos) {
+    pub(super) fn reset_test(&mut self, pos: Pos) {
         self.remove_test_barriers(pos);
         self.clear_error_markers(pos);
         if self.place_test_structure(pos) {
@@ -420,19 +488,7 @@ impl Game<'_> {
                 inner.min.map(|v| v - padding),
                 inner.max.map(|v| v + padding),
             );
-            let ground = area.min[1] - 1;
-            for y in area.min[1]..=area.max[1] {
-                for z in area.min[2]..=area.max[2] {
-                    for x in area.min[0]..=area.max[0] {
-                        let name = if y < ground {
-                            "minecraft:stone"
-                        } else {
-                            "minecraft:air"
-                        };
-                        self.set_test_block_state((x, y, z), name, 818);
-                    }
-                }
-            }
+            self.clear_test_space(&area);
         }
         let corner = block.start_corner(origin, padding, rotation);
         let settings = TemplateSettings {
@@ -452,6 +508,24 @@ impl Game<'_> {
             rotation,
         );
         true
+    }
+
+    /// `StructureUtils.clearSpaceForStructure`'s blocks: air in the box (stone
+    /// below the ground height, which no row of the box is).
+    pub(super) fn clear_test_space(&mut self, area: &BoundingBox) {
+        let ground = area.min[1] - 1;
+        for y in area.min[1]..=area.max[1] {
+            for z in area.min[2]..=area.max[2] {
+                for x in area.min[0]..=area.max[0] {
+                    let name = if y < ground {
+                        "minecraft:stone"
+                    } else {
+                        "minecraft:air"
+                    };
+                    self.set_test_block_state((x, y, z), name, 818);
+                }
+            }
+        }
     }
 
     /// `saveTest`: the test's structure id, saved from the world.
@@ -527,8 +601,8 @@ impl Game<'_> {
             &[Text::literal(key.clone())],
         ));
         let id = self.game_tests.next_id();
-        let info = Info::new(id, key, def, pos, self.dim, rotation);
-        self.track_and_start_runner(vec![info], false);
+        let info = Info::new(id, key, def, Some(pos), self.dim, rotation);
+        self.track_and_start_runner(vec![info], false, None);
     }
 }
 

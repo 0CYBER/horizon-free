@@ -1041,6 +1041,48 @@ fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
         _ => true,
     }
 }
+/// `BackUpIfTooClose.create(5, 0.75)` of `PiglinAi.initFightActivity`, behind
+/// `hasCrossbow`: with no walk target and the attack target in sight within 5
+/// blocks, look at it and strafe backwards every tick. It takes no flags so the
+/// crossbow goal keeps aiming meanwhile.
+#[derive(Clone, Debug)]
+struct BackUpIfTooClose;
+impl BackUpIfTooClose {
+    fn too_close(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+        if m.extra.main_hand.as_deref() != Some("minecraft:crossbow") || !m.ai.nav.is_done() {
+            return None;
+        }
+        let who = m.ai.target?;
+        let t = cx.w.target_info(who)?;
+        if !t.position.closer_than(m.position, 5.0) || !m.sees(cx.w, who) {
+            return None;
+        }
+        Some([t.position.x, t.eye_y, t.position.z])
+    }
+}
+impl Goal for BackUpIfTooClose {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        Self::too_close(m, cx).is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.can_use(m, cx)
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(eye) = Self::too_close(m, cx) else {
+            return;
+        };
+        m.look_at(eye);
+        m.ai.mov.strafe(-0.75, 0.0);
+        m.yaw = super::control::rotate_if_necessary(m.yaw, m.head_yaw, 0.0);
+    }
+}
 pub fn register_piglin(m: &mut Mob) {
     // `AbstractPiglin.<init>`: a piglin's navigation opens doors.
     m.ai.nav.can_open_doors = true;
@@ -1054,6 +1096,7 @@ pub fn register_piglin(m: &mut Mob) {
     // Registered before the spawn weapon is equipped, so the goal checks the
     // held item itself (it only starts while a crossbow is in the main hand).
     g.add(3, super::illager::crossbow_goal(1.0, 8.0));
+    g.add(3, BackUpIfTooClose);
     // `PiglinAi.initFightActivity`: the spear behaviours come before the melee one.
     g.add(3, super::spear_use::PiglinSpear::new());
     g.add(

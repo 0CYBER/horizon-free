@@ -2301,6 +2301,118 @@ impl Goal for FollowParent {
         }
     }
 }
+/// `FollowMobGoal` `(mob, speed, stopDistance, areaSize)`: follows the first
+/// visible mob of another class within `area` blocks and keeps `stop` away
+/// from it (a parrot hovers by the other animals).
+///
+/// Left out: vanilla also backs away when the followed mob's look control
+/// wants this mob's position; only another `FollowMobGoal` mob of a different
+/// class would look at it, and parrots are the only ones that have the goal.
+#[derive(Clone, Debug)]
+pub struct FollowMob {
+    speed: f64,
+    stop: f64,
+    area: f64,
+    following: Option<u32>,
+    recalc: i32,
+    old_water: f32,
+}
+impl FollowMob {
+    pub fn new(speed: f64, stop: f32, area: f32) -> Self {
+        Self {
+            speed,
+            stop: f64::from(stop),
+            area: f64::from(area),
+            following: None,
+            recalc: 0,
+            old_water: 0.0,
+        }
+    }
+}
+impl Goal for FollowMob {
+    fn name(&self) -> &'static str {
+        "FollowMobGoal"
+    }
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    /// `FollowMobGoal.canUse`.
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let species = m.species();
+        // `getEntitiesOfClass(Mob, getBoundingBox().inflate(areaSize))`.
+        let area = m
+            .bounds()
+            .inflate(Vec3::new(self.area, self.area, self.area));
+        let found = cx
+            .w
+            .others_near(area)
+            .find(|s| {
+                s.species != species && s.bounds.intersects(area) && !s.has_effect("invisibility")
+            })
+            .map(|s| s.id);
+        self.following = found;
+        found.is_some()
+    }
+    /// `FollowMobGoal.canContinueToUse`.
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(at) = self
+            .following
+            .and_then(|id| cx.w.seen(id))
+            .map(|s| s.position)
+        else {
+            return false;
+        };
+        !m.ai.nav.is_done() && m.distance_sqr(at) > self.stop * self.stop
+    }
+    /// `FollowMobGoal.start`.
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        self.recalc = 0;
+        self.old_water = m.malus(super::path::PathType::Water);
+        m.set_malus(super::path::PathType::Water, 0.0);
+    }
+    /// `FollowMobGoal.stop`.
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        self.following = None;
+        m.nav_stop();
+        m.set_malus(super::path::PathType::Water, self.old_water);
+    }
+    /// `FollowMobGoal.tick`.
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some((at, eye)) = self
+            .following
+            .and_then(|id| cx.w.seen(id))
+            .map(|s| (s.position, s.eye_y))
+        else {
+            return;
+        };
+        if m.extra.leash.is_some() {
+            return;
+        }
+        let max = m.max_head_x_rot();
+        m.look_at_speed([at.x, eye, at.z], 10.0, max);
+        self.recalc -= 1;
+        if self.recalc <= 0 {
+            self.recalc = reduced(10);
+            let d = m.distance_sqr(at);
+            if d > self.stop * self.stop {
+                m.nav_move_to_entity(cx.w, [at.x, at.y, at.z], 1, self.speed);
+            } else {
+                m.nav_stop();
+                // `distSqr <= stopDistance` (not squared, as vanilla writes it):
+                // too close, so it moves away from the mob.
+                if d <= self.stop {
+                    let (dx, dz) = (at.x - m.position.x, at.z - m.position.z);
+                    m.nav_move_to(
+                        cx.w,
+                        [m.position.x - dx, m.position.y, m.position.z - dz],
+                        self.speed,
+                    );
+                }
+            }
+        }
+    }
+}
 /// RestrictSunGoal: avoid sunlit nodes while it is bright outside.
 #[derive(Clone, Debug)]
 pub struct RestrictSun;

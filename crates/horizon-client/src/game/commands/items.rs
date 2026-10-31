@@ -603,7 +603,7 @@ impl Game<'_> {
     }
     /// `ItemStack.getMaxStackSize`: the max_stack_size component, else the
     /// item's.
-    pub(super) fn stack_max_size(&self, s: &ItemStack) -> u32 {
+    pub(in crate::game) fn stack_max_size(&self, s: &ItemStack) -> u32 {
         if let Some(Tag::Int(n)) = s.data().and_then(|d| d.other("minecraft:max_stack_size")) {
             return (*n).clamp(1, 99) as u32;
         }

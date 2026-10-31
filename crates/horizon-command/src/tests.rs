@@ -692,9 +692,9 @@ fn horizon_commands_are_off_unless_the_server_turns_them_on() {
     // By default the game runs vanilla's tree: /help lists no /pregen.
     assert!(vanilla::game_dispatcher().find("pregen").is_none());
     for dev in [false, true] {
-        let vanilla_tree = vanilla::game_tree(dev, false);
+        let vanilla_tree = vanilla::game_tree(dev, false, false);
         assert!(vanilla_tree.find("pregen").is_none());
-        let d = vanilla::game_tree(dev, true);
+        let d = vanilla::game_tree(dev, true, false);
         let parse = d.parse("pregen start 100 circle", &reg());
         assert_eq!(parse.executable().unwrap().1, "pregen.start");
         // Vanilla's commands are the same with or without it.
@@ -704,10 +704,21 @@ fn horizon_commands_are_off_unless_the_server_turns_them_on() {
         );
     }
 }
+/// `run` on a dedicated server's tree.
+fn run_dedicated(input: &str) -> CmdResult<(String, Vec<String>)> {
+    let reg = reg();
+    let parse = vanilla::game_tree(true, false, true).parse(input, &reg);
+    let (ctx, id) = parse.executable()?;
+    Ok((
+        id.to_owned(),
+        ctx.args.iter().map(|a| a.name.clone()).collect(),
+    ))
+}
 #[test]
 fn profile_commands_parse_like_vanilla() {
     // OpCommand, DeOpCommands, BanPlayerCommands, PardonCommand and
     // WhitelistCommand: GameProfileArgument targets, admins only.
+    let run = run_dedicated;
     assert_eq!(run("op Steve").unwrap().0, "op");
     assert_eq!(run("deop @a").unwrap().0, "deop");
     assert_eq!(run("pardon Steve").unwrap().0, "pardon");
@@ -734,9 +745,41 @@ fn profile_commands_parse_like_vanilla() {
         permission: 2,
         ..reg()
     };
-    let d = vanilla::game_dispatcher();
+    let d = vanilla::game_tree(false, false, true);
     for line in ["op Steve", "ban Steve", "whitelist on"] {
         let e = d.parse(line, &reg).executable().unwrap_err();
         assert_eq!(e.message.plain(), "command.unknown.command", "{line}");
     }
+}
+#[test]
+fn only_a_dedicated_server_has_the_dedicated_commands() {
+    // Commands.CommandSelection: an integrated server (single player, a LAN
+    // world) registers no /op, /ban, /ban-ip, /banlist, /pardon, /pardon-ip,
+    // /deop or /whitelist, so /help and Tab don't offer them.
+    let dedicated = [
+        "ban",
+        "ban-ip",
+        "banlist",
+        "deop",
+        "op",
+        "pardon",
+        "pardon-ip",
+        "whitelist",
+    ];
+    for dev in [false, true] {
+        for horizon in [false, true] {
+            let integrated = vanilla::game_tree(dev, horizon, false);
+            let server = vanilla::game_tree(dev, horizon, true);
+            for name in dedicated {
+                assert!(integrated.find(name).is_none(), "{name}");
+                assert!(server.find(name).is_some(), "{name}");
+            }
+            assert_eq!(
+                server.nodes[0].children.len(),
+                integrated.nodes[0].children.len() + dedicated.len()
+            );
+        }
+    }
+    assert!(vanilla::game_dispatcher().find("ban").is_none());
+    assert!(vanilla::release_dispatcher().find("ban").is_none());
 }
