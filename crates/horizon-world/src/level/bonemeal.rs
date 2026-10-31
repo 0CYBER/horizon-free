@@ -4,6 +4,7 @@
 use super::{
     Behaviours, LevelAccess, LevelEvent, Sim, Ticks,
     classes::{Class, Interface},
+    feature_world::LevelFeatureWorld,
     growth::grower,
     update::{HORIZONTAL, above, below, rel},
 };
@@ -116,6 +117,59 @@ impl Behaviours {
     ) -> Option<bool> {
         self.live_features()?.configured(name)?;
         Some(self.sim(level, ticks).place_configured_feature(name, pos))
+    }
+    /// `StructureBlockEntity.placeStructure`'s `StructureTemplate.placeInWorld`
+    /// on the live level: `pos` is both the position and the pivot, the
+    /// template rots at `integrity` below 1 (`BlockRotProcessor`) drawing from
+    /// `LegacyRandomSource(seed)`, the loot seeds from a second one, and
+    /// `flags` are the `setBlock` flags. Returns whether the template placed
+    /// and the entities it carried (their NBT, for the caller to spawn);
+    /// `None` when the level has no structure resources.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_template<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        template: &crate::worldgen::structure::StructureTemplate,
+        pos: BlockPos,
+        settings: TemplateSettings,
+    ) -> Option<(bool, Vec<crate::nbt::Compound>)> {
+        use crate::worldgen::structure::processor::{PlaceSettings, Processor, place_in_world};
+        let features = self.live_features()?;
+        let resources = features.structure_resources()?;
+        let mut sim = self.sim(level, ticks);
+        let rot = Processor::BlockRot {
+            rottable: None,
+            integrity: settings.integrity,
+        };
+        let mut random = horizon_core::random::LegacyRandom::new(settings.seed);
+        let mut loot_random = horizon_core::random::LegacyRandom::new(settings.seed);
+        let mut place = PlaceSettings::new(settings.rotation);
+        place.mirror = settings.mirror;
+        place.known_shape = settings.known_shape;
+        place.ignore_entities = settings.ignore_entities;
+        if settings.integrity < 1.0 {
+            place.processors.push(&rot);
+            place.random = Some(&mut random);
+        }
+        let mut world = LevelFeatureWorld {
+            sim: &mut sim,
+            features,
+            entities: Vec::new(),
+        };
+        let at = [pos.x, pos.y, pos.z];
+        let placed = place_in_world(
+            &mut world,
+            &resources,
+            template,
+            at,
+            at,
+            &mut place,
+            Some(&mut loot_random),
+            settings.flags,
+        )
+        .ok()?;
+        Some((placed, world.entities))
     }
     /// `BoneMealItem.useOn` for a player clicking `pos` on `face`. Returns
     /// whether bone meal was used (the caller then shrinks the stack unless
@@ -1163,4 +1217,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
     }
+}
+
+/// What `StructurePlaceSettings` a `place_template` call sets.
+#[derive(Clone, Copy, Debug)]
+pub struct TemplateSettings {
+    pub mirror: crate::worldgen::structure::Mirror,
+    pub rotation: crate::worldgen::structure::Rotation,
+    pub ignore_entities: bool,
+    pub known_shape: bool,
+    /// `BlockRotProcessor`'s integrity; 1 places everything.
+    pub integrity: f32,
+    pub seed: i64,
+    pub flags: i32,
 }

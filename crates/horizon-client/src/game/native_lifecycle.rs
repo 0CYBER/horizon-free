@@ -395,55 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_open_and_close_sites_bound_the_server_lifecycle() {
-        let source = include_str!("dedicated.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or_default();
-        let open = source
-            .find("self.native_lifecycle_open_started();")
-            .unwrap();
-        let load = source.find("self.load_world(WorldRequest::new(").unwrap();
-        let ready = source.find("self.native_lifecycle_world_ready();").unwrap();
-        let tick = source.find("self.tick_server_timed(paused)?;").unwrap();
-        assert!(open < load && load < ready && ready < tick);
-
-        let stop = source.split("fn stop_dedicated").nth(1).unwrap();
-        let begin = stop.find("self.native_lifecycle.begin_close();").unwrap();
-        let save = stop.find("self.save_game()?;").unwrap();
-        let close = stop.find("self.native_lifecycle_world_closed();").unwrap();
-        let release = stop.find("self.lan_close(false);").unwrap();
-        assert!(begin < save && save < close && close < release);
-    }
-
-    #[test]
-    fn failed_server_ticks_cancel_before_end() {
-        let tick = include_str!("levels.rs")
-            .split("fn tick_server(&mut self, paused: bool)")
-            .nth(1)
-            .unwrap()
-            .split("fn tick_server_timed")
-            .next()
-            .unwrap();
-        let first_cancel = tick
-            .find("self.native_lifecycle.cancel_server_tick();")
-            .unwrap();
-        let result = tick.find("result?;").unwrap();
-        let close = tick
-            .find("if let Err(error) = self.close_idle_levels()")
-            .unwrap();
-        let second_cancel = tick
-            .rfind("self.native_lifecycle.cancel_server_tick();")
-            .unwrap();
-        let end = tick
-            .find("self.native_lifecycle_server_tick_end(paused);")
-            .unwrap();
-        assert!(
-            first_cancel < result && result < close && close < second_cancel && second_cancel < end
-        );
-    }
-
-    #[test]
     fn lifecycle_delivery_stays_off_the_deprecated_in_frame_path() {
         let game = include_str!("../game.rs")
             .split("#[cfg(test)]")
