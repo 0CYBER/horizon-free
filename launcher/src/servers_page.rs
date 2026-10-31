@@ -38,6 +38,8 @@ pub(super) enum Field {
     InstanceGroup,
     /// Its search in Mojang's versions (`new_instance.rs`).
     InstanceVersion,
+    /// Home's Mods tab's filter (`instance_mods.rs`).
+    InstanceModsFilter,
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
     ServerName,
     ServerAddress,
@@ -54,7 +56,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 21] = [
+    const ALL: [Field; 22] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -67,6 +69,7 @@ impl Field {
         Field::InstanceName,
         Field::InstanceGroup,
         Field::InstanceVersion,
+        Field::InstanceModsFilter,
         Field::ServerName,
         Field::ServerAddress,
         Field::ConsoleSearch,
@@ -800,7 +803,7 @@ impl Launcher {
             difficulty: "normal",
             max_players: 10,
             friends_only: true,
-            check_accounts: false,
+            check_accounts: true,
             eula: false,
             eula_missing: false,
         });
@@ -999,6 +1002,7 @@ impl Launcher {
             Field::InstanceName
             | Field::InstanceGroup
             | Field::InstanceVersion
+            | Field::InstanceModsFilter
             | Field::ConsoleSearch
             | Field::DeleteServer => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {
@@ -2689,8 +2693,7 @@ impl Launcher {
         let c = self.servers.create.as_ref()?;
         let (new_world, copy, worlds) = (c.new_world, c.copy.clone(), c.worlds.clone());
         let (mode, difficulty, max_players) = (c.mode, c.difficulty, c.max_players);
-        let (friends_only, check_accounts, eula, eula_missing) =
-            (c.friends_only, c.check_accounts, c.eula, c.eula_missing);
+        let (friends_only, eula, eula_missing) = (c.friends_only, c.eula, c.eula_missing);
         let creating = self.servers.creating;
         let row = |label: &'static str, control: AnyElement| {
             div()
@@ -2837,36 +2840,6 @@ impl Launcher {
                 .cursor_pointer()
                 .when(on, |d| d.child("✓"))
         };
-        let accounts = div()
-            .flex()
-            .items_start()
-            .gap(px(10.))
-            .child(
-                checkbox("create-accounts", check_accounts).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        if let Some(c) = &mut this.servers.create {
-                            c.check_accounts = !c.check_accounts;
-                        }
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        text(theme::UI)
-                            .text_color(t.ink)
-                            .child("Check Minecraft accounts"),
-                    )
-                    .child(text(theme::CAPTION).text_color(t.muted).child(
-                        "Only if every player signs in with Microsoft. Leave it off for Horizon \
-                         players without an account: Friends only keeps strangers out.",
-                    )),
-            );
         let eula_line = div()
             .flex()
             .items_center()
@@ -2957,7 +2930,6 @@ impl Launcher {
                             "The first one becomes an operator. Add more later on the Players tab.",
                         ))
                     })
-                    .child(accounts)
                     .into_any_element(),
             ))
             .child(eula_line);

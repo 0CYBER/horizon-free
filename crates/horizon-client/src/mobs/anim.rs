@@ -851,18 +851,7 @@ pub fn setup(
             }
             humanoid(p, s, &h);
             if player {
-                // PlayerModel.setupAnim: the layers the player hid (PlayerModelPart).
-                let hidden = m.extra.hidden_model_parts;
-                for (bit, part) in [
-                    (1, "jacket"),
-                    (2, "left_sleeve"),
-                    (3, "right_sleeve"),
-                    (4, "left_pants"),
-                    (5, "right_pants"),
-                    (6, "hat"),
-                ] {
-                    p.visible(part, hidden & (1 << bit) == 0);
-                }
+                player_model_visibility(p, m.extra.hidden_model_parts, m.extra.spectator);
             }
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.
@@ -961,12 +950,59 @@ pub fn setup(
     }
 }
 
+/// `PlayerModel.setupAnim`'s visibility: a spectator shows only its head (`showBody`), and the
+/// skin layers the player hid (`PlayerModelPart`, bit set = hidden) are off.
+fn player_model_visibility(p: &mut Poses, hidden: u8, spectator: bool) {
+    for part in ["body", "right_arm", "left_arm", "right_leg", "left_leg"] {
+        p.visible(part, !spectator);
+    }
+    for (bit, part) in [
+        (1, "jacket"),
+        (2, "left_sleeve"),
+        (3, "right_sleeve"),
+        (4, "left_pants"),
+        (5, "right_pants"),
+        (6, "hat"),
+    ] {
+        p.visible(part, hidden & (1 << bit) == 0);
+    }
+}
 #[cfg(test)]
 mod flight_pose_tests {
     use super::*;
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
+    #[test]
+    fn spectators_show_only_the_head_and_its_hat() {
+        let mut p = Poses {
+            map: [
+                "head",
+                "hat",
+                "body",
+                "jacket",
+                "right_arm",
+                "left_arm",
+                "right_leg",
+                "left_leg",
+            ]
+            .into_iter()
+            .map(|n| (n.to_string(), [0.0; 9]))
+            .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        player_model_visibility(&mut p, 0, true);
+        for part in ["body", "right_arm", "left_arm", "right_leg", "left_leg"] {
+            assert!(p.hidden.contains(part), "{part}");
+        }
+        assert!(!p.hidden.contains("head") && !p.hidden.contains("hat"));
+        // Back in another mode they all show, but for the layers the player hid.
+        player_model_visibility(&mut p, 1 << 6, false);
+        assert!(!p.hidden.contains("body") && !p.hidden.contains("left_leg"));
+        assert!(p.hidden.contains("hat"));
+    }
     #[test]
     fn blocking_arm_follows_the_head_with_limits_in_both_hands() {
         for right in [false, true] {

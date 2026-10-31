@@ -311,6 +311,8 @@ pub fn reduced_far_detail_suggested() -> bool {
     REDUCED_SUGGESTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The name the options screen waits on to bind `Graphics::hdr_key`.
+pub const HDR_KEY: &str = "horizon.hdrSettings";
 static HDR_OFFERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the display path offers HDR output (HDR10 or scRGB): set when the renderer
 /// opens its surface; the settings open HDR's screen only then.
@@ -391,6 +393,8 @@ pub struct Graphics {
     /// HDR brightness of the HUD and menus, in percent of paper white (25..=100); the
     /// first-person hand stays at the world's.
     pub hdr_ui_brightness: u32,
+    /// A vanilla key name (`HDR_KEY`): opens HDR's settings from the game. Unbound by default.
+    pub hdr_key: String,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
@@ -429,6 +433,7 @@ impl Default for Graphics {
             hdr_peak: 0,
             hdr_black_level: 0,
             hdr_ui_brightness: 100,
+            hdr_key: "key.keyboard.unknown".into(),
             battery: false,
             api: GraphicsApi::Auto,
             shader_pack: String::new(),
@@ -507,6 +512,7 @@ impl Graphics {
                 "hdrUiBrightness" => {
                     g.hdr_ui_brightness = number(g.hdr_ui_brightness).clamp(25, 100)
                 }
+                "hdrKey" if value.starts_with("key.") => g.hdr_key = value.to_owned(),
                 "batteryMode" => g.battery = flag(g.battery),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "pickedShaderPack" => g.shader_pack = value.to_owned(),
@@ -524,7 +530,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -556,10 +562,19 @@ impl Graphics {
             self.hdr_peak,
             self.hdr_black_level,
             self.hdr_ui_brightness,
+            self.hdr_key,
             bool_text(self.battery),
             self.api.name(),
             self.shader_pack,
         )
+    }
+    /// Binds Horizon's graphics key `name` (`HDR_KEY`); false for another name.
+    pub fn set_key(&mut self, name: &str, value: String) -> bool {
+        match name {
+            HDR_KEY => self.hdr_key = value,
+            _ => return false,
+        }
+        true
     }
     pub fn save(&self, dir: &Path) {
         let _ = fs::write(dir.join(FILE), self.serialize());
@@ -691,6 +706,7 @@ mod tests {
             hdr_peak: 1400,
             hdr_black_level: 12,
             hdr_ui_brightness: 60,
+            hdr_key: "key.keyboard.h".into(),
             battery: true,
             api: GraphicsApi::Dx12,
             shader_pack: "Golden Hour".into(),

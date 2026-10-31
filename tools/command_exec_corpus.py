@@ -1118,8 +1118,9 @@ def social():
 
 
 def test_command():
-    # Horizon has no game test runner: `/test run|runmultiple|verify` of an
-    # existing instance and `/test create` are not compared.
+    # `/test run|runmultiple` of an existing instance start a real test (a
+    # tick-based run, not compared here); `verify`, `create`, `locate` and
+    # `pos` with test instance blocks around are not ported.
     return [
         cmd('/test clearall'),
         cmd('/test stop'),
@@ -1217,6 +1218,25 @@ def ender_dragon():
     ]
 
 
+def place_structure():
+    """`/place structure` (PlaceCommand.placeStructure): the id is resolved, a
+    `StructureStart` is generated for the position's chunk with vanilla's
+    `biome -> true` predicate, and its `placeInChunk` runs for every chunk of the
+    start's box in the live level. Buried treasure's one piece digs down from the
+    ocean floor and leaves a single chest, so a chest count in its chunk compares
+    the generated start and its placement without knowing the terrain height."""
+    return [
+        *setup('/gamemode creative', '/tp @s 8.5 230 8.5 0 0'),
+        {'op': 'settle'},
+        *setup('/kill @e[type=!minecraft:player]',
+               '/fill 0 0 0 15 120 15 minecraft:air replace minecraft:chest'),
+        cmd('/place structure minecraft:buried_treasure 4 210 4'),
+        # One chest between y 0 and 120 of chunk (0, 0): the piece's column is
+        # inside that chunk whatever height its dig reached.
+        cmd('/fill 0 0 0 15 120 15 minecraft:air replace minecraft:chest'),
+    ]
+
+
 def tame_wolf_kills():
     # LivingEntity.resolvePlayerResponsibleForDamage: a tame wolf's hit is its
     # owner's (the harness player, OfflinePlayer:Player), so the kill drops
@@ -1276,5 +1296,6 @@ def groups():
         ('test', test_command()),
         ('wither breaks', wither_breaks()),
         ('ender dragon', ender_dragon()),
+        ('place structure', place_structure()),
         ('tame wolf kills', tame_wolf_kills()),
     ]

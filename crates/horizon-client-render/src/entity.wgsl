@@ -23,6 +23,7 @@ struct Globals {
     // Horizon Extras' dynamic lights: camera-relative position and level (dynamic_light.rs).
     dynamic_lights: array<vec4<f32>, 16>,
     sunrise_fan: array<vec4<f32>, 32>,
+    filtering: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -306,7 +307,10 @@ fn celestial_color(in: Out) -> vec4<f32> {
 @fragment fn fs_sky_celestial(in: Out) -> @location(0) vec4<f32> {
     let color = celestial_color(in);
     let added = color.rgb * color.a;
-    return vec4(added, smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
+    // The sky under the disc keeps alpha 1 less this: 0 for the brightest tier
+    // (the sun), terrain.wgsl's mark for the lower ones (the moon).
+    let mark = 1.0 - 0.7 * f32(4u - min(in.tier, 4u)) / 4.0;
+    return vec4(added, mark * smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
 }
 
 // RenderPipelines.ENERGY_SWIRL (entity.fsh with EMISSIVE and NO_OVERLAY): the sprite, scrolled by

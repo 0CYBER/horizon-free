@@ -197,7 +197,7 @@ impl Goal for DefendVillage {
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let Some(p) = &cx.w.player else { return false };
-        if !p.alive || p.creative || p.spectator || m.spares_players() {
+        if !p.alive || p.creative || p.spectator || m.spares_players(cx.w) {
             return false;
         }
         // The box around the golem: 10 across, 8 up and down.
@@ -218,7 +218,7 @@ impl Goal for DefendVillage {
         bad && m.sees(cx.w, Who::Player)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        let spares = m.spares_players();
+        let spares = m.spares_players(cx.w);
         m.target_info(cx.w).is_some_and(|t| {
             t.alive
                 && !(t.is_player && (t.creative || spares))
@@ -529,6 +529,7 @@ pub fn snow_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 pos: [xx, y, zz],
                 name: "minecraft:snow",
                 effect: false,
+                flags: horizon_world::level::flags::UPDATE_ALL,
             });
         }
     }

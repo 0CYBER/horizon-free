@@ -21,6 +21,8 @@ pub(super) struct Bolt {
     converted: Vec<u32>,
     /// The mobs it has struck (`hitEntities`).
     hit: Vec<u32>,
+    /// The dropped items in the strike box (`hitEntities` holds every entity).
+    hit_items: Vec<u32>,
     /// Items a cushion dropped under it, spared for 20 ticks
     /// (`Cushion.dropItem`: `setInvulnerableTime(20)`).
     spared: Vec<u32>,
@@ -29,6 +31,14 @@ pub(super) struct Bolt {
     /// The player who channelled it (`LightningBolt.cause`): `Some(None)` for
     /// the host, `Some(Some(conn))` for a guest.
     pub cause: Option<Option<u32>>,
+}
+/// The box `LightningBolt.tick` collects the `LightningStrikeTrigger` bystanders from: 15 blocks
+/// around the bolt, 15 down and `6 + 15` up.
+fn in_viewer_box(bolt: [f64; 3], p: [f64; 3]) -> bool {
+    (p[0] - bolt[0]).abs() <= 15.0
+        && (p[2] - bolt[2]).abs() <= 15.0
+        && p[1] >= bolt[1] - 15.0
+        && p[1] <= bolt[1] + 21.0
 }
 impl Game<'_> {
     /// `ServerChunkCache.tickSpawningChunk`: one `tickThunder` roll per
@@ -222,6 +232,7 @@ impl Game<'_> {
             visual_only,
             converted: Vec::new(),
             hit: Vec::new(),
+            hit_items: Vec::new(),
             spared: Vec::new(),
             fires: 0,
             cause: None,
@@ -244,6 +255,7 @@ impl Game<'_> {
             visual_only: true,
             converted: Vec::new(),
             hit: Vec::new(),
+            hit_items: Vec::new(),
             spared: Vec::new(),
             fires: 0,
             cause: None,
@@ -401,14 +413,35 @@ impl Game<'_> {
             .mobs
             .iter()
             .filter(|m| m.alive() && !b.hit.contains(&m.id))
-            .filter(|m| {
-                (m.position.x - at[0]).abs() <= 15.0
-                    && (m.position.z - at[2]).abs() <= 15.0
-                    && m.position.y >= at[1] - 15.0
-                    && m.position.y <= at[1] + 21.0
-            })
+            .filter(|m| in_viewer_box(at, [m.position.x, m.position.y, m.position.z]))
             .map(|m| self.mob_entity(m))
             .collect();
+        // The item entities in the box are viewers too (`getEntities` is every entity).
+        let mut viewers = viewers;
+        viewers.extend(
+            self.dropped
+                .iter()
+                .filter(|e| !b.hit_items.contains(&e.id))
+                .filter(|e| in_viewer_box(at, [e.position.x, e.position.y, e.position.z]))
+                .map(|e| self.item_entity_view(e)),
+        );
+        // The players are entities in that box too, unless the bolt struck
+        // them (`thunderHit` reaches 3 blocks, 9 up: `hitEntities`).
+        let struck = |p: [f64; 3]| {
+            (p[0] - at[0]).abs() <= 3.0
+                && (p[2] - at[2]).abs() <= 3.0
+                && p[1] >= at[1] - 3.0
+                && p[1] <= at[1] + 9.0
+        };
+        self.for_each_player(|g| {
+            let Some(p) = g.player.as_ref().filter(|p| !p.health.dead_or_dying()) else {
+                return;
+            };
+            let pos = [p.position.x, p.position.y, p.position.z];
+            if in_viewer_box(at, pos) && !struck(pos) {
+                viewers.push(g.player_entity());
+            }
+        });
         self.for_each_player(|g| {
             let Some(p) = g.player.as_ref().map(|p| p.position) else {
                 return;
@@ -539,6 +572,12 @@ impl Game<'_> {
         };
         strike(self);
         self.each_guest_hit(strike);
+        b.hit_items.extend(
+            self.dropped
+                .iter()
+                .filter(|e| inside([e.position.x, e.position.y, e.position.z]))
+                .map(|e| e.id),
+        );
         // Dropped items burn up (ItemEntity health 5), save fire-resistant ones.
         self.dropped.retain(|e| {
             !inside([e.position.x, e.position.y, e.position.z])
@@ -567,5 +606,20 @@ impl Game<'_> {
                 seed: b.seed,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod viewer_tests {
+    use super::in_viewer_box;
+
+    #[test]
+    fn viewer_box_reaches_15_around_and_down_and_21_up() {
+        let bolt = [0.0, 64.0, 0.0];
+        assert!(in_viewer_box(bolt, [15.0, 49.0, -15.0]));
+        assert!(in_viewer_box(bolt, [0.0, 85.0, 0.0]));
+        assert!(!in_viewer_box(bolt, [0.0, 85.5, 0.0]));
+        assert!(!in_viewer_box(bolt, [0.0, 48.5, 0.0]));
+        assert!(!in_viewer_box(bolt, [15.5, 64.0, 0.0]));
     }
 }

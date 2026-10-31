@@ -2,7 +2,7 @@
 //! server threads and the play-state hub, feeds it the world's entities each
 //! tick and turns what the guests do into gameplay. A world that is not open
 //! costs one `Option` check per tick.
-use super::{Game, shield::OFFHAND_SLOT};
+use super::{Game, shield::OFFHAND_SLOT, shoulders::shoulder_variants};
 use horizon_client::{
     Result,
     items::ItemStack,
@@ -93,6 +93,9 @@ pub(super) struct LanHost {
     pub commands: Vec<super::lan_actions::GuestCommand>,
     /// Mods' quiet commands waiting to run a few a tick (game/lan_quiet.rs).
     pub quiet: std::collections::VecDeque<super::lan_quiet::QuietBatch>,
+    /// Native mods' commands and the level each needs, once asked
+    /// (game/native_server.rs).
+    pub native_commands: Option<HashMap<String, u8>>,
     /// The entities the guests track, described again every tick
     /// (`lan_entities`) over last tick's states.
     states: lan::entity::States,
@@ -595,6 +598,11 @@ fn mob_meta(
         // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER),
         // set while `serverStillTimeout > 0` (`syncStayStillFlag`).
         "minecraft:happy_ghast" => {
+            // HappyGhast.IS_LEASH_HOLDER (`setLeashHolder` in `tick`).
+            if horizon_client::mobs::happy_ghast::is_leash_holder(m) {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
             if horizon_client::mobs::happy_ghast::on_still_timeout(m) {
                 meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
             }
@@ -961,7 +969,7 @@ fn mob_equipment(
     // slot's item (6) in `head`.
     let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
-        (0u8, &e.main_hand, None),
+        (0u8, &e.main_hand, e.main_hand_stack()),
         (1, &e.off_hand, None),
         (2, &e.feet, e.armor[3].as_ref()),
         (3, &e.legs, e.armor[2].as_ref()),
@@ -1011,6 +1019,28 @@ pub const HELP: &[&str] = &[
     "lan close                      stop hosting",
     "lan status                     the hosting state and the guests",
 ];
+
+/// With the game mode forced, the guests online take the default mode
+/// (setting a mode does nothing when it is already theirs). A world open to
+/// LAN is an integrated server, which leaves out the players who have game
+/// master permission; a dedicated server does not.
+fn enforce_guest_game_mode(host: &mut LanHost) {
+    if !host.hub.config.force_game_mode {
+        return;
+    }
+    let mode = host.hub.config.default_game_mode;
+    let spares_operators = !host.hub.config.dedicated || host.hub.config.integrated;
+    let stale: Vec<u32> = host
+        .hub
+        .guests
+        .iter()
+        .filter(|g| g.game_mode != mode && !(spares_operators && g.permission >= 2))
+        .map(|g| g.conn)
+        .collect();
+    for conn in stale {
+        host.hub.set_game_mode(conn, mode);
+    }
+}
 
 impl Game<'_> {
     /// `horizon-ctl lan ...`.
@@ -1148,6 +1178,7 @@ impl Game<'_> {
             },
         );
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             guest_commands: settings.guest_commands,
             force_game_mode: settings.force_game_mode,
@@ -1155,12 +1186,14 @@ impl Game<'_> {
             view_distance: self.settings.render_distance.clamp(2, 32),
             simulation_distance: self.settings.render_distance.clamp(2, 32),
             dimension: self.dim.id().to_owned(),
+            levels: self.level_shapes,
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
             dedicated: false,
             integrated: false,
         };
         let net = NetConfig {
+            levels: self.level_shapes,
             online: horizon_client::lan::OnlineMode::lan(),
             ..NetConfig::lan(settings.port, motd, MAX_PLAYERS)
         };
@@ -1237,6 +1270,7 @@ impl Game<'_> {
             border_sent: None,
             commands: Vec::new(),
             quiet: std::collections::VecDeque::new(),
+            native_commands: None,
             states: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
@@ -1440,6 +1474,9 @@ impl Game<'_> {
         self.level.creative = mode == 1;
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.default_game_mode = mode;
+            // `setWorldGameType` and `DefaultGameModeCommands.setMode`: a
+            // world that forces its mode puts the guests online in it.
+            enforce_guest_game_mode(host);
         }
     }
 
@@ -1457,25 +1494,7 @@ impl Game<'_> {
             host.settings.force_game_mode = force;
             host.hub.config.guest_commands = effective;
             host.hub.config.force_game_mode = force;
-            // MinecraftServer.enforceGameTypeForPlayers: the guests online
-            // take the default mode (`setGameMode` does nothing when it is
-            // already theirs). A world open to LAN is an IntegratedServer,
-            // whose `updateGameModeBasedOnPermission` leaves out the players
-            // who have game master permission; a dedicated server does not.
-            if force {
-                let mode = host.hub.config.default_game_mode;
-                let spares_operators = !host.hub.config.dedicated || host.hub.config.integrated;
-                let stale: Vec<u32> = host
-                    .hub
-                    .guests
-                    .iter()
-                    .filter(|g| g.game_mode != mode && !(spares_operators && g.permission >= 2))
-                    .map(|g| g.conn)
-                    .collect();
-                for conn in stale {
-                    host.hub.set_game_mode(conn, mode);
-                }
-            }
+            enforce_guest_game_mode(host);
             host.hub.resend_commands();
         }
     }
@@ -1519,6 +1538,8 @@ impl Game<'_> {
             // Bit 4: Riptide's spin (LivingEntity.isAutoSpinAttack).
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
+            stuck: (self.combat.stuck.arrows, self.combat.stuck.stingers),
+            shoulders: shoulder_variants(self.level.player_extra.as_ref()),
             bed: self.sleeping,
             body: BodyFlags {
                 gliding: p.fall_flying,
@@ -1554,7 +1575,7 @@ impl Game<'_> {
                 .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
                 Holder::Player => player_entity,
-                Holder::Mob(id) => Some(id as i32),
+                Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
                 Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
             });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());
@@ -1613,6 +1634,7 @@ impl Game<'_> {
         };
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
+        self.register_native_commands(&mut host);
         // The host's own commands' (and command blocks') players moving
         // to another level, and their broadcastToAdmins lines.
         if !self.level_teleports.is_empty() {
@@ -1844,11 +1866,20 @@ impl Game<'_> {
                 .take()
                 .expect("the hub is back after the quiet commands");
         }
+        if !host.hub.native_menu_events.is_empty() {
+            self.lan = Some(host);
+            self.run_native_menu_events();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the menu events");
+        }
         self.lan_flush_effects(&mut host);
         if !paused {
             self.tick_guests(&mut host);
         }
         self.lan_living_flags(&mut host);
+        self.lan_stuck(&mut host, paused);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
@@ -2257,6 +2288,13 @@ impl Game<'_> {
                     // then ticks without a player.
                     .map(|chunk| (chunk, 1)),
             )
+            // A portal ticket keeps the area around the exit loaded and
+            // ticking (its entity-ticking chunks and their neighbours).
+            .chain(
+                self.portal_ticket_chunks(self.dim)
+                    .into_iter()
+                    .map(|chunk| (chunk, 1)),
+            )
             .collect();
     }
 
@@ -2339,6 +2377,8 @@ impl Game<'_> {
             m.extra.fall_flying = body.gliding;
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
+            (m.extra.arrow_count, m.extra.stinger_count) = g.stuck;
+            m.extra.shoulder_parrots = g.shoulders;
             m.velocity = g
                 .motion
                 .as_ref()
@@ -2357,6 +2397,7 @@ impl Game<'_> {
             // ClientInformation.mainHand (HumanoidArm: 0 left, 1 right).
             m.extra.main_hand_left = g.info.main_hand == 0;
             m.extra.hidden_model_parts = !g.info.model_customisation & 0x7F;
+            m.extra.spectator = g.game_mode == horizon_client::lan::guest::SPECTATOR;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
@@ -2451,7 +2492,13 @@ impl Game<'_> {
                 packed,
                 out,
             );
+            if let Some(g) = host.hub.guest(*conn) {
+                self.player_ears_geometry(m, &g.name, camera, alpha as f32, packed, out);
+            }
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
+            if let Some(g) = host.hub.guest(*conn) {
+                self.stuck_in_body_geometry(m, g.entity_id, camera, alpha as f32, packed, out);
+            }
             self.held_item_geometry(m, camera, alpha, packed, true, out);
             self.player_pumpkin_geometry(
                 m,

@@ -44,6 +44,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         direction: Direction,
     ) -> i32 {
         let b = self.b;
+        // BlockBehaviour.getSignal is `ownSignal` for a TestBlock, which is
+        // not an `isSignalSource`.
+        if b.data(state).class == Class::TestBlock {
+            return self.level.block_entity_signal(pos, state, direction);
+        }
         if !b.has_flag(state, state_flags::SIGNAL_SOURCE) {
             return 0;
         }

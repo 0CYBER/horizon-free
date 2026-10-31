@@ -5,7 +5,7 @@
 use horizon_client::{
     chunk::{Chunk, MIN_Y},
     lan::{
-        Lan,
+        Lan, NetConfig, OwnerProfile,
         chunks::ChunkEncoder,
         data::SyncData,
         entity::EntityState,
@@ -183,9 +183,11 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            shoulders: [None; 2],
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,
+            stuck: (0, 0),
             body: Default::default(),
         };
         let mut ctx = TickCtx {
@@ -225,10 +227,14 @@ impl Server {
 }
 
 fn server(resources: &Path) -> Server {
+    server_with(resources, NetConfig::lan(0, "Test - World".into(), 8))
+}
+
+fn server_with(resources: &Path, net: NetConfig) -> Server {
     let sync = Arc::new(
         SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
     );
-    let lan = Lan::start(sync.clone(), 0, "Test - World".into(), 8).unwrap();
+    let lan = Lan::start_with(sync.clone(), net).unwrap();
     let biomes: Vec<String> = sync
         .dynamic
         .registries
@@ -246,6 +252,7 @@ fn server(resources: &Path) -> Server {
         sync,
         encoder,
         HubConfig {
+            allow_flight: true,
             default_game_mode: 1,
             guest_commands: true,
             force_game_mode: false,
@@ -257,6 +264,7 @@ fn server(resources: &Path) -> Server {
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
+            levels: Default::default(),
         },
     );
     Server {
@@ -280,6 +288,80 @@ fn run<T: Send + 'static>(
         assert!(start.elapsed() < Duration::from_secs(40), "timed out");
     }
     handle.join().unwrap().unwrap()
+}
+
+/// An integrated server opened to LAN with a signed-in owner: a guest's
+/// player list gives the owner the account's skin (its `textures`
+/// property), and the guest itself none (an offline-mode world).
+#[test]
+fn a_lan_guest_sees_the_signed_in_owners_skin() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let textures = login::Property {
+        name: "textures".into(),
+        value: "e30=".into(),
+        signature: Some("c2lnbmVk".into()),
+    };
+    let fetched = textures.clone();
+    let profile = Arc::new(OwnerProfile::new(move || vec![fetched]));
+    let net = NetConfig {
+        announce: false,
+        owner_profile: Some(profile.clone()),
+        ..NetConfig::lan(0, "Test - World".into(), 8)
+    };
+    let mut s = server_with(&resources, net);
+    s.hub.singleplayer_owner = Some(offline_uuid("Owner"));
+    let port = s.hub.lan.port;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while profile.properties().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the profile fetch never answered"
+        );
+        thread::yield_now();
+    }
+    // The owner (the window's connection) joins first and stays.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let staying = stop.clone();
+    let owner = thread::spawn(move || -> Result<(), String> {
+        let mut bot = connect(port, "Owner", false)?;
+        bot.c
+            .reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        while !staying.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = bot.c.recv();
+        }
+        Ok(())
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.hub.guests.iter().any(|g| g.name == "Owner") {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "the owner did not join");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let listed = run(&mut s, move || {
+        let mut bot = connect(port, "Guest", false)?;
+        let (mut owner, mut guest) = (None, None);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && (owner.is_none() || guest.is_none()) {
+            if let C::PlayerInfoUpdate(p) = bot.recv_play()? {
+                for e in p.entries {
+                    if e.uuid == offline_uuid("Owner") {
+                        owner = Some(e.properties);
+                    } else if e.uuid == offline_uuid("Guest") {
+                        guest = Some(e.properties);
+                    }
+                }
+            }
+        }
+        Ok((owner, guest))
+    });
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    owner.join().unwrap().unwrap();
+    assert_eq!(listed.0, Some(vec![textures]), "the owner's entry");
+    assert_eq!(listed.1, Some(Vec::new()), "the guest's entry");
 }
 
 #[test]
@@ -367,6 +449,7 @@ fn sprint_commands_survive_keyboard_input_changes() {
     }
     let id = s.hub.guests[0].entity_id;
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     s.hub.guests[0].inbox.push_back((
         S::PlayerCommand(play::PlayerCommand {
             id,
@@ -427,6 +510,7 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
         thread::yield_now();
     }
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     let at = s.hub.guests[0].position;
     let below = [
         at[0].floor() as i32,
@@ -532,6 +616,7 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
         thread::yield_now();
     }
     s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
     // The join's teleport accepted: the hub takes moves.
     s.hub.guests[0].awaiting_teleport = None;
     let at = s.hub.guests[0].position;
@@ -737,6 +822,7 @@ fn guests_see_each_other_and_the_world_entities() {
         needs_sync: false,
         leash: None,
         spectator: false,
+        watching: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
