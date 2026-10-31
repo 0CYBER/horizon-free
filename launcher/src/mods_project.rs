@@ -109,7 +109,10 @@ impl Launcher {
                 }
             }
             Loaded::Image(key, path) => {
-                b.images.insert(key, path);
+                // A refresh that failed (offline) keeps the cached image.
+                if path.is_some() || !matches!(b.images.get(&key), Some(Some(_))) {
+                    b.images.insert(key, path);
+                }
             }
             Loaded::Tags(key, Ok(tags)) => {
                 b.tags.insert(key, tags);
@@ -156,47 +159,61 @@ impl Launcher {
         });
     }
 
-    /// The image of `url` at `size` when it is on disk; else asks for it once.
-    fn mods_image(&mut self, url: &str, size: u32) -> Option<PathBuf> {
+    /// The image of `url` at `size` when it is on disk; else asks for it once. One cached longer
+    /// than `images::FRESH` is shown and asked for again, with its validators.
+    pub(super) fn mods_image(&mut self, url: &str, size: u32) -> Option<PathBuf> {
         let key = (url.to_owned(), size);
         if let Some(state) = self.mods.browse.images.get(&key) {
             return state.clone();
         }
-        let home = backend::game_home();
+        // The launcher's data folder, shared by every instance.
+        let home = backend::data_dir();
         if let Some(p) = images::cached(&home, url, size) {
-            self.mods.browse.images.insert(key, Some(p.clone()));
+            self.mods.browse.images.insert(key.clone(), Some(p.clone()));
+            if images::stale(&home, url, size) {
+                let _ = self.mods_image_queue().send(key);
+            }
             return Some(p);
         }
         self.mods.browse.images.insert(key.clone(), None);
         if images::refuse(url).is_some() {
             return None;
         }
-        let b = &mut self.mods.browse;
-        let queue = b.image_queue.get_or_insert_with(|| {
-            let (send, receive) = std::sync::mpsc::channel::<(String, u32)>();
-            let receive = std::sync::Arc::new(std::sync::Mutex::new(receive));
-            for _ in 0..IMAGE_WORKERS {
-                let (receive, tx, home) = (receive.clone(), self.mods.tx.clone(), home.clone());
-                std::thread::spawn(move || loop {
-                    let Ok(next) = receive.lock().map(|r| r.recv()) else {
-                        break;
-                    };
-                    let Ok((url, size)) = next else {
-                        break;
-                    };
-                    let path = images::fetch(&home, &url, size).ok();
-                    if tx
-                        .send(Event::Loaded(Loaded::Image((url, size), path)))
-                        .is_err()
-                    {
-                        break;
-                    }
-                });
-            }
-            send
-        });
-        let _ = queue.send(key);
+        let _ = self.mods_image_queue().send(key);
         None
+    }
+
+    /// The image workers' queue, started the first time an image is asked for.
+    fn mods_image_queue(&mut self) -> std::sync::mpsc::Sender<(String, u32)> {
+        let tx = self.mods.tx.clone();
+        self.mods
+            .browse
+            .image_queue
+            .get_or_insert_with(|| {
+                let (send, receive) = std::sync::mpsc::channel::<(String, u32)>();
+                let receive = std::sync::Arc::new(std::sync::Mutex::new(receive));
+                let home = backend::data_dir();
+                for _ in 0..IMAGE_WORKERS {
+                    let (receive, tx, home) = (receive.clone(), tx.clone(), home.clone());
+                    std::thread::spawn(move || loop {
+                        let Ok(next) = receive.lock().map(|r| r.recv()) else {
+                            break;
+                        };
+                        let Ok((url, size)) = next else {
+                            break;
+                        };
+                        let path = images::fetch(&home, &url, size).ok();
+                        if tx
+                            .send(Event::Loaded(Loaded::Image((url, size), path)))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    });
+                }
+                send
+            })
+            .clone()
     }
 
     /// A project's icon, `side` pixels: its image, or its first letter on a plate until then.

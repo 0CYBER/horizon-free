@@ -20,9 +20,9 @@ ClientPacketListener.queueLightRemoval	inline	crates/horizon-client-render/src/s
 ClientPacketListener.handleBlockUpdate	port	crates/horizon-client/src/game/remote.rs::Game::server_block	
 ClientPacketListener.handleConfigurationStart	port	crates/horizon-client/src/net.rs::receive_play	gap: player: no reconfiguring screen is shown and the chat state is not stored
 ClientPacketListener.handleSystemChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SystemChat arm: overlay to the action bar, otherwise the chat
-ClientPacketListener.handlePlayerChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm; gap: minor: no signature, chat index or validity checks
+ClientPacketListener.handlePlayerChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm; gap: minor: no chat index or validity checks
 ClientPacketListener.handleDisguisedChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	DisguisedChat arm
-ClientPacketListener.handleDeleteChat	missing		player: a chat line the server deletes (moderation) stays on screen
+ClientPacketListener.handleDeleteChat	port	crates/horizon-client/src/game/remote.rs::Game::handle_delete_chat	gap: minor: no LastSeenMessagesTracker.ignorePending, the client signs no chat
 ClientPacketListener.handleAnimate	port	crates/horizon-client/src/game/remote.rs::Game::remote_animate	action 0 stops sleeping, 1 and 2 emit crit and enchanted hit particles
 ClientPacketListener.handleHurtAnimation	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	HurtAnimation arm: own player's hurt tilt, or a mob's hurt time
 ClientPacketListener.handleSetSpawn	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetDefaultSpawnPosition arm; gap: minor: only an overworld spawn is kept, other dimensions are dropped
@@ -48,7 +48,7 @@ ClientPacketListener.handleCommands	port	crates/horizon-client/src/game/remote.r
 ClientPacketListener.handleStopSoundEvent	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	StopSound arm: audio stop_sounds
 ClientPacketListener.handleUpdateRecipes	skip:data		Horizon reads recipes from its own tables; the server's list is not read
 ClientPacketListener.handleLookAt	missing		player: a server command that turns the camera (/faceplayer, /tp with facing) does not turn this player's view
-ClientPacketListener.handleTagQueryPacket	skip:debug		answer to a debug NBT query; Horizon sends none
+ClientPacketListener.handleTagQueryPacket	port	crates/horizon-client/src/game/debug_keys.rs::Game::answer_tag_query	reached from the TagQuery arm of remote.rs handle_packet
 ClientPacketListener.handleAwardStats	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	AwardStats arm: known stat keys into the stats values
 ClientPacketListener.handleRecipeBookAdd	port	crates/horizon-client/src/game/recipe_book.rs::Game::remote_recipe_book_add	
 ClientPacketListener.handleRecipeBookRemove	port	crates/horizon-client/src/game/recipe_book.rs::Game::remote_recipe_book_remove	
@@ -65,7 +65,7 @@ ClientPacketListener.handleSetBorderSize	port	crates/horizon-client/src/game/rem
 ClientPacketListener.handleSetBorderWarningDistance	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetBorderWarningDistance arm
 ClientPacketListener.handleSetBorderWarningDelay	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetBorderWarningDelay arm
 ClientPacketListener.handleTitlesClear	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	ClearTitles arm: clear, optionally reset the times
-ClientPacketListener.handleCustomChatCompletions	missing		minor: server-sent custom chat completions are not used
+ClientPacketListener.handleCustomChatCompletions	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	CustomChatCompletions arm: modify_custom_completions on the connection's set
 ClientPacketListener.setTitleText	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetTitleText arm
 ClientPacketListener.setSubtitleText	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetSubtitleText arm
 ClientPacketListener.setTitlesAnimation	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	SetTitlesAnimation arm
@@ -116,12 +116,12 @@ ClientPacketListener.notifyPlayerLoaded	port	crates/horizon-client/src/game/remo
 ClientPacketListener.setKeyPair	missing		player: no chat key pair is ever set, so chat and commands stay unsigned
 ClientRegistryLayer.createRegistryAccess	skip:data		registry layers come from Horizon's own tables
 ClientSuggestionProvider.getOnlinePlayerNames	port	crates/horizon-client/src/game/remote.rs::Game::remote_online_names	sorted names of the server's player list
-ClientSuggestionProvider.getCustomTabSuggestions	missing		minor: server-sent custom completions are not used
+ClientSuggestionProvider.getCustomTabSuggestions	port	crates/horizon-client-core/src/registries.rs::Registries::custom_tab_suggestions	the player names and the server's custom completions, each once
 ClientSuggestionProvider.getSelectedEntities	missing		minor: no suggestion for the entity under the crosshair
 ClientSuggestionProvider.suggestRegistryElements	port	crates/horizon-command/src/args.rs::suggest_resources	registry ids come from Horizon's registry tables
 ClientSuggestionProvider.getRelevantCoordinates	port	crates/horizon-command/src/args.rs::suggest_coordinates	the block under the crosshair for block positions
 ClientSuggestionProvider.getAbsoluteCoordinates	port	crates/horizon-command/src/args.rs::suggest_coordinates	gap: minor: the exact hit point is not offered; Vec3 arguments only get ~
-ClientSuggestionProvider.modifyCustomCompletions	missing		minor: server-sent custom completions are not stored
+ClientSuggestionProvider.modifyCustomCompletions	port	crates/horizon-client-core/src/registries.rs::modify_custom_completions	ADD, REMOVE or SET on the set the connection keeps
 KnownPacksManager.trySelectingPacks	skip:data		Horizon answers SelectKnownPacks with no packs, so the server sends full registries (net.rs configure)
 LegacyServerPinger.channelActive	skip:other		legacy pre-1.7 server-list ping, not used by this client
 LegacyServerPinger.channelRead0	skip:other		legacy pre-1.7 server-list ping, not used by this client
