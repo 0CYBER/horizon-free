@@ -14,6 +14,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs, io,
     path::Path,
+    sync::{Arc, Mutex, Weak},
 };
 
 /// Raw files a world's data packs add over the game's own data, by
@@ -157,7 +158,7 @@ impl Enchantment {
 
 /// Loot tables, items, enchantments and the tags they reference.
 pub struct LootData {
-    tables: HashMap<String, Value>,
+    tables: Arc<HashMap<String, Value>>,
     modifiers: HashMap<String, Value>,
     predicates: HashMap<String, Value>,
     items: HashMap<String, ItemFacts>,
@@ -318,6 +319,53 @@ fn overlay_map(overlay: &PackOverlay, kind: &str, out: &mut HashMap<String, Valu
     }
 }
 
+/// The loot tables of every namespace in `root`'s `data/`, with `overlay`'s
+/// over them. Shared while one is alive: `Items` and [`LootData`] of the
+/// same root and packs hold one map, not a copy each (7 MB). The key holds
+/// the packs' bytes and each root file's size and modification time, so a
+/// table changed on disk is read again rather than taken from a held map.
+pub fn shared_tables(
+    root: &Path,
+    overlay: &PackOverlay,
+) -> io::Result<Arc<HashMap<String, Value>>> {
+    static LOADED: Mutex<Vec<(u64, Weak<HashMap<String, Value>>)>> = Mutex::new(Vec::new());
+    let key = {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        root.hash(&mut hasher);
+        let data = root.join("data");
+        let mut namespaces: Vec<_> = fs::read_dir(&data)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        namespaces.sort();
+        for namespace in namespaces {
+            hash_files(&namespace.join("loot_table"), &mut hasher);
+        }
+        overlay
+            .kind("loot_table")
+            .for_each(|file| file.hash(&mut hasher));
+        hasher.finish()
+    };
+    let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+    loaded.retain(|(_, tables)| tables.strong_count() > 0);
+    if let Some(tables) = loaded
+        .iter()
+        .find(|(k, _)| *k == key)
+        .and_then(|(_, tables)| tables.upgrade())
+    {
+        return Ok(tables);
+    }
+    let mut tables = HashMap::new();
+    load_kind(&root.join("data"), "loot_table", &mut tables)?;
+    overlay_map(overlay, "loot_table", &mut tables);
+    let tables = Arc::new(tables);
+    loaded.push((key, Arc::downgrade(&tables)));
+    Ok(tables)
+}
+
 fn load_kind(data: &Path, kind: &str, out: &mut HashMap<String, Value>) -> io::Result<()> {
     let Ok(entries) = fs::read_dir(data) else {
         return Ok(());
@@ -332,6 +380,29 @@ fn load_kind(data: &Path, kind: &str, out: &mut HashMap<String, Value>) -> io::R
         load_dir(&data.join(&ns).join(kind), &ns, "", out)?;
     }
     Ok(())
+}
+
+/// Every file's path, size and modification time under `dir`, in name order.
+fn hash_files(dir: &Path, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            hash_files(&path, hasher);
+        } else {
+            path.hash(hasher);
+            meta.len().hash(hasher);
+            meta.modified().ok().hash(hasher);
+        }
+    }
 }
 
 fn load_dir(
@@ -372,9 +443,7 @@ impl LootData {
     pub fn load(root: &Path, overlay: &PackOverlay) -> io::Result<Self> {
         let all = root.join("data");
         let data = all.join("minecraft");
-        let mut tables = HashMap::new();
-        load_kind(&all, "loot_table", &mut tables)?;
-        overlay_map(overlay, "loot_table", &mut tables);
+        let tables = shared_tables(root, overlay)?;
         let mut modifiers = HashMap::new();
         load_kind(&all, "item_modifier", &mut modifiers)?;
         overlay_map(overlay, "item_modifier", &mut modifiers);
@@ -1596,6 +1665,47 @@ fn enchant(stack: &mut LootStack, name: &str, level: i32) {
 #[cfg(test)]
 mod namespace_tests {
     use super::*;
+
+    /// The same root and packs share one map while it is held; other packs
+    /// get their own.
+    #[test]
+    fn loot_tables_are_shared_per_root_and_packs() {
+        let root = std::env::temp_dir().join(format!("horizon-loot-share-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/loot_table/chests")).unwrap();
+        fs::write(
+            root.join("data/minecraft/loot_table/chests/a.json"),
+            r#"{"pools": []}"#,
+        )
+        .unwrap();
+        let first = shared_tables(&root, &PackOverlay::NONE).unwrap();
+        let again = shared_tables(&root, &PackOverlay::NONE).unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        assert!(first.contains_key("minecraft:chests/a"));
+        let files = [(
+            "loot_table/minecraft:chests/b".to_owned(),
+            vec![br#"{"pools": []}"#.to_vec()],
+        )];
+        let packs = shared_tables(&root, &PackOverlay { files: &files }).unwrap();
+        assert!(!Arc::ptr_eq(&first, &packs));
+        assert!(packs.contains_key("minecraft:chests/b"));
+        // A table changed at the same path while `first` is still held: the
+        // new file is read, not the held map.
+        fs::write(
+            root.join("data/minecraft/loot_table/chests/a.json"),
+            r#"{"pools": [], "random_sequence": "minecraft:chests/a"}"#,
+        )
+        .unwrap();
+        let changed = shared_tables(&root, &PackOverlay::NONE).unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(
+            changed["minecraft:chests/a"]
+                .get("random_sequence")
+                .is_some()
+        );
+        assert!(first["minecraft:chests/a"].get("random_sequence").is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
 
     /// A content mods' root: the mods' loot tables and tags load beside
     /// vanilla's, under their own namespaces.
