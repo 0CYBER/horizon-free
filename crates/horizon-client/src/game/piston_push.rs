@@ -31,6 +31,8 @@ enum Target {
     Boat(usize),
     Cart(usize),
     ArmorStand(usize),
+    /// Primed TNT (`PrimedTnt`): slime piston bounce (#4550).
+    Tnt(usize),
 }
 
 /// `Entity.getStepHeight` of each body, read before the push.
@@ -246,6 +248,7 @@ impl Game<'_> {
         targets.extend((0..self.boats.len()).map(Target::Boat));
         targets.extend((0..self.carts.len()).map(Target::Cart));
         targets.extend((0..self.armor_stands.len()).map(Target::ArmorStand));
+        targets.extend((0..self.tnts.len()).map(Target::Tnt));
         targets
     }
 
@@ -336,6 +339,16 @@ impl Game<'_> {
                 if entity.marker {
                     return None;
                 }
+                Some(Body {
+                    bounds: entity.bounds(),
+                    position: entity.position,
+                    on_ground: entity.on_ground,
+                    step_height: 0.0,
+                    supported: false,
+                })
+            }
+            Target::Tnt(i) => {
+                let entity = &self.tnts[i];
                 Some(Body {
                     bounds: entity.bounds(),
                     position: entity.position,
@@ -454,6 +467,7 @@ impl Game<'_> {
             Target::ArmorStand(i) => {
                 self.armor_stands[i].position = self.armor_stands[i].position.add_vector(movement)
             }
+            Target::Tnt(i) => self.tnts[i].position = self.tnts[i].position.add_vector(movement),
         }
     }
 
@@ -489,6 +503,13 @@ impl Game<'_> {
             Target::ArmorStand(i) => {
                 self.armor_stands[i].velocity =
                     piston_push::bounce_velocity(movement, self.armor_stands[i].velocity)
+            }
+            Target::Tnt(i) => {
+                self.tnts[i].velocity =
+                    piston_push::bounce_velocity(movement, self.tnts[i].velocity);
+                // Leave the ground so the next tick does not apply the
+                // on-ground Y * -0.5 friction that cancels the launch.
+                self.tnts[i].on_ground = false;
             }
         }
     }
