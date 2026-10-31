@@ -78,6 +78,8 @@ pub fn hurt_sound(effects: &str) -> &'static str {
 }
 #[derive(Clone, Copy, Debug)]
 pub enum HealthEvent {
+    /// `FoodData.tick` calling `hurtServer` with starvation. Only a hit that
+    /// lands is recorded (`RecordedDamage`).
     StarvationDamage(f32),
     /// `LivingEntity.aiStep` hurting a fully frozen entity.
     FreezeDamage(f32),
