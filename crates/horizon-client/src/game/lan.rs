@@ -2216,19 +2216,27 @@ impl Game<'_> {
         let players: Vec<_> = host_player
             .into_iter()
             .chain(guests.filter_map(|g| g.motion.as_deref().map(|m| (g.entity_id, g.position, m))))
-            .map(|(id, at, p)| (id, at, p.health.hurt_animation_time, p.hurt_log.last()))
+            .map(|(id, at, p)| {
+                (
+                    id,
+                    at,
+                    p.health.hurt_animation_time,
+                    p.health.dead_or_dying(),
+                    p.hurt_log.last(),
+                )
+            })
             .collect();
-        for (id, at, hurt, record) in players {
+        for (id, at, hurt, dead, record) in players {
             let old = host
                 .mob_state
                 .get(&self.dim)
                 .and_then(|s| s.get(&(id as u32)));
-            if hurt > old.map_or(0, |o| o.0) {
+            if hurt > old.map_or(0, |o| o.0) && !dead {
                 // Starving keeps no record: any type flashes the same.
                 let kind = record.map_or("minecraft:generic", |r| r.source.as_str());
                 host.hub.damage_event(id, kind, None, None, at);
             }
-            seen.insert(id as u32, (hurt, false, None));
+            seen.insert(id as u32, (hurt, dead, None));
         }
         host.mob_state.insert(self.dim, seen);
         // Level.broadcastEntityEvent(player, 2) of a spear's stab.

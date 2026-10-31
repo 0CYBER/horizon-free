@@ -2938,8 +2938,16 @@ impl Game<'_> {
                     && let Some(pl) = self.player.as_ref()
                 {
                     let at = [pl.position.x, pl.position.y, pl.position.z];
-                    self.audio
-                        .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
+                    let sound = "minecraft:entity.player.death";
+                    let pitch = 1.0
+                        + (self.world.random.next_float() - self.world.random.next_float()) * 0.2;
+                    self.audio.play_on(
+                        horizon_client::settings::sound_source(sound),
+                        sound,
+                        Some(at),
+                        1.0,
+                        pitch,
+                    );
                 }
                 // The events that start a mob's animation (the warden's).
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {

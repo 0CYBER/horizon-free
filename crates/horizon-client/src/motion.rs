@@ -3428,6 +3428,20 @@ mod tests {
                 .count(),
             1
         );
+        // A fatal hit plays the death sound rather than a hurt sound (#4570).
+        let mut dying = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        assert!(
+            dying
+                .hurt(&resources.health, Default::default(), source, 100.0)
+                .unwrap()
+        );
+        assert!(dying.health.dead_or_dying());
+        assert!(
+            !dying
+                .events
+                .iter()
+                .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+        );
         // A shield that takes the whole arrow: onBlocked's sound, no damage
         // event, so the player hears no hurt sound.
         use horizon_world::blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction};
