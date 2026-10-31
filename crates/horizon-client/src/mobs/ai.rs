@@ -2925,41 +2925,9 @@ mod fox_screech_tests {
     use super::*;
     use crate::mobs::PlayerView;
     use crate::mobs::world::with_test_world;
-    use horizon_core::geometry::Aabb;
 
     fn player_at(x: f64) -> PlayerView {
-        PlayerView {
-            position: Vec3::new(x, 64.0, 0.5),
-            bounds: Aabb::new(Vec3::new(x - 0.3, 64.0, 0.2), Vec3::new(x + 0.3, 65.8, 0.8)),
-            eye: [x, 65.62, 0.5],
-            alive: true,
-            creative: false,
-            sneaking: false,
-            swimming: false,
-            look: [0.0; 3],
-            main_hand: None,
-            off_hand: None,
-            head: None,
-            armor_cover: 0.0,
-            invisible: false,
-            spectator: false,
-            gold_armor: false,
-            hurt_by: None,
-            last_hurt: None,
-            velocity: Vec3::ZERO,
-            yaw: 0.0,
-            sprinting: false,
-            riding: false,
-            hero: false,
-            effects: Vec::new(),
-            uuid: [0; 4],
-            allies: Default::default(),
-            remote: false,
-            sleeping: false,
-            sleep_timer: 0,
-            passenger: false,
-            vehicle: None,
-        }
+        crate::mobs::world::test_player(Vec3::new(x, 64.0, 0.5))
     }
 
     /// The (sound, volume) of 200 ambient sounds from one fox in `w`.
