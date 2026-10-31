@@ -16589,7 +16589,12 @@ fn load_core(
                 .map_err(|e| e.to_string());
                 Ok((render, item_renderer))
             });
+            // Nor the face visibility the mesher and the block entity
+            // renderer cull with (19 MB).
             let visibility = Step::spawn(scope, parallel, || {
+                if headless {
+                    return Ok(horizon_world::block_render::FaceVisibility::empty());
+                }
                 models::load_visibility(root, registry).map_err(|e| e.to_string())
             });
             let biomes = Step::spawn(scope, parallel, || {

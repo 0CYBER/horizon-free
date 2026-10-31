@@ -545,7 +545,12 @@ impl MeshTables {
             });
             let mut face = [0u8; 6];
             let mut cover = [0f32; 6];
-            for d in Direction::ALL {
+            // A server's visibility knows no state (`FaceVisibility::empty`):
+            // it meshes no fluid, so these stay unset.
+            for d in Direction::ALL
+                .into_iter()
+                .filter(|_| !visibility.is_empty())
+            {
                 let (face_id, shape) = visibility
                     .occlusion_face(BlockStateId(id as u32), d)
                     .ok_or("missing occlusion face")?;
