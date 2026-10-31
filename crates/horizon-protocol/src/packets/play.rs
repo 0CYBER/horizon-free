@@ -4,7 +4,7 @@ use crate::{
     buf::{
         Bool, Byte, BytesN, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt,
         Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong,
-        Vec3d, Writer,
+        VarVec3i, Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
@@ -75,6 +75,9 @@ packet!(BlockChangedAck { sequence: i32 => VarInt });
 packet!(BlockDestruction { id: i32 => VarInt, pos: [i32; 3] => Pos, progress: u8 => UByte });
 packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => Nbt });
 packet!(BlockUpdate { pos: [i32; 3] => Pos, state: i32 => VarInt });
+// ClientboundAddTransientBlockPacket: a block the client shows for a moment
+// while its section mesh catches up (a falling block that landed).
+packet!(AddTransientBlock { pos: [i32; 3] => Pos, state: i32 => VarInt });
 packet!(ChangeDifficulty { difficulty: i32 => VarInt, locked: bool => Bool });
 // ResourceKey<GameRule<?>> is an identifier, followed by its string value.
 packet!(GameRuleEntry { name: String => Ident, value: String => Str });
@@ -786,6 +789,11 @@ packet!(
         entity: Option<LookAtEntity> => Opt<LookAtEntity>,
     }
 );
+packet!(
+    /// ClientboundPostEffectsPacket: the `post_effect` chains (ids) the player's
+    /// screen runs, in order (`ServerPlayer.postEffects`).
+    PostEffects { effects: Vec<String> => List<Ident> }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -822,6 +830,24 @@ packet!(
     /// ClientboundMoveVehiclePacket: the server puts a vehicle its rider
     /// controls back where it was (PositionAndRotation: x, y, z, yRot, xRot).
     MoveVehicle { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float }
+);
+packet!(
+    /// NewMinecartBehavior.MinecartStep: where a minecart is at the end of one
+    /// of the server's steps along the track, its motion, its rotation (yRot,
+    /// xRot) and the step's weight in the 3 ticks they are played over.
+    MinecartStep {
+        position: [f64; 3] => Vec3d,
+        movement: [f64; 3] => Vec3d,
+        yaw: i8 => Byte,
+        pitch: i8 => Byte,
+        weight: f32 => Float,
+    }
+);
+packet!(
+    /// ClientboundMoveMinecartPacket: the steps a minecart took along the
+    /// track since the last one (the `minecart_improvements` experiment sends
+    /// these in place of move packets).
+    MoveMinecartAlongTrack { id: i32 => VarInt, steps: Vec<MinecartStep> => List<MinecartStep> }
 );
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
@@ -1889,6 +1915,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
     ClearTitles(Bool1) = CLEAR_TITLES,
+    LowDiskSpaceWarning(Empty) = LOW_DISK_SPACE_WARNING,
     Commands(Commands) = COMMANDS,
     RecipeBookAdd(super::recipes::RecipeBookAdd) = RECIPE_BOOK_ADD,
     RecipeBookRemove(super::recipes::RecipeBookRemove) = RECIPE_BOOK_REMOVE,
@@ -1910,6 +1937,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
+    GameTestHighlightPos(GameTestHighlightPos) = GAME_TEST_HIGHLIGHT_POS,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     DamageEvent(DamageEvent) = DAMAGE_EVENT,
@@ -1938,6 +1966,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerLookAt(PlayerLookAt) = PLAYER_LOOK_AT,
     PlayerPosition(PlayerPosition) = PLAYER_POSITION,
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
+    PostEffects(PostEffects) = POST_EFFECTS,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
     RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
     ResetScore(ResetScore) = RESET_SCORE,
@@ -1969,6 +1998,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPassengers(SetPassengers) = SET_PASSENGERS,
     MoveVehicle(MoveVehicle) = MOVE_VEHICLE,
+    MoveMinecartAlongTrack(MoveMinecartAlongTrack) = MOVE_MINECART_ALONG_TRACK,
     ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
@@ -1992,6 +2022,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TagQuery(TagQuery) = TAG_QUERY,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
+    TestInstanceBlockStatus(TestInstanceBlockStatus) = TEST_INSTANCE_BLOCK_STATUS,
     TickingState(TickingState) = TICKING_STATE,
     TickingStep(TickingStep) = TICKING_STEP,
     Transfer(Transfer) = TRANSFER,
@@ -1999,6 +2030,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
     LevelParticles(LevelParticles) = LEVEL_PARTICLES,
     Explode(Explode) = EXPLODE,
+    AddTransientBlock(AddTransientBlock) = ADD_TRANSIENT_BLOCK,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -2261,11 +2293,165 @@ packet!(
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
 packet!(
+    /// ServerboundSetJigsawBlockPacket: the jigsaw block's edit screen. The
+    /// joint is `JointType.getSerializedName`; an unknown one reads as aligned.
+    SetJigsawBlock {
+        pos: [i32; 3] => Pos,
+        name: String => Ident,
+        target: String => Ident,
+        pool: String => Ident,
+        final_state: String => Str,
+        joint: String => Str,
+        selection_priority: i32 => VarInt,
+        placement_priority: i32 => VarInt
+    }
+);
+packet!(
+    /// ServerboundSetTestBlockPacket: the test block's edit screen; `mode` is
+    /// a `TestBlockMode` id.
+    SetTestBlock { pos: [i32; 3] => Pos, mode: i32 => VarInt, message: String => Str }
+);
+packet!(
+    /// `TestInstanceBlockEntity.Data.STREAM_CODEC`: the test, size, rotation
+    /// (ordinal), ignore-entities flag, status (index) and error message.
+    TestInstanceData {
+        test: Option<String> => Opt<Ident>,
+        size: [i32; 3] => VarVec3i,
+        rotation: i32 => VarInt,
+        ignore_entities: bool => Bool,
+        status: i32 => VarInt,
+        error_message: Option<Tag> => Opt<Nbt>
+    }
+);
+packet!(
+    /// ServerboundTestInstanceBlockActionPacket: `action` is the `Action` id
+    /// (INIT 0, QUERY 1, SET 2, RESET 3, SAVE 4, EXPORT 5, RUN 6).
+    TestInstanceBlockAction { pos: [i32; 3] => Pos, action: i32 => VarInt, data: TestInstanceData => TestInstanceData }
+);
+packet!(
+    /// ClientboundGameTestHighlightPosPacket: the absolute position and the
+    /// position relative to the test's origin.
+    GameTestHighlightPos { absolute: [i32; 3] => Pos, relative: [i32; 3] => Pos }
+);
+packet!(
+    /// ClientboundTestInstanceBlockStatus: the test's description and, for a
+    /// query, the size of its structure.
+    TestInstanceBlockStatus { status: Tag => Nbt, size: Option<[i32; 3]> => Opt<VarVec3i> }
+);
+packet!(
+    /// ServerboundJigsawGeneratePacket: the jigsaw block's Generate button.
+    JigsawGenerate { pos: [i32; 3] => Pos, levels: i32 => VarInt, keep_jigsaws: bool => Bool }
+);
+packet!(
     /// ServerboundSetCommandBlockPacket: the command block's command, its
     /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
     /// conditional (2) and automatic (4) flags.
     SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
 );
+packet!(
+    /// ServerboundSetCommandMinecartPacket: the command minecart's entity id,
+    /// its command and whether it tracks output.
+    SetCommandMinecart { entity: i32 => VarInt, command: String => Str, track_output: bool => Bool }
+);
+/// ServerboundSetStructureBlockPacket: the structure block's edit screen.
+/// `update_type` and `mode` are `StructureBlockEntity.UpdateType` and
+/// `StructureMode` ordinals, `mirror` and `rotation` the enums' ordinals.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetStructureBlock {
+    pub pos: [i32; 3],
+    pub update_type: i32,
+    pub mode: i32,
+    pub name: String,
+    pub offset: [i32; 3],
+    pub size: [i32; 3],
+    pub mirror: i32,
+    pub rotation: i32,
+    pub data: String,
+    pub ignore_entities: bool,
+    pub strict: bool,
+    pub show_air: bool,
+    pub show_bounding_box: bool,
+    pub integrity: f32,
+    pub seed: i64,
+}
+impl SetStructureBlock {
+    const FLAG_IGNORE_ENTITIES: i8 = 1;
+    const FLAG_SHOW_AIR: i8 = 2;
+    const FLAG_SHOW_BOUNDING_BOX: i8 = 4;
+    const FLAG_STRICT: i8 = 8;
+}
+impl Codec<SetStructureBlock> for SetStructureBlock {
+    /// `ServerboundSetStructureBlockPacket(FriendlyByteBuf)`: the offsets,
+    /// sizes and integrity are clamped as they are read.
+    fn read(r: &mut Reader) -> Result<Self> {
+        let pos = Pos::read(r)?;
+        let update_type = r.varint()?;
+        let mode = r.varint()?;
+        let name = r.string(32767)?;
+        let mut offset = [0; 3];
+        for v in &mut offset {
+            *v = i32::from(r.i8()?).clamp(-48, 48);
+        }
+        let mut size = [0; 3];
+        for v in &mut size {
+            *v = i32::from(r.i8()?).clamp(0, 48);
+        }
+        let mirror = r.varint()?;
+        let rotation = r.varint()?;
+        let data = r.string(128)?;
+        let integrity = r.f32()?.clamp(0.0, 1.0);
+        let seed = r.varlong()?;
+        let flags = r.i8()?;
+        Ok(Self {
+            pos,
+            update_type,
+            mode,
+            name,
+            offset,
+            size,
+            mirror,
+            rotation,
+            data,
+            ignore_entities: flags & Self::FLAG_IGNORE_ENTITIES != 0,
+            strict: flags & Self::FLAG_STRICT != 0,
+            show_air: flags & Self::FLAG_SHOW_AIR != 0,
+            show_bounding_box: flags & Self::FLAG_SHOW_BOUNDING_BOX != 0,
+            integrity,
+            seed,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        Pos::write(&v.pos, w);
+        w.varint(v.update_type);
+        w.varint(v.mode);
+        w.string(&v.name);
+        for o in v.offset {
+            w.i8(o as i8);
+        }
+        for s in v.size {
+            w.i8(s as i8);
+        }
+        w.varint(v.mirror);
+        w.varint(v.rotation);
+        w.string(&v.data);
+        w.f32(v.integrity);
+        w.varlong(v.seed);
+        let mut flags = 0;
+        if v.ignore_entities {
+            flags |= Self::FLAG_IGNORE_ENTITIES;
+        }
+        if v.show_air {
+            flags |= Self::FLAG_SHOW_AIR;
+        }
+        if v.show_bounding_box {
+            flags |= Self::FLAG_SHOW_BOUNDING_BOX;
+        }
+        if v.strict {
+            flags |= Self::FLAG_STRICT;
+        }
+        w.i8(flags);
+    }
+}
 packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
     /// the off hand), its pages and, to sign it, its title.
@@ -2434,13 +2620,19 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     RenameItem(RenameItem) = RENAME_ITEM,
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
+    JigsawGenerate(JigsawGenerate) = JIGSAW_GENERATE,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
+    SetCommandMinecart(SetCommandMinecart) = SET_COMMAND_MINECART,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SetJigsawBlock(SetJigsawBlock) = SET_JIGSAW_BLOCK,
+    SetTestBlock(SetTestBlock) = SET_TEST_BLOCK,
+    TestInstanceBlockAction(TestInstanceBlockAction) = TEST_INSTANCE_BLOCK_ACTION,
+    SetStructureBlock(SetStructureBlock) = SET_STRUCTURE_BLOCK,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
     UseItemOn(UseItemOn) = USE_ITEM_ON,
@@ -2621,6 +2813,7 @@ mod tests {
     fn clientbound_round_trips() {
         let packets = vec![
             Clientbound::BundleDelimiter(Empty),
+            Clientbound::LowDiskSpaceWarning(Empty),
             Clientbound::PongResponse(crate::packets::status::Ping { time: 1_234_567 }),
             Clientbound::SetBorderCenter(SetBorderCenter { x: 1.5, z: -2.0 }),
             Clientbound::SetBorderLerpSize(SetBorderLerpSize {
@@ -2691,6 +2884,10 @@ mod tests {
                 data: 0,
             }),
             Clientbound::BlockUpdate(BlockUpdate {
+                pos: [-5, -60, 7],
+                state: 1,
+            }),
+            Clientbound::AddTransientBlock(AddTransientBlock {
                 pos: [-5, -60, 7],
                 state: 1,
             }),
@@ -3299,6 +3496,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn post_effects_round_trips() {
+        let p = PostEffects {
+            effects: vec!["minecraft:invert".into(), "pack:glow".into()],
+        };
+        let bytes = Clientbound::PostEffects(p.clone()).encode();
+        assert_eq!(
+            Clientbound::decode(crate::ids::play::clientbound::POST_EFFECTS, &bytes[1..]).unwrap(),
+            Clientbound::PostEffects(p)
+        );
+        // The empty list the server sends on join.
+        assert_eq!(
+            Clientbound::decode(crate::ids::play::clientbound::POST_EFFECTS, &[0]).unwrap(),
+            Clientbound::PostEffects(PostEffects {
+                effects: Vec::new()
+            })
+        );
+    }
+
     /// ClientboundChunksBiomesPacket is read, not passed through as an
     /// unknown packet: one column (1, -2) with two bytes of biomes.
     #[test]
@@ -3543,6 +3759,160 @@ mod tests {
             Serverbound::CustomClickAction(CustomClickAction {
                 id: "minecraft:custom".into(),
                 payload: None,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+    }
+
+    #[test]
+    fn set_command_minecart_writes_entity_command_then_track_output() {
+        let packet = SetCommandMinecart {
+            entity: 300,
+            command: "say hi".into(),
+            track_output: true,
+        };
+        round_trip(
+            Serverbound::SetCommandMinecart(packet.clone()),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        // ServerboundSetCommandMinecartPacket.write: VarInt, UTF, boolean.
+        let mut w = Writer::new();
+        SetCommandMinecart::write(&packet, &mut w);
+        assert_eq!(
+            w.data,
+            [0xAC, 0x02, 6, b's', b'a', b'y', b' ', b'h', b'i', 1]
+        );
+    }
+
+    #[test]
+    fn set_structure_block_round_trips_and_clamps_like_vanilla() {
+        let packet = SetStructureBlock {
+            pos: [-3, 70, 12],
+            update_type: 1,
+            mode: 0,
+            name: "minecraft:house".into(),
+            offset: [-48, 1, 48],
+            size: [0, 48, 5],
+            mirror: 2,
+            rotation: 3,
+            data: "meta".into(),
+            ignore_entities: true,
+            strict: false,
+            show_air: true,
+            show_bounding_box: true,
+            integrity: 0.5,
+            seed: -7,
+        };
+        round_trip(
+            Serverbound::SetStructureBlock(packet.clone()),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        // The flag byte: ignoreEntities 1, showAir 2, showBoundingBox 4, strict 8.
+        let mut w = Writer::new();
+        SetStructureBlock::write(&packet, &mut w);
+        assert_eq!(*w.data.last().unwrap(), 1 | 2 | 4);
+        // Offsets clamp to +-48, sizes to 0..=48 and the integrity to 0..=1.
+        let wild = SetStructureBlock {
+            offset: [-100, 100, 0],
+            size: [-5, 100, 7],
+            integrity: 4.0,
+            ..packet
+        };
+        let mut w = Writer::new();
+        SetStructureBlock::write(&wild, &mut w);
+        let read = SetStructureBlock::read(&mut Reader::new(&w.data)).unwrap();
+        assert_eq!(read.offset, [-48, 48, 0]);
+        assert_eq!(read.size, [0, 48, 7]);
+        assert_eq!(read.integrity, 1.0);
+    }
+
+    #[test]
+    fn test_instance_packets_round_trip() {
+        let data = TestInstanceData {
+            test: Some("minecraft:always_pass".into()),
+            size: [3, 4, 5],
+            rotation: 2,
+            ignore_entities: true,
+            status: 1,
+            error_message: Some(Tag::String("bad".into())),
+        };
+        round_trip(
+            Serverbound::TestInstanceBlockAction(TestInstanceBlockAction {
+                pos: [1, 2, 3],
+                action: 6,
+                data: data.clone(),
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        let empty = TestInstanceData {
+            test: None,
+            error_message: None,
+            ..data
+        };
+        let mut w = Writer::new();
+        TestInstanceData::write(&empty, &mut w);
+        // Absent test, three sizes, rotation, flag, status, absent error.
+        assert_eq!(w.data, [0, 3, 4, 5, 2, 1, 1, 0]);
+        round_trip(
+            Clientbound::TestInstanceBlockStatus(TestInstanceBlockStatus {
+                status: Tag::String("ok".into()),
+                size: Some([1, 2, 3]),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
+    fn game_test_highlight_pos_round_trips() {
+        round_trip(
+            Clientbound::GameTestHighlightPos(GameTestHighlightPos {
+                absolute: [10, -64, 30],
+                relative: [1, 2, 3],
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
+    fn set_test_block_round_trips() {
+        round_trip(
+            Serverbound::SetTestBlock(SetTestBlock {
+                pos: [1, 2, 3],
+                mode: 3,
+                message: "passed".into(),
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+    }
+
+    #[test]
+    fn jigsaw_packets_round_trip() {
+        round_trip(
+            Serverbound::SetJigsawBlock(SetJigsawBlock {
+                pos: [4, -60, 9],
+                name: "minecraft:bottom".into(),
+                target: "minecraft:top".into(),
+                pool: "minecraft:village/plains/houses".into(),
+                final_state: "minecraft:oak_planks".into(),
+                joint: "aligned".into(),
+                selection_priority: 3,
+                placement_priority: -2,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        round_trip(
+            Serverbound::JigsawGenerate(JigsawGenerate {
+                pos: [0, 64, 0],
+                levels: 20,
+                keep_jigsaws: true,
             }),
             Serverbound::encode,
             Serverbound::decode,

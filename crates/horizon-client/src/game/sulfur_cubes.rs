@@ -108,7 +108,8 @@ impl Game<'_> {
             }
             let m = &mut self.mobs[index];
             let secs = (-m.extra.age / 20) as f32 * 0.1;
-            m.extra.age = (m.extra.age + (secs as i32) * 20).min(0);
+            // AgeableMob.ageUp: a grown cube is size 2 (SulfurCube.ageBoundaryReached).
+            horizon_client::mobs::ai::age_up(m, secs as i32, false);
             self.consume_held();
             self.sulfur_sound(index, "entity.small_sulfur_cube.eat");
             return true;
@@ -131,10 +132,20 @@ impl Game<'_> {
         }
         if item == "minecraft:shears" && sulfur_cube::has_body(m) {
             // shear: out comes the block, and nothing is swallowed for 5 s.
+            let sheared = self.mobs[index].extra.head.clone();
             self.eject_sulfur_block(index);
             self.mobs[index].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
             self.sulfur_sound(index, "entity.sulfur_cube.eject");
             self.damage_held_tool();
+            // CriteriaTriggers.PLAYER_SHEARED_EQUIPMENT with the body block.
+            if let Some(body) = sheared {
+                let target = self.mob_entity(&self.mobs[index]);
+                self.trigger_item_entity(
+                    "minecraft:player_sheared_equipment",
+                    &ItemStack::new(&body, 1),
+                    &target,
+                );
+            }
             return true;
         }
         if sulfur_cube::swallowable(m, item) {

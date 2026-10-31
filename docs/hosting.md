@@ -154,6 +154,7 @@ whitelist = true
 enforce_whitelist = false
 view_distance = 10
 simulation_distance = 10
+max_view_distance = 0        # past view_distance, saved chunks only, up to this (0: off)
 
 [world]
 name = "world"
@@ -186,6 +187,23 @@ The defaults are vanilla 26.3's. Unknown keys and values vanilla would refuse ar
 start instead of being ignored. When the game changes a setting itself (`/whitelist on`), the change is copied
 back into `server.toml` when it stops, and your comments are kept. Changes to the file apply at the next
 restart: there is no live reload yet.
+
+### Seeing further: `max_view_distance`
+
+Off by default (0), a Horizon setting with no vanilla equivalent. Past `view_distance`, up to
+`max_view_distance` (at most 32), each player is also sent the chunks the world has already saved, as far
+as their own render distance goes. Those chunks are only read and sent: the server never generates them,
+keeps them loaded or ticks them, so what lies out there stands still (no mobs, no growing crops, no
+redstone) until a player comes within `view_distance`. A chunk the world hasn't saved yet stays empty on
+the player's screen. To fill the ring, generate the world ahead of the players with `/pregen`
+(`horizon-pregen = true` under `[properties]`, then `horizon-server cmd pregen start 2500`,
+[pregeneration](pregeneration.md)).
+
+The far ring goes after everything else: its chunks wait behind the ones inside `view_distance`, are paced
+by how fast each player's game takes them, and aren't read while the world's saves are behind. When the
+average tick goes over 40 ms, the ring pulls in by two chunks a second, never inside `view_distance`; after
+30 s of ticks under 25 ms, it grows back by one chunk every 5 s. What it sent is kept in memory for 5
+minutes (96 MB at most), so a player walking back isn't sent the save again.
 
 Already have a vanilla server? Run `horizon-server init` in its folder, or `horizon-server import
 server.properties` to write `server.toml` from it. The world, `ops.json`, `whitelist.json` and the ban lists

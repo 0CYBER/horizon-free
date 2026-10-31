@@ -349,7 +349,10 @@ impl PackEntities {
             bytes[0..4].copy_from_slice(&(span.stage as i32).to_le_bytes());
             bytes[4..8].copy_from_slice(&entity_id.to_le_bytes());
             bytes[8..12].copy_from_slice(&block_id.to_le_bytes());
-            for (i, c) in entity_color(run[0].layer).iter().enumerate() {
+            for (i, c) in entity_color(run[0].layer & !super::entity_batch::OIT_ENTITY)
+                .iter()
+                .enumerate()
+            {
                 bytes[16 + 4 * i..20 + 4 * i].copy_from_slice(&c.to_le_bytes());
             }
             self.uniforms.extend_from_slice(&bytes);
@@ -408,9 +411,12 @@ pub(super) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
 /// celestial body, cloud, beam, End portal, crack or energy swirl (overlay codes Horizon's entity
 /// shader draws in its own way; entity.wgsl).
 fn plain(run: &[Vertex]) -> bool {
-    run.iter()
-        .step_by(4)
-        .all(|v| !matches!(v.layer, 2 | 4 | 6 | 9 | 10 | 11 | 12 | 34))
+    run.iter().step_by(4).all(|v| {
+        !matches!(
+            v.layer & !super::entity_batch::OIT_ENTITY,
+            2 | 4 | 6 | 9 | 10 | 11 | 12 | 34
+        )
+    })
 }
 
 /// The programs of entity runs, in the order they draw.

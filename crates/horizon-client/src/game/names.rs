@@ -12,6 +12,9 @@ use horizon_client::{
     scoreboard as sb, text::Text,
 };
 
+/// The world size of one text pixel in a name tag: `Matrix4f.scale(0.025F, -0.025F, 0.025F)`.
+pub(super) const NAME_TAG_UNIT: f32 = 0.025;
+
 impl Game<'_> {
     /// A named name tag names the mob under the crosshair.
     pub(super) fn name_mob(&mut self, index: usize) -> bool {
@@ -82,13 +85,15 @@ impl Game<'_> {
             return None;
         }
         let m = self.player_model.as_ref()?;
-        // The name others see: the profile's on a server (single player's
-        // server thread included), else the local player's.
-        let name = match self.remote.as_ref() {
+        Some((m, self.own_profile_name()))
+    }
+    /// The local player's profile name as others see it: the session's on a
+    /// server (single player's server thread included), else the local player's.
+    pub(super) fn own_profile_name(&self) -> String {
+        match self.remote.as_ref() {
             Some(r) if !r.profile_name.is_empty() => r.profile_name.clone(),
             _ => self.acting_player_name().to_owned(),
-        };
-        Some((m, name))
+        }
     }
     /// The names the name tags show this frame (the control socket's status).
     pub(super) fn shown_name_tags(&self, camera: glam::DVec3) -> Vec<String> {
@@ -322,16 +327,43 @@ impl Game<'_> {
             if tag.discrete {
                 self.mark_translucent_entity(out.len(), "minecraft:name_tag");
                 let light = vertex_light(tag.light);
-                patches.extend(self.name_tag_quads(o, &tag.lines, FADED, true, 0, light, out));
+                patches.extend(self.name_tag_quads(
+                    o,
+                    &tag.lines,
+                    FADED,
+                    true,
+                    0,
+                    light,
+                    NAME_TAG_UNIT,
+                    out,
+                ));
                 continue;
             }
             // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2).
             let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
             self.mark_entity(out.len(), "minecraft:name_tag");
             let light = vertex_light(lit);
-            patches.extend(self.name_tag_quads(o, &tag.lines, 0xFF, false, 0, light, out));
+            patches.extend(self.name_tag_quads(
+                o,
+                &tag.lines,
+                0xFF,
+                false,
+                0,
+                light,
+                NAME_TAG_UNIT,
+                out,
+            ));
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
-            patches.extend(self.name_tag_quads(o, &tag.lines, FADED, true, 2, 0, see_through));
+            patches.extend(self.name_tag_quads(
+                o,
+                &tag.lines,
+                FADED,
+                true,
+                2,
+                0,
+                NAME_TAG_UNIT,
+                see_through,
+            ));
         }
         self.map_patches.extend(patches);
     }
@@ -340,7 +372,7 @@ impl Game<'_> {
     /// (in `text_layer` like the glyphs, a hair behind) when `background`.
     /// Returns the glyph pixels the atlas still needs.
     #[allow(clippy::too_many_arguments)]
-    fn name_tag_quads(
+    pub(super) fn name_tag_quads(
         &self,
         o: glam::DVec3,
         lines: &[(Text, f64)],
@@ -348,6 +380,7 @@ impl Game<'_> {
         background: bool,
         text_layer: u32,
         light: u32,
+        unit: f32,
         out: &mut Vec<Vertex>,
     ) -> Vec<horizon_client::font::Patch> {
         // Options.getBackgroundOpacity(0.25) black, as ARGB.color.
@@ -367,7 +400,7 @@ impl Game<'_> {
         let mut batch = HudBatch::new([1, 1]);
         for (text, lift) in lines {
             let o = (o + glam::DVec3::new(0.0, *lift, 0.0)).as_vec3();
-            let (r, u) = (right.as_vec3() * 0.025, up.as_vec3() * 0.025);
+            let (r, u) = (right.as_vec3() * unit, up.as_vec3() * unit);
             // Text space: x right, y down (scale 0.025, -0.025).
             let at = |x: f32, y: f32| o + r * x - u * y;
             let y0 = if text.plain() == "deadmau5" {

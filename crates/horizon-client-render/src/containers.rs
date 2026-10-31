@@ -307,6 +307,27 @@ impl BlockEntity {
         if name == "minecraft:chiseled_bookshelf" {
             return Some(Self::ChiseledBookshelf(Box::default()));
         }
+        if name == "minecraft:structure_block" {
+            // The entity's mode is the state's (`StructureBlock.MODE`); the block's
+            // state is not known here, so a new one starts in its default, SAVE.
+            return Some(Self::StructureBlock(Box::new(
+                crate::structure_block::StructureBlock::new(
+                    crate::structure_block::StructureMode::Save,
+                ),
+            )));
+        }
+        if name == "minecraft:test_block" {
+            // The mode is the state's, which is not known here.
+            return Some(Self::TestBlock(Box::new(
+                crate::test_block::TestBlock::new(crate::test_block::TestBlockMode::Fail),
+            )));
+        }
+        if name == "minecraft:test_instance_block" {
+            return Some(Self::TestInstanceBlock(Box::default()));
+        }
+        if name == "minecraft:jigsaw" {
+            return Some(Self::JigsawBlock(Box::default()));
+        }
         if name == "minecraft:potent_sulfur" {
             return Some(Self::PotentSulfur(PotentSulfur::default()));
         }
@@ -355,6 +376,10 @@ impl BlockEntity {
             Self::Shelf(_) => "minecraft:shelf",
             Self::Mod(m) => &m.id,
             Self::PotentSulfur(_) => "minecraft:potent_sulfur",
+            Self::StructureBlock(_) => "minecraft:structure_block",
+            Self::JigsawBlock(_) => "minecraft:jigsaw",
+            Self::TestBlock(_) => "minecraft:test_block",
+            Self::TestInstanceBlock(_) => "minecraft:test_instance_block",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -374,6 +399,10 @@ impl BlockEntity {
             | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::PotentSulfur(_)
+            | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
+            | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => Vec::new(),
             Self::Mod(m) => m.items.iter().flatten().cloned().collect(),
@@ -400,6 +429,10 @@ impl BlockEntity {
             | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::PotentSulfur(_)
+            | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
+            | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &[],
             Self::Crafter(c) => &c.items,
@@ -430,6 +463,10 @@ impl BlockEntity {
             | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::PotentSulfur(_)
+            | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
+            | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => &mut [],
             Self::Crafter(c) => &mut c.items,

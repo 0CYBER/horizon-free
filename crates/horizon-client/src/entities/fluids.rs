@@ -200,17 +200,17 @@ mod tests {
             ticks: 0,
         };
         let mut still = item.clone();
-        assert!(still.tick(&world, &facts, &collision, false, &fluids));
+        assert!(still.tick(&world, assets.registry, &facts, &collision, false, &fluids));
         assert_eq!(still.position.x, at.x);
         assert_eq!(still.velocity.x, 0.0);
         world.set(21, 4, 20, flowing).unwrap();
         let mut carried = item;
-        assert!(carried.tick(&world, &facts, &collision, false, &fluids));
+        assert!(carried.tick(&world, assets.registry, &facts, &collision, false, &fluids));
         // First push is damped by buoyancy before motion, second follows drag.
         assert!((carried.position.x - at.x - 0.014 * 0.99).abs() < 1e-12);
         assert!((carried.velocity.x - (0.014 * 0.99 * 0.98 + 0.014)).abs() < 1e-12);
         for _ in 0..20 {
-            carried.tick(&world, &facts, &collision, false, &fluids);
+            carried.tick(&world, assets.registry, &facts, &collision, false, &fluids);
         }
         assert!(carried.position.x > at.x + 0.5);
     }

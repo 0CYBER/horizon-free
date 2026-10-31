@@ -13,15 +13,16 @@ reopened; labels never start it):
 
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
-| `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
+| `verify` | GitHub `ubuntu-latest` | Gathers three jobs that run at once: `python` (public-tree check, Python tests), `clippy` (rustfmt, clippy with warnings denied) and `tests` (Rust tests). Dependencies come from caches saved by main's runs | ~4 min |
 | `parity / parity` | A runner with the label `horizon-game`: the Mac mini's and playhorizon's (below) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
-`verify` is the check main requires, so it has no condition and runs in every run of `checks`: GitHub counts a
-*skipped* required check as passed, and labels used to start runs whose `verify` was skipped, which let
-auto-merge merge before the real `verify` finished. A pull request that changes no Rust (docs, tools) runs only its
-quick steps and finishes in seconds.
+`verify` is the check main requires, so it runs `always()` in every run of `checks` and fails unless `python`,
+`clippy` and `tests` all passed: GitHub counts a *skipped* required check as passed, and labels used to start runs
+whose `verify` was skipped, which let auto-merge merge before the real `verify` finished. A pull request that changes
+only documentation skips the Rust steps and finishes in about a minute. A pull request's public-tree check reads only
+its own commits (`--range base..head`); main's pushes read every ref's history.
 
 ### The parity job
 
@@ -417,10 +418,13 @@ launcher and the website read: both then look the newest launcher tags up one by
 (20:17 UTC) and when a trusted reviewer asks (#2681). It builds main's newest commit where
 `checks` and `parity-main` passed, as a release does (or the `base` input), plus the pull requests the trusted
 reviewers picked, merged in their order; with none picked, that commit alone (`tools/ci/nightly.py pick`). No green
-commit (main's newest `checks` or `parity-main` run failed) builds nothing. A night with nothing new publishes nothing. Since the Nightly is the version every player installs, a pull request goes in only with an
-approving review at the exact head that is built, from a trusted reviewer or from Ludovic's account (his own or his
-agents' review), never its author's (Ludovic, 2026-10-28). A push after the review needs a new one: until then the
-scheduled build keeps the approved head. `/nightly dry-run` needs no review: it publishes nothing.
+commit (main's newest `checks` or `parity-main` run failed) builds nothing. A night with nothing new publishes nothing. A pull request goes in without a review: a trusted
+reviewer or Ludovic can pick any open pull request to main, reviewed or not (Ludovic, 2026-10-30, at the Team's
+request, because they were often blocked on the launcher; from 2026-10-28 it needed an approving review at the
+head that is built). The guards stay: the pull request must be open and target main, it must leave the
+CODEOWNERS-guarded files alone, the sets and builds stay capped, `paused` stops the reviewers, Ludovic's `remove`
+sticks, and the build runs without secrets. Each pull request is built at the head it was picked at; a push after
+the pick waits until someone picks it again (`/nightly add`).
 
 Every Nightly ships its exact source. Its notes name the commit; `horizon-source.tar.gz` on the release is that
 commit's `git archive`, signed with the builds in `SHA256SUMS`; and `nightly.py keep-source` tags the commit
@@ -474,8 +478,8 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
 - **The answer.** The workflow answers in the thread with one comment starting `🤖 Nightly:`: the set, the build's
   run, and later the published Nightly (or why it failed).
 - **The set** is `set.json` on the `nightly-state` branch: who asked, when, and each pull request at the head it had
-  then. A head is taken again only when someone asks again or at the scheduled run, never silently in between. The
-  scheduled run takes every pull request's newest head and drops the merged and closed ones; the notes say so.
+  then. A head is taken again only when someone asks again, never silently in between. The
+  scheduled run builds every pull request at that head and drops the merged, closed and refused ones; the notes say so.
   `builds.jsonl` there records each build's set (for `nightly_stats.py`).
 - **Assembly.** `pick` (main's code) fetches each head and merges them onto main with `git merge-tree
   --write-tree`: git objects only, no working tree, so no file, hook or filter of theirs reaches the runner. The
