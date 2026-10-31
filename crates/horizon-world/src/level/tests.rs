@@ -52,6 +52,9 @@ pub(crate) struct TestLevel {
     pub client_side: bool,
     /// Positions that refuse fluids, fire and piston moves, as a land claim would.
     pub guarded: HashSet<BlockPos>,
+    /// What `adjust_signal` answers at a position: the weak and direct signal,
+    /// and the only direction they go in, if any.
+    pub signals: HashMap<BlockPos, (i32, i32, Option<Direction>)>,
 }
 impl TestLevel {
     fn new(b: &Behaviours) -> Self {
@@ -59,6 +62,7 @@ impl TestLevel {
             blocks: HashMap::new(),
             air: b.air(),
             random: LegacyRandom::new(42),
+            signals: HashMap::new(),
             time: 0,
             day_time: 0,
             events: Vec::new(),
@@ -69,6 +73,26 @@ impl TestLevel {
     }
 }
 impl LevelAccess for TestLevel {
+    fn adjust_signal(
+        &self,
+        pos: BlockPos,
+        _state: BlockStateId,
+        direction: Direction,
+        direct: bool,
+        vanilla: i32,
+    ) -> i32 {
+        match self.signals.get(&pos) {
+            Some((_, _, Some(only))) if *only != direction => 0,
+            Some((weak, strong, _)) => {
+                if direct {
+                    *strong
+                } else {
+                    *weak
+                }
+            }
+            None => vanilla,
+        }
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
@@ -1829,6 +1853,47 @@ fn dripstone_fills_cauldrons() {
         w.tick();
     }
     assert_eq!(w.name(BlockPos::new(0, 5, 0)), "water_cauldron[level=1]");
+}
+
+#[test]
+fn a_level_can_answer_for_a_blocks_signal() {
+    let mut w = world!();
+    let source = BlockPos::new(0, 1, 0);
+    let beside = BlockPos::new(-1, 1, 0);
+    let above = BlockPos::new(0, 2, 0);
+    let conductor = BlockPos::new(1, 1, 0);
+    let past_it = BlockPos::new(2, 1, 0);
+    let gold = w.id("gold_block", &[]);
+    let stone = w.id("stone", &[]);
+    w.set(source, gold);
+    w.set(conductor, stone);
+    let read = |w: &mut World, pos| {
+        w.f.behaviours
+            .best_neighbor_signal(&mut w.level, &mut w.ticks, pos)
+    };
+    assert_eq!(read(&mut w, beside), 0, "gold gives nothing by itself");
+
+    // A weak signal reaches what touches it, and stops at a conductor.
+    w.level.signals.insert(source, (7, 0, None));
+    assert_eq!(read(&mut w, beside), 7);
+    assert_eq!(read(&mut w, past_it), 0);
+
+    // A direct signal passes through the conductor.
+    w.level.signals.insert(source, (7, 15, None));
+    assert_eq!(read(&mut w, past_it), 15);
+
+    // One side only: `Down` is the direction read by the block above.
+    w.level
+        .signals
+        .insert(source, (9, 0, Some(Direction::Down)));
+    assert_eq!(read(&mut w, above), 9);
+    assert_eq!(read(&mut w, beside), 0);
+
+    // Vanilla's sources go through the same answer untouched.
+    w.level.signals.clear();
+    let redstone = w.id("redstone_block", &[]);
+    w.set(source, redstone);
+    assert_eq!(read(&mut w, beside), 15);
 }
 
 #[test]

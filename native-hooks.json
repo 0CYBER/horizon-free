@@ -231,6 +231,16 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
     },
     {
+      "name": "block_signal",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"
+    },
+    {
+      "name": "is_signal_source",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"
+    },
+    {
       "name": "health_hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud"

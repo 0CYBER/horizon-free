@@ -208,6 +208,11 @@ Bundles that use them need `"hooks": 36`.
 API 37 adds [mobs](#mobs) for server mods: spawn one, read the mobs of a level in place, and move, hurt or remove one by its id.
 Bundles that use them need `"hooks": 37`.
 
+API 38 adds redstone from a mod's block, on authoritative servers. `native_block_signal` may change the signal a block gives on
+a face, weak or direct, and `native_is_signal_source` lets redstone wire connect to it. Both are asked very often, so check the
+block first and answer from the mod's own state. When the output changes, and once the block is placed (a direct signal past a conductor isn't read before), `native_update_signal_neighbors(dimension, pos)` makes the blocks around
+it read it again; it acts on the level in place and is refused for another dimension. Bundles that use them need `"hooks": 38`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
