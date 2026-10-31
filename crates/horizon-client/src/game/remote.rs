@@ -387,6 +387,8 @@ pub(super) struct Remote {
     /// own player, as the server synced them.
     pub(super) own_arrows: i32,
     pub(super) own_stingers: i32,
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT` of the own player.
+    pub(super) own_shoulders: [Option<i32>; 2],
     /// The local player's profile UUID (always in the level).
     profile: u128,
     /// The local player's profile name: its score holder and team member.
@@ -745,6 +747,7 @@ impl Game<'_> {
             own_invisible: false,
             own_arrows: 0,
             own_stingers: 0,
+            own_shoulders: [None; 2],
             profile: 0,
             profile_name: String::new(),
             destroying: None,
@@ -2935,6 +2938,12 @@ impl Game<'_> {
                             (13, Value::Int(count)) => {
                                 if let Some(r) = self.remote.as_mut() {
                                     r.own_stingers = *count;
+                                }
+                            }
+                            (19 | 20, Value::Id(v)) => {
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_shoulders[usize::from(*index == 20)] =
+                                        (*v > 0).then(|| (*v - 1).clamp(0, 4));
                                 }
                             }
                             (17, Value::Float(amount)) => {

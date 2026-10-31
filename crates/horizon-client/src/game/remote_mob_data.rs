@@ -388,6 +388,13 @@ fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
             // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
             (12, Value::Int(count)) => m.extra.arrow_count = *count,
             (13, Value::Int(count)) => m.extra.stinger_count = *count,
+            // Player.DATA_SHOULDER_PARROT_LEFT and _RIGHT.
+            (19, Value::Id(v)) => {
+                m.extra.shoulder_parrots[0] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
+            (20, Value::Id(v)) => {
+                m.extra.shoulder_parrots[1] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
             _ => {}
         }
     }

@@ -1027,6 +1027,10 @@ pub fn main() -> horizon_client::Result<()> {
                     "inlove" => m.extra.in_love = 600,
                     "nectar" => horizon_client::mobs::bee::set_has_nectar(&mut m, true),
                     "tame" => m.extra.tame = true,
+                    "owned" => {
+                        horizon_client::mobs::tame::set_tame(&mut m, true);
+                        m.extra.owner = Some(PLAYER_UUID);
+                    }
                     x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
                     x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
                     x if x.starts_with("hand=") => {

@@ -119,6 +119,7 @@ mod glowing;
 mod golems;
 mod growth;
 mod hand;
+mod ime;
 mod initial_spawn;
 mod integrated;
 mod interactions;
@@ -248,6 +249,7 @@ mod sulfur_cubes;
 mod test_block_edit;
 mod test_blocks;
 mod test_entities;
+mod test_environments;
 mod test_instance_edit;
 mod test_instances;
 mod text_displays;
@@ -1724,6 +1726,12 @@ struct Game<'a> {
     pending_entry: Option<PendingWorldEntry>,
     world_loader: Option<world_loading::WorldLoader>,
     pending_pack_reload: bool,
+    /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
+    /// (`watch_pack_folder`).
+    pack_folder: Option<(
+        std::time::Instant,
+        Vec<(String, u64, Option<std::time::SystemTime>)>,
+    )>,
     /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
     /// its progress until `drive_pack_reload` applies it.
     pack_reload: Option<packs::PackReload>,
@@ -1824,6 +1832,8 @@ struct Game<'a> {
     /// This view's corner in its shared window; cursor warps include the offset.
     view_at: [u32; 2],
     focused: bool,
+    /// Whether the window currently accepts input method events.
+    ime_allowed: bool,
     /// When the window lost focus, while it is still without
     /// (`Minecraft.lastActiveTime`: pausing waits 500 ms).
     focus_lost: Option<Instant>,
@@ -7804,11 +7814,17 @@ impl Game<'_> {
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
         self.draw_sort_buttons(batch, ox, oy);
         self.draw_recipe_book(batch);
+        let effect_tip = if self.container.is_none() && self.craft_size == 2 && !self.mount_active()
+        {
+            self.draw_inventory_effects(batch, (ox, oy), 176)
+        } else {
+            None
+        };
         self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
         self.draw_native_screen_tooltip(batch);
-        if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
-            self.draw_inventory_effects(batch, (ox, oy), 176);
+        if let Some(lines) = effect_tip {
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
     }
     /// `AbstractContainerScreen` keeps `isQuickCrafting` and the drag it
@@ -12742,6 +12758,7 @@ impl Game<'_> {
                 oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
             );
         }
+        let effect_tip = self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             if self.cursor.0 >= ox + tx
@@ -12785,7 +12802,9 @@ impl Game<'_> {
             // A `CustomCreativeSlot`: TooltipFlag.asCreative.
             self.draw_stack_tooltip_with(batch, &item, grid, self.cursor.0, self.cursor.1, tabs);
         }
-        self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
+        if let Some(lines) = effect_tip {
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        }
     }
     fn creative_trash_hovered(batch: &HudBatch, cursor: (f32, f32)) -> bool {
         let (ox, oy) = Self::creative_origin(batch);
@@ -14268,6 +14287,7 @@ impl ApplicationHandler for Game<'_> {
             }
         }
         self.window = Some(window);
+        self.ime_allowed = false;
         self.apply_settings();
         self.previous = Instant::now();
     }
@@ -14481,6 +14501,8 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.begin_closing_save(true)?;
                 }
+                // Input method composition: the committed text types like a key's text.
+                WindowEvent::Ime(winit::event::Ime::Commit(text)) => self.ime_commit(&text),
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
@@ -15120,6 +15142,7 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();
+                    self.sync_ime();
                     let now = Instant::now();
                     let frame_cpu = self
                         .options
@@ -15487,6 +15510,7 @@ impl<'a> Game<'a> {
             pending_entry: None,
             world_loader: None,
             pending_pack_reload: false,
+            pack_folder: None,
             pack_reload: None,
             server_packs: Default::default(),
             link_prompt: None,
@@ -15558,6 +15582,7 @@ impl<'a> Game<'a> {
             keyboard_mouse: true,
             view_at: [0, 0],
             focused: true,
+            ime_allowed: false,
             focus_lost: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
