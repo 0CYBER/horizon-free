@@ -191,7 +191,8 @@ impl Game<'_> {
             ) != FogType::Water
     }
     /// `ScreenEffectRenderer` + `Hud` camera overlays for this frame.
-    pub(super) fn screen_quads(&self, partial: f32, size: [u32; 2]) -> Vec<ScreenQuad> {
+    /// `scale` is the player's `LivingEntity.getScale`.
+    pub(super) fn screen_quads(&self, partial: f32, size: [u32; 2], scale: f32) -> Vec<ScreenQuad> {
         let Some(p) = self.player.as_ref() else {
             return Vec::new();
         };
@@ -231,13 +232,15 @@ impl Game<'_> {
                 ),
             );
             // The test points use float maths: `(i % 2 - 0.5F) * width * 0.8F`.
+            // The height spread is `0.1F * getScale()`: a tiny player's eye is
+            // closer to the ground than 0.05.
             let width = p.dimensions.width;
             for i in 0..8 {
                 let t = [
                     p.position.x + f64::from(((i & 1) as f32 - 0.5) * width * 0.8),
                     p.position.y
                         + f64::from(p.dimensions.eye_height)
-                        + f64::from((((i >> 1) & 1) as f32 - 0.5) * 0.1),
+                        + f64::from((((i >> 1) & 1) as f32 - 0.5) * 0.1 * scale),
                     p.position.z + f64::from((((i >> 2) & 1) as f32 - 0.5) * width * 0.8),
                 ];
                 let pos = [
@@ -544,8 +547,14 @@ impl Game<'_> {
         };
         self.particles.tick(&level);
         self.tick_pickups();
-        for (name, at, volume, pitch) in std::mem::take(&mut self.particles.sounds) {
-            self.audio.play(name, Some(at), volume, pitch);
+        let camera = self.particles.camera;
+        for (name, at, volume, pitch, delayed) in std::mem::take(&mut self.particles.sounds) {
+            if delayed {
+                self.audio
+                    .play_distance_delayed(name, at, volume, pitch, camera);
+            } else {
+                self.audio.play(name, Some(at), volume, pitch);
+            }
         }
     }
 }

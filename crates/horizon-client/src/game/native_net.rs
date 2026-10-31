@@ -87,8 +87,12 @@ impl Game<'_> {
                 );
             }
         }
-        self.native_net.from_counts.clear();
-        self.native_net.to_counts.clear();
+        // The allowance is a server tick's, not a level pass's: it starts over
+        // after the last level.
+        if self.level_pass.last {
+            self.native_net.from_counts.clear();
+            self.native_net.to_counts.clear();
+        }
     }
 
     /// A `horizon:mod_net` payload the server sent the window.
@@ -106,7 +110,7 @@ impl Game<'_> {
     /// Sends `data` on `channel` (`mod_id:name`, at most 30 000 bytes, at
     /// most 32 a player a tick) to `player`'s client, at the tick's end, from
     /// any server hook. Ok means accepted: a player who left or isn't on a
-    /// Horizon client doesn't get it. API 23.
+    /// Horizon client doesn't get it. API 40.
     pub(super) fn native_net_send_to_player(
         &mut self,
         player: u128,
@@ -129,17 +133,22 @@ impl Game<'_> {
     /// The client half: sends `data` on `channel` to the server (the same
     /// caps, 32 a tick). An error when the server doesn't carry mod messages
     /// (a vanilla server), and until the player has joined: a server says it
-    /// carries them during configuration, before it can take one. API 23.
+    /// carries them during configuration, before it can take one. API 40.
     pub(super) fn native_net_send_to_server(
         &mut self,
         channel: &str,
         data: &[u8],
     ) -> Result<(), String> {
-        let Some(remote) = self.remote.as_ref().filter(|r| r.mod_net) else {
+        // Not joined first: the announcement may still be on its way, and a
+        // mod that gives up on "carries no mod messages" never tries again.
+        let Some(remote) = self.remote.as_ref() else {
             return Err("the server carries no mod messages".into());
         };
         if !remote.joined {
             return Err("the player has not joined yet".into());
+        }
+        if !remote.mod_net {
+            return Err("the server carries no mod messages".into());
         }
         let payload = payload(channel, data)?;
         if self.native_net.to_server >= PER_TICK {

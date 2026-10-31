@@ -3,16 +3,22 @@
 //! the structure's placement), over the game tests the registry holds.
 use super::{
     Game,
+    game_tests::Info,
     lan::LanHost,
     structure_blocks::{create_seed, template_size},
+    test_entities::{aabb_of, inflate},
 };
 use horizon_client::{
+    block_entity_render::vertex_light,
+    component::name_text,
     containers::BlockEntity,
+    hud::HudBatch,
+    mesher::Vertex,
     structure_block::rotation_from_ordinal,
     test_instance_block::{Data, Status, TestInstanceBlock},
     text::{self, Text},
 };
-use horizon_core::position::BlockPos;
+use horizon_core::{position::BlockPos, ticks::TickArea};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::{
     level::{TemplateSettings, flags},
@@ -20,6 +26,9 @@ use horizon_world::{
 };
 
 type Pos = (i32, i32, i32);
+
+/// `GameTestBlockHighlightRenderer.highlightPos`'s colour, 1610678016: ARGB 0x6000FF00.
+const HIGHLIGHT_FILL: u32 = 0x6000_FF00;
 
 /// `ServerboundTestInstanceBlockActionPacket.Action`.
 const INIT: i32 = 0;
@@ -38,7 +47,43 @@ pub(super) struct TestDef {
     pub(super) padding: i32,
     pub(super) required: bool,
     pub(super) sky_access: bool,
+    /// `BlockBasedTestInstance` (else a `FunctionGameTestInstance`).
+    pub(super) block_based: bool,
+    /// The function a function test runs.
+    pub(super) function: Option<String>,
+    /// The test environment's id (`batch()`).
+    pub(super) environment: String,
+    pub(super) max_ticks: i32,
+    pub(super) setup_ticks: i32,
+    /// `TestData.maxAttempts` and `requiredSuccesses`.
+    pub(super) max_attempts: i32,
+    pub(super) required_successes: i32,
+    /// The dimension the test runs in (`TestData.dimension`).
+    pub(super) dimension: String,
     description: Text,
+}
+
+#[cfg(test)]
+impl TestDef {
+    /// A test with the timing and type a runner test needs.
+    pub(super) fn sample(block_based: bool, max_ticks: i32, setup_ticks: i32) -> Self {
+        Self {
+            structure: "minecraft:empty".into(),
+            rotation: Rotation::None,
+            padding: 0,
+            required: true,
+            sky_access: false,
+            block_based,
+            function: None,
+            environment: "minecraft:default".into(),
+            dimension: "minecraft:overworld".into(),
+            max_ticks,
+            setup_ticks,
+            max_attempts: 1,
+            required_successes: 1,
+            description: Text::literal(""),
+        }
+    }
 }
 
 /// `GameTestInstance.descriptionRow`: the row's value in blue, then a line break.
@@ -79,6 +124,13 @@ impl Game<'_> {
         let environment = string("environment")?.to_owned();
         let dimension = string("dimension").unwrap_or("minecraft:overworld");
         let function = string("function");
+        // `ExtraCodecs.POSITIVE_INT`, 1 when absent.
+        let positive = |key: &str| {
+            json.get(key)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .clamp(1, i64::from(i32::MAX)) as i32
+        };
         // GameTestInstance.describe: the type, the function (function tests
         // only), then the structure, batch and dimension.
         let block_based = string("type") == Some("minecraft:block_based");
@@ -120,18 +172,34 @@ impl Game<'_> {
                 .get("sky_access")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            block_based,
+            function: function.map(str::to_owned),
+            environment: environment.clone(),
+            dimension: dimension.to_owned(),
+            max_ticks: json
+                .get("max_ticks")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .clamp(1, i64::from(i32::MAX)) as i32,
+            setup_ticks: json
+                .get("setup_ticks")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .clamp(0, i64::from(i32::MAX)) as i32,
+            max_attempts: positive("max_attempts"),
+            required_successes: positive("required_successes"),
             description,
         })
     }
 
-    fn test_instance_at(&self, pos: Pos) -> Option<&TestInstanceBlock> {
+    pub(super) fn test_instance_at(&self, pos: Pos) -> Option<&TestInstanceBlock> {
         match self.world.block_entities.get(&pos)? {
             BlockEntity::TestInstanceBlock(b) => Some(b),
             _ => None,
         }
     }
 
-    fn test_instance_mut(&mut self, pos: Pos) -> Option<&mut TestInstanceBlock> {
+    pub(super) fn test_instance_mut(&mut self, pos: Pos) -> Option<&mut TestInstanceBlock> {
         match self.world.block_entities.get_mut(&pos)? {
             BlockEntity::TestInstanceBlock(b) => Some(b),
             _ => None,
@@ -139,7 +207,7 @@ impl Game<'_> {
     }
 
     /// `getTestHolder`.
-    fn test_holder(&self, pos: Pos) -> Option<TestDef> {
+    pub(super) fn test_holder(&self, pos: Pos) -> Option<TestDef> {
         let key = self.test_instance_at(pos)?.data.test.clone()?;
         self.test_def(&key)
     }
@@ -149,29 +217,97 @@ impl Game<'_> {
         self.test_holder(pos).map_or(0, |t| t.padding)
     }
 
-    /// `TestInstanceRenderer.submit`'s error markers: each marked block in a
-    /// translucent red box, for any player near the block.
-    pub(super) fn test_instance_markers(
-        &self,
-        b: &TestInstanceBlock,
-        block: [i32; 3],
-        camera: [f64; 3],
-        g: &mut horizon_client::gizmos::Gizmos,
+    /// `ClientPacketListener.handleGameTestHighlightPos`:
+    /// `GameTestBlockHighlightRenderer.highlightPos` shows the block for ten
+    /// seconds with its position relative to the test.
+    pub(super) fn highlight_test_pos(&mut self, absolute: [i32; 3], relative: [i32; 3]) {
+        let text = format!("{}, {}, {}", relative[0], relative[1], relative[2]);
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(10_000);
+        self.test_highlights
+            .insert((absolute[0], absolute[1], absolute[2]), (text, until));
+    }
+
+    /// `TestInstanceRenderer.submit`'s error markers, for any player within
+    /// the beacon's view distance of the block: each marked block in a
+    /// translucent red box (`out`, blending) and its text as a billboard over
+    /// everything (`see_through`).
+    pub(super) fn test_instance_marker_geometry(
+        &mut self,
+        camera: glam::DVec3,
+        out: &mut Vec<Vertex>,
+        see_through: &mut Vec<Vertex>,
     ) {
-        // BeaconRenderer.getViewDistance: 256, by the horizontal distance.
-        let dx = f64::from(block[0]) + 0.5 - camera[0];
-        let dz = f64::from(block[2]) + 0.5 - camera[2];
-        if dx * dx + dz * dz >= 256.0 * 256.0 {
+        use horizon_client::gizmos as g;
+        // `GameTestBlockHighlightRenderer.emitGizmos`: expired highlights go,
+        // the rest are a green box with the relative position over it.
+        let now = std::time::Instant::now();
+        self.test_highlights.retain(|_, (_, until)| now <= *until);
+        let mut markers: Vec<(_, _, u32)> = self
+            .test_highlights
+            .iter()
+            .map(|(&pos, (text, _))| ([pos.0, pos.1, pos.2], text.clone(), HIGHLIGHT_FILL))
+            .collect();
+        for (pos, entity) in &self.world.block_entities {
+            let BlockEntity::TestInstanceBlock(b) = entity else {
+                continue;
+            };
+            // BeaconRenderer.getViewDistance: 256, by the horizontal distance.
+            let dx = f64::from(pos.0) + 0.5 - camera.x;
+            let dz = f64::from(pos.2) + 0.5 - camera.z;
+            if dx * dx + dz * dz >= 256.0 * 256.0 {
+                continue;
+            }
+            for marker in &b.error_markers {
+                markers.push((
+                    marker.pos,
+                    name_text(&marker.text).plain(),
+                    g::ERROR_MARKER_FILL,
+                ));
+            }
+        }
+        if markers.is_empty() {
             return;
         }
-        for marker in &b.error_markers {
-            // `new AABB(pos).inflate(0.02F)`, filled with
-            // `colorFromFloat(0.375, 1, 0, 0)`.
-            let pad = f64::from(0.02f32);
-            let min = marker.pos.map(|v| f64::from(v) - pad);
-            let max = marker.pos.map(|v| f64::from(v) + 1.0 + pad);
-            g.cuboid(min, max, 0x5FFF_0000, horizon_client::gizmos::STROKE_WIDTH);
+        let light = vertex_light(0xFF);
+        self.mark_translucent_entity(out.len(), "minecraft:test_instance_block");
+        let mut patches = Vec::new();
+        for (pos, text, color) in markers {
+            // A plain colour: the atlas's white pixel at the fill's colour.
+            let mut fill = HudBatch::new([1, 1]);
+            fill.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, color);
+            let Some(v) = fill.vertices.first().copied() else {
+                continue;
+            };
+            let (min, max, text_at) = g::error_marker_shape(pos);
+            for quad in g::cuboid_fill_quads(min, max) {
+                for corner in quad {
+                    out.push(Vertex {
+                        normal: [0; 4],
+                        pos: (glam::DVec3::from_array(corner) - camera)
+                            .as_vec3()
+                            .to_array(),
+                        uv: v.uv,
+                        layer: 0,
+                        color: v.color,
+                        light,
+                        glint_uv: [0.0, 0.0],
+                    });
+                }
+            }
+            // `Gizmos.billboardText(..).setAlwaysOnTop()`: white, centred,
+            // without a background.
+            patches.extend(self.name_tag_quads(
+                glam::DVec3::from_array(text_at) - camera,
+                &[(Text::literal(text), 0.0)],
+                0xFF,
+                false,
+                2,
+                0,
+                g::billboard_text_unit(g::ERROR_MARKER_TEXT_SCALE),
+                see_through,
+            ));
         }
+        self.map_patches.extend(patches);
     }
 
     /// `getRotation`: the test's rotation turned by the block's.
@@ -185,7 +321,7 @@ impl Game<'_> {
     }
 
     /// `getTestName`.
-    fn test_name(&self, pos: Pos) -> Text {
+    pub(super) fn test_name(&self, pos: Pos) -> Text {
         match self.test_instance_at(pos).and_then(|b| b.data.test.clone()) {
             Some(key) => Text::literal(key),
             None => Text::translate("test_instance_block.invalid_test", &[]),
@@ -277,7 +413,7 @@ impl Game<'_> {
     }
 
     /// `getStructureBoundingBox`.
-    fn test_structure_box(&self, pos: Pos) -> Option<BoundingBox> {
+    pub(super) fn test_structure_box(&self, pos: Pos) -> Option<BoundingBox> {
         let padding = self.test_holder(pos).map_or(0, |t| t.padding);
         let rotation = self.test_rotation(pos);
         Some(
@@ -288,7 +424,7 @@ impl Game<'_> {
 
     /// `processStructureBoundary`: the floor and walls (and the ceiling,
     /// unless the test has sky access) of the box around the structure.
-    fn structure_boundary(&self, pos: Pos) -> Vec<Pos> {
+    pub(super) fn structure_boundary(&self, pos: Pos) -> Vec<Pos> {
         let Some(bounds) = self.test_structure_box(pos) else {
             return Vec::new();
         };
@@ -312,7 +448,7 @@ impl Game<'_> {
     }
 
     /// `setBlockAndUpdate(pos, state)`.
-    fn set_test_block_state(&mut self, at: Pos, name: &str, flags: i32) {
+    pub(super) fn set_test_block_state(&mut self, at: Pos, name: &str, flags: i32) {
         let Some(id) = self.pack.assets.registry.default_state(name) else {
             return;
         };
@@ -321,7 +457,7 @@ impl Game<'_> {
     }
 
     /// `removeBarriers`.
-    fn remove_test_barriers(&mut self, pos: Pos) {
+    pub(super) fn remove_test_barriers(&mut self, pos: Pos) {
         let barrier = self.pack.assets.registry.default_state("minecraft:barrier");
         for at in self.structure_boundary(pos) {
             if Some(self.world.block(at.0, at.1, at.2)) == barrier {
@@ -332,7 +468,7 @@ impl Game<'_> {
     }
 
     /// `clearErrorMarkers`.
-    fn clear_error_markers(&mut self, pos: Pos) {
+    pub(super) fn clear_error_markers(&mut self, pos: Pos) {
         if let Some(b) = self.test_instance_mut(pos)
             && !b.error_markers.is_empty()
         {
@@ -341,7 +477,7 @@ impl Game<'_> {
     }
 
     /// `resetTest`.
-    fn reset_test(&mut self, pos: Pos) {
+    pub(super) fn reset_test(&mut self, pos: Pos) {
         self.remove_test_barriers(pos);
         self.clear_error_markers(pos);
         if self.place_test_structure(pos) {
@@ -359,7 +495,7 @@ impl Game<'_> {
     }
 
     /// `placeStructure()`: the test's structure, cleared space first.
-    fn place_test_structure(&mut self, pos: Pos) -> bool {
+    pub(super) fn place_test_structure(&mut self, pos: Pos) -> bool {
         let Some(def) = self.test_holder(pos) else {
             return false;
         };
@@ -372,25 +508,17 @@ impl Game<'_> {
             return false;
         };
         let origin = [pos.0, pos.1, pos.2];
-        // `StructureUtils.clearSpaceForStructure(getTestBoundingBox())`.
+        // `forceLoadChunks`, then `StructureUtils.clearSpaceForStructure(
+        // getTestBoundingBox())`.
         if let Some(inner) = self.test_structure_box(pos) {
+            self.force_load_test_chunks(&inner);
             let area = BoundingBox::new(
                 inner.min.map(|v| v - padding),
                 inner.max.map(|v| v + padding),
             );
-            let ground = area.min[1] - 1;
-            for y in area.min[1]..=area.max[1] {
-                for z in area.min[2]..=area.max[2] {
-                    for x in area.min[0]..=area.max[0] {
-                        let name = if y < ground {
-                            "minecraft:stone"
-                        } else {
-                            "minecraft:air"
-                        };
-                        self.set_test_block_state((x, y, z), name, 818);
-                    }
-                }
-            }
+            self.clear_test_space(&area);
+            // removeEntities: `getTestBounds()`, the structure's box inflated.
+            self.discard_entities_in(inflate(aabb_of(&inner), f64::from(padding)));
         }
         let corner = block.start_corner(origin, padding, rotation);
         let settings = TemplateSettings {
@@ -410,6 +538,42 @@ impl Game<'_> {
             rotation,
         );
         true
+    }
+
+    /// `StructureUtils.clearSpaceForStructure`'s blocks: air in the box (stone
+    /// below the ground height, which no row of the box is).
+    pub(super) fn clear_test_space(&mut self, area: &BoundingBox) {
+        let ground = area.min[1] - 1;
+        for y in area.min[1]..=area.max[1] {
+            for z in area.min[2]..=area.max[2] {
+                for x in area.min[0]..=area.max[0] {
+                    let name = if y < ground {
+                        "minecraft:stone"
+                    } else {
+                        "minecraft:air"
+                    };
+                    self.set_test_block_state((x, y, z), name, 818);
+                }
+            }
+        }
+        // `getBlockTicks().clearArea`, `clearBlockEvents`.
+        self.clear_test_ticks(area);
+        // The entities but the players.
+        self.discard_entities_in(aabb_of(area));
+    }
+
+    /// `getBlockTicks().clearArea(bounds)` and `clearBlockEvents(bounds)`.
+    pub(super) fn clear_test_ticks(&mut self, bounds: &BoundingBox) {
+        let area = TickArea::new(
+            BlockPos::new(bounds.min[0], bounds.min[1], bounds.min[2]),
+            BlockPos::new(bounds.max[0], bounds.max[1], bounds.max[2]),
+        );
+        self.block_ticks.blocks.clear_area(area);
+        self.block_ticks.block_events.retain(|e| {
+            !(bounds.min[0]..=bounds.max[0]).contains(&e.pos.x)
+                || !(bounds.min[1]..=bounds.max[1]).contains(&e.pos.y)
+                || !(bounds.min[2]..=bounds.max[2]).contains(&e.pos.z)
+        });
     }
 
     /// `saveTest`: the test's structure id, saved from the world.
@@ -452,20 +616,41 @@ impl Game<'_> {
         }
     }
 
-    /// `runTest`: the checks and the structure's placement. Horizon has no
-    /// game test runner, so the test itself does not start.
+    /// `runTest`: the checks, the structure's placement and the test.
     fn run_test(&mut self, pos: Pos) {
         let coordinates = [pos.0, pos.1, pos.2].map(|v| Text::literal(v.to_string()));
-        if self.test_holder(pos).is_none() {
+        let Some(def) = self.test_holder(pos) else {
             self.system_message(red("test_instance_block.error.no_test", &coordinates));
-        } else if !self.place_test_structure(pos) {
+            return;
+        };
+        if !self.place_test_structure(pos) {
             self.system_message(red(
                 "test_instance_block.error.no_test_structure",
                 &coordinates,
             ));
-        } else {
-            self.clear_error_markers(pos);
+            return;
         }
+        self.clear_error_markers(pos);
+        // GameTestTicker.SINGLETON.clear(), FailedTestTracker.forgetFailedTests().
+        self.clear_game_tests();
+        self.game_tests.failed.clear();
+        let Some(block) = self.test_instance_at(pos) else {
+            return;
+        };
+        let key = block.data.test.clone().unwrap_or_default();
+        let rotation = block.data.rotation;
+        let key = if key.contains(':') {
+            key
+        } else {
+            format!("minecraft:{key}")
+        };
+        self.system_message(Text::translate(
+            "test_instance_block.starting",
+            &[Text::literal(key.clone())],
+        ));
+        let id = self.game_tests.next_id();
+        let info = Info::new(id, key, def, Some(pos), self.dim, rotation);
+        self.track_and_start_runner(vec![info], false, None);
     }
 }
 

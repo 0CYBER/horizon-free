@@ -630,6 +630,12 @@ public final class VanillaMobAiOracle {
                         case "inlove" -> ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
                         case "nectar" -> method(net.minecraft.world.entity.animal.bee.Bee.class, "setHasNectar", boolean.class).invoke(mob, true);
                         case "tame" -> { if (mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true); }
+                        // TamableAnimal.tame without the player entity: tamed (with its side effects) by the scenario's player.
+                        case "owned" -> {
+                            net.minecraft.world.entity.TamableAnimal pet = (net.minecraft.world.entity.TamableAnimal) mob;
+                            pet.setTame(true, true);
+                            pet.setOwnerReference(net.minecraft.world.entity.EntityReference.of(PLAYER_UUID));
+                        }
                         case "strength" -> method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
                             .invoke(mob, Integer.parseInt(v));
                         case "dead" -> mob.setHealth(0.0F);

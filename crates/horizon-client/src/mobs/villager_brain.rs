@@ -1268,6 +1268,12 @@ enum B {
     ShowTrades {
         t: Timed,
         look_time: i32,
+        /// `playerItemStack` (outer `None`: null) and `displayItems`,
+        /// `cycleCounter`, `displayIndex`.
+        player_item: Option<Option<std::sync::Arc<str>>>,
+        items: Vec<crate::items::ItemStack>,
+        cycle: i32,
+        index: usize,
     },
     TradeWithVillager(Timed),
     MakeLove {
@@ -1647,7 +1653,13 @@ impl B {
                 mm.look_target.set(Tracker::Entity(Who::Player, true));
                 true
             }
-            B::ShowTrades { t, look_time } => {
+            B::ShowTrades {
+                t,
+                look_time,
+                cycle,
+                index,
+                ..
+            } => {
                 if !mem(m).interaction_target.present() || !show_trades_condition(m, cx.w) {
                     return false;
                 }
@@ -1656,6 +1668,8 @@ impl B {
                 if let Some(target) = mem(m).interaction_target.value() {
                     mem(m).look_target.set(Tracker::Entity(target, true));
                 }
+                *cycle = 0;
+                *index = 0;
                 *look_time = 40;
                 true
             }
@@ -2975,7 +2989,14 @@ impl B {
                     });
                 }
             }
-            B::ShowTrades { t, look_time } => {
+            B::ShowTrades {
+                t,
+                look_time,
+                player_item,
+                items,
+                cycle,
+                index,
+            } => {
                 let still = show_trades_condition(m, cx.w)
                     && *look_time > 0
                     && mem(m).interaction_target.present();
@@ -2986,8 +3007,54 @@ impl B {
                 if let Some(target) = mem(m).interaction_target.value() {
                     mem(m).look_target.set(Tracker::Entity(target, true));
                 }
-                // No offer matches the player's item: look for a while only.
-                *look_time = (*look_time).min(40);
+                // findItemsToDisplay: the trades the player's item pays for.
+                let current = cx.w.player.as_ref().and_then(|p| p.main_hand.clone());
+                // getOffers makes the trades on first use: the level rolls
+                // them, and the cost is compared from the next tick on.
+                let unset = m.extra.trade.as_ref().is_none_or(|t| t.unset);
+                if current.is_some() && unset {
+                    cx.events.push(MobEvent::VillagerOffers { mob: m.id });
+                } else if player_item.as_ref() != Some(&current) {
+                    *player_item = Some(current.clone());
+                    items.clear();
+                    if let Some(held) = &current {
+                        if let Some(trade) = &m.extra.trade {
+                            for offer in &trade.offers {
+                                if !offer.out_of_stock()
+                                    && (offer.base_cost_a.stack.item == *held
+                                        || offer
+                                            .cost_b
+                                            .as_ref()
+                                            .is_some_and(|c| c.stack.item == *held))
+                                {
+                                    items.push(offer.result.clone());
+                                }
+                            }
+                        }
+                        if let Some(first) = items.first() {
+                            *look_time = 900;
+                            m.extra.set_main_hand_stack(Some(first.clone()));
+                        }
+                    }
+                }
+                if !items.is_empty() {
+                    // displayCyclingItems
+                    if items.len() >= 2 {
+                        *cycle += 1;
+                        if *cycle >= 40 {
+                            *index += 1;
+                            *cycle = 0;
+                            if *index > items.len() - 1 {
+                                *index = 0;
+                            }
+                            m.extra.set_main_hand_stack(Some(items[*index].clone()));
+                        }
+                    }
+                } else {
+                    // clearHeldItem; no offer matches: look for a while only.
+                    m.extra.set_main_hand(None);
+                    *look_time = (*look_time).min(40);
+                }
                 *look_time -= 1;
             }
             B::TradeWithVillager(t) => {
@@ -3239,9 +3306,12 @@ impl B {
                 mm.walk_target.clear();
                 mm.look_target.clear();
             }
-            B::ShowTrades { t, .. } => {
+            B::ShowTrades { t, player_item, .. } => {
                 t.running = false;
                 mem(m).interaction_target.clear();
+                // clearHeldItem
+                m.extra.set_main_hand(None);
+                *player_item = None;
             }
             B::TradeWithVillager(t) => {
                 t.running = false;
@@ -3927,6 +3997,10 @@ fn show_trades() -> B {
     B::ShowTrades {
         t: timed(400, 1600),
         look_time: 0,
+        player_item: None,
+        items: Vec::new(),
+        cycle: 0,
+        index: 0,
     }
 }
 fn interact(kind: Interact) -> B {
