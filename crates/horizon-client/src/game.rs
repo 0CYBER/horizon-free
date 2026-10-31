@@ -16464,10 +16464,21 @@ fn synchronous_startup(options: &Options) -> bool {
         || std::env::var_os("HORIZON_NET_REPORT").is_some()
 }
 
+/// The local world a client's launch opens at once (`--world`,
+/// `--quickPlaySingleplayer`), whose generator data can load with the game's.
+fn launch_world(options: &Options) -> Option<&str> {
+    (options.execution_role.is_client() && options.server.is_none() && !options.test_terrain)
+        .then_some(options.world.as_deref())
+        .flatten()
+}
+
 /// The synchronous launch loads both phases; an ordinary launch returns the
-/// core bundle while the rest worker keeps loading.
+/// core bundle while the rest worker keeps loading. `launch_world`: the world
+/// the launch opens, whose data is preloaded meanwhile.
+#[allow(clippy::too_many_arguments)]
 fn load_resources(
     mut root: PathBuf,
+    launch_world: Option<&str>,
     vanilla_root: &std::path::Path,
     settings: &Settings,
     started: Instant,
@@ -16596,6 +16607,9 @@ fn load_resources(
     let (facts, gameplay_projection) =
         facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
+    if let Some(folder) = launch_world {
+        world_loading::preload_launch_world(folder, &root, registry, biomes.clone());
+    }
     let environment = environment.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(2);
@@ -17661,6 +17675,7 @@ pub fn run() -> Result<()> {
     );
     let loaded = load_resources(
         options.resources.clone(),
+        launch_world(&options),
         &vanilla_root,
         &early_settings,
         started,

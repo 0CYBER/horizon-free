@@ -241,6 +241,7 @@ pub(super) fn spawn_loader(
     let settings = settings.clone();
     let vanilla_root = vanilla_root.to_path_buf();
     let dev_mods = options.dev_mods.clone();
+    let world = launch_world(options).map(str::to_owned);
     let progress = progress.clone();
     let handle = std::thread::Builder::new()
         .name("resource-loader".into())
@@ -254,6 +255,7 @@ pub(super) fn spawn_loader(
             let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
             let result = load_resources(
                 root,
+                world.as_deref(),
                 &vanilla_root,
                 &settings,
                 started,
