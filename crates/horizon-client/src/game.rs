@@ -11250,16 +11250,19 @@ impl Game<'_> {
                 ItemStack::new("minecraft:hanging_roots", 1),
             );
         }
-        self.audio.play(
-            &sound,
-            Some([
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ]),
-            1.0,
-            1.0,
-        );
+        // `Level.playSound(player, ...)`: the actor's client already played
+        // the strip/scrape/till sound in `predict_item_on_block` (#4681).
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
+        if self.lan_acting.is_some() {
+            self.audio.play_unshared(&sound, Some(at), 1.0, 1.0);
+            self.guest_player_sounds.push((sound.clone(), at, 1.0, 1.0));
+        } else {
+            self.audio.play(&sound, Some(at), 1.0, 1.0);
+        }
         // ItemStack.useOn: a use that acted counts as one of the item.
         self.stats.add("used", &stack.item, 1);
         self.damage_held(damage);
