@@ -462,7 +462,19 @@ fn check_block(file: &BlockFile) -> Result<(), String> {
     if !file.item && !file.components.is_empty() {
         return Err("item is false, so the block has no item to take components".into());
     }
-    check_components(&file.components, &[])
+    check_components(&file.components, &[])?;
+    // A block file has no `max_stack_size` / `rarity` keys, so those two take the same checks here.
+    if let Some(n) = file.components.get("minecraft:max_stack_size")
+        && !n.as_u64().is_some_and(|n| (1..=99).contains(&n))
+    {
+        return Err("component \"minecraft:max_stack_size\" is an integer 1 to 99".into());
+    }
+    if let Some(r) = file.components.get("minecraft:rarity")
+        && serde_json::from_value::<Rarity>(r.clone()).is_err()
+    {
+        return Err("component \"minecraft:rarity\" is common, uncommon, rare or epic".into());
+    }
+    Ok(())
 }
 
 fn open_zip(path: &Path) -> Result<zip::ZipArchive<std::fs::File>, String> {
@@ -720,6 +732,26 @@ capabilities = ["registries"]
                 "block-removal-value",
                 r#"{"template": "minecraft:stone", "components": {"!minecraft:lore": []}}"#,
                 "a removal's value is {}",
+            ),
+            (
+                "block-stack-zero",
+                r#"{"template": "minecraft:stone", "components": {"minecraft:max_stack_size": 0}}"#,
+                "integer 1 to 99",
+            ),
+            (
+                "block-stack-100",
+                r#"{"template": "minecraft:stone", "components": {"minecraft:max_stack_size": 100}}"#,
+                "integer 1 to 99",
+            ),
+            (
+                "block-stack-string",
+                r#"{"template": "minecraft:stone", "components": {"minecraft:max_stack_size": "16"}}"#,
+                "integer 1 to 99",
+            ),
+            (
+                "block-rarity",
+                r#"{"template": "minecraft:stone", "components": {"minecraft:rarity": "bogus"}}"#,
+                "common, uncommon",
             ),
             (
                 "block-without-item",
