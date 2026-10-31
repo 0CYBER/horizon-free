@@ -133,7 +133,12 @@ API 26 adds `Game::native_config_dir()`: the game's shared `config/` folder besi
 `server.properties` on a dedicated server), where a mod names its own files, made when missing. It takes no `self`, so
 it works from any hook ([mods.md](mods.md#native-mods)). Bundles that use it need `"hooks": 26`.
 
-API next adds `native_block_in_tag` and `native_item_in_tag` for server tick hooks. They read the world's merged block and item tags, including data packs and content mods. An unknown tag returns false. An empty item stack tests the `minecraft:air` item, as vanilla does. Calls with an inactive or stale tick context return an error.
+API 27 adds the player-health HUD rows through `native_health_hud`: every frame the HUD draws them, the
+hook hears the layout's inputs (`HealthInputs`) and the screen's GUI size, and a mod that answers with
+draws replaces all the rows — armour, hearts, food, air and the heights above the hotbar — for that
+frame. Nothing answered draws Horizon's own. Bundles that use it need `"hooks": 27`.
+
+API 28 adds `native_block_in_tag` and `native_item_in_tag` for server tick hooks. They read the world's merged block and item tags, including data packs and content mods. An unknown tag returns false. An empty item stack tests the `minecraft:air` item, as vanilla does. Calls with an inactive or stale tick context return an error. Bundles that use them need `"hooks": 28`.
 
 ## What the launcher does
 

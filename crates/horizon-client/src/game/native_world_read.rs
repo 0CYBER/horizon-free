@@ -17,7 +17,7 @@ pub(super) enum NativeBlockReadError {
 }
 
 impl Game<'_> {
-    /// Test a block state's name against the world's merged block tags.
+    /// Test a block state's name against the world's merged block tags. API 28.
     #[allow(dead_code)]
     pub(super) fn native_block_in_tag(
         &self,
@@ -31,7 +31,7 @@ impl Game<'_> {
         Ok(self.items().block_in_tag(tag, &state.name))
     }
 
-    /// Test an item stack against the world's merged item tags.
+    /// Test an item stack against the world's merged item tags. API 28.
     #[allow(dead_code)]
     pub(super) fn native_item_in_tag(
         &self,

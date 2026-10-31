@@ -12,8 +12,8 @@ use serde_json::Value;
 use std::{collections::HashSet, fs, path::Path};
 
 pub use horizon_client_core::potions::{
-    BASE_POTION_COLOR, Category, EFFECTS, EffectDef, POTIONS, PotionDef, effect, namespaced,
-    potion, potion_color,
+    BASE_POTION_COLOR, Category, EFFECTS, EffectDef, POTIONS, PotionDef, all_effects,
+    description_id, effect, mod_effects, namespaced, potion, potion_color, register_mod_effects,
 };
 /// `MobEffectUtil.formatDuration` at 20 TPS.
 pub fn format_duration(ticks: i32) -> String {
@@ -80,8 +80,7 @@ pub fn effect_lines<'a>(
         .into_iter()
         .map(|(e, duration, amp)| {
             let e = e.trim_start_matches("minecraft:");
-            let mut line =
-                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| e.to_owned());
+            let mut line = translate(&description_id(e)).unwrap_or_else(|| e.to_owned());
             if amp > 0 {
                 line.push(' ');
                 line.push_str(
