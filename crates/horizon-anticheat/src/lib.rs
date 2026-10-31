@@ -2,17 +2,21 @@
 //! `server.toml`, each player's violation levels, and the rules of the checks. The server's hub
 //! (`horizon_client::lan`) feeds it what players send and carries out what it decides.
 //!
-//! It is off unless the owner turns it on. A check that fails *flags* the player: its violation level
-//! (VL) rises by the flag's weight and falls back by `decay` a second. From `setback` on, the move or
-//! action is cancelled (the player is sent back where the server last had them); from `alert` on,
-//! online operators and the console are told; from `kick` on, the player is disconnected. Nothing bans.
-//! Any threshold at 0 turns that action off.
+//! It is on by default, and so is every check, but only the checks a vanilla client can't trip act on
+//! their own (`combat`); the others log only until they have shown no false positive with real
+//! players (their `setback`, `alert` and `kick` are 0). `enabled = false` turns the anticheat, or one
+//! check, off. A check that fails *flags* the player: its violation level (VL) rises by the flag's
+//! weight and falls back by `decay` a second. From `setback` on, the move or action is cancelled (the
+//! player is sent back where the server last had them); from `alert` on, online operators and the
+//! console are told; from `kick` on, the player is disconnected. Nothing bans. Any threshold at 0 turns
+//! that action off.
 //!
 //! The checks are written from vanilla 26.3's own rules and from what cheats are publicly described to
 //! do, never from another anticheat's code.
 
 use serde::{Deserialize, Serialize};
 
+pub mod combat;
 pub mod prediction;
 pub mod timer;
 
@@ -72,7 +76,7 @@ macro_rules! checks {
             }
         )*
 
-        /// `server.toml`'s `[anticheat]`: off by default.
+        /// `server.toml`'s `[anticheat]`: on by default.
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         #[serde(default, deny_unknown_fields)]
         pub struct Config {
@@ -89,7 +93,7 @@ macro_rules! checks {
         impl Default for Config {
             fn default() -> Self {
                 Self {
-                    enabled: false,
+                    enabled: true,
                     alerts: true,
                     alert_level: 2,
                     log: "logs/anticheat.log".into(),
@@ -120,7 +124,8 @@ checks! {
     /// Timer: more client ticks than the server's clock allows (a sped-up game). Vanilla's client ends
     /// every tick with ServerboundClientTickEndPacket, at the server's tick rate; each one spends a tick's
     /// time from a balance that wall-clock time fills, capped so a pause can't be saved up for a burst.
-    timer: Timer => TimerConfig [2.0, 5.0, 20.0, 0.02] {
+    /// It logs only by default; once trusted: `setback = 2`, `alert = 5`, `kick = 20`.
+    timer: Timer => TimerConfig [0.0, 0.0, 0.0, 0.02] {
         /// How far ahead of the clock, in milliseconds, a client may get before it is flagged.
         tolerance_ms: f64 = 300.0,
         /// The most time, in milliseconds, a quiet connection banks for the ticks that follow (a lag
@@ -129,9 +134,10 @@ checks! {
     }
 
     /// Ground: a move that says it ends on the ground with nothing there to stand on: no-fall (claiming
-    /// the ground to skip fall damage) and walking on water. The claim is always dropped, so vanilla's
-    /// fall damage follows; from `setback` on the player is also sent back.
-    ground: Ground => GroundConfig [5.0, 15.0, 60.0, 2.0] {}
+    /// the ground to skip fall damage) and walking on water. The claim is dropped, so vanilla's
+    /// fall damage follows; from `setback` on the player is also sent back. Logging only (`setback = 0`,
+    /// the default), the claim stands. Once trusted: `setback = 5`, `alert = 15`, `kick = 60`.
+    ground: Ground => GroundConfig [0.0, 0.0, 0.0, 2.0] {}
 
     /// Prediction: each move played again from the client's own inputs with vanilla's movement code,
     /// and compared (speed, step, fly, jesus...). Each player's client ticks are recorded
@@ -141,11 +147,18 @@ checks! {
     /// setback puts the player back where its moves last agreed. A tick near what the replay can't
     /// play yet (another entity, a block change or abilities the client hadn't seen, a moving piston,
     /// a chunk the client doesn't have, a riptide launch) is excused, and so are the ticks after it
-    /// until the moves agree again.
-    prediction: Prediction => PredictionConfig [5.0, 15.0, 60.0, 2.0] {
+    /// until the moves agree again. It logs only by default; once trusted: `setback = 5`, `alert = 15`,
+    /// `kick = 60`.
+    prediction: Prediction => PredictionConfig [0.0, 0.0, 0.0, 2.0] {
         /// How far, in blocks, a move may land from where the replay puts it.
         tolerance: f64 = 0.03,
     }
+
+    /// Combat: attacks vanilla's client can't send (`combat`): one with no swing after it (a kill aura
+    /// that hides its swing), or a second entity attacked in the same client tick (vanilla attacks the
+    /// one entity under the crosshair, picked once a tick). Each flags once; from `setback` on the
+    /// player's attacks are dropped. A vanilla client never trips it, so it acts by default.
+    combat: Combat => CombatConfig [2.0, 5.0, 20.0, 0.5] {}
 }
 
 /// How many checks there are.
@@ -219,6 +232,8 @@ pub struct Player {
     pub ground: Option<(u64, f64)>,
     /// The client ticks the prediction plays again (only while it runs).
     pub record: Option<Box<prediction::Record>>,
+    /// The attacks of the client tick being heard.
+    pub attacks: combat::Attacks,
 }
 
 impl Player {
@@ -262,12 +277,17 @@ mod tests {
     }
 
     #[test]
-    fn off_by_default_and_without_a_section() {
-        assert!(!Config::default().enabled);
+    fn on_by_default_but_only_combat_acts() {
         let c = Config::from_server_toml("[server]\nport = 25565\n").unwrap();
         assert_eq!(c, Config::default());
-        assert!(!c.runs(Check::Timer));
-        assert!(!c.runs(Check::Ground));
+        for &check in Check::ALL {
+            assert!(c.runs(check), "{}", check.name());
+            let a = c.actions(check);
+            let acts = [a.setback, a.alert, a.kick] != [0.0; 3];
+            assert_eq!(acts, check == Check::Combat, "{}", check.name());
+        }
+        let off = Config::from_server_toml("[anticheat]\nenabled = false\n").unwrap();
+        assert!(Check::ALL.iter().all(|&check| !off.runs(check)));
     }
 
     #[test]

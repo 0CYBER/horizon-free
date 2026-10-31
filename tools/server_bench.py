@@ -266,6 +266,9 @@ def server_command(kind, directory, args):
         # tolerance, flags none (an honest player's moves agree).
         toml.write_text(toml.read_text()
                         + '\n[anticheat]\nenabled = true\n[anticheat.prediction]\ntolerance = 1000.0\n')
+    else:
+        # The anticheat is on by default: off, to measure the server without it.
+        toml.write_text(toml.read_text() + '\n[anticheat]\nenabled = false\n')
     return [server, '--dir', directory, 'run']
 
 

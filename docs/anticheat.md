@@ -1,31 +1,40 @@
 # The dedicated server's anticheat
 
-Horizon's dedicated server can check what players send beyond what vanilla checks. It is **off**: a
-server that doesn't turn it on runs vanilla's checks only ("moved too quickly", "moved wrongly"...)
-and costs nothing more. An owner turns it on in `server.toml`:
+Horizon's dedicated server checks what players send beyond what vanilla checks. It is **on** by default,
+every check with it, but only the checks a vanilla client can't trip act on their own: `combat` drops the
+attacks of a kill aura and kicks it. `timer`, `ground` and `prediction` only write `logs/anticheat.log`
+(their `setback`, `alert` and `kick` are 0) until they have shown no false positive with real players;
+then they act by default too. An owner changes it in `server.toml`:
 
 ```toml
 [anticheat]
-enabled = true
+enabled = true             # false: vanilla's checks only ("moved too quickly", "moved wrongly"...)
 alerts = true              # tell online operators (alert_level, default 2) in their chat
 alert_level = 2
 log = "logs/anticheat.log" # every flag, one line each; "" writes none
 
 [anticheat.timer]          # each check has a table like this one; every key is optional
-enabled = true
-setback = 2
+enabled = true             # false turns this check off
+setback = 2                # the thresholds once trusted (0, log only, by default)
 alert = 5
 kick = 20
 decay = 0.02
 ```
+
+| Check | Acts by default | Thresholds once trusted (`setback`, `alert`, `kick`) |
+|---|---|---|
+| `combat` | yes: 2, 5, 20 | |
+| `timer` | no, logs only | 2, 5, 20 |
+| `ground` | no, logs only (a false claim stands) | 5, 15, 60 |
+| `prediction` | no, logs only | 5, 15, 60 |
 
 It lives in the server for now, in its own crate (`horizon-anticheat`) plus one file of the hub
 (`lan/anticheat.rs`), because the native mod API ([native-mods.md](native-mods.md)) has no hooks yet for a
 player's moves (the position, the on-ground claim, cancelling a move) or for packet timing. It moves into a
 native mod once those hooks exist.
 
-horizon-server checks the section before every start; the game reads it from `server.toml` when it
-starts (`horizon-client --dedicated` run by hand reads the same file from its folder, if there is one).
+horizon-server checks the section before every start (a wrong one turns the anticheat off, with an
+error in the log); the game reads it from `server.toml` when it starts (`horizon-client --dedicated` run by hand reads the same file from its folder, if there is one).
 
 ## How a check acts
 
@@ -47,10 +56,11 @@ Every flag goes to `log`, with the time, the player, the check, its level, what 
 | Check | Catches | How |
 |---|---|---|
 | `timer` | a sped-up game (more ticks a second than the server's clock) | vanilla's client ends each tick with ServerboundClientTickEndPacket, at the server's tick rate. Each one spends one tick of a balance that wall-clock time fills. A client more than `tolerance_ms` (300) ahead is flagged; a quiet connection banks at most `max_lag_ms` (1000), so a lag spike's backlog isn't flagged and a pause can't be saved for a burst. A slow server tick adds its own time before its backlog is counted. |
-| `ground` | no-fall (claiming the ground to skip fall damage) and walking on water | a move that says it ends on the ground is judged only when every block around the feet (0.6 below them, 1/16 wider than the body) is air or a fluid, nothing collides a tenth of a block down, and no boat, minecart, shulker or happy ghast is near. Anything else (powder snow, scaffolding, a waterlogged slab...) isn't judged. A false claim is always dropped, so vanilla's fall damage follows; creative, spectators and gliders are skipped (no fall damage to dodge). |
-| `prediction` | speed, step, fly, jesus: any move vanilla's movement can't make from the player's own keys | each client tick (the packets between two ServerboundClientTickEndPackets: keys, sprinting, rotation, the move) is recorded, and every server tick ends with a ping so the server knows from which client tick on what it changed (a push, a teleport, an effect) was in effect. Each tick is then played again with the client's own movement code, from where the last one ended (it starts at a teleport the client accepted), and compared with where the client said it went; the replay then goes on from the client's position. What the server sent the player that changes its movement (a velocity, an explosion's knockback, attributes, effects) is applied on the first client tick that had seen it, so a client that ignores a push (anti-knockback) is off too. The keys and sprinting are the client's own, so they are never guessed; what the server can't know is tried (the ground on the first tick after a teleport, the item use on the tick the server's changed). Not played: riding, sleeping, dead, spectators. A move that lands farther than `tolerance` (0.03 blocks) from the replay flags, weighing its offset in tolerances (at most 5 a tick); the setback puts the player back where its moves last agreed. What the replay can't play yet excuses the tick, and the ticks after it until the moves agree again (2 seconds at most): another entity or player within 3 blocks (a push, a boat or shulker to stand on, a firework to fly with), an entity within 4 blocks that the server removed and the client hadn't heard of yet, a block change within 4 blocks the client hadn't seen or the server hasn't sent yet, abilities (a game mode, flight, a glider put on) the client hadn't seen, a moving piston, a chunk around the player the client doesn't have, a riptide launch, a teleport that keeps the player's motion (an End gateway's). Around a fast player (an elytra) these distances grow by two ticks of its speed, as what the server has around it is a tick or so behind. Under an excuse the replay takes the client's velocity, so it agrees again within a few ticks. With `[anticheat]` on it costs one ping and one replayed tick a tick per player. |
+| `ground` | no-fall (claiming the ground to skip fall damage) and walking on water | a move that says it ends on the ground is judged only when every block around the feet (0.6 below them, 1/16 wider than the body) is air or a fluid, nothing collides a tenth of a block down, and no boat, minecart, shulker or happy ghast is near. Anything else (powder snow, scaffolding, a waterlogged slab...) isn't judged. A false claim is dropped, so vanilla's fall damage follows (not while the check only logs); creative, spectators and gliders are skipped (no fall damage to dodge). |
+| `prediction` | speed, step, fly, jesus: any move vanilla's movement can't make from the player's own keys | each client tick (the packets between two ServerboundClientTickEndPackets: keys, sprinting, rotation, the move) is recorded, and every server tick ends with a ping so the server knows from which client tick on what it changed (a push, a teleport, an effect) was in effect. Each tick is then played again with the client's own movement code, from where the last one ended (it starts at a teleport the client accepted), and compared with where the client said it went; the replay then goes on from the client's position. What the server sent the player that changes its movement (a velocity, an explosion's knockback, attributes, effects) is applied on the first client tick that had seen it, so a client that ignores a push (anti-knockback) is off too. The keys and sprinting are the client's own, so they are never guessed; what the server can't know is tried (the ground on the first tick after a teleport, the item use on the tick the server's changed). Not played: riding, sleeping, dead, spectators. A move that lands farther than `tolerance` (0.03 blocks) from the replay flags, weighing its offset in tolerances (at most 5 a tick); the setback puts the player back where its moves last agreed. What the replay can't play yet excuses the tick, and the ticks after it until the moves agree again (2 seconds at most): another entity or player within 3 blocks (a push, a boat or shulker to stand on, a firework to fly with), an entity within 4 blocks that the server removed and the client hadn't heard of yet, a block change within 4 blocks the client hadn't seen or the server hasn't sent yet, abilities (a game mode, flight, a glider put on) the client hadn't seen, a moving piston, a chunk around the player the client doesn't have, a riptide launch, a teleport that keeps the player's motion (an End gateway's). Around a fast player (an elytra) these distances grow by two ticks of its speed, as what the server has around it is a tick or so behind. Under an excuse the replay takes the client's velocity, so it agrees again within a few ticks. It costs one ping and one replayed tick a tick per player. |
+| `combat` | a kill aura: attacks a vanilla client can't send | vanilla's client attacks from one place only (`Minecraft.startAttack`, once a client tick, with no screen open): the entity under the crosshair, picked once a tick, then it swings (ServerboundPunchPacket) at once. An attack with no swing before the next attack or the tick's end (a kill aura hiding its swing), or a second entity attacked in the same client tick (a multi-target aura), flags once. From `setback` (2) on the player's attacks are dropped until the level decays below it (`decay` 0.5 a second); `kick` is 20. It costs nothing until a player attacks. |
 
-More checks (movement, combat, world, anti-xray) come in their own pull requests; this table lists the
+More checks (aim, world, anti-xray) come in their own pull requests; this table lists the
 ones in this version.
 
 ## Writing a check
@@ -64,6 +74,8 @@ ones in this version.
   bubble columns, latency). A false positive is worse than a missed cheat: when unsure, don't flag.
 - A clean player must cost nothing: no work per tick unless the check needs it, and none at all while the
   anticheat is off (`Hub::anticheat` is `None`).
+- A new check that a vanilla client could trip ships logging only (thresholds at 0), until real players
+  have shown it no false positive.
 - Original code only (CONTRIBUTING.md): written from vanilla 26.3 and public descriptions of what cheats
   do. Never read, copy or paraphrase another anticheat's source (Grim, NoCheatPlus, Vulcan, Matrix,
   Spartan, Paper's anti-xray...), its decompiled jars or docs quoting its code.
