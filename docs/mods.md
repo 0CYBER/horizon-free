@@ -49,7 +49,7 @@ cargo horizon-mod check target/horizon-mod/my_mod.hmod   # the registry's checks
 - `check <file>` runs what the registry runs: the file's size and SHA-256, its manifest and content, and a signature
   with `--key <public key> --signature <file>.minisig`. It reads `.hmod`, `.hnmod`, `.hpack`, resource pack `.zip`
   and `.hshader` files.
-- `registry build|review|check|list` is the registry repository's CI ([api/mod-index.md](api/mod-index.md)).
+- `registry build|review|check|list|release|page` is the registry repository's CI ([api/mod-index.md](api/mod-index.md)).
 
 ### The manifest
 
@@ -169,30 +169,37 @@ one, what it pins and why it is not sandboxed: [native-mods.md](native-mods.md).
 
 ## Publish your mod
 
-Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon, each reviewed before it is
-published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher (Mods, then
-**Horizon** beside Modrinth), which checks every file before it installs it.
+Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon. **A project is reviewed
+once, when it is listed; its later releases are checked by machine, not read by a person.** Players find them at
+[playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher (Mods, then **Horizon** beside Modrinth),
+which checks every file before it installs it.
 
 1. Run `cargo horizon-mod check` on the file (above): the registry runs the same checks.
-2. Put the source somewhere public, under a licence that lets players run it: reviewers read it, and the file must be
-   built from it. A native mod's `.hnmod` is its source, and a maintainer reads it before it is listed.
-3. Open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub (it reads only your
-   public profile) and fill in the page: the file, its name and summary, licence, source address, and optionally a
-   minisign public key with the file's `.minisig`.
-4. The form checks the file again and opens a pull request in
-   [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) that adds `mods/<id>.toml`, with you as its
-   owner. That repository's checks run `cargo horizon-mod check` on the file and post their report on the pull
-   request; answer the reviewers there.
-5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
-   the launcher.
+2. Put the source in a public GitHub repository, under a licence that lets players run it. A native mod's `.hnmod` is
+   its source.
+3. Publish a **GitHub release** in it with the file as an asset (`.hmod`, `.hnmod`, `.hpack`, `.hshader`, or a resource
+   pack's `.zip`), and its `.minisig` beside it if you sign. The release notes are the changelog.
+4. List the project once: open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub
+   and give the repository and the page (name, summary, licence, optionally a minisign public key). It opens a pull
+   request in [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) adding `mods/<id>.toml`, with
+   you as owner. A reviewer reads the repository and its source and merges it.
 
-Once it is published, its page and its card in the launcher show its downloads (GitHub's counts of its files,
-refreshed every hour) and its rating: players signed in with GitHub on its page give it 1 to 5 stars, one rating per
-account, which they can change. Its owners can't rate it, and nobody sees who rated.
+**Releasing a version is only step 3.** Publish a GitHub release (not a draft or a pre-release); within the hour the
+registry reads it, runs the checks a submission runs (the file's own, the signature, the id and the version in the
+file's manifest), and lists it. A release that fails is skipped and reported in an issue of the registry, never
+published. Nobody opens a pull request and nobody reviews it. The version is the one in the file's manifest (the tag
+when the file has none), the date and the changelog are the release's, the SHA-256 is computed by the registry, and
+the launcher downloads the asset from your repository and refuses any other bytes. A published file never changes:
+publish a new version. `revoked.toml` takes a bad one down.
 
-An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
-has one. When nothing but the version is new (the page's text, key, owners and icon are as they were), the registry merges it by itself once its checks pass; anything else waits for a reviewer. A published file never changes. Without the form, open the pull request by hand (the repository's README
-says how). The formats: [api/mod-index.md](api/mod-index.md).
+Once it is published, its page and its card in the launcher show its rating: players signed in with GitHub on its
+page give it 1 to 5 stars, one rating per account, which they can change. Its owners can't rate it, and nobody sees
+who rated.
+
+Your page can live in your repository too: a `horizon-registry.toml` at its root (on the newest release's tag) with
+`name`, `summary`, `description`, `authors` and `license` fills what the registry's entry leaves out; the entry's own
+words win. Its owners, key, kind and icon are the registry's, changed by a pull request. Projects listed before this
+(`versions` in their entry) keep their hosted versions. The formats: [api/mod-index.md](api/mod-index.md).
 
 ### Integrity and signing
 

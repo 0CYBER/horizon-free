@@ -313,6 +313,9 @@ pub struct Streaming {
     decorates: bool,
     lighting: FxHashMap<(i32, i32), u64>,
     meshing: FxHashMap<(i32, i32, i32), u64>,
+    /// The sequence each section's latest accepted mesh was dispatched at
+    /// (`CompiledSectionMesh.compileTaskStartTimeNs`).
+    compile_started: FxHashMap<(i32, i32, i32), u64>,
     /// Chunks whose light is current.
     lit: FxHashSet<(i32, i32)>,
     /// Columns whose sections have been meshed at least once.
@@ -687,6 +690,7 @@ impl Streaming {
             decorates: generator.decorates(),
             lighting: Default::default(),
             meshing: Default::default(),
+            compile_started: Default::default(),
             lit: Default::default(),
             meshed: Default::default(),
             waiting: Default::default(),
@@ -730,6 +734,7 @@ impl Streaming {
     pub fn reload_resources(&mut self, world: &mut World, context: Arc<WorkerContext>) {
         *self.shared.context.write().unwrap() = context;
         self.meshing.clear();
+        self.compile_started.clear();
         for &(x, z) in world.chunks.keys() {
             if self.lit.contains(&(x, z)) {
                 for sy in 0..world.layout().sections() as i32 {
@@ -793,6 +798,7 @@ impl Streaming {
         // shrunk storage forgets thousands of columns in one frame.
         for sy in 0..world.layout().sections() as i32 {
             self.meshing.remove(&(x, sy, z));
+            self.compile_started.remove(&(x, sy, z));
             self.waiting.remove(&(x, sy, z));
         }
         world.dirty_sections.take_column(x, z);
@@ -952,6 +958,21 @@ impl Streaming {
         }
         Some(Box::new(region))
     }
+    /// Whether `light_region` would find all nine columns: the same walk
+    /// without building the snapshot, so the scheduler can rank the ready
+    /// columns before any region is cloned. A proto neighbour whose light
+    /// view turns out empty is skipped when its region is built, and asked
+    /// for again, as `light_region` returning `None` always was.
+    fn light_region_ready(&self, world: &World, x: i32, z: i32) -> bool {
+        light_region_ready(
+            world,
+            |x, z| self.in_range(x, z, 1),
+            &self.decorated,
+            &self.protos,
+            x,
+            z,
+        )
+    }
     fn region(world: &World, x: i32, z: i32) -> Option<Box<Region>> {
         let mut region: Region = Default::default();
         for dz in 0..3 {
@@ -1001,6 +1022,17 @@ impl Streaming {
         } else {
             return None;
         })
+    }
+    /// The sequence the next mesh job will be dispatched after: a clock for
+    /// `compile_start`, whose jobs all snapshot the world as they are
+    /// dispatched (`Util.getNanos()` at the start of a compile task).
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    /// When the section's latest accepted mesh started compiling, on the
+    /// `sequence` clock (`CompiledSectionMesh.getCompileTaskStartTime`).
+    pub fn compile_start(&self, section: (i32, i32, i32)) -> Option<u64> {
+        self.compile_started.get(&section).copied()
     }
     pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
         self.meshing.contains_key(&section)
@@ -1125,6 +1157,7 @@ impl Streaming {
                         continue;
                     }
                     self.meshing.remove(&(x, sy, z));
+                    self.compile_started.insert((x, sy, z), seq);
                     self.meshed_total += 1;
                     uploads.push(((x, sy, z), mesh));
                 }
@@ -1156,6 +1189,8 @@ impl Streaming {
             if !far.is_empty() {
                 let far: HashSet<(i32, i32)> = far.iter().copied().collect();
                 self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
+                self.compile_started
+                    .retain(|k, _| !far.contains(&(k.0, k.2)));
                 self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
                 world
                     .dirty_sections
@@ -1337,13 +1372,29 @@ impl Streaming {
             }
         }
         self.schedule_generation(world, workers);
-        // Lighting once all neighbours exist.
-        let light: Vec<_> = world.dirty_light.iter().copied().collect();
-        for (x, z) in light {
+        // Lighting once all neighbours exist, nearest first and only as
+        // much of it as the workers can chew. Vanilla's light engine also
+        // hands a bounded queue to its workers and reschedules what did
+        // not fit by distance; submitted whole, the light jobs of every
+        // unlit column at once — each carrying a 3x3 region snapshot —
+        // grew with the render distance and outlived the columns they
+        // were queued for (#3629). What stays in `dirty_light` is asked
+        // for again, from the current centre, as capacity frees.
+        let mut light: Vec<(i64, i32, i32)> = Vec::new();
+        let mut gone: Vec<(i32, i32)> = Vec::new();
+        for &(x, z) in world.dirty_light.iter() {
             if !world.chunks.contains_key(&(x, z)) {
-                world.dirty_light.remove(&(x, z));
-                continue;
+                gone.push((x, z));
+            } else if self.light_region_ready(world, x, z) {
+                light.push((self.distance(x, z), x, z));
             }
+        }
+        for key in gone {
+            world.dirty_light.remove(&key);
+        }
+        let room = (self.threads.len() * 4).saturating_sub(self.lighting.len());
+        nearest_first(&mut light, room);
+        for (_, x, z) in light {
             let Some(region) = self.light_region(world, x, z) else {
                 continue;
             };
@@ -1389,6 +1440,7 @@ impl Streaming {
         }
         // Column by column: the checks below hold for all of a column's
         // sections, and columns waiting for light cost one look per frame.
+        let mut candidates: Vec<(i64, i32, i32, SectionMask)> = Vec::new();
         let columns: Vec<_> = world.dirty_sections.columns().collect();
         for ((x, z), sections) in columns {
             if !world.chunks.contains_key(&(x, z)) {
@@ -1417,6 +1469,18 @@ impl Streaming {
             if !ready {
                 continue;
             }
+            candidates.push((self.distance(x, z), x, z, sections));
+        }
+        // Nearest first, and only as many sections as the workers can chew.
+        // Every ready column used to be submitted at once, so at a wide
+        // render distance the queue — and `meshing`, and each job's 3x3
+        // region snapshot — grew with the number of loaded columns and the
+        // jobs went stale long before a worker reached them (#3629). What
+        // stays dirty is asked for again, from the current centre, as
+        // capacity frees; `requeue` then has a small queue to keep close.
+        let room = (self.threads.len() * 32).saturating_sub(self.meshing.len());
+        nearest_first(&mut candidates, room);
+        for (_, x, z, sections) in candidates {
             let Some(region) = Self::region(world, x, z) else {
                 continue;
             };
@@ -2031,6 +2095,46 @@ fn rank_again(queue: &mut BinaryHeap<Queued>, distance: impl Fn(i32, i32) -> i64
     }
     *queue = BinaryHeap::from(jobs);
 }
+/// Whether the 3x3 a light job for (x, z) reads is all there: every
+/// neighbour a finished column, or a decorated proto chunk past the area
+/// (the last FULL ring lights against neighbours at FEATURES, as
+/// `Streaming::light_region` reads them).
+fn light_region_ready(
+    world: &World,
+    in_range: impl Fn(i32, i32) -> bool,
+    decorated: &FxHashSet<(i32, i32)>,
+    protos: &FxHashMap<(i32, i32), Option<Proto>>,
+    x: i32,
+    z: i32,
+) -> bool {
+    for dz in 0..3 {
+        for dx in 0..3 {
+            let n = (x + dx - 1, z + dz - 1);
+            if world.chunks.contains_key(&n)
+                || (!in_range(n.0, n.1)
+                    && decorated.contains(&n)
+                    && matches!(protos.get(&n), Some(Some(_))))
+            {
+                continue;
+            }
+            return false;
+        }
+    }
+    true
+}
+/// The nearest `room` of the `candidates`, ordered: the light and mesh
+/// stages submit bounded work, chosen from everything that is ready each
+/// `update`, so what runs is always the nearest of what is left — chosen
+/// again, from the current centre, as capacity frees, the way vanilla's
+/// chunk task queues follow the current ticket levels. The selection is
+/// O(n); the sort orders only what is submitted.
+fn nearest_first<T: Ord>(candidates: &mut Vec<T>, room: usize) {
+    if candidates.len() > room {
+        candidates.select_nth_unstable(room);
+        candidates.truncate(room);
+    }
+    candidates.sort_unstable();
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2118,6 +2222,79 @@ mod tests {
         let moved = ranges((19, 0));
         rank_again(&mut queue, |x, z| moved.priority(x, z, false));
         assert_eq!(queue.pop().and_then(|q| q.at), Some((20, 0)));
+    }
+
+    /// The light and mesh stages submit bounded work, the nearest first:
+    /// what exceeds the room stays dirty, to be chosen again — from the
+    /// current centre — as capacity frees. Submitted whole, the queue once
+    /// held every ready column's jobs and grew with the render distance
+    /// (#3629); ties break by position, so the choice is deterministic.
+    #[test]
+    fn bounded_submission_takes_the_nearest_first() {
+        let candidates: Vec<(i64, i32, i32, u32)> = (0..40i32)
+            .map(|i| {
+                let (x, z) = (i / 8 - 2, i % 8 - 3);
+                (
+                    i64::from((x - 3).pow(2) + (z - 2).pow(2)),
+                    x,
+                    z,
+                    1 << (i % 24),
+                )
+            })
+            .collect();
+        let mut expected = candidates.clone();
+        expected.sort_unstable();
+        let mut none = candidates.clone();
+        nearest_first(&mut none, 0);
+        assert!(none.is_empty());
+        let mut nearest = candidates;
+        nearest_first(&mut nearest, 5);
+        assert_eq!(nearest, expected[..5]);
+        let mut past = expected.clone();
+        nearest_first(&mut past, expected.len() + 10);
+        assert_eq!(past, expected);
+    }
+
+    /// What the scheduler counts as ready to light: every neighbour a
+    /// finished column, or a decorated proto chunk past the area — the
+    /// walk `light_region` makes without its snapshot.
+    #[test]
+    fn light_readiness_follows_the_region_a_light_job_reads() {
+        let mut world = World::new(horizon_world::registry::BlockStateId(0), 0);
+        let chunk = Arc::new(Chunk::empty(0, 0));
+        let nine = (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (dx, dz)));
+        for key in nine {
+            world.chunks.insert(key, chunk.clone());
+        }
+        // The kept area is the cross around (0, 0); the corners of the
+        // 3x3 light reads lie past it.
+        let in_range = |x: i32, z: i32| x.abs() + z.abs() <= 1;
+        let none = FxHashSet::<(i32, i32)>::default();
+        let empty = FxHashMap::<(i32, i32), Option<Proto>>::default();
+        assert!(light_region_ready(&world, in_range, &none, &empty, 0, 0));
+        // A corner is missing, and nothing stands in for it yet.
+        world.chunks.remove(&(1, 1));
+        assert!(!light_region_ready(&world, in_range, &none, &empty, 0, 0));
+        // A decorated, checked-in proto chunk past the area lights against.
+        let decorated: FxHashSet<(i32, i32)> = [(1, 1)].into_iter().collect();
+        let mut protos: FxHashMap<(i32, i32), Option<Proto>> = Default::default();
+        protos.insert((1, 1), Some(Box::new(()) as Proto));
+        assert!(light_region_ready(
+            &world, in_range, &decorated, &protos, 0, 0
+        ));
+        // The proto is checked out to a job: it cannot be read.
+        protos.insert((1, 1), None);
+        assert!(!light_region_ready(
+            &world, in_range, &decorated, &protos, 0, 0
+        ));
+        // A neighbour inside the area waits for the chunk itself.
+        world.chunks.remove(&(1, 0));
+        let mut inside = decorated.clone();
+        inside.insert((1, 0));
+        protos.insert((1, 0), Some(Box::new(()) as Proto));
+        assert!(!light_region_ready(
+            &world, in_range, &inside, &protos, 0, 0
+        ));
     }
 
     #[test]

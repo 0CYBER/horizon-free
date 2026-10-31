@@ -181,8 +181,9 @@ StateDefinition	skip:java		codecs and state builders; states come from the gener
 StateDefinition.Builder	skip:java		state builder
 StateDefinition.StateCollection	skip:data		neighbour tables of the state graph are generated data
 BlockInWorld	skip:java		accessor over the level's state and block entity
-BlockPattern.matches	port	crates/horizon-client/src/game/golems.rs::Game::find_golem	golem head and body patterns only, not a generic pattern matcher
-BlockPattern.translateAndRotate	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	pattern placement folded into golem search
+BlockPattern.matches	port	crates/horizon-client/src/block_pattern.rs::BlockPattern::matches	the wither's, the golems' and the dispenser's patterns all go through it
+BlockPattern.find	port	crates/horizon-client/src/block_pattern.rs::BlockPattern::find	every corner of the search cube (x fastest, then y, then z), then every forwards/up pair in Direction order
+BlockPattern.translateAndRotate	port	crates/horizon-client/src/block_pattern.rs::translate_and_rotate	x along forwards x up, y against up, z along forwards
 BlockPattern.BlockPatternMatch	skip:java		match result accessor
 BlockPatternBuilder	skip:java		builder for block patterns
 BlockStatePredicate	skip:java		predicate builder

@@ -81,6 +81,51 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
     },
     {
+      "name": "block_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity"
+    },
+    {
+      "name": "block_entity_ticks",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_ticks"
+    },
+    {
+      "name": "block_entity_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_tick"
+    },
+    {
+      "name": "block_entity_container",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"
+    },
+    {
+      "name": "screen",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen"
+    },
+    {
+      "name": "screen_draw",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_draw"
+    },
+    {
+      "name": "screen_click",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_click"
+    },
+    {
+      "name": "screen_tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_tooltip"
+    },
+    {
+      "name": "menu_button",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_button"
+    },
+    {
       "name": "register_commands",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
@@ -124,6 +169,36 @@
       "name": "place_block",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
+    },
+    {
+      "name": "right_click_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"
+    },
+    {
+      "name": "block_spread",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_spread"
+    },
+    {
+      "name": "piston_move",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_piston_move"
+    },
+    {
+      "name": "explosion_detonate",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_explosion_detonate"
+    },
+    {
+      "name": "fill_bucket",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_fill_bucket"
+    },
+    {
+      "name": "attack_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
     }
   ]
 }

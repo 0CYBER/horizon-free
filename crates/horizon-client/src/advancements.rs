@@ -479,6 +479,8 @@ pub struct EntityView {
     /// mainhand, offhand, head, chest, legs, feet, body.
     pub equipment: [Option<ItemView>; 7],
     pub vehicle: Option<Box<EntityView>>,
+    /// `Entity.getPassengers`, for `PassengerPredicate`.
+    pub passengers: Vec<EntityView>,
     /// Player: what it looks at within 100 blocks (`PlayerPredicate.lookingAt`).
     pub looking_at: Option<Box<EntityView>>,
     pub effects: Vec<(String, i32, i32)>,
@@ -763,6 +765,11 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                 .vehicle
                 .as_ref()
                 .is_some_and(|veh| entity(p, veh, w, origin)),
+            // PassengerPredicate.matches: any passenger matches the nested predicate.
+            "minecraft:passenger" | "passenger" => e
+                .passengers
+                .iter()
+                .any(|passenger| entity(p, passenger, w, origin)),
             "minecraft:effects" | "effects" => p.as_object().is_some_and(|m| {
                 m.iter().all(|(id, want)| {
                     e.effects.iter().any(|(eid, amp, dur)| {
@@ -1400,6 +1407,24 @@ mod tests {
                 || (tag == "minecraft:is_projectile"
                     && matches!(id, "minecraft:fireball" | "minecraft:arrow"))
         }
+    }
+    /// `PassengerPredicate.matches`: ride_a_boat_with_a_goat's vehicle holds a goat.
+    #[test]
+    fn passenger_predicate_needs_a_matching_passenger() {
+        let want = serde_json::json!({
+            "minecraft:entity_type": "minecraft:oak_boat",
+            "minecraft:passenger": {"minecraft:entity_type": "minecraft:goat"}
+        });
+        let entity = |kind: &str| EntityView {
+            kind: kind.into(),
+            ..Default::default()
+        };
+        let mut boat = entity("minecraft:oak_boat");
+        assert!(!super::entity(&want, &boat, &Flat, [0.0; 3]));
+        boat.passengers = vec![entity("minecraft:player")];
+        assert!(!super::entity(&want, &boat, &Flat, [0.0; 3]));
+        boat.passengers.push(entity("minecraft:goat"));
+        assert!(super::entity(&want, &boat, &Flat, [0.0; 3]));
     }
     /// Return to Sender's `killing_blow`: only the ghast's own fireball, as a
     /// projectile, kills it for the advancement; a sword or an arrow does not.
