@@ -1323,6 +1323,14 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `AbstractCubeMob.dealDamage` on the player (`playerTouch`): the hit,
+    /// then, only when `hurtServer` let it land, the cube's
+    /// `entity.slime.attack` with its pitch drawn from the cube's random.
+    CubeHurtPlayer {
+        cube: u32,
+        amount: f32,
+        from: [f64; 3],
+    },
     /// `AbstractCubeMob.dealDamage` on a mob (an iron golem it touches): the
     /// hit, then, only when `hurtServer` let it land, the cube's
     /// `entity.slime.attack` with its pitch drawn from the cube's random.
