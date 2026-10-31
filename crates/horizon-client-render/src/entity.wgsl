@@ -314,8 +314,10 @@ fn celestial_color(in: Out) -> vec4<f32> {
     let color = celestial_color(in);
     let added = color.rgb * color.a;
     // The sky under the disc keeps alpha 1 less this: 0 for the brightest tier
-    // (the sun), terrain.wgsl's mark for the lower ones (the moon).
-    let mark = 1.0 - 0.7 * f32(4u - min(in.tier, 4u)) / 4.0;
+    // (the sun), terrain.wgsl's mark for the lower ones (the moon). Tier 0 is
+    // geometry that sets none (the End sky, the End flash): it stays brightest.
+    let tier = select(4u, min(in.tier, 4u), in.tier > 0u);
+    let mark = 1.0 - 0.7 * f32(4u - tier) / 4.0;
     return vec4(added, mark * smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
 }
 
