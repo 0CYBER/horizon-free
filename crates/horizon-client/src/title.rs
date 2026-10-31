@@ -342,6 +342,8 @@ pub enum Mode {
     },
     /// AccessibilityOnboardingScreen: the first screen of a first launch.
     Onboarding(Onboarding),
+    /// `BanNoticeScreens`: a ConfirmLinkScreen `Gui.addInitialScreens` queued.
+    BanNotice(crate::ban_notice::Notice),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -354,6 +356,10 @@ pub enum Action {
     Sounds,
     /// The title's bottom text (`PlainTextButton`): `CreditsAndAttributionScreen`.
     Credits,
+    /// `Blaze3D.openUri`: a ConfirmLinkScreen's Open in Browser.
+    OpenUri(String),
+    /// `ConfirmLinkScreen.copyToClipboard`.
+    CopyText(String),
     Play {
         folder: String,
     },
@@ -394,6 +400,12 @@ pub struct Title {
     warning_check: Cell<[f32; 4]>,
     /// The bottom notice's `PlainTextButton` as last drawn: x, y, width, height.
     credits_button: Cell<[f32; 4]>,
+    /// `Minecraft.allowsMultiplayer()` once the account's attributes are known.
+    pub allows_multiplayer: bool,
+    /// The ban screens `Gui.addInitialScreens` queued, shown once the title is up.
+    ban_queue: std::collections::VecDeque<crate::ban_notice::Notice>,
+    /// A ban notice's three buttons as last drawn (`ConfirmLinkScreen`'s row).
+    ban_buttons: Cell<[(f32, f32); 3]>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
     /// The backup a `BackupBeforeUpgrade` asked for opens its world when done; whether it
@@ -636,6 +648,9 @@ impl Title {
             message_lines: Cell::new(1),
             warning_check: Cell::new([0.0; 4]),
             credits_button: Cell::new([0.0; 4]),
+            allows_multiplayer: true,
+            ban_queue: Default::default(),
+            ban_buttons: Cell::new([(0.0, 0.0); 3]),
             backup: None,
             backup_shown: Cell::new(false),
             backup_then_open: None,
@@ -902,6 +917,7 @@ impl Title {
     /// Polling is done once per rendered frame so filesystem work never blocks drawing.
     pub fn poll_backup(&mut self) {
         self.poll_onboarding(std::time::Instant::now());
+        self.poll_account();
         self.poll_optimize();
         if !self.backup_shown.get() {
             return;
@@ -1393,7 +1409,7 @@ impl Title {
                         y + 24.0,
                         200.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
-                        true,
+                        self.allows_multiplayer,
                         4,
                     ),
                     b(
@@ -1801,6 +1817,28 @@ impl Title {
                 ]
             }
             Mode::Onboarding(_) => self.onboarding_buttons(w, h),
+            Mode::BanNotice(_) => {
+                // ConfirmLinkScreen.addButtons: Open in Browser, Copy to Clipboard, then the
+                // notice's Acknowledge, 100 wide each.
+                let labels = [
+                    lang::get_or("chat.link.open", "Open in Browser"),
+                    lang::get_or("chat.copy", "Copy to Clipboard"),
+                    lang::get_or("gui.acknowledge", "Acknowledge"),
+                ];
+                let positions = self.ban_buttons.get();
+                (0..3)
+                    .map(|i| {
+                        b(
+                            positions[i].0,
+                            positions[i].1,
+                            100.0,
+                            &labels[i],
+                            true,
+                            120 + i as u8,
+                        )
+                    })
+                    .collect()
+            }
             Mode::Backup { .. } => Vec::new(),
             Mode::Multiplayer(screen) => screen
                 .buttons(w, h)
@@ -2418,6 +2456,23 @@ impl Title {
                 );
             }
             Mode::Onboarding(_) => fade_from = Some(self.draw_onboarding(atlas, batch, w, h)),
+            Mode::BanNotice(notice) => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let now = chrono::Utc::now().timestamp_millis();
+                let layout = crate::confirm_screen::Choice::new(
+                    &atlas.font,
+                    (w, h),
+                    &notice.title(),
+                    &notice.message(now),
+                    3,
+                    100.0,
+                );
+                for (line, x, y) in &layout.lines {
+                    batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
+                }
+                self.ban_buttons
+                    .set([layout.buttons[0], layout.buttons[1], layout.buttons[2]]);
+            }
             Mode::Multiplayer(screen) => screen.draw(
                 atlas,
                 batch,
@@ -2641,6 +2696,16 @@ impl Title {
                 Action::None
             }
             (Mode::Main, Some(2)) => Action::Quit,
+            (Mode::BanNotice(_), Some(id @ 120..=122)) => {
+                // BanNoticeScreens' callback: Open in Browser opens the link, Copy copies it
+                // and answers no; all of them run `next`.
+                self.next_ban_notice();
+                match id {
+                    120 => Action::OpenUri(crate::ban_notice::SUSPENSION_HELP.to_owned()),
+                    121 => Action::CopyText(crate::ban_notice::SUSPENSION_HELP.to_owned()),
+                    _ => Action::None,
+                }
+            }
             (Mode::Main, Some(4)) => {
                 // TitleScreen.init: SafetyScreen first, unless it was turned off.
                 self.mode = if self.skip_multiplayer_warning {
@@ -3220,6 +3285,53 @@ impl Title {
             }
         }
     }
+    /// `Gui.buildInitialScreens`' chain: the next queued ban notice, else the title.
+    fn next_ban_notice(&mut self) {
+        self.mode = match self.ban_queue.pop_front() {
+            Some(notice) => Mode::BanNotice(notice),
+            None => Mode::Main,
+        };
+    }
+    /// The account fetches vanilla starts in `Minecraft`'s constructor
+    /// (`userPropertiesFuture`, `profileFuture`), run once per launch on a thread, only
+    /// for a real online session (offline and demo have none). Their result decides
+    /// `allowsMultiplayer` and queues `Gui.addInitialScreens`' ban notices, which open
+    /// as soon as the title is showing.
+    fn poll_account(&mut self) {
+        use crate::ban_notice::{AccountStatus, initial_notices};
+        use std::sync::{
+            OnceLock,
+            atomic::{AtomicBool, Ordering},
+        };
+        static STATUS: OnceLock<AccountStatus> = OnceLock::new();
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        static QUEUED: AtomicBool = AtomicBool::new(false);
+        let Some(session) = crate::auth::current() else {
+            return;
+        };
+        if !STARTED.swap(true, Ordering::Relaxed) {
+            let session = session.clone();
+            let spawned = std::thread::Builder::new()
+                .name("Account status".into())
+                .spawn(move || {
+                    let _ = STATUS.set(crate::auth::fetch_account_status(&session));
+                });
+            if spawned.is_err() {
+                log::warn!("Horizon: could not start the account status fetch");
+            }
+        }
+        let Some(status) = STATUS.get() else {
+            return;
+        };
+        self.allows_multiplayer = status.allows_multiplayer();
+        if !QUEUED.swap(true, Ordering::Relaxed) {
+            self.ban_queue
+                .extend(initial_notices(status, &session.name));
+        }
+        if matches!(self.mode, Mode::Main) {
+            self.next_ban_notice();
+        }
+    }
     pub fn escape(&mut self) {
         if let Some(rules) = self.rules.get_mut() {
             if let Some(exit) = rules.escape() {
@@ -3267,6 +3379,8 @@ impl Title {
             Mode::Create { .. } => self.cancel_create(),
             // Screen.keyPressed: Escape closes the screen, which fades out.
             Mode::Onboarding(_) => self.onboarding_close(),
+            // ConfirmScreen.keyPressed: Escape answers no, which runs `next`.
+            Mode::BanNotice(_) => self.next_ban_notice(),
             _ => self.mode = Mode::Main,
         }
     }
@@ -3336,6 +3450,41 @@ fn caret_field<'a>(
 #[cfg(test)]
 mod classic_tests {
     use super::*;
+
+    #[test]
+    fn ban_notices_chain_into_the_title_and_gate_multiplayer() {
+        use crate::ban_notice::{BanDetails, Notice};
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        let multiplayer = |title: &Title| {
+            title
+                .buttons(427.0, 240.0)
+                .into_iter()
+                .find(|b| b.id == 4)
+                .unwrap()
+                .enabled
+        };
+        assert!(multiplayer(&title));
+        title.allows_multiplayer = false;
+        assert!(!multiplayer(&title));
+        // Gui.buildInitialScreens: each notice runs `next`, the last one opens the title.
+        let ban = BanDetails {
+            expires_ms: None,
+            reason: None,
+            reason_message: None,
+        };
+        title.ban_queue = [Notice::Name("Steve".into()), Notice::Skin].into();
+        title.mode = Mode::BanNotice(Notice::Multiplayer(ban));
+        assert_eq!(title.buttons(427.0, 240.0).len(), 3);
+        title.escape();
+        assert!(matches!(&title.mode, Mode::BanNotice(Notice::Name(n)) if n == "Steve"));
+        title.escape();
+        assert!(matches!(title.mode, Mode::BanNotice(Notice::Skin)));
+        title.next_ban_notice();
+        assert!(matches!(title.mode, Mode::Main));
+    }
 
     #[test]
     fn the_bottom_text_button_opens_the_credits() {
