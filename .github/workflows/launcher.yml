@@ -202,13 +202,20 @@ jobs:
           retry() { for i in 1 2 3 4; do "$@" && return 0; sleep $((i * 15)); done; return 1; }
           retry "$launcher" versions
           "$launcher" links --json
-          # A new platform's launcher can come out before any game build has its asset (Intel Macs, #1161): then
-          # there is nothing to install yet.
-          any_build='import json, sys; sys.exit(not any(r["available_here"] for r in json.load(sys.stdin)))'
-          if ! retry "$launcher" --json versions | ${{ runner.os == 'Windows' && 'python' || 'python3' }} -c "$any_build"; then
-            echo "::warning::No game build has an asset for ${{ matrix.name }} yet: install not tested"
-            rm -rf "$HORIZON_LAUNCHER_HOME"
-            exit 0
+          # The Intel Mac launcher can come out before any game build has its asset (#1161): then there is nothing
+          # to install yet. Only that entry skips, and only on a version list that parsed and had no build here
+          # (exit 3); a launcher or a script that fails still fails the step.
+          if [[ "${{ matrix.name }}" == macos-x64 ]]; then
+            versions=$(retry "$launcher" --json versions)
+            no_build='import json, sys; sys.exit(3 if not any(r["available_here"] for r in json.load(sys.stdin)) else 0)'
+            status=0
+            python3 -c "$no_build" <<<"$versions" || status=$?
+            if [[ $status == 3 ]]; then
+              echo "::warning::No game build has an asset for ${{ matrix.name }} yet: install not tested"
+              rm -rf "$HORIZON_LAUNCHER_HOME"
+              exit 0
+            fi
+            [[ $status == 0 ]] || exit $status
           fi
           retry "$launcher" install latest
           "$launcher" versions --installed
