@@ -230,7 +230,12 @@ fn wrap(d: f32) -> f32 {
 impl Game<'_> {
     /// `key.togglePerspective`.
     pub(super) fn cycle_camera(&mut self) {
+        let previous = self.camera_type;
         self.camera_type = self.camera_type.cycle();
+        // Minecraft.handleKeybinds: the chain follows the first-person view.
+        if previous.first_person() != self.camera_type.first_person() {
+            self.check_entity_post_effect(self.camera_type.first_person());
+        }
     }
     /// `Camera.update` (`alignWithEntity` and `getMaxZoom`): the
     /// interpolated eye, or a point up to the camera distance behind (or in
