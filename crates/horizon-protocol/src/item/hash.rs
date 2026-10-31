@@ -9,6 +9,7 @@
 //! Horizon can build (vanilla has none, an id has no name, or a codec is not
 //! ported yet) has no hash: it is left out of the added map and a vanilla server
 //! resyncs that slot.
+mod exact;
 mod gameplay;
 mod raw;
 use super::{Component, FireworkExplosion, Hashed, Stack, WirePatch, component as kind};

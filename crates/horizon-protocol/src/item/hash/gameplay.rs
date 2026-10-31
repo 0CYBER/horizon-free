@@ -220,7 +220,7 @@ fn kinetic_condition(r: &mut Reader) -> Option<HashCode> {
 /// (`FireworkPredicate`, `WrittenBookPredicate`, `MobEffectInstancePredicate`):
 /// they travel as NBT bytes and hash as booleans. The text components inside a
 /// written book's page predicates add [`TEXT_BOOLS`].
-const PREDICATE_BOOLS: [&str; 12] = [
+pub(super) const PREDICATE_BOOLS: [&str; 12] = [
     "has_twinkle",
     "has_trail",
     "resolved",
@@ -234,17 +234,6 @@ const PREDICATE_BOOLS: [&str; 12] = [
     "interpret",
     "plain",
 ];
-/// Whether a compound anywhere in `tag` has a field `name`.
-fn has_field(tag: &horizon_world::nbt::Tag, name: &str) -> bool {
-    use horizon_world::nbt::Tag;
-    match tag {
-        Tag::Compound(map) => map
-            .iter()
-            .any(|(k, v)| k.0.iter().copied().eq(name.encode_utf16()) || has_field(v, name)),
-        Tag::List(items) => items.iter().any(|t| has_field(t, name)),
-        _ => false,
-    }
-}
 /// `DataComponentPredicate.STREAM_CODEC`: each entry is a type (a predicate
 /// type, or a component type for `AnyValue`) and the predicate as the NBT its
 /// `CODEC` encodes (`fromCodecWithRegistries`), hashed as the map
@@ -258,84 +247,9 @@ fn partial_predicate(r: &mut Reader, names: &dyn Names) -> Option<(HashCode, Has
     let key = entry(names, registry, int(r)?)?;
     let tag = r.nbt().ok()?;
     // The nested `components` of an item predicate (`container`,
-    // `bundle_contents`) are component values as NBT, whose booleans cannot be
-    // told from bytes without their codecs: the `Codec.BOOL` fields of the
-    // components are named in [`COMPONENT_BOOLS`], and a byte anywhere else
-    // could be either, so that predicate stays unhashed.
-    if has_field(&tag, "components") {
-        if has_unnamed_byte(&tag, &COMPONENT_BOOLS) {
-            return None;
-        }
-        return Some((key, HashOps::from_nbt(&tag, &COMPONENT_BOOLS)));
-    }
-    Some((key, HashOps::from_nbt(&tag, &PREDICATE_BOOLS)))
-}
-
-/// The `Codec.BOOL` fields and values of the item components, as NBT bytes
-/// (`FoodProperties.canAlwaysEat`, `Equippable.dispensable`, the
-/// `enchantment_glint_override` value...), with the predicates' and the text
-/// components' ([`PREDICATE_BOOLS`]): what a nested item predicate's exact
-/// `components` need to be hashed from the NBT they travel as.
-const COMPONENT_BOOLS: [&str; 42] = [
-    "has_twinkle",
-    "has_trail",
-    "resolved",
-    "ambient",
-    "visible",
-    "bold",
-    "italic",
-    "underlined",
-    "strikethrough",
-    "obfuscated",
-    "interpret",
-    "plain",
-    "minecraft:enchantment_glint_override",
-    "active",
-    "add_material_count_to_result",
-    "allow_duplicates",
-    "attribute_to_source",
-    "attribute_to_user",
-    "buoyant",
-    "can_always_eat",
-    "can_be_sheared",
-    "can_destroy_blocks_in_creative",
-    "can_sprint",
-    "causes_fire",
-    "correct_for_drops",
-    "create_fire",
-    "damage_on_hurt",
-    "deals_knockback",
-    "directional_particles",
-    "dismounts",
-    "dispensable",
-    "equip_on_interact",
-    "has_consume_particles",
-    "hide_tooltip",
-    "ignore_entities",
-    "interact_vibrations",
-    "join_team",
-    "locked",
-    "raining",
-    "swappable",
-    "thundering",
-    "tracked",
-];
-/// Whether `tag` holds a byte that no key in `bools` names, or one in a list:
-/// it might be a `Codec.BOOL` or a `Codec.BYTE`.
-fn has_unnamed_byte(tag: &horizon_world::nbt::Tag, bools: &[&str]) -> bool {
-    use horizon_world::nbt::Tag;
-    match tag {
-        Tag::Compound(map) => map.iter().any(|(k, v)| match v {
-            Tag::Byte(_) => !bools
-                .iter()
-                .any(|n| k.0.iter().copied().eq(n.encode_utf16())),
-            _ => has_unnamed_byte(v, bools),
-        }),
-        Tag::List(items) => items
-            .iter()
-            .any(|t| matches!(t, Tag::Byte(_)) || has_unnamed_byte(t, bools)),
-        _ => false,
-    }
+    // `bundle_contents`) are component values as NBT: `exact` hashes them by
+    // each component's codec.
+    Some((key, super::exact::predicate(&tag, names)?))
 }
 
 /// `BlockPredicate.STREAM_CODEC` as `BlockPredicate.CODEC` writes it.
@@ -703,26 +617,4 @@ pub(super) fn code(kind: i32, r: &mut Reader, names: &dyn Names) -> Option<HashC
         25 => super::raw::template_code(r, names)?,
         _ => return None,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use horizon_world::nbt::Tag;
-
-    #[test]
-    fn a_byte_is_a_bool_only_under_a_name_the_codecs_give_to_one() {
-        let named = Tag::compound([("can_always_eat", Tag::Byte(1))]);
-        let other = Tag::compound([("flag", Tag::Byte(1))]);
-        let listed = Tag::compound([("can_always_eat", Tag::List(vec![Tag::Byte(1)]))]);
-        let deep = Tag::compound([("a", Tag::List(vec![other.clone()]))]);
-        assert!(!has_unnamed_byte(&named, &COMPONENT_BOOLS));
-        assert!(has_unnamed_byte(&other, &COMPONENT_BOOLS));
-        assert!(has_unnamed_byte(&listed, &COMPONENT_BOOLS));
-        assert!(has_unnamed_byte(&deep, &COMPONENT_BOOLS));
-        assert!(!has_unnamed_byte(
-            &Tag::compound([("n", Tag::Int(1))]),
-            &COMPONENT_BOOLS
-        ));
-    }
 }
