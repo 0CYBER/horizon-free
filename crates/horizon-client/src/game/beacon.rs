@@ -562,27 +562,23 @@ impl Game<'_> {
             "gui/sprites/container/beacon/cancel",
         );
         let slots: Vec<usize> = (0..36).chain([INPUT]).collect();
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             if let Some(stack) = self.slot_mut(i).clone() {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
         }
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
         let mut stack_tip = None;
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
             stack_tip = self.slot_mut(slot).clone();
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = stack_tip.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if let Some(stack) = stack_tip {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(key) = tooltip {

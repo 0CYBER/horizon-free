@@ -275,6 +275,9 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     for w in &props.warnings {
         log("WARN", w);
     }
+    // A dedicated server's tree: /op, /ban, /whitelist... (single player's
+    // server thread is an integrated one and never gets here).
+    horizon_client::command::vanilla::set_dedicated_commands(true);
     // Horizon's own commands are the owner's choice, off as on vanilla.
     if props
         .raw
@@ -705,8 +708,20 @@ impl Game<'_> {
         // The single-player host's state is not used: players have their own files.
         self.level.position = None;
         // DedicatedServer.initServer: worldData.setGameType; forceDifficulty.
+        // `load_world` restored difficulty from level.dat; server.properties wins
+        // (vanilla's forceDifficulty), including health_rules used for despawn (#4694).
         self.set_default_game_mode(game_mode);
-        self.ui.difficulty = props.difficulty as u8;
+        // MinecraftServer.setDifficulty: a hardcore world is always hard.
+        self.ui.difficulty = if self.level.hardcore {
+            3
+        } else {
+            props.difficulty as u8
+        };
+        self.level.set_difficulty(self.ui.difficulty);
+        self.sync_rules();
+        if self.ui.difficulty == 0 {
+            self.mobs.retain(|m| !m.hostile());
+        }
         // DedicatedServer.initServer: a legacy `announce-player-achievements`
         // sets the show_advancement_messages rule once, as the file is read.
         if let Some(announce) = props.announce_player_achievements {
@@ -913,6 +928,13 @@ impl Game<'_> {
                 && let Some(recording) = state.report.take()
             {
                 self.finish_report(recording, state.view, state.max_players);
+            }
+            // DedicatedServer.sendLowDiskSpaceWarning: the operators hear of it
+            // (no window drains the toasts here).
+            if horizon_client::chunk_io::take().low_disk_space
+                && let Some(host) = self.lan.as_ref()
+            {
+                host.hub.send_low_disk_space_warning();
             }
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);

@@ -139,9 +139,48 @@ mod vertex_tests {
         assert_eq!(hdr_tier("red_candle", 3), LOW);
         assert_eq!(hdr_tier("glow_lichen", 7), 0);
         assert_eq!(hdr_tier("stone", 0), 0);
+        assert_eq!(hdr_tier("ochre_froglight", 15), LOW);
+        assert_eq!(hdr_tier("respawn_anchor", 3), INCANDESCENT);
+        assert_eq!(hdr_tier("waxed_copper_bulb", 15), LOW);
+        assert_eq!(hdr_tier("sea_pickle", 15), 0);
         // Unlisted ones by their light level.
-        assert_eq!(hdr_tier("ochre_froglight", 15), INCANDESCENT);
+        assert_eq!(hdr_tier("vault", 12), INCANDESCENT);
         assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
+    }
+}
+
+#[cfg(test)]
+mod section_mesh_tests {
+    use super::*;
+
+    #[test]
+    fn compute_bounds_empty_solid_and_translucent() {
+        let mut mesh = SectionMesh::default();
+        assert_eq!(mesh.compute_bounds(), None);
+
+        let v1 = TerrainVertex::new([1.0, 2.0, 3.0], [0.0, 0.0], 0, 0, 0);
+        let v2 = TerrainVertex::new([4.0, 5.0, 6.0], [0.0, 0.0], 0, 0, 0);
+        mesh.solid.push(v1);
+        mesh.solid.push(v2);
+
+        let pad = glam::Vec3::splat(SectionMesh::BOUNDS_PAD);
+        assert_eq!(
+            mesh.compute_bounds(),
+            Some([
+                glam::Vec3::new(1.0, 2.0, 3.0) - pad,
+                glam::Vec3::new(4.0, 5.0, 6.0) + pad,
+            ])
+        );
+
+        let v3 = TerrainVertex::new([0.5, 7.0, 8.0], [0.0, 0.0], 0, 0, 0);
+        mesh.translucent.push(v3);
+        assert_eq!(
+            mesh.compute_bounds(),
+            Some([
+                glam::Vec3::new(0.5, 2.0, 3.0) - pad,
+                glam::Vec3::new(4.0, 7.0, 8.0) + pad,
+            ])
+        );
     }
 }
 pub struct SectionMesh {
@@ -158,6 +197,8 @@ pub struct SectionMesh {
     /// each frame by `block_entity_render` like vanilla's per-section
     /// `SectionCompiler.Results.blockEntities`.
     pub block_entities: Vec<([i32; 3], u32)>,
+    /// Axis-aligned bounding box [min, max] of actual terrain mesh vertices in section-local space [0, 16].
+    pub bounds: Option<[glam::Vec3; 2]>,
 }
 impl Default for SectionMesh {
     fn default() -> Self {
@@ -167,19 +208,66 @@ impl Default for SectionMesh {
             translucent: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
+            bounds: None,
         }
     }
 }
 impl SectionMesh {
+    /// Padding applied to mesh vertex bounds to prevent clipping at the frustum
+    /// boundary when shader packs with vertex displacement (e.g. waving foliage, water) are active.
+    pub const BOUNDS_PAD: f32 = 0.5;
+
+    /// Retain geometry capacity after an upload, but none of its old contents.
+    pub(crate) fn clear(&mut self) {
+        self.solid.clear();
+        self.translucent.clear();
+        self.block_entities.clear();
+        self.sides = Sides::default();
+        self.visibility = ALL_VISIBLE;
+        self.bounds = None;
+    }
+    pub(crate) fn capacity_bytes(&self) -> usize {
+        self.solid.capacity() * std::mem::size_of::<TerrainVertex>()
+            + self.translucent.capacity() * std::mem::size_of::<TerrainVertex>()
+            + self.block_entities.capacity() * std::mem::size_of::<([i32; 3], u32)>()
+    }
     /// Sorts the solid quads by the side they face, for the renderer to
     /// leave out those facing away from the eye (`sides`).
     pub fn sort_solid(&mut self) {
         self.sides = sides::sort(&mut self.solid);
+        self.bounds = self.compute_bounds();
+    }
+
+    /// Computes the tight axis-aligned bounding box [min, max] of actual terrain geometry vertices.
+    pub fn compute_bounds(&self) -> Option<[glam::Vec3; 2]> {
+        if self.solid.is_empty() && self.translucent.is_empty() {
+            return None;
+        }
+        let mut min = glam::Vec3::splat(f32::INFINITY);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        for v in &self.solid {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        for v in &self.translucent {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let pad = glam::Vec3::splat(Self::BOUNDS_PAD);
+        Some([min - pad, max + pad])
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
 /// VisGraph.resolve: flood fill non-opaque cells and connect the faces each region touches.
+#[cfg(test)]
 fn visibility(pad: &Padded, info: &[Info]) -> u64 {
+    visibility_reusing(pad, info, &mut Vec::new())
+}
+fn visibility_reusing(pad: &Padded, info: &[Info], stack: &mut Vec<usize>) -> u64 {
+    // The all-visible shortcut can leave a partially filled stack behind.
+    stack.clear();
     // Opaque cells are already visited: resolve each state's opacity once,
     // then reuse this map for the flood fill and the uniform-section shortcuts.
     let mut seen = [false; 4096];
@@ -201,7 +289,6 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
         return 0;
     }
     let mut result = 0u64;
-    let mut stack = Vec::new();
     for start in 0..4096usize {
         if seen[start] {
             continue;
@@ -631,21 +718,30 @@ fn pi(x: i32, y: i32, z: i32) -> usize {
     ((y + B) as usize * P + (z + B) as usize) * P + (x + B) as usize
 }
 /// Blocks and light of one section plus a `B`-block border.
+#[derive(Default)]
 struct Padded {
     blocks: Vec<u32>,
     light: Vec<u8>,
 }
 impl Padded {
+    #[cfg(test)]
     fn new(region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> Self {
-        let mut blocks = vec![0u32; P * P * P];
-        let mut light = vec![0u8; P * P * P];
+        let mut pad = Self::default();
+        pad.fill(region, sy, &mut Box::new([0; 4096]));
+        pad
+    }
+    fn fill(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32, own: &mut [u32; 4096]) {
+        self.blocks.resize(P * P * P, 0);
+        self.blocks.fill(0);
+        self.light.resize(P * P * P, 0);
+        let (blocks, light) = (&mut self.blocks, &mut self.light);
         let base_y = region[1][1].map_or(MIN_Y, Chunk::min_y) + sy * 16;
         // The section itself is unpacked in one pass; the border cells of the
         // neighbouring sections are read one by one.
-        let mut own = Box::new([0u32; 4096]);
+        own.fill(0);
         let center = region[1][1].map(|c| &c.sections[sy as usize]);
         if let Some(section) = center {
-            section.unpack(&mut own);
+            section.unpack(own);
         }
         for y in -B..16 + B {
             let wy = base_y + y;
@@ -677,9 +773,18 @@ impl Padded {
                 }
             }
         }
-        Self { blocks, light }
     }
 }
+/// Per-worker temporary arrays. They never hold resource-pack references or
+/// geometry still owned by the renderer, and total about 88 KiB per worker.
+#[derive(Default)]
+pub(crate) struct MeshScratch {
+    padded: Padded,
+    own: Option<Box<[u32; 4096]>>,
+    visibility: Vec<usize>,
+}
+#[cfg(test)]
+mod reuse_tests;
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
 /// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
@@ -702,14 +807,25 @@ pub fn hdr_tier(name: &str, level: u8) -> u8 {
     match name {
         _ if level == 0 => 0,
         "glowstone" | "jack_o_lantern" | "campfire" | "soul_campfire" | "soul_lantern"
-        | "soul_torch" | "soul_wall_torch" | "soul_fire" => BRIGHT,
+        | "soul_torch" | "soul_wall_torch" | "soul_fire" | "beacon" | "end_rod" | "furnace"
+        | "redstone_lamp" => BRIGHT,
         "torch" | "wall_torch" | "lantern" | "lava" | "crying_obsidian" | "fire"
         | "sea_lantern" => INCANDESCENT,
-        "redstone_torch" | "redstone_wall_torch" | "magma_block" => LOW,
+        // Glowing at every charge, not only the brighter ones.
+        "respawn_anchor" => INCANDESCENT,
+        "redstone_torch"
+        | "redstone_wall_torch"
+        | "magma_block"
+        | "ochre_froglight"
+        | "verdant_froglight"
+        | "pearlescent_froglight"
+        | "shroomlight" => LOW,
         // Its flame is a particle.
         _ if name.ends_with("candle") || name.ends_with("candle_cake") => LOW,
+        // One tier at every oxidation stage, waxed or not.
+        _ if name.ends_with("copper_bulb") => LOW,
         // A faint glow in the dark, as in SDR.
-        "glow_lichen" => 0,
+        "glow_lichen" | "sea_pickle" | "brown_mushroom" | "dragon_egg" | "end_portal_frame" => 0,
         _ if level >= 10 => INCANDESCENT,
         _ => LOW,
     }
@@ -849,14 +965,30 @@ pub struct Mesher<'a> {
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     pub fn mesh(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
-        let mut out = SectionMesh::default();
+        self.mesh_reusing(
+            region,
+            sy,
+            SectionMesh::default(),
+            &mut MeshScratch::default(),
+        )
+    }
+    pub(crate) fn mesh_reusing(
+        &mut self,
+        region: &[[Option<&Chunk>; 3]; 3],
+        sy: i32,
+        mut out: SectionMesh,
+        scratch: &mut MeshScratch,
+    ) -> SectionMesh {
+        out.clear();
         let center = region[1][1].expect("centre chunk");
         let section = &center.sections[sy as usize];
         if section.is_uniform(0) {
             return out;
         }
-        let pad = Padded::new(region, sy);
-        out.visibility = visibility(&pad, &self.tables.info);
+        let own = scratch.own.get_or_insert_with(|| Box::new([0; 4096]));
+        scratch.padded.fill(region, sy, own);
+        let pad = &scratch.padded;
+        out.visibility = visibility_reusing(pad, &self.tables.info, &mut scratch.visibility);
         let base_y = center.min_y() + sy * 16;
         let mut tints = Tints::new(
             region,
@@ -891,7 +1023,7 @@ impl Mesher<'_> {
                     if state.fluid.kind() != FluidKind::Empty {
                         let water = tints.get(Resolver::Water, x, y, z);
                         let nether = self.nether_shading;
-                        fluid::tesselate(self.tables, nether, &pad, water, &mut out, [x, y, z]);
+                        fluid::tesselate(self.tables, nether, pad, water, &mut out, [x, y, z]);
                     }
                     if !state.model {
                         continue;
@@ -941,7 +1073,7 @@ impl Mesher<'_> {
                                 continue;
                             }
                             self.face(
-                                &pad,
+                                pad,
                                 &mut tints,
                                 &mut out,
                                 [x, y, z],

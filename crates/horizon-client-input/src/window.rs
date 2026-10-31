@@ -673,6 +673,11 @@ mod tests {
             vsync_present_mode(&[PresentMode::Fifo], false),
             Some(PresentMode::Fifo)
         );
+        // Regression guard: GLES capabilities report [Fifo, Immediate] without Mailbox.
+        assert_eq!(
+            vsync_present_mode(&[PresentMode::Fifo, PresentMode::Immediate], false),
+            Some(PresentMode::Immediate)
+        );
     }
     #[test]
     fn vsync_on_waits_for_the_display_whatever_the_present_mode() {

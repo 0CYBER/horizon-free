@@ -58,6 +58,8 @@ pub enum Ticking {
     Bee { bee: u32, aggressive: bool },
     /// `GuardianAttackSoundInstance`.
     GuardianAttack { guardian: u32 },
+    /// `SnifferSoundInstance`.
+    Sniffer { sniffer: u32 },
     /// `ElytraOnPlayerSoundInstance`: ticks since it started.
     Elytra { time: i32 },
     /// `RidingEntitySoundInstance` for the player riding a happy ghast
@@ -86,6 +88,8 @@ pub struct MobSound {
     pub silent: bool,
     /// `Guardian.getAttackAnimationScale(0)`.
     pub attack_scale: f32,
+    /// `getTarget() == null && Sniffer.canPlayDiggingSound()`.
+    pub sniffer_digging: bool,
 }
 /// What a `RidingEntitySoundInstance` reads about the mob the player rides.
 #[derive(Clone, Copy, Debug)]
@@ -451,6 +455,25 @@ impl SoundInstance {
         };
         s
     }
+    /// `new SnifferSoundInstance(sniffer)`: the digging sound, which sits at
+    /// the origin (`AbstractSoundInstance` leaves x, y, z at 0) until its
+    /// first tick moves it to the sniffer.
+    pub fn sniffer(sniffer: u32, random: LegacyRandom) -> Self {
+        let mut s = Self::new(
+            "minecraft:entity.sniffer.digging",
+            NEUTRAL,
+            1.0,
+            1.0,
+            random,
+            false,
+            0,
+            Attenuation::Linear,
+            [0.0; 3],
+            false,
+        );
+        s.ticking = Ticking::Sniffer { sniffer };
+        s
+    }
     /// `new ElytraOnPlayerSoundInstance(player)`: looping at volume 0.1 until
     /// its first tick.
     pub fn elytra(position: [f64; 3], random: LegacyRandom) -> Self {
@@ -603,6 +626,27 @@ impl SoundInstance {
                 } else {
                     1.0
                 };
+            }
+            Ticking::Sniffer { sniffer } => {
+                // canPlaySound (`!isSilent`), then `tick`: follow the sniffer
+                // while it is alive, has no target and still digs or searches.
+                let id = *sniffer;
+                let Some(sniffer) = ctx
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.silent && m.sniffer_digging)
+                else {
+                    self.stop();
+                    return;
+                };
+                let [x, y, z] = sniffer.position;
+                self.position = [
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(z as f32),
+                ];
+                self.volume = 1.0;
+                self.pitch = 1.0;
             }
             Ticking::GuardianAttack { guardian } => {
                 let id = *guardian;
@@ -1445,6 +1489,39 @@ mod tests {
         assert!(!s.stopped);
         // Off the ghast, it stops.
         ctx.ridden = None;
+        s.tick(&ctx);
+        assert!(s.stopped);
+    }
+
+    #[test]
+    fn sniffer_digging_sound_follows_the_sniffer_and_stops() {
+        let sniffer = MobSound {
+            id: 3,
+            position: [10.0, 64.0, -5.0],
+            speed: 0.0,
+            baby: false,
+            angry: false,
+            silent: false,
+            attack_scale: 0.0,
+            sniffer_digging: true,
+        };
+        let mut s = SoundInstance::sniffer(3, SoundEngine::unseeded());
+        assert_eq!(s.position, [0.0; 3]);
+        assert!(!s.looping);
+        let mut ctx = TickContext {
+            mobs: vec![sniffer],
+            ..TickContext::default()
+        };
+        s.tick(&ctx);
+        assert_eq!(s.position, [10.0, 64.0, -5.0]);
+        assert!(!s.stopped);
+        // A target, a state other than digging or searching: stop.
+        ctx.mobs[0].sniffer_digging = false;
+        s.tick(&ctx);
+        assert!(s.stopped);
+        // Removed (missing): stop.
+        let mut s = SoundInstance::sniffer(3, SoundEngine::unseeded());
+        ctx.mobs.clear();
         s.tick(&ctx);
         assert!(s.stopped);
     }
