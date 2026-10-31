@@ -139,8 +139,12 @@ mod vertex_tests {
         assert_eq!(hdr_tier("red_candle", 3), LOW);
         assert_eq!(hdr_tier("glow_lichen", 7), 0);
         assert_eq!(hdr_tier("stone", 0), 0);
+        assert_eq!(hdr_tier("ochre_froglight", 15), LOW);
+        assert_eq!(hdr_tier("respawn_anchor", 3), INCANDESCENT);
+        assert_eq!(hdr_tier("waxed_copper_bulb", 15), LOW);
+        assert_eq!(hdr_tier("sea_pickle", 15), 0);
         // Unlisted ones by their light level.
-        assert_eq!(hdr_tier("ochre_froglight", 15), INCANDESCENT);
+        assert_eq!(hdr_tier("vault", 12), INCANDESCENT);
         assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
     }
 }
@@ -702,14 +706,25 @@ pub fn hdr_tier(name: &str, level: u8) -> u8 {
     match name {
         _ if level == 0 => 0,
         "glowstone" | "jack_o_lantern" | "campfire" | "soul_campfire" | "soul_lantern"
-        | "soul_torch" | "soul_wall_torch" | "soul_fire" => BRIGHT,
+        | "soul_torch" | "soul_wall_torch" | "soul_fire" | "beacon" | "end_rod" | "furnace"
+        | "redstone_lamp" => BRIGHT,
         "torch" | "wall_torch" | "lantern" | "lava" | "crying_obsidian" | "fire"
         | "sea_lantern" => INCANDESCENT,
-        "redstone_torch" | "redstone_wall_torch" | "magma_block" => LOW,
+        // Glowing at every charge, not only the brighter ones.
+        "respawn_anchor" => INCANDESCENT,
+        "redstone_torch"
+        | "redstone_wall_torch"
+        | "magma_block"
+        | "ochre_froglight"
+        | "verdant_froglight"
+        | "pearlescent_froglight"
+        | "shroomlight" => LOW,
         // Its flame is a particle.
         _ if name.ends_with("candle") || name.ends_with("candle_cake") => LOW,
+        // One tier at every oxidation stage, waxed or not.
+        _ if name.ends_with("copper_bulb") => LOW,
         // A faint glow in the dark, as in SDR.
-        "glow_lichen" => 0,
+        "glow_lichen" | "sea_pickle" | "brown_mushroom" | "dragon_egg" | "end_portal_frame" => 0,
         _ if level >= 10 => INCANDESCENT,
         _ => LOW,
     }
