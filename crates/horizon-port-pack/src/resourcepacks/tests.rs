@@ -5,7 +5,11 @@ struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
         static N: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
+        // The temp dir with its links resolved: `directory` refuses a link
+        // anywhere in a destination's ancestry, and macOS's is under /var, a
+        // link to /private/var.
+        let temp = std::env::temp_dir().canonicalize().unwrap();
+        let path = temp.join(format!(
             "horizon-resourcepacks-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
