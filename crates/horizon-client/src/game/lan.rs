@@ -1513,6 +1513,8 @@ impl Game<'_> {
         if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == uuid && g.placed) {
             playerdata::store(g, &mut self.level, vehicle);
             self.save_guest_records(host, g);
+        } else if let Some(saved) = host.owner.as_ref().and_then(|o| o.saved.as_ref()) {
+            self.level.position = saved.position;
         }
     }
 
