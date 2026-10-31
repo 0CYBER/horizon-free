@@ -934,6 +934,14 @@ impl Game<'_> {
         Ok(())
     }
 
+    /// Whether the open dialog has a text input.
+    pub(super) fn dialog_has_text_field(&self) -> bool {
+        self.dialogs
+            .open
+            .as_ref()
+            .is_some_and(|open| open.fields.iter().any(Option::is_some))
+    }
+
     /// `type TEXT` with a dialog open: into the focused text input, or the
     /// first one.
     pub(super) fn dialog_type(&mut self, text: &str) -> bool {

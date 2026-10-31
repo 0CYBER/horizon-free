@@ -112,7 +112,48 @@ impl Game<'_> {
         ui.languages = lang::available(&[&root]);
         self.refresh_pack_lists();
     }
+    /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
+    /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s
+    /// watcher).
+    fn watch_pack_folder(&mut self) {
+        if !self.ui.options.resource_packs_open() {
+            self.pack_folder = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .pack_folder
+            .as_ref()
+            .is_some_and(|(at, _)| now.duration_since(*at).as_secs_f32() < 1.0)
+        {
+            return;
+        }
+        let signature: Vec<(String, u64, Option<std::time::SystemTime>)> =
+            std::fs::read_dir(super::packs::packs_dir())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| {
+                    let meta = e.metadata().ok();
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        meta.as_ref().map_or(0, |m| m.len()),
+                        meta.and_then(|m| m.modified().ok()),
+                    )
+                })
+                .collect();
+        let changed = self
+            .pack_folder
+            .as_ref()
+            .is_some_and(|(_, seen)| *seen != signature);
+        self.pack_folder = Some((now, signature));
+        if changed {
+            let infos = super::packs::pack_infos(&self.vanilla_root());
+            self.ui.options.update_pack_infos(infos);
+        }
+    }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
+        self.watch_pack_folder();
         let mut ui = std::mem::take(&mut self.ui.options);
         ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
         self.ui.options = ui;
@@ -327,6 +368,7 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
             r.fullbright = s.extras.fullbright;
+            r.improved_transparency = s.improved_transparency;
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);

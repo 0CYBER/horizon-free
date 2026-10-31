@@ -14,6 +14,7 @@ pub(super) mod pregen;
 mod profiles;
 mod raid;
 mod terrain_cmds;
+mod test_locate;
 mod test_runs;
 mod text_commands;
 mod world_cmds;
@@ -2800,6 +2801,12 @@ impl Game<'_> {
                 &[name(i)],
             )));
         }
+        self.set_difficulty_forced(i);
+        self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
+        Ok(0)
+    }
+    /// `MinecraftServer.setDifficulty(difficulty, true)`.
+    pub(super) fn set_difficulty_forced(&mut self, i: u8) {
         self.ui.difficulty = i;
         // The level data holds the world's difficulty: it survives the
         // reopen, so it follows the command.
@@ -2818,8 +2825,6 @@ impl Game<'_> {
                     locked: self.level.difficulty_locked,
                 }));
         }
-        self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
-        Ok(0)
     }
     fn cmd_spawnpoint(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {
