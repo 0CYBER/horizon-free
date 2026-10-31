@@ -14,6 +14,7 @@ use super::{
     Dim, Game,
     structure_blocks::template_size,
     test_entities::{aabb_of, inflate},
+    test_environments::Activation,
     test_instances::TestDef,
 };
 use horizon_client::{
@@ -479,6 +480,8 @@ pub(super) struct GameTests {
     /// `FailedTestTracker.LAST_FAILED_TESTS`.
     pub(super) failed: Vec<String>,
     outbox: Vec<Out>,
+    /// `GameTestRunner.currentEnvironment`.
+    environment: Option<Activation>,
 }
 
 impl GameTests {
@@ -497,7 +500,10 @@ impl Game<'_> {
             self.game_tests.halting = true;
         } else {
             self.game_tests.ticker.clear();
-            self.game_tests.runner = None;
+            if self.game_tests.runner.take().is_some() {
+                // GameTestRunner.stop: endCurrentEnvironment.
+                self.end_test_environment();
+            }
         }
     }
 
@@ -550,7 +556,7 @@ impl Game<'_> {
             return;
         };
         if index >= runner.batches.len() {
-            // endCurrentEnvironment, runScheduledRerunTests.
+            self.end_test_environment();
             self.run_scheduled_reruns();
             return;
         }
@@ -599,8 +605,15 @@ impl Game<'_> {
             "Running test environment '{environment}' batch {batch_number} ({} tests)...",
             spawned.len()
         );
-        // TestEnvironmentDefinition.activate: the environments' definitions
-        // are not read, so none changes the level.
+        // endCurrentEnvironment, then TestEnvironmentDefinition.activate.
+        self.end_test_environment();
+        match self.test_environment(&environment) {
+            Some(definition) => {
+                let activation = self.activate_test_environment(definition);
+                self.game_tests.environment = Some(activation);
+            }
+            None => log::error!("Missing test environment {environment}"),
+        }
         self.game_tests.outbox.push(Out::Console {
             text: Text::translate(
                 "commands.test.batch.starting",
@@ -613,6 +626,13 @@ impl Game<'_> {
             runner.last_batch = spawned.iter().map(|i| i.pos).collect();
         }
         self.game_tests.ticker.extend(spawned);
+    }
+
+    /// `GameTestRunner.endCurrentEnvironment`.
+    fn end_test_environment(&mut self) {
+        if let Some(activation) = self.game_tests.environment.take() {
+            self.tear_down_test_environment(activation);
+        }
     }
 
     /// `GameTestRunner.runScheduledRerunTests`: the reruns are batched
