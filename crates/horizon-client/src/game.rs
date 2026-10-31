@@ -1724,6 +1724,12 @@ struct Game<'a> {
     pending_entry: Option<PendingWorldEntry>,
     world_loader: Option<world_loading::WorldLoader>,
     pending_pack_reload: bool,
+    /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
+    /// (`watch_pack_folder`).
+    pack_folder: Option<(
+        std::time::Instant,
+        Vec<(String, u64, Option<std::time::SystemTime>)>,
+    )>,
     /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
     /// its progress until `drive_pack_reload` applies it.
     pack_reload: Option<packs::PackReload>,
@@ -15356,6 +15362,7 @@ impl<'a> Game<'a> {
             pending_entry: None,
             world_loader: None,
             pending_pack_reload: false,
+            pack_folder: None,
             pack_reload: None,
             server_packs: Default::default(),
             link_prompt: None,
