@@ -3,6 +3,7 @@
 //! lay out rows and handle input; a menu theme replaces this module.
 use crate::{
     hud::{HudAtlas, HudBatch},
+    lang,
     text::Text,
     ui,
 };
@@ -156,10 +157,11 @@ impl Style {
         cost: Cost,
         text: &str,
     ) {
-        let tag = Text::literal(cost.label());
+        let tag = Text::literal(lang::get(cost.label()));
         batch.text_styled(atlas, &tag, x, y, self.cost_colors[cost as usize], true);
         let indent = atlas.font.width_text(&tag) + 4.0;
-        let lines = wrap(atlas, text, self.text_width(batch.width), indent);
+        let text = lang::get(text);
+        let lines = wrap(atlas, &text, self.text_width(batch.width), indent);
         for (i, line) in lines.iter().take(2).enumerate() {
             let lx = if i == 0 { x + indent } else { x };
             batch.text_styled(

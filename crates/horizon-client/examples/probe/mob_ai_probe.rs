@@ -599,6 +599,8 @@ fn print_heart(
 fn player_damage(e: &MobEvent) -> f32 {
     match e {
         MobEvent::AttackPlayer(amount, _)
+        | MobEvent::CubeHurtPlayer { amount, .. }
+        | MobEvent::StingPlayer { amount, .. }
         | MobEvent::AttackPlayerWithEffect { amount, .. }
         | MobEvent::DamagePlayer { amount, .. } => *amount,
         MobEvent::SonicBoom {
@@ -616,6 +618,8 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
     };
     match e {
         MobEvent::AttackPlayer(amount, _)
+        | MobEvent::CubeHurtPlayer { amount, .. }
+        | MobEvent::StingPlayer { amount, .. }
         | MobEvent::AttackPlayerWithEffect { amount, .. }
         | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
         MobEvent::SonicBoom {
@@ -1027,6 +1031,10 @@ pub fn main() -> horizon_client::Result<()> {
                     "inlove" => m.extra.in_love = 600,
                     "nectar" => horizon_client::mobs::bee::set_has_nectar(&mut m, true),
                     "tame" => m.extra.tame = true,
+                    "owned" => {
+                        horizon_client::mobs::tame::set_tame(&mut m, true);
+                        m.extra.owner = Some(PLAYER_UUID);
+                    }
                     x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
                     x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
                     x if x.starts_with("hand=") => {

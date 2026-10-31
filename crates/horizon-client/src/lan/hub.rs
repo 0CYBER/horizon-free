@@ -96,6 +96,8 @@ pub struct HostState {
     pub living_flags: i8,
     /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID`.
     pub stuck: (i32, i32),
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the parrots' variants.
+    pub shoulders: [Option<i32>; 2],
     /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
     pub bed: Option<[i32; 3]>,
     pub body: BodyFlags,
@@ -284,6 +286,21 @@ fn stuck_meta(state: &mut EntityState, (arrows, stingers): (i32, i32)) {
             state.meta.push((index, serializer::INT, Value::Int(count)));
         }
         state.defaults.push((index, serializer::INT, Value::Int(0)));
+    }
+}
+
+/// `Player.DATA_SHOULDER_PARROT_LEFT` (19) and `_RIGHT` (20), an
+/// `OptionalInt`: 0 for none, else the parrot variant's id plus one.
+fn shoulder_meta(state: &mut EntityState, shoulders: [Option<i32>; 2]) {
+    for (index, variant) in [(19, shoulders[0]), (20, shoulders[1])] {
+        if let Some(v) = variant {
+            state
+                .meta
+                .push((index, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(v + 1)));
+        }
+        state
+            .defaults
+            .push((index, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(0)));
     }
 }
 
@@ -806,7 +823,8 @@ impl Hub {
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
         self.send_initial_recipe_book(i);
-        // The others hear of the newcomer before it joins the list.
+        // PlayerList.placeNewPlayer broadcasts the join line before
+        // players.add: the others read it, the newcomer doesn't.
         self.broadcast_except(
             conn,
             &C::SystemChat(play::SystemChat {
@@ -874,7 +892,7 @@ impl Hub {
     fn send_effect(&mut self, i: usize, e: &EffectInstance, blend: bool) -> Option<SentEffect> {
         let effect = self
             .sync
-            .id("minecraft:mob_effect", &format!("minecraft:{}", e.id))?;
+            .id("minecraft:mob_effect", crate::brewing::namespaced(e.id))?;
         let flags = PlayerEffects::flags(e);
         let g = &self.guests[i];
         g.send(&C::UpdateMobEffect(play::UpdateMobEffect {
@@ -958,7 +976,7 @@ impl Hub {
         for id in removed {
             let Some(effect) = self
                 .sync
-                .id("minecraft:mob_effect", &format!("minecraft:{id}"))
+                .id("minecraft:mob_effect", crate::brewing::namespaced(id))
             else {
                 continue;
             };
@@ -1972,6 +1990,7 @@ impl Hub {
             );
             state.spectator = h.game_mode == 3;
             stuck_meta(&mut state, h.stuck);
+            shoulder_meta(&mut state, h.shoulders);
             all.push(state);
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -2013,6 +2032,7 @@ impl Hub {
                 state.spectator = g.spectator();
                 state.watching = g.watching;
                 stuck_meta(&mut state, g.stuck);
+                shoulder_meta(&mut state, g.shoulders);
                 state
             })
             .collect();
@@ -2361,6 +2381,8 @@ impl Hub {
         let g = &mut self.guests[i];
         g.first_good = g.position;
         g.known_moves = g.received_moves;
+        // ServerPlayer.tick: tickClientLoadTimeout.
+        g.load_timeout = g.load_timeout.saturating_sub(1);
         let mut budget = PACKETS_PER_TICK;
         while budget > 0 {
             let Some((packet, bytes)) = self.guests[i].inbox.pop_front() else {
@@ -2382,18 +2404,31 @@ impl Hub {
                 | S::ClientInformation(_)
                 | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
-                | S::KeepAlive(_) => false,
+                | S::KeepAlive(_)
+                | S::Pong(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
                 S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
-                S::PlayerInput(_) => self.guests[i].loaded,
+                S::PlayerInput(_) => self.guests[i].client_loaded(),
                 _ => true,
             };
             if acted {
                 self.guests[i].last_action_tick = self.ticks;
             }
             match packet {
+                // hasClientLoaded: these handlers ignore the player's actions until
+                // the client says the level around it is loaded (or 60 ticks pass),
+                // and while it is dead.
+                S::PlayerAction(_)
+                | S::UseItemOn(_)
+                | S::UseItem(_)
+                | S::Attack(_)
+                | S::Interact(_)
+                | S::SpectatorAction(_)
+                | S::PlayerCommand(_)
+                    if !self.guests[i].client_loaded() => {}
                 // handleAcceptTeleportPacket.
                 S::AcceptTeleportation(p) => {
+                    let recording = self.recording();
                     let g = &mut self.guests[i];
                     if let Some((id, at)) = g.awaiting_teleport
                         && id == p.id
@@ -2409,6 +2444,10 @@ impl Hub {
                         }
                         g.position = at;
                         g.awaiting_teleport = None;
+                        // The prediction's replay starts again where the client now is.
+                        if recording {
+                            g.anticheat.record.get_or_insert_default().teleported(at);
+                        }
                         let rot = (p.yaw, p.pitch);
                         self.position_change(i, [p.x, p.y, p.z], rot, 0, ctx, events);
                     }
@@ -2431,7 +2470,12 @@ impl Hub {
                 S::MovePlayerStatus(p) => {
                     self.move_player(i, None, None, p.flags, ctx, events);
                 }
-                S::PlayerLoaded(_) => self.guests[i].loaded = true,
+                // handleAcceptPlayerLoad: markClientLoaded.
+                S::PlayerLoaded(_) => {
+                    let g = &mut self.guests[i];
+                    g.loaded = true;
+                    g.load_timeout = 0;
+                }
                 // PlayerChunkSender.onChunkBatchReceivedByClient.
                 S::ChunkBatchReceived(p) => {
                     let g = &mut self.guests[i];
@@ -2446,6 +2490,7 @@ impl Hub {
                     }
                     g.max_unacknowledged = 10;
                 }
+                S::Pong(p) => self.anticheat_pong(i, p.id),
                 S::ClientTickEnd(_) => {
                     // handleClientTickEnd: no move this tick, no known movement.
                     let g = &mut self.guests[i];
@@ -2487,8 +2532,11 @@ impl Hub {
                     }
                 }
                 S::PlayerInput(p) => {
-                    self.guests[i].input = p.flags;
-                    self.guests[i].sneaking = p.flags & 32 != 0;
+                    let g = &mut self.guests[i];
+                    g.input = p.flags;
+                    if g.client_loaded() {
+                        g.sneaking = p.flags & 32 != 0;
+                    }
                     // handlePlayerInput only records keys and updates crouching.
                     // Sprinting persists after the sprint key is released (or
                     // starts with a double tap); PlayerCommand changes it.
@@ -2534,6 +2582,19 @@ impl Hub {
                         break;
                     }
                 }
+                // ContainerInput's codec (ByIdMap, OutOfBoundsStrategy.ZERO) reads an
+                // unknown click type as PICKUP.
+                S::ContainerClick(mut p) => {
+                    if !(0..=6).contains(&p.input) {
+                        p.input = 0;
+                    }
+                    events.push(HostEvent::Packet(conn, Box::new(S::ContainerClick(p))));
+                }
+                // ServerboundSelectBundleItemPacket's constructor: no index below -1.
+                S::SelectBundleItem(p) if p.index < -1 => {
+                    let reason = format!("Invalid selectedItemIndex: {}", p.index);
+                    self.kick(conn, literal(&reason));
+                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
@@ -2559,6 +2620,9 @@ impl Hub {
             self.kick(conn, invalid_movement());
             return;
         }
+        if self.anticheat.is_some() {
+            self.anticheat_moved(i, pos, rot, flags);
+        }
         let g = &mut self.guests[i];
         if pos.is_some() {
             if g.position_this_tick {
@@ -2567,7 +2631,8 @@ impl Hub {
             }
             g.position_this_tick = true;
         }
-        if g.landing || !g.loaded && g.ticks == 0 && pos.is_none() {
+        // handleMovePlayer: nothing moves before the client has loaded.
+        if g.landing || !g.client_loaded() {
             return;
         }
         // updateAwaitingTeleport: moves wait for the client to accept the
@@ -2712,7 +2777,10 @@ impl Hub {
     }
 
     /// `ServerGamePacketListenerImpl.noBlocksAround`: every block of the
-    /// player's box grown by 0.0625 and stretched 0.55 down is air.
+    /// player's box grown by 0.0625 and stretched 0.55 down is air. Vanilla
+    /// loads a chunk it reads; a chunk not loaded here yet (a player's first
+    /// move after joining, before the spawn chunks are generated) is not
+    /// known to be air, so it never makes the player float.
     fn no_blocks_around(&self, i: usize, at: [f64; 3], world: &World) -> bool {
         let g = &self.guests[i];
         let d = g.dimensions();
@@ -2725,8 +2793,10 @@ impl Hub {
         ];
         let cell = |v: f64| v.floor() as i32;
         (cell(lo[0])..=cell(hi[0])).all(|x| {
-            (cell(lo[1])..=cell(hi[1]))
-                .all(|y| (cell(lo[2])..=cell(hi[2])).all(|z| world.is_air(world.block(x, y, z))))
+            (cell(lo[2])..=cell(hi[2])).all(|z| {
+                world.loaded(x, z)
+                    && (cell(lo[1])..=cell(hi[1])).all(|y| world.is_air(world.block(x, y, z)))
+            })
         })
     }
 
@@ -2784,7 +2854,17 @@ impl Hub {
             to[1] - g.position[1],
             to[2] - g.position[2],
         );
-        let done = scene.resolve(old, movement, 0.6, g.on_ground).ok();
+        let done = scene
+            .resolve_with_context(
+                old,
+                movement,
+                0.6,
+                g.on_ground,
+                // The mover's own sneaking, as CollisionContext.of(player):
+                // a sneaking player descends through scaffolding.
+                CollisionContext::position(g.position[1]).with_descending(g.sneaking),
+            )
+            .ok();
         let fail = !g.creative()
             && done.is_some_and(|done| {
                 let (dx, dz) = (movement.x - done.x, movement.z - done.z);
@@ -2802,7 +2882,7 @@ impl Hub {
         let Ok(old_shape) = VoxelShape::from_box(old.deflate(shrink)) else {
             return (fail, false, stands);
         };
-        let context = CollisionContext::position(g.position[1]);
+        let context = CollisionContext::position(g.position[1]).with_descending(g.sneaking);
         let Ok(scan) =
             BlockCollisionScan::new(&mut scene, context, new.deflate(shrink), false, 1 << 20)
         else {

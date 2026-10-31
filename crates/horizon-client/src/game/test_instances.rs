@@ -6,6 +6,7 @@ use super::{
     game_tests::Info,
     lan::LanHost,
     structure_blocks::{create_seed, template_size},
+    test_entities::{aabb_of, inflate},
 };
 use horizon_client::{
     block_entity_render::vertex_light,
@@ -17,7 +18,7 @@ use horizon_client::{
     test_instance_block::{Data, Status, TestInstanceBlock},
     text::{self, Text},
 };
-use horizon_core::position::BlockPos;
+use horizon_core::{position::BlockPos, ticks::TickArea};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::{
     level::{TemplateSettings, flags},
@@ -25,6 +26,9 @@ use horizon_world::{
 };
 
 type Pos = (i32, i32, i32);
+
+/// `GameTestBlockHighlightRenderer.highlightPos`'s colour, 1610678016: ARGB 0x6000FF00.
+const HIGHLIGHT_FILL: u32 = 0x6000_FF00;
 
 /// `ServerboundTestInstanceBlockActionPacket.Action`.
 const INIT: i32 = 0;
@@ -213,6 +217,16 @@ impl Game<'_> {
         self.test_holder(pos).map_or(0, |t| t.padding)
     }
 
+    /// `ClientPacketListener.handleGameTestHighlightPos`:
+    /// `GameTestBlockHighlightRenderer.highlightPos` shows the block for ten
+    /// seconds with its position relative to the test.
+    pub(super) fn highlight_test_pos(&mut self, absolute: [i32; 3], relative: [i32; 3]) {
+        let text = format!("{}, {}, {}", relative[0], relative[1], relative[2]);
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(10_000);
+        self.test_highlights
+            .insert((absolute[0], absolute[1], absolute[2]), (text, until));
+    }
+
     /// `TestInstanceRenderer.submit`'s error markers, for any player within
     /// the beacon's view distance of the block: each marked block in a
     /// translucent red box (`out`, blending) and its text as a billboard over
@@ -224,7 +238,15 @@ impl Game<'_> {
         see_through: &mut Vec<Vertex>,
     ) {
         use horizon_client::gizmos as g;
-        let mut markers = Vec::new();
+        // `GameTestBlockHighlightRenderer.emitGizmos`: expired highlights go,
+        // the rest are a green box with the relative position over it.
+        let now = std::time::Instant::now();
+        self.test_highlights.retain(|_, (_, until)| now <= *until);
+        let mut markers: Vec<(_, _, u32)> = self
+            .test_highlights
+            .iter()
+            .map(|(&pos, (text, _))| ([pos.0, pos.1, pos.2], text.clone(), HIGHLIGHT_FILL))
+            .collect();
         for (pos, entity) in &self.world.block_entities {
             let BlockEntity::TestInstanceBlock(b) = entity else {
                 continue;
@@ -236,22 +258,26 @@ impl Game<'_> {
                 continue;
             }
             for marker in &b.error_markers {
-                markers.push((marker.pos, name_text(&marker.text).plain()));
+                markers.push((
+                    marker.pos,
+                    name_text(&marker.text).plain(),
+                    g::ERROR_MARKER_FILL,
+                ));
             }
         }
         if markers.is_empty() {
             return;
         }
-        // A plain colour: the atlas's white pixel at the fill's colour.
-        let mut fill = HudBatch::new([1, 1]);
-        fill.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, g::ERROR_MARKER_FILL);
-        let Some(v) = fill.vertices.first().copied() else {
-            return;
-        };
         let light = vertex_light(0xFF);
         self.mark_translucent_entity(out.len(), "minecraft:test_instance_block");
         let mut patches = Vec::new();
-        for (pos, text) in markers {
+        for (pos, text, color) in markers {
+            // A plain colour: the atlas's white pixel at the fill's colour.
+            let mut fill = HudBatch::new([1, 1]);
+            fill.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, color);
+            let Some(v) = fill.vertices.first().copied() else {
+                continue;
+            };
             let (min, max, text_at) = g::error_marker_shape(pos);
             for quad in g::cuboid_fill_quads(min, max) {
                 for corner in quad {
@@ -482,13 +508,17 @@ impl Game<'_> {
             return false;
         };
         let origin = [pos.0, pos.1, pos.2];
-        // `StructureUtils.clearSpaceForStructure(getTestBoundingBox())`.
+        // `forceLoadChunks`, then `StructureUtils.clearSpaceForStructure(
+        // getTestBoundingBox())`.
         if let Some(inner) = self.test_structure_box(pos) {
+            self.force_load_test_chunks(&inner);
             let area = BoundingBox::new(
                 inner.min.map(|v| v - padding),
                 inner.max.map(|v| v + padding),
             );
             self.clear_test_space(&area);
+            // removeEntities: `getTestBounds()`, the structure's box inflated.
+            self.discard_entities_in(inflate(aabb_of(&inner), f64::from(padding)));
         }
         let corner = block.start_corner(origin, padding, rotation);
         let settings = TemplateSettings {
@@ -526,6 +556,24 @@ impl Game<'_> {
                 }
             }
         }
+        // `getBlockTicks().clearArea`, `clearBlockEvents`.
+        self.clear_test_ticks(area);
+        // The entities but the players.
+        self.discard_entities_in(aabb_of(area));
+    }
+
+    /// `getBlockTicks().clearArea(bounds)` and `clearBlockEvents(bounds)`.
+    pub(super) fn clear_test_ticks(&mut self, bounds: &BoundingBox) {
+        let area = TickArea::new(
+            BlockPos::new(bounds.min[0], bounds.min[1], bounds.min[2]),
+            BlockPos::new(bounds.max[0], bounds.max[1], bounds.max[2]),
+        );
+        self.block_ticks.blocks.clear_area(area);
+        self.block_ticks.block_events.retain(|e| {
+            !(bounds.min[0]..=bounds.max[0]).contains(&e.pos.x)
+                || !(bounds.min[1]..=bounds.max[1]).contains(&e.pos.y)
+                || !(bounds.min[2]..=bounds.max[2]).contains(&e.pos.z)
+        });
     }
 
     /// `saveTest`: the test's structure id, saved from the world.

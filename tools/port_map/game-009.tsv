@@ -90,7 +90,7 @@ OpenDoorGoal.canContinueToUse	port	crates/horizon-client/src/mobs/doors.rs::Raid
 PanicGoal.findRandomPosition	inline	crates/horizon-client/src/mobs/goals.rs::Panic::can_use	default_random_pos(5, 4)
 PanicGoal.lookForWater	inline	crates/horizon-client/src/mobs/goals.rs::Panic::can_use	burning (or turtle) mob not inside a solid cell looks for water by Manhattan distance
 PathfindToRaidGoal.canContinueToUse	port	crates/horizon-client/src/mobs/raider.rs::PathfindToRaid::can_continue	
-RandomStandGoal.playStandSound	port	crates/horizon-client/src/mobs/equine.rs::RandomStand::start	gap: player: plays the angry neigh and only for horses; vanilla plays the ambient sound (baby variants too), so skeleton and zombie horses rear silently, and donkeys and mules never get the goal (can_rear) although only llamas are barred from rearing
+RandomStandGoal.playStandSound	port	crates/horizon-client/src/mobs/equine.rs::RandomStand::start	ambient sound, baby variants too, donkeys and mules have the goal; tick for tick with vanilla in mob_ai *_herd_rears
 RangedCrossbowAttackGoal.canContinueToUse	port	crates/horizon-client/src/mobs/illager.rs::CrossbowAttack::can_continue	gap: minor: holding test looks at the main hand only
 RangedCrossbowAttackGoal.isValidTarget	inline	crates/horizon-client/src/mobs/illager.rs::CrossbowAttack::can_use	alive target; also rejects creative players
 RemoveBlockGoal.getPosWithBlock	inline	crates/horizon-client/src/mobs/undead.rs::AttackTurtleEgg::tick	own cell, below, west, east, north, south, two below

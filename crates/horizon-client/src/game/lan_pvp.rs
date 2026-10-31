@@ -296,8 +296,24 @@ impl Game<'_> {
         }
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
+        // CombatTracker: the attacking player is the death message's killer.
+        // Without it the message is built with one argument and a template
+        // that names a killer ("%1$s was slain by %2$s") shows as written.
+        let attacker_note = match s.attacker {
+            Some(conn) => host
+                .hub
+                .guest(conn)
+                .map(|a| (a.entity_id, self.player_text(&a.name, a.uuid))),
+            None => Some((
+                host.host_entity,
+                self.player_text(&host.host_name, host.host_uuid),
+            )),
+        };
         let land = |g: &mut Self| {
             g.combat.player_attacker = Some((s.from, s.disable_blocking));
+            if let Some((id, name)) = attacker_note.clone() {
+                g.note_named_attacker("minecraft:player_attack", id as u32, name);
+            }
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
             g.combat.player_attacker = None;
             let (strength, xd, zd) = s.knockback;

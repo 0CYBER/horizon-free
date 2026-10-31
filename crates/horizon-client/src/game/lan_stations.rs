@@ -141,6 +141,13 @@ impl Game<'_> {
         true
     }
 
+    /// How many slots of its own the guest's open station menu has before the
+    /// player's inventory (`slot_count - 36`), if one is open.
+    pub(super) fn lan_station_own_slots(host: &LanHost, conn: u32) -> Option<usize> {
+        let gs = host.play.get(&conn)?.station.as_ref()?;
+        Some(gs.menu.slot_count() - 36)
+    }
+
     /// `LecternBlock.openScreen` for a guest: `minecraft:lectern` over the
     /// block entity, with its book and page.
     pub(super) fn lan_open_lectern(&mut self, host: &mut LanHost, conn: u32, key: (i32, i32, i32)) {
@@ -557,13 +564,30 @@ impl Game<'_> {
             }
         }
         let data = self.beacon_data(host, pos);
-        let mut updated = false;
+        let mut updated = None;
         self.lan_station_op(host, conn, None, |menu, env| {
             menu.data.copy_from_slice(&data);
             let power = |k: usize| powers[k].as_ref().map(|(id, n)| (*id, n.as_str()));
-            updated = menu.beacon_update(env, power(0), power(1));
+            updated = Some(menu.beacon_update(env, power(0), power(1)));
         });
-        if !updated {
+        // handleSetBeaconPacket: effects the beacon can't give, or no payment, disconnect.
+        if updated == Some(false) {
+            let name = host
+                .hub
+                .guests
+                .iter()
+                .find(|g| g.conn == conn)
+                .map(|g| g.name.clone());
+            eprintln!(
+                "Player {} tried to set invalid beacon effects",
+                name.unwrap_or_default()
+            );
+            host.hub.kick(
+                conn,
+                horizon_protocol::text::translatable("multiplayer.disconnect.generic", &[]),
+            );
+        }
+        if updated != Some(true) {
             return;
         }
         let [primary, secondary] = powers.map(|p| p.map(|(_, n)| n));

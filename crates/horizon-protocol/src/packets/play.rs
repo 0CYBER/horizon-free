@@ -1937,6 +1937,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
+    GameTestHighlightPos(GameTestHighlightPos) = GAME_TEST_HIGHLIGHT_POS,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     DamageEvent(DamageEvent) = DAMAGE_EVENT,
@@ -2326,6 +2327,11 @@ packet!(
     /// ServerboundTestInstanceBlockActionPacket: `action` is the `Action` id
     /// (INIT 0, QUERY 1, SET 2, RESET 3, SAVE 4, EXPORT 5, RUN 6).
     TestInstanceBlockAction { pos: [i32; 3] => Pos, action: i32 => VarInt, data: TestInstanceData => TestInstanceData }
+);
+packet!(
+    /// ClientboundGameTestHighlightPosPacket: the absolute position and the
+    /// position relative to the test's origin.
+    GameTestHighlightPos { absolute: [i32; 3] => Pos, relative: [i32; 3] => Pos }
 );
 packet!(
     /// ClientboundTestInstanceBlockStatus: the test's description and, for a
@@ -3855,6 +3861,18 @@ mod tests {
             Clientbound::TestInstanceBlockStatus(TestInstanceBlockStatus {
                 status: Tag::String("ok".into()),
                 size: Some([1, 2, 3]),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
+    fn game_test_highlight_pos_round_trips() {
+        round_trip(
+            Clientbound::GameTestHighlightPos(GameTestHighlightPos {
+                absolute: [10, -64, 30],
+                relative: [1, 2, 3],
             }),
             Clientbound::encode,
             Clientbound::decode,

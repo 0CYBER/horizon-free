@@ -99,12 +99,12 @@ IronGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_i
 IronGolem.createAttributes	skip:data		attributes come from entity-types.json
 IronGolem.doPush	missing		minor: a hostile mob that bumps the golem is not picked as its target one time in 20 (the golem still finds enemies by its nearest-target goal)
 IronGolem.canSpawnSprintParticle	missing		player: a walking iron golem kicks up no dust of the block under its feet (sprint dust is drawn for players only, client_ambient.rs)
-IronGolem.canAttack	missing		player: a golem the player built can still attack the player after being hit (player-created is not tracked)
-IronGolem.addAdditionalSaveData	missing		minor: PlayerCreated and the persistent anger are not written from the live mob
-IronGolem.readAdditionalSaveData	missing		minor: PlayerCreated and the persistent anger are not read
-IronGolem.hurtServer	missing		player: no entity.iron_golem.damage crack sound when damage moves the golem to a new crackiness level (the crack texture does change, mobs/golem.rs::crackiness)
-IronGolem.isPlayerCreated	missing		player: the player-created flag does not exist, so every golem acts like a village golem toward the player
-IronGolem.setPlayerCreated	missing		player: building a golem from iron blocks does not mark it player-created (game/golems.rs create_triggered)
+IronGolem.canAttack	port	crates/horizon-client/src/mobs/goals.rs::Mob::spares_players	the creator rule: player_created makes every player-target path skip players; gap: minor: the creeper refusal is only golem_prey's nearest-target filter, so HurtByTarget can still target a creeper that hits the golem
+IronGolem.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	PlayerCreated in the iron golem arm; persistent anger writes anger_end_time and angry_at
+IronGolem.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	PlayerCreated (absent is false); persistent anger reads anger_end_time and angry_at
+IronGolem.hurtServer	port	crates/horizon-client/src/mobs.rs::Mob::damage_with	golem::crackiness is read before the hit and compared after; a changed level plays entity.iron_golem.damage at 1.0/1.0
+IronGolem.isPlayerCreated	inline	crates/horizon-client/src/mobs/goals.rs::Mob::spares_players	the flag is extra.player_created; spares_players reads it, and entity_nbt.rs writes and reads it
+IronGolem.setPlayerCreated	inline	crates/horizon-client/src/game/golems.rs::Game::check_golem_spawn	sets extra.player_created on the golem built from blocks; mob_from_nbt sets it on load
 IronGolem.getLeashOffset	missing		minor: a lead hangs at the default offset, not 0.875 of the eye height
 SnowGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_snow	gap: minor: stroll uses the 0.001 water-avoiding probability, vanilla 1.0000001E-5
 SnowGolem.shear	port	crates/horizon-client/src/game/creatures.rs::Game::interact_shear_mob	shear sound, pumpkin off, shearing loot table at eye height

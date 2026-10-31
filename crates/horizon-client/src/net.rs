@@ -52,6 +52,9 @@ pub enum Event {
     Packet(Box<play::Clientbound>),
     /// A packet that failed to decode (skipped, like vanilla's skippable packets).
     DecodeError(String),
+    /// The server sent us back to configuration (`ClientboundStartConfigurationPacket`):
+    /// the game shows `ServerReconfigScreen` until the server logs it in again.
+    Reconfiguring,
     /// The server sent us back to configuration and finished it again.
     Reconfigured(Arc<Dynamic>),
     /// ClientboundResourcePackPushPacket, in configuration or in play.
@@ -627,6 +630,7 @@ fn receive_play(
                 let _ = send.send(Event::PackPop(p.id));
             }
             play::Clientbound::StartConfiguration(_) => {
+                let _ = send.send(Event::Reconfiguring);
                 if let Some(w) = shared_writer.lock().unwrap().as_mut() {
                     let _ = w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode());
                     configuring.store(true, Ordering::Relaxed);
@@ -1060,7 +1064,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("facts.json"),
-            br#"{"states":[[0,0,0,0,"minecraft:stone"]]}"#,
+            br#"{"states":[["minecraft:stone",false,false,"Block{minecraft:stone}",{"id":"minecraft:stone"}]]}"#,
         )
         .unwrap();
         let expected = crate::content_identity::identity(&root).unwrap();

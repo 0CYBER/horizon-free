@@ -67,6 +67,71 @@ fn item_components_patch_the_template_entry() {
     }
 }
 
+/// A block item's patch goes over its template block's item, and a type no
+/// vanilla item has fails the build.
+#[test]
+fn block_items_patch_their_template_item() {
+    let scratch = std::env::temp_dir().join(format!("horizon-block-item-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join("facts.json"),
+        r#"{"states": [["minecraft:iron_block"]], "defaults": {"minecraft:iron_block": 0}}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("gameplay-facts.json"),
+        r#"{"states": [{"item": "minecraft:iron_block"}]}"#,
+    )
+    .unwrap();
+    let items = r##"{"minecraft:iron_block": {"minecraft:max_stack_size": 64,
+        "minecraft:item_name": {"translate": "block.minecraft.iron_block"}},
+        "minecraft:netherite_block": {"minecraft:damage_resistant": {"types": "#minecraft:is_fire"}}}"##;
+    let block = |dir: &str, components: &str| {
+        folder_mod(
+            &scratch.join(dir),
+            &[
+                ("horizon-mod.toml", &manifest("ruby", "")),
+                (
+                    "data/ruby/horizon/block/ruby_block.json",
+                    &format!(
+                        r#"{{"template": "minecraft:iron_block", "components": {components}}}"#
+                    ),
+                ),
+            ],
+        )
+    };
+    let mods = [block(
+        "ruby",
+        r##"{"minecraft:max_stack_size": 16, "minecraft:damage_resistant": {"types": "#minecraft:is_fire"}}"##,
+    )];
+    let mut doc: J = serde_json::from_str(items).unwrap();
+    Plan::new(&base, &mods)
+        .unwrap()
+        .json("items.json", &mut doc)
+        .unwrap();
+    let doc: serde_json::Value = serde_json::to_value(&doc).unwrap();
+    assert_eq!(
+        doc["ruby:ruby_block"],
+        serde_json::json!({"minecraft:max_stack_size": 16,
+            "minecraft:item_name": {"translate": "block.ruby.ruby_block"},
+            "minecraft:damage_resistant": {"types": "#minecraft:is_fire"}})
+    );
+    assert_eq!(doc["minecraft:iron_block"]["minecraft:max_stack_size"], 64);
+    let mods = [block("typo", r#"{"minecraft:fod": {}}"#)];
+    let mut doc: J = serde_json::from_str(items).unwrap();
+    let e = Plan::new(&base, &mods)
+        .unwrap()
+        .json("items.json", &mut doc)
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "ruby:ruby_block: minecraft:fod is no component a vanilla item has"
+    );
+    fs::remove_dir_all(scratch).unwrap();
+}
+
 #[test]
 fn tags_merge_without_repeats() {
     let vanilla = r#"{"values": ["minecraft:stone"]}"#;
@@ -111,7 +176,9 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
         r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
             "minecraft:iron_block":{"protocol_id":9}}},
             "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
-            "minecraft:iron_block":{"protocol_id":11}}}}"#,
+            "minecraft:iron_block":{"protocol_id":11}}},
+            "minecraft:mob_effect":{"entries":{"minecraft:speed":{"protocol_id":0},
+            "minecraft:luck":{"protocol_id":25}}}}"#,
     )
     .unwrap();
     fs::create_dir_all(base.join("assets/minecraft/blockstates")).unwrap();
@@ -133,6 +200,10 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
                 "data/ruby/horizon/item/aitem.json",
                 r#"{"template":"minecraft:stone"}"#,
             ),
+            (
+                "data/ruby/horizon/mob_effect/glow.json",
+                r#"{"category":"beneficial","color":16711680}"#,
+            ),
         ],
     );
     let alpha = folder_mod(
@@ -146,6 +217,14 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
             (
                 "data/alpha/horizon/item/aitem.json",
                 r#"{"template":"minecraft:stone"}"#,
+            ),
+            (
+                "data/alpha/horizon/mob_effect/zap.json",
+                r#"{"category":"harmful","color":255}"#,
+            ),
+            (
+                "data/alpha/horizon/mob_effect/dull.json",
+                r#"{"category":"neutral","color":0}"#,
             ),
         ],
     );
@@ -179,7 +258,9 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
             r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
                 "minecraft:iron_block":{"protocol_id":9}}},
                 "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
-                "minecraft:iron_block":{"protocol_id":11}}}}"#,
+                "minecraft:iron_block":{"protocol_id":11}}},
+                "minecraft:mob_effect":{"entries":{"minecraft:speed":{"protocol_id":0},
+                "minecraft:luck":{"protocol_id":25}}}}"#,
         )
         .unwrap();
         plan.json("registries.json", &mut registry).unwrap();
@@ -200,6 +281,26 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
         assert_eq!(id("minecraft:block", "minecraft:iron_block"), 11);
         assert_eq!(id("minecraft:block", "alpha:zblock"), 12);
         assert_eq!(id("minecraft:block", "ruby:zblock"), 13);
+        assert_eq!(id("minecraft:mob_effect", "minecraft:luck"), 25);
+        assert_eq!(id("minecraft:mob_effect", "alpha:dull"), 26);
+        assert_eq!(id("minecraft:mob_effect", "alpha:zap"), 27);
+        assert_eq!(id("minecraft:mob_effect", "ruby:glow"), 28);
+
+        // `/effect` and the mob_effect arguments check ids against this table.
+        let mut commands: J = serde_json::from_str(
+            r#"{"blocks":[],"items":[],"effects":["minecraft:speed"],
+                "by_registry":{"minecraft:mob_effect":{"ids":["minecraft:speed"]}}}"#,
+        )
+        .unwrap();
+        plan.json("command-registries.json", &mut commands).unwrap();
+        let commands: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&commands).unwrap()).unwrap();
+        let want = ["minecraft:speed", "alpha:dull", "alpha:zap", "ruby:glow"];
+        assert_eq!(commands["effects"], serde_json::json!(want));
+        assert_eq!(
+            commands["by_registry"]["minecraft:mob_effect"]["ids"],
+            serde_json::json!(want)
+        );
         drop(plan);
 
         let output = scratch.join(format!("output-{index}"));
@@ -226,17 +327,19 @@ fn prepared() -> Option<PathBuf> {
 }
 
 /// A content mod folder: a full block, a door and an item-less glass from
-/// templates, an item, a vanilla tag addition and a language file.
+/// templates, items, a recipe, a vanilla tag addition and a language file.
 fn ruby_mod(dir: &Path) -> ContentMod {
-    let files: [(&str, &str); 9] = [
+    let files: [(&str, &str); 11] = [
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
         ),
         (
             "data/ruby/horizon/block/ruby_block.json",
-            r#"{"template": "minecraft:iron_block", "properties": {"hardness": 4.0, "light": 3,
-                "sounds": "minecraft:amethyst_block", "map_color": 28, "friction": 0.8}}"#,
+            r##"{"template": "minecraft:iron_block", "properties": {"hardness": 4.0, "light": 3,
+                "sounds": "minecraft:amethyst_block", "map_color": 28, "friction": 0.8},
+                "components": {"minecraft:max_stack_size": 16,
+                    "minecraft:damage_resistant": {"types": "#minecraft:is_fire"}}}"##,
         ),
         (
             "data/ruby/horizon/block/ruby_door.json",
@@ -257,6 +360,15 @@ fn ruby_mod(dir: &Path) -> ContentMod {
                     "id": "minecraft:base_attack_damage", "amount": 7.0,
                     "operation": "add_value", "slot": "mainhand"}],
                 "!minecraft:repairable": {}}}"#,
+        ),
+        (
+            "data/ruby/horizon/item/ruby_stew.json",
+            r#"{"template": "minecraft:mushroom_stew", "crafting_remainder": "minecraft:bowl"}"#,
+        ),
+        (
+            "data/ruby/recipe/ruby_from_stew.json",
+            r#"{"type": "minecraft:crafting_shapeless", "category": "misc",
+                "ingredients": ["ruby:ruby_stew"], "result": {"id": "ruby:ruby"}}"#,
         ),
         // Carried-over tags name blocks left out and other mods' ids too.
         (
@@ -425,6 +537,9 @@ fn content_root_loads_with_every_table() {
     let items = Items::load(&root, new, &facts, &PackOverlay::NONE).unwrap();
     let ruby_block = &items.items["ruby:ruby_block"];
     assert_eq!(ruby_block.block, Some(ruby));
+    let iron_block = &items.items["minecraft:iron_block"];
+    assert_eq!((ruby_block.max_stack, iron_block.max_stack), (16, 64));
+    assert!(ruby_block.fire_resistant && !iron_block.fire_resistant);
     let gem = &items.items["ruby:ruby"];
     assert_eq!(gem.max_stack, 16);
     let sword = &items.items["ruby:ruby_sword"];
@@ -433,6 +548,24 @@ fn content_root_loads_with_every_table() {
     assert_eq!(sword.modifiers.len(), 1);
     assert_eq!(sword.modifiers[0].2, 7.0);
     assert_eq!(sword.tool.len(), iron_sword.tool.len());
+    // The stew leaves its bowl in the grid; vanilla's stew leaves none.
+    let stew = &items.items["ruby:ruby_stew"];
+    assert_eq!(stew.crafting_remainder.as_deref(), Some("minecraft:bowl"));
+    assert_eq!(
+        items.items["minecraft:mushroom_stew"].crafting_remainder,
+        None
+    );
+    let recipes = crate::crafting::Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+    let grid = [
+        Some(crate::items::ItemStack::new("ruby:ruby_stew", 1)),
+        None,
+        None,
+        None,
+    ];
+    let (id, result) = recipes.find(&grid, 2).unwrap();
+    assert_eq!(&*result.item, "ruby:ruby");
+    let rest = recipes.remainders(id, &grid, 2);
+    assert_eq!(rest[0].as_ref().map(|s| &*s.item), Some("minecraft:bowl"));
     assert!(!items.items.contains_key("ruby:ruby_glass"));
     let pickaxe = &items.block_tags["minecraft:mineable/pickaxe"];
     assert!(pickaxe.contains("ruby:ruby_block"));
@@ -473,6 +606,19 @@ fn refuses_unknown_templates_and_vanilla_ids() {
     m.content.blocks[0].template = "minecraft:not_a_block".into();
     let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
     assert!(e.to_string().contains("is not a block"), "{e}");
+    m.content.blocks[0].template = "minecraft:iron_block".into();
+    let stew = m
+        .content
+        .items
+        .iter_mut()
+        .find(|i| i.id == "ruby:ruby_stew");
+    stew.unwrap().crafting_remainder = Some("minecraft:bowll".into());
+    let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains(r#"crafting_remainder "minecraft:bowll" is not an item"#),
+        "{e}"
+    );
     fs::remove_dir_all(&scratch).unwrap();
 }
 
@@ -894,6 +1040,50 @@ fn content_root_carries_a_structure_mod() {
     assert_eq!(name, "huts:hut");
     assert!(at[0].abs() < 1024 && at[2].abs() < 1024, "{at:?}");
     let _ = fs::remove_dir_all(&scratch);
+}
+
+/// A mod's mob effect gets the network id after vanilla's last, on the game
+/// and its server alike, and joins the ids `/effect` and its suggestions
+/// check.
+#[test]
+#[ignore = "full content root: CI and pr_ready run it"]
+fn content_root_registers_a_mod_mob_effect() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-effect-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let m = folder_mod(
+        &scratch.join("glow"),
+        &[
+            ("horizon-mod.toml", &manifest("glow", "")),
+            (
+                "data/glow/horizon/mob_effect/radiance.json",
+                r#"{"category": "beneficial", "color": 16773120}"#,
+            ),
+        ],
+    );
+    let root = resource_root(&base, std::slice::from_ref(&m), &scratch.join("cache")).unwrap();
+    let report = |root: &Path| {
+        horizon_protocol::registry::Builtin::load(&root.join("registries.json")).unwrap()
+    };
+    let (vanilla, ids) = (report(&base), report(&root));
+    let vanilla = vanilla.get("minecraft:mob_effect").unwrap();
+    let ids = ids.get("minecraft:mob_effect").unwrap();
+    let count = (0..).take_while(|&i| vanilla.name(i).is_some()).count() as i32;
+    assert_eq!(ids.id("glow:radiance"), Some(count));
+    assert_eq!(ids.id("minecraft:speed"), vanilla.id("minecraft:speed"));
+    let commands: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("command-registries.json")).unwrap()).unwrap();
+    for ids in [
+        &commands["effects"],
+        &commands["by_registry"]["minecraft:mob_effect"]["ids"],
+    ] {
+        let ids = ids.as_array().unwrap();
+        assert!(ids.contains(&"glow:radiance".into()) && ids.contains(&"minecraft:speed".into()));
+    }
+    assert!(root.join(crate::content_identity::MARKER).exists());
+    fs::remove_dir_all(&scratch).unwrap();
 }
 
 /// A content mod folder from `(path, text)` pairs, read as the game reads it.

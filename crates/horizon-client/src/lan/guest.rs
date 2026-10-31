@@ -57,6 +57,9 @@ pub struct SentEffect {
     pub tick_count: i32,
 }
 
+/// ServerGamePacketListenerImpl.CLIENT_LOADED_TIMEOUT_TIME.
+pub const CLIENT_LOADED_TIMEOUT: u8 = 60;
+
 pub struct Guest {
     pub conn: u32,
     /// The client's address (IP bans, `list`).
@@ -116,6 +119,8 @@ pub struct Guest {
     pub living_flags: i8,
     /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID`.
     pub stuck: (i32, i32),
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the parrots' variants.
+    pub shoulders: [Option<i32>; 2],
     /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
@@ -156,11 +161,17 @@ pub struct Guest {
     pub position_this_tick: bool,
     /// Violation levels and the checks' state (the anticheat, when on).
     pub anticheat: horizon_anticheat::Player,
+    /// The movement prediction's replay of the client's own moves (only while it runs).
+    pub replay: Option<Box<super::prediction::Replay>>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
     /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
     pub loaded: bool,
+    /// Ticks left before the server stops waiting for that packet
+    /// (ServerGamePacketListenerImpl.clientLoadedTimeoutTimer): 60 at join and
+    /// after a respawn, 0 once it comes.
+    pub load_timeout: u8,
     // Chunks.
     pub center: Option<(i32, i32)>,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
@@ -328,6 +339,7 @@ impl Guest {
             sleeping: false,
             living_flags: 0,
             stuck: (0, 0),
+            shoulders: [None; 2],
             bed: None,
             sleep_timer: 0,
             sent_bed: None,
@@ -345,8 +357,10 @@ impl Guest {
             above_ground_ticks: 0,
             position_this_tick: false,
             anticheat: Default::default(),
+            replay: None,
             moved: false,
             loaded: false,
+            load_timeout: CLIENT_LOADED_TIMEOUT,
             center: None,
             sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
@@ -446,6 +460,11 @@ impl Guest {
     }
     pub fn creative(&self) -> bool {
         self.game_mode == CREATIVE
+    }
+    /// ServerGamePacketListenerImpl.hasClientLoaded: not dead (waitingForRespawn) and
+    /// loaded, or waited for long enough. Until then the player's actions are ignored.
+    pub fn client_loaded(&self) -> bool {
+        !self.dead && self.load_timeout == 0
     }
     pub fn spectator(&self) -> bool {
         self.game_mode == SPECTATOR
@@ -880,7 +899,10 @@ fn network_stack(
         if !d.writable_pages.is_empty() {
             stack.added.push((
                 horizon_protocol::item::component::WRITABLE_BOOK_CONTENT,
-                horizon_protocol::item::Component::WritableBook(d.writable_pages.clone()),
+                horizon_protocol::item::Component::WritableBook {
+                    pages: d.writable_pages.clone(),
+                    filtered: Vec::new(),
+                },
             ));
         }
         if let Some(w) = &d.written {
@@ -900,6 +922,7 @@ fn network_stack(
                                 .collect()
                         },
                         resolved: true,
+                        ..Default::default()
                     },
                 ),
             ));
@@ -1041,6 +1064,18 @@ mod tests {
             position,
             10,
         )
+    }
+
+    #[test]
+    fn the_client_has_loaded_once_it_says_so_or_after_60_ticks_and_not_while_dead() {
+        let mut g = guest_at([0.0; 3]);
+        assert!(!g.client_loaded());
+        g.load_timeout -= 59;
+        assert!(!g.client_loaded());
+        g.load_timeout -= 1;
+        assert!(g.client_loaded());
+        g.dead = true;
+        assert!(!g.client_loaded());
     }
 
     #[test]

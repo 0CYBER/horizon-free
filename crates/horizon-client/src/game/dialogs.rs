@@ -237,7 +237,7 @@ impl Game<'_> {
         // the dialog stays unless the confirmation takes over (Web Links off,
         // or Prompt on Links off, opens nothing or the browser behind it).
         if let Some(Click::OpenUrl(url)) = &click
-            && !(self.settings.chat_links && self.settings.file.bool("chatLinksPrompt"))
+            && !(self.settings.chat_links && self.settings.chat_links_prompt)
         {
             if self.settings.chat_links {
                 super::packs::open_uri(url);
@@ -932,6 +932,14 @@ impl Game<'_> {
             edit.insert_text(font, &typed);
         }
         Ok(())
+    }
+
+    /// Whether the open dialog has a text input.
+    pub(super) fn dialog_has_text_field(&self) -> bool {
+        self.dialogs
+            .open
+            .as_ref()
+            .is_some_and(|open| open.fields.iter().any(Option::is_some))
     }
 
     /// `type TEXT` with a dialog open: into the focused text input, or the
