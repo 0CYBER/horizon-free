@@ -3561,9 +3561,9 @@ impl Game<'_> {
         self.tick_chunks.recycle_added(added);
     }
     /// `DistanceManager`'s tickets of the level in place, from every player in
-    /// it (the local player, LAN guests, a server's players) and its forced
-    /// chunks. A game with neither a server nor a player (the headless
-    /// fixtures) ticks everywhere.
+    /// it (the local player, LAN guests, a server's players), its forced
+    /// chunks and its portal tickets. A game with neither a server nor a
+    /// player (the headless fixtures) ticks everywhere.
     fn update_chunk_tickets(&mut self) {
         let mut players: Vec<(i32, i32)> = self.lan.as_ref().map_or_else(Vec::new, |h| {
             h.hub
@@ -3584,6 +3584,8 @@ impl Game<'_> {
                 horizon_client::ticket_levels::Sources {
                     players,
                     forced: self.streaming.forced.iter().copied().collect(),
+                    // Filled from the `PORTAL` tickets by `update`.
+                    portal: Vec::new(),
                     view_distance: self.settings.render_distance.clamp(2, 32),
                     simulation_distance: self.settings.simulation_distance.max(2),
                 }
@@ -3610,6 +3612,8 @@ impl Game<'_> {
     /// ServerLevel.tick block phases: scheduled ticks, random ticks in the
     /// chunks the tickets simulate, block events and moving pistons.
     fn tick_blocks(&mut self) -> Result<()> {
+        // ServerChunkCache.tick: the tickets that time out.
+        self.tickets.tick_portal();
         self.sync_tick_chunks();
         self.start_ticking_chunks();
         let levels = self.tickets.levels();
