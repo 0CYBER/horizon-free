@@ -46,31 +46,78 @@ pub struct Release {
     pub nightly: Option<String>,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub const ASSET: Option<&str> = Some("horizon-linux-x86_64.tar.gz");
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub const ASSET: Option<&str> = Some("horizon-macos-arm64.zip");
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-pub const ASSET: Option<&str> = Some("horizon-windows-x64.zip");
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-pub const ASSET: Option<&str> = None;
+/// The release assets of each system Horizon ships for: (`std::env::consts::OS`, `ARCH`, the game,
+/// the launcher). game-build.yml builds the game's, nightly-build.yml signs and publishes them, and
+/// launcher.yml builds the launcher's (`platform_assets_are_published`).
+pub const PLATFORMS: [(&str, &str, &str, &str); 4] = [
+    (
+        "linux",
+        "x86_64",
+        "horizon-linux-x86_64.tar.gz",
+        "horizon-launcher-linux-x86_64.tar.gz",
+    ),
+    (
+        "macos",
+        "aarch64",
+        "horizon-macos-arm64.zip",
+        "horizon-launcher-macos-arm64.zip",
+    ),
+    // Intel Macs (#1161).
+    (
+        "macos",
+        "x86_64",
+        "horizon-macos-x64.zip",
+        "horizon-launcher-macos-x64.zip",
+    ),
+    (
+        "windows",
+        "x86_64",
+        "horizon-windows-x64.zip",
+        "horizon-launcher-windows-x64.zip",
+    ),
+];
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-linux-x86_64.tar.gz");
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-macos-arm64.zip");
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-windows-x64.zip");
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-pub const LAUNCHER_ASSET: Option<&str> = None;
+/// `a == b`, in a const context.
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// This system's entry of `PLATFORMS`: the game's asset and the launcher's.
+const fn platform_assets(os: &str, arch: &str) -> Option<(&'static str, &'static str)> {
+    let mut i = 0;
+    while i < PLATFORMS.len() {
+        let (o, a, game, launcher) = PLATFORMS[i];
+        if same(o, os) && same(a, arch) {
+            return Some((game, launcher));
+        }
+        i += 1;
+    }
+    None
+}
+
+const OWN_ASSETS: Option<(&str, &str)> =
+    platform_assets(std::env::consts::OS, std::env::consts::ARCH);
+/// The game build this launcher installs, None where Horizon has none.
+pub const ASSET: Option<&str> = match OWN_ASSETS {
+    Some((game, _)) => Some(game),
+    None => None,
+};
+/// The launcher build this launcher updates itself from.
+pub const LAUNCHER_ASSET: Option<&str> = match OWN_ASSETS {
+    Some((_, launcher)) => Some(launcher),
+    None => None,
+};
 
 const LAUNCHER_BINARY: &str = if cfg!(windows) {
     "horizon-launcher.exe"
@@ -3369,6 +3416,57 @@ pub fn {f}("
             resources_summary(false, false, "26.3"),
             resources_summary(false, true, "26.3")
         );
+    }
+
+    #[test]
+    fn each_mac_picks_the_build_for_its_processor() {
+        assert_eq!(
+            platform_assets("macos", "aarch64"),
+            Some((
+                "horizon-macos-arm64.zip",
+                "horizon-launcher-macos-arm64.zip"
+            ))
+        );
+        assert_eq!(
+            platform_assets("macos", "x86_64"),
+            Some(("horizon-macos-x64.zip", "horizon-launcher-macos-x64.zip"))
+        );
+        assert_eq!(
+            platform_assets("windows", "x86_64").map(|(game, _)| game),
+            Some("horizon-windows-x64.zip")
+        );
+        assert_eq!(platform_assets("linux", "aarch64"), None);
+        assert_eq!(platform_assets("macos", "x86"), None);
+        assert_eq!(
+            ASSET,
+            platform_assets(std::env::consts::OS, std::env::consts::ARCH).map(|(game, _)| game)
+        );
+    }
+
+    /// Every asset a launcher looks for is one the release workflows build, sign and publish.
+    #[test]
+    fn platform_assets_are_published() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let read = |path: &str| fs::read_to_string(repo.join(path)).unwrap();
+        let build = read(".github/workflows/game-build.yml");
+        let nightly = read(".github/workflows/nightly-build.yml");
+        let launcher = read(".github/workflows/launcher.yml");
+        for (os, arch, game, launcher_asset) in PLATFORMS {
+            assert!(
+                build.contains(&format!("asset: {game}")),
+                "game-build.yml builds no {game}"
+            );
+            // Signed (SHA256SUMS), then published.
+            assert_eq!(
+                nightly.matches(&format!("dist/{game}")).count(),
+                2,
+                "nightly-build.yml must sign and publish {game} ({os} {arch})"
+            );
+            assert!(
+                launcher.contains(&format!("asset: {launcher_asset}")),
+                "launcher.yml builds no {launcher_asset}"
+            );
+        }
     }
 
     #[test]

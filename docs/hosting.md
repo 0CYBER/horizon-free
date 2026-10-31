@@ -41,7 +41,7 @@ plan are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/d
 
 ## 1. Install
 
-Linux (x86-64) and macOS (Apple Silicon):
+Linux (x86-64) and macOS (Apple Silicon; Intel from the next Nightly):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh
