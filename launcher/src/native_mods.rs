@@ -292,8 +292,40 @@ fn newest(
         .unwrap_or_default())
 }
 
-/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts).
+/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts), from the dates kept
+/// in [`DATES`] when it was asked before: a commit's date never changes, so a build of mods made
+/// for different revisions can be used again offline or past GitHub's rate limit.
 fn committed(repo: &str, revision: &str) -> Result<String, String> {
+    remembered(&root().join(DATES), repo, revision, ask_github)
+}
+
+/// The file in [`root`] keeping the commit dates GitHub gave, as `{"repo@revision": date}`.
+const DATES: &str = "commit-dates.json";
+
+/// The date `file` keeps for `repo`'s `revision`, else `ask`'s, then kept in `file`.
+fn remembered(
+    file: &Path,
+    repo: &str,
+    revision: &str,
+    ask: impl FnOnce(&str, &str) -> Result<String, String>,
+) -> Result<String, String> {
+    let key = format!("{repo}@{revision}");
+    let mut dates: serde_json::Map<String, serde_json::Value> = fs::read(file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if let Some(date) = dates.get(&key).and_then(|d| d.as_str()) {
+        return Ok(date.to_owned());
+    }
+    let date = ask(repo, revision)?;
+    dates.insert(key, date.clone().into());
+    if let Ok(text) = serde_json::to_vec_pretty(&dates) {
+        let _ = fs::write(file, text);
+    }
+    Ok(date)
+}
+
+fn ask_github(repo: &str, revision: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{repo}/commits/{revision}");
     let commit: serde_json::Value = backend::get(&url)?.into_json().map_err(|e| e.to_string())?;
     commit["commit"]["committer"]["date"]
@@ -1232,6 +1264,35 @@ mod tests {
             ..pinned("minimap", Some(A), None)
         }];
         assert_eq!(mismatch(&hooked, B), None, "hook mods follow the build");
+    }
+
+    #[test]
+    fn a_commit_date_is_asked_once_and_kept() {
+        let d = dir("commit-dates");
+        let file = d.join(DATES);
+        let ask = |_: &str, r: &str| -> Result<String, String> { Ok(format!("date of {r}")) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, ask).unwrap(),
+            format!("date of {A}")
+        );
+        let offline = |_: &str, _: &str| -> Result<String, String> { Err("offline".into()) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, offline).unwrap(),
+            format!("date of {A}")
+        );
+        // Another repo or revision isn't known yet.
+        assert!(remembered(&file, "acme/y", A, offline).is_err());
+        assert!(remembered(&file, "acme/x", B, offline).is_err());
+        // A broken file is asked again and rewritten.
+        fs::write(&file, "not json").unwrap();
+        assert_eq!(
+            remembered(&file, "acme/x", B, ask).unwrap(),
+            format!("date of {B}")
+        );
+        assert_eq!(
+            remembered(&file, "acme/x", B, offline).unwrap(),
+            format!("date of {B}")
+        );
     }
 
     #[test]

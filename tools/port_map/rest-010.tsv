@@ -131,9 +131,9 @@ FriendlyByteBuf.forEachByteDesc	skip:java		Netty buffer search
 FriendlyByteBuf.toString	skip:java		Netty buffer text
 FriendlyByteBuf.retain	skip:java		Netty reference counting
 FriendlyByteBuf.touch	skip:java		Netty leak detection
-HashedPatchMap.create	port	crates/horizon-protocol/src/item.rs::Hashed::of	gap: player: component hashes are never sent (added stays empty), so a vanilla server resyncs a slot that holds components
+HashedPatchMap.create	port	crates/horizon-protocol/src/item.rs::Hashed::of	component hashes are sent for every component the client keeps (item/hash/); gap: minor: a container or bundle_contents predicate whose nested exact components hold a byte no Codec.BOOL field names is left unhashed
 HashedPatchMap.matches	port	crates/horizon-client/src/lan/containers.rs::Hub::hashed_matches	gap: minor: compares item id and count only, not the component patch
-HashedStack.create	port	crates/horizon-protocol/src/item.rs::Hashed::of	gap: player: component hashes are never sent, so a vanilla server resyncs a slot that holds components
+HashedStack.create	port	crates/horizon-protocol/src/item.rs::Hashed::of	component hashes are sent for every component the client keeps (item/hash/); gap: minor: a container or bundle_contents predicate whose nested exact components hold a byte no Codec.BOOL field names is left unhashed
 HashedStack.ActualItem.matches	port	crates/horizon-client/src/lan/containers.rs::Hub::hashed_matches	gap: minor: compares item id and count only, not the component patch
 HiddenByteBuf.pack	skip:java		Netty in-memory channel wrapper
 HiddenByteBuf.unpack	skip:java		Netty in-memory channel wrapper

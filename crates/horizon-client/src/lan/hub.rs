@@ -823,17 +823,6 @@ impl Hub {
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
         self.send_initial_recipe_book(i);
-        // The others hear of the newcomer before it joins the list.
-        self.broadcast_except(
-            conn,
-            &C::SystemChat(play::SystemChat {
-                content: yellow_names(
-                    "multiplayer.player.joined",
-                    vec![display_name(self.guests[i].uuid, &name)],
-                ),
-                overlay: false,
-            }),
-        );
         self.guests[i].placed = true;
         self.resend_teleport(i, None);
         let g = &self.guests[i];
@@ -877,6 +866,12 @@ impl Hub {
         // ServerPlayer.sendPostEffects and initInventoryMenu.
         self.send_post_effects(i);
         self.send_inventory(i);
+        // PlayerList.placeNewPlayer adds the player to the list, then calls
+        // broadcastSystemMessage: the newcomer reads its own join line too.
+        self.system_message(yellow_names(
+            "multiplayer.player.joined",
+            vec![display_name(uuid, &name)],
+        ));
     }
 
     /// `ServerPlayer.sendPostEffects`: the player's `/posteffect` chains.
@@ -2766,7 +2761,10 @@ impl Hub {
     }
 
     /// `ServerGamePacketListenerImpl.noBlocksAround`: every block of the
-    /// player's box grown by 0.0625 and stretched 0.55 down is air.
+    /// player's box grown by 0.0625 and stretched 0.55 down is air. Vanilla
+    /// loads a chunk it reads; a chunk not loaded here yet (a player's first
+    /// move after joining, before the spawn chunks are generated) is not
+    /// known to be air, so it never makes the player float.
     fn no_blocks_around(&self, i: usize, at: [f64; 3], world: &World) -> bool {
         let g = &self.guests[i];
         let d = g.dimensions();
@@ -2779,8 +2777,10 @@ impl Hub {
         ];
         let cell = |v: f64| v.floor() as i32;
         (cell(lo[0])..=cell(hi[0])).all(|x| {
-            (cell(lo[1])..=cell(hi[1]))
-                .all(|y| (cell(lo[2])..=cell(hi[2])).all(|z| world.is_air(world.block(x, y, z))))
+            (cell(lo[2])..=cell(hi[2])).all(|z| {
+                world.loaded(x, z)
+                    && (cell(lo[1])..=cell(hi[1])).all(|y| world.is_air(world.block(x, y, z)))
+            })
         })
     }
 
