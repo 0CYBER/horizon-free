@@ -349,6 +349,12 @@ impl Game<'_> {
         if self.block_in_tag("minecraft:climbable", name) || open_trapdoor {
             return VoxelShape::empty();
         }
+        self.block_collision_shape(p)
+    }
+    /// `BlockState.getCollisionShape(level, pos)`: the shape under the empty
+    /// collision context.
+    pub(super) fn block_collision_shape(&self, p: [i32; 3]) -> VoxelShape {
+        let state = self.world.block(p[0], p[1], p[2]);
         let binding = self.collision;
         let mut scene = SceneCollisions {
             world: &self.world,
@@ -363,6 +369,22 @@ impl Game<'_> {
                 &CollisionContext::empty(false),
             )
             .unwrap_or_else(|_| VoxelShape::empty())
+    }
+    /// `DismountHelper.canDismountTo(level, entity, box)`: no block collides
+    /// with the box and it is inside the world border.
+    pub(super) fn can_dismount_to(&self, bounds: Aabb) -> bool {
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        if !no_collision_empty(&mut scene, bounds) {
+            return false;
+        }
+        // WorldBorder.isWithinBounds(box).
+        let (lo, hi) = (bounds.min(Axis::X), bounds.max(Axis::X) - 1.0e-5);
+        let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
+        self.border.contains(lo, lz) && self.border.contains(hi, hz)
     }
     pub(super) fn block_in_tag(&self, tag: &str, block: &str) -> bool {
         self.res
@@ -427,12 +449,7 @@ impl Game<'_> {
                 position.z + half,
             ),
         );
-        let mut scene = SceneCollisions {
-            world: &self.world,
-            binding: self.collision,
-            subject: None,
-        };
-        if !no_collision_empty(&mut scene, bounds) {
+        if !self.can_dismount_to(bounds) {
             return None;
         }
         let name = |q: [i32; 3]| {
@@ -450,10 +467,7 @@ impl Game<'_> {
         {
             return None;
         }
-        // WorldBorder.isWithinBounds(box).
-        let (lo, hi) = (bounds.min(Axis::X), bounds.max(Axis::X) - 1.0e-5);
-        let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
-        (self.border.contains(lo, lz) && self.border.contains(hi, hz)).then_some(position)
+        Some(position)
     }
     /// `Block.isPossibleToRespawnInThis`: neither solid nor liquid; banners,
     /// signs and pressure plates override it to always.

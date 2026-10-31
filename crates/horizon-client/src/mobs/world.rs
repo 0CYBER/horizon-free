@@ -38,14 +38,14 @@ impl MobWorld<'_> {
     }
     /// `Heightmap.Types.MOTION_BLOCKING`: above the highest blocking block.
     pub fn motion_blocking_height(&self, x: i32, z: i32) -> i32 {
-        let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;
-        (crate::chunk::MIN_Y..top)
+        let top = self.world.top_y();
+        (self.world.bottom_y()..top)
             .rev()
             .find(|&y| {
                 let f = self.facts.get(self.world.block(x, y, z));
                 f.full_collision || f.fluid != crate::blocks::Fluid::None
             })
-            .map_or(crate::chunk::MIN_Y, |y| y + 1)
+            .map_or(self.world.bottom_y(), |y| y + 1)
     }
     /// BlockState.isSolid (the legacy solid flag).
     pub fn solid(&self, x: i32, y: i32, z: i32) -> bool {
@@ -199,12 +199,19 @@ impl MobWorld<'_> {
     }
     /// The bounds of the block's collision shape, relative to the block.
     pub fn collision_bounds(&self, p: [i32; 3]) -> Option<horizon_core::geometry::Aabb> {
+        self.collision_bounds_of(self.world.block(p[0], p[1], p[2]), p)
+    }
+    /// The same for `state` standing at `p` (a block that was there).
+    pub fn collision_bounds_of(
+        &self,
+        state: horizon_world::registry::BlockStateId,
+        p: [i32; 3],
+    ) -> Option<horizon_core::geometry::Aabb> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
             subject: None,
         };
-        let state = self.world.block(p[0], p[1], p[2]);
         self.collision
             .collision_shape(&mut scene, state, p)
             .ok()?
@@ -424,6 +431,7 @@ pub(crate) fn with_test_world(
         player: None,
         nearest_player: None,
         others,
+        leash_boats: &[],
         others_grid: None,
         others_index: None,
         daylight: true,

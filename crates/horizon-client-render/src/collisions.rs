@@ -305,7 +305,7 @@ impl<'w> BlockCollisionWorld for SceneCollisions<'w, '_> {
     /// From the section's palette, without reading its blocks; a palette
     /// of the whole registry reads every cell.
     fn may_reach_out(&mut self, chunk: Self::Chunk, section_y: i32) -> io::Result<bool> {
-        let blocks = usize::try_from(section_y - (crate::chunk::MIN_Y >> 4))
+        let blocks = usize::try_from(section_y - (chunk.min_y() >> 4))
             .ok()
             .and_then(|s| chunk.sections.get(s))
             .map(|section| &section.blocks);

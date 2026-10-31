@@ -80,6 +80,7 @@ Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Ho
 - `FOLDER`: A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them (default: the native mods installed and turned on in the instance)
 - `--instance`: The instance whose installed native mods to build, and which then plays the build (default: the selected one; the game's own home builds into the Native mods instance)
 - `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+- `--allow-version-mismatch`: Build mods made for different Horizon versions together anyway, on the newest of them
 
 MCP: none: the player's switch.
 
@@ -835,6 +836,33 @@ Update what the browser installed (or one pack).
 - `--instance`: The instance (default: the selected one)
 
 MCP: `mods_update`.
+
+## `horizon-launcher mods add-github`
+
+Install a native mod from a GitHub link (docs/native-mods.md, "Install from GitHub"): https://github.com/OWNER/REPO (its latest release, else its default branch), .../releases/tag/TAG, .../tree/REF or .../commit/SHA. Resolved to an exact release file or commit, checked like a registry mod. NOT reviewed by the Horizon registry.
+
+    horizon-launcher mods add-github <URL>
+
+- `URL`
+- `--mod`: The mod to install when the link holds several
+- `--all`: Install every mod the link holds
+- `--instance`: The instance (default: the selected one)
+- `--trust-native-code`: You read the mod's source (the link printed) and trust it with full access to this computer
+
+MCP: none: the player's switch.
+
+## `horizon-launcher mods update-github`
+
+Look for newer versions of the native mods installed from GitHub (the latest release, or the default branch's head for a mod installed from a commit), and install them.
+
+    horizon-launcher mods update-github [ID]
+
+- `ID`: One mod (default: all of them)
+- `--check`: Only say what is newer
+- `--instance`: The instance (default: the selected one)
+- `--trust-native-code`: You read the new source and trust it with full access to this computer
+
+MCP: none: the player's switch.
 
 ## `horizon-launcher mods remove`
 
