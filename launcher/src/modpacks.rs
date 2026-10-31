@@ -413,9 +413,7 @@ mod tests {
     }
     #[test]
     fn resource_only_profile_can_play_without_enabling_or_overwriting_packs() {
-        // Resolved: the packs' install refuses a link in the profile's
-        // ancestry, and macOS's temp dir is under /var, a link.
-        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "horizon-launcher-resource-profile-{}",
             std::process::id()
         ));
