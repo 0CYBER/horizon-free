@@ -330,6 +330,29 @@ cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage
 cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
 
+### Resource packs from an imported modpack
+
+Import stages embedded resource packs in `<work>/resourcepacks/`: `.mrpack` common overrides and client
+overrides (the client copy wins), a CurseForge ZIP's declared override folder, or an installed instance's
+`resourcepacks/` directory. ZIP packs stay intact; directory packs must contain `pack.mcmeta`. Server-only
+overrides and unrelated files such as scripts and `options.txt` are not copied.
+
+`port` also obtains client-supported `.mrpack` resource-pack ZIPs from the existing permitted download hosts,
+checking the index's SHA-1 before keeping them. `<work>/resourcepacks.json` records available, missing, failed,
+conflicting and unsupported entries; they also appear in `coverage.json` and `coverage.md`. A copied pack is
+reported as partial, not as a rendering-verified port. Shader packs are reported as pending conversion.
+Old import folders without this report still open.
+
+The launcher copies staged packs into `<work>/home/resourcepacks/` on import, port and launch. It preserves any
+existing profile pack as a whole, including edits inside a directory pack, and lists name/content conflicts.
+`<work>/profile-resourcepacks.json` records those results. A profile with resource packs and no carried mods can
+play. Enable packs in the game's Resource Packs screen; importing never changes the enabled-pack list.
+
+Paths must stay within staging, links are refused, and one import is limited to 65,536 resource files and
+512 MiB of resource bytes (including both override layers). Indexed downloads are limited to 512 MiB each.
+These checks use synthetic packs and temporary profiles; in-game rendering still needs Minecraft 26.3 prepared
+resources and has not been verified for this local batch.
+
 `check <jar> <out>` takes one mod jar on its own, as the launcher's mod browser installs it
 ([mod-browser.md](mod-browser.md)): it carries the jar into `<out>/carry/` and reads its class
 files (constant pool, superclass, declared methods; no decompiling) for what the carry can't
