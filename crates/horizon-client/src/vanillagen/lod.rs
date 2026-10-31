@@ -489,6 +489,30 @@ impl LodSampler for VanillaLodSampler {
         self.grid(x, z, width, 1).pop().unwrap_or_default()
     }
     fn grid(&mut self, x: i32, z: i32, width: i32, side: usize) -> Vec<Column> {
+        // A whole tile inside visited chunks needs no density work at all.
+        // This used to evaluate the lattice first and throw all of it away
+        // in the per-cell cache check below.
+        if width <= 16 && !self.cache.is_empty() {
+            let mut columns = Vec::with_capacity(side * side);
+            'cached: for dz in 0..side {
+                for dx in 0..side {
+                    let (wx, wz) = (x + dx as i32 * width, z + dz as i32 * width);
+                    let Some(cached) = self.cache.get(&(wx >> 4, wz >> 4)) else {
+                        columns.clear();
+                        break 'cached;
+                    };
+                    columns.push(Column::reduced(
+                        cached,
+                        (wx & 15) as usize,
+                        (wz & 15) as usize,
+                        width as usize,
+                    ));
+                }
+            }
+            if columns.len() == side * side {
+                return columns;
+            }
+        }
         let samples =
             match self
                 .worker
