@@ -347,6 +347,12 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
+/// The time a frame spends uploading chunk meshes when the player set no
+/// Chunk Updates or Upload Budget: a burst past it waits for the next frames.
+const AUTO_UPLOAD_TIME: Duration = Duration::from_millis(2);
+/// A frame's finished meshes up to this many upload at once, unqueued.
+const AUTO_UPLOADS_AT_ONCE: usize = 8;
+
 #[derive(Clone)]
 struct Options {
     resources: PathBuf,
@@ -14165,7 +14171,8 @@ impl Game<'_> {
             let g = &self.settings.horizon;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
             // The meshes, once copied, are freed by a worker (`Streaming::free`).
-            if !budgeted && self.pending_uploads.is_empty() {
+            if !budgeted && self.pending_uploads.is_empty() && uploads.len() <= AUTO_UPLOADS_AT_ONCE
+            {
                 horizon_client::spans::time("upload", || {
                     for (key, mesh) in &uploads {
                         renderer.upload(*key, mesh);
@@ -14204,7 +14211,15 @@ impl Game<'_> {
                     (0, 0)
                 };
                 let (mut count, mut bytes) = (0, 0u64);
+                // Without the player's budgets, uploads stop once they took
+                // AUTO_UPLOAD_TIME of this frame (at least one goes): a burst of
+                // finished meshes spreads over frames, nearest first.
+                let auto = !budgeted;
+                let started = Instant::now();
                 while let Some((_, mesh)) = pending.last() {
+                    if auto && count > 0 && started.elapsed() >= AUTO_UPLOAD_TIME {
+                        break;
+                    }
                     let size = ((mesh.solid.len() + mesh.translucent.len())
                         * std::mem::size_of::<horizon_client::mesher::TerrainVertex>())
                         as u64;
