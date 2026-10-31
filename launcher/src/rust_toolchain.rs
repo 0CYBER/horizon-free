@@ -142,9 +142,9 @@ impl Toolchain {
 
     /// `program` (this toolchain's cargo, or a tool built with it) set up to use only this
     /// toolchain: its rustc, its MinGW-w64 where it has one, the launcher's Cargo home, and none of
-    /// the player's rustup or compiler-wrapper settings. On Windows it opens no console window:
-    /// cargo is a console program, and the launcher has none to share, so each build showed an
-    /// empty one for as long as it ran (#4770).
+    /// the player's rustup, compiler-wrapper or compiler-flag settings ([`scrubbed`]). On Windows it
+    /// opens no console window: cargo is a console program, and the launcher has none to share, so
+    /// each build showed an empty one for as long as it ran (#4770).
     pub fn command(&self, program: &Path) -> Command {
         let mut cmd = crate::process::command(program);
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -152,17 +152,19 @@ impl Toolchain {
         let paths = std::iter::once(self.dir.join("bin"))
             .chain(mingw)
             .chain(std::env::split_paths(&path));
+        if let Some(root) = outside_configs() {
+            cmd.current_dir(root);
+        }
         cmd.env("PATH", std::env::join_paths(paths).unwrap_or(path))
             .env("RUSTC", self.dir.join("bin").join(exe("rustc")))
             .env("CARGO_HOME", cargo_home());
-        for name in [
-            "RUSTUP_TOOLCHAIN",
-            "RUSTC_WRAPPER",
-            "RUSTC_WORKSPACE_WRAPPER",
-            "CARGO_BUILD_RUSTC_WRAPPER",
-            "CARGO_TARGET_DIR",
-        ] {
+        for name in SCRUBBED {
             cmd.env_remove(name);
+        }
+        for (name, _) in std::env::vars_os() {
+            if name.to_str().is_some_and(scrubbed) {
+                cmd.env_remove(name);
+            }
         }
         cmd
     }
@@ -182,6 +184,93 @@ impl Toolchain {
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
     }
+}
+
+/// Whether the player's environment variable `name` stays out of a build: it would pick another
+/// Rust or wrap it (rustup, `RUSTC_WRAPPER`), or change the compiler's flags (`RUSTFLAGS`, a
+/// profile, incremental, the build's target or linker: `CARGO_BUILD_*` but the jobs,
+/// `CARGO_TARGET_*`),
+/// so the build would differ from the release's and recompile everything after any change.
+pub fn scrubbed(name: &str) -> bool {
+    const PREFIXES: [&str; 3] = ["CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_"];
+    // Windows' variable names ignore case.
+    let name = name.to_ascii_uppercase();
+    // The number of jobs changes no flag: a player may still limit it.
+    if name == "CARGO_BUILD_JOBS" {
+        return false;
+    }
+    SCRUBBED.contains(&name.as_str()) || PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// `ioprio_set`'s "which" for one process.
+#[cfg(target_os = "linux")]
+const IOPRIO_WHO_PROCESS: libc::c_long = 1;
+/// The best-effort I/O class (2) at its lowest level (7), as `ioprio_set` takes it.
+#[cfg(target_os = "linux")]
+const LOW_IO: libc::c_long = (2 << 13) | 7;
+
+/// Runs `cmd` (a build) below the player's own programs, so the desktop and a game in play stay
+/// smooth while it compiles; with the computer otherwise idle it still gets every core. Unix: nice
+/// 19, and on Linux the lowest best-effort I/O level (not the idle class, which gets the disk only
+/// when nothing else uses it, so a game streaming chunks could stall a build for minutes);
+/// Windows: below-normal priority, keeping [`crate::process::hide_console`]'s no-console flag
+/// (`creation_flags` sets the whole value, so this sets both).
+pub fn low_priority(cmd: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: between fork and exec the closure only makes two system calls, which are
+        // async-signal-safe, on the child itself; a failure (not allowed) leaves the priority.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+                #[cfg(target_os = "linux")]
+                {
+                    libc::syscall(
+                        libc::SYS_ioprio_set,
+                        IOPRIO_WHO_PROCESS,
+                        0 as libc::c_long,
+                        LOW_IO,
+                    );
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        cmd.creation_flags(crate::process::CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+    }
+    cmd
+}
+
+const SCRUBBED: [&str; 8] = [
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
+    "CARGO_INCREMENTAL",
+];
+
+/// Where commands run so that no player's Cargo configuration reaches them: the filesystem root
+/// above the launcher's data (`/` on Unix, whatever mount the data is on; the drive's root on
+/// Windows). Cargo reads `.cargo/config.toml` in the folder it starts in and in
+/// every folder above it, so from a folder under the player's home it would read
+/// `~/.cargo/config.toml` even with another `CARGO_HOME`: its `[profile]`, `[build]` and
+/// `[target]` settings (rustflags, linker, incremental) beat both the workspace's profile and
+/// the environment, and no command-line switch turns that search off. A build names its workspace
+/// with `--manifest-path` instead.
+pub fn outside_configs() -> Option<PathBuf> {
+    let data = backend::data_dir();
+    data.ancestors()
+        .last()
+        .filter(|root| root.has_root())
+        .map(Path::to_path_buf)
 }
 
 /// Where toolchains live: `<launcher data>/rust/`.
@@ -479,6 +568,67 @@ mod tests {
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             assert_eq!(host().unwrap().target, "aarch64-apple-darwin");
         }
+    }
+
+    #[test]
+    fn the_players_compiler_settings_stay_out_of_builds() {
+        for name in [
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTDOCFLAGS",
+            "CARGO_INCREMENTAL",
+            "CARGO_PROFILE_RELEASE_LTO",
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS",
+            "CARGO_BUILD_TARGET",
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_TARGET_DIR",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+            "RUSTC_WRAPPER",
+            "RUSTUP_TOOLCHAIN",
+            "cargo_profile_release_debug",
+        ] {
+            assert!(scrubbed(name), "{name}");
+        }
+        for name in [
+            "CARGO_BUILD_JOBS",
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "CARGO_NET_OFFLINE",
+            "CARGO_HTTP_PROXY",
+            "HTTPS_PROXY",
+            "SSL_CERT_FILE",
+        ] {
+            assert!(!scrubbed(name), "{name}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn builds_run_at_the_lowest_priority() {
+        // Read back from the running child itself: its niceness and its I/O priority.
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let mut child = low_priority(&mut cmd).spawn().unwrap();
+        let pid = child.id();
+        // The priority is set between fork and exec; wait for the exec.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // SAFETY: plain system calls on a child process of this test.
+        let (nice, io) = unsafe {
+            let nice = libc::getpriority(libc::PRIO_PROCESS, pid as libc::id_t);
+            let io = libc::syscall(
+                libc::SYS_ioprio_get,
+                IOPRIO_WHO_PROCESS,
+                pid as libc::c_long,
+            );
+            (nice, io)
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(nice, 19);
+        assert_eq!(io, LOW_IO);
     }
 
     #[test]

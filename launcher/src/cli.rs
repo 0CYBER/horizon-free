@@ -745,20 +745,25 @@ enum Cmd {
         accept_eula: bool,
     },
     /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
-    /// revision they pin, with the launcher's own Rust, as the version the "Native mods" instance
-    /// plays. Not sandboxed: the mods' code runs with your rights
+    /// revision they pin, else the one the instance plays, with the launcher's own Rust, as the
+    /// version the instance then plays. Not sandboxed: the mods' code runs with your rights
     NativeBuild {
         /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
         /// (default: the native mods installed and turned on in the instance)
         folder: Option<PathBuf>,
         /// The instance whose installed native mods to build, and which then plays the build
-        /// (default: the selected one; the game's own home builds into the Native mods instance)
+        /// (default: the selected one)
         #[arg(long)]
         instance: Option<String>,
         /// The installed version whose game files the build reuses, and whose commit it builds on
-        /// when no mod pins one (default: the selected one)
+        /// when no mod pins one (default: the one the instance plays, so a rebuild stays on its
+        /// Horizon)
         #[arg(long)]
         version: Option<String>,
+        /// Move to the newest installed release or Nightly instead of the Horizon the instance
+        /// plays (a full rebuild)
+        #[arg(long, conflicts_with = "version")]
+        update: bool,
         /// You read the mods' source and trust it with full access to this computer
         #[arg(long)]
         trust_native_code: bool,
@@ -1175,40 +1180,40 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             folder,
             instance,
             version,
+            update,
             trust_native_code,
             allow_version_mismatch,
         } => {
             if !trust_native_code {
                 return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
             }
-            let base = backend::resolve_version(version.as_deref())?;
             let started = std::time::Instant::now();
             let target = match &instance {
                 Some(name) => instances::find(name)?,
                 None => instances::selected(),
             };
-            let (folder, target) = match folder {
-                Some(folder) => (folder, None),
-                None => (
-                    horizon_launcher::native_mods::installed_mods(&target.home)?,
-                    Some(&target),
-                ),
+            let base = match version {
+                Some(v) => backend::resolve_version(Some(&v))?,
+                None => {
+                    let plays = target.resolve_version(None).ok();
+                    native_mods::base_for(plays.as_deref(), &backend::installed(), update)
+                        .ok_or("No version is installed yet.")?
+                }
             };
-            let built = horizon_launcher::native_mods::build(
-                &base,
-                &folder,
-                target,
-                allow_version_mismatch,
-                |step| eprintln!("{}", step.label()),
-            )
-            .map_err(|e| {
-                match e.starts_with(horizon_launcher::native_mods::MISMATCH) {
+            let folder = match folder {
+                Some(folder) => folder,
+                None => native_mods::installed_mods(&target.home)?,
+            };
+            let built =
+                native_mods::build(&base, &folder, &target, allow_version_mismatch, |step| {
+                    eprintln!("{}", step.label())
+                })
+                .map_err(|e| match e.starts_with(native_mods::MISMATCH) {
                     true => {
                         format!("{e} They often still build: pass --allow-version-mismatch to try.")
                     }
                     false => e,
-                }
-            })?;
+                })?;
             println!(
                 "{built} built and selected for its instance ({:.0} s).",
                 started.elapsed().as_secs_f64()
