@@ -223,6 +223,7 @@ horizon-server start | stop | restart    in the background (its output goes to l
 horizon-server status [--json]           up or not, TPS, MSPT, players, chunks, RAM, CPU
 horizon-server cmd COMMAND...            one console command, and what it answers
 horizon-server logs [-f] [-n N]          the log; -f follows it
+horizon-server console                   attach: the live log, TPS/players at the top, type commands; Ctrl-D detaches
 horizon-server report [SECONDS]          record a performance report (below)
 horizon-server op|deop NAME
 horizon-server whitelist on|off|list
