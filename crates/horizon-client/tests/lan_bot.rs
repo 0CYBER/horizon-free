@@ -1150,3 +1150,80 @@ fn a_click_past_the_menu_is_ignored() {
         "slot 9 keeps its stone"
     );
 }
+
+#[test]
+fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let mut config = horizon_anticheat::Config {
+        enabled: true,
+        ..Default::default()
+    };
+    config.timer.enabled = false;
+    config.ground.enabled = false;
+    s.hub.set_anticheat(config);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Recorded", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
+    let at = s.hub.guests[0].position;
+    // The server's tick ends with a ping; the client answers it before its next tick.
+    s.hub.anticheat_ping();
+    let pinged = s.hub.ticks;
+    let inbox = &mut s.hub.guests[0].inbox;
+    inbox.push_back((
+        S::Pong(horizon_protocol::packets::configuration::Ping { id: pinged as i32 }),
+        0,
+    ));
+    inbox.push_back((S::PlayerInput(play::PlayerInput { flags: 1 }), 0));
+    inbox.push_back((
+        S::MovePlayerPosRot(play::MovePlayerPosRot {
+            x: at[0],
+            y: at[1],
+            z: at[2] + 0.1,
+            yaw: 45.0,
+            pitch: 5.0,
+            flags: 1,
+        }),
+        0,
+    ));
+    inbox.push_back((S::ClientTickEnd(Empty), 0));
+    // A tick without a move.
+    inbox.push_back((S::ClientTickEnd(Empty), 0));
+    s.tick(&[]);
+    let record = s.hub.guests[0]
+        .anticheat
+        .record
+        .as_deref()
+        .expect("the prediction records");
+    let ticks: Vec<_> = record.ticks().copied().collect();
+    assert_eq!(ticks.len(), 2);
+    assert_eq!(ticks[0].position, Some([at[0], at[1], at[2] + 0.1]));
+    assert_eq!(
+        (ticks[0].yaw, ticks[0].pitch, ticks[0].flags),
+        (45.0, 5.0, Some(1))
+    );
+    assert_eq!((ticks[0].input, ticks[0].seen), (1, Some(pinged)));
+    assert_eq!(
+        (ticks[1].position, ticks[1].input, ticks[1].yaw),
+        (None, 1, 45.0)
+    );
+    // An answer to a ping never sent changes nothing.
+    s.hub.guests[0].inbox.push_back((
+        S::Pong(horizon_protocol::packets::configuration::Ping {
+            id: (pinged + 100) as i32,
+        }),
+        0,
+    ));
+    s.tick(&[]);
+    let record = s.hub.guests[0].anticheat.record.as_deref().unwrap();
+    assert_eq!(record.seen(), Some(pinged));
+}
