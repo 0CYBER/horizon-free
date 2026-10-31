@@ -13871,8 +13871,9 @@ impl Game<'_> {
             return;
         }
         self.lod_source_attempted = true;
+        let dim = self.dim;
         let source = match &self.integrated {
-            Some(server) => server.call(|game| game.streaming.lod_source()),
+            Some(server) => server.call(move |game| game.lod_source_in(dim)).flatten(),
             None => Some(self.streaming.lod_source()),
         };
         if let Some(source) = source {
