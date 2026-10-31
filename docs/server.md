@@ -337,7 +337,8 @@ horizon-server update --archive FILE --version NAME     an archive you have (you
 
 Planned:
 horizon-server console                   attach: the live log, and send commands (Ctrl-D detaches)
-horizon-server ban|pardon <player> [reason]      ban-ip|pardon-ip <address>   (`cmd ban …` works now)
+horizon-server players [--json]          who is online, operators, whitelist, bans
+horizon-server kick|ban <player> [reason]   pardon <player>   ban-ip <address|player> [reason]   pardon-ip <address>
 horizon-server import-resources <dir>      prepare --server-jar PATH
 horizon-server mcp                       MCP server on stdio (section 8)
 ```
@@ -444,8 +445,12 @@ runtime or new dependency. Server-sent events can replace the polling later if a
     average/P50/P95/P99, players, chunks), `GET logs?since=`, `POST command {line}` (returns the output),
     `POST stop`, `POST restart`, `GET backups`, `POST backups {name}`, `POST restore {name}`, `POST update
     {tag, timeout}` (without a tag: the newest release, downloaded first; `status` has an `update` object
-    that says how it went);
-  - planned: `GET metrics?since=` (the panel's graphs), `GET events` (SSE: log lines and metrics),
+    that says how it went), `GET metrics?since=`;
+  - built (server-admin): `GET players` (online with address, ping and op level; ops, whitelist, bans, IP
+    bans), `POST players/{kick,ban,pardon,ban-ip,pardon-ip,op,deop}`, `POST whitelist {enabled}`,
+    `POST whitelist/{add,remove}` (each runs vanilla's console command and answers `changed` and its lines),
+    `GET metrics/prometheus` (Prometheus text);
+  - planned: `GET events` (SSE: log lines and metrics),
     `GET`/`PATCH config` (server.toml fields, validated).
 - **Auth.** Every call needs `Authorization: Bearer <token from .horizon/api.json>` (file mode 0600), and the
   `Host` header must be the loopback address it listens on.

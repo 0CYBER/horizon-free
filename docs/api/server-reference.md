@@ -138,4 +138,16 @@ HTTP and JSON on 127.0.0.1. A running server writes its address and a random tok
 | `POST` | `/api/v1/backups` | `{"name": "..."}` (optional) | `{"name": "<file>"}` | Back up now (a running game saves first and stays up) |
 | `POST` | `/api/v1/restore` | `{"name": "<backup>"}` | `{"name": "<backup>"}` | Restart the game with that backup's world (the current one is kept in backups/) |
 | `POST` | `/api/v1/update` | `{"tag": "...", "timeout": seconds}` (both optional) | `{"ok": true}`; `status` says how it went (`update`) | Restart on that installed release, or download the newest first; goes back if the game isn't up within the timeout |
+| `GET` | `/api/v1/metrics/prometheus` | nothing | the latest sample as Prometheus text: `horizon_up`, `horizon_tps`, `horizon_mspt{stat}`, `horizon_players_online`, `horizon_memory_rss_bytes`... | Metrics for a monitoring tool to scrape |
+| `GET` | `/api/v1/players` | nothing | `online` (name, uuid, address, ping_ms, op_level), `max_players`, `ops`, `whitelist` (`enabled`, `players`), `bans`, `ip_bans` (with reason, source, created, expires) | Who is online, and vanilla's lists |
+| `POST` | `/api/v1/players/kick` | `{"name", "reason"}` (reason optional) | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Kick an online player |
+| `POST` | `/api/v1/players/ban` | `{"name", "reason"}` (reason optional) | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Ban a player (kicked if online) |
+| `POST` | `/api/v1/players/pardon` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Lift a player's ban |
+| `POST` | `/api/v1/players/ban-ip` | `{"ip", "reason"}`, or `{"name"}` of an online player | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Ban an address (its players are kicked) |
+| `POST` | `/api/v1/players/pardon-ip` | `{"ip"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Lift an address's ban |
+| `POST` | `/api/v1/players/op` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Make a player an operator (op-permission-level) |
+| `POST` | `/api/v1/players/deop` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Make a player no longer an operator |
+| `POST` | `/api/v1/whitelist` | `{"enabled": bool}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Turn the whitelist on or off |
+| `POST` | `/api/v1/whitelist/add` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Whitelist a player |
+| `POST` | `/api/v1/whitelist/remove` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Take a player off the whitelist (kicked if enforce-whitelist) |
 | `POST` | `/api/v1/panel/login` | nothing | `{"url": "..."}` | A one-time login link for the web panel (with the token only, not from the panel) |
