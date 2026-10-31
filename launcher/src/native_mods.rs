@@ -1,4 +1,4 @@
-//! Native mods (docs/native-mods.md), experimental and off by default: mixin bundles that
+//! Native mods (docs/native-mods.md): mixin bundles that
 //! levzzz5154's horizon-mixins (MIT, <https://github.com/horizon-rust/horizon-mixins>) applies to
 //! Horizon's source, which the launcher then compiles into a game of its own with its portable Rust
 //! ([`rust_toolchain`]). Unlike `.hmod` mods they are not sandboxed: their code runs with the
@@ -35,26 +35,6 @@ const PROFILE: &str = "fast";
 const FALLBACK_PROFILE: &str = "release";
 /// The features of the release's own game (game-build.yml).
 const FEATURES: &str = "horizon-client/mods";
-
-/// Whether Native mods are on after an install into a game folder whose list is `installed`:
-/// installing a native mod turns them on, so the player only has to build. A player who never
-/// installs one keeps them off; one already on stays on.
-pub fn turns_on(on: bool, installed: &[crate::browser::installed::Entry]) -> bool {
-    on || installed.iter().any(|e| {
-        e.file
-            .strip_prefix(INSTALLED)
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
-}
-
-/// Whether installing a native mod shows its notice first (what the first build takes): once,
-/// for a player whose Native mods are still off.
-pub fn needs_notice(on: bool, noticed: bool) -> bool {
-    !on && !noticed
-}
-
-/// The notice before the first native mod is installed.
-pub const NOTICE: &str = "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.";
 
 /// Whether an installed version is a native-mods build.
 pub fn is_native(version: &str) -> bool {
@@ -517,7 +497,7 @@ pub fn update_for(version: &str, installed: &[String]) -> Option<String> {
     newer_than(&about(version)?.base, installed)
 }
 
-fn newer_than(base: &str, installed: &[String]) -> Option<String> {
+pub fn newer_than(base: &str, installed: &[String]) -> Option<String> {
     newest_installed(installed)
         .filter(|n| *n != base && backend::compare_versions(n, base).is_gt())
         .cloned()
@@ -574,6 +554,18 @@ pub fn version_for(revision: &str, mixins: &str, bundles: &[Bundle]) -> Result<S
         .map(|b| format!("{b:02x}"))
         .collect();
     Ok(format!("{PREFIX}{}-{key}", &revision[..7]))
+}
+
+/// A digest of a mod's files (name, length, bytes, sorted by name), kept in `native-mods.json` so
+/// the Mods page sees a mod edited or reinstalled without a version bump.
+pub fn digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
+    let mut hash = Sha256::new();
+    for (name, bytes) in files {
+        hash.update(name.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Where a build is.
@@ -924,7 +916,14 @@ pub fn build(
             "hooks": mods.iter().find_map(|m| m.hooks),
             "rust": rust_toolchain::VERSION,
             "profile": profile,
-            "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
+            "mods": mods.iter().map(|m| serde_json::json!({
+                "id": m.id,
+                "version": m.version,
+                "sha256": files(&m.dir).ok().map(|list| {
+                    let read: Vec<_> = list.iter().filter_map(|(n, p)| Some((n.clone(), fs::read(p).ok()?))).collect();
+                    digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice())))
+                }),
+            })).collect::<Vec<_>>(),
         });
         let binary = target.join(profile).join(backend::CLIENT);
         install(base, &version, &binary, &about)?;
@@ -1027,42 +1026,6 @@ fn stale(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Ludovic's decision (2026-10-29): installing a native mod turns Native mods on, after a
-    /// notice shown once; players who never install one keep them off.
-    #[test]
-    fn installing_a_native_mod_turns_native_mods_on() {
-        let entry = |file: &str| {
-            serde_json::from_value::<crate::browser::installed::Entry>(serde_json::json!({
-                "source": "horizon", "project": "p", "slug": "p", "title": "P", "kind": "mod",
-                "version": "1", "number": "1", "file": file, "checksum": "", "page": ""
-            }))
-            .unwrap()
-        };
-        let plain = [
-            entry("horizon-mods/zoom.hmod"),
-            entry("resourcepacks/x.zip"),
-        ];
-        assert!(!turns_on(false, &[]));
-        assert!(!turns_on(false, &plain), "no native mod: they stay off");
-        assert!(!turns_on(
-            false,
-            &[entry("horizon-native-mods-old/x.hnmod")]
-        ));
-        let native = [
-            plain[0].clone(),
-            entry("horizon-native-mods/veinminer.hnmod"),
-        ];
-        assert!(turns_on(false, &native));
-        assert!(turns_on(true, &plain), "on stays on");
-        // The notice: before the first one only.
-        assert!(needs_notice(false, false));
-        assert!(!needs_notice(false, true));
-        assert!(!needs_notice(true, false));
-        // Settings without the fields read as off and not noticed.
-        let s: backend::Settings = serde_json::from_str("{}").unwrap();
-        assert!(!s.native_mods && !s.native_mods_noticed);
-    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("horizon-native-{name}-{}", std::process::id()));
@@ -1472,7 +1435,7 @@ mod tests {
     }
 
     /// levzzz5154's decision (2026-10-29): a rebuild stays on the Horizon the instance plays;
-    /// only Update moves it to a newer one.
+    /// only "Rebuild on Horizon {version}" moves it to a newer one.
     #[test]
     fn a_rebuild_stays_on_the_instances_horizon_until_an_update() {
         let installed: Vec<String> = [

@@ -7,6 +7,7 @@ use horizon_launcher::github_mods;
 use horizon_launcher::instances;
 use horizon_launcher::loaders;
 use horizon_launcher::native_mods;
+use horizon_launcher::native_status;
 use horizon_launcher::other_launchers;
 use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
@@ -744,9 +745,9 @@ enum Cmd {
         #[arg(long)]
         accept_eula: bool,
     },
-    /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
-    /// revision they pin, else the one the instance plays, with the launcher's own Rust, as the
-    /// version the instance then plays. Not sandboxed: the mods' code runs with your rights
+    /// Native mods (docs/native-mods.md): compile mixin bundles on the Horizon revision they
+    /// pin, else the one the instance plays, with the launcher's own Rust, as the version the
+    /// instance then plays. Not sandboxed: the mods' code runs with your rights
     NativeBuild {
         /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
         /// (default: the native mods installed and turned on in the instance)
@@ -2058,13 +2059,10 @@ fn github_native(
             o.sha256
         );
     }
-    // A native mod turns Native mods on, with the window's notice, once.
+    // The window's trust notice, once. Nothing is turned on: native mods are always on.
     let mut settings = backend::Settings::load();
-    if !settings.native_mods {
-        if !settings.native_mods_noticed {
-            eprintln!("{}", native_mods::NOTICE);
-        }
-        settings.native_mods = true;
+    if !settings.native_mods_noticed {
+        eprintln!("{}", native_status::NOTICE);
         settings.native_mods_noticed = true;
         settings.save();
     }
@@ -2360,14 +2358,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     println!("  not ported: {s}");
                 }
             }
-            // A native mod turns Native mods on, with the window's notice, once.
+            // The first native mod: the window's trust notice, once.
             let mut settings = backend::Settings::load();
-            let list = installed::Installed::load(&home).entries;
-            if !settings.native_mods && native_mods::turns_on(false, &list) {
-                if !settings.native_mods_noticed {
-                    eprintln!("{}", native_mods::NOTICE);
-                }
-                settings.native_mods = true;
+            let native = done.iter().any(|e| native_status::is_native_file(&e.file));
+            if native && !settings.native_mods_noticed {
+                eprintln!("{}", native_status::NOTICE);
                 settings.native_mods_noticed = true;
                 settings.save();
             }

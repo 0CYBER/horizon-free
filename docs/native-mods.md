@@ -1,4 +1,4 @@
-# Native mods (experimental)
+# Native mods
 
 Native mods are **mixin bundles** that change the game's own Rust source before it is compiled, with
 [horizon-mixins](https://github.com/horizon-rust/horizon-mixins) (MIT, by levzzz5154, made for Horizon). A bundle
@@ -6,9 +6,10 @@ is a `horizon-mixin.toml` and a few `.rs` helpers that hook into named functions
 RETURN, MODIFY_ARG, OVERWRITE...; the tool's README lists them). A port such as Veinminer is three HEAD hooks and
 one module. Start a mod from [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template).
 
-Native mods are native code with the player's rights, not sandboxed. The launcher turns them on only when the player
-installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review (its later releases are checked by machine); and
-they play in a game of their own, built for the instance they are installed in.
+Native mods are native code with the player's rights, not sandboxed. They are always on in the launcher: there is no
+switch. The first install shows a trust notice, and every build waits behind a red warning; the registry lists one only
+after a review (its later releases are checked by machine); and they play in a game of their own, built for the
+instance they are installed in.
 
 ## Pinned to a Nightly
 
@@ -225,10 +226,23 @@ need `"hooks": 40`.
 
 ## What the launcher does
 
-In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
-Rust and can take 20 to 30 minutes; later builds are faster) and turns on Settings → Game → **Native mods
-(experimental)**, which stays off for players who never install one; `mods install` does the same. Then **Build**. The launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the
-row shows each step, the error if one fails, and the build the instance plays. From the command line:
+In the window: install a native mod from the Mods page, into the instance picked on the left ("Installs into
+{instance}", shown even with one instance). The first one shows a trust notice once (native mods aren't sandboxed; the
+first build downloads Rust and can take 20 to 30 minutes; later builds are faster); `mods install` prints it too. Each
+installed native mod's row says "Installed in {instance}" and has **Open folder** (`<instance>/horizon-native-mods/`).
+The installed list has a **Native build of {instance}** row for the instance picked on the left, never another's:
+
+- a badge: **Not built** (the version it plays isn't a `native-*` build), **Needs rebuild** (the `mods` in its
+  `native-mods.json` differ from those turned on, by id and version) or **Up to date**, with **Build** for the first
+  two;
+- for a native build, "Plays native-…, built on Horizon {version}" (the `base` of its `native-mods.json`);
+- **Rebuild on Horizon {version}** when a newer release or Nightly is installed (`native_mods::update_for`). Build
+  stays on the Horizon the instance plays; only that button moves it, and its warning says the build starts from scratch
+  and takes longer.
+
+The instance list on the left shows such an instance as "Native build · Nightly 10-28" (its base). The launcher names
+the mods, warns in red, and builds only from "I trust these mods: build"; the row shows each step and the error if
+one fails, on the instance being built only; one build runs at a time. From the command line:
 `horizon-launcher native-build [FOLDER] [--instance NAME] [--update] --trust-native-code`. FOLDER is a bundle, an
 unpacked `.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
 trusting native code is the player's decision, never an agent's.
@@ -381,8 +395,8 @@ each was built or last used): switching a mod off and on again plays the kept bu
 
 ## Trust
 
-- **Off until the player installs one.** Settings → Game → Native mods stays off for a player who never installs a
-  native mod; the first install shows the notice and turns it on. The command needs `--trust-native-code`; the window
+- **A notice, then a warning.** The first native install shows a trust notice once. The command needs
+  `--trust-native-code`; the window
   shows a warning in red before every build: the mods run with full access to the computer, and their ids and
   versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
   Horizon's own.
@@ -410,8 +424,7 @@ each was built or last used): switching a mod off and on again plays the kept bu
 
 ## Left to do
 
-- Rebuild after the mods change, and offer **Update** when `update_for` finds a newer Horizon (asking first, as it
-  compiles for minutes).
+- A list of every native build, to delete the ones no instance needs.
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
 
 ## Named hook catalog (draft)

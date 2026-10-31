@@ -111,6 +111,9 @@ impl Launcher {
     }
 
     pub(super) fn select_instance(&mut self, instance: &Instance) {
+        // A native build's warning names the mods of the instance it was opened for.
+        self.native_confirm = None;
+        self.native_update = None;
         self.settings.instance =
             (instance.kind != InstanceKind::Default).then(|| instance.id.clone());
         self.settings.save();
@@ -206,6 +209,13 @@ impl Launcher {
                         }
                         (None, None, None) => tr("No version installed").into(),
                         (None, Some(_), _) if !prepared => tr("Needs preparing").into(),
+                        (None, Some(tag), _) if self.native_build_of(tag).is_some() => {
+                            let build = self.native_build_of(tag).unwrap_or_default();
+                            trf(
+                                "Native build · {version}",
+                                &[("version", &build.horizon_short())],
+                            )
+                        }
                         (None, Some(tag), Some(_)) => format!("{} · {tag}", tr("Ready")),
                         (None, Some(_), None) => tr("Ready").into(),
                     },
