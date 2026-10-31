@@ -2519,7 +2519,9 @@ impl Game<'_> {
             return;
         }
         let g = &mut host.hub.guests[i];
+        // restartClientLoadTimerAfterRespawn.
         g.dead = false;
+        g.load_timeout = horizon_client::lan::guest::CLIENT_LOADED_TIMEOUT;
         g.death_time = 0;
         g.health = 20.0;
         g.food = 20;
