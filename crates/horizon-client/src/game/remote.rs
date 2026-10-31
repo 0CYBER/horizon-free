@@ -835,6 +835,9 @@ impl Game<'_> {
         self.streaming.paused = true;
         self.world = World::new(self.res.facts().air, 0);
         self.player = None;
+        // The vehicle went with the level: an id kept here would seat the
+        // next login on an entity that is not there.
+        self.riding = None;
         // Out of the server's bed: InBedChatScreen goes with the level.
         self.sleeping = None;
         self.sleep_timer = 0;
@@ -2441,9 +2444,11 @@ impl Game<'_> {
                     r.reconfiguring = None;
                 }
                 // handleLogin makes a new MultiPlayerGameMode (carried index 0) and a
-                // new LocalPlayer (slot 0, no effects).
+                // new LocalPlayer (slot 0, no effects, riding nothing: the server
+                // pairs a vehicle again with ClientboundSetPassengersPacket).
                 self.selected = 0;
                 self.potions.effects.clear();
+                self.riding = None;
                 if let Some(r) = self.remote.as_mut() {
                     r.carried = Some(0);
                     r.own_invisible = false;
