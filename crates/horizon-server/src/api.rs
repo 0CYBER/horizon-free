@@ -48,7 +48,7 @@ pub struct Route {
 }
 
 /// Every endpoint `start` and [`route`] answer; a test checks the two agree.
-pub const ROUTES: [Route; 27] = [
+pub const ROUTES: [Route; 28] = [
     Route {
         method: "GET",
         path: "/api/v1/status",
@@ -69,6 +69,13 @@ pub const ROUTES: [Route; 27] = [
         takes: "`?since=N`",
         answers: "`{\"next\": N, \"lines\": [...]}`",
         what: "The log lines after the Nth (the last 2000 are kept)",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/events",
+        takes: "`?since=N` (or `Last-Event-ID`), `?types=join,leave,kick,chat,death,log,phase` (all by default)",
+        answers: "with `Accept: text/event-stream`, server-sent events as they happen (`id`, `event`: the type, `data`: JSON); otherwise `{\"next\": N, \"events\": [...]}`",
+        what: "Log lines, the supervisor's phase, and the game's joins, leaves, kicks, chat and deaths (the last 2000 kept)",
     },
     Route {
         method: "POST",
@@ -251,7 +258,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
@@ -332,6 +339,9 @@ pub struct Shared {
     /// The installer's folder this program runs from (none for a build of your own: no updates).
     pub install: Option<Install>,
     pub update: Mutex<Updates>,
+    /// The event stream's events (events.rs), and the streams' wake-up.
+    pub events: Mutex<crate::events::Events>,
+    pub event_added: std::sync::Condvar,
 }
 
 impl Shared {
@@ -360,6 +370,8 @@ impl Shared {
             panel: Mutex::new(panel::Auth::default()),
             install,
             update: Mutex::new(Updates::default()),
+            events: Mutex::default(),
+            event_added: std::sync::Condvar::new(),
         })
     }
 
@@ -447,6 +459,7 @@ impl Shared {
     }
     pub fn set_phase(&self, phase: Phase) {
         self.state.lock().unwrap().phase = phase;
+        self.emit("phase", json!({ "phase": phase.name() }));
     }
     fn phase(&self) -> Phase {
         self.state.lock().unwrap().phase
@@ -639,6 +652,7 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
             let (next, lines) = shared.log.lock().unwrap().since(since);
             Response::json(200, &json!({ "next": next, "lines": lines }))
         }
+        ("GET", "/api/v1/events") => crate::events::route(shared, request),
         ("POST", "/api/v1/command") => {
             let line = serde_json::from_slice::<Value>(&request.body)
                 .ok()

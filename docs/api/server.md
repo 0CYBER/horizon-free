@@ -14,7 +14,7 @@ address), op and deop, the whitelist, and metrics as Prometheus text.
 | --- | --- |
 | Commands | 28 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `op`, `deop`, `whitelist`, `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`, `version`) |
 | `server.toml` keys | 25 in 7 sections, plus `[properties]` for any other vanilla key |
-| Control API endpoints | 27 under `/api/v1` |
+| Control API endpoints | 28 under `/api/v1` |
 
 ## Guide
 
@@ -27,6 +27,10 @@ address), op and deop, the whitelist, and metrics as Prometheus text.
    action runs vanilla's console command on the running game, so it kicks, logs and saves `banned-players.json`
    exactly as an operator's `/ban` does; the reply says whether anything `changed` and has the console's lines.
 5. Monitor: point Prometheus (or any scraper that sends a bearer token) at `GET /api/v1/metrics/prometheus`.
+6. Watch: `GET /api/v1/events` with `Accept: text/event-stream` streams what happens as server-sent events: every
+   log line (`log`), the supervisor's `phase`, and the game's typed `join`, `leave`, `kick`, `chat` and `death`
+   events with the player's name and UUID (`?types=chat,death` picks some). `Last-Event-ID` (or `?since=N`)
+   resumes after a reconnection; without `Accept: text/event-stream` it answers the events after `since` as JSON.
 
 ## Reference
 
@@ -43,6 +47,10 @@ curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/players"
 curl -s -H "Authorization: Bearer $token" -d '{"name": "Steve", "reason": "griefing"}' "http://$address/api/v1/players/ban"
 # {"changed":true,"output":["Banned Steve: griefing"]}
 curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/metrics/prometheus"
+curl -sN -H "Authorization: Bearer $token" -H "Accept: text/event-stream" "http://$address/api/v1/events?types=join,chat,death"
+# id: 41
+# event: chat
+# data: {"id":41,"type":"chat","name":"Steve","uuid":"...","message":"hi","time":1793451234567}
 curl -s -H "Authorization: Bearer $token" -X PATCH -d '{"changes": {"world.difficulty": "hard"}}' "http://$address/api/v1/config"
 # {"applied":["world.difficulty"],"restart":[],"running":true,"saved":["world.difficulty"]}
 curl -s -H "Authorization: Bearer $token" -o world.zip "http://$address/api/v1/backups/download?name=2026-10-31T12-00-00Z-manual.zip"
@@ -57,8 +65,6 @@ addition; a change to one starts `/api/v2`, served beside `/api/v1`.
 
 - **Players**: positions in `players`; editing the lists while the game is stopped through the API (the CLI's
   `op`, `deop` and `whitelist` already do).
-- **Console stream**: the log as a stream (server-sent events) rather than `logs?since=N` polling; chat, joins, leaves,
-  deaths and crashes as typed events.
 - **Metrics**: entities and per-dimension counts in the Prometheus text.
 - **Backups**: restore a single dimension.
 - **Mods on a dedicated server**: list, turn on and off, and their settings, once native mods can be built for the
@@ -73,4 +79,4 @@ addition; a change to one starts `/api/v2`, served beside `/api/v1`.
 - Commands: `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`.
 - `/api/v1` additions: `players`, `players/{kick,ban,pardon,ban-ip,pardon-ip,op,deop}`, `whitelist`,
   `whitelist/{add,remove}`, `metrics/prometheus`, `GET`/`PATCH config`, `DELETE backups`, `GET backups/download`;
-  `server.toml` gets `[api]` (`bind`, `token`, `allow_public`).
+  `server.toml` gets `[api]` (`bind`, `token`, `allow_public`); `GET events` (server-sent events, or JSON).
