@@ -1925,6 +1925,8 @@ struct Game<'a> {
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     /// LevelLoadingScreen.smoothedProgress while the player is not placed yet.
     loading_progress: f32,
+    /// When `loading_progress` last eased (the server thread's load, 50 ms a step).
+    loading_progress_at: Option<std::time::Instant>,
     /// The world spawn search's origin chunk and fallback height, once known.
     spawn_origin: Option<((i32, i32), i32)>,
     spawn_spiral: horizon_client::world_spawn::ChunkSpiral,
@@ -12905,8 +12907,7 @@ impl Game<'_> {
             self.apply_ui_settings();
         }
         // Minecraft.doWorldLoad: the LevelLoadingScreen while single player's
-        // server starts. Its chunk map and progress are the server's, which
-        // the window doesn't see yet: the title alone, over the menu background.
+        // server starts, with the server's chunk map and progress.
         if self.integrated_starting.is_some() {
             if let Some(renderer) = &mut self.renderer {
                 let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
@@ -12920,7 +12921,22 @@ impl Game<'_> {
                     h,
                     false,
                 );
-                horizon_client::level_loading::draw(&mut hud, &self.gui.atlas, None, None);
+                // The chunk map and progress are the server thread's.
+                let view = self
+                    .integrated_starting
+                    .as_ref()
+                    .map(|s| s.handle.load_view().clone());
+                let status = |x: i32, z: i32| view.as_ref().and_then(|v| v.status(x, z));
+                let progress = view
+                    .as_ref()
+                    .is_some_and(|v| v.has_progress())
+                    .then_some(self.loading_progress);
+                horizon_client::level_loading::draw(
+                    &mut hud,
+                    &self.gui.atlas,
+                    Some(&status),
+                    progress,
+                );
                 return renderer.render(&loading_frame(&hud));
             }
             return Ok(false);
@@ -15406,6 +15422,7 @@ impl<'a> Game<'a> {
             book_last_click: None,
             lectern_pulses: Vec::new(),
             loading_progress: 0.0,
+            loading_progress_at: None,
             spawn_origin: None,
             spawn_spiral: Default::default(),
             player_spawn: None,
