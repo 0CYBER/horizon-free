@@ -1708,6 +1708,7 @@ impl Game<'_> {
             // handleTeleportToEntityPacket: a spectator goes to the player,
             // in whichever level they are.
             S::TeleportToEntity(p) if spectator => self.guest_spectate_teleport(host, gi, p.uuid),
+            S::SpectatorAction(p) => self.guest_spectator_action(host, gi, p.target),
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
@@ -2073,7 +2074,7 @@ impl Game<'_> {
     /// interaction: the host, another player, a mob, a vehicle or object, a
     /// dragon part or crystal, a projectile. None for an id the level doesn't
     /// have (the handlers then find nothing either).
-    fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
+    pub(super) fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
         let conn = host.hub.guests[gi].conn;
         if id == host.host_entity {
             return self.player.as_ref().map(|p| p.bounds());
@@ -2577,6 +2578,7 @@ impl Game<'_> {
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
+        self.tick_guest_cameras(host);
         self.lan_merchant_tick(host);
         self.lan_stations_tick(host);
         self.lan_tables_tick(host);

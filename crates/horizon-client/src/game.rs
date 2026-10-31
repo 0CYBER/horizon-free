@@ -129,6 +129,7 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_attributes;
+mod lan_camera;
 mod lan_chat;
 mod lan_crafting;
 mod lan_entities;
@@ -1106,6 +1107,12 @@ impl LevelAccess for GameLevel<'_> {
         _state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        // TestBlock.ownSignal.
+        if let Some(BlockEntity::TestBlock(b)) =
+            self.world.block_entities.get(&(pos.x, pos.y, pos.z))
+        {
+            return b.own_signal();
+        }
         // TrappedChestBlock.getSignal: the players with it open, at most 15.
         if let Some(count) = self.lid_openers.get(&(pos.x, pos.y, pos.z)) {
             return (*count).clamp(0, 15);
@@ -4187,6 +4194,16 @@ impl Game<'_> {
                     kind: "structure_block",
                     ..
                 } => self.structure_block_neighbor_changed((pos.x, pos.y, pos.z)),
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "test_block",
+                    ..
+                } => self.test_block_neighbor_changed((pos.x, pos.y, pos.z)),
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "test_block_tick",
+                    ..
+                } => self.reset_test_block((pos.x, pos.y, pos.z)),
                 LevelEvent::BlockEvent {
                     pos,
                     kind: "brushable",
@@ -9204,19 +9221,23 @@ impl Game<'_> {
                         | "minecraft:test_instance_block"
                 )
             };
-            let visible = r.block_entities().filter(|(p, state)| {
-                if !self.res.block_entity_render().renders(*state) {
-                    return false;
-                }
-                off_screen(*state)
-                    || view.is_none_or(|v| {
-                        let o =
-                            (glam::DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
-                                - camera)
-                                .as_vec3();
-                        v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
-                    })
-            });
+            let visible =
+                r.visible_block_entities(self.settings.chunk_fade)
+                    .filter(|(p, state)| {
+                        if !self.res.block_entity_render().renders(*state) {
+                            return false;
+                        }
+                        off_screen(*state)
+                            || view.is_none_or(|v| {
+                                let o = (glam::DVec3::new(
+                                    f64::from(p[0]),
+                                    f64::from(p[1]),
+                                    f64::from(p[2]),
+                                ) - camera)
+                                    .as_vec3();
+                                v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
+                            })
+                    });
             if self.entity_culler.is_some() || self.pack_ids.is_some() {
                 for block in visible {
                     let start = out.len();
@@ -13365,6 +13386,7 @@ impl Game<'_> {
                 .boss_overlay
                 .darken_amount(self.clock.fraction() as f32),
             menu_blur: self.menu_blur(),
+            chunk_fade: self.settings.chunk_fade,
         };
         let result = match self.renderer.as_mut() {
             Some(renderer) => {
@@ -13406,13 +13428,13 @@ impl Game<'_> {
             .count();
         horizon_client::level_loading::progress(ready)
     }
-    /// `LevelLoadingScreen.extractBackground` and `extractRenderState`.
-    fn draw_level_loading(
+    /// `LevelLoadingScreen.extractBackground`.
+    pub(super) fn draw_level_loading_background(
         &self,
         batch: &mut HudBatch,
         reason: horizon_client::level_loading::Reason,
     ) {
-        use horizon_client::level_loading::{self, Reason, STATUS_RADIUS};
+        use horizon_client::level_loading::Reason;
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         match reason {
@@ -13426,6 +13448,16 @@ impl Game<'_> {
             }
             Reason::EndPortal => batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255)),
         }
+    }
+    /// `LevelLoadingScreen.extractBackground` and `extractRenderState`.
+    fn draw_level_loading(
+        &self,
+        batch: &mut HudBatch,
+        reason: horizon_client::level_loading::Reason,
+    ) {
+        use horizon_client::level_loading::{self, STATUS_RADIUS};
+        self.draw_level_loading_background(batch, reason);
+        let atlas = &self.gui.atlas;
         let (cx, cz) = self.streaming.center;
         let status = |x: i32, z: i32| {
             self.streaming.latest_status(
@@ -16538,6 +16570,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         night_vision: 0.0,
         block_flicker: 0.0,
         boss_darken: 0.0,
+        chunk_fade: 0.0,
         menu_blur: None,
     }
 }

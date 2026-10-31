@@ -114,7 +114,7 @@ impl Game<'_> {
             cart: None,
         }
     }
-    pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
+    pub(in crate::game) fn target_rotation(&self, t: Target) -> [f32; 2] {
         match t {
             Target::Player => [self.yaw, self.pitch],
             Target::Guest(conn) => self

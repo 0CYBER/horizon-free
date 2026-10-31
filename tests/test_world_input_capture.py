@@ -45,12 +45,14 @@ class WorldInputCaptureTests(unittest.TestCase):
         spawn = method(game, "spawn_player")
         self.assertLess(spawn.index("self.player = Some(player)"),
                         spawn.index("self.capture_loaded_world()"))
-        tick = remote[remote.index("    pub(super) fn tick_remote("):]
-        ready = tick[tick.index("if self.remote.as_ref().is_some_and(|r| !r.loaded_sent)"):]
+        # ClientPacketListener.tick: the level load tracker ends the loading screen,
+        # the server hears PlayerLoaded, the mouse is captured, then the player moves.
+        ready = remote[remote.index("    fn tick_client_load("):]
         self.assertLess(ready.index("r.loaded_sent = true"),
                         ready.index("self.capture_loaded_world()"))
-        self.assertLess(ready.index("self.capture_loaded_world()"),
-                        ready.index("let stick = self.pad_move()"))
+        level = remote[remote.index("    fn tick_remote_level("):]
+        self.assertLess(level.index("self.tick_client_load()"),
+                        level.index("let stick = self.pad_move()"))
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_capture_lifecycle(self):

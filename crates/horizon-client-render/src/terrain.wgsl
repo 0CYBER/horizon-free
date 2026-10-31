@@ -77,6 +77,8 @@ struct TerrainOut {
     @location(6) @interpolate(flat) fade: u32,
     // A distant tile's tile-relative position, for its fade (`faded`).
     @location(7) local: vec3<f32>,
+    // terrain.vsh's chunkVisibility: the section's fade-in, from 16 blocks out.
+    @location(8) visibility: f32,
 }
 // Whether a fading tile or section leaves this pixel out (gfx/lod.rs's
 // `fade_code`, `fade_out_code`). It fades in, or out, chunk by chunk: each
@@ -122,7 +124,7 @@ fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
 // section's 1/32768 (`terrain_uv`).
 fn fade_depth(clip: vec4<f32>, w: f32) -> vec4<f32> {
     let code = fade_code(w);
-    let tile = fract(abs(w)) > 0.001;
+    let tile = instance_step(w) > 0.001;
     var scale = select(1.0, 1.0 - 2e-3, tile);
     if code != 0u && (code - 1u) % 129u < 64u {
         scale *= 1.0 + 5e-6 * f32(64u - (code - 1u) % 129u);
@@ -157,8 +159,23 @@ fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
 // integer below 2^24, so it decodes exactly), 1/32 per block for distant
 // terrain tiles (TerrainVertex::tiled). A fading tile negates it past its
 // dither code (gfx/lod.rs's `instance`): the step is the fraction either way.
-fn terrain_uv(packed: vec2<u32>, step: f32) -> vec2<f32> {
-    return vec2<f32>(packed) * fract(abs(step));
+fn terrain_uv(packed: vec2<u32>, w: f32) -> vec2<f32> {
+    return vec2<f32>(packed) * instance_step(w);
+}
+// A whole section's step (a power of two) carries its fade-in in the mantissa's 23 bits, as
+// `1 - visibility` (gfx.rs's `section_instance`): masked off, the step; the rest is
+// `RenderSection.getVisibility`. A fading one (negative) is fully visible.
+fn instance_step(w: f32) -> f32 {
+    if w > 0.0 {
+        return bitcast<f32>(bitcast<u32>(w) & 0xff800000u);
+    }
+    return fract(abs(w));
+}
+fn instance_visibility(w: f32) -> f32 {
+    if w > 0.0 {
+        return 1.0 - f32(bitcast<u32>(w) & 0x7fffffu) / 8388608.0;
+    }
+    return 1.0;
 }
 // A fading distant tile's dither code (gfx/lod.rs's `fade_code`), 0 when whole.
 fn fade_code(w: f32) -> u32 {
@@ -199,6 +216,9 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
     out.fade = fade_code(w);
+    const CHUNK_FULLY_VISIBLE_RANGE: f32 = 16.0;
+    out.visibility = mix(1.0, instance_visibility(w),
+        clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -216,7 +236,9 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     let dy = dpdy(in.local);
     if faded(in.fade, in.local, dx, dy) { discard; }
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
-    let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
+    var color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
+    // terrain.fsh: the fade-in mixes toward the fog colour.
+    color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
     if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     // Below 0.75, alpha tells HDR output (hdr.wgsl) a light source's bright
     // pixels may shine, and at which tier (mesher::hdr_tier): 0.525 at the
@@ -228,7 +250,8 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
 // layer drawn first in front (gfx.rs's water tiers): dithered, the faded-out
 // pixels showed the layer behind through the one in front, twice the water.
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
-    let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
+    var color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
+    color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
     if color.a < 0.01 { discard; }
     return apply_fog(color, in.spherical, in.cylindrical);
 }

@@ -9,8 +9,10 @@ use horizon_client::{
     clipboard::EditShortcut,
     confirm_screen::Confirm,
     dialog::{AfterAction, Body, Click, Control, Dialog, InputValue, Kind},
-    dialog_screen::{BOX, Layout, Part, WARNING_SPRITES, waiting_button},
+    dialog_screen::{BOX, Layout, Part, WARNING_SPRITES, text_height, waiting_button},
+    font::Font,
     hud::{HudBatch, rgba},
+    multiline_edit::MultiLineEdit,
     text::{ClickEvent, Text},
     ui,
 };
@@ -23,11 +25,54 @@ struct Open {
     dialog: Dialog,
     values: Vec<InputValue>,
     /// The box of each text input.
-    fields: Vec<Option<ui::EditBox>>,
+    fields: Vec<Option<Field>>,
     focus: Option<usize>,
     scroll: ui::Scroll,
     /// The number range input whose slider is held.
     dragging: Option<usize>,
+    /// The multiline input the pointer is selecting in.
+    selecting: Option<usize>,
+}
+
+/// A text input's control: `EditBox`, or `MultiLineEditBox` for a multiline one.
+enum Field {
+    Line(ui::EditBox),
+    Multi(Box<MultiLineEdit>),
+}
+impl Field {
+    fn value(&self) -> String {
+        match self {
+            Self::Line(edit) => edit.value.clone(),
+            Self::Multi(edit) => edit.value(),
+        }
+    }
+    fn insert_text(&mut self, font: &Font, text: &str) {
+        match self {
+            Self::Line(edit) => edit.insert_text(text),
+            Self::Multi(edit) => edit.insert_text(font, text),
+        }
+    }
+    fn key(&mut self, font: &Font, key: KeyCode, ctrl: bool, shift: bool) -> bool {
+        match self {
+            Self::Line(edit) => edit.key(key, ctrl, shift),
+            Self::Multi(edit) => edit.key(font, key, ctrl, shift),
+        }
+    }
+    fn shortcut(
+        &mut self,
+        font: &Font,
+        shortcut: EditShortcut,
+        clipboard: &mut dyn horizon_client::clipboard::Clipboard,
+    ) {
+        match self {
+            Self::Line(edit) => {
+                edit.shortcut(shortcut, clipboard);
+            }
+            Self::Multi(edit) => {
+                edit.shortcut(font, shortcut, clipboard);
+            }
+        }
+    }
 }
 
 /// The dialog screens a server can open.
@@ -100,10 +145,35 @@ impl Game<'_> {
             dialog.set_list(&entries.unwrap_or_default());
         }
         let values = dialog.inputs.iter().map(|i| i.control.initial()).collect();
+        let font = &self.gui.atlas.font;
         let fields = dialog
             .inputs
             .iter()
             .map(|i| match &i.control {
+                Control::Text {
+                    width,
+                    initial,
+                    max_length,
+                    multiline: Some((max_lines, _)),
+                    ..
+                } => {
+                    // TextInputHandler: the `MultiLineEditBox` with its limits.
+                    let height = text_height(Some((*max_lines, None)));
+                    let height = match &i.control {
+                        Control::Text {
+                            multiline: Some((_, Some(h))),
+                            ..
+                        } => *h as f32,
+                        _ => height,
+                    };
+                    let mut edit = MultiLineEdit::new(font, 0.0, 0.0, *width as f32, height);
+                    edit.set_character_limit((*max_length).max(0) as usize);
+                    if let Some(lines) = max_lines {
+                        edit.set_line_limit((*lines).max(0) as usize);
+                    }
+                    edit.set_value(font, initial);
+                    Some(Field::Multi(Box::new(edit)))
+                }
                 Control::Text {
                     width,
                     initial,
@@ -114,7 +184,7 @@ impl Game<'_> {
                     edit.max_length = (*max_length).max(1) as usize;
                     edit.set_value(initial);
                     edit.focused = false;
-                    Some(edit)
+                    Some(Field::Line(edit))
                 }
                 _ => None,
             })
@@ -126,6 +196,7 @@ impl Game<'_> {
             focus: None,
             scroll: ui::Scroll::default(),
             dragging: None,
+            selecting: None,
         });
         self.dialogs.waiting = None;
         self.capture(false);
@@ -154,7 +225,7 @@ impl Game<'_> {
     fn dialog_values(open: &mut Open) {
         for (value, field) in open.values.iter_mut().zip(&open.fields) {
             if let Some(f) = field {
-                *value = InputValue::Text(f.value.clone());
+                *value = InputValue::Text(f.value());
             }
         }
     }
@@ -371,10 +442,19 @@ impl Game<'_> {
                     batch.text_styled(atlas, &text, x, y, u32::MAX, true);
                 }
                 Part::Field { input, rect } => {
-                    if let Some(Some(edit)) = open.fields.get_mut(input) {
-                        [edit.x, edit.y, edit.width, edit.height] = rect;
-                        edit.focused = open.focus == Some(input);
-                        edit.draw(batch, atlas, None);
+                    let focused = open.focus == Some(input);
+                    match open.fields.get_mut(input) {
+                        Some(Some(Field::Line(edit))) => {
+                            [edit.x, edit.y, edit.width, edit.height] = rect;
+                            edit.focused = focused;
+                            edit.draw(batch, atlas, None);
+                        }
+                        Some(Some(Field::Multi(edit))) => {
+                            [edit.x, edit.y, edit.width, edit.height] = rect;
+                            edit.set_focused(focused);
+                            edit.draw(batch, atlas);
+                        }
+                        _ => {}
                     }
                 }
                 Part::Check { input, rect } => {
@@ -567,11 +647,32 @@ impl Game<'_> {
                 Part::Field {
                     input,
                     rect: [x, y, w, h],
-                } if ui::hovered(cursor, x, y, w, h) => {
+                } if ui::hovered(
+                    cursor,
+                    x,
+                    y,
+                    // A multiline box answers over its scroll bar too.
+                    w + if matches!(open.fields.get(input), Some(Some(Field::Multi(_)))) {
+                        6.0
+                    } else {
+                        0.0
+                    },
+                    h,
+                ) =>
+                {
                     open.focus = Some(input);
-                    if let Some(Some(edit)) = open.fields.get_mut(input) {
-                        edit.focused = true;
-                        edit.click(&self.gui.atlas, cursor.0, false, false);
+                    match open.fields.get_mut(input) {
+                        Some(Some(Field::Line(edit))) => {
+                            edit.focused = true;
+                            edit.click(&self.gui.atlas, cursor.0, false, false);
+                        }
+                        Some(Some(Field::Multi(edit))) => {
+                            [edit.x, edit.y, edit.width, edit.height] = [x, y, w, h];
+                            edit.set_focused(true);
+                            edit.click(&self.gui.atlas.font, cursor, shift, false);
+                            open.selecting = Some(input);
+                        }
+                        _ => {}
                     }
                 }
                 Part::Check {
@@ -681,6 +782,30 @@ impl Game<'_> {
                     cycle(open, input, if delta > 0.0 { -1 } else { 1 });
                     return;
                 }
+                // AbstractScrollArea.mouseScrolled: a multiline box takes the wheel.
+                let text = layout
+                    .placed(open.scroll.amount)
+                    .find_map(|(part, _)| match part {
+                        Part::Field { input, rect } => match open.fields.get(input) {
+                            Some(Some(Field::Multi(_)))
+                                if ui::hovered(
+                                    cursor,
+                                    rect[0],
+                                    rect[1],
+                                    rect[2] + 6.0,
+                                    rect[3],
+                                ) =>
+                            {
+                                Some(input)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                if let Some(Some(Field::Multi(edit))) = text.and_then(|i| open.fields.get_mut(i)) {
+                    edit.wheel(delta);
+                    return;
+                }
             }
             open.scroll.wheel(delta, 10.0, ay, ay + ah, layout.content);
         }
@@ -688,6 +813,14 @@ impl Game<'_> {
 
     /// The pointer moved with a slider held (`AbstractSliderButton.onDrag`).
     pub(super) fn dialog_drag(&mut self) {
+        let (cursor, shift) = (self.cursor, self.modifiers.shift_key());
+        if let Some(open) = self.dialogs.open.as_mut()
+            && let Some(Some(Field::Multi(edit))) =
+                open.selecting.and_then(|i| open.fields.get_mut(i))
+        {
+            // MultiLineEditBox.onDrag.
+            edit.drag(&self.gui.atlas.font, cursor, shift);
+        }
         let Some(input) = self.dialogs.open.as_ref().and_then(|o| o.dragging) else {
             return;
         };
@@ -709,10 +842,15 @@ impl Game<'_> {
 
     /// The left button released: a held slider lets go and clicks.
     pub(super) fn dialog_release(&mut self) {
-        if let Some(open) = self.dialogs.open.as_mut()
-            && open.dragging.take().is_some()
-        {
-            self.audio.play_button_click();
+        if let Some(open) = self.dialogs.open.as_mut() {
+            if let Some(Some(Field::Multi(edit))) =
+                open.selecting.take().and_then(|i| open.fields.get_mut(i))
+            {
+                edit.release();
+            }
+            if open.dragging.take().is_some() {
+                self.audio.play_button_click();
+            }
         }
     }
 
@@ -777,11 +915,12 @@ impl Game<'_> {
         let Some(Some(edit)) = open.focus.and_then(|f| open.fields.get_mut(f)) else {
             return Ok(());
         };
+        let font = &self.gui.atlas.font;
         if let Some(shortcut) = shortcut {
-            edit.shortcut(shortcut, &mut self.clipboard);
+            edit.shortcut(font, shortcut, &mut self.clipboard);
             return Ok(());
         }
-        if edit.key(key, ctrl, shift) {
+        if edit.key(font, key, ctrl, shift) {
             return Ok(());
         }
         let typed: String = text
@@ -790,7 +929,7 @@ impl Game<'_> {
             .filter(|c| !c.is_control())
             .collect();
         if !typed.is_empty() {
-            edit.insert_text(&typed);
+            edit.insert_text(font, &typed);
         }
         Ok(())
     }
@@ -808,7 +947,7 @@ impl Game<'_> {
             return false;
         };
         open.focus = focus;
-        edit.insert_text(text);
+        edit.insert_text(&self.gui.atlas.font, text);
         true
     }
 
@@ -827,7 +966,7 @@ impl Game<'_> {
             let mut values = open.values.clone();
             for (value, field) in values.iter_mut().zip(&open.fields) {
                 if let Some(f) = field {
-                    *value = InputValue::Text(f.value.clone());
+                    *value = InputValue::Text(f.value());
                 }
             }
             open.dialog.json(&values)

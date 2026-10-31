@@ -168,7 +168,9 @@ impl GameLevel<'_> {
     /// the blocks at `push` one step `direction` (`[0, 1, 0]` is up; pulling
     /// when it retracts) and destroy those at `destroy`:
     /// `PistonBaseBlock.moveBlocks`, once its structure resolved. Set
-    /// `canceled` and nothing moves, as when the structure can't. API 22.
+    /// `canceled` and nothing moves, as when the structure can't; a sticky
+    /// piston then retracts without its block, and clients are sent the
+    /// blocks rather than the retraction to replay. API 22.
     #[inline(always)]
     pub(super) fn native_piston_move(
         &self,

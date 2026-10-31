@@ -2398,7 +2398,13 @@ impl SaveDir {
             Folder::Entities => &self.entity_regions,
             Folder::Poi => &self.poi_regions,
         };
-        read_region_record(&self.root, cache, folder, x, z).ok()?
+        match read_region_record(&self.root, cache, folder, x, z) {
+            Ok(record) => record,
+            Err(e) => {
+                crate::chunk_io::report_load_failure(&self.root, x, z, &e);
+                None
+            }
+        }
     }
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
         let root = self.read_record("region", x, z)?;
@@ -2537,6 +2543,10 @@ impl SaveDir {
                         let message = format!("failed to write {folder} files: {e}");
                         log::warn!("Horizon: {message}");
                         *outstanding.error.lock().unwrap() = Some(message);
+                        // `reportChunkSaveFailure` for each chunk of the batch.
+                        for (k, _, _) in &batch {
+                            crate::chunk_io::report_save_failure(&root, k.0, k.1, e);
+                        }
                     }
                     // Keep failed snapshots readable; never report them as durable.
                     if result.is_ok()
