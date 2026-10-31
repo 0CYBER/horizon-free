@@ -244,7 +244,7 @@ Most decoration and resource blocks are vanilla classes with other numbers: Maca
 data tier without code. Templates also give mod blocks every behaviour Horizon already
 implements and the harnesses already check. Items work the same way (`"template":
 "minecraft:diamond"`, overriding `max_stack_size`, `rarity` and any data component in
-`components`).
+`components`; a block's item takes `components` too).
 
 How the game loads them, without touching vanilla's path:
 

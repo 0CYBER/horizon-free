@@ -95,6 +95,18 @@ gets its own damage and durability, or a tool its mining speed:
     "!minecraft:repairable": {} } }
 ```
 
+A block's item takes the same `components`, over the components of its
+template block's item; a block with `"item": false` can't have them. Block files
+have no `max_stack_size` or `rarity` keys, so those two go in `components` here
+(an integer 1 to 99, and one of `common`, `uncommon`, `rare`, `epic`):
+
+```json
+{ "template": "minecraft:iron_block",
+  "components": {
+    "minecraft:max_stack_size": 16,
+    "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } } }
+```
+
 A component type no vanilla item has is refused, so a misspelt one fails
 the load instead of doing nothing. Behaviour the game ties to a vanilla
 item's id doesn't come along yet: a copy of the trident doesn't throw
