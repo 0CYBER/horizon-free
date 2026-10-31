@@ -145,7 +145,8 @@ fn hostile_archive_paths_and_cross_layer_collisions_are_rejected_before_staging(
                 (&format!("overrides/resourcepacks/{name}"), b"bad"),
             ],
         );
-        assert!(imported(&src, &t.work()).is_err(), "{name}");
+        // A bad entry leaves the packs out; it no longer fails the import.
+        assert!(imported(&src, &t.work()).is_ok(), "{name}");
         assert!(available(&t.work()).is_empty());
         assert!(!t.work().join("escape.zip").exists());
     }
@@ -162,7 +163,7 @@ fn hostile_archive_paths_and_cross_layer_collisions_are_rejected_before_staging(
             ),
         ],
     );
-    assert!(imported(&src, &t.work()).is_err());
+    assert!(imported(&src, &t.work()).is_ok());
     assert!(available(&t.work()).is_empty());
 }
 
@@ -209,7 +210,8 @@ fn symlinks_at_source_and_destination_are_rejected() {
     put(&src.join("resourcepacks/good.zip"), b"good");
     put(&t.0.join("outside.zip"), b"outside");
     symlink(t.0.join("outside.zip"), src.join("resourcepacks/link.zip")).unwrap();
-    assert!(imported(&src, &t.work()).is_err());
+    // A bad entry leaves the packs out; it no longer fails the import.
+    assert!(imported(&src, &t.work()).is_ok());
     fs::remove_file(src.join("resourcepacks/link.zip")).unwrap();
     imported(&src, &t.work()).unwrap();
     let home = t.0.join("home");
@@ -381,7 +383,8 @@ fn duplicate_archive_entries_are_rejected() {
         }
     }
     fs::write(&src, bytes).unwrap();
-    assert!(imported(&src, &t.work()).is_err());
+    // A bad entry leaves the packs out; it no longer fails the import.
+    assert!(imported(&src, &t.work()).is_ok());
     assert!(available(&t.work()).is_empty());
 }
 
@@ -400,7 +403,8 @@ fn archive_symlinks_are_refused_and_file_counts_are_bounded() {
     )
     .unwrap();
     zip.finish().unwrap();
-    assert!(imported(&src, &t.work()).is_err());
+    // A bad entry leaves the packs out; it no longer fails the import.
+    assert!(imported(&src, &t.work()).is_ok());
     assert!(available(&t.work()).is_empty());
     let mut files: Files = (0..MAX_FILES)
         .map(|n| (format!("pack/{n}"), Vec::new()))

@@ -214,7 +214,7 @@ pub fn import(path: &Path, log: Log) -> Result<Imported, String> {
     pipeline::import(path, &work, log)?;
     pipeline::inventory(&work, false, log)?;
     pipeline::report(&work, log)?;
-    prepare_resourcepacks(&work)?;
+    prepare_resourcepacks(&work);
     load(&work)
 }
 
@@ -227,7 +227,7 @@ pub fn port(
     log: Log,
 ) -> Result<Imported, String> {
     pipeline::port(work, resources, from, log)?;
-    prepare_resourcepacks(work)?;
+    prepare_resourcepacks(work);
     load(work)
 }
 
@@ -301,7 +301,7 @@ pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
     if mods.is_empty() && resourcepacks::available(work).is_empty() {
         return Err("No content mods or resource packs are available: port the pack first.".into());
     }
-    prepare_resourcepacks(work)?;
+    prepare_resourcepacks(work);
     let home = profile_home(work);
     fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
     let options = home.join("options.txt");
@@ -316,9 +316,14 @@ pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn prepare_resourcepacks(work: &Path) -> Result<(), String> {
-    let report = resourcepacks::install(work, &profile_home(work))?;
-    pipeline::write_json(&work.join("profile-resourcepacks.json"), &report)
+/// Installs the staged resource packs into the profile. A pack that cannot be installed
+/// is logged and left off; it never blocks importing, porting or launching the mods.
+fn prepare_resourcepacks(work: &Path) {
+    let result = resourcepacks::install(work, &profile_home(work))
+        .and_then(|report| pipeline::write_json(&work.join("profile-resourcepacks.json"), &report));
+    if let Err(e) = result {
+        eprintln!("resource packs not installed: {e}");
+    }
 }
 
 #[cfg(test)]

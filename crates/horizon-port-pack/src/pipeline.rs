@@ -25,7 +25,11 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Strin
 pub fn import(source: &Path, work: &Path, log: Log) -> Result<import::Pack, String> {
     let pack = import::import(source)?;
     fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
-    crate::resourcepacks::stage(source, work, &pack)?.save(work)?;
+    // A bad resource-pack entry must not stop the pack's mods from importing.
+    match crate::resourcepacks::stage(source, work, &pack).and_then(|r| r.save(work)) {
+        Ok(()) => {}
+        Err(e) => log(format!("resource packs not staged: {e}")),
+    }
     write_json(&work.join("pack.json"), &pack)?;
     let mut kinds = BTreeMap::<&str, usize>::new();
     for f in &pack.files {

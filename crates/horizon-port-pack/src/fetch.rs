@@ -268,8 +268,25 @@ pub(crate) fn store_download(
                 fs::rename(&part, dest).map_err(|e| e.to_string())
             } else {
                 // Publish without replacing a file that appeared while the request was in flight.
-                fs::hard_link(&part, dest).map_err(|e| e.to_string())?;
-                fs::remove_file(&part).map_err(|e| e.to_string())
+                match fs::hard_link(&part, dest) {
+                    Ok(()) => fs::remove_file(&part).map_err(|e| e.to_string()),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e.to_string()),
+                    Err(_) => {
+                        // No hard links here (FAT, some network mounts): copy into a new file.
+                        let mut out = fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(dest)
+                            .map_err(|e| e.to_string())?;
+                        let written = out.write_all(&bytes).map_err(|e| e.to_string());
+                        drop(out);
+                        if written.is_err() {
+                            let _ = fs::remove_file(dest);
+                        }
+                        let _ = fs::remove_file(&part);
+                        written
+                    }
+                }
             }
         });
     if result.is_err() {
