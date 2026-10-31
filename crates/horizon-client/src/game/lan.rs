@@ -2576,7 +2576,24 @@ impl Game<'_> {
 }
 
 /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` for an item in use: 1, and 2 when
-/// it is the off hand's.
+/// it is the off hand's. A stop is 0 here; vanilla leaves bit 1 set, so its
+/// stop of an off-hand use is 2. Both mean "not using" (bit 0 is clear), and
+/// nothing reads bit 1 without bit 0.
 pub(super) fn living_flags(using: Option<(usize, u32)>) -> i8 {
     using.map_or(0, |(slot, _)| if slot == OFFHAND_SLOT { 3 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OFFHAND_SLOT, living_flags};
+
+    /// `LivingEntity.startUsingItem` sets flag 1 for the use and flag 2 for
+    /// the off hand, so an off-hand use is 3, not 2. A reader takes bit 0 as
+    /// `isUsingItem` and bit 1 as `getUsedItemHand`.
+    #[test]
+    fn an_off_hand_use_flags_both_the_use_and_the_hand() {
+        assert_eq!(living_flags(None), 0);
+        assert_eq!(living_flags(Some((0, 12))), 1);
+        assert_eq!(living_flags(Some((OFFHAND_SLOT, 12))), 3);
+    }
 }

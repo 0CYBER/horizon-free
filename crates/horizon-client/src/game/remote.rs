@@ -8651,11 +8651,14 @@ mod tests {
 
     #[test]
     fn the_server_stopping_the_use_lowers_the_shield() {
-        // Player.disableShield's stopUsingItem: flags 0 while the off-hand
-        // shield is raised (LocalPlayer.onSyncedDataUpdated → stopUsingItem).
+        // Player.disableShield's stopUsingItem: flags 0 or 2 while the
+        // off-hand shield is raised (LocalPlayer.onSyncedDataUpdated →
+        // stopUsingItem). stopUsingItem clears bit 0 and leaves bit 1, so a
+        // main-hand stop is 0 and an off-hand stop is 2.
         let off = super::super::shield::OFFHAND_SLOT;
         assert_eq!(synced_local_use(Some((off, 12)), 0, 3, |_| true), None);
         assert_eq!(synced_local_use(Some((3, 5)), 0, 3, |_| true), None);
+        assert_eq!(synced_local_use(Some((off, 12)), 2, 3, |_| true), None);
     }
 
     #[test]
