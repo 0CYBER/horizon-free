@@ -132,6 +132,13 @@ impl Levels {
     }
 
     /// The levels that are not in place, by dimension.
+    /// The forced chunks of every level not in place, released.
+    pub(super) fn release_parked_forced_chunks(&mut self) {
+        for level in self.parked.values_mut() {
+            level.streaming.forced.clear();
+        }
+    }
+
     pub(super) fn parked_dims(&self) -> Vec<Dim> {
         self.parked.keys().copied().collect()
     }
@@ -516,6 +523,8 @@ impl Game<'_> {
                 guests.iter().any(|g| g.dimension == d.id())
                     || self.player_bed_levels().any(|b| b == *d)
                     || forced
+                    // A game test runs in its own level, players or not.
+                    || self.game_tests.has_tests_in(*d)
                     || self.pregen_level() == Some(*d)
                     // A pending portal arrival keeps its destination level
                     // running so it can land and tick (the portal ticket).
