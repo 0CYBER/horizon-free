@@ -43,7 +43,13 @@ pub(super) fn with_native_commands(
     base: &horizon_client::command::Dispatcher,
     names: &[&str],
 ) -> horizon_client::command::Dispatcher {
-    base.with_mod_commands(names.iter().copied())
+    // A name the tree already has keeps that command (colour, completion).
+    base.with_mod_commands(
+        names
+            .iter()
+            .copied()
+            .filter(|name| base.find(name).is_none()),
+    )
 }
 
 impl Game<'_> {
@@ -468,9 +474,8 @@ impl Game<'_> {
         };
         // The mob effect registry: every effect `/effect` and the
         // `mob_effect` resource arguments accept.
-        reg.effects = horizon_client::brewing::EFFECTS
-            .iter()
-            .map(|e| format!("minecraft:{}", e.id))
+        reg.effects = horizon_client::brewing::all_effects()
+            .map(|e| horizon_client::brewing::namespaced(e.id).to_owned())
             .collect();
         reg.effects.sort();
         reg.enchantments = list("data/minecraft/enchantment");
@@ -983,7 +988,7 @@ impl Game<'_> {
         if !self.settings.chat_links {
             return;
         }
-        if self.settings.file.bool("chatLinksPrompt") {
+        if self.settings.chat_links_prompt {
             self.link_prompt = Some(url);
         } else {
             super::packs::open_uri(&url);
@@ -1167,9 +1172,9 @@ impl Game<'_> {
                 .focused_tags(&self.gui.atlas.font, height, cx, cy);
         horizon_client::hud_layout::paint(batch, &self.gui.atlas, &tag_icons);
         if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
-            // DrawingFocusedGraphicsAccess.handleMessage: the pointing hand over
-            // insertion text, which ChatScreen only asks for while Shift is held.
-            if style.insertion.is_some() && self.has_shift_down() {
+            // ActiveTextCollector.ClickableStyleFinder: a click event, or an
+            // insertion while Shift is held (ChatScreen.includeInsertions).
+            if style.click.is_some() || (style.insertion.is_some() && self.has_shift_down()) {
                 horizon_client::widgets::request_cursor(
                     horizon_client::widgets::Cursor::PointingHand,
                 );
@@ -1551,5 +1556,10 @@ mod tests {
         // A name the game has keeps that command: the chat still knows it.
         let shared = with_native_commands(vanilla, &["help"]);
         assert!(shared.find("help").is_some());
+        assert_eq!(
+            shared.parse("help", &reg).executable().map(|e| e.1),
+            vanilla.parse("help", &reg).executable().map(|e| e.1)
+        );
+        assert_eq!(shared.nodes.len(), vanilla.nodes.len());
     }
 }

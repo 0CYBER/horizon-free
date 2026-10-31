@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod prediction;
 pub mod timer;
 
 /// What one check's violation level leads to.
@@ -131,6 +132,12 @@ checks! {
     /// the ground to skip fall damage) and walking on water. The claim is always dropped, so vanilla's
     /// fall damage follows; from `setback` on the player is also sent back.
     ground: Ground => GroundConfig [5.0, 15.0, 60.0, 2.0] {}
+
+    /// Prediction: each move played again from the client's own inputs with vanilla's movement code,
+    /// and compared (speed, step, fly, jesus...). Being built: for now it records each player's
+    /// client ticks (`prediction::Record`), with a ping a tick to place what the server changes, and
+    /// plays them again (horizon-client's `lan::prediction`), but flags nothing.
+    prediction: Prediction => PredictionConfig [5.0, 15.0, 60.0, 2.0] {}
 }
 
 /// How many checks there are.
@@ -198,6 +205,8 @@ pub struct Player {
     pub timer: timer::Balance,
     /// The server tick and height where the ground last held the player.
     pub ground: Option<(u64, f64)>,
+    /// The client ticks the prediction plays again (only while it runs).
+    pub record: Option<Box<prediction::Record>>,
 }
 
 impl Player {

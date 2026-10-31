@@ -43,6 +43,41 @@ fn scroll_u(u: f32, scroll: f32) -> f32 {
 /// HDR output, as `mesher::hdr_tier`.
 const EYES_TIER: u8 = crate::mesher::BRIGHT;
 
+/// Tags quads as drawn by a render type vanilla gives an `OitPipelineSet`
+/// (`gfx::OIT_ENTITY`): improved transparency draws them in its stages.
+fn mark_oit(quads: &mut [Vertex]) {
+    for vertex in quads {
+        vertex.layer |= crate::gfx::OIT_ENTITY;
+    }
+}
+/// Whether the species' model is built with `RenderTypes::entityTranslucent`
+/// (`Model.renderType`, which `LivingEntityRenderer.getRenderType` uses for the
+/// body): the allay, the piglins, the breeze, the vex, the player model and the
+/// sulfur cube.
+fn translucent_body(m: &Mob) -> bool {
+    matches!(
+        m.species(),
+        Species::Allay
+            | Species::Piglin
+            | Species::PiglinBrute
+            | Species::ZombifiedPiglin
+            | Species::Breeze
+            | Species::Vex
+            | Species::SulfurCube
+    ) || avatar(m)
+}
+/// Whether a layer's render type has an `OitPipelineSet`: `RenderTypes.eyes` and
+/// `entityTranslucentEmissive` (the full bright layers), `breezeWind`, and
+/// `entityTranslucent` (the slime's outer cube, the sulfur cube's inner cube
+/// and the horse's markings).
+fn translucent_layer(m: &Mob, layer: &Layer) -> bool {
+    layer.full_bright
+        || layer.model == "breeze#wind"
+        || layer.model == "slime#outer"
+        || matches!(m.species(), Species::SulfurCube)
+        || layer.texture.starts_with("entity/horse/horse_markings")
+}
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
@@ -1007,7 +1042,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         }
         let yaw = m.previous_head_yaw + wrap(m.head_yaw - m.previous_head_yaw) * alpha;
         let (look_x, look_z) = (-(yaw.to_radians()).msin(), (yaw.to_radians()).mcos());
-        let v = m.velocity;
+        let v = m.extra.previous_velocity.lerp(m.velocity, f64::from(alpha));
         let view_scale = (pitch.to_radians()).mcos();
         let (look_x, look_z) = (look_x * view_scale, look_z * view_scale);
         let view_length = f64::from(look_x * look_x + look_z * look_z);
@@ -1622,6 +1657,7 @@ fn render_visible(
             }
         });
         if body_visible && let Some(uv) = uv {
+            let start = out.len();
             draw(
                 &model,
                 base,
@@ -1632,6 +1668,9 @@ fn render_visible(
                 body_overlay(m, alpha),
                 out,
             );
+            if translucent_body(m) {
+                mark_oit(&mut out[start..]);
+            }
         }
     };
     // The translucent shell writes depth: draw the opaque core before it.
@@ -1705,6 +1744,9 @@ fn render_visible(
             overlay,
             out,
         );
+        if translucent_layer(m, &layer) {
+            mark_oit(&mut out[start..]);
+        }
         // The eyes render type's glowing eyes also shine in HDR output, at
         // `EYES_TIER` in the overlay's high bits (entity.wgsl fs_hdr_mark).
         if layer.full_bright && m.species() != Species::Warden {
@@ -2084,6 +2126,88 @@ pub fn held_item_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The elytra's flight yaw (`AvatarRenderer.extractFlightData`) lerps
+    /// the velocity of the previous tick towards this tick's, so the model
+    /// does not step once per tick while the view turns (#4104).
+    #[test]
+    fn the_elytra_flight_yaw_lerps_the_velocity_between_ticks() {
+        use crate::mobs::{Anim, Brain, Flags, MobType, Part};
+        use horizon_core::geometry::Vec3;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let model = Arc::new(Part::parse("root", &json!({"children": {"head": {}}})));
+        let kind = Arc::new(MobType {
+            id: "minecraft:player".into(),
+            species: Species::Zombie,
+            width: 0.6,
+            height: 1.8,
+            eye_height: 1.62,
+            category: "misc".into(),
+            max_health: 20.0,
+            speed: 0.1,
+            flying_speed: 0.02,
+            attack_damage: 1.0,
+            attack_knockback: 0.0,
+            follow_range: 0.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Flags::default(),
+            model,
+            layers: std::collections::HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Camel,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        });
+        let gliding = |previous: Vec3, current: Vec3| {
+            let mut m = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
+            m.extra.fall_flying = true;
+            m.extra.fall_fly_ticks = 20;
+            m.extra.previous_velocity = previous;
+            m.velocity = current;
+            m
+        };
+        let from = Vec3::new(0.4, 0.0, 0.4);
+        let to = Vec3::new(0.0, 0.0, 0.5);
+        let at = |m: &Mob, alpha: f32| base_transform_at(m, alpha, glam::Mat4::IDENTITY);
+        let differs = |a: glam::Mat4, b: glam::Mat4| {
+            a.to_cols_array()
+                .iter()
+                .zip(b.to_cols_array())
+                .any(|(x, y)| (x - y).abs() > 1.0e-4)
+        };
+        let m = gliding(from, to);
+        // The ends are the two ticks' velocities.
+        assert!(!differs(at(&m, 0.0), at(&gliding(from, from), 0.0)));
+        assert!(!differs(at(&m, 1.0), at(&gliding(to, to), 1.0)));
+        // Between them the yaw is that of the lerped velocity, which is
+        // neither end: the current tick's alone made it snap.
+        let mid = Vec3::new(0.2, 0.0, 0.45);
+        let half = at(&m, 0.5);
+        assert!(!differs(half, at(&gliding(mid, mid), 0.5)));
+        assert!(differs(half, at(&gliding(to, to), 0.5)));
+        assert!(differs(half, at(&gliding(from, from), 0.5)));
+    }
 
     /// Six faces whose corners span `min` to `max`.
     fn cube(min: [f32; 3], max: [f32; 3]) -> Vec<super::super::Polygon> {

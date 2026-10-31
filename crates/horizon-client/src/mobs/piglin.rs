@@ -220,9 +220,9 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
     b.sees_loved = loved;
 }
 /// `Brain.setActiveActivityToFirstValid`: the first valid activity of a
-/// piglin's list (admiring, fighting, avoiding, celebrating, riding, idle) or
-/// of a hoglin's (fighting, avoiding, idle). An activity is valid while the
-/// memory it requires is there.
+/// piglin's list (admiring, fighting, avoiding, celebrating, riding, idle), of
+/// a brute's (fighting, idle) or of a hoglin's (fighting, avoiding, idle). An
+/// activity is valid while the memory it requires is there.
 pub fn activity(m: &Mob) -> Activity {
     let b = &m.extra.piglin;
     let piglin = m.species() == Species::Piglin;
@@ -291,20 +291,20 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     }
     update_activity(m, cx.w, cx.events);
 }
-/// `HoglinAi.updateActivity` and `PiglinAi.updateActivity`: take the first
-/// valid activity and, when it is not the one it was in, make the sound that
-/// goes with the new one; a piglin then gets off a baby it rides once it has
-/// no ride target (`isBabyRidingBaby`).
+/// `HoglinAi.updateActivity`, `PiglinAi.updateActivity` and
+/// `PiglinBruteAi.updateActivity`: take the first valid activity and, when it
+/// is not the one it was in, make the sound that goes with the new one; a
+/// piglin then gets off a baby it rides once it has no ride target
+/// (`isBabyRidingBaby`).
 fn update_activity(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let now = activity(m);
     let before = std::mem::replace(&mut m.extra.piglin.activity, now);
     if before != now {
-        let sound = if m.species() == Species::Hoglin {
-            hoglin_sound(m, w, now)
-        } else {
-            piglin_sound(m, w, now)
-        };
-        m.voice(sound, events);
+        match m.species() {
+            Species::PiglinBrute => play_brute_sound(m, events),
+            Species::Hoglin => m.voice(hoglin_sound(m, w, now), events),
+            _ => m.voice(piglin_sound(m, w, now), events),
+        }
     }
     // A baby that rides a baby but has no ride target (any more) gets off.
     if m.species() == Species::Piglin && m.extra.piglin.ride.is_none() && is_baby_riding_baby(m, w)
@@ -373,6 +373,21 @@ fn piglin_sound(m: &Mob, w: &MobWorld, activity: Activity) -> &'static str {
         "entity.piglin.retreat"
     } else {
         "entity.piglin.ambient"
+    }
+}
+/// `PiglinBruteAi.playActivitySound`: a brute's `PiglinBrute.playAngrySound`
+/// while the fight activity is the active one; its other activity (idle) says
+/// nothing.
+fn play_brute_sound(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.extra.piglin.activity == Activity::Fight {
+        m.voice("entity.piglin_brute.angry", events);
+    }
+}
+/// `PiglinBruteAi.maybePlayActivitySound`: the level random is drawn on every
+/// tick, fighting or not; a hit only growls in a fight.
+fn maybe_play_brute_sound(m: &mut Mob, lr: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
+    if lr.next_float() < 0.0125 {
+        play_brute_sound(m, events);
     }
 }
 /// `PiglinAi.getAvoidTarget`: the avoid target while the memory is there.
@@ -1551,9 +1566,15 @@ pub fn celebrate(m: &mut Mob, w: &MobWorld) {
 pub fn client_converting(m: &mut Mob, nether: bool) {
     m.extra.counter2 = i32::from(!nether && !m.extra.flag2 && !m.no_ai);
 }
-/// Per-tick piglin and hoglin state: admiring, anger, zombification and the
-/// hoglin attack animation. Returns a conversion when it happens.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+/// Per-tick piglin, piglin brute and hoglin state: the brute's activity and
+/// growl, a piglin's admiring, anger and zombification, and the hoglin attack
+/// animation.
+pub fn ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     if m.extra.anim_ticks > 0 {
         m.extra.anim_ticks -= 1;
     }
@@ -1572,6 +1593,12 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         {
             m.ai.target = None;
         }
+    }
+    // `PiglinBrute.customServerAiStep`: `updateActivity`, then
+    // `maybePlayActivitySound`, after the goals that pick the brute's target.
+    if m.alive() && m.species() == Species::PiglinBrute {
+        update_activity(m, w, events);
+        maybe_play_brute_sound(m, level_random, events);
     }
     if m.extra.anger > 0 {
         m.extra.anger -= 1;
@@ -1905,6 +1932,81 @@ pub fn hoglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     p.xrot("left_front_leg", (pos + PI).mcos() * 1.2 * sp);
     p.xrot("right_hind_leg", (pos + PI).mcos() * 1.2 * sp);
     p.xrot("left_hind_leg", pos.mcos() * 1.2 * sp);
+}
+
+#[cfg(test)]
+mod brute_sound_tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use crate::mobs::world::with_test_world;
+    use std::sync::Arc;
+
+    fn mob(species: Species) -> Mob {
+        let mut kind = kind();
+        Arc::make_mut(&mut kind).species = species;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+    fn sounds(events: &[MobEvent]) -> Vec<&'static str> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                MobEvent::Sound(sound, ..) => Some(*sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `PiglinBruteAi.updateActivity`: a brute with an attack target enters
+    /// the fight activity and growls `entity.piglin_brute.angry`, losing the
+    /// target is silent, and a piglin keeps `entity.piglin.angry`.
+    #[test]
+    fn a_brute_names_the_brute_growl() {
+        let mut brute = mob(Species::PiglinBrute);
+        brute.ai.target = Some(Who::Player);
+        assert_eq!(activity(&brute), Activity::Fight);
+        // The switch itself takes a level; it runs where the vanilla data is.
+        with_test_world(&[], |w, _| {
+            let mut events = Vec::new();
+            update_activity(&mut brute, w, &mut events);
+            assert_eq!(sounds(&events), ["entity.piglin_brute.angry"]);
+            brute.ai.target = None;
+            let mut events = Vec::new();
+            update_activity(&mut brute, w, &mut events);
+            assert!(sounds(&events).is_empty());
+            let mut piglin = mob(Species::Piglin);
+            piglin.ai.target = Some(Who::Player);
+            let mut events = Vec::new();
+            update_activity(&mut piglin, w, &mut events);
+            assert_eq!(sounds(&events), ["entity.piglin.angry"]);
+        });
+    }
+
+    /// `PiglinBruteAi.maybePlayActivitySound`: the level random is drawn on
+    /// every tick, fighting or not, and a hit only sounds in a fight.
+    #[test]
+    fn the_growl_roll_draws_every_tick_and_only_sounds_in_a_fight() {
+        let mut brute = mob(Species::PiglinBrute);
+        let mut lr = LegacyRandom::new(7);
+        let mut control = LegacyRandom::new(7);
+        let mut events = Vec::new();
+        let mut growls = 0;
+        for tick in 0..2000 {
+            let fight = tick % 2 == 0;
+            brute.extra.piglin.activity = if fight {
+                Activity::Fight
+            } else {
+                Activity::Idle
+            };
+            // The same draw on a stream of its own says when the roll hit.
+            let hit = control.next_float() < 0.0125;
+            maybe_play_brute_sound(&mut brute, &mut lr, &mut events);
+            if hit && fight {
+                growls += 1;
+            }
+            assert_eq!(sounds(&events).len(), growls, "tick {tick}");
+        }
+        assert!(growls > 0, "the roll never hit");
+    }
 }
 
 #[cfg(test)]

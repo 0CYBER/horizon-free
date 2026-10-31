@@ -333,7 +333,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is deprecated.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'menu-transfer', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
-          'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
+          'flow-push', 'bubble-column', 'arrows', 'kills', 'looting', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'wheel', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
@@ -1363,6 +1363,47 @@ def check_kills(host, guest, out):
     assert any(f'{GUEST_NAME} has 1 [parity_kills]' in line for line in chat), f"the guest's kill is not theirs: {chat}"
     assert not any(f'{host.player} has 1 [parity_kills]' in line for line in chat), f"the host got the guest's kill: {chat}"
     return chat
+
+
+def check_looting(host, guest, out):
+    """Looting on the guest's sword adds to the drops of a mob they kill (#4496). Deaths are handled
+    in the server's tick, after the guest's swing, so the killer's weapon has to be read from that
+    guest, not from the server's own player. Looting 255 adds round(255 x uniform(0, 1)) porkchops
+    to the pig's 1-3, so a pig dropping 3 or fewer is the bug (or a 1-in-100 roll: two tries)."""
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    guest('command', command='item replace entity @s weapon.mainhand with '
+                             'minecraft:iron_sword[minecraft:enchantments={"minecraft:looting":255}]')
+    face_each_other(host, guest)
+    hx, hy, hz = pos_of(host)
+    counts = []
+
+    def porkchops():
+        # On the ground, or already picked up by either player (the pig dies at the guest's feet).
+        items = host.raw('entities', 8, 'minecraft:item')['entities']
+        ground = sum(e['item']['count'] for e in items if e['item']['item'] == 'minecraft:porkchop')
+        return ground + sum(g('inventory')['counts'].get('minecraft:porkchop', 0) for g in (host, guest))
+
+    try:
+        for _ in range(2):
+            for g in (host, guest):
+                g('command', command='clear @s minecraft:porkchop')
+            host('command', command=f'summon minecraft:pig {hx + 1.5:.2f} {hy:.2f} {hz:.2f} {{NoAI:1b,Health:1.0f}}')
+            guest.wait(30)
+            guest.raw('look-at', f'{hx + 1.5:.2f}', f'{hy + 0.5:.2f}', f'{hz:.2f}')
+            guest.wait(10)
+            guest.raw('attack')
+            guest.wait(30)
+            counts.append(porkchops())
+            host('command', command='kill @e[type=minecraft:item]')
+            if counts[-1] > 3:
+                break
+        guest.shot(out, 'looting')
+    finally:
+        host('command', command='kill @e[type=minecraft:pig]')
+        host('command', command='kill @e[type=minecraft:item]')
+    assert counts[-1] > 3, f"Looting 255 on the guest's sword added nothing: porkchops {counts}"
+    return counts
 
 
 def check_arrows(host, guest, out):
@@ -5847,7 +5888,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
              'cracks': check_cracks, 'time': check_time, 'growth': check_growth, 'doors': check_doors,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
-             'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'leave': check_leave,
+             'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'looting': check_looting, 'leave': check_leave,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
              'boats': check_boats, 'boat_shoved': check_boat_shoved, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
              'lightning': check_lightning, 'riding': check_riding, 'occupied_horse': check_occupied_horse, 'mounts': check_mounts,
@@ -9562,6 +9603,38 @@ def check_pet_death(host, guest, out):
 
 CHECKS += ['pet_death']
 CHECK_FNS['pet_death'] = check_pet_death
+
+
+def check_arrow_pickup(host, guest, out):
+    """ClientPacketListener.handleTakeItemEntity (#4486): an arrow a player picks up
+    (AbstractArrow.playerTouch, once in the ground) flies into them on every client, the
+    collector's and the other player's, as an ItemPickupParticle, like an item does."""
+    face_each_other(host, guest)
+    seen = {}
+    try:
+        # The guest stands 3 blocks east: each arrow lands on the far side from the other player.
+        for game, dx in ((host, -0.9), (guest, 0.9)):
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            before = {g.name: g('status')['pickups'].get('arrow', 0) for g in (host, guest)}
+            game('command', command=f'summon minecraft:arrow ~{dx} ~2 ~ {{pickup:1b,Motion:[0.0,-1.0,0.0]}}')
+            game.wait(40)
+            game.shot(out, 'arrow-pickup')
+            seen[game.name] = {'flown': {g.name: g('status')['pickups'].get('arrow', 0) - before[g.name]
+                                         for g in (host, guest)},
+                               'arrows': game('inventory')['counts'].get('minecraft:arrow', 0)}
+    finally:
+        for game in (host, guest):
+            game('command', command='clear @s')
+        host('command', command='kill @e[type=minecraft:arrow]')
+    for name, case in seen.items():
+        assert case['arrows'] == 1, f'{name} did not pick the arrow up: {seen}'
+        assert all(n == 1 for n in case['flown'].values()), f"{name}'s arrow did not fly to them: {seen}"
+    return seen
+
+
+CHECKS += ['arrow_pickup']
+CHECK_FNS['arrow_pickup'] = check_arrow_pickup
 
 
 if __name__ == '__main__':

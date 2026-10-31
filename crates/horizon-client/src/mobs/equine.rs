@@ -440,6 +440,9 @@ struct RandomStand {
 }
 impl Goal for RandomStand {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        "RandomStandGoal"
+    }
     fn flags(&self) -> u8 {
         0
     }

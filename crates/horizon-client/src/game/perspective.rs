@@ -488,6 +488,7 @@ impl Game<'_> {
         // Guests and server players take their pose from DATA_POSE, not here.
         m.extra.avatar_pose = pose;
         m.extra.passenger = riding;
+        m.extra.previous_velocity = m.velocity;
         m.velocity = velocity;
         m.extra.fall_flying = fall_flying;
         m.extra.fall_fly_ticks = fly_ticks;

@@ -45,6 +45,7 @@ mod agent;
 mod agent_settings;
 mod allays;
 mod armor_stands;
+mod atlas_slots;
 mod banners;
 mod beacon;
 mod beds;
@@ -199,6 +200,7 @@ mod postprocess;
 mod potent_sulfur;
 mod potions;
 mod powder_snow;
+mod prediction;
 mod pumpkin;
 mod raids;
 mod recipe_book;
@@ -346,6 +348,12 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowId},
 };
+
+/// The time a frame spends uploading chunk meshes when the player set no
+/// Chunk Updates or Upload Budget: a burst past it waits for the next frames.
+const AUTO_UPLOAD_TIME: Duration = Duration::from_millis(2);
+/// A frame's finished meshes up to this many upload at once, unqueued.
+const AUTO_UPLOADS_AT_ONCE: usize = 8;
 
 #[derive(Clone)]
 struct Options {
@@ -790,15 +798,8 @@ struct GameLevel<'w> {
     client_side: bool,
     /// Only the integrated or dedicated server dispatches native observations.
     native_authoritative: bool,
-    native_particles: &'w mut Vec<(
-        &'static str,
-        horizon_client::particles::ParticleOptions,
-        Option<BlockStateId>,
-        [f64; 3],
-        [f64; 3],
-        f64,
-        i32,
-    )>,
+    native_sounds: &'w mut Vec<creatures::NativeSound>,
+    native_particles: &'w mut Vec<lan_particles::QueuedParticle>,
 }
 struct PlayerCollision {
     y: f64,
@@ -1034,6 +1035,61 @@ impl LevelAccess for GameLevel<'_> {
             self.native_piston_move(self.dimension, piston, step, push, destroy, &mut canceled);
         }
         !canceled
+    }
+    fn before_random_tick(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: &mut BlockStateId,
+        handled: &mut bool,
+    ) {
+        if self.native_authoritative {
+            // Any block the hook writes moves the world's revision on.
+            let revision = self.world.revision;
+            self.native_random_tick(ticks, self.dimension, pos, *state, handled);
+            if !*handled && self.world.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
+    fn before_tick_block(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: &mut BlockStateId,
+        handled: &mut bool,
+    ) {
+        if self.native_authoritative {
+            // Any block the hook writes moves the world's revision on.
+            let revision = self.world.revision;
+            self.native_tick_block(ticks, self.dimension, pos, *state, handled);
+            if !*handled && self.world.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
+    fn before_update_shape(
+        &self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        neighbour_pos: BlockPos,
+        neighbour: BlockStateId,
+        new: &mut Option<BlockStateId>,
+    ) {
+        if self.native_authoritative {
+            self.native_update_shape(
+                ticks,
+                self.dimension,
+                pos,
+                state,
+                direction,
+                neighbour_pos,
+                neighbour,
+                new,
+            );
+        }
     }
     fn is_client_side(&self) -> bool {
         self.client_side
@@ -1669,8 +1725,8 @@ struct DragView {
 fn equipment_modifier_applies(group: &str, slot: &str) -> bool {
     group == slot
         || group == "any"
-        || (group == "armor" && slot != "mainhand")
-        || (group == "hand" && slot == "mainhand")
+        || (group == "armor" && slot != "mainhand" && slot != "offhand")
+        || (group == "hand" && (slot == "mainhand" || slot == "offhand"))
 }
 /// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
 /// A chunk whose ticking future can complete (`ChunkMap.prepareTickingChunk`):
@@ -1834,6 +1890,8 @@ struct Game<'a> {
     focused: bool,
     /// Whether the window currently accepts input method events.
     ime_allowed: bool,
+    /// The candidate window's area last given to the window, in pixels.
+    ime_area: Option<[i32; 4]>,
     /// When the window lost focus, while it is still without
     /// (`Minecraft.lastActiveTime`: pausing waits 500 ms).
     focus_lost: Option<Instant>,
@@ -3224,19 +3282,11 @@ impl Game<'_> {
             }
             let alive = item.tick(
                 &self.world,
+                self.pack.assets.registry,
                 self.res.facts(),
                 self.collision,
                 no_physics,
                 &self.res.motion().fluids,
-            );
-            // Entity.applyEffectsFromBlocks: bubble columns lift or drag the item.
-            horizon_client::motion::bubble_column_push(
-                &self.world,
-                self.pack.assets.registry,
-                self.res.facts(),
-                self.collision,
-                item.bounds(),
-                &mut item.velocity,
             );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
@@ -3511,12 +3561,14 @@ impl Game<'_> {
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
             native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
+            native_sounds: &mut self.creatures.lan_sounds,
             native_particles: &mut self.creatures.lan_particles,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
         if self.lan.is_some() {
             self.flush_lan_particles();
+            self.flush_native_sounds();
         }
         result
     }
@@ -5018,6 +5070,20 @@ impl Game<'_> {
     /// `Player.interactOn` for the entity under the crosshair with the
     /// acting hand: whether it took the click.
     fn interact_entity(&mut self) -> Result<bool> {
+        // Native mods, where Player.interactOn starts: before the entity's
+        // own interact and the item's interactLivingEntity.
+        if let Some(Some(id)) = self.pick_entity_hit()
+            && let Some(target) = self.level_entity(id)
+        {
+            let kind = self.target_type(target);
+            let stack = self.held().cloned();
+            let mut claimed = false;
+            self.native_interact_entity(id, &kind, stack.as_ref(), &mut claimed);
+            if claimed {
+                self.swing_arm();
+                return Ok(true);
+            }
+        }
         Ok(self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_cushion()
@@ -7276,7 +7342,17 @@ impl Game<'_> {
                     under_water,
                     vehicle_hearts,
                 };
-                let draws = self.health_hud.layout(&inputs, wi, hi);
+                let at = [p.position.x, p.position.y, p.position.z];
+                // The native mods' health HUD (`native_health_hud`): a mod
+                // that answers draws every row instead.
+                let mut native_health_hud = None;
+                self.native_health_hud(&inputs, wi, hi, &mut native_health_hud);
+                let draws = match native_health_hud {
+                    Some(draws) => draws,
+                    None => self.health_hud.layout(&inputs, wi, hi),
+                };
+                // A fresh borrow: the hook ran with all of `self`.
+                let atlas = &self.gui.atlas;
                 hud_layout::paint(&mut batch, atlas, &draws);
                 bar_height = self
                     .health_hud
@@ -7285,7 +7361,6 @@ impl Game<'_> {
                 // Hud.playAirBubblePoppedSound: Player.playSound (PLAYERS), heard
                 // by this client only.
                 if let Some((volume, pitch)) = self.health_hud.bubble_pop_sound.take() {
-                    let at = [p.position.x, p.position.y, p.position.z];
                     let players = horizon_client::settings::SOUND_SOURCES
                         .iter()
                         .position(|s| *s == "player")
@@ -9499,7 +9574,8 @@ impl Game<'_> {
                         normal: [0; 4],
                         pos: v.to_array(),
                         uv,
-                        layer: 0,
+                        // ExperienceOrbRenderer: `RenderTypes.entityTranslucent`.
+                        layer: horizon_client::gfx::OIT_ENTITY,
                         color,
                         light: packed,
 
@@ -9810,7 +9886,15 @@ impl Game<'_> {
         // the offset is the one from the player to the particle.
         let origin = from.unwrap_or(at);
         let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
-        self.lan_send_particles(self.dim.id(), &arc, None, at, spread, 0.0, 0);
+        self.lan_send_particles(lan_particles::QueuedParticle {
+            dimension: self.dim.id(),
+            options: arc,
+            state: None,
+            at,
+            spread,
+            speed: 0.0,
+            count: 0,
+        });
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
@@ -10039,15 +10123,15 @@ impl Game<'_> {
                     (actual * 0.5) as u32,
                 );
                 // The players a server serves are sent them too.
-                self.lan_send_particles(
-                    self.dim.id(),
-                    &indicator,
-                    None,
-                    [feet[0], feet[1] + height * 0.5, feet[2]],
-                    [0.1, 0.0, 0.1],
-                    0.2,
-                    (actual * 0.5) as u32 as i32,
-                );
+                self.lan_send_particles(lan_particles::QueuedParticle {
+                    dimension: self.dim.id(),
+                    options: indicator,
+                    state: None,
+                    at: [feet[0], feet[1] + height * 0.5, feet[2]],
+                    spread: [0.1, 0.0, 0.1],
+                    speed: 0.2,
+                    count: (actual * 0.5) as u32 as i32,
+                });
             }
             self.last_hurt_by_player
                 .insert(self.mobs[index].id, self.lan_acting);
@@ -10233,6 +10317,11 @@ impl Game<'_> {
             Action::Sounds => self.open_options_at(true, horizon_client::options_ui::Page::Sound),
             Action::Credits => {
                 self.open_options_at(true, horizon_client::options_ui::Page::Credits)
+            }
+            Action::OpenUri(uri) => packs::open_uri(&uri),
+            Action::CopyText(text) => {
+                use horizon_client::clipboard::Clipboard;
+                self.clipboard.set(&text);
             }
             Action::Play { folder } => self.open_world(&folder, None, None, false, None)?,
             Action::Create {
@@ -10877,6 +10966,7 @@ impl Game<'_> {
             .map(|(s, n)| (s.as_ref(), n))
             .collect();
         equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
+        equipped.push((self.offhand.as_ref(), "offhand"));
         for (stack, slot) in equipped {
             let Some(info) = stack.and_then(|s| world_items!(self).get(&s.item)) else {
                 continue;
@@ -11249,16 +11339,19 @@ impl Game<'_> {
                 ItemStack::new("minecraft:hanging_roots", 1),
             );
         }
-        self.audio.play(
-            &sound,
-            Some([
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ]),
-            1.0,
-            1.0,
-        );
+        // `Level.playSound(player, ...)`: the actor's client already played
+        // the strip/scrape/till sound in `predict_item_on_block` (#4681).
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
+        if self.lan_acting.is_some() {
+            self.audio.play_unshared(&sound, Some(at), 1.0, 1.0);
+            self.guest_player_sounds.push((sound.clone(), at, 1.0, 1.0));
+        } else {
+            self.audio.play(&sound, Some(at), 1.0, 1.0);
+        }
         // ItemStack.useOn: a use that acted counts as one of the item.
         self.stats.add("used", &stack.item, 1);
         self.damage_held(damage);
@@ -11476,10 +11569,28 @@ impl Game<'_> {
             if !emptied {
                 return Ok(UseResult::Fail);
             }
+            // `BucketItem.emptyContents` uses `playSound(player, …)`: the
+            // actor's client already played the empty / evaporate sound from
+            // its DryLevel prediction (#4684).
+            if self.lan_acting.is_some()
+                && let Some(capture) = self.audio.capture.as_mut()
+            {
+                let want = sound.trim_start_matches("minecraft:");
+                let mut keep = Vec::with_capacity(capture.len());
+                for entry in capture.drain(..) {
+                    let name = entry.0.trim_start_matches("minecraft:");
+                    if name == want || name == "block.fire.extinguish" {
+                        self.guest_player_sounds.push(entry);
+                    } else {
+                        keep.push(entry);
+                    }
+                }
+                *capture = keep;
+            }
             if let Some(kind) = mob {
                 if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                        horizon_client::entity_nbt::load_bucket_data(m, stack);
+                        horizon_client::entity_nbt::apply_item_components(m, stack);
                     }
                     self.mob_placed(id)?;
                 }
@@ -12164,6 +12275,12 @@ impl Game<'_> {
                 horizon_client::block_entity_render::vertex_light(light),
                 &mut out,
             );
+        }
+        // The hand has its own submit storage, which never uses improved
+        // transparency (`LevelRenderer` alone calls `setUseImprovedTransparency`):
+        // a held player head stays classic.
+        for vertex in &mut out {
+            vertex.layer &= !horizon_client::gfx::OIT_ENTITY;
         }
         out
     }
@@ -13021,7 +13138,11 @@ impl Game<'_> {
         self.save_warden_tracker();
         self.sync_level();
         self.store_owner();
-        self.level.write(&self.world_root)?;
+        if self.options.dedicated.is_some() {
+            self.level.write_without_player(&self.world_root)?;
+        } else {
+            self.level.write(&self.world_root)?;
+        }
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
@@ -13177,11 +13298,12 @@ impl Game<'_> {
         if let Some(reload) = &self.pack_reload {
             if let Some(renderer) = &mut self.renderer {
                 let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
-                horizon_client::level_loading::draw_progress(
+                horizon_client::level_loading::draw_loading_overlay(
                     &mut hud,
                     &self.gui.atlas,
                     reload.progress.line(),
                     reload.progress.fraction(),
+                    self.settings.file.bool("darkMojangStudiosBackground"),
                 );
                 return renderer.render(&loading_frame(&hud));
             }
@@ -13363,6 +13485,7 @@ impl Game<'_> {
             Vec::new()
         };
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
+        self.flush_ime(&mut hud);
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
             || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other)
@@ -14161,7 +14284,8 @@ impl Game<'_> {
             let g = &self.settings.horizon;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
             // The meshes, once copied, are freed by a worker (`Streaming::free`).
-            if !budgeted && self.pending_uploads.is_empty() {
+            if !budgeted && self.pending_uploads.is_empty() && uploads.len() <= AUTO_UPLOADS_AT_ONCE
+            {
                 horizon_client::spans::time("upload", || {
                     for (key, mesh) in &uploads {
                         renderer.upload(*key, mesh);
@@ -14200,7 +14324,15 @@ impl Game<'_> {
                     (0, 0)
                 };
                 let (mut count, mut bytes) = (0, 0u64);
+                // Without the player's budgets, uploads stop once they took
+                // AUTO_UPLOAD_TIME of this frame (at least one goes): a burst of
+                // finished meshes spreads over frames, nearest first.
+                let auto = !budgeted;
+                let started = Instant::now();
                 while let Some((_, mesh)) = pending.last() {
+                    if auto && count > 0 && started.elapsed() >= AUTO_UPLOAD_TIME {
+                        break;
+                    }
                     let size = ((mesh.solid.len() + mesh.translucent.len())
                         * std::mem::size_of::<horizon_client::mesher::TerrainVertex>())
                         as u64;
@@ -14304,6 +14436,7 @@ impl ApplicationHandler for Game<'_> {
         }
         self.window = Some(window);
         self.ime_allowed = false;
+        self.ime_area = None;
         self.apply_settings();
         self.previous = Instant::now();
     }
@@ -14519,6 +14652,12 @@ impl ApplicationHandler for Game<'_> {
                 }
                 // Input method composition: the committed text types like a key's text.
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => self.ime_commit(&text),
+                WindowEvent::Ime(winit::event::Ime::Preedit(text, cursor)) => {
+                    self.ime_preedit(&text, cursor)
+                }
+                WindowEvent::Ime(winit::event::Ime::Disabled) => {
+                    horizon_client::preedit::set_preedit(None)
+                }
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
@@ -15599,6 +15738,7 @@ impl<'a> Game<'a> {
             view_at: [0, 0],
             focused: true,
             ime_allowed: false,
+            ime_area: None,
             focus_lost: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
@@ -17740,7 +17880,7 @@ mod tests {
     use super::*;
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
 
-    /// Held items apply their main-hand modifiers to the player (#4118).
+    /// Held items apply their main-hand and off-hand modifiers to the player (#4118, #4777).
     #[test]
     fn equipment_modifiers_follow_their_slot_group() {
         assert!(equipment_modifier_applies("mainhand", "mainhand"));
@@ -17750,6 +17890,12 @@ mod tests {
         assert!(!equipment_modifier_applies("mainhand", "head"));
         assert!(equipment_modifier_applies("armor", "chest"));
         assert!(!equipment_modifier_applies("hand", "feet"));
+        assert!(equipment_modifier_applies("offhand", "offhand"));
+        assert!(equipment_modifier_applies("hand", "offhand"));
+        assert!(equipment_modifier_applies("any", "offhand"));
+        assert!(!equipment_modifier_applies("armor", "offhand"));
+        assert!(!equipment_modifier_applies("mainhand", "offhand"));
+        assert!(!equipment_modifier_applies("offhand", "mainhand"));
     }
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
 

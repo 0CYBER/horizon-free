@@ -823,7 +823,8 @@ impl Hub {
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
         self.send_initial_recipe_book(i);
-        // The others hear of the newcomer before it joins the list.
+        // PlayerList.placeNewPlayer broadcasts the join line before
+        // players.add: the others read it, the newcomer doesn't.
         self.broadcast_except(
             conn,
             &C::SystemChat(play::SystemChat {
@@ -891,7 +892,7 @@ impl Hub {
     fn send_effect(&mut self, i: usize, e: &EffectInstance, blend: bool) -> Option<SentEffect> {
         let effect = self
             .sync
-            .id("minecraft:mob_effect", &format!("minecraft:{}", e.id))?;
+            .id("minecraft:mob_effect", crate::brewing::namespaced(e.id))?;
         let flags = PlayerEffects::flags(e);
         let g = &self.guests[i];
         g.send(&C::UpdateMobEffect(play::UpdateMobEffect {
@@ -975,7 +976,7 @@ impl Hub {
         for id in removed {
             let Some(effect) = self
                 .sync
-                .id("minecraft:mob_effect", &format!("minecraft:{id}"))
+                .id("minecraft:mob_effect", crate::brewing::namespaced(id))
             else {
                 continue;
             };
@@ -2403,7 +2404,8 @@ impl Hub {
                 | S::ClientInformation(_)
                 | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
-                | S::KeepAlive(_) => false,
+                | S::KeepAlive(_)
+                | S::Pong(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
                 S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
                 S::PlayerInput(_) => self.guests[i].client_loaded(),
@@ -2426,6 +2428,7 @@ impl Hub {
                     if !self.guests[i].client_loaded() => {}
                 // handleAcceptTeleportPacket.
                 S::AcceptTeleportation(p) => {
+                    let recording = self.recording();
                     let g = &mut self.guests[i];
                     if let Some((id, at)) = g.awaiting_teleport
                         && id == p.id
@@ -2441,6 +2444,10 @@ impl Hub {
                         }
                         g.position = at;
                         g.awaiting_teleport = None;
+                        // The prediction's replay starts again where the client now is.
+                        if recording {
+                            g.anticheat.record.get_or_insert_default().teleported(at);
+                        }
                         let rot = (p.yaw, p.pitch);
                         self.position_change(i, [p.x, p.y, p.z], rot, 0, ctx, events);
                     }
@@ -2483,6 +2490,7 @@ impl Hub {
                     }
                     g.max_unacknowledged = 10;
                 }
+                S::Pong(p) => self.anticheat_pong(i, p.id),
                 S::ClientTickEnd(_) => {
                     // handleClientTickEnd: no move this tick, no known movement.
                     let g = &mut self.guests[i];
@@ -2574,6 +2582,19 @@ impl Hub {
                         break;
                     }
                 }
+                // ContainerInput's codec (ByIdMap, OutOfBoundsStrategy.ZERO) reads an
+                // unknown click type as PICKUP.
+                S::ContainerClick(mut p) => {
+                    if !(0..=6).contains(&p.input) {
+                        p.input = 0;
+                    }
+                    events.push(HostEvent::Packet(conn, Box::new(S::ContainerClick(p))));
+                }
+                // ServerboundSelectBundleItemPacket's constructor: no index below -1.
+                S::SelectBundleItem(p) if p.index < -1 => {
+                    let reason = format!("Invalid selectedItemIndex: {}", p.index);
+                    self.kick(conn, literal(&reason));
+                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
@@ -2598,6 +2619,9 @@ impl Hub {
         {
             self.kick(conn, invalid_movement());
             return;
+        }
+        if self.anticheat.is_some() {
+            self.anticheat_moved(i, pos, rot, flags);
         }
         let g = &mut self.guests[i];
         if pos.is_some() {
@@ -2753,7 +2777,10 @@ impl Hub {
     }
 
     /// `ServerGamePacketListenerImpl.noBlocksAround`: every block of the
-    /// player's box grown by 0.0625 and stretched 0.55 down is air.
+    /// player's box grown by 0.0625 and stretched 0.55 down is air. Vanilla
+    /// loads a chunk it reads; a chunk not loaded here yet (a player's first
+    /// move after joining, before the spawn chunks are generated) is not
+    /// known to be air, so it never makes the player float.
     fn no_blocks_around(&self, i: usize, at: [f64; 3], world: &World) -> bool {
         let g = &self.guests[i];
         let d = g.dimensions();
@@ -2766,8 +2793,10 @@ impl Hub {
         ];
         let cell = |v: f64| v.floor() as i32;
         (cell(lo[0])..=cell(hi[0])).all(|x| {
-            (cell(lo[1])..=cell(hi[1]))
-                .all(|y| (cell(lo[2])..=cell(hi[2])).all(|z| world.is_air(world.block(x, y, z))))
+            (cell(lo[2])..=cell(hi[2])).all(|z| {
+                world.loaded(x, z)
+                    && (cell(lo[1])..=cell(hi[1])).all(|y| world.is_air(world.block(x, y, z)))
+            })
         })
     }
 

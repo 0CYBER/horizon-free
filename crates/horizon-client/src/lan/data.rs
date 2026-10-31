@@ -171,7 +171,7 @@ impl SyncData {
         }
         let tags = Self::load_tags(&root, &builtin, &dynamic);
         let content_identity = if resources.join(crate::content_identity::MARKER).exists() {
-            Some(crate::content_identity::identity(resources)?)
+            Some(crate::content_identity::identity(resources).map_err(|error| error.to_string())?)
         } else {
             None
         };

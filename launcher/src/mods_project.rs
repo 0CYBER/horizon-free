@@ -272,9 +272,9 @@ impl Launcher {
         let toggle = button(
             "mods-filters",
             if active > 0 {
-                format!("Filters ({active})")
+                trf("Filters ({count})", &[("count", &active.to_string())])
             } else {
-                "Filters".to_string()
+                tr("Filters").to_string()
             },
             if shown { Kind::Secondary } else { Kind::Ghost },
             &t,
@@ -296,7 +296,7 @@ impl Launcher {
             return bar;
         }
         let Some(tags) = self.mods_tags().cloned() else {
-            return bar.child(caps("Loading filters").text_color(t.muted));
+            return bar.child(caps(tr("Loading filters")).text_color(t.muted));
         };
         // A chip: on or off, one value of a filter.
         let chip = |id: String, label: String, on: bool| {
@@ -313,7 +313,7 @@ impl Launcher {
                 .flex_wrap()
                 .items_center()
                 .gap(px(4.))
-                .child(caps(title).text_color(t.muted).w(px(120.)))
+                .child(caps(tr(title)).text_color(t.muted).w(px(120.)))
         };
         let mut loaders = row("Loader");
         for l in &tags.loaders {
@@ -418,17 +418,23 @@ impl Launcher {
         let details = o.details.clone();
         let versions = o.versions.clone();
         let version_list = o.version_list.clone();
-        let mut meta = vec![format!("{} downloads", thousands(p.downloads))];
+        let mut meta = vec![trf(
+            "{count} downloads",
+            &[("count", &thousands(p.downloads))],
+        )];
         if let Some(Ok(d)) = &details {
-            meta.push(format!("{} followers", thousands(d.followers)));
+            meta.push(trf(
+                "{count} followers",
+                &[("count", &thousands(d.followers))],
+            ));
             if let Some(day) = d.updated.get(..10) {
-                meta.push(format!("updated {day}"));
+                meta.push(trf("updated {date}", &[("date", day)]));
             }
         }
         if !p.license.is_empty() {
             meta.push(p.license.clone());
         }
-        meta.push(format!("from {}", p.source.label()));
+        meta.push(trf("from {source}", &[("source", p.source.label())]));
         let authors = match &details {
             Some(Ok(d)) if !d.authors.is_empty() => d.authors.join(", "),
             _ => p.author.clone(),
@@ -439,17 +445,17 @@ impl Launcher {
         let checking = self.mods.checking(&p);
         let mut action = div().flex().items_center().gap(px(8.)).child(
             caps(if checking {
-                "Checking"
+                tr("Checking")
             } else {
-                support.label()
+                tr(support.label())
             })
             .flex_none()
             .text_color(color),
         );
         if busy.as_deref() == Some(p.id.as_str()) {
-            action = action.child(caps("Installing").text_color(t.accent));
+            action = action.child(caps(tr("Installing")).text_color(t.accent));
         } else if installed {
-            action = action.child(caps("Installed").text_color(t.muted));
+            action = action.child(caps(tr("Installed")).text_color(t.muted));
         } else if support.installable() && !checking {
             let label = if p.kind == PackKind::Modpack {
                 "Import"
@@ -487,7 +493,11 @@ impl Launcher {
                             .child(if authors.is_empty() {
                                 p.summary.clone()
                             } else {
-                                format!("by {authors} · {}", p.summary)
+                                format!(
+                                    "{} · {}",
+                                    trf("by {author}", &[("author", &authors)]),
+                                    p.summary
+                                )
                             }),
                     )
                     .child(
@@ -531,7 +541,7 @@ impl Launcher {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
-                    .child(caps(title).text_color(t.muted))
+                    .child(caps(tr(title)).text_color(t.muted))
                     .children(
                         list.iter()
                             .map(|l| text(theme::CAPTION).text_color(t.ink_soft).child(l.clone())),
@@ -553,7 +563,7 @@ impl Launcher {
                 links = links.child(
                     button(
                         "mods-link-page",
-                        format!("{} page", p.source.label()),
+                        trf("{source} page", &[("source", p.source.label())]),
                         Kind::Ghost,
                         &t,
                     )
@@ -582,14 +592,14 @@ impl Launcher {
         })));
         let body = match tab {
             Tab::Description => match &details {
-                None => centered("Loading…", &t),
+                None => centered(tr("Loading…"), &t),
                 Some(Err(e)) => notice(e.clone(), &t),
                 Some(Ok(d)) => div().max_w(px(760.)).child(markdown::render(&d.body, &t)),
             },
             Tab::Gallery => match &details {
-                None => centered("Loading…", &t),
+                None => centered(tr("Loading…"), &t),
                 Some(Err(e)) => notice(e.clone(), &t),
-                Some(Ok(d)) if d.gallery.is_empty() => centered("No gallery images.", &t),
+                Some(Ok(d)) if d.gallery.is_empty() => centered(tr("No gallery images."), &t),
                 Some(Ok(d)) => {
                     let mut grid = div().flex().flex_wrap().gap(px(16.));
                     for g in &d.gallery {
@@ -617,7 +627,7 @@ impl Launcher {
                 }
             },
             Tab::Versions => match &versions {
-                None => centered("Loading…", &t),
+                None => centered(tr("Loading…"), &t),
                 Some(Err(e)) => notice(e.clone(), &t),
                 Some(Ok(list)) => version_list.column(
                     &self.content_scroll.handle,

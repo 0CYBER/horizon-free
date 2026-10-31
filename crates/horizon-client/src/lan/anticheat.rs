@@ -109,6 +109,14 @@ impl Hub {
         let Some(ac) = self.anticheat.as_deref() else {
             return;
         };
+        if ac.config.runs(Check::Prediction) {
+            let g = &mut self.guests[i];
+            let (input, sprinting) = (g.input, g.sprinting);
+            g.anticheat
+                .record
+                .get_or_insert_default()
+                .tick_end(input, sprinting);
+        }
         if !ac.config.runs(Check::Timer) {
             return;
         }
@@ -121,6 +129,55 @@ impl Hub {
                 &format!("{ahead:.0} ms ahead"),
                 events,
             );
+        }
+    }
+
+    /// Whether the prediction records the players' client ticks.
+    pub fn recording(&self) -> bool {
+        self.anticheat
+            .as_deref()
+            .is_some_and(|ac| ac.config.runs(Check::Prediction))
+    }
+
+    /// A move packet from guest `i`, as it came: the prediction's record of the client tick.
+    pub(super) fn anticheat_moved(
+        &mut self,
+        i: usize,
+        pos: Option<[f64; 3]>,
+        rot: Option<(f32, f32)>,
+        flags: u8,
+    ) {
+        if self.recording() {
+            let record = self.guests[i].anticheat.record.get_or_insert_default();
+            record.moved(pos, rot, flags);
+        }
+    }
+
+    /// ServerboundPongPacket: the client has handled every packet of the server tick `id` (the ping
+    /// [`Hub::anticheat_ping`] sent at its end).
+    pub(super) fn anticheat_pong(&mut self, i: usize, id: i32) {
+        let ticks = self.ticks;
+        if self.recording() {
+            let record = self.guests[i].anticheat.record.get_or_insert_default();
+            // Ids are server ticks, cut to 32 bits.
+            record.pong(u64::from(id as u32), ticks);
+        }
+    }
+
+    /// The end of a server tick, after everything it sent: a ping whose id is the tick to each
+    /// player in the world, so the prediction knows from which client tick on that tick's packets
+    /// were in effect.
+    pub fn anticheat_ping(&self) {
+        if !self.recording() {
+            return;
+        }
+        let ping = horizon_protocol::packets::play::Clientbound::Ping(
+            horizon_protocol::packets::configuration::Ping {
+                id: self.ticks as u32 as i32,
+            },
+        );
+        for g in self.guests.iter().filter(|g| g.placed) {
+            g.send(&ping);
         }
     }
 

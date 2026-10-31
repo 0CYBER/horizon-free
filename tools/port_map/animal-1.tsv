@@ -12,21 +12,21 @@ Allay.setJukeboxPlaying	inline	crates/horizon-client/src/game/allays.rs::Game::t
 Allay.wantsToPickUp	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	same item within 32 blocks, mob_griefing on
 Allay.allayConsidersItemEqual	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	gap: compares item ids only, the held item keeps no potion contents
 Allay.hasNonMatchingPotion	missing		an allay holding a potion also fetches other potion types; the held item is only an id
-Allay.updateDynamicGameEventListener	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	jukebox is polled; there is no vibration listener
+Allay.updateDynamicGameEventListener	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	no listener registry: the vibration half is mobs/allay.rs::listen (game/sculk.rs dispatches each event) and the jukebox half is polled here; vanilla's re-registration on a chunk-section change has no counterpart
 Allay.setDancing	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	dancing set while a jukebox plays and not panicking
 Allay.shouldStopDancing	inline	crates/horizon-client/src/game/allays.rs::Game::tick_allays	no jukebox within 10 blocks stops the dance
 Allay.isSpinning	inline	crates/horizon-client/src/mobs/allay.rs::animate	dance clock modulo 55 below 15
-Allay.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	inventory, DuplicationCooldown and liked player; vibration listener data is not written
+Allay.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	inventory, DuplicationCooldown, liked player and the vibration listener (listener)
 Allay.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	
 Allay.updateDuplicationCooldown	inline	crates/horizon-client/src/mobs/allay.rs::ai_step	egg_time counts down
 Allay.setDuplicationCooldown	inline	crates/horizon-client/src/game/allays.rs::Game::interact_allay	6000 set here; can_duplicate is derived from egg_time in mob_meta
 Allay.getLeashOffset	missing		lead hangs at the default offset (eye height), not 0.6 of it; leash::leash_offset only special-cases llamas
 Allay.handleEntityEvent	port	crates/horizon-client-render/src/particles.rs::entity_event_burst	event 18, three hearts
 Allay.spawnHeartParticle	port	crates/horizon-client-render/src/particles.rs::around_self	one heart's random placement
-Allay.VibrationUser.canReceiveVibration	missing		allays never listen for vibrations: a note block played near one is not remembered
+Allay.VibrationUser.canReceiveVibration	port	crates/horizon-client/src/mobs/allay.rs::can_receive_vibration	no AI; the liked block only, within 1024 blocks in its dimension
 AllayAi.initCoreActivity	inline	crates/horizon-client/src/mobs/allay.rs::register	panic goal; the cooldown countdowns are plain ints
 AllayAi.initIdleActivity	inline	crates/horizon-client/src/mobs/allay.rs::register	fetch, deliver, stay close, stroll and look as goals instead of a brain
-AllayAi.hearNoteblock	missing		no liked note block: an allay never learns one, so items always go to the player
+AllayAi.hearNoteblock	port	crates/horizon-client/src/mobs/allay.rs::hear_noteblock	the note_block_play vibration: remembers the block and waits 600 ticks; a block it already likes restarts the wait
 AllayAi.getItemDepositPosition	port	crates/horizon-client/src/mobs/allay.rs::deposit	
 AllayAi.shouldDepositItemsAtLikedNoteblock	inline	crates/horizon-client/src/mobs/allay.rs::deposit	cooldown test only; the note block's existence and distance are not rechecked
 AllayAi.getLikedPlayerPositionTracker	port	crates/horizon-client/src/game/allays.rs::Game::allay_liked_player	
@@ -45,7 +45,7 @@ Axolotl.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::fina
 Axolotl.tickBabyAnimations	inline	crates/horizon-client/src/mobs/axolotl.rs::Animation::tick	the baby branch
 Axolotl.soloAnimation	inline	crates/horizon-client/src/mobs/axolotl.rs::Animation::tick	one state started, the rest stopped
 Axolotl.tickAdultAnimations	inline	crates/horizon-client/src/mobs/axolotl.rs::Animation::tick	the binary animators
-Axolotl.rehydrate	missing		a thrown water bottle does not refill an axolotl's air; splash water has no effect on mobs
+Axolotl.rehydrate	port	crates/horizon-client/src/game/splash_water.rs::Game::affect_entities_around	water potion on #rehydrates_axolotls: 1800 more air up to MAX_AIR (6000)
 Axolotl.get	port	crates/horizon-client/src/entity_nbt.rs::bucket_components	axolotl/variant component written to the bucket
 Axolotl.applyImplicitComponent	port	crates/horizon-client/src/entity_nbt.rs::load_bucket_data	axolotl/variant read from the bucket
 Axolotl.getBreedOffspring	port	crates/horizon-client/src/game/creatures.rs::Game::breed	gap: baby takes the first parent's colour; no random parent, no 1-in-1200 blue, not set persistent
@@ -53,7 +53,7 @@ Axolotl.createAttributes	skip:data		attributes come from entity-types.json
 Axolotl.mobInteract	port	crates/horizon-client/src/game/creatures.rs::Game::interact_mob	a water bucket scoops it up (bucketable)
 Axolotl.loadFromBucketTag	port	crates/horizon-client/src/entity_nbt.rs::load_bucket_data	age, age lock and hunting cooldown
 Axolotl.applySupportingEffects	inline	crates/horizon-client/src/game/creatures.rs::Game::handle_mob_events	the AxolotlSupportPlayer event: regeneration and no mining fatigue, host player only
-Axolotl.usePlayerItem	missing		feeding a tropical fish bucket uses up the whole bucket; vanilla hands back a water bucket
+Axolotl.usePlayerItem	port	crates/horizon-client/src/game/creatures.rs::Game::interact_mob	a fed tropical fish bucket leaves a water bucket in its place (creative keeps the fish bucket and adds the bucket)
 Axolotl.Variant.getSpawnVariant	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	gap: the common pick for spawn groups only; the rare (blue) pick is never drawn
 AxolotlAi.initPlayDeadActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::axolotl_package	
 AxolotlAi.initFightActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::axolotl_package	

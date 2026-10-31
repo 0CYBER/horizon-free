@@ -1,0 +1,15 @@
+{
+  "horizon.options.controller": "Mando",
+  "horizon.options.vibration": "Vibración",
+  "horizon.options.adaptive_triggers": "Gatillos adaptativos",
+  "horizon.options.lightbar": "Barra de luz",
+  "horizon.options.look_sensitivity": "Sensibilidad de vista",
+  "horizon.options.invert_x": "Invertir vista X",
+  "horizon.options.invert_y": "Invertir vista Y",
+  "horizon.options.sneak_button": "Botón de agacharse",
+  "horizon.options.move_deadzone": "Zona muerta de movimiento",
+  "horizon.options.look_deadzone": "Zona muerta de vista",
+  "horizon.options.button_glyphs": "Símbolos de botones",
+  "horizon.options.menu_navigation": "Navegación de menús",
+  "horizon.options.on_screen_keyboard": "Teclado en pantalla"
+}
