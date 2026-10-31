@@ -46,6 +46,10 @@ pub struct Record {
     ticks: VecDeque<ClientTick>,
     /// The last server tick the client answered for.
     seen: Option<u64>,
+    /// Client ticks ended since the record began.
+    ended: u64,
+    /// Where an accepted teleport put the player, until the replay starts again from there.
+    restart: Option<[f64; 3]>,
 }
 
 impl Record {
@@ -87,6 +91,7 @@ impl Record {
             self.ticks.pop_front();
         }
         self.ticks.push_back(ended);
+        self.ended += 1;
         self.ticks.back().expect("just pushed")
     }
 
@@ -100,7 +105,34 @@ impl Record {
         self.seen
     }
 
-    /// A teleport or a respawn: the ticks before it say nothing about the ones after.
+    /// Client ticks ended since the record began.
+    pub fn ended(&self) -> u64 {
+        self.ended
+    }
+
+    /// The ticks ended after the first `played`, oldest first; None when some of them are no longer
+    /// kept.
+    pub fn since(&self, played: u64) -> Option<impl Iterator<Item = &ClientTick>> {
+        let new = self.ended.checked_sub(played)?;
+        let new = usize::try_from(new)
+            .ok()
+            .filter(|&n| n <= self.ticks.len())?;
+        Some(self.ticks.iter().skip(self.ticks.len() - new))
+    }
+
+    /// The client accepted a teleport to `at` (ServerboundAcceptTeleportationPacket): it goes on from
+    /// there, standing still, and the ticks before say nothing about the ones after.
+    pub fn teleported(&mut self, at: [f64; 3]) {
+        self.clear();
+        self.restart = Some(at);
+    }
+
+    /// Where the last accepted teleport put the player, once.
+    pub fn take_restart(&mut self) -> Option<[f64; 3]> {
+        self.restart.take()
+    }
+
+    /// The ticks before now say nothing about the ones after.
     pub fn clear(&mut self) {
         self.ticks.clear();
         self.current = ClientTick {
@@ -157,5 +189,28 @@ mod tests {
         assert_eq!(r.ticks().next().unwrap().position, Some([5.0, 0.0, 0.0]));
         r.clear();
         assert_eq!(r.ticks().len(), 0);
+    }
+
+    #[test]
+    fn the_replay_takes_the_ticks_it_has_not_played() {
+        let mut r = Record::default();
+        for i in 0..3 {
+            r.moved(Some([i as f64, 0.0, 0.0]), None, 0);
+            r.tick_end(0, false);
+        }
+        fn x(r: &Record, played: u64) -> Option<Vec<f64>> {
+            r.since(played)
+                .map(|t| t.map(|t| t.position.unwrap()[0]).collect())
+        }
+        assert_eq!(x(&r, 1), Some(vec![1.0, 2.0]));
+        assert_eq!(x(&r, 3), Some(vec![]));
+        // Played ahead of the record, or so far behind the ticks are gone.
+        assert_eq!(x(&r, 4), None);
+        r.clear();
+        assert_eq!(x(&r, 2), None);
+        assert_eq!(x(&r, 3), Some(vec![]));
+        r.teleported([5.0, 6.0, 7.0]);
+        assert_eq!(r.take_restart(), Some([5.0, 6.0, 7.0]));
+        assert_eq!(r.take_restart(), None);
     }
 }

@@ -134,9 +134,9 @@ checks! {
     ground: Ground => GroundConfig [5.0, 15.0, 60.0, 2.0] {}
 
     /// Prediction: each move played again from the client's own inputs with vanilla's movement code,
-    /// and compared (speed, step, fly, jesus...). Being built: for now it only records each player's
+    /// and compared (speed, step, fly, jesus...). Being built: for now it records each player's
     /// client ticks (`prediction::Record`), with a ping a tick to place what the server changes, and
-    /// flags nothing.
+    /// plays them again (horizon-client's `lan::prediction`), but flags nothing.
     prediction: Prediction => PredictionConfig [5.0, 15.0, 60.0, 2.0] {}
 }
 

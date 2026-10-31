@@ -133,7 +133,7 @@ impl Hub {
     }
 
     /// Whether the prediction records the players' client ticks.
-    fn recording(&self) -> bool {
+    pub fn recording(&self) -> bool {
         self.anticheat
             .as_deref()
             .is_some_and(|ac| ac.config.runs(Check::Prediction))
