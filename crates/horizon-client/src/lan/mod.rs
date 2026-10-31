@@ -18,6 +18,7 @@ pub mod containers;
 pub mod data;
 pub mod discovery;
 pub mod entity;
+pub mod far;
 pub mod guest;
 pub mod hub;
 pub mod menu;
