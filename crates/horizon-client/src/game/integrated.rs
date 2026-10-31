@@ -16,10 +16,11 @@ use super::{
     lan::{LanSettings, Owner},
     world_loading::WorldRequest,
 };
+use horizon_client::level_loading::{STATUS_RADIUS, Stage};
 use horizon_client::{
     Result,
     audio::Audio,
-    lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
+    lan::{Lan, MAX_PLAYERS, NetConfig, OwnerProfile, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
 };
@@ -35,6 +36,9 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
+
+/// `LevelLoadProgressTracker.EXPECTED_PLAYER_CHUNKS`: the 7x7 chunks around the spawn.
+const PLAYER_CHUNKS: usize = 49;
 
 /// What the window tells its server thread.
 #[derive(Default)]
@@ -56,6 +60,9 @@ struct Flags {
     entity_distance: AtomicU32,
     /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
     saving: AtomicBool,
+    /// What the server's `LevelLoadListener` reports, for the window's
+    /// `LevelLoadingScreen` (`LevelLoadTracker.serverProgress/statusView`).
+    load: Arc<horizon_client::level_loading::ServerLoadView>,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -70,6 +77,10 @@ pub(super) struct Integrated {
     pub world_name: String,
 }
 impl Integrated {
+    /// The server's load progress and chunk status map.
+    pub fn load_view(&self) -> &Arc<horizon_client::level_loading::ServerLoadView> {
+        &self.flags.load
+    }
     pub fn smoothed_tick_ms(&self) -> f32 {
         f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
     }
@@ -159,6 +170,17 @@ pub(super) struct Serving {
     /// Open to LAN or closed from inside a player's command, while the hub
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
+    /// Where the load focus is and how far the player's chunks are.
+    load: LoadPhase,
+}
+/// The part of `LevelLoadListener` after `prepareLevels`: `PrepareSpawnTask`'s
+/// `LOAD_PLAYER_CHUNKS`.
+#[derive(Default)]
+struct LoadPhase {
+    /// `updateFocus`: the spawn chunk, once the stage started.
+    focus: Option<(i32, i32)>,
+    /// `finish(LOAD_PLAYER_CHUNKS)`.
+    done: bool,
 }
 impl Serving {
     /// The window reads this as `MinecraftServer.isCurrentlySaving`.
@@ -180,11 +202,14 @@ type Ready = std::result::Result<(Pipe, String), String>;
 /// does while its server prepares (`Minecraft.doWorldLoad`), instead of
 /// waiting for it frozen for the whole load.
 pub(super) struct Starting {
-    handle: Integrated,
+    pub(super) handle: Integrated,
     ready: Receiver<Ready>,
     player: String,
     /// The save's folder in `saves/`, for the world icon once joined.
     folder: String,
+    /// `Minecraft.doWorldLoad`'s `newWorld`: the loading screen stays 500 ms
+    /// once the level is ready.
+    new_world: bool,
 }
 
 /// The world to open and the player who owns it.
@@ -199,6 +224,8 @@ struct Launch {
     owner: u128,
     /// Its name, for the LAN's MOTD.
     player: String,
+    /// The signed-in account's profile, fetched while the world loads.
+    owner_profile: Option<Arc<OwnerProfile>>,
 }
 
 impl Game<'_> {
@@ -229,6 +256,7 @@ impl Game<'_> {
         let player = auth
             .as_ref()
             .map_or_else(|| self.options.player_name(), |a| a.name.clone());
+        let new_world = create.is_some();
         let launch = Launch {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
@@ -238,6 +266,21 @@ impl Game<'_> {
             // An offline-mode server names its players by their offline profile.
             owner: offline_uuid(&player),
             player: player.clone(),
+            owner_profile: auth.as_ref().map(|a| {
+                let id = a.uuid;
+                Arc::new(OwnerProfile::new(move || {
+                    horizon_client::skins::fetch_own_properties(id)
+                        .into_iter()
+                        .map(|(name, value, signature)| {
+                            horizon_protocol::packets::login::Property {
+                                name,
+                                value,
+                                signature,
+                            }
+                        })
+                        .collect()
+                }))
+            }),
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
@@ -299,6 +342,7 @@ impl Game<'_> {
             ready,
             player,
             folder: folder.to_owned(),
+            new_world,
         });
         // Harnesses, control scripts and runs without a window go on with the world open.
         if self.window.is_none() || super::synchronous_startup(&self.options) {
@@ -314,6 +358,10 @@ impl Game<'_> {
 
     /// The starting server's answer, polled each frame: joined once it is ready.
     pub(super) fn poll_integrated_start(&mut self) -> Result<()> {
+        if self.integrated_starting.is_none() {
+            return Ok(());
+        }
+        self.tick_load_progress();
         let Some(starting) = &self.integrated_starting else {
             return Ok(());
         };
@@ -333,6 +381,7 @@ impl Game<'_> {
             mut handle,
             player,
             folder,
+            new_world,
             ..
         }) = self.integrated_starting.take()
         else {
@@ -341,6 +390,14 @@ impl Game<'_> {
         handle.world_name = world_name;
         self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
+        if let Some(r) = self.remote.as_mut() {
+            // `new LevelLoadTracker(newWorld ? 500L : 0L)`.
+            r.level_load = horizon_client::level_loading::LevelLoadTracker::new(if new_world {
+                horizon_client::level_loading::LEVEL_LOAD_CLOSE_DELAY_MS
+            } else {
+                0
+            });
+        }
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
         self.world_icon = Some(WorldIcon {
@@ -352,6 +409,77 @@ impl Game<'_> {
         });
         self.integrated = Some(handle);
         Ok(())
+    }
+
+    /// `PrepareSpawnTask`'s `LOAD_PLAYER_CHUNKS`, reported to the window's
+    /// loading screen: the focus moves to the spawn chunk when the stage
+    /// starts, the 7x7 chunks around it count as they are ready, and the
+    /// status map around the focus follows (`ChunkLoadStatusView.get`).
+    pub(super) fn publish_load_view(&mut self) {
+        let Some(serving) = self.serving.as_mut() else {
+            return;
+        };
+        if serving.load.done {
+            return;
+        }
+        let view = serving.flags.load.clone();
+        let focus = match serving.load.focus {
+            Some(focus) => focus,
+            None => {
+                let Some(spawn) = self.spawn else { return };
+                let focus = ((spawn.x.floor() as i32) >> 4, (spawn.z.floor() as i32) >> 4);
+                view.start(Stage::LoadPlayerChunks, PLAYER_CHUNKS);
+                serving.load.focus = Some(focus);
+                focus
+            }
+        };
+        let ready = (-3..=3)
+            .flat_map(|dz| (-3..=3).map(move |dx| (focus.0 + dx, focus.1 + dz)))
+            .filter(|&(x, z)| self.streaming.is_lit(x, z))
+            .count();
+        view.update(Stage::LoadPlayerChunks, ready, PLAYER_CHUNKS);
+        let diameter = STATUS_RADIUS * 2 + 1;
+        view.set_status(
+            (0..diameter)
+                .flat_map(|x| (0..diameter).map(move |z| (x, z)))
+                .map(|(x, z)| {
+                    self.streaming.latest_status(
+                        &self.world,
+                        focus.0 + x - STATUS_RADIUS,
+                        focus.1 + z - STATUS_RADIUS,
+                    )
+                })
+                .collect(),
+        );
+        if ready == PLAYER_CHUNKS {
+            view.finish(Stage::LoadPlayerChunks);
+            if let Some(serving) = self.serving.as_mut() {
+                serving.load.done = true;
+            }
+        }
+    }
+
+    /// `LevelLoadingScreen.tick`'s easing of the server's progress, every 50 ms
+    /// of wall time (the starting server has no client tick yet).
+    pub(super) fn tick_load_progress(&mut self) {
+        let view = match (&self.integrated_starting, &self.integrated) {
+            (Some(s), _) => s.handle.load_view().clone(),
+            (None, Some(i)) => i.load_view().clone(),
+            _ => return,
+        };
+        let now = Instant::now();
+        let at = self.loading_progress_at.get_or_insert(now);
+        let steps = (now.duration_since(*at).as_millis() / 50).min(20) as u32;
+        *at += Duration::from_millis(u64::from(steps) * 50);
+        if now.duration_since(*at) > Duration::from_secs(1) {
+            *at = now;
+        }
+        for _ in 0..steps {
+            self.loading_progress = horizon_client::level_loading::smooth(
+                self.loading_progress,
+                view.server_progress(),
+            );
+        }
     }
 
     /// The server thread's loop (`MinecraftServer.runServer`): 20 ticks a
@@ -430,6 +558,7 @@ impl Game<'_> {
                 );
             }
             self.apply_publish();
+            self.publish_load_view();
             self.wait_for_next_server_tick(&mut next, paused);
         }
         self.stop_integrated()
@@ -461,6 +590,7 @@ impl Game<'_> {
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             // Only the owner until it is opened to the LAN.
             guest_commands: false,
@@ -488,6 +618,7 @@ impl Game<'_> {
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
             levels: self.level_shapes,
+            owner_profile: launch.owner_profile.clone(),
             // IntegratedServer.initServer: the MOTD names the owner and the world.
             ..NetConfig::lan(
                 0,
@@ -522,7 +653,13 @@ impl Game<'_> {
             tasks,
             owner,
             pending: None,
+            load: LoadPhase::default(),
         });
+        // MinecraftServer.prepareLevels: no forced chunks to load, so the
+        // stage is over at once; the player's chunks come after.
+        let view = &flags.load;
+        view.start(Stage::LoadInitialChunks, 0);
+        view.finish(Stage::LoadInitialChunks);
         let _ = ready.send(Ok((pipe, self.level.name.clone())));
         self.settle_spawn()
     }

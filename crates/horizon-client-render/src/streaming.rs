@@ -313,6 +313,9 @@ pub struct Streaming {
     decorates: bool,
     lighting: FxHashMap<(i32, i32), u64>,
     meshing: FxHashMap<(i32, i32, i32), u64>,
+    /// The sequence each section's latest accepted mesh was dispatched at
+    /// (`CompiledSectionMesh.compileTaskStartTimeNs`).
+    compile_started: FxHashMap<(i32, i32, i32), u64>,
     /// Chunks whose light is current.
     lit: FxHashSet<(i32, i32)>,
     /// Columns whose sections have been meshed at least once.
@@ -687,6 +690,7 @@ impl Streaming {
             decorates: generator.decorates(),
             lighting: Default::default(),
             meshing: Default::default(),
+            compile_started: Default::default(),
             lit: Default::default(),
             meshed: Default::default(),
             waiting: Default::default(),
@@ -730,6 +734,7 @@ impl Streaming {
     pub fn reload_resources(&mut self, world: &mut World, context: Arc<WorkerContext>) {
         *self.shared.context.write().unwrap() = context;
         self.meshing.clear();
+        self.compile_started.clear();
         for &(x, z) in world.chunks.keys() {
             if self.lit.contains(&(x, z)) {
                 for sy in 0..world.layout().sections() as i32 {
@@ -793,6 +798,7 @@ impl Streaming {
         // shrunk storage forgets thousands of columns in one frame.
         for sy in 0..world.layout().sections() as i32 {
             self.meshing.remove(&(x, sy, z));
+            self.compile_started.remove(&(x, sy, z));
             self.waiting.remove(&(x, sy, z));
         }
         world.dirty_sections.take_column(x, z);
@@ -1002,6 +1008,17 @@ impl Streaming {
             return None;
         })
     }
+    /// The sequence the next mesh job will be dispatched after: a clock for
+    /// `compile_start`, whose jobs all snapshot the world as they are
+    /// dispatched (`Util.getNanos()` at the start of a compile task).
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    /// When the section's latest accepted mesh started compiling, on the
+    /// `sequence` clock (`CompiledSectionMesh.getCompileTaskStartTime`).
+    pub fn compile_start(&self, section: (i32, i32, i32)) -> Option<u64> {
+        self.compile_started.get(&section).copied()
+    }
     pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
         self.meshing.contains_key(&section)
     }
@@ -1125,6 +1142,7 @@ impl Streaming {
                         continue;
                     }
                     self.meshing.remove(&(x, sy, z));
+                    self.compile_started.insert((x, sy, z), seq);
                     self.meshed_total += 1;
                     uploads.push(((x, sy, z), mesh));
                 }
@@ -1156,6 +1174,8 @@ impl Streaming {
             if !far.is_empty() {
                 let far: HashSet<(i32, i32)> = far.iter().copied().collect();
                 self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
+                self.compile_started
+                    .retain(|k, _| !far.contains(&(k.0, k.2)));
                 self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
                 world
                     .dirty_sections

@@ -535,14 +535,32 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
             );
         }
         // SimpleEquipmentLayer: the harness over the body.
-        S::HappyGhast if !m.is_baby() => {
-            if let Some(texture) = m
+        S::HappyGhast => {
+            let harness = m
                 .extra
                 .head
                 .as_deref()
-                .and_then(super::happy_ghast::harness_texture)
+                .and_then(super::happy_ghast::harness_texture);
+            if !m.is_baby()
+                && let Some(texture) = &harness
             {
-                push(&mut v, "happy_ghast_harness#main", &texture, white, false);
+                push(&mut v, "happy_ghast_harness#main", texture, white, false);
+            }
+            // RopesLayer: the ropes over a harnessed body while the ghast
+            // holds a quad lead (`isLeashHolder`), the baby's model for a baby.
+            if harness.is_some() && super::happy_ghast::is_leash_holder(m) {
+                let model = if m.is_baby() {
+                    "happy_ghast_baby_ropes#main"
+                } else {
+                    "happy_ghast_ropes#main"
+                };
+                push(
+                    &mut v,
+                    model,
+                    "entity/ghast/happy_ghast_ropes",
+                    white,
+                    false,
+                );
             }
         }
         // BreezeWindLayer and BreezeEyesLayer. The wind layer's texture
@@ -554,7 +572,7 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
                 texture: "entity/breeze/breeze_wind".into(),
                 color: white,
                 full_bright: false,
-                scroll: scroll_offset(m.age as f32, BREEZE_WIND_SCROLL),
+                scroll: scroll_offset(age, BREEZE_WIND_SCROLL),
             });
             push(
                 &mut v,
@@ -954,7 +972,8 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         None => super::aquatic::rotations(m, alpha, body)
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
-    let mut base = origin * rotation;
+    // PufferfishRenderer.setupRotations: bobs before LivingEntityRenderer's.
+    let mut base = origin * pufferfish_bob(m, alpha) * rotation;
     if m.death_time > 0 && !super::creaking::tearing_down(m) {
         let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
             .sqrt()
@@ -1033,6 +1052,21 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
+}
+/// `PufferfishRenderer.setupRotations`: `translate(0, cos(ageInTicks * 0.05) * 0.08, 0)`
+/// before the usual rotations, so a pufferfish bobs up and down.
+fn pufferfish_bob(m: &Mob, alpha: f32) -> glam::Mat4 {
+    if m.species() != Species::Pufferfish {
+        return glam::Mat4::IDENTITY;
+    }
+    glam::Mat4::from_translation(glam::Vec3::new(
+        0.0,
+        pufferfish_bob_y(m.age as f32 + alpha),
+        0.0,
+    ))
+}
+fn pufferfish_bob_y(age_in_ticks: f32) -> f32 {
+    (age_in_ticks * 0.05).mcos() * 0.08
 }
 /// `LivingEntityRenderer.isShaking`: a fully frozen mob (the skeleton's own
 /// `isShaking` is its stray conversion only), converting zombies, piglins
@@ -1328,6 +1362,155 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `Deadmau5EarsLayer.submit` with `PlayerEarsModel`: the player model's
+/// head carrying two 6x6x1 ears (the model's other cubes are cleared),
+/// drawn with the player's skin as `RenderTypes.entitySolid`. The caller has
+/// checked `showExtraEars`; an invisible avatar draws no ears.
+#[allow(clippy::too_many_arguments)]
+pub fn ears(
+    m: &Mob,
+    alpha: f32,
+    base: glam::Mat4,
+    uv: [f32; 4],
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    if super::trader::is_invisible(m) {
+        return;
+    }
+    let Some(model) = m.kind.layer("player#ears") else {
+        return;
+    };
+    let s = anim::state(m, alpha);
+    let mut poses = Poses::new(model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    // LivingEntityRenderer.getOverlayCoords(state, 0.0F).
+    draw(
+        model,
+        base,
+        &poses,
+        uv,
+        0xFFFF_FFFF,
+        light,
+        body_overlay(m, alpha),
+        out,
+    );
+}
+/// `PlayerModel.bodyParts`: what `getRandomBodyPart` picks from.
+const BODY_PARTS: [&str; 6] = [
+    "head",
+    "body",
+    "left_arm",
+    "right_arm",
+    "left_leg",
+    "right_leg",
+];
+
+/// The cubes of a part as `ModelPart.cubes` has them: min and max corners in
+/// model units. The part keeps six faces per cube, in cube order.
+fn cube_bounds(part: &Part) -> Vec<[f32; 6]> {
+    let size = if part.polygons.len().is_multiple_of(6) {
+        6
+    } else {
+        part.polygons.len().max(1)
+    };
+    part.polygons
+        .chunks(size)
+        .map(|faces| {
+            let mut b = [f32::MAX, f32::MAX, f32::MAX, f32::MIN, f32::MIN, f32::MIN];
+            for v in faces.iter().flat_map(|f| f.vertices) {
+                for k in 0..3 {
+                    b[k] = b[k].min(v[k]);
+                    b[3 + k] = b[3 + k].max(v[k]);
+                }
+            }
+            b
+        })
+        .collect()
+}
+
+/// `StuckInBodyLayer.snapToFace`.
+fn snap_to_face(value: f32) -> f32 {
+    if value > 0.5 { 1.0 } else { 0.5 }
+}
+
+/// `StuckInBodyLayer.submit` (with `submitStuckItem`) for a player: `count`
+/// copies of `item` (`ArrowLayer`'s arrow model, `BeeStingerLayer`'s stinger)
+/// stuck in random cubes of the posed body, placed from a random source
+/// seeded by the entity id `id`. `on_surface` is `PlacementStyle.ON_SURFACE`.
+#[allow(clippy::too_many_arguments)]
+pub fn stuck_in_body(
+    m: &Mob,
+    id: i32,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    count: i32,
+    on_surface: bool,
+    item: &Part,
+    uv: [f32; 4],
+    light: u32,
+    out: &mut Vec<Vertex>,
+) {
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    if count <= 0 {
+        return;
+    }
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let mut random = LegacyRandom::new(i64::from(id));
+    for _ in 0..count {
+        let name = BODY_PARTS[random.next_int_bound(BODY_PARTS.len() as i32).unwrap_or(0) as usize];
+        let Some(part) = find_part(&model, name) else {
+            return;
+        };
+        let cubes = cube_bounds(part);
+        let Ok(index) = random.next_int_bound(cubes.len() as i32) else {
+            return;
+        };
+        let cube = cubes[index as usize];
+        let Some(mut t) = part_matrix(&model, base, &poses, name, 0.0) else {
+            return;
+        };
+        let mut mid = [
+            random.next_float(),
+            random.next_float(),
+            random.next_float(),
+        ];
+        if on_surface {
+            let plane = random.next_int_bound(3).unwrap_or(0) as usize;
+            if plane < 3 {
+                mid[plane] = snap_to_face(mid[plane]);
+            }
+        }
+        let lerp = |k: usize| cube[k] + mid[k] * (cube[3 + k] - cube[k]);
+        t *= glam::Mat4::from_translation(glam::Vec3::new(lerp(0), lerp(1), lerp(2)) / 16.0);
+        let (dx, dy, dz) = (
+            -(mid[0] * 2.0 - 1.0),
+            -(mid[1] * 2.0 - 1.0),
+            -(mid[2] * 2.0 - 1.0),
+        );
+        let dxz = f64::from(dx * dx + dz * dz).sqrt() as f32;
+        let degrees = |y: f32, x: f32| {
+            (horizon_core::jmath::atan2(f64::from(y), f64::from(x)) * 180.0
+                / f64::from(std::f32::consts::PI)) as f32
+        };
+        let y_rot = degrees(dx, dz);
+        let x_rot = degrees(dy, dxz);
+        t *= glam::Mat4::from_rotation_y((y_rot - 90.0).to_radians())
+            * glam::Mat4::from_rotation_z(x_rot.to_radians());
+        super::render_model(item, t, &|p| p.pose, uv, light, 0, out);
+    }
+}
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
@@ -1383,7 +1566,16 @@ fn render_visible(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let draw_body = |out: &mut Vec<Vertex>| {
-        if body_visible && let Some(uv) = atlas(&texture) {
+        // A player or mannequin whose skin has no atlas sprite (an evicted or
+        // never stored download) draws with its default skin, not invisibly.
+        let uv = atlas(&texture).or_else(|| {
+            if avatar(m) {
+                atlas(&m.kind.texture)
+            } else {
+                None
+            }
+        });
+        if body_visible && let Some(uv) = uv {
             draw(
                 &model,
                 base,
@@ -1736,6 +1928,17 @@ fn fox_item_transform(m: &Mob, alpha: f32, camera: glam::DVec3, data: &MobData) 
     }
     t
 }
+/// `CrossedArmsItemLayer.applyTranslation`: `translateToArms`, then the item's
+/// placement over the folded arms.
+fn crossed_arms_matrix(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat4> {
+    let arms = part_matrix(model, base, poses, "arms", 0.0)?;
+    Some(
+        arms * glam::Mat4::from_rotation_x(0.75)
+            * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
+            * glam::Mat4::from_rotation_x(std::f32::consts::PI),
+    )
+}
 /// The pose a mob's held item is submitted under (`ItemInHandLayer`:
 /// `translateToHand`, then the hand offset; the item model adds its own
 /// display transform), or `None` when the mob shows no held items.
@@ -1786,14 +1989,16 @@ pub fn held_item_transform(
                     * glam::Mat4::from_rotation_x(180.0f32.to_radians()),
             );
         }
-        // CrossedArmsItemLayer.applyTranslation: translateToArms, then this.
-        let arms = part_matrix(&model, base, &poses, "arms", 0.0)?;
-        return Some(
-            arms * glam::Mat4::from_rotation_x(0.75)
-                * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
-                * glam::Mat4::from_rotation_x(std::f32::consts::PI),
-        );
+        return crossed_arms_matrix(&model, base, &poses);
+    }
+    // CrossedArmsItemLayer (villagers and wandering traders): the main hand's
+    // item over the folded arms.
+    if matches!(m.species(), Species::Villager | Species::WanderingTrader) {
+        m.extra.main_hand.as_deref()?;
+        if left != m.main_arm_left() {
+            return None;
+        }
+        return crossed_arms_matrix(&model, base, &poses);
     }
     let mut t = hand_base(m, &model, base, &poses, left)?;
     // ItemInHandLayer: a STAB swing of this arm thrusts its item out
@@ -1830,6 +2035,45 @@ pub fn held_item_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Six faces whose corners span `min` to `max`.
+    fn cube(min: [f32; 3], max: [f32; 3]) -> Vec<super::super::Polygon> {
+        let corner = |p: [f32; 3]| [p[0], p[1], p[2], 0.0, 0.0];
+        (0..6)
+            .map(|_| super::super::Polygon {
+                normal: [0.0; 3],
+                vertices: [corner(min), corner(max), corner(min), corner(max)],
+            })
+            .collect()
+    }
+
+    /// `ModelPart.cubes`: the corners of each cube of a part, six faces apiece.
+    #[test]
+    fn cube_bounds_follow_the_faces_of_each_cube() {
+        let mut polygons = cube([-4.0, -8.0, -2.0], [4.0, 0.0, 2.0]);
+        polygons.extend(cube([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]));
+        let part = Part {
+            name: "body".into(),
+            pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            polygons,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            cube_bounds(&part),
+            vec![
+                [-4.0, -8.0, -2.0, 4.0, 0.0, 2.0],
+                [0.0, 0.0, 0.0, 1.0, 2.0, 3.0]
+            ]
+        );
+    }
+
+    /// `StuckInBodyLayer.snapToFace`.
+    #[test]
+    fn a_stuck_item_snaps_to_the_far_or_the_middle_face() {
+        assert_eq!(snap_to_face(0.75), 1.0);
+        assert_eq!(snap_to_face(0.5), 0.5);
+        assert_eq!(snap_to_face(0.1), 0.5);
+    }
 
     /// VillagerProfessionLayer's textures (type, or baby for a baby;
     /// profession; level) of every villager and zombie villager are in the
@@ -2042,6 +2286,29 @@ mod tests {
         }
     }
 
+    /// `CrossedArmsItemLayer`: a villager and a wandering trader show their
+    /// main hand's item over the folded arms, and nothing in the off hand.
+    #[test]
+    fn villagers_and_traders_hold_items_in_crossed_arms() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let data = MobData::load(&root, &facts);
+        for id in ["minecraft:villager", "minecraft:wandering_trader"] {
+            let kind = std::sync::Arc::new(types.types[id].clone());
+            let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+            let main = mob.main_arm_left();
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, main).is_none());
+            mob.extra.set_main_hand(Some("minecraft:emerald".into()));
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, main).is_some());
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, !main).is_none());
+        }
+    }
     /// PhantomRenderer.scale moves the model down into its 0.5-high box:
     /// the model's origin ends 1.501 - 1.3125 blocks above the feet (times
     /// the size's scale), not 1.501 like other mobs (#3008).
@@ -2251,6 +2518,15 @@ mod tests {
 
 #[cfg(test)]
 mod scroll_tests {
+    #[test]
+    fn a_pufferfish_bobs_by_eight_hundredths() {
+        // PufferfishRenderer.setupRotations: cos(ageInTicks * 0.05) * 0.08.
+        assert!((super::pufferfish_bob_y(0.0) - 0.08).abs() < 1e-6);
+        let quarter = std::f32::consts::FRAC_PI_2 / 0.05;
+        assert!(super::pufferfish_bob_y(quarter).abs() < 1e-3);
+        assert!(super::pufferfish_bob_y(2.0 * quarter) < -0.0799);
+    }
+
     use super::*;
 
     #[test]

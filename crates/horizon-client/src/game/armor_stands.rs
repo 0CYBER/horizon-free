@@ -75,7 +75,14 @@ impl ArmorStandAssets {
         }
         let mut equipment = HashMap::new();
         let mut trim_overrides = HashMap::new();
-        if let Ok(entries) = std::fs::read_dir(root.join("assets/minecraft/equipment")) {
+        // EquipmentAssetManager reads every namespace: vanilla's and the content mods'.
+        let namespaces = std::iter::once("minecraft".to_owned())
+            .chain(horizon_client::mod_content::namespaces(root));
+        for namespace in namespaces {
+            let Ok(entries) = std::fs::read_dir(root.join(format!("assets/{namespace}/equipment")))
+            else {
+                continue;
+            };
             for e in entries.flatten() {
                 let path = e.path();
                 let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -87,6 +94,7 @@ impl ArmorStandAssets {
                     continue;
                 };
                 let Ok(v) = v else { continue };
+                let id = format!("{namespace}:{name}");
                 let mut kinds = HashMap::new();
                 for kind in ["humanoid", "humanoid_leggings", "wings"] {
                     // Every layer of the kind: leather's overlay is layer 1.
@@ -95,22 +103,25 @@ impl ArmorStandAssets {
                         .into_iter()
                         .flatten()
                         .map(|layer| {
-                            let tex = layer["texture"]
-                                .as_str()
-                                .unwrap_or(name)
-                                .trim_start_matches("minecraft:");
+                            let tex = layer["texture"].as_str().unwrap_or(&id);
+                            let (tex_namespace, tex) =
+                                tex.split_once(':').unwrap_or(("minecraft", tex));
+                            let sprite = match tex_namespace {
+                                "minecraft" => format!("entity/equipment/{kind}/{tex}"),
+                                other => format!("{other}:entity/equipment/{kind}/{tex}"),
+                            };
                             let undyed = layer["dyeable"]["color_when_undyed"]
                                 .as_i64()
                                 .map(|c| c as u32 & 0xFF_FFFF);
-                            (format!("entity/equipment/{kind}/{tex}"), undyed)
+                            (sprite, undyed)
                         })
                         .collect();
                     if !layers.is_empty() {
                         kinds.insert(kind.to_owned(), layers);
                     }
                 }
-                trim_overrides.insert(format!("minecraft:{name}"), TrimOverride::list(&v));
-                equipment.insert(format!("minecraft:{name}"), kinds);
+                trim_overrides.insert(id.clone(), TrimOverride::list(&v));
+                equipment.insert(id, kinds);
             }
         }
         Self {
@@ -943,6 +954,52 @@ fn overlaps(a: Aabb, b: Aabb) -> bool {
     );
     a0.x < b1.x && b0.x < a1.x && a0.y < b1.y && b0.y < a1.y && a0.z < b1.z && b0.z < a1.z
 }
+/// What `Equippable.swapWithEquipmentSlot` leaves once it has passed its
+/// checks: the piece worn in the slot, the hand, and the old piece bound for
+/// the inventory.
+#[derive(Debug, PartialEq)]
+struct ArmorSwap {
+    worn: ItemStack,
+    hand: Option<ItemStack>,
+    to_inventory: Option<ItemStack>,
+}
+/// `Equippable.swapWithEquipmentSlot` after its checks. A single item swaps
+/// with the worn piece: the hand gets the worn piece (`copyAndClear`), or
+/// keeps the item in creative when nothing was worn; creative wears a copy
+/// (`copy` instead of `copyAndClear`). From a larger stack one item is worn
+/// (`consumeAndReturn`, which takes none in creative) and the worn piece goes
+/// to the inventory.
+fn swap_with_equipment_slot(
+    stack: &ItemStack,
+    current: Option<ItemStack>,
+    creative: bool,
+) -> ArmorSwap {
+    let one = ItemStack {
+        count: 1,
+        ..stack.clone()
+    };
+    if stack.count <= 1 {
+        let hand = match current {
+            Some(old) => Some(old),
+            None if creative => Some(stack.clone()),
+            None => None,
+        };
+        return ArmorSwap {
+            worn: one,
+            hand,
+            to_inventory: None,
+        };
+    }
+    let mut held = stack.clone();
+    if !creative {
+        held.count -= 1;
+    }
+    ArmorSwap {
+        worn: one,
+        hand: Some(held),
+        to_inventory: current,
+    }
+}
 impl Game<'_> {
     /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
     /// its slot (the worn piece comes back to the hand).
@@ -968,28 +1025,19 @@ impl Game<'_> {
         }) {
             return true;
         }
-        let equipped = ItemStack {
-            count: 1,
-            ..stack.clone()
-        };
-        self.armor[index] = Some(equipped.clone());
+        let swap = swap_with_equipment_slot(stack, current, self.creative);
+        self.armor[index] = Some(swap.worn.clone());
         // Player.setItemSlot: onEquipItem plays the equip sound.
-        self.player_equipped(slot, Some(&equipped));
-        if !self.creative {
-            let mut held = stack.clone();
-            held.count -= 1;
-            if held.count == 0 {
-                // The worn piece comes back to the hand.
-                *self.held_mut() = current;
-            } else {
-                *self.held_mut() = Some(held);
-                if let Some(old) = current
-                    && let Some(rest) = self.give(old)
-                    && let Some(eye) = self.eye_position()
-                {
-                    self.spawn_item(rest, eye, [0.0; 3], 40);
-                }
-            }
+        self.player_equipped(slot, Some(&swap.worn));
+        *self.held_mut() = swap.hand;
+        // Inventory.add, else Player.drop (in creative a full inventory
+        // takes it anyway: hasInfiniteMaterials empties the stack).
+        if let Some(old) = swap.to_inventory
+            && let Some(rest) = self.give(old)
+            && !self.creative
+            && let Some(eye) = self.eye_position()
+        {
+            self.spawn_item(rest, eye, [0.0; 3], 40);
         }
         self.apply_equipment();
         self.swing_arm();
@@ -1150,6 +1198,52 @@ fn broken_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
         .filter(|stack| stack.enchantment_level("minecraft:vanishing_curse") == 0)
         .collect();
     (pos, drops)
+}
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+    fn stack(item: &str, count: u32) -> ItemStack {
+        ItemStack::new(item, count)
+    }
+    #[test]
+    fn creative_swap_gives_the_worn_piece_to_the_hand() {
+        let swap = swap_with_equipment_slot(
+            &stack("minecraft:diamond_chestplate", 1),
+            Some(stack("minecraft:iron_chestplate", 1)),
+            true,
+        );
+        assert_eq!(swap.worn, stack("minecraft:diamond_chestplate", 1));
+        assert_eq!(swap.hand, Some(stack("minecraft:iron_chestplate", 1)));
+        assert_eq!(swap.to_inventory, None);
+    }
+    #[test]
+    fn creative_equip_with_nothing_worn_keeps_the_hand() {
+        let swap = swap_with_equipment_slot(&stack("minecraft:diamond_helmet", 1), None, true);
+        assert_eq!(swap.worn, stack("minecraft:diamond_helmet", 1));
+        assert_eq!(swap.hand, Some(stack("minecraft:diamond_helmet", 1)));
+    }
+    #[test]
+    fn survival_swap_gives_the_worn_piece_or_empties_the_hand() {
+        let worn = Some(stack("minecraft:iron_boots", 1));
+        let swap = swap_with_equipment_slot(&stack("minecraft:diamond_boots", 1), worn, false);
+        assert_eq!(swap.hand, Some(stack("minecraft:iron_boots", 1)));
+        let swap = swap_with_equipment_slot(&stack("minecraft:diamond_boots", 1), None, false);
+        assert_eq!(swap.hand, None);
+    }
+    #[test]
+    fn a_larger_stack_wears_one_and_sends_the_old_piece_to_the_inventory() {
+        // Armour stacks past one only with a max_stack_size component.
+        let worn = Some(stack("minecraft:leather_helmet", 1));
+        let swap =
+            swap_with_equipment_slot(&stack("minecraft:golden_helmet", 3), worn.clone(), false);
+        assert_eq!(swap.worn, stack("minecraft:golden_helmet", 1));
+        assert_eq!(swap.hand, Some(stack("minecraft:golden_helmet", 2)));
+        assert_eq!(swap.to_inventory, worn);
+        let swap =
+            swap_with_equipment_slot(&stack("minecraft:golden_helmet", 3), worn.clone(), true);
+        assert_eq!(swap.hand, Some(stack("minecraft:golden_helmet", 3)));
+        assert_eq!(swap.to_inventory, worn);
+    }
 }
 #[cfg(test)]
 mod burn_drop_tests {

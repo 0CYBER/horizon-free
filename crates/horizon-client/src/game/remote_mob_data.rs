@@ -302,6 +302,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER):
             // `isOnStillTimeout` on a client, which keeps the ghast solid to
             // the player (`canBeCollidedWith`).
+            // HappyGhast.IS_LEASH_HOLDER: RopesLayer draws the ropes while set.
+            (Species::HappyGhast, 18, Value::Bool(holder)) => {
+                m.extra.scratch[1] = i32::from(*holder)
+            }
             (Species::HappyGhast, 19, Value::Bool(still)) => m.extra.counter = i32::from(*still),
             // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
             (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {
@@ -381,6 +385,9 @@ fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
             (0, Value::Byte(flags)) => m.extra.fall_flying = flags & -128 != 0,
             (6, Value::Id(pose)) => m.extra.synced_pose = (*pose).clamp(0, 17) as u8,
             (8, Value::Byte(flags)) => m.extra.auto_spin_attack = flags & 4 != 0,
+            // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
+            (12, Value::Int(count)) => m.extra.arrow_count = *count,
+            (13, Value::Int(count)) => m.extra.stinger_count = *count,
             _ => {}
         }
     }
@@ -814,6 +821,20 @@ mod tests {
         assert!(m.extra.using_off_hand);
         apply(&mut m, &[(8, s::BYTE, Value::Byte(0))]);
         assert_eq!(m.extra.using_item, 0);
+    }
+
+    /// LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID of another
+    /// player, which ArrowLayer and BeeStingerLayer draw.
+    #[test]
+    fn another_players_stuck_arrows_and_stingers_are_kept() {
+        let Some(mut m) = mob("minecraft:player") else {
+            return;
+        };
+        apply(&mut m, &[(12, s::INT, Value::Int(4))]);
+        apply(&mut m, &[(13, s::INT, Value::Int(2))]);
+        assert_eq!((m.extra.arrow_count, m.extra.stinger_count), (4, 2));
+        apply(&mut m, &[(12, s::INT, Value::Int(0))]);
+        assert_eq!((m.extra.arrow_count, m.extra.stinger_count), (0, 2));
     }
 
     #[test]
