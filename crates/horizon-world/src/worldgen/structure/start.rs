@@ -831,7 +831,9 @@ pub trait StartContext: JigsawContext {
     /// BiomeSource.findBiomeHorizontal samples: each climate lookup starts
     /// from the previous result, which a tie keeps.
     fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId>;
-    fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>);
+    /// `GenerationContext.validBiome`'s set: `None` is the `biome -> true`
+    /// predicate `/place structure` passes, so every biome counts as valid.
+    fn set_valid_biomes(&mut self, biomes: Option<&BTreeSet<BiomeId>>);
 }
 
 /// ChunkGenerator.createStructures for one chunk: the starts it owns.
@@ -869,6 +871,7 @@ pub fn create_starts(
                 context,
                 set.structures[0].0,
                 chunk,
+                false,
             ) {
                 starts.push(start);
             }
@@ -889,9 +892,9 @@ pub fn create_starts(
                 index += 1;
             }
             let selected = options[index];
-            if let Some(start) =
-                try_generate(registry, resources, bindings, context, selected.0, chunk)
-            {
+            if let Some(start) = try_generate(
+                registry, resources, bindings, context, selected.0, chunk, false,
+            ) {
                 starts.push(start);
                 break;
             }
@@ -901,16 +904,21 @@ pub fn create_starts(
     }
     starts
 }
-fn try_generate(
+/// `Structure.generate` of one structure for one chunk: what the chunk's
+/// structure set would build there, or, for `/place structure`, the start this
+/// structure builds in any chunk (the set's placement is not consulted, and
+/// `any_biome` is vanilla's `biome -> true` predicate there).
+pub(crate) fn try_generate(
     registry: &StructureRegistry,
     resources: &StructureResources,
     bindings: &FeatureBlockBindings<'_>,
     context: &mut impl StartContext,
     structure: usize,
     chunk: ChunkPos,
+    any_biome: bool,
 ) -> Option<StructureStart> {
     let def = &registry.structures[structure];
-    context.set_valid_biomes(&def.biomes);
+    context.set_valid_biomes((!any_biome).then_some(&def.biomes));
     let seed = context.seed();
     let mut random = WorldgenRandom::new(LegacyRandom::new(0));
     random.set_large_feature_seed(seed, chunk.x, chunk.z);
@@ -920,6 +928,8 @@ fn try_generate(
                 .start_height
                 .sample(&mut random, context.generation())
                 .ok()?;
+            // A carried mod's own start rules keep the structure's biome set:
+            // they read it directly, not through the context's predicate.
             if !jigsaw
                 .checks
                 .pass(context, &def.biomes, chunk, height, jigsaw.project_to)
@@ -1163,9 +1173,10 @@ fn try_generate(
                 return None;
             }
             let start = [x, y, z];
-            if !def
-                .biomes
-                .contains(&context.noise_biome(start.map(|v| v >> 2)))
+            if !any_biome
+                && !def
+                    .biomes
+                    .contains(&context.noise_biome(start.map(|v| v >> 2)))
             {
                 return None;
             }
@@ -1195,7 +1206,7 @@ fn try_generate(
             )?;
             let position = [x, y, z];
             let quart = position.map(|v| v >> 2);
-            if !def.biomes.contains(&context.noise_biome(quart)) {
+            if !any_biome && !def.biomes.contains(&context.noise_biome(quart)) {
                 return None;
             }
             let piece = super::nether_fossil::piece(resources, &mut random, position)?;
@@ -1216,7 +1227,7 @@ fn try_generate(
         StructureKind::Unsupported(_) => return None,
     };
     let quart = position.map(|v| v >> 2);
-    if !def.biomes.contains(&context.noise_biome(quart)) || pieces.is_empty() {
+    if (!any_biome && !def.biomes.contains(&context.noise_biome(quart))) || pieces.is_empty() {
         return None;
     }
     Some(StructureStart::new(structure, def, chunk, pieces))

@@ -891,6 +891,22 @@ def table(labels):
             r = json.loads(path.read_text())
             runs.setdefault(label, {})[r["conditions"]["render_distance"]] = r
     distances = sorted({d for by in runs.values() for d in by})
+    # The report contract requires these conditions to match before comparing runs.
+    for distance in distances:
+        present = [(label, runs[label][distance]["conditions"]) for label in labels
+                   if label in runs and distance in runs[label]]
+        if len(present) < 2:
+            continue
+        for key in ("scenario", "seed", "simulation_distance", "window", "vsync", "fps_cap", "offscreen"):
+            # Only an absent fps_cap has a defined meaning (unlimited); null is unknown.
+            missing = [label for label, c in present
+                       if c.get(key) is None and (key != "fps_cap" or key in c)]
+            if missing:
+                raise ValueError(f"cannot compare RD {distance}: {key} missing in {', '.join(missing)}")
+            baseline = present[0][1].get(key)
+            for label, c in present[1:]:
+                if c.get(key) != baseline:
+                    raise ValueError(f"cannot compare RD {distance}: {key} differs between {present[0][0]} and {label}")
     cell = lambda m, digits=0: "–" if not m else f"{m['mean']:.{digits}f}" + (f" ±{m['ci95']:.{digits}f}" if m["ci95"] else "")
     print("| RD | scene | " + " | ".join(f"{l}: avg / 1% / 0.1% low FPS" for l in labels) + " |")
     print("| --- | --- |" + " --- |" * len(labels))
@@ -946,10 +962,13 @@ def main():
                    help="horizon: measure a later start, after one start to the title screen built the caches")
     p.add_argument("--mod-jars", help="neoforge: the mod jars to load (the user's own; never committed)")
     p.add_argument("--deps", help="neoforge: their required libraries")
-    p.add_argument("--table", nargs="+", metavar="LABEL", help="print markdown tables of saved runs, and exit")
+    p.add_argument("--table", nargs="+", metavar="LABEL", help="compare saved runs with matching recorded conditions, and exit")
     args = p.parse_args()
     if args.table:
-        table(args.table)
+        try:
+            table(args.table)
+        except ValueError as error:
+            p.error(str(error))
         return
     args.label = args.label or f"{args.game}-{platform.node().split('.')[0]}"
     WORK.mkdir(parents=True, exist_ok=True)

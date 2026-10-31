@@ -106,6 +106,7 @@ impl Game<'_> {
         self.keys.clear();
         self.screen = Screen::Options;
         self.options_from_title = from_title;
+        self.options_to_game = false;
         let ui = &mut self.ui.options;
         ui.open_at(!from_title && self.title.is_none(), page);
         let root = self.options.resources.clone();
@@ -275,13 +276,17 @@ impl Game<'_> {
                 Event::Close if self.ui.options.resource_error.is_some() => {}
                 Event::Close => {
                     self.settings.save(&Self::options_path());
+                    let to_game = std::mem::take(&mut self.options_to_game);
                     self.screen = if std::mem::take(&mut self.options_to_world_options) {
                         Screen::WorldOptions
-                    } else if self.options_from_title {
+                    } else if self.options_from_title || to_game {
                         Screen::Playing
                     } else {
                         Screen::Paused
                     };
+                    if to_game {
+                        self.capture(true);
+                    }
                     self.dragging = false;
                 }
                 Event::Language(code) => {

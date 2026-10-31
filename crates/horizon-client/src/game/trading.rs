@@ -844,24 +844,17 @@ impl Game<'_> {
         // Slots, hover highlight, carried stack, tooltip.
         let slots: Vec<usize> = (0..36).chain([INPUT, INPUT + 1, RESULT]).collect();
         let drag = self.drag_view();
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             let stack = self.slot_mut(i).clone();
             self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
-        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
-            if self.carried.is_none() && tooltip.is_none() {
-                tooltip = self.slot_mut(slot).clone();
-            }
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
+        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
+            && tooltip.is_none()
+        {
+            tooltip = self.slot_mut(slot).clone();
         }
         // An out-of-stock trade: "the villager needs to restock" over the
         // result (isHovering(186, 35, 22, 21), canRestock).
@@ -873,6 +866,9 @@ impl Game<'_> {
             && local.1 < 35.0 + 21.0 + 1.0;
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = tooltip.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if deprecated {
             let text = self
                 .res
