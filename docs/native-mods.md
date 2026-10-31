@@ -195,6 +195,10 @@ uses `flags::UPDATE_CLIENTS`) and set `handled` to skip the block's own tick. Wi
 its own tick as it is now, if it is still the tick's block. The deprecated in-frame path fires none. Bundles that use
 it need `"hooks": 34`.
 
+API 35 adds the commands a mod owns on the client: `native_commands` is asked for their names, so the chat box
+colours, completes and lists them like the game's own, and `native_command` runs them. A name the game already has
+keeps that command. Bundles that use it need `"hooks": 35`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
