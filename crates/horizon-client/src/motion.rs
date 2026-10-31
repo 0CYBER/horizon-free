@@ -263,6 +263,7 @@ pub enum MotionEvent {
     /// around a drowning player.
     Drown,
 }
+#[derive(Clone)]
 pub struct PlayerMotion {
     pub swimming: bool,
     pub fire_ticks: i32,
@@ -359,7 +360,7 @@ pub struct PlayerMotion {
     /// server takes it at the end of a guest's turn.
     pub teleported: bool,
     pub events: Vec<MotionEvent>,
-    pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
+    pub attributes: LiveAttributes<Box<dyn horizon_world::attributes::live::Identities>>,
     pub impulse: ImpulseContext,
     /// `ServerPlayer.spawnExtraParticlesOnFall`: a mace smash on a grounded
     /// target makes the next landing throw up the block below.
@@ -474,7 +475,7 @@ impl PlayerMotion {
             .map(|(i, _)| i as i32)
             .collect();
         let mut identity = 0i32;
-        let next: Box<dyn FnMut() -> i32> = Box::new(move || {
+        let next: Box<dyn horizon_world::attributes::live::Identities> = Box::new(move || {
             identity = identity.wrapping_add(1);
             identity
         });
@@ -485,7 +486,7 @@ impl PlayerMotion {
         resources: &MotionResources,
         position: Vec3,
         hashes: &[i32],
-        next: Box<dyn FnMut() -> i32>,
+        next: Box<dyn horizon_world::attributes::live::Identities>,
     ) -> Result<Self> {
         let mut attributes = LiveAttributes::new(
             resources.attributes.clone(),
@@ -3940,6 +3941,39 @@ mod tests {
         w.passenger_pose_tick().unwrap();
         assert!(!w.player.swimming);
         assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+    }
+    /// The movement prediction plays a tick again on a copy: what the copy
+    /// does (sprinting edits the speed attribute) stays in the copy.
+    #[test]
+    fn a_copied_player_moves_on_its_own() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        let walking = player.attribute("minecraft:movement_speed").unwrap();
+        let mut copy = player.clone();
+        copy.set_sprinting(true).unwrap();
+        copy.velocity = Vec3::new(0.2, 0.0, 0.0);
+        let sprinting = copy.attribute("minecraft:movement_speed").unwrap();
+        assert!(
+            (sprinting - walking * 1.3).abs() < 1e-6,
+            "{walking} {sprinting}"
+        );
+        assert_eq!(
+            player.attribute("minecraft:movement_speed").unwrap(),
+            walking
+        );
+        assert!(!player.sprinting);
+        assert_eq!(player.velocity, Vec3::ZERO);
+        // The copy's attributes keep working after the original changes too.
+        player.set_sprinting(true).unwrap();
+        copy.set_sprinting(false).unwrap();
+        assert_eq!(copy.attribute("minecraft:movement_speed").unwrap(), walking);
     }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {
