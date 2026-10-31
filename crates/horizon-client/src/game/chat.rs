@@ -952,7 +952,7 @@ impl Game<'_> {
         if !self.settings.chat_links {
             return;
         }
-        if self.settings.file.bool("chatLinksPrompt") {
+        if self.settings.chat_links_prompt {
             self.link_prompt = Some(url);
         } else {
             super::packs::open_uri(&url);
@@ -1136,9 +1136,9 @@ impl Game<'_> {
                 .focused_tags(&self.gui.atlas.font, height, cx, cy);
         horizon_client::hud_layout::paint(batch, &self.gui.atlas, &tag_icons);
         if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
-            // DrawingFocusedGraphicsAccess.handleMessage: the pointing hand over
-            // insertion text, which ChatScreen only asks for while Shift is held.
-            if style.insertion.is_some() && self.has_shift_down() {
+            // ActiveTextCollector.ClickableStyleFinder: a click event, or an
+            // insertion while Shift is held (ChatScreen.includeInsertions).
+            if style.click.is_some() || (style.insertion.is_some() && self.has_shift_down()) {
                 horizon_client::widgets::request_cursor(
                     horizon_client::widgets::Cursor::PointingHand,
                 );

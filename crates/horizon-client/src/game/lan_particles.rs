@@ -11,6 +11,17 @@ use horizon_protocol::{
 };
 use horizon_world::registry::BlockStateId;
 
+/// A particle request awaiting delivery to players in its level.
+pub(super) struct QueuedParticle {
+    pub dimension: &'static str,
+    pub options: ParticleOptions,
+    pub state: Option<BlockStateId>,
+    pub at: [f64; 3],
+    pub spread: [f64; 3],
+    pub speed: f64,
+    pub count: i32,
+}
+
 /// An ARGB colour as the options' RGBA.
 fn rgba(argb: i32) -> [f32; 4] {
     let c = |shift: i32| ((argb >> shift) & 255) as f32 / 255.0;
@@ -367,32 +378,23 @@ impl Game<'_> {
     /// the players (a guest's turn through `as_guest`, a host's hit on a
     /// guest) the packet waits for the turn to end so that it reaches every
     /// player, the guest too.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn lan_send_particles(
-        &mut self,
-        dimension: &'static str,
-        options: &ParticleOptions,
-        state: Option<BlockStateId>,
-        at: [f64; 3],
-        spread: [f64; 3],
-        speed: f64,
-        count: i32,
-    ) {
+    pub(super) fn lan_send_particles(&mut self, request: QueuedParticle) {
         if self.lan.is_none() {
             if self.serving.is_some() || self.options.dedicated.is_some() {
-                self.creatures.lan_particles.push((
-                    dimension,
-                    options.clone(),
-                    state,
-                    at,
-                    spread,
-                    speed,
-                    count,
-                ));
+                self.creatures.lan_particles.push(request);
             }
             return;
         }
-        let Some(particle) = self.network_particle(options, state) else {
+        let QueuedParticle {
+            dimension,
+            options,
+            state,
+            at,
+            spread,
+            speed,
+            count,
+        } = request;
+        let Some(particle) = self.network_particle(&options, state) else {
             return;
         };
         let Some(host) = self.lan.as_ref() else {
@@ -428,10 +430,8 @@ impl Game<'_> {
 
     /// The particles guests' turns put off.
     pub(super) fn flush_lan_particles(&mut self) {
-        for (dimension, options, state, at, spread, speed, count) in
-            std::mem::take(&mut self.creatures.lan_particles)
-        {
-            self.lan_send_particles(dimension, &options, state, at, spread, speed, count);
+        for request in std::mem::take(&mut self.creatures.lan_particles) {
+            self.lan_send_particles(request);
         }
     }
 

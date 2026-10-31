@@ -3080,21 +3080,28 @@ impl Game<'_> {
             }
             C::TakeItemEntity(p) => {
                 // ClientPacketListener.handleTakeItemEntity: the pickup sound at
-                // the item, whoever collects it (the server sends none). An
-                // orb's sound comes from the server, at the orb; an arrow this
-                // client does not track as an item sounds at this player.
+                // the item or arrow, whoever collects it (the server sends none).
+                // An orb's sound comes from the server, at the orb; an entity
+                // this client doesn't track sounds at this player.
                 let orb = self.orbs.iter().any(|o| o.id == p.item as u32);
                 let item = self.dropped.iter().find(|d| d.id == p.item as u32);
-                let at = match item {
-                    Some(d) => Some([d.position.x, d.position.y, d.position.z]),
-                    None if self
-                        .remote
-                        .as_ref()
-                        .is_some_and(|r| r.entity_id == p.player) =>
+                let shot = self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .find(|s| s.id == p.item as u32);
+                let at = match (item, shot) {
+                    (Some(d), _) => Some([d.position.x, d.position.y, d.position.z]),
+                    (None, Some(s)) => Some([s.position.x, s.position.y, s.position.z]),
+                    (None, None)
+                        if self
+                            .remote
+                            .as_ref()
+                            .is_some_and(|r| r.entity_id == p.player) =>
                     {
                         self.eye_position()
                     }
-                    None => None,
+                    (None, None) => None,
                 };
                 if !orb && let Some(at) = at {
                     let pitch = ((self.world.random.next_float() - self.world.random.next_float())
@@ -3119,6 +3126,15 @@ impl Game<'_> {
                 } else if let Some(orb) = self.orbs.iter().find(|o| o.id == p.item as u32).cloned()
                 {
                     self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
+                } else if let Some(shot) = self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .find(|s| s.id == p.item as u32)
+                    .cloned()
+                {
+                    // An arrow or trident flies to its collector too, then goes.
+                    self.add_pickup(super::pickups::Taken::Arrow(Box::new(shot)), collector);
                 }
                 // An orb stays: the server may still hold merged ones in it.
                 if !orb {
@@ -3252,8 +3268,16 @@ impl Game<'_> {
                     && let Some(pl) = self.player.as_ref()
                 {
                     let at = [pl.position.x, pl.position.y, pl.position.z];
-                    self.audio
-                        .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
+                    let sound = "minecraft:entity.player.death";
+                    let pitch = 1.0
+                        + (self.world.random.next_float() - self.world.random.next_float()) * 0.2;
+                    self.audio.play_on(
+                        horizon_client::settings::sound_source(sound),
+                        sound,
+                        Some(at),
+                        1.0,
+                        pitch,
+                    );
                 }
                 // The events that start a mob's animation (the warden's).
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
@@ -3419,7 +3443,10 @@ impl Game<'_> {
             }
             // ClientPacketListener.handleSetTime: the game time, then
             // ClientClockManager.handleUpdates: the clock catches up with the
-            // game time and takes the server's state.
+            // game time and takes the server's state. Only this level's
+            // default world clock is applied — a packet that only updates
+            // another clock (the End's) must not overwrite day_time, or the
+            // sky follows game_time and looks inverted vs the server's day.
             C::SetTime(p) => {
                 self.world.game_time = p.game_time;
                 self.remote_clock_tick();
@@ -3427,15 +3454,20 @@ impl Game<'_> {
                     let r = self.remote.as_ref();
                     let names =
                         r.and_then(|r| r.registries.registries.get("minecraft:world_clock"));
-                    let wanted = r.map(|r| r.dimension.name.clone()).unwrap_or_default();
+                    let tracked = r.and_then(|r| r.clock);
+                    let wanted = r
+                        .and_then(|r| r.dimension.default_clock.clone())
+                        .or_else(|| r.map(|r| r.dimension.name.clone()))
+                        .unwrap_or_else(|| "minecraft:overworld".into());
+                    let name = |id: i32| {
+                        names
+                            .and_then(|n| n.get(id as usize))
+                            .map(|(n, _)| n.as_str())
+                    };
                     p.clocks
                         .iter()
-                        .find(|c| {
-                            names
-                                .and_then(|n| n.get(c.clock as usize))
-                                .is_some_and(|(n, _)| *n == wanted)
-                        })
-                        .or_else(|| p.clocks.first())
+                        .find(|c| name(c.clock) == Some(wanted.as_str()))
+                        .or_else(|| tracked.and_then(|id| p.clocks.iter().find(|c| c.clock == id)))
                         .cloned()
                 };
                 if let Some(c) = clock {
@@ -5531,9 +5563,21 @@ impl Game<'_> {
         // ItemEntity.tick runs on a client too: gravity, collisions and
         // friction move the item between the server's updates (every 20
         // ticks), and only the server removes it.
-        let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
+        let (world, registry, facts, collision) = (
+            &self.world,
+            self.pack.assets.registry,
+            self.res.facts(),
+            self.collision,
+        );
         for d in self.dropped.iter_mut().filter(|_| running) {
-            d.tick(world, facts, collision, false, &self.res.motion().fluids);
+            d.tick(
+                world,
+                registry,
+                facts,
+                collision,
+                false,
+                &self.res.motion().fluids,
+            );
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
         let _ = self.handle_mob_events(mob_fx);
@@ -6517,28 +6561,35 @@ impl Game<'_> {
     /// the client's own. A fill into a waterloggable block changes nothing
     /// here: `SimpleWaterloggedBlock.placeLiquid` tests `isClientSide` and
     /// leaves the block update to the server.
-    fn remote_use_bucket(&mut self, stack: &ItemStack) -> (bool, Option<DryChanges>) {
+    fn remote_use_bucket(
+        &mut self,
+        stack: &ItemStack,
+    ) -> (bool, Option<DryChanges>, Vec<DrySound>) {
         // `BucketItem.use`: `level.mayInteract` and `mayUseItemAt`.
         if !self.may_build() {
-            return (false, None);
+            return (false, None, Vec::new());
         }
         if &*stack.item == "minecraft:bucket" {
             let Some(hit) = self.bucket_hit() else {
-                return (false, None);
+                return (false, None, Vec::new());
             };
             let pos = horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
             let creative = self.creative;
             return self.with_level(|b, level, ticks| {
                 let mut level = DryLevel::new(level);
                 let picked = b.bucket_pickup(&mut level, ticks, pos, creative).is_some();
-                (picked, Some(level.changed.into_iter().collect()))
+                (
+                    picked,
+                    Some(level.changed.into_iter().collect()),
+                    std::mem::take(&mut level.sounds),
+                )
             });
         }
         let Some((content, sound, _)) = horizon_client::items::bucket_contents(&stack.item) else {
-            return (false, None);
+            return (false, None, Vec::new());
         };
         let Some(hit) = self.pick() else {
-            return (false, None);
+            return (false, None, Vec::new());
         };
         let target = self.bucket_target(content, &hit);
         let pos = horizon_core::position::BlockPos::new(target[0], target[1], target[2]);
@@ -6555,6 +6606,7 @@ impl Game<'_> {
             (
                 emptied,
                 client_change.then(|| level.changed.into_iter().collect()),
+                std::mem::take(&mut level.sounds),
             )
         })
     }
@@ -6588,9 +6640,24 @@ impl Game<'_> {
         if &*held.item == "minecraft:bucket"
             || horizon_client::items::bucket_contents(&held.item).is_some()
         {
-            let (succeeded, changes) = self.with_hand(hand, |g| g.remote_use_bucket(&held));
+            let (succeeded, changes, sounds) = self.with_hand(hand, |g| g.remote_use_bucket(&held));
             if let Some(changes) = changes {
                 self.predict_blocks(&changes, seq);
+            }
+            // `BucketItem.emptyContents` / evaporate: `playSound(player, …)` on
+            // this client; the server leaves the actor out (#4684).
+            for (pos, sound, volume, pitch) in sounds {
+                let at = [
+                    f64::from(pos.x) + 0.5,
+                    f64::from(pos.y) + 0.5,
+                    f64::from(pos.z) + 0.5,
+                ];
+                let name = if sound.contains(':') {
+                    sound.to_string()
+                } else {
+                    format!("minecraft:{sound}")
+                };
+                self.audio.play(&name, Some(at), volume, pitch);
             }
             return succeeded;
         }

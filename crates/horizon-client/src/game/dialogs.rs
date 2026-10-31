@@ -237,7 +237,7 @@ impl Game<'_> {
         // the dialog stays unless the confirmation takes over (Web Links off,
         // or Prompt on Links off, opens nothing or the browser behind it).
         if let Some(Click::OpenUrl(url)) = &click
-            && !(self.settings.chat_links && self.settings.file.bool("chatLinksPrompt"))
+            && !(self.settings.chat_links && self.settings.chat_links_prompt)
         {
             if self.settings.chat_links {
                 super::packs::open_uri(url);

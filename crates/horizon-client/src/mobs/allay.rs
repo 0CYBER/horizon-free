@@ -8,6 +8,7 @@ use super::{
     goals::{Cx, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, goal_clone},
     nav::NavKind,
 };
+use crate::items::ItemStack;
 use crate::sculk::{self, Context, Info};
 use horizon_core::geometry::Vec3;
 use horizon_core::geometry::trig::Mth;
@@ -62,6 +63,15 @@ pub fn dimension(w: &MobWorld) -> &'static str {
     } else {
         "minecraft:overworld"
     }
+}
+
+/// `AllayAi.allayConsidersItemEqual`: the same item (`ItemStack.isSameItem`)
+/// and the same potion contents (`!hasNonMatchingPotion`); no
+/// `potion_contents` on a stack is the empty contents, and two empty ones match.
+// shortcut: only the potion id is compared, not custom effects or colour, which
+// `StackData` does not keep; upgrade when it does.
+pub fn considers_item_equal(held: &ItemStack, candidate: &ItemStack) -> bool {
+    held.item == candidate.item && held.potion() == candidate.potion()
 }
 
 /// An allay's vibration listener (`Allay.vibrationData`) and the brain
@@ -409,4 +419,43 @@ pub fn anim(m: &Mob, s: &AnimState, p: &mut Poses) {
     p.zrot("right_arm", amount);
     p.yrot("right_arm", 0.279_252_68 * hold);
     p.yrot("left_arm", -0.279_252_68 * hold);
+}
+#[cfg(test)]
+mod allay_parity_tests {
+    use super::*;
+
+    fn potion(id: &str) -> ItemStack {
+        ItemStack::new("minecraft:potion", 1).with_potion(id)
+    }
+
+    #[test]
+    fn a_held_potion_matches_only_its_own_contents() {
+        assert!(!considers_item_equal(
+            &potion("minecraft:swiftness"),
+            &potion("minecraft:healing")
+        ));
+        assert!(considers_item_equal(
+            &potion("minecraft:swiftness"),
+            &potion("minecraft:swiftness")
+        ));
+    }
+
+    #[test]
+    fn stacks_without_potion_contents_match_by_item() {
+        let stone = ItemStack::new("minecraft:stone", 1);
+        assert!(considers_item_equal(&stone, &stone));
+        assert!(!considers_item_equal(
+            &stone,
+            &ItemStack::new("minecraft:dirt", 1)
+        ));
+        // An empty potion component on both sides matches; one is not enough.
+        assert!(considers_item_equal(
+            &ItemStack::new("minecraft:potion", 1),
+            &ItemStack::new("minecraft:potion", 1)
+        ));
+        assert!(!considers_item_equal(
+            &ItemStack::new("minecraft:potion", 1),
+            &potion("minecraft:swiftness")
+        ));
+    }
 }

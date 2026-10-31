@@ -293,8 +293,9 @@ pub(super) struct Dragon {
     pub parts: [(Vec3, Vec3); 8],
     nodes: Option<[[i32; 3]; 24]>,
     nearest_crystal: Option<usize>,
-    /// A crystal destroyed while it held its pattern (taken on its next tick).
-    strafe_request: Option<StrafeRequest>,
+    /// The player a crystal destroyed while it held its pattern sends it
+    /// after (`strafe_after_crystal`), taken on its next tick.
+    strafe_request: Option<FightWho>,
     random: LegacyRandom,
 }
 /// A player in the fight: the window's own player, or a guest by
@@ -343,15 +344,6 @@ fn nearest_enemy(
                 .total_cmp(&b.position.distance_squared(at))
         })
         .copied()
-}
-/// Whom a destroyed crystal sends a holding dragon after
-/// (`DragonHoldingPatternPhase.onCrystalDestroyed`).
-#[derive(Clone, Copy, Debug)]
-enum StrafeRequest {
-    /// The player who destroyed it.
-    Player(FightWho),
-    /// Anything else: the player nearest the crystal.
-    Nearest(Vec3),
 }
 /// Whether `EndCrystal.hurtServer` creates a blast before notifying the fight.
 #[derive(Clone, Copy, PartialEq)]
@@ -551,6 +543,19 @@ impl Dragon {
                 })
             })
             .collect()
+    }
+    /// `DragonHoldingPatternPhase.onCrystalDestroyed`: strafe `player` if
+    /// the dragon can attack them (`EnderDragon.canAttack`, on Peaceful too).
+    /// The first such crystal wins: the dragon strafes from then on, and
+    /// `onCrystalDestroyed` does nothing in that phase.
+    fn strafe_after_crystal(&mut self, player: Option<&FightPlayer>) {
+        if let Some(p) = player
+            && p.enemy()
+            && matches!(self.phase, Phase::Holding { .. })
+            && self.strafe_request.is_none()
+        {
+            self.strafe_request = Some(p.who);
+        }
     }
     fn set_phase(&mut self, phase: Phase) {
         if self.phase.id() == phase.id() && phase.id() != 1 {
@@ -925,25 +930,29 @@ impl Game<'_> {
         }
         // EnderDragonFight.onCrystalDestroyed.
         self.count_crystals();
+        // EnderDragon.onCrystalDestroyed: the player behind the damage, else
+        // the one nearest the crystal's block (`CRYSTAL_DESTROY_TARGETING`,
+        // whose range `TargetingConditions.test` skips without a targeter).
+        let player = by.or_else(|| {
+            let p = c.position;
+            let at = Vec3::new(p.x.floor(), p.y.floor(), p.z.floor());
+            let peaceful = self.ui.difficulty == 0;
+            nearest_enemy(&self.fight_players(), peaceful, at, None, |_| true).map(|p| p.who)
+        });
+        let Some(d) = self.dragon.as_mut() else {
+            return;
+        };
+        if d.nearest_crystal == Some(index) {
+            d.nearest_crystal = None;
+            self.hurt_dragon(0, 10.0, true, player, DamageKind::Explosion);
+        } else if let Some(n) = d.nearest_crystal.as_mut()
+            && *n > index
+        {
+            *n -= 1;
+        }
+        let target = player.and_then(|who| self.fight_players().into_iter().find(|p| p.who == who));
         if let Some(d) = self.dragon.as_mut() {
-            if d.nearest_crystal == Some(index) {
-                d.nearest_crystal = None;
-                self.hurt_dragon(0, 10.0, true, by, DamageKind::Explosion);
-            } else if let Some(n) = d.nearest_crystal.as_mut()
-                && *n > index
-            {
-                *n -= 1;
-            }
-            // EnderDragon.onCrystalDestroyed: the player who did it, else the
-            // nearest; DragonHoldingPatternPhase strafes them.
-            if let Some(d) = self.dragon.as_mut()
-                && matches!(d.phase, Phase::Holding { .. })
-            {
-                d.strafe_request = Some(match by {
-                    Some(who) => StrafeRequest::Player(who),
-                    None => StrafeRequest::Nearest(c.position),
-                });
-            }
+            d.strafe_after_crystal(target.as_ref());
         }
     }
     /// Targets for projectiles: dragon parts and crystals.
@@ -1369,19 +1378,12 @@ impl Game<'_> {
     fn tick_phase(&mut self) {
         let players = self.fight_players();
         let peaceful = self.ui.difficulty == 0;
-        // A crystal destroyed since: strafe whoever it names, if the dragon
-        // can attack them (`canAttack`).
+        // A crystal destroyed since: strafe the player it named.
         if let Some(d) = self.dragon.as_mut()
-            && let Some(request) = d.strafe_request.take()
+            && let Some(who) = d.strafe_request.take()
             && matches!(d.phase, Phase::Holding { .. })
         {
-            let target = match request {
-                StrafeRequest::Player(who) => players
-                    .iter()
-                    .find(|p| p.who == who && p.enemy() && !peaceful)
-                    .copied(),
-                StrafeRequest::Nearest(at) => nearest_enemy(&players, peaceful, at, None, |_| true),
-            };
+            let target = players.iter().find(|p| p.who == who).copied();
             if let Some(t) = target {
                 d.set_phase(Phase::Strafe {
                     charge: 0,
@@ -2633,8 +2635,13 @@ impl Game<'_> {
             0,
             &mut eye_quads,
         );
+        // `RenderTypes.eyes` has an `OitPipelineSet`: improved transparency
+        // moves the tagged quads into its stages (the HDR tier is the eyes'
+        // shine, `mobs::render::EYES_TIER`).
         for v in &mut eye_quads {
-            v.layer = 2;
+            v.layer = 2
+                | horizon_client::gfx::OIT_ENTITY
+                | u32::from(horizon_client::mesher::BRIGHT) << 16;
         }
         additive.extend(eye_quads);
         if death > 0.0 {
@@ -2872,10 +2879,12 @@ impl Game<'_> {
             .filter(|c| !c.invulnerable && in_reach(c.position))
             .map(|c| c.position)
             .collect();
+        // The blast's source carries the player who set it off, if any.
+        let by = self.fight.blast_by;
         for at in crystals {
             // Look up the current index after each removal.
             if let Some(i) = self.crystals.iter().position(|c| c.position == at) {
-                self.destroy_crystal(i, None, CrystalDamage::Explosion);
+                self.destroy_crystal(i, by, CrystalDamage::Explosion);
             }
         }
         let Some(d) = self.dragon.as_ref() else {
@@ -2885,7 +2894,6 @@ impl Game<'_> {
             let (lo, hi) = (b.min_position(), b.max_position());
             self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
         });
-        let by = self.fight.blast_by;
         for (part, amount) in hits {
             self.hurt_dragon(part, amount, true, by, DamageKind::Explosion);
         }
@@ -3344,6 +3352,9 @@ impl Game<'_> {
     /// The END stage: the portal crystals blow up (no block damage) and a
     /// new dragon takes over.
     fn finish_respawn(&mut self) {
+        // Portal crystals are not on spikes; clear their revival beams before
+        // the spike reset and before they are removed (vanilla resetEndCrystals).
+        self.respawn_beams(None);
         self.reset_spike_crystals();
         self.fight.respawn = None;
         let list = std::mem::take(&mut self.fight.respawn_crystals);
@@ -3398,6 +3409,7 @@ impl Game<'_> {
     /// `abortRespawnSequence`.
     fn abort_respawn(&mut self) {
         self.fight.respawn = None;
+        self.respawn_beams(None);
         self.fight.respawn_crystals.clear();
         self.reset_spike_crystals();
         let _ = self.activate_exit_portal();
@@ -3826,6 +3838,31 @@ mod tests {
             creative,
             spectator,
         }
+    }
+
+    #[test]
+    fn the_first_crystal_destroyed_in_a_tick_names_the_strafed_player() {
+        // DragonHoldingPatternPhase.onCrystalDestroyed strafes at once, and
+        // the strafing phase ignores the next crystal.
+        let (host, guest) = (
+            player(FightWho::Host, 1.0, false, false),
+            player(FightWho::Guest(8), 2.0, false, false),
+        );
+        let mut d = dragon(flying());
+        d.strafe_after_crystal(Some(&host));
+        d.strafe_after_crystal(Some(&guest));
+        assert_eq!(d.strafe_request, Some(FightWho::Host));
+        // Nobody, or a player it can't attack, leaves the next crystal free.
+        let creative = player(FightWho::Host, 1.0, true, false);
+        let mut d = dragon(flying());
+        d.strafe_after_crystal(None);
+        d.strafe_after_crystal(Some(&creative));
+        d.strafe_after_crystal(Some(&guest));
+        assert_eq!(d.strafe_request, Some(FightWho::Guest(8)));
+        // Only while it holds its pattern.
+        let mut d = dragon(Phase::Scanning { time: 0 });
+        d.strafe_after_crystal(Some(&guest));
+        assert_eq!(d.strafe_request, None);
     }
 
     /// #2893: a player under a wing is pushed only when the wing's hurt

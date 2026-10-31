@@ -68,17 +68,8 @@ pub(super) struct Creatures {
     pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
     pub cat_tick: i32,
-    /// Particles from a guest's turn, waiting for it to end
-    /// (`lan_send_particles`: options, centre, spread, speed, count).
-    pub lan_particles: Vec<(
-        &'static str,
-        horizon_client::particles::ParticleOptions,
-        Option<horizon_world::registry::BlockStateId>,
-        [f64; 3],
-        [f64; 3],
-        f64,
-        i32,
-    )>,
+    /// Particles from a guest's turn, waiting for it to end.
+    pub lan_particles: Vec<super::lan_particles::QueuedParticle>,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,
@@ -987,7 +978,8 @@ impl Game<'_> {
         self.raider_died(m, slain_by_player);
         self.villager_murdered(m, slain_by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
-        self.drop_death_loot(&mut dying, by_player, consumed, pos);
+        let killer_entity = self.killer_loot_entity(killer.flatten());
+        self.drop_death_loot(&mut dying, by_player, killer_entity, consumed, pos);
         self.create_wither_rose(m);
         if m.species() == Species::CopperGolem {
             // CopperGolem.dropEquipment: the preserved equipment too.
@@ -1058,7 +1050,7 @@ impl Game<'_> {
             None => source.clone(),
         };
         horizon_client::advancements::DamageView {
-            kind: damage_type(d.kind, matches!(d.attacker, Some(Who::Player))).to_owned(),
+            kind: source_damage_type(d).to_owned(),
             // DamageSource.isDirect: the causing entity is the direct one.
             is_direct: projectile.is_none(),
             direct,
@@ -1069,7 +1061,47 @@ impl Game<'_> {
     /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
     /// world's random sequence, equipment by drop chance, species extras and
     /// the experience orbs, spawned in order.
-    fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
+    /// The killing player as a loot entity: their worn and held items, read
+    /// from the guest who struck the last blow when a server's player did
+    /// (on the server thread that is every player, the window's too), so
+    /// Looting on their weapon counts.
+    fn killer_loot_entity(&mut self, guest: Option<u32>) -> horizon_world::loot::LootEntity {
+        let own = |g: &Self| {
+            let mut e = horizon_world::loot::LootEntity::new("minecraft:player");
+            let slots = [
+                ("mainhand", g.stack_in(g.selected)),
+                ("offhand", g.stack_in(super::shield::OFFHAND_SLOT)),
+                ("head", g.armor[0].as_ref()),
+                ("chest", g.armor[1].as_ref()),
+                ("legs", g.armor[2].as_ref()),
+                ("feet", g.armor[3].as_ref()),
+            ];
+            for (slot, stack) in slots {
+                if let Some(stack) = stack {
+                    e.equipment.push((slot.into(), to_loot(stack)));
+                }
+            }
+            e
+        };
+        if let Some(conn) = guest.filter(|_| self.lan_acting.is_none())
+            && let Some(mut host) = self.lan.take()
+        {
+            let entity = self.as_guest(&mut host, conn, |g| own(g));
+            self.lan = Some(host);
+            if let Some(entity) = entity {
+                return entity;
+            }
+        }
+        own(self)
+    }
+    fn drop_death_loot(
+        &mut self,
+        m: &mut Mob,
+        by_player: bool,
+        killer: horizon_world::loot::LootEntity,
+        consumed: bool,
+        pos: [f64; 3],
+    ) {
         use horizon_client::mobs::{DamageKind, Who, drops};
         use horizon_world::loot::{LootDamage, LootEntity};
         let Some(loot) = horizon_client::structure_blocks::loot_data(
@@ -1078,13 +1110,7 @@ impl Game<'_> {
         ) else {
             return;
         };
-        let player = || {
-            let mut e = LootEntity::new("minecraft:player");
-            if let Some(held) = self.held() {
-                e.equipment.push(("mainhand".into(), to_loot(held)));
-            }
-            e
-        };
+        let player = || killer.clone();
         let damage = m.last_damage.map(|(d, _)| {
             let source = match d.attacker {
                 Some(Who::Player) => Some(player()),
@@ -1116,9 +1142,8 @@ impl Game<'_> {
                 }),
                 _ => source.clone(),
             };
-            let player_source = matches!(d.attacker, Some(Who::Player));
             LootDamage {
-                kind: damage_type(d.kind, player_source).into(),
+                kind: source_damage_type(d).into(),
                 source,
                 direct,
             }
@@ -1553,6 +1578,30 @@ impl Game<'_> {
                     source,
                 } => {
                     self.mob_hits_mob(target, amount, source);
+                }
+                MobEvent::CubeHurtPlayer { cube, amount, from } => {
+                    // AbstractCubeMob.dealDamage: the attack sound (and its
+                    // two pitch draws, made even for a silent cube, whose
+                    // Entity.playSound is then skipped) only follows a hit
+                    // that landed.
+                    if self.hurt_player_from(
+                        amount,
+                        Some(from),
+                        "minecraft:mob_attack",
+                        Some(Some(cube)),
+                    ) && let Some(m) = self.mobs.iter_mut().find(|m| m.id == cube)
+                    {
+                        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+                        let at = m.center();
+                        if !m.silent {
+                            self.handle_mob_events(vec![MobEvent::Sound(
+                                "entity.slime.attack",
+                                at,
+                                1.0,
+                                pitch,
+                            )])?;
+                        }
+                    }
                 }
                 MobEvent::CubeHurtMob {
                     cube,
@@ -2054,6 +2103,11 @@ impl Game<'_> {
                 MobEvent::CureZombieVillager { mob } => self.cure_zombie_villager(mob),
                 MobEvent::Reinforcements { mob, target } => self.call_reinforcements(mob, target),
                 MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
+                MobEvent::VillagerOffers { mob } => {
+                    if let Some(i) = self.mobs.iter().position(|m| m.id == mob) {
+                        self.ensure_offers(i);
+                    }
+                }
                 MobEvent::VillagerBirth {
                     parent,
                     partner,
@@ -4221,7 +4275,7 @@ impl Game<'_> {
             self.swing_arm();
             return Ok(true);
         }
-        if self.interact_allay(index, &item) {
+        if self.interact_allay(index, held.as_ref()) {
             self.swing_arm();
             return Ok(true);
         }
@@ -5031,14 +5085,13 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        let Some(mob_id) = self.spawn_mob_spawned(&kind, at) else {
+        let Some(id) = self.spawn_mob_spawned(&kind, at) else {
             return Ok(false);
         };
-        // Entity.applyImplicitComponents: a name from an anvil names the mob.
-        if let Some(name) = stack.custom_name()
-            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id)
-        {
-            m.custom_name = Some(name.to_owned());
+        // SpawnEggItem.spawnMob: `EntityType.create` finalizes the mob, then
+        // `PostSpawnProcessor` puts the egg's components on it.
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            horizon_client::entity_nbt::apply_item_components(m, stack);
         }
         self.swing_arm();
         if !self.creative
@@ -5446,7 +5499,9 @@ impl Game<'_> {
                         0,
                         out,
                     );
-                    // The translucent shell blends over the opaque core.
+                    // The translucent shell blends over the opaque core
+                    // (`RenderTypes.entityTranslucent`).
+                    let shell = out.len();
                     horizon_client::mobs::render::draw(
                         model,
                         base * glam::Mat4::from_scale(glam::Vec3::splat(1.5)),
@@ -5457,6 +5512,7 @@ impl Game<'_> {
                         0,
                         out,
                     );
+                    horizon_client::gfx::mark_oit(&mut out[shell..]);
                 }
                 continue;
             }
@@ -5593,9 +5649,15 @@ fn bucketable(species: Species) -> Option<(&'static str, &'static str)> {
         _ => return None,
     })
 }
-/// Mob.getBaseExperienceReward
-/// The damage type id of a Horizon damage kind.
-pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static str {
+/// The damage type id of a mob's damage source (`DamageSources.explosion`: a
+/// blast with a causing entity is `player_explosion` whoever it is, an
+/// exploding creeper too).
+pub(super) fn source_damage_type(d: Damage) -> &'static str {
+    damage_type(d.kind, d.attacker.is_some())
+}
+/// The damage type id of a Horizon damage kind. `caused`: the source has a
+/// causing entity (only a blast asks).
+pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, caused: bool) -> &'static str {
     use horizon_client::mobs::DamageKind as K;
     match kind {
         K::PlayerAttack => "minecraft:player_attack",
@@ -5605,7 +5667,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Arrow => "minecraft:arrow",
         K::Thrown => "minecraft:thrown",
         K::Fireball => "minecraft:fireball",
-        K::Explosion if player => "minecraft:player_explosion",
+        K::Explosion if caused => "minecraft:player_explosion",
         K::Explosion => "minecraft:explosion",
         K::Fall => "minecraft:fall",
         K::FallingBlock => "minecraft:falling_block",
@@ -5849,6 +5911,32 @@ mod breeding_tests {
         assert_eq!(breeding_credit(&mut love, 1, 2), Some(None));
         // Neither was fed by a player (a bred pair loaded from a save).
         assert_eq!(breeding_credit(&mut love, 1, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod damage_type_tests {
+    use super::*;
+
+    /// `DamageSources.explosion`: a blast with a causing entity is
+    /// `player_explosion` whoever caused it, so an exploding creeper's too.
+    #[test]
+    fn a_creeper_blast_is_a_player_explosion() {
+        let blast = |attacker| Damage {
+            kind: DamageKind::Explosion,
+            attacker,
+            from: Some([0.0; 3]),
+        };
+        let creeper = blast(Some(Who::Mob(7)));
+        assert_eq!(source_damage_type(creeper), "minecraft:player_explosion");
+        // No causing entity.
+        assert_eq!(source_damage_type(blast(None)), "minecraft:explosion");
+        // The other kinds do not ask.
+        let bite = Damage {
+            kind: DamageKind::MobAttack,
+            ..creeper
+        };
+        assert_eq!(source_damage_type(bite), "minecraft:mob_attack");
     }
 }
 

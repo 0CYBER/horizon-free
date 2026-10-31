@@ -54,6 +54,9 @@ pub struct ItemQuad {
     /// The quad's sprite has translucent pixels (`MaterialInfo.itemRenderType`
     /// is a translucent sheet): drawn with the translucent entities.
     pub translucent: bool,
+    /// The quad's render type has an `OitPipelineSet` (`entityTranslucent`: a
+    /// player head's skin): improved transparency draws it in its stages.
+    pub oit: bool,
 }
 /// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
@@ -331,6 +334,11 @@ fn submit_quads(
                 translucent
             }
         };
+        // Translucent item sheets draw without depth writes (ITEM_TRANSLUCENT).
+        // Without back-face cull, both sides of a jelly shell (slime/honey) stack
+        // their partial alpha and look opaque (#4508). Glass is fine either way:
+        // most of its texels discard at alpha 0.
+        let translucent = translucent || q.material.force_translucent;
         sink.quad(ItemQuad {
             pos,
             uv,
@@ -339,8 +347,9 @@ fn submit_quads(
             color: argb(color),
             foil,
             light_emission: q.light_emission,
-            cull_back: false,
-            translucent: translucent || q.material.force_translucent,
+            cull_back: translucent,
+            translucent,
+            oit: false,
         });
     }
 }
@@ -827,13 +836,19 @@ impl ItemSink for WorldSink<'_> {
             (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
             (true, false) => 7,
         };
+        // Only plain and foil quads: the translucent sheet's overlays are their own material.
+        let oit = if q.oit && matches!(overlay, 0 | 7) {
+            crate::gfx::OIT_ENTITY
+        } else {
+            0
+        };
         for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
             let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
                 normal: if q.cull_back { CULL_BACK } else { [0; 4] },
                 pos: p.to_array(),
                 uv,
-                layer: overlay,
+                layer: overlay | oit,
                 color,
                 light,
                 glint_uv,
@@ -993,6 +1008,29 @@ mod tests {
             serde_json::json!({"a": 3, "b": ["x"], "c": 1.5})
         );
     }
+    #[test]
+    fn palette_trns_partial_alpha_counts_as_translucent() {
+        // Slime/honey (and ice) are indexed PNGs with a tRNS chunk. Decode must
+        // keep that fractional alpha so FileSprites marks them translucent (#4508).
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x03, 0x00, 0x00,
+            0x00, 0x45, 0x68, 0xfd, 0x16, 0x00, 0x00, 0x00, 0x06, 0x50, 0x4c, 0x54, 0x45, 0x00,
+            0xff, 0x00, 0x00, 0x80, 0x00, 0x54, 0x80, 0xe6, 0x08, 0x00, 0x00, 0x00, 0x01, 0x74,
+            0x52, 0x4e, 0x53, 0xb4, 0x8c, 0xea, 0xaf, 0xf3, 0x00, 0x00, 0x00, 0x0e, 0x49, 0x44,
+            0x41, 0x54, 0x78, 0x9c, 0x63, 0x60, 0x60, 0x64, 0x60, 0x60, 0x04, 0x00, 0x00, 0x0b,
+            0x00, 0x03, 0x52, 0x29, 0x78, 0x8f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+            0xae, 0x42, 0x60, 0x82,
+        ];
+        let dir = std::env::temp_dir().join("horizon-trns-alpha");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("indexed.png");
+        std::fs::write(&path, png).unwrap();
+        let (_w, _h, rgba) = crate::hud::decode(&path).unwrap();
+        let partial = rgba.chunks(4).filter(|p| matches!(p[3], 1..=254)).count();
+        assert!(partial > 0, "tRNS alpha was stripped: {rgba:?}");
+    }
+
     #[test]
     fn normals_follow_the_inverse_transpose() {
         let m = Mat4::from_scale(Vec3::new(2.0, 1.0, 1.0));
