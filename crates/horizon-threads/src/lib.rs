@@ -1,5 +1,5 @@
-//! Scheduling hints for the game's threads: the few OS calls that the other
-//! crates, which forbid unsafe code, can't make themselves.
+//! Scheduling hints for the game's threads and its allocator: the few OS calls
+//! that the other crates, which forbid unsafe code, can't make themselves.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -195,11 +195,36 @@ pub fn catch_stop_signals() {
 #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
 pub fn catch_stop_signals() {}
 
+/// The game's global allocator (`#[global_allocator]` in its `main.rs`).
+/// World generation, meshing and the tick allocate and free small blocks on
+/// every worker at once; the system heaps serialise them (Windows' heap was
+/// 16% of a chunk's generation time), mimalloc keeps a heap per thread.
+pub use mimalloc::MiMalloc as Allocator;
+
+/// `mi_option_purge_delay` in mimalloc.h (index 15 in v2 and v3); the bindings
+/// don't name it.
+const PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+
+/// Set the allocator up, first thing in `main`: free pages go back to the OS
+/// at once instead of a second later. With mimalloc's delay the game held a
+/// quarter more memory than with the system heap; without it a few percent,
+/// and generation keeps most of its speed-up.
+pub fn configure_allocator() {
+    // SAFETY: sets one integer option, which mimalloc reads at each purge.
+    unsafe {
+        libmimalloc_sys::mi_option_set(PURGE_DELAY, 0);
+    }
+}
+
 /// Give back to the OS the memory the allocator holds free, after something
-/// large was dropped: glibc keeps freed pages in the arena of the thread that
-/// allocated them, and macOS in its zones until memory runs short. Nothing
-/// elsewhere.
+/// large was dropped: mimalloc's free pages, then the system heap's, which
+/// native libraries still use: glibc keeps freed pages in the arena of the
+/// thread that allocated them, and macOS in its zones until memory runs short.
 pub fn release_free_memory() {
+    // SAFETY: frees only pages no allocation uses (this thread's heap, shared arenas).
+    unsafe {
+        libmimalloc_sys::mi_collect(true);
+    }
     release();
 }
 
@@ -226,6 +251,78 @@ fn release() {
 
 #[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_vendor = "apple")))]
 fn release() {}
+
+/// The REPARSE_DATA_BUFFER of a mount point naming `name` (UTF-16, `\??\` prefixed). The length
+/// fields are 16 bits: a name too long for them is an error, so the caller copies instead.
+#[cfg(windows)]
+fn mount_point_buffer(name: &[u16]) -> std::io::Result<Vec<u8>> {
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    let too_long = || std::io::Error::from(std::io::ErrorKind::InvalidInput);
+    let name_bytes = u16::try_from(name.len() * 2).map_err(|_| too_long())?;
+    // Substitute name, its NUL, then an empty print name and its NUL.
+    let print_offset = name_bytes.checked_add(2).ok_or_else(too_long)?;
+    let data_len = name_bytes.checked_add(12).ok_or_else(too_long)?;
+    let mut buffer = Vec::with_capacity(16 + name.len() * 2 + 4);
+    buffer.extend(IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    buffer.extend(data_len.to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend(name_bytes.to_le_bytes());
+    buffer.extend(print_offset.to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend(name.iter().flat_map(|c| c.to_le_bytes()));
+    buffer.extend([0; 4]);
+    Ok(buffer)
+}
+
+/// A directory junction, which Windows creates without privileges (a directory symlink needs
+/// developer mode): the resource pack overlay links its untouched directories with them.
+#[cfg(windows)]
+pub fn junction(target: &std::path::Path, at: &std::path::Path) -> std::io::Result<()> {
+    // What `mklink /J` does, without its ~100 ms `cmd` process per directory: an empty
+    // directory given a mount point reparse point (REPARSE_DATA_BUFFER) naming the target.
+    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    let target = std::path::absolute(target)?;
+    let target = target.as_os_str().to_string_lossy();
+    let target = target.strip_prefix(r"\\?\").unwrap_or(&target);
+    let name: Vec<u16> = std::ffi::OsStr::new(&format!(r"\??\{target}"))
+        .encode_wide()
+        .collect();
+    let buffer = mount_point_buffer(&name)?;
+    std::fs::create_dir(at)?;
+    let set = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(at)
+        .and_then(|dir| {
+            let mut returned = 0;
+            // SAFETY: a live directory handle, and `buffer` outlives the call.
+            let ok = unsafe {
+                windows_sys::Win32::System::IO::DeviceIoControl(
+                    dir.as_raw_handle(),
+                    FSCTL_SET_REPARSE_POINT,
+                    buffer.as_ptr().cast(),
+                    buffer.len() as u32,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    if set.is_err() {
+        let _ = std::fs::remove_dir(at);
+    }
+    set
+}
 
 #[cfg(test)]
 mod tests {
@@ -299,5 +396,45 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// The option set is the purge delay: mimalloc v3's default for it is
+    /// 1000 ms, and it is 0 once configured.
+    #[test]
+    fn configuring_the_allocator_purges_at_once() {
+        // SAFETY: reads and sets one integer option.
+        let get = || unsafe { libmimalloc_sys::mi_option_get(super::PURGE_DELAY) };
+        if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+            assert_eq!(get(), 1000);
+        }
+        super::configure_allocator();
+        assert_eq!(get(), 0);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod junction_tests {
+    #[test]
+    fn mount_point_buffer_layout() {
+        let name: Vec<u16> = r"\??\C:\a".encode_utf16().collect();
+        let bytes = u16::try_from(name.len() * 2).unwrap();
+        let buffer = super::mount_point_buffer(&name).unwrap();
+        assert_eq!(buffer[..4], 0xA000_0003u32.to_le_bytes());
+        assert_eq!(buffer[4..6], (bytes + 12).to_le_bytes());
+        assert_eq!(buffer[8..10], 0u16.to_le_bytes());
+        assert_eq!(buffer[10..12], bytes.to_le_bytes());
+        assert_eq!(buffer[12..14], (bytes + 2).to_le_bytes());
+        assert_eq!(buffer.len(), 16 + usize::from(bytes) + 4);
+        // Past the 8-byte header, the length field counts the rest of the buffer.
+        assert_eq!(usize::from(bytes) + 12, buffer.len() - 8);
+    }
+
+    #[test]
+    fn names_too_long_for_the_length_fields_are_errors() {
+        // 32764 units is 65528 bytes: the name fits, its length field sums do not.
+        let name = vec![b'a' as u16; 32_764];
+        assert!(super::mount_point_buffer(&name).is_err());
+        assert!(super::mount_point_buffer(&vec![0; 32_768]).is_err());
+        assert!(super::mount_point_buffer(&vec![0; 100]).is_ok());
     }
 }

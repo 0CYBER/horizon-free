@@ -191,7 +191,8 @@ def plan(report, diff, store_path, open_issues):
 # --- GitHub and Kira (only with --yes) ---------------------------------------------------------------------
 
 def gh(*args):
-    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
+    # gh prints UTF-8, whatever the system's code page.
+    return subprocess.run(["gh", *args], capture_output=True, encoding="utf-8", check=True).stdout
 
 
 def open_version_port_issues():
@@ -223,7 +224,8 @@ def apply(actions, report, open_issues):
 
 def issue(action, name, text, number, new):
     """Create or update one issue; its URL."""
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as stream:
+    # gh reads the body as UTF-8, whatever the system's code page.
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as stream:
         stream.write(text)
     try:
         if action == "create":
@@ -240,7 +242,7 @@ def issue(action, name, text, number, new):
 
 def kira(tool, arguments):
     return json.loads(subprocess.run(["node", str(KIRA), tool, json.dumps(arguments)], capture_output=True,
-                                     text=True, check=True).stdout or "null")
+                                     encoding="utf-8", check=True).stdout or "null")
 
 
 def kira_card(new, url):

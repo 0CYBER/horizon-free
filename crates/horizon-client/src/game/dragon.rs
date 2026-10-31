@@ -11,7 +11,9 @@ use horizon_client::{
     hud::HudBatch,
     hud_layout, hud_overlays,
     mesher::Vertex,
+    mobs::{Damage, DamageKind, Who},
     particles::{ParticleOptions, ParticleType},
+    projectiles::ProjectileKind,
     text::Text,
 };
 use horizon_core::{
@@ -50,9 +52,14 @@ pub(super) struct Fight {
     respawn: Option<(Respawn, i32)>,
     /// The four crystals on the exit portal driving the respawn.
     respawn_crystals: Vec<Vec3>,
-    /// The player behind the crystal blast under way, whose `explosion`
-    /// damage source names them (`EndCrystal.hurtServer`).
+    /// The player behind the blast under way, whose `explosion` damage
+    /// source names them: a crystal's (`EndCrystal.hurtServer`) or a large
+    /// fireball's (`Explosion.getIndirectSourceEntity`, its owner).
     blast_by: Option<FightWho>,
+    /// The last hit the dragon took (`die(source)`'s source, for the
+    /// `player_killed_entity` trigger's `killing_blow`): its damage type and
+    /// whether a player was behind it.
+    last_blow: Option<(DamageKind, bool)>,
     dirty: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -288,8 +295,9 @@ pub(super) struct Dragon {
     pub parts: [(Vec3, Vec3); 8],
     nodes: Option<[[i32; 3]; 24]>,
     nearest_crystal: Option<usize>,
-    /// A crystal destroyed while it held its pattern (taken on its next tick).
-    strafe_request: Option<StrafeRequest>,
+    /// The player a crystal destroyed while it held its pattern sends it
+    /// after (`strafe_after_crystal`), taken on its next tick.
+    strafe_request: Option<FightWho>,
     random: LegacyRandom,
 }
 /// A player in the fight: the window's own player, or a guest by
@@ -339,15 +347,6 @@ fn nearest_enemy(
         })
         .copied()
 }
-/// Whom a destroyed crystal sends a holding dragon after
-/// (`DragonHoldingPatternPhase.onCrystalDestroyed`).
-#[derive(Clone, Copy, Debug)]
-enum StrafeRequest {
-    /// The player who destroyed it.
-    Player(FightWho),
-    /// Anything else: the player nearest the crystal.
-    Nearest(Vec3),
-}
 /// Whether `EndCrystal.hurtServer` creates a blast before notifying the fight.
 #[derive(Clone, Copy, PartialEq)]
 enum CrystalDamage {
@@ -360,11 +359,21 @@ pub(super) enum Hurt {
     /// It returned true; `full` when it was a new hit, not just the excess
     /// over the last one (the hurt sound and animation).
     Landed { full: bool },
-    /// It returned false (dying, too little damage).
+    /// It returned false (dying, too little damage, fire on a part).
     Refused,
-    /// A perched dragon's `onHurt` took an arrow's damage away (and set the
-    /// arrow alight for a second).
+    /// A perched dragon's `onHurt` took a direct arrow's or wind charge's
+    /// damage away (and set it alight for a second).
     Shrugged,
+}
+/// `#minecraft:is_fire`, which the dragon's parts and the crystals refuse
+/// (`isInvulnerableToBase`: both types are fire immune).
+fn is_fire(kind: DamageKind) -> bool {
+    let source = Damage {
+        kind,
+        attacker: None,
+        from: None,
+    };
+    source.is_fire()
 }
 const PART_SIZES: [(f64, f64); 8] = [
     (1.0, 1.0),
@@ -449,6 +458,30 @@ impl Dragon {
             Vec3::new(p.x - w / 2.0, p.y, p.z - w / 2.0),
             Vec3::new(p.x + w / 2.0, p.y + h, p.z + w / 2.0),
         )
+    }
+    /// `EnderDragonPart.hurtServer`: `isInvulnerableToBase` refuses fire
+    /// (the dragon's type is fire immune) before `EnderDragon.hurt`.
+    /// `direct` is the projectile that hit: a direct `AbstractArrow` or a
+    /// `WindCharge` is the arrow a perched dragon shrugs off, a breeze's
+    /// `BreezeWindCharge` is neither.
+    fn hurt_part(
+        &mut self,
+        part: usize,
+        damage: f32,
+        counts: bool,
+        kind: DamageKind,
+        direct: Option<&ProjectileKind>,
+    ) -> Hurt {
+        if is_fire(kind) {
+            return Hurt::Refused;
+        }
+        let arrow = matches!(
+            direct,
+            Some(
+                ProjectileKind::Arrow { .. } | ProjectileKind::Trident | ProjectileKind::WindCharge
+            )
+        );
+        self.hurt(part, damage, counts, arrow)
     }
     /// `EnderDragon.hurt(part, source, damage)`: whether the hit landed
     /// (an arrow is spent, else it turns back). `counts` is
@@ -546,6 +579,19 @@ impl Dragon {
                 })
             })
             .collect()
+    }
+    /// `DragonHoldingPatternPhase.onCrystalDestroyed`: strafe `player` if
+    /// the dragon can attack them (`EnderDragon.canAttack`, on Peaceful too).
+    /// The first such crystal wins: the dragon strafes from then on, and
+    /// `onCrystalDestroyed` does nothing in that phase.
+    fn strafe_after_crystal(&mut self, player: Option<&FightPlayer>) {
+        if let Some(p) = player
+            && p.enemy()
+            && matches!(self.phase, Phase::Holding { .. })
+            && self.strafe_request.is_none()
+        {
+            self.strafe_request = Some(p.who);
+        }
     }
     fn set_phase(&mut self, phase: Phase) {
         if self.phase.id() == phase.id() && phase.id() != 1 {
@@ -706,6 +752,11 @@ impl Game<'_> {
     /// The player acting now: the guest whose turn it is, else the host.
     fn acting_player(&self) -> FightWho {
         self.lan_acting.map_or(FightWho::Host, FightWho::Guest)
+    }
+    /// Names the acting player behind the blast about to go off (a large
+    /// fireball they shot), or no one, for the dragon's kill credit.
+    pub(super) fn set_blast_by_player(&mut self, by_player: bool) {
+        self.fight.blast_by = by_player.then(|| self.acting_player());
     }
     /// The players in the level the dragon sees (`level.players()`): the
     /// window's own, then every guest in the level.
@@ -920,25 +971,29 @@ impl Game<'_> {
         }
         // EnderDragonFight.onCrystalDestroyed.
         self.count_crystals();
+        // EnderDragon.onCrystalDestroyed: the player behind the damage, else
+        // the one nearest the crystal's block (`CRYSTAL_DESTROY_TARGETING`,
+        // whose range `TargetingConditions.test` skips without a targeter).
+        let player = by.or_else(|| {
+            let p = c.position;
+            let at = Vec3::new(p.x.floor(), p.y.floor(), p.z.floor());
+            let peaceful = self.ui.difficulty == 0;
+            nearest_enemy(&self.fight_players(), peaceful, at, None, |_| true).map(|p| p.who)
+        });
+        let Some(d) = self.dragon.as_mut() else {
+            return;
+        };
+        if d.nearest_crystal == Some(index) {
+            d.nearest_crystal = None;
+            self.hurt_dragon(0, 10.0, true, player, DamageKind::Explosion);
+        } else if let Some(n) = d.nearest_crystal.as_mut()
+            && *n > index
+        {
+            *n -= 1;
+        }
+        let target = player.and_then(|who| self.fight_players().into_iter().find(|p| p.who == who));
         if let Some(d) = self.dragon.as_mut() {
-            if d.nearest_crystal == Some(index) {
-                d.nearest_crystal = None;
-                self.hurt_dragon(0, 10.0, true, by, false);
-            } else if let Some(n) = d.nearest_crystal.as_mut()
-                && *n > index
-            {
-                *n -= 1;
-            }
-            // EnderDragon.onCrystalDestroyed: the player who did it, else the
-            // nearest; DragonHoldingPatternPhase strafes them.
-            if let Some(d) = self.dragon.as_mut()
-                && matches!(d.phase, Phase::Holding { .. })
-            {
-                d.strafe_request = Some(match by {
-                    Some(who) => StrafeRequest::Player(who),
-                    None => StrafeRequest::Nearest(c.position),
-                });
-            }
+            d.strafe_after_crystal(target.as_ref());
         }
     }
     /// Targets for projectiles: dragon parts and crystals.
@@ -976,19 +1031,30 @@ impl Game<'_> {
             .find(|(s, _)| *s == CRYSTAL_IDS + i as u32)
             .map(|(_, b)| b)
     }
+    /// `ServerLevel.dragonParts`: where the part with that entity id is
+    /// and its box.
+    pub(super) fn dragon_part(&self, id: u32) -> Option<(Vec3, Aabb)> {
+        let d = self.dragon.as_ref().filter(|d| d.alive() && d.id != 0)?;
+        (d.id + 1..=d.id + 8).contains(&id).then(|| {
+            let i = (id - d.id - 1) as usize;
+            (d.parts[i].0, d.part_box(i))
+        })
+    }
     /// Damage to a special id (from projectiles and melee): what the
-    /// dragon part or crystal made of it. `arrow` for a direct arrow.
+    /// dragon part or crystal made of it. `direct` is the projectile that hit.
     pub(super) fn hit_special(
         &mut self,
         id: u32,
         amount: f32,
         by_player: bool,
-        arrow: bool,
+        kind: DamageKind,
+        direct: Option<&ProjectileKind>,
     ) -> Hurt {
         if id >= CRYSTAL_IDS {
-            // EndCrystal.hurtServer: false while invulnerable, else it blows up.
+            // EndCrystal.hurtServer: false while invulnerable and for fire
+            // (its type is fire immune), else it blows up.
             let index = (id - CRYSTAL_IDS) as usize;
-            if self.crystals.get(index).is_none_or(|c| c.invulnerable) {
+            if is_fire(kind) || self.crystals.get(index).is_none_or(|c| c.invulnerable) {
                 return Hurt::Refused;
             }
             let by = by_player.then(|| self.acting_player());
@@ -996,27 +1062,40 @@ impl Game<'_> {
             Hurt::Landed { full: true }
         } else if id >= SPECIAL {
             let by = by_player.then(|| self.acting_player());
-            self.hurt_dragon((id - SPECIAL) as usize, amount, by_player, by, arrow)
+            let part = (id - SPECIAL) as usize;
+            self.hurt_dragon_part(part, amount, by_player, by, kind, direct)
         } else {
             Hurt::Refused
         }
     }
-    /// `EnderDragon.hurt(part, source, damage)` on the dragon in the level.
-    /// `by` is the player behind the hit, remembered for the kill credit.
+    /// `hurt_dragon_part` with no projectile behind the hit.
     fn hurt_dragon(
         &mut self,
         part: usize,
         damage: f32,
         counts: bool,
         by: Option<FightWho>,
-        arrow: bool,
+        kind: DamageKind,
+    ) -> Hurt {
+        self.hurt_dragon_part(part, damage, counts, by, kind, None)
+    }
+    /// `EnderDragonPart.hurtServer` on the dragon in the level. `by` is the
+    /// player behind the hit, remembered for the kill credit.
+    fn hurt_dragon_part(
+        &mut self,
+        part: usize,
+        damage: f32,
+        counts: bool,
+        by: Option<FightWho>,
+        kind: DamageKind,
+        direct: Option<&ProjectileKind>,
     ) -> Hurt {
         let Some(d) = self.dragon.as_mut() else {
             return Hurt::Refused;
         };
         let was_down = d.down();
         let (cooldown, last_hurt) = (d.invulnerable, d.last_hurt);
-        let hurt = d.hurt(part, damage, counts, arrow);
+        let hurt = d.hurt_part(part, damage, counts, kind, direct);
         // LivingEntity.hurtServer: damage that is applied sets lastHurtByPlayer
         // (100 ticks); a hit the damage cooldown absorbs returns before that.
         if counts
@@ -1027,6 +1106,7 @@ impl Game<'_> {
             d.hurt_by_player = Some((who, d.ticks));
         }
         if !was_down && d.down() {
+            self.fight.last_blow = Some((kind, by.is_some()));
             self.credit_dragon_kill();
         }
         let Some(d) = self.dragon.as_mut() else {
@@ -1058,6 +1138,7 @@ impl Game<'_> {
             ..Default::default()
         };
         let id = d.id;
+        let blow = self.fight.last_blow.take();
         let guest = match who {
             FightWho::Guest(conn) if self.lan_acting.is_none() => Some(conn),
             _ => None,
@@ -1067,21 +1148,43 @@ impl Game<'_> {
                 return false;
             };
             let done = self
-                .as_guest(&mut host, conn, |g| g.award_dragon_kill(id, &view))
+                .as_guest(&mut host, conn, |g| g.award_dragon_kill(id, &view, blow))
                 .is_some();
             self.lan = Some(host);
             done
         });
         if !credited {
-            self.award_dragon_kill(id, &view);
+            self.award_dragon_kill(id, &view, blow);
         }
     }
     /// `ServerPlayer.awardKillScore` for the dragon, on the killer's state.
-    fn award_dragon_kill(&mut self, id: u32, view: &horizon_client::advancements::EntityView) {
+    fn award_dragon_kill(
+        &mut self,
+        id: u32,
+        view: &horizon_client::advancements::EntityView,
+        blow: Option<(DamageKind, bool)>,
+    ) {
         self.stats.add("killed", "minecraft:ender_dragon", 1);
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(id));
-        self.trigger_killed(view, None);
+        // KilledTrigger: the damage source `die` was given.
+        let blow = blow.map(|(kind, by_player)| {
+            let mut view = self.damage_view(Damage {
+                kind,
+                attacker: by_player.then_some(Who::Player),
+                from: None,
+            });
+            // `damageSources().explosion(crystal, player)`: the crystal is the direct entity.
+            if kind == DamageKind::Explosion {
+                view.direct = Some(horizon_client::advancements::EntityView {
+                    kind: "minecraft:end_crystal".to_owned(),
+                    ..Default::default()
+                });
+                view.is_direct = false;
+            }
+            view
+        });
+        self.trigger_killed(view, blow.as_ref());
     }
     /// Player melee on the dragon's parts or a crystal under the crosshair.
     /// The dragon part under the crosshair within reach: its id and distance.
@@ -1128,7 +1231,7 @@ impl Game<'_> {
             .into_iter()
             .find(|(part, _)| *part == id)
             .map(|(_, b)| b);
-        let hurt = self.hit_special(id, amount, true, false);
+        let hurt = self.hit_special(id, amount, true, DamageKind::PlayerAttack, None);
         // The sweep and the sounds read the charge, which the hit then spends.
         if let (Some(area), Hurt::Landed { .. }) = (area, hurt) {
             self.attack_effects(area, None, super::mace::Spared::Nothing, None);
@@ -1330,19 +1433,12 @@ impl Game<'_> {
     fn tick_phase(&mut self) {
         let players = self.fight_players();
         let peaceful = self.ui.difficulty == 0;
-        // A crystal destroyed since: strafe whoever it names, if the dragon
-        // can attack them (`canAttack`).
+        // A crystal destroyed since: strafe the player it named.
         if let Some(d) = self.dragon.as_mut()
-            && let Some(request) = d.strafe_request.take()
+            && let Some(who) = d.strafe_request.take()
             && matches!(d.phase, Phase::Holding { .. })
         {
-            let target = match request {
-                StrafeRequest::Player(who) => players
-                    .iter()
-                    .find(|p| p.who == who && p.enemy() && !peaceful)
-                    .copied(),
-                StrafeRequest::Nearest(at) => nearest_enemy(&players, peaceful, at, None, |_| true),
-            };
+            let target = players.iter().find(|p| p.who == who).copied();
             if let Some(t) = target {
                 d.set_phase(Phase::Strafe {
                     charge: 0,
@@ -1963,16 +2059,8 @@ impl Game<'_> {
                     if zone.intersects(p.bounds) {
                         let (xd, zd) = (p.position.x - bc, p.position.z - bz);
                         let dd = (xd * xd + zd * zd).max(0.1);
-                        self.as_fight_player(p.who, |g| {
-                            if let Some(pl) = g.player.as_mut() {
-                                pl.velocity.x += xd / dd * 4.0;
-                                pl.velocity.y += 0.2;
-                                pl.velocity.z += zd / dd * 4.0;
-                            }
-                            if !sitting {
-                                g.dragon_hurts_player("minecraft:mob_attack", 5.0);
-                            }
-                        });
+                        let push = Vec3::new(xd / dd * 4.0, f64::from(0.2_f32), zd / dd * 4.0);
+                        self.as_fight_player(p.who, |g| g.dragon_wing_knock_back(push, sitting));
                     }
                 }
                 // hurt: the head and the neck.
@@ -1992,7 +2080,7 @@ impl Game<'_> {
             return;
         };
         let boxes = [d.part_box(0), d.part_box(1), d.part_box(2)];
-        let tags = &self.res.items().block_tags;
+        let tags = &self.items().block_tags;
         let transparent = tags
             .get("minecraft:dragon_transparent")
             .cloned()
@@ -2288,10 +2376,37 @@ impl Game<'_> {
             });
         }
     }
+    /// `EnderDragon.knockBack` on the player in a wing's zone: pushed away
+    /// from the body, and hurt for 5 unless the dragon is perched
+    /// (`isSitting`) or a mob hurt the player within the last 2 ticks
+    /// (`getLastHurtByMobTimestamp() < tickCount - 2`).
+    fn dragon_wing_knock_back(&mut self, push: Vec3, sitting: bool) {
+        let now = self.world.game_time;
+        let hurt_lately = self.player_hurt_by().is_some_and(|(_, at)| at >= now - 2);
+        let hurts = !sitting && !hurt_lately && !self.creative;
+        if hurts {
+            self.note_dragon_attacker("minecraft:mob_attack");
+        }
+        let (health, rules) = (&self.motion.health, self.world.health_rules);
+        let id = health.damage.id("minecraft:mob_attack");
+        if let Some(p) = self.player.as_mut() {
+            push_seen_with_hurt(p, push, |p| {
+                if let Some(id) = id.filter(|_| hurts) {
+                    let _ = p.hurt(health, rules, id, 5.0);
+                }
+            });
+        }
+    }
     /// Damage from the dragon, which is its causing entity
     /// (`DamageSources.mobAttack(dragon)`, `indirectMagic(cloud, dragon)`): the
     /// death message names it, or the cloud once the dragon is gone.
     fn dragon_hurts_player(&mut self, damage_type: &str, amount: f32) {
+        self.note_dragon_attacker(damage_type);
+        self.hurt_player_by(damage_type, amount);
+    }
+    /// The causing entity of the dragon's next `damage_type` damage, for the
+    /// death message.
+    fn note_dragon_attacker(&mut self, damage_type: &str) {
         if let Some(id) = self.dragon.as_ref().map(|d| d.id) {
             let name = Text::translate("entity.minecraft.ender_dragon", &[]);
             self.note_named_attacker(damage_type, id, name);
@@ -2299,7 +2414,6 @@ impl Game<'_> {
             let name = Text::translate("entity.minecraft.area_effect_cloud", &[]);
             self.note_direct_entity(damage_type, name);
         }
-        self.hurt_player_by(damage_type, amount);
     }
     /// `BossHealthOverlay.extractRenderState`: whatever `publish_boss_bars`
     /// (or a server's packets) put on this client's overlay.
@@ -2576,8 +2690,13 @@ impl Game<'_> {
             0,
             &mut eye_quads,
         );
+        // `RenderTypes.eyes` has an `OitPipelineSet`: improved transparency
+        // moves the tagged quads into its stages (the HDR tier is the eyes'
+        // shine, `mobs::render::EYES_TIER`).
         for v in &mut eye_quads {
-            v.layer = 2;
+            v.layer = 2
+                | horizon_client::gfx::OIT_ENTITY
+                | u32::from(horizon_client::mesher::BRIGHT) << 16;
         }
         additive.extend(eye_quads);
         if death > 0.0 {
@@ -2815,10 +2934,12 @@ impl Game<'_> {
             .filter(|c| !c.invulnerable && in_reach(c.position))
             .map(|c| c.position)
             .collect();
+        // The blast's source carries the player who set it off, if any.
+        let by = self.fight.blast_by;
         for at in crystals {
             // Look up the current index after each removal.
             if let Some(i) = self.crystals.iter().position(|c| c.position == at) {
-                self.destroy_crystal(i, None, CrystalDamage::Explosion);
+                self.destroy_crystal(i, by, CrystalDamage::Explosion);
             }
         }
         let Some(d) = self.dragon.as_ref() else {
@@ -2828,9 +2949,8 @@ impl Game<'_> {
             let (lo, hi) = (b.min_position(), b.max_position());
             self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
         });
-        let by = self.fight.blast_by;
         for (part, amount) in hits {
-            self.hurt_dragon(part, amount, true, by, false);
+            self.hurt_dragon(part, amount, true, by, DamageKind::Explosion);
         }
     }
 }
@@ -2869,6 +2989,8 @@ impl Game<'_> {
             precise: false,
             needs_sync: false,
             leash: None,
+            spectator: false,
+            watching: false,
         })
     }
 }
@@ -3285,6 +3407,9 @@ impl Game<'_> {
     /// The END stage: the portal crystals blow up (no block damage) and a
     /// new dragon takes over.
     fn finish_respawn(&mut self) {
+        // Portal crystals are not on spikes; clear their revival beams before
+        // the spike reset and before they are removed (vanilla resetEndCrystals).
+        self.respawn_beams(None);
         self.reset_spike_crystals();
         self.fight.respawn = None;
         let list = std::mem::take(&mut self.fight.respawn_crystals);
@@ -3339,6 +3464,7 @@ impl Game<'_> {
     /// `abortRespawnSequence`.
     fn abort_respawn(&mut self) {
         self.fight.respawn = None;
+        self.respawn_beams(None);
         self.fight.respawn_crystals.clear();
         self.reset_spike_crystals();
         let _ = self.activate_exit_portal();
@@ -3603,6 +3729,28 @@ fn dragon_rays(base: glam::Mat4, t: f32, white: horizon_client::hud::Rect, out: 
     }
 }
 
+/// `Entity.push` on the server's copy of a player, then `hurt`. A player's
+/// own client hears of its velocity only when a hurt marks it
+/// (`LivingEntity.hurtServer`'s `markHurt`, sent by
+/// `ServerEntity.sendChanges`); `push` alone only sets `needsSync`, which
+/// reaches the players tracking them, not them. So the push moves the player
+/// only together with a hurt that lands outside the hurt cooldown, and is
+/// dropped otherwise.
+fn push_seen_with_hurt(
+    p: &mut horizon_client::motion::PlayerMotion,
+    push: Vec3,
+    hurt: impl FnOnce(&mut horizon_client::motion::PlayerMotion),
+) {
+    let before = p.velocity;
+    let marked_before = std::mem::take(&mut p.health.sync_velocity);
+    p.velocity = before.add_vector(push);
+    hurt(p);
+    if !p.health.sync_velocity {
+        p.velocity = before;
+    }
+    p.health.sync_velocity |= marked_before;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3664,6 +3812,44 @@ mod tests {
         let mut d = dragon(flying());
         assert_eq!(d.hurt(0, 9.0, true, true), Hurt::Landed { full: true });
         assert_eq!(d.health, MAX_HEALTH - 9.0);
+    }
+
+    #[test]
+    fn a_part_refuses_fire() {
+        // EnderDragonPart.hurtServer: the dragon is fire immune, so a
+        // fireball's hit is refused on the head and on the other parts.
+        let large = ProjectileKind::LargeFireball { power: 1 };
+        for part in [0, 2] {
+            let mut d = dragon(flying());
+            let hurt = d.hurt_part(part, 6.0, true, DamageKind::Fireball, Some(&large));
+            assert_eq!(hurt, Hurt::Refused);
+            assert_eq!(d.health, MAX_HEALTH);
+        }
+        let small = ProjectileKind::SmallFireball;
+        let mut d = dragon(flying());
+        let hurt = d.hurt_part(0, 5.0, true, DamageKind::Fireball, Some(&small));
+        assert_eq!(hurt, Hurt::Refused);
+        assert_eq!(d.health, MAX_HEALTH);
+    }
+
+    #[test]
+    fn a_perched_dragon_shrugs_a_players_wind_charge_off() {
+        // AbstractDragonSittingPhase.onHurt: a direct WindCharge does
+        // nothing, a breeze's BreezeWindCharge is not one.
+        let charge = ProjectileKind::WindCharge;
+        let mut d = dragon(Phase::Scanning { time: 0 });
+        let hurt = d.hurt_part(0, 1.0, true, DamageKind::WindCharge, Some(&charge));
+        assert_eq!(hurt, Hurt::Shrugged);
+        assert_eq!(d.health, MAX_HEALTH);
+        let breeze = ProjectileKind::BreezeWindCharge;
+        let hurt = d.hurt_part(0, 1.0, true, DamageKind::WindCharge, Some(&breeze));
+        assert_eq!(hurt, Hurt::Landed { full: true });
+        assert_eq!(d.health, MAX_HEALTH - 1.0);
+        // In flight the player's charge lands too.
+        let mut d = dragon(flying());
+        let hurt = d.hurt_part(0, 1.0, true, DamageKind::WindCharge, Some(&charge));
+        assert_eq!(hurt, Hurt::Landed { full: true });
+        assert_eq!(d.health, MAX_HEALTH - 1.0);
     }
 
     #[test]
@@ -3745,6 +3931,80 @@ mod tests {
             creative,
             spectator,
         }
+    }
+
+    #[test]
+    fn the_first_crystal_destroyed_in_a_tick_names_the_strafed_player() {
+        // DragonHoldingPatternPhase.onCrystalDestroyed strafes at once, and
+        // the strafing phase ignores the next crystal.
+        let (host, guest) = (
+            player(FightWho::Host, 1.0, false, false),
+            player(FightWho::Guest(8), 2.0, false, false),
+        );
+        let mut d = dragon(flying());
+        d.strafe_after_crystal(Some(&host));
+        d.strafe_after_crystal(Some(&guest));
+        assert_eq!(d.strafe_request, Some(FightWho::Host));
+        // Nobody, or a player it can't attack, leaves the next crystal free.
+        let creative = player(FightWho::Host, 1.0, true, false);
+        let mut d = dragon(flying());
+        d.strafe_after_crystal(None);
+        d.strafe_after_crystal(Some(&creative));
+        d.strafe_after_crystal(Some(&guest));
+        assert_eq!(d.strafe_request, Some(FightWho::Guest(8)));
+        // Only while it holds its pattern.
+        let mut d = dragon(Phase::Scanning { time: 0 });
+        d.strafe_after_crystal(Some(&guest));
+        assert_eq!(d.strafe_request, None);
+    }
+
+    /// #2893: a player under a wing is pushed only when the wing's hurt
+    /// lands, not on every tick they stay there, and never under a perched
+    /// dragon's wing.
+    #[test]
+    fn a_wing_pushes_the_player_only_with_a_landed_hurt() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let resources = horizon_client::motion::MotionResources::load(&root, &assets).unwrap();
+        let (health, rules) = (&resources.health, Default::default());
+        let id = health.damage.id("minecraft:mob_attack").unwrap();
+        let push = Vec3::new(0.5, f64::from(0.2_f32), -0.25);
+        let wing = |p: &mut horizon_client::motion::PlayerMotion, sitting: bool| {
+            push_seen_with_hurt(p, push, |p| {
+                if !sitting {
+                    let _ = p.hurt(health, rules, id, 5.0);
+                }
+            });
+        };
+        // In flight: the first tick's hurt lands and carries the push.
+        let mut p = horizon_client::motion::PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        wing(&mut p, false);
+        assert_eq!(p.velocity, push);
+        assert_eq!(p.health.health(), 15.0);
+        // The next 9 ticks are inside the hurt cooldown: no hurt, no push.
+        for _ in 0..9 {
+            p.health.advance_clock();
+            wing(&mut p, false);
+        }
+        assert_eq!(p.velocity, push, "pushed again with no hurt");
+        assert_eq!(p.health.health(), 15.0);
+        // Ten ticks on, the next hurt lands and pushes again.
+        p.health.advance_clock();
+        wing(&mut p, false);
+        assert_eq!(p.velocity, push.add_vector(push));
+        assert_eq!(p.health.health(), 10.0);
+        // Under a perched dragon's wing nothing reaches the player.
+        let mut p = horizon_client::motion::PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        for _ in 0..20 {
+            wing(&mut p, true);
+        }
+        assert_eq!(p.velocity, Vec3::ZERO, "pushed by a perched dragon");
+        assert!(!p.health.sync_velocity);
     }
 
     #[test]

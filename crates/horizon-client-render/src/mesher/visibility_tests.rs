@@ -77,6 +77,7 @@ fn info(solid: bool) -> Info {
         permeable: false,
         shade: 1.0,
         emission: 0,
+        tier: 0,
         emissive: false,
         fluid: FluidState::EMPTY,
         model: false,
@@ -182,6 +183,21 @@ fn visibility_matches_reference() {
         for _ in 0..32 {
             let pad = fixture(|_, _, _| random(&mut seed) % 100 < percent);
             assert_eq!(visibility(&pad, &info), reference(&pad, &info));
+        }
+    }
+}
+
+#[test]
+fn visibility_scratch_reuse_keeps_shortcuts_and_subsequent_fills_exact() {
+    let info = [info(false), info(true), info(false), info(true)];
+    let mut stack = vec![usize::MAX];
+    for _ in 0..3 {
+        for (name, pad) in cases() {
+            assert_eq!(
+                visibility_reusing(&pad, &info, &mut stack),
+                reference(&pad, &info),
+                "{name}"
+            );
         }
     }
 }

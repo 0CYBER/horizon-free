@@ -38,11 +38,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   starts the game. With no install on the computer the Play page offers the download alone and the
   Minecraft folder row says none is needed. Without an owner,
   the Play page asks to sign in first. `horizon-launcher prepare --download`.
-- **Mods**: search Modrinth (CurseForge support is coming soon) for resource
-  packs and modpacks, each marked Works, Partly or Doesn't run in
-  Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` only after its SHA-512 matches, and a
-  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update,
+- **Mods**: **Mods** and **Shader packs** search Horizon's own registry (a Java instance's mods
+  come from Modrinth), **Resource packs** searches Modrinth, each marked Works, Partly or Doesn't
+  run in Horizon; Modrinth's data packs aren't usable yet and have no tab. Install puts a file in the game folder only after its checksum matches, and a
+  modpack (the sidebar's +) goes to the Modpacks page; installed packs show their source and checksum, with Update,
   **Update all** and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
   MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
@@ -153,12 +152,12 @@ The opening, then Play ([clip](docs/opening.webm)):
   white on the Play button at 4.5:1 and the accent at 3:1 on every background (a test holds every
   accent in both looks to it). The picture is copied into the data folder.
   `horizon-launcher settings accent NAME`, `settings background PATH|default`.
-- **Language**: English, French, Russian, German, Simplified Chinese, Spanish and Ukrainian.
+- **Language**: English, French, Russian, German, Simplified Chinese, Spanish, Ukrainian and Polish.
   The window follows the system's language unless the player picks one in Settings > Launcher
   (each named in itself); a string a table lacks shows in English. The tables are
   `launcher/lang/<code>.json`, English text to its translation, Horizon's own; a test fails when
   the code asks `tr("…")` for a string a table lacks, or a table keeps one the code dropped.
-  `horizon-launcher settings language system|en|fr|ru|de|zh|es|uk`.
+  `horizon-launcher settings language system|en|fr|ru|de|zh|es|uk|pl`.
 - **Skin and cape**: each offline name's **Skin…** in Settings > Account shows the front of its
   skin and cape, takes a skin PNG (64×64, or the older 64×32) and a cape PNG (64×32), and picks
   classic or slim arms. The launcher keeps copies in its `skins/` folder and gives the game
@@ -182,9 +181,9 @@ The opening, then Play ([clip](docs/opening.webm)):
   `datapacks/` under its row: what is there (and which the game has turned off), **Add data pack…**,
   and **Remove** (to the trash); a data pack `.zip` dropped on a world goes into it. The game turns
   a new one on when the world opens. From the command line: `horizon-launcher worlds
-  datapack-list|datapack-add|datapack-remove <world> …`. The Mods page's **Data packs** tab finds
-  them on Modrinth and installs one into the world picked there (`mods search --kind datapack`,
-  `mods install <pack> --world <world>`), saying what of it runs in Horizon.
+  datapack-list|datapack-add|datapack-remove <world> …`. `horizon-launcher mods search --kind datapack`
+  finds them on Modrinth and `mods install <pack> --world <world>` installs one, saying what of it
+  runs in Horizon.
 - **Packs**: Home lists the selected instance's resource packs and shader packs, each with a switch.
   The choice is the game's own: `resourcePacks` in options.txt (a pack turned on goes on top, as
   the game's Resource Packs screen does) and `pickedShaderPack` in `horizon-graphics.txt` (one shader
@@ -341,7 +340,7 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher mods remove <pack>
     horizon-launcher servers [list]                 the servers hosted from the launcher, and whether they run
     horizon-launcher servers create [--name N] [--seed S | --copy-world DIR] [--mode M] [--difficulty D]
-                     [--max-players N] [--open] [--check-accounts] [--player NAME]... --accept-eula
+                     [--max-players N] [--open] [--offline] [--player NAME]... --accept-eula
     horizon-launcher servers set-up [--version <tag>]   copy a prepared version's programs and game files for servers
     horizon-launcher servers run <server> -- <horizon-server command>   for example: servers run "My server" -- start
     horizon-launcher servers forget <server>        take it off the list (its folder stays)

@@ -1,11 +1,12 @@
 //! `/place template` (PlaceCommand): a saved structure template placed with
 //! rotation, mirroring and integrity.
-use super::{Arg, Context, Game, R, err};
-use horizon_client::{save, text::Text};
+use super::{Arg, Context, Game, R, Screen, err};
+use horizon_client::{containers::BlockEntity, save, text::Text};
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_world::{
     compression::Compression,
     nbt::{self, Limits, Tag},
+    registry::BlockStateId,
     worldgen::structure::{Mirror, Rotation, StateTransforms, StructureTemplate},
 };
 use std::sync::{Arc, OnceLock};
@@ -15,7 +16,7 @@ fn num(n: impl std::fmt::Display) -> Text {
 }
 
 impl Game<'_> {
-    fn state_transforms(&self) -> Option<&'static StateTransforms> {
+    pub(in crate::game) fn state_transforms(&self) -> Option<&'static StateTransforms> {
         static TRANSFORMS: OnceLock<Option<StateTransforms>> = OnceLock::new();
         TRANSFORMS
             .get_or_init(|| {
@@ -32,6 +33,16 @@ impl Game<'_> {
     /// A template by id: a structure block's save in the world, then the
     /// vanilla templates.
     fn load_template(&self, id: &str) -> Option<Arc<StructureTemplate>> {
+        let tag = self.read_template_tag(id)?;
+        Some(Arc::new(StructureTemplate::from_nbt(
+            &tag,
+            self.pack.assets.registry,
+            self.state_transforms()?,
+        )))
+    }
+    /// A template's tree by id, as `StructureTemplateManager` reads it from
+    /// disk.
+    pub(in crate::game) fn read_template_tag(&self, id: &str) -> Option<Tag> {
         let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
         let candidates = [
             self.world_root
@@ -45,7 +56,6 @@ impl Game<'_> {
                 .join(ns)
                 .join(format!("{path}.nbt")),
         ];
-        let transforms = self.state_transforms()?;
         for file in candidates {
             let Ok(bytes) = std::fs::read(&file) else {
                 continue;
@@ -56,11 +66,7 @@ impl Game<'_> {
             let Ok((named, _)) = nbt::read_named(&raw, Limits::templates()) else {
                 continue;
             };
-            return Some(Arc::new(StructureTemplate::from_nbt(
-                &named.tag,
-                self.pack.assets.registry,
-                transforms,
-            )));
+            return Some(named.tag);
         }
         None
     }
@@ -150,9 +156,12 @@ impl Game<'_> {
                     max_depth,
                     position: pos,
                 };
-                let placed = self.with_level(|b, level, ticks| {
-                    b.place_jigsaw(level, ticks, pos, || terrain.jigsaw_pieces(&query))
+                let (placed, entities) = self.with_level(|b, level, ticks| {
+                    b.place_jigsaw(level, ticks, pos, false, || terrain.jigsaw_pieces(&query))
                 });
+                for entity in entities {
+                    self.spawn_entity_from_nbt(Tag::Compound(entity));
+                }
                 self.process_level_events()
                     .map_err(|_| err("command.failed", &[]))?;
                 if !placed {
@@ -176,10 +185,60 @@ impl Game<'_> {
                 {
                     return Err(err("commands.place.structure.invalid", &[&structure]));
                 }
-                self.place_pos(ctx, "pos")?;
-                // Structure.generate is not wired to the live level.
-                Err(err("command.failed", &[]))
+                let pos = self.place_pos(ctx, "pos")?;
+                // PlaceCommand.placeStructure: Structure.generate for the
+                // position's chunk with its `biome -> true` predicate, then
+                // placeInChunk for every chunk of the start's box.
+                let terrain = self
+                    .end
+                    .locator()
+                    .ok_or_else(|| err("command.failed", &[]))?;
+                let start = terrain
+                    .structure_start(&structure, pos[0] >> 4, pos[2] >> 4)
+                    .ok_or_else(|| err("commands.place.structure.failed", &[]))?;
+                let (min, max) = (start.bounding_box.min, start.bounding_box.max);
+                self.place_check_loaded([min[0] >> 4, min[2] >> 4], [max[0] >> 4, max[2] >> 4])?;
+                let (placed, entities) =
+                    self.with_level(|b, level, ticks| b.place_structure(level, ticks, &start));
+                for entity in entities {
+                    self.spawn_entity_from_nbt(Tag::Compound(entity));
+                }
+                if !placed {
+                    return Err(err("commands.place.structure.failed", &[]));
+                }
+                self.feedback(Text::translate(
+                    "commands.place.structure.success",
+                    &[
+                        Text::literal(structure),
+                        num(pos[0]),
+                        num(pos[1]),
+                        num(pos[2]),
+                    ],
+                ));
+                Ok(1)
             }
+        }
+    }
+    /// The barrier step of `StructureTemplate.placeInWorld`, run where a block
+    /// with saved data goes, even over the same state: `LevelChunk.setBlockState`
+    /// removes what is there, with no side effects. A removed jukebox stops its
+    /// song (`place_state` does that itself when the block's name changes), and
+    /// a container screen open on it closes.
+    fn clear_template_block_entity(&mut self, at: [i32; 3], state: BlockStateId) {
+        let key = (at[0], at[1], at[2]);
+        self.world.block_names.remove(&key);
+        let Some(replaced) = self.world.block_entities.remove(&key) else {
+            return;
+        };
+        let previous = self.world.block(at[0], at[1], at[2]);
+        let same_name = self.res.facts().get(previous).name == self.res.facts().get(state).name;
+        if same_name && matches!(replaced, BlockEntity::Jukebox(_)) {
+            self.jukebox_removed(at);
+        }
+        if self.container == Some(key) {
+            self.container_opener_event(key, false);
+            self.container = None;
+            self.screen = Screen::Playing;
         }
     }
     pub(super) fn cmd_place(&mut self, ctx: &Context) -> R<i32> {
@@ -235,6 +294,9 @@ impl Game<'_> {
                 continue;
             }
             let state = transforms.rotate(transforms.mirror(b.state, mirror), rotation);
+            if b.nbt.is_some() {
+                self.clear_template_block_entity(at, state);
+            }
             if self.place_state(at, state, strict).is_ok() {
                 placed += 1;
             }

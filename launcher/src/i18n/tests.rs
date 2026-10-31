@@ -158,6 +158,10 @@ fn every_language_has_every_string_the_code_asks_for() {
 
 #[test]
 fn the_system_language_is_the_first_one_the_launcher_has() {
+    assert_eq!(Language::pick(["pl-PL", "en-US"]), Language::Polish);
+    assert_eq!(Language::parse("pl_PL.UTF-8"), Some(Language::Polish));
+    assert_eq!(Language::pick(["pl-PL", "en-US"]), Language::Polish);
+    assert_eq!(Language::parse("pl_PL.UTF-8"), Some(Language::Polish));
     assert_eq!(Language::pick(["fr-CH", "en-US"]), Language::French);
     assert_eq!(Language::pick(["it-IT", "ru_RU.UTF-8"]), Language::Russian);
     assert_eq!(Language::pick(["it-IT", "zh-Hans-CN"]), Language::Chinese);
@@ -184,6 +188,7 @@ fn the_system_language_is_the_first_one_the_launcher_has() {
 
 #[test]
 fn a_missing_string_shows_in_english() {
+    assert_eq!(tr_in(Language::Polish, "Settings"), "Ustawienia");
     assert_eq!(tr_in(Language::French, "Settings"), "Paramètres");
     assert_eq!(tr_in(Language::Russian, "Settings"), "Настройки");
     assert_eq!(tr_in(Language::German, "Settings"), "Einstellungen");
@@ -192,4 +197,15 @@ fn a_missing_string_shows_in_english() {
     assert_eq!(tr_in(Language::Ukrainian, "Settings"), "Налаштування");
     assert_eq!(tr_in(Language::English, "Settings"), "Settings");
     assert_eq!(tr_in(Language::French, "No such string"), "No such string");
+}
+
+#[test]
+fn polish_entries_are_valid_and_keep_placeholders() {
+    let (_, all) = strings();
+    let table: HashMap<String, String> = serde_json::from_str(Language::Polish.source()).unwrap();
+    for (en, said) in &table {
+        assert!(all.contains(en), "unused Polish string: {en:?}");
+        assert!(!said.trim().is_empty(), "empty Polish string: {en:?}");
+        assert_eq!(holes(en), holes(said), "Polish: {en:?}");
+    }
 }

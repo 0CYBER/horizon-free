@@ -2,6 +2,7 @@
 //! network order, with their data for clients that do not know the vanilla
 //! pack) and the tags of every registry, loaded from the prepared resources
 //! (`data/minecraft/...`) and the registries report.
+use crate::chunk::LevelShapes;
 use horizon_protocol::{
     packets::configuration::{RegistryData, RegistryEntry, RegistryTags, TagEntry, UpdateTags},
     registry::{Builtin, Dynamic},
@@ -58,6 +59,7 @@ struct Entries {
 }
 
 pub struct SyncData {
+    pub content_identity: Option<[u8; 32]>,
     pub builtin: Builtin,
     /// Entry names per synchronized registry (for id lookups).
     pub dynamic: Dynamic,
@@ -123,7 +125,30 @@ pub fn component_nbt(v: &Value) -> Tag {
 }
 
 impl SyncData {
-    pub fn load(resources: &Path) -> Result<Self, String> {
+    /// No registries, tags or recipes: enough for tests of the login phase.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            builtin: Builtin::default(),
+            dynamic: Dynamic::default(),
+            registries: Vec::new(),
+            tags: UpdateTags {
+                registries: Vec::new(),
+            },
+            features: Vec::new(),
+            commands: None,
+            recipes: Vec::new(),
+            advancements: super::advancements::ServerAdvancements::load(
+                Path::new(""),
+                &horizon_world::loot::PackOverlay::NONE,
+            ),
+            content_identity: None,
+        }
+    }
+    pub fn load(
+        resources: &Path,
+        overlay: &horizon_world::loot::PackOverlay,
+    ) -> Result<Self, String> {
         let builtin = Builtin::find(resources)
             .and_then(|p| Builtin::load(&p).ok())
             .ok_or("registries.json not found next to the resources")?;
@@ -145,7 +170,13 @@ impl SyncData {
             registries.push(((*key).to_owned(), Entries { names, json }));
         }
         let tags = Self::load_tags(&root, &builtin, &dynamic);
+        let content_identity = if resources.join(crate::content_identity::MARKER).exists() {
+            Some(crate::content_identity::identity(resources).map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
         let mut sync = Self {
+            content_identity,
             builtin,
             dynamic,
             registries,
@@ -153,9 +184,9 @@ impl SyncData {
             features: vec!["minecraft:vanilla".to_owned()],
             commands: super::commands::CommandTree::load(resources),
             recipes: Vec::new(),
-            advancements: super::advancements::ServerAdvancements::load(resources),
+            advancements: super::advancements::ServerAdvancements::load(resources, overlay),
         };
-        sync.recipes = super::recipes::update_recipes(resources, &sync);
+        sync.recipes = super::recipes::update_recipes(resources, &sync, overlay);
         Ok(sync)
     }
 
@@ -174,7 +205,10 @@ impl SyncData {
 
     /// ClientboundRegistryDataPacket per registry. With `known_pack` the
     /// client rebuilds the entries from its own data, so none is sent.
-    pub fn registry_packets(&self, known_pack: bool) -> Vec<RegistryData> {
+    /// The registries for a client, with the data of a dimension type the
+    /// world's data packs changed (`levels`) even when it knows the vanilla
+    /// pack.
+    pub fn registry_packets(&self, known_pack: bool, levels: &LevelShapes) -> Vec<RegistryData> {
         self.registries
             .iter()
             .map(|(key, e)| RegistryData {
@@ -183,13 +217,18 @@ impl SyncData {
                     .names
                     .iter()
                     .zip(&e.json)
-                    .map(|(name, json)| RegistryEntry {
-                        id: name.clone(),
-                        data: if known_pack {
-                            None
-                        } else {
-                            Some(json_to_nbt(json))
-                        },
+                    .map(|(name, json)| {
+                        let changed = (key == "minecraft:dimension_type")
+                            .then(|| changed_dimension_type(name, json, levels))
+                            .flatten();
+                        RegistryEntry {
+                            id: name.clone(),
+                            data: match changed {
+                                Some(json) => Some(json_to_nbt(&json)),
+                                None if known_pack => None,
+                                None => Some(json_to_nbt(json)),
+                            },
+                        }
                     })
                     .collect(),
             })
@@ -290,6 +329,27 @@ impl SyncData {
     }
 }
 
+/// The vanilla dimension type `name` (its JSON `json`) with the shape the
+/// world gives the level of that name, if its data packs changed it.
+fn changed_dimension_type(name: &str, json: &Value, levels: &LevelShapes) -> Option<Value> {
+    if !matches!(
+        name,
+        "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+    ) {
+        return None;
+    }
+    let shape = levels.get(name);
+    if shape == LevelShapes::VANILLA.get(name) {
+        return None;
+    }
+    let mut json = json.clone();
+    json["min_y"] = shape.min_y.into();
+    json["height"] = shape.height.into();
+    json["logical_height"] = shape.logical_height.into();
+    json["has_skylight"] = shape.sky_light.into();
+    Some(json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +361,33 @@ mod tests {
         assert!(matches!(t.get("a"), Some(Tag::Int(1))));
         assert!(matches!(t.get("c"), Some(Tag::String(_))));
         assert!(matches!(t.get("b"), Some(Tag::List(l)) if l.len() == 2));
+    }
+
+    #[test]
+    fn a_changed_dimension_type_is_sent_with_its_shape() {
+        let vanilla: Value =
+            serde_json::from_str(r#"{"min_y":-64,"height":384,"logical_height":384,"has_skylight":true,"ultrawarm":false}"#)
+                .unwrap();
+        let mut levels = LevelShapes::VANILLA;
+        assert_eq!(
+            changed_dimension_type("minecraft:overworld", &vanilla, &levels),
+            None
+        );
+        levels.overworld = crate::chunk::LevelShape::new(-64, 2096, 2096, true).unwrap();
+        let sent = changed_dimension_type("minecraft:overworld", &vanilla, &levels).unwrap();
+        assert_eq!(
+            (sent["min_y"].as_i64(), sent["height"].as_i64()),
+            (Some(-64), Some(2096))
+        );
+        assert_eq!(sent["ultrawarm"], false, "the rest of the type is kept");
+        assert_eq!(
+            changed_dimension_type("minecraft:the_nether", &vanilla, &levels),
+            None
+        );
+        assert_eq!(
+            changed_dimension_type("minecraft:overworld_caves", &vanilla, &levels),
+            None
+        );
     }
 }
 

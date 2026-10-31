@@ -6,8 +6,9 @@
 use super::{Game, Result};
 use horizon_client::{
     containers::BlockEntity,
+    effects::{EffectInstance, PlayerEffects},
     fast_hash::{FxHashMap, FxHashSet},
-    mobs::{Mob, Species, Who, warden},
+    mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
@@ -32,6 +33,10 @@ struct Tables {
     occludes: Vec<bool>,
     dampens: Vec<bool>,
     resonator: Vec<bool>,
+    /// The `minecraft:climbable` tag, and the two redstone ores: read for
+    /// every mob on every tick.
+    climbable: Vec<bool>,
+    redstone_ore: Vec<bool>,
 }
 /// `SculkSensorBlock.getAnalogOutputSignal`: the last vibration's frequency
 /// while the sensor is active.
@@ -87,7 +92,7 @@ pub(super) struct SculkState {
     damaged: FxHashMap<u32, i64>,
     last_health: Option<f32>,
     /// The darkness effect's blend factor, previous and current tick.
-    darkness: (f32, f32),
+    pub darkness: (f32, f32),
     /// Who causes the block changes being processed (the player's actions).
     pub actor: Option<Who>,
     ticks: u32,
@@ -308,10 +313,11 @@ impl Game<'_> {
                 .cloned()
                 .unwrap_or_default()
         };
-        let (wool, dampening, resonators) = (
+        let (wool, dampening, resonators, climbable) = (
             tag("minecraft:occludes_vibration_signals"),
             tag("minecraft:dampens_vibrations"),
             tag("minecraft:vibration_resonators"),
+            tag("minecraft:climbable"),
         );
         let mut t = Tables {
             built: true,
@@ -319,6 +325,8 @@ impl Game<'_> {
             occludes: vec![false; n],
             dampens: vec![false; n],
             resonator: vec![false; n],
+            climbable: vec![false; n],
+            redstone_ore: vec![false; n],
         };
         for i in 0..n {
             let facts = self.res.facts().get(BlockStateId(i as u32));
@@ -333,6 +341,11 @@ impl Game<'_> {
             t.occludes[i] = wool.contains(name);
             t.dampens[i] = dampening.contains(name);
             t.resonator[i] = resonators.contains(name);
+            t.climbable[i] = climbable.contains(name);
+            t.redstone_ore[i] = matches!(
+                name,
+                "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+            );
         }
         self.world.watched = t.kinds.iter().map(|k| *k != 0).collect();
         self.sculk.tables = t;
@@ -410,13 +423,12 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
-            let y0 = MIN_Y + s as i32 * 16;
+            let y0 = self.world.bottom_y() + s as i32 * 16;
             // Without a sculk state in its palette, no block of the section
             // is one: most sections are passed over without reading a block.
             if !section.blocks.maybe_has(|v| self.kind_of_state(v) != 0) {
@@ -542,6 +554,9 @@ impl Game<'_> {
         for i in 0..self.mobs.len() {
             if self.mobs[i].species() == Species::Warden && self.mobs[i].alive() {
                 self.warden_listen(i, event, pos, &ctx);
+            }
+            if self.mobs[i].species() == Species::Allay && self.mobs[i].alive() {
+                self.allay_listen(i, event, pos, &ctx);
             }
         }
     }
@@ -722,6 +737,28 @@ impl Game<'_> {
         if avoided {
             self.trigger_player("minecraft:avoid_vibration");
         }
+    }
+
+    /// `VibrationSystem.Listener.handleGameEvent` for the allay at `index`
+    /// (`Allay.VibrationUser`).
+    fn allay_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
+        let now = self.world.game_time;
+        let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
+        let dimension = self.dim.id();
+        allay::listen(
+            &mut self.mobs[index],
+            now,
+            event,
+            pos,
+            ctx,
+            dimension,
+            |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let state = world.block(p.x, p.y, p.z);
+                    occludes.get(state.0 as usize).copied().unwrap_or(false)
+                })
+            },
+        );
     }
 
     // ---- ticking ----
@@ -1171,23 +1208,10 @@ impl Game<'_> {
 
     // ---- darkness ----
 
-    /// `MobEffectInstance.BlendState.tick` for the darkness effect: it fades
-    /// in and out over 22 ticks.
+    /// The darkness effect's blend, where this game ticks the player in its
+    /// own level (a server's client ticks it in `tick_client_effects`).
     fn tick_darkness_blend(&mut self) {
-        const BLEND: f32 = 22.0;
-        let (_, current) = self.sculk.darkness;
-        let next = match self.potions.effects.get("darkness") {
-            Some(e) => {
-                let target = if e.duration == -1 || e.duration > BLEND as i32 {
-                    1.0
-                } else {
-                    0.0
-                };
-                current + (target - current).clamp(-1.0 / BLEND, 1.0 / BLEND)
-            }
-            None => 0.0,
-        };
-        self.sculk.darkness = (current, next);
+        self.sculk.darkness = darkness_blend_tick(&self.potions.effects, self.sculk.darkness);
     }
     /// The darkness effect's blend factor at the partial tick.
     fn darkness_blend(&self, partial: f32) -> f32 {
@@ -1542,7 +1566,7 @@ impl Game<'_> {
             .map(|i| [i.position.x, i.position.y, i.position.z])
             .collect();
         for at in items {
-            self.step_on_redstone_ore(at, false);
+            self.step_on_redstone_ore(at, false, false);
         }
     }
 
@@ -1560,7 +1584,7 @@ impl Game<'_> {
         if let Some((at, on_ground, health, flying)) = player {
             let crouch = self.keys.contains(&KeyCode::ShiftLeft);
             if on_ground && !self.spectator() {
-                self.step_on_redstone_ore(at, crouch);
+                self.step_on_redstone_ore(at, crouch, true);
             }
             self.mount_events(Who::Player, self.riding, true);
             let in_water = self.in_water_at(at);
@@ -1571,6 +1595,7 @@ impl Game<'_> {
                 in_water,
                 crouch && on_ground,
                 flying,
+                false,
             );
             if let Some(last) = self.sculk.last_health
                 && health < last
@@ -1581,9 +1606,57 @@ impl Game<'_> {
         }
     }
 
+    /// `RedStoneOreBlock.spawnParticles`: a red dust puff for each face of the
+    /// ore that is not against a solid block. Non-axis coordinates draw from
+    /// the client level random, x then y then z. It is `level.addParticle`, so
+    /// only the local player's own click or step draws it, not a guest's turn.
+    pub(super) fn redstone_ore_particles(&mut self, pos: [i32; 3]) {
+        if self.lan_acting.is_some()
+            || !matches!(
+                &*self.block_name(pos),
+                "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+            )
+        {
+            return;
+        }
+        // Direction.values(): down, up, north, south, west, east.
+        const FACES: [[i32; 3]; 6] = [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+            [-1, 0, 0],
+            [1, 0, 0],
+        ];
+        for step in FACES {
+            let next = [pos[0] + step[0], pos[1] + step[1], pos[2] + step[2]];
+            let state = self.world.block(next[0], next[1], next[2]);
+            if self.res.facts().get(state).solid_render {
+                continue;
+            }
+            let mut at = [0.0f64; 3];
+            for axis in 0..3 {
+                at[axis] = if step[axis] != 0 {
+                    0.5 + 0.5625 * f64::from(step[axis])
+                } else {
+                    f64::from(self.particles.level_random().next_float())
+                };
+            }
+            self.particles.add(
+                &horizon_client::particles::ParticleOptions::dust([1.0, 0.0, 0.0], 1.0),
+                [
+                    f64::from(pos[0]) + at[0],
+                    f64::from(pos[1]) + at[1],
+                    f64::from(pos[2]) + at[2],
+                ],
+                [0.0; 3],
+            );
+        }
+    }
+
     /// `RedStoneOreBlock.stepOn`: standing on the ore lights it, unless the
     /// entity is stepping carefully (`attack_block` only lights an unlit ore).
-    fn step_on_redstone_ore(&mut self, at: [f64; 3], carefully: bool) {
+    fn step_on_redstone_ore(&mut self, at: [f64; 3], carefully: bool, burst: bool) {
         if carefully {
             return;
         }
@@ -1593,10 +1666,13 @@ impl Game<'_> {
             (at[1] - 0.2).floor() as i32,
             at[2].floor() as i32,
         ];
-        if matches!(
-            &*self.block_name(pos),
-            "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
-        ) {
+        self.sculk_prepare();
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if self.state_is(&self.sculk.tables.redstone_ore, state) {
+            // The dust is the local player's client effect, not a mob's or an item's.
+            if burst {
+                self.redstone_ore_particles(pos);
+            }
             let _ = self.attack_block(pos);
         }
     }
@@ -1615,6 +1691,7 @@ impl Game<'_> {
         ) {
             return Ok(false);
         }
+        self.redstone_ore_particles(pos);
         self.attack_block(pos)?;
         let block_item = held.is_some_and(|s| {
             self.res
@@ -1626,7 +1703,16 @@ impl Game<'_> {
     }
 
     fn tick_mob_sculk_events(&mut self) {
-        let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>, Option<u32>)> = self
+        let snapshot: Vec<(
+            u32,
+            [f64; 3],
+            bool,
+            bool,
+            Species,
+            Option<i64>,
+            Option<u32>,
+            u32,
+        )> = self
             .mobs
             .iter()
             .filter(|m| m.alive())
@@ -1639,19 +1725,42 @@ impl Game<'_> {
                     m.species(),
                     m.last_damage.map(|(_, t)| t),
                     m.extra.mount,
+                    m.age,
                 )
             })
             .collect();
-        for (id, at, on_ground, in_water, species, damaged, vehicle) in snapshot {
+        for (id, at, on_ground, in_water, species, damaged, vehicle, age) in snapshot {
             if on_ground {
-                self.step_on_redstone_ore(at, false);
+                self.step_on_redstone_ore(at, false, false);
             }
             // A mob first seen already riding raised its event when it spawned.
             let seen = self.sculk.steps.contains_key(&Who::Mob(id));
             self.mount_events(Who::Mob(id), vehicle, seen);
             let emits = !matches!(species, Species::Shulker);
             if emits {
-                self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);
+                let warden = species == Species::Warden;
+                self.entity_motion_events(
+                    Who::Mob(id),
+                    at,
+                    on_ground,
+                    in_water,
+                    false,
+                    false,
+                    warden,
+                );
+                // Entity.processFlappingMovement with Bee.isFlapping: a bee off
+                // the ground over air flaps on every other tick (the mob's own
+                // `MobEvent::GameEvent` is not read here).
+                if species == Species::Bee && !on_ground && age.is_multiple_of(2) {
+                    let below = self.world.block(
+                        at[0].floor() as i32,
+                        (at[1] - 1.0e-5).floor() as i32,
+                        at[2].floor() as i32,
+                    );
+                    if self.res.facts().is_air(below) {
+                        self.post_entity_event("minecraft:flap", Who::Mob(id));
+                    }
+                }
             }
             if let Some(t) = damaged {
                 let seen = self.sculk.damaged.insert(id, t);
@@ -1730,7 +1839,9 @@ impl Game<'_> {
         in_water: bool,
         discrete: bool,
         flying: bool,
+        warden: bool,
     ) {
+        self.sculk_prepare();
         let entry = self.sculk.steps.entry(who).or_insert(Steps {
             move_dist: 0.0,
             next_step: 1.0,
@@ -1767,12 +1878,7 @@ impl Game<'_> {
         );
         let state = self.world.block(block.0, block.1, block.2);
         let air = self.res.facts().is_air(state);
-        let climbable = self
-            .res
-            .items()
-            .block_tags
-            .get("minecraft:climbable")
-            .is_some_and(|t| t.contains(&*self.res.facts().get(state).name));
+        let climbable = self.state_is(&self.sculk.tables.climbable, state);
         let travelled = if climbable {
             ((dx * dx + dy * dy + dz * dz).sqrt() * f64::from(0.6f32)) as f32
         } else {
@@ -1786,8 +1892,6 @@ impl Game<'_> {
             let steps_on_block = on_ground || climbable;
             let move_dist = entry.move_dist;
             if steps_on_block {
-                let warden = matches!(who, Who::Mob(id)
-                    if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Warden));
                 entry.next_step = if warden {
                     // Warden.nextStep
                     move_dist + 0.55
@@ -1812,6 +1916,41 @@ impl Game<'_> {
             ctx,
         );
     }
+}
+
+/// `MobEffects.DARKNESS`'s `setBlendDuration(22)`: its fade in, its fade out,
+/// and how long before the end the fade out starts.
+const DARKNESS_BLEND: i32 = 22;
+
+/// `MobEffectInstance.BlendState.hasEffect` for the darkness effect.
+fn darkness_target(e: &EffectInstance) -> f32 {
+    if e.ends_within(DARKNESS_BLEND) {
+        0.0
+    } else {
+        1.0
+    }
+}
+
+/// `MobEffectInstance.BlendState.tick` for the darkness effect: from the
+/// (previous, current) factors, the next ones. It fades in and out over 22
+/// ticks; with no darkness it is gone.
+pub(super) fn darkness_blend_tick(effects: &PlayerEffects, (_, current): (f32, f32)) -> (f32, f32) {
+    let next = match effects.get("darkness") {
+        Some(e) => {
+            let step = 1.0 / DARKNESS_BLEND as f32;
+            current + (darkness_target(e) - current).clamp(-step, step)
+        }
+        None => 0.0,
+    };
+    (current, next)
+}
+
+/// A new darkness instance's `BlendState`: from nothing, or, when the server
+/// asked for no blending, at once (`MobEffectInstance.skipBlending`'s
+/// `BlendState.setImmediate`).
+pub(super) fn darkness_blend_added(e: &EffectInstance, blend: bool) -> (f32, f32) {
+    let factor = if blend { 0.0 } else { darkness_target(e) };
+    (factor, factor)
 }
 
 #[cfg(test)]

@@ -83,10 +83,10 @@ impl FluidInteractionWorld for ItemFluidWorld<'_> {
         Ok(self.world.chunks.contains_key(&(x, z)).then_some(()))
     }
     fn chunk_sections(&mut self, _: ()) -> Result<FluidSections<'_>, Error> {
-        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        let layout = self.world.layout();
         Ok(FluidSections {
-            minimum_section_y: crate::chunk::MIN_Y >> 4,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() >> 4,
+            has_fluid: crate::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {
@@ -200,17 +200,17 @@ mod tests {
             ticks: 0,
         };
         let mut still = item.clone();
-        assert!(still.tick(&world, &facts, &collision, false, &fluids));
+        assert!(still.tick(&world, assets.registry, &facts, &collision, false, &fluids));
         assert_eq!(still.position.x, at.x);
         assert_eq!(still.velocity.x, 0.0);
         world.set(21, 4, 20, flowing).unwrap();
         let mut carried = item;
-        assert!(carried.tick(&world, &facts, &collision, false, &fluids));
+        assert!(carried.tick(&world, assets.registry, &facts, &collision, false, &fluids));
         // First push is damped by buoyancy before motion, second follows drag.
         assert!((carried.position.x - at.x - 0.014 * 0.99).abs() < 1e-12);
         assert!((carried.velocity.x - (0.014 * 0.99 * 0.98 + 0.014)).abs() < 1e-12);
         for _ in 0..20 {
-            carried.tick(&world, &facts, &collision, false, &fluids);
+            carried.tick(&world, assets.registry, &facts, &collision, false, &fluids);
         }
         assert!(carried.position.x > at.x + 0.5);
     }

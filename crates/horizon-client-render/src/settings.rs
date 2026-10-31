@@ -50,6 +50,9 @@ pub fn sound_source(event: &str) -> usize {
         index("ambient")
     } else if e.starts_with("music_disc.") {
         index("record")
+    } else if e.starts_with("item.goat_horn.") {
+        // InstrumentItem.play: SoundSource.RECORDS.
+        index("record")
     } else if e.starts_with("music.") {
         index("music")
     } else if e.starts_with("weather.") || e.starts_with("entity.lightning_bolt") {
@@ -150,6 +153,8 @@ pub struct Settings {
     pub chat_links: bool,
     pub chat_links_prompt: bool,
     pub chat_opacity: f32,
+    /// Chat Delay in seconds (`chatDelay`): player chat shows this far apart.
+    pub chat_delay: f64,
     pub text_background_opacity: f32,
     pub chat_scale: f32,
     pub chat_width: f32,
@@ -184,6 +189,10 @@ pub struct Settings {
     pub ctrl_click_emulates_right_click: bool,
     /// Horizon's own graphics settings (`horizon-graphics.txt`, not options.txt).
     pub horizon: crate::graphics::Graphics,
+    /// The graphics API the game started with: `Options.preferredGraphicsBackendFromStartup`.
+    pub startup_api: crate::graphics::GraphicsApi,
+    /// `Monitor.videoModes` of the window's monitor, for the Video page (set by the game).
+    pub video_modes: Vec<crate::window::VideoMode>,
     /// Controller settings (`horizon-controller.txt`, Horizon's own).
     pub controller: crate::gamepad::PadSettings,
     /// Horizon's optional extras (`horizon-extras.txt`), all off by default.
@@ -246,6 +255,7 @@ impl Default for Settings {
             chat_links: true,
             chat_links_prompt: true,
             chat_opacity: 1.0,
+            chat_delay: 0.0,
             text_background_opacity: 0.5,
             chat_scale: 1.0,
             chat_width: 1.0,
@@ -269,6 +279,8 @@ impl Default for Settings {
             quit_shortcuts: true,
             ctrl_click_emulates_right_click: false,
             horizon: Default::default(),
+            startup_api: Default::default(),
+            video_modes: Vec::new(),
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
@@ -302,6 +314,16 @@ fn put_s(f: &mut OptionsFile, key: &str, v: &str) {
     }
 }
 impl Settings {
+    /// The index in `video_modes` of the preferred fullscreen mode, -1 (the desktop's own mode)
+    /// when none is set or the monitor lacks it: `Monitor.indexOfMode`.
+    pub fn video_mode_index(&self) -> i32 {
+        self.file
+            .fullscreen_resolution
+            .as_deref()
+            .and_then(crate::window::VideoMode::read)
+            .and_then(|mode| self.video_modes.iter().position(|m| *m == mode))
+            .map_or(-1, |i| i as i32)
+    }
     pub fn load(path: &Path) -> Self {
         let horizon = path
             .parent()
@@ -336,7 +358,11 @@ impl Settings {
             },
         };
         settings.describe_for_crashes();
-        settings
+        // Options.load: the backend asked for at startup, what a restart is measured from.
+        Self {
+            startup_api: settings.horizon.api,
+            ..settings
+        }
     }
     /// The render settings and resource packs a crash report lists.
     fn describe_for_crashes(&self) {
@@ -435,6 +461,8 @@ impl Settings {
             quit_shortcuts: f.bool("quitShortcuts"),
             ctrl_click_emulates_right_click: f.bool("ctrlClickEmulatesRightClick"),
             horizon: Default::default(),
+            startup_api: Default::default(),
+            video_modes: Vec::new(),
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
@@ -448,6 +476,7 @@ impl Settings {
             chat_links: f.bool("chatLinks"),
             chat_links_prompt: f.bool("chatLinksPrompt"),
             chat_opacity: f.double("chatOpacity") as f32,
+            chat_delay: f.double("chatDelay"),
             text_background_opacity: f.double("textBackgroundOpacity") as f32,
             chat_scale: f.double("chatScale") as f32,
             chat_width: f.double("chatWidth") as f32,
@@ -468,10 +497,13 @@ impl Settings {
     /// `Options.createInformation`: what the server learns about this player.
     pub fn client_information(&self, view_distance: i8) -> ClientInformation {
         ClientInformation {
+            language: self.language.clone(),
             chat_visibility: self.chat_visibility as i32,
+            chat_colors: self.chat_colors,
             model_customisation: self.file.model_customisation(),
             main_hand: i32::from(!self.main_hand_left),
             allows_listing: self.file.bool("allowServerListing"),
+            particle_status: i32::from(self.particles),
             ..ClientInformation::new(view_distance)
         }
     }
@@ -551,6 +583,9 @@ impl Settings {
         put_b(&mut f, "chatLinks", self.chat_links);
         put_b(&mut f, "chatLinksPrompt", self.chat_links_prompt);
         put_f(&mut f, "chatOpacity", self.chat_opacity);
+        if self.chat_delay != f.double("chatDelay") {
+            f.set("chatDelay", V::Double(self.chat_delay));
+        }
         put_f(
             &mut f,
             "textBackgroundOpacity",
@@ -757,6 +792,16 @@ pub enum Opt {
     SharePresence,
     DirectionalAudio,
     MusicToast,
+    /// `Options.exclusiveFullscreen`.
+    ExclusiveFullscreen,
+    /// VideoSettingsScreen's "Exclusive Fullscreen Mode": the monitor's mode to take.
+    ExclusiveMode,
+    /// `Options.preferredGraphicsBackend`.
+    GraphicsBackend,
+    /// `Options.textureFiltering`.
+    TextureFiltering,
+    /// `Options.maxAnisotropyBit`.
+    MaxAnisotropy,
 }
 
 #[cfg(test)]
@@ -823,6 +868,17 @@ mod tests {
         let again = Settings::parse(&out);
         assert_eq!(again.fov, 90.0);
         assert_eq!(again.keys.get("key.jump"), "key.keyboard.j");
+    }
+    #[test]
+    fn client_information_maps_the_stored_main_hand() {
+        // The Skin Customization option is stored by name; ClientInformation
+        // sends HumanoidArm (LEFT = 0, RIGHT = 1).
+        for (stored, arm) in [("left", 0), ("right", 1)] {
+            let s = Settings::parse(&format!("mainHand:{stored}\n"));
+            assert_eq!(s.client_information(10).main_hand, arm);
+            assert!(s.serialize().contains(&format!("mainHand:\"{stored}\"")));
+        }
+        assert_eq!(Settings::default().client_information(10).main_hand, 1);
     }
     #[test]
     fn no_options_txt_paces_frames_like_an_empty_one() {

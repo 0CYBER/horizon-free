@@ -60,8 +60,20 @@ impl ResourceSource for Bundled {
             "assets/horizon/lang/ru_ru.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/ru_ru.json")
             }
+            "assets/horizon/lang/pl_pl.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/pl_pl.json")
+            }
             "assets/horizon/lang/uk_ua.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/uk_ua.json")
+            }
+            "assets/horizon/lang/es_es.json"
+            | "assets/horizon/lang/es_ar.json"
+            | "assets/horizon/lang/es_cl.json"
+            | "assets/horizon/lang/es_ec.json"
+            | "assets/horizon/lang/es_mx.json"
+            | "assets/horizon/lang/es_uy.json"
+            | "assets/horizon/lang/es_ve.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/es_es.json")
             }
             _ => return None,
         };
@@ -276,10 +288,20 @@ mod tests {
         }
         assert_eq!(en.get("horizon.pages.mods"), Some("Mods"));
         assert_eq!(ru.get("horizon.pages.mods"), Some("Моды"));
+        let pl = Language::load(&[&empty], "pl_pl");
+        assert_eq!(pl.get("horizon.options.controller"), Some("Kontroler"));
+        assert_eq!(pl.get("horizon.options.vibration"), Some("Wibracje"));
         let uk = Language::load(&[&empty], "uk_ua");
         assert_eq!(
             uk.get("horizon.options.on_screen_keyboard"),
             Some("Екранна клавіатура")
+        );
+        let es = Language::load(&[&empty], "es_es");
+        assert_eq!(es.get("horizon.options.controller"), Some("Mando"));
+        let es_ve = Language::load(&[&empty], "es_ve");
+        assert_eq!(
+            es_ve.get("horizon.options.on_screen_keyboard"),
+            Some("Teclado en pantalla")
         );
     }
 

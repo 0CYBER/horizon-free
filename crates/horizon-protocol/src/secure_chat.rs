@@ -357,6 +357,16 @@ impl SignatureCache {
             None => (-1, Some(signature.to_vec())),
         }
     }
+    /// `MessageSignature.Packed.unpack`: a full signature as it is, an
+    /// index as the cache holds it; `None` for an empty or unknown slot.
+    pub fn unpack(&self, packed: &(i32, Option<Vec<u8>>)) -> Option<Signature> {
+        match packed {
+            (_, Some(full)) => signature(full),
+            (id, None) => usize::try_from(*id)
+                .ok()
+                .and_then(|i| self.entries.get(i).copied().flatten()),
+        }
+    }
     /// push(body, signature): the message's last seen and its signature go
     /// to the front, most recent first; what they displace moves back.
     pub fn push(&mut self, last_seen: &[Signature], signature: Option<&Signature>) {
@@ -471,6 +481,20 @@ mod tests {
         let mut ack = [0u8; 3];
         ack[2] |= 1 << 3;
         assert!(v.apply_update(1, ack, 99).is_err(), "checksum");
+    }
+
+    #[test]
+    fn packed_signatures_resolve_against_the_cache() {
+        let mut c = SignatureCache::default();
+        assert_eq!(c.unpack(&(-1, Some(sig(4).to_vec()))), Some(sig(4)));
+        assert_eq!(c.unpack(&(0, None)), None, "an empty slot");
+        c.push(&[sig(1)], Some(&sig(2)));
+        assert_eq!(c.unpack(&(0, None)), Some(sig(2)));
+        assert_eq!(c.unpack(&(1, None)), Some(sig(1)));
+        assert_eq!(c.unpack(&(2, None)), None);
+        assert_eq!(c.unpack(&(128, None)), None, "past the cache");
+        // What the server packs, the client unpacks to the same signature.
+        assert_eq!(c.unpack(&c.pack(&sig(1))), Some(sig(1)));
     }
 
     #[test]

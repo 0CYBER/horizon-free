@@ -3,7 +3,8 @@
 //! the nearest living thing it can see, walks to a spot four to seven
 //! blocks away in a straight line and waits there 20 ticks with its head
 //! down; `RamTarget` then charges at it, knocks it back, or breaks a horn
-//! on a log, stone or ore. Both are one goal here.
+//! on a log, stone or ore. Both are one goal here. The long jump activity is
+//! the frog's goal (frog.rs) with the goat's numbers.
 use super::{
     Damage, Mob, MobEvent, MobWorld, Who,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone},
@@ -39,7 +40,7 @@ struct Candidate {
 }
 
 /// The lowered head and the ram behaviours' state. `RAM_COOLDOWN_TICKS` is a
-/// brain memory (`ram_cooldown`), saved with the others.
+/// brain memory (`ram_cooldown_ticks`), saved with the others.
 #[derive(Clone, Debug, Default)]
 pub struct State {
     lower_head_tick: i32,
@@ -51,10 +52,47 @@ pub struct State {
     ram_target: Option<Vec3>,
     ram_direction: Vec3,
     time: i32,
+    /// `LivingEntity.discardFriction`, set through the long jump.
+    pub discard_friction: bool,
 }
 
 pub fn register(m: &mut Mob) {
     m.ai.goals.add(2, Ram);
+    // `GoatAi.initLongJumpActivity`: the long jump activity comes after the
+    // ram activity and before the idle one.
+    m.ai.goals.add(2, super::frog::LongJump::default());
+}
+/// The goat's long jump activity is the one in use: `GoatAi` tries the ram
+/// activity first, so the ram cooldown runs, and the long jump activity wants
+/// no tempting player, no breed target and no walk target (the navigation is
+/// idle).
+pub(super) fn long_jump_activity(m: &Mob, w: &MobWorld) -> bool {
+    ram_cooldown(m) > 0 && m.ai.nav.is_done() && !tempted(m, w) && !breeding(m, w)
+}
+/// `TemptingSensor.forAnimal`: a player within 10 blocks holds goat food.
+fn tempted(m: &Mob, w: &MobWorld) -> bool {
+    let holds = |item: &Option<std::sync::Arc<str>>| {
+        item.as_deref()
+            .is_some_and(|i| m.kind.food.iter().any(|f| f.as_str() == i))
+    };
+    w.player.as_ref().is_some_and(|p| {
+        p.alive
+            && !p.spectator
+            && m.distance_sqr(p.position) <= 100.0
+            && (holds(&p.main_hand) || holds(&p.off_hand))
+            && m.rider.is_none()
+    })
+}
+/// `AnimalMakeLove.checkExtraStartConditions`: the goat is in love and an
+/// adult goat in love is near, so `BREED_TARGET` is set or about to be.
+fn breeding(m: &Mob, w: &MobWorld) -> bool {
+    let id = m.id;
+    m.extra.in_love > 0
+        && w.nearby(m.position, 8.0, move |s| {
+            s.id != id && s.species == super::Species::Goat && s.in_love && !s.baby
+        })
+        .next()
+        .is_some()
 }
 
 /// `Goat.handleEntityEvent`: 58 lowers the head, 59 raises it.
@@ -64,6 +102,15 @@ pub fn entity_event(m: &mut Mob, event: u8) {
         59 => m.extra.goat.lowering_head = false,
         _ => {}
     }
+}
+/// `Entity.setPose` and the `refreshDimensions` it triggers, for a goat of a
+/// server: the pose's box (`Goat.getDefaultDimensions` scales a long jump's
+/// by 0.7), and a box that grew (the goat lands) is moved to a free spot
+/// (`fudgePositionAfterSizeChange`).
+pub fn set_pose(m: &mut Mob, w: &MobWorld, id: u8) {
+    let (old_w, old_h, _) = m.dims();
+    m.extra.pose = id;
+    m.fudge_position_after_size_change(w, old_w, old_h);
 }
 /// `Goat.aiStep`'s `lowerHeadTick`; a client runs it too.
 pub fn tick(m: &mut Mob) {
@@ -76,6 +123,8 @@ pub fn tick(m: &mut Mob) {
     if cooldown > 0 {
         set_ram_cooldown(m, cooldown - 1);
     }
+    // `CountDownCooldownTicks(LONG_JUMP_COOLDOWN_TICKS)` of the core activity.
+    super::frog::count_down_cooldown(m);
 }
 /// `RAM_COOLDOWN_TICKS`: 0 when absent.
 pub fn ram_cooldown(m: &Mob) -> i32 {
@@ -96,7 +145,7 @@ fn set_ram_cooldown(m: &mut Mob, ticks: i32) {
         None => {}
     }
 }
-const RAM_COOLDOWN: &str = "ram_cooldown";
+const RAM_COOLDOWN: &str = "ram_cooldown_ticks";
 /// `Goat.getRammingXHeadRot`.
 pub fn ramming_x_head_rot(m: &Mob) -> f32 {
     let max = if m.is_baby() { 52.5_f32 } else { 30.0 };

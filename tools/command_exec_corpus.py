@@ -168,6 +168,7 @@ def player_state():
         cmd('/effect clear @s'),
         cmd('/give @s minecraft:diamond 3'),
         cmd('/give @s minecraft:diamond_sword[minecraft:custom_name="Blade"]'),
+        cmd('/give @s minecraft:diamond[item_name={text:"ItemName",color:"red"}]'),
         cmd('/give @s minecraft:stone 130'),
         cmd('/clear @s minecraft:diamond 0'),
         cmd('/clear @s minecraft:stone 0'),
@@ -425,6 +426,32 @@ def mob_riding():
     ]
 
 
+def camel_riders():
+    """A husk riding a camel (#3199): the camel and its rider never push each other
+    (Entity.push skips passengers of the same vehicle), so the camel stays near
+    where it was summoned instead of sliding off backwards, and it never sits down
+    with a controlling passenger (CamelAi.RandomSitting needs none)."""
+    camel = '@e[tag=camel_v,limit=1]'
+    return [
+        # A walled pen, and a camel that cannot walk: only a push would move it.
+        *setup('/fill 0 200 0 15 203 15 minecraft:glass hollow', '/fill 1 203 1 14 203 14 minecraft:air',
+               '/scoreboard objectives add camel_pose dummy',
+               '/summon minecraft:camel 8.0 201 8.0 {Tags:["camel_v"],'
+               'Passengers:[{id:"minecraft:husk",Tags:["camel_r"]}]}',
+               f'/attribute {camel} minecraft:movement_speed base set 0'),
+        {'op': 'tick', 'n': 100},
+        cmd('/execute as @e[tag=camel_r] on vehicle run say carrying'),
+        cmd('/execute if entity @e[tag=camel_v,x=8,y=201,z=8,distance=..4]'),
+        {'op': 'tick', 'n': 500},
+        *setup(f'/execute store result score camel camel_pose run data get entity {camel} LastPoseTick'),
+        # Negative while sitting.
+        cmd('/execute if score camel camel_pose matches ..-1'),
+        cmd('/execute as @e[tag=camel_r] on vehicle run say still carrying'),
+        *setup('/kill @e[tag=camel_r]', '/kill @e[tag=camel_v]', '/scoreboard objectives remove camel_pose',
+               '/fill 0 200 0 15 203 15 minecraft:air'),
+    ]
+
+
 def scores():
     return [
         cmd('/scoreboard objectives add harness dummy'),
@@ -484,6 +511,10 @@ def execute():
         cmd('/execute positioned 4 210 4 if block ~ ~ ~ minecraft:stone'),
         cmd('/execute positioned as @s run tp @s ~ ~ ~'),
         cmd('/execute align xyz run summon minecraft:armor_stand ~ ~-20 ~ {NoGravity:1b,Tags:["ex"],UUID:[I;1,2,3,4]}'),
+        cmd('/summon minecraft:armor_stand 3 210 3 {NoGravity:1b,Tags:["implicit_tp"]}'),
+        cmd('/execute as @e[tag=implicit_tp,limit=1] run tp 4 210 4'),
+        cmd('/data get entity @e[tag=implicit_tp,limit=1] Pos'),
+        cmd('/kill @e[tag=implicit_tp]'),
         cmd('/execute if entity @e[tag=ex]'),
         cmd('/execute as @e[tag=ex] run data get entity @s Pos'),
         cmd('/data get entity @e[tag=ex,limit=1]'),
@@ -1087,8 +1118,9 @@ def social():
 
 
 def test_command():
-    # Horizon has no game test runner: `/test run|runmultiple|verify` of an
-    # existing instance and `/test create` are not compared.
+    # `/test run|runmultiple` of an existing instance start a real test (a
+    # tick-based run, not compared here); `verify`, `create`, `locate` and
+    # `pos` with test instance blocks around are not ported.
     return [
         cmd('/test clearall'),
         cmd('/test stop'),
@@ -1134,6 +1166,35 @@ def server_clock():
     ]
 
 
+def wither_breaks():
+    """WitherBoss.customServerAiStep 20 ticks after it is hurt: Level.destroyBlock around it, which leaves
+    each cell's fluid (FluidState.createLegacyBlock), so water stays and a waterlogged block turns to water."""
+    return [
+        *setup('/fill 4 206 4 12 217 12 minecraft:glass hollow', '/fill 5 207 5 11 216 11 minecraft:water',
+               '/setblock 7 210 7 minecraft:stone', '/setblock 9 211 9 minecraft:oak_stairs[waterlogged=true]',
+               '/setblock 7 212 9 minecraft:oak_slab[waterlogged=false]'),
+        {'op': 'tick', 'n': 10},
+        *setup('/summon minecraft:wither 8.5 210 8.5 {NoGravity:1b,Tags:["wb"]}'),
+        cmd('/damage @e[tag=wb,limit=1] 1'),
+        # WaterAvoidingRandomFlyingGoal may set off on a stroll (the wither's random is unseeded in vanilla),
+        # which moves the box destroyBlocksTick breaks. Hold it in place each tick until then: customServerAiStep
+        # runs before travel, so the break sees the teleported position.
+        *[op for _ in range(25) for op in (*setup('/tp @e[tag=wb] 8.5 210 8.5'), {'op': 'tick', 'n': 1})],
+        {'op': 'tick', 'n': 15},
+        cmd('/execute if block 8 212 8 minecraft:water'),
+        cmd('/execute if block 9 211 9 minecraft:water'),
+        cmd('/execute if block 9 211 9 minecraft:oak_stairs'),
+        cmd('/execute if block 7 210 7 minecraft:stone'),
+        cmd('/execute if block 7 212 9 minecraft:oak_slab'),
+        # The broken cells' neighbours were updated (setBlock flag 3): the pool flows back in.
+        cmd('/execute if block 7 210 7 minecraft:water'),
+        cmd('/execute if block 7 212 9 minecraft:water'),
+        cmd('/execute if block 6 210 6 minecraft:water'),
+        *setup('/kill @e[tag=wb]', '/fill 4 206 4 12 217 12 minecraft:air'),
+        {'op': 'tick', 'n': 25},
+    ]
+
+
 def ender_dragon():
     """`/kill` on the fight's dragon ends the fight (#3319): `EnderDragon.kill` removes it and calls
     `EnderDragonFight.setDragonKilled`, so no new dragon takes its place, the exit portal opens and the
@@ -1157,6 +1218,58 @@ def ender_dragon():
     ]
 
 
+def place_structure():
+    """`/place structure` (PlaceCommand.placeStructure): the id is resolved, a
+    `StructureStart` is generated for the position's chunk with vanilla's
+    `biome -> true` predicate, and its `placeInChunk` runs for every chunk of the
+    start's box in the live level. Buried treasure's one piece digs down from the
+    ocean floor and leaves a single chest, so a chest count in its chunk compares
+    the generated start and its placement without knowing the terrain height."""
+    return [
+        *setup('/gamemode creative', '/tp @s 8.5 230 8.5 0 0'),
+        {'op': 'settle'},
+        *setup('/kill @e[type=!minecraft:player]',
+               '/fill 0 0 0 15 120 15 minecraft:air replace minecraft:chest'),
+        cmd('/place structure minecraft:buried_treasure 4 210 4'),
+        # One chest between y 0 and 120 of chunk (0, 0): the piece's column is
+        # inside that chunk whatever height its dig reached.
+        cmd('/fill 0 0 0 15 120 15 minecraft:air replace minecraft:chest'),
+    ]
+
+
+def tame_wolf_kills():
+    # LivingEntity.resolvePlayerResponsibleForDamage: a tame wolf's hit is its
+    # owner's (the harness player, OfflinePlayer:Player), so the kill drops
+    # experience and ServerPlayer.awardKillScore counts it (mob_kills,
+    # totalKillCount); the killed statistic stays the wolf's
+    # (Player.killedEntity). A wild wolf's kill is nobody's.
+    owner = '[I;-1608632253,-450807400,-1786055591,-2146546415]'
+    return [
+        *setup('/gamerule mob_drops true', '/scoreboard objectives add wolf_kills minecraft.killed:minecraft.zombie',
+               '/scoreboard objectives add wolf_mob_kills minecraft.custom:minecraft.mob_kills',
+               '/scoreboard objectives add wolf_total totalKillCount'),
+        cmd('/summon minecraft:wolf 4.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["wild"]}'),
+        cmd('/summon minecraft:zombie 6.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["prey"]}'),
+        cmd('/damage @e[tag=prey,limit=1] 100 minecraft:mob_attack by @e[tag=wild,limit=1]'),
+        {'op': 'tick', 'n': 25},
+        cmd('/execute if entity @e[type=minecraft:experience_orb,limit=1]'),
+        cmd('/scoreboard players get @s wolf_kills'),
+        cmd('/scoreboard players get @s wolf_mob_kills'),
+        cmd('/scoreboard players get @s wolf_total'),
+        cmd(f'/summon minecraft:wolf 4.5 210 8.5 {{NoAI:1b,NoGravity:1b,Owner:{owner},Tags:["pet"]}}'),
+        cmd('/summon minecraft:zombie 6.5 210 8.5 {NoAI:1b,NoGravity:1b,Tags:["prey"]}'),
+        cmd('/damage @e[tag=prey,limit=1] 100 minecraft:mob_attack by @e[tag=pet,limit=1]'),
+        {'op': 'tick', 'n': 25},
+        cmd('/execute if entity @e[type=minecraft:experience_orb,limit=1]'),
+        cmd('/scoreboard players get @s wolf_kills'),
+        cmd('/scoreboard players get @s wolf_mob_kills'),
+        cmd('/scoreboard players get @s wolf_total'),
+        *setup('/kill @e[type=!player]', '/scoreboard objectives remove wolf_kills',
+               '/scoreboard objectives remove wolf_mob_kills', '/scoreboard objectives remove wolf_total',
+               '/gamerule mob_drops false'),
+    ]
+
+
 def groups():
     return [
         ('setup', group_setup()),
@@ -1169,6 +1282,7 @@ def groups():
         ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('mob riding', mob_riding()),
+        ('camel riders', camel_riders()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),
@@ -1180,5 +1294,8 @@ def groups():
         ('compute', compute()),
         ('social and scoreboard', social()),
         ('test', test_command()),
+        ('wither breaks', wither_breaks()),
         ('ender dragon', ender_dragon()),
+        ('place structure', place_structure()),
+        ('tame wolf kills', tame_wolf_kills()),
     ]

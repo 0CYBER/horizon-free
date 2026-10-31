@@ -19,6 +19,7 @@ mod block_entity_anim_fixture;
 mod block_entity_render_fixture;
 mod block_entity_tickers_fixture;
 mod block_particles_fixture;
+mod block_tint_probe;
 mod block_transform_fixture;
 mod breaking_fixture;
 mod camera_probe;
@@ -75,6 +76,7 @@ mod recipe_book_fixture;
 mod recipe_book_render_fixture;
 mod recipe_book_view_fixture;
 mod recipe_fixture;
+mod remote_attack_probe;
 mod scene_collision_probe;
 mod scene_motion_probe;
 mod scoreboard_fixture;
@@ -98,6 +100,7 @@ mod toggle_keys_probe;
 mod tooltip_display_fixture;
 mod trading_fixture;
 mod translucency_fixture;
+mod trident_probe;
 mod weather_fixture;
 mod world_border_render_fixture;
 mod world_options_fixture;
@@ -113,6 +116,7 @@ probes! {
     block_particles_fixture,
     block_transform_fixture,
     breaking_fixture,
+    block_tint_probe,
     camera_probe,
     squid_client_probe,
     creative_mining_probe,
@@ -168,6 +172,7 @@ probes! {
     recipe_book_render_fixture,
     recipe_book_view_fixture,
     recipe_fixture,
+    remote_attack_probe,
     scene_collision_probe,
     scene_motion_probe,
     scoreboard_fixture,
@@ -189,6 +194,7 @@ probes! {
     text_display_fixture,
     text_display_render_fixture,
     trading_fixture,
+    trident_probe,
     translucency_fixture,
     weather_fixture,
     world_border_render_fixture,

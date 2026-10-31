@@ -44,6 +44,9 @@ pub struct ParticleOptions {
     /// `ItemParticleOption`: the particle sprite of each layer of the item's
     /// model as resolved for the ground.
     pub item: Option<Vec<String>>,
+    /// `GeyserParticleOptions.waterBlocks` and `GeyserBaseParticleOptions`'
+    /// `waterBlocks` and `burstImpulseBase` (0 where the type has none).
+    pub geyser: Option<(i32, f32)>,
 }
 impl ParticleOptions {
     pub fn simple(ty: ParticleType) -> Self {
@@ -55,6 +58,21 @@ impl ParticleOptions {
             to_color: [1.0, 0.0, 0.0],
             trail: None,
             item: None,
+            geyser: None,
+        }
+    }
+    /// `GeyserParticleOptions(type, waterBlocks)`.
+    pub fn geyser(ty: ParticleType, water_blocks: i32) -> Self {
+        Self {
+            geyser: Some((water_blocks, 0.0)),
+            ..Self::simple(ty)
+        }
+    }
+    /// `GeyserBaseParticleOptions(type, waterBlocks, burstImpulseBase)`.
+    pub fn geyser_base(ty: ParticleType, water_blocks: i32, burst_impulse_base: f32) -> Self {
+        Self {
+            geyser: Some((water_blocks, burst_impulse_base)),
+            ..Self::simple(ty)
         }
     }
     /// `ItemParticleOption`: the stack's layer particle sprites (`BreakingItemParticle`).
@@ -188,6 +206,29 @@ enum Behaviour {
         y_end: f64,
         size_start: f32,
         y_prev: f64,
+    },
+    /// `NoxiousGasParticle`: fades out from `fade_start` ticks of age.
+    NoxiousGas {
+        fade_start: f32,
+    },
+    /// `NoxiousGasCloudParticle`: every second tick, a gas particle where the
+    /// gas reaches.
+    NoxiousGasCloud,
+    /// `GeyserEruptionParticle`: the base puffs, the plume and the poofs of
+    /// one eruption; `aux` is the speed its provider was given.
+    GeyserEruption {
+        water_blocks: i32,
+        aux: [f64; 3],
+    },
+    /// `GeyserPlumeParticle`: shoots up `plumeHeight` blocks, then falls back.
+    GeyserPlume {
+        start_y: f64,
+        max_y: f64,
+        propulsion: f32,
+        spray: [f32; 2],
+        min_size: f32,
+        max_size: f32,
+        done: bool,
     },
     BubblePop,
     BubbleColumnUp,
@@ -869,6 +910,26 @@ impl Particle {
         (age / self.lifetime as f32).clamp(0.0, 1.0)
     }
 }
+/// `NoxiousGasCloudParticle.pickRandomParticleSpawnPoint`: a point up to three
+/// blocks from the centre of `center_block` in a random horizontal direction,
+/// a quarter block lower, from the level's random.
+fn pick_random_particle_spawn_point(random: &mut LegacyRandom, center_block: [i32; 3]) -> [f64; 3] {
+    let dx = f64::from(random.next_float() - 0.5);
+    let dz = f64::from(random.next_float() - 0.5);
+    // Vec3.normalize.
+    let length = (dx * dx + dz * dz).sqrt();
+    let (dx, dz) = if length < f64::from(1.0e-5f32) {
+        (0.0, 0.0)
+    } else {
+        (dx / length, dz / length)
+    };
+    let distance = f64::from(random.next_float() * 3.0);
+    [
+        f64::from(center_block[0]) + 0.5 + dx * distance,
+        f64::from(center_block[1]) + 0.5 - 0.25,
+        f64::from(center_block[2]) + 0.5 + dz * distance,
+    ]
+}
 /// `FireflyParticle.getFadeAmount`.
 fn fade_amount(progress: f32, fade_in: f32, fade_out: f32) -> f32 {
     if progress >= 1.0 - fade_in {
@@ -928,7 +989,7 @@ impl ParticleLevel<'_> {
             Err(_) => d,
         }
     }
-    fn block_at(p: [f64; 3]) -> [i32; 3] {
+    pub(crate) fn block_at(p: [f64; 3]) -> [i32; 3] {
         [
             p[0].floor() as i32,
             p[1].floor() as i32,
@@ -950,7 +1011,7 @@ impl ParticleLevel<'_> {
         (s.fluid, height)
     }
     /// The fluid at a block and whether it is a source (`FluidState.isSource`).
-    fn fluid_source(&self, b: [i32; 3]) -> (Fluid, bool) {
+    pub(crate) fn fluid_source(&self, b: [i32; 3]) -> (Fluid, bool) {
         let s = self.facts.get(self.world.block(b[0], b[1], b[2]));
         (s.fluid, s.fluid_level == 8 && !s.fluid_falling)
     }
@@ -981,6 +1042,8 @@ pub struct ParticleEngine {
     level_random: LegacyRandom,
     /// `SpellParticle.RANDOM`.
     spell_random: LegacyRandom,
+    /// The local player's eye while it looks through a spyglass in first person.
+    scope_eye: Option<[f64; 3]>,
     /// Seeds for each particle's own random (`RandomSource.create()`).
     seeds: LegacyRandom,
     /// When set, particles ask the level for other particles here instead
@@ -1001,8 +1064,9 @@ pub struct ParticleEngine {
     pub particle_level: u8,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
-    /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
-    pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
+    /// Local sounds requested by particles (dripstone drips, firework bursts):
+    /// (event, position, volume, pitch, distanceDelay).
+    pub sounds: Vec<(&'static str, [f64; 3], f32, f32, bool)>,
     /// How many of each type were made, for `horizon-ctl status`.
     made: std::collections::BTreeMap<&'static str, u64>,
     /// The item particles' sprites (`BreakingItemParticle`'s slime ball, snowball
@@ -1019,6 +1083,7 @@ impl ParticleEngine {
             random: LegacyRandom::new(0x7061_7274),
             level_random: LegacyRandom::new(0x6c65_7665),
             spell_random: LegacyRandom::new(0x7370_656c),
+            scope_eye: None,
             seeds: LegacyRandom::new(0x7365_6564),
             requested: None,
             names: Vec::new(),
@@ -1164,6 +1229,17 @@ impl ParticleEngine {
         if override_limiter || options.ty.override_limiter() || (d2 <= 1024.0 && !minimal) {
             self.create(options, p, v);
         }
+    }
+    /// `NoxiousGasCloudParticle.spawnNoxiousGasParticle`: the gas, as an
+    /// always visible particle (`ClientLevel.addAlwaysVisibleParticle`).
+    fn spawn_noxious_gas_particle(&mut self, pos: [f64; 3]) {
+        self.add_with(
+            &ParticleOptions::simple(ParticleType::NoxiousGas),
+            pos,
+            [0.0; 3],
+            false,
+            true,
+        );
     }
     /// `ClientLevel.calculateParticleLevel`: minimal still shows one in ten
     /// always-visible particles as decreased, and decreased drops a third.
@@ -1365,6 +1441,16 @@ impl ParticleEngine {
             }
         }
     }
+    /// Set each frame to the local player's eye while it scopes in first person.
+    pub fn set_scope_eye(&mut self, eye: Option<[f64; 3]>) {
+        self.scope_eye = eye;
+    }
+    /// `SpellParticle.isCloseToScopingPlayer`: within 3 blocks of that eye.
+    fn close_to_scoping_player(&self, pos: [f64; 3]) -> bool {
+        self.scope_eye.is_some_and(|eye| {
+            (eye[0] - pos[0]).powi(2) + (eye[1] - pos[1]).powi(2) + (eye[2] - pos[2]).powi(2) <= 9.0
+        })
+    }
     /// `ClientPacketListener.handleParticleEvent` for `ServerLevel.sendParticles`.
     pub fn send_particles(
         &mut self,
@@ -1562,7 +1648,15 @@ impl ParticleEngine {
                 q.set = set;
                 q
             }
-            T::Smoke | T::LargeSmoke | T::WhiteSmoke | T::Ash | T::WhiteAsh | T::DustPlume => {
+            T::Smoke
+            | T::LargeSmoke
+            | T::WhiteSmoke
+            | T::Ash
+            | T::WhiteAsh
+            | T::DustPlume
+            | T::NoxiousGas
+            | T::GeyserBase
+            | T::GeyserPoof => {
                 // BaseAshSmokeParticle(dir, xa, scale, colorRandom, maxLifetime, gravity, hasPhysics).
                 let (dir, scale, color_random, max_lifetime, gravity, physics, vel) = match ty {
                     T::Smoke | T::WhiteSmoke => ([0.1, 0.1, 0.1], 1.0, 0.3, 8, -0.1, true, v),
@@ -1578,6 +1672,22 @@ impl ParticleEngine {
                         false,
                         [v[0], v[1] + f64::from(0.15f32), v[2]],
                     ),
+                    // NoxiousGasParticle.Provider: scale 3.
+                    T::NoxiousGas => ([0.1, 0.1, 0.1], 3.0, 0.3, 5, -0.02, true, v),
+                    // GeyserBaseParticle: the burst impulse scales every axis.
+                    T::GeyserBase | T::GeyserPoof => {
+                        let (water_blocks, burst_impulse_base) = o.geyser?;
+                        let burst_impulse = burst_impulse_base + 0.25 * water_blocks as f32;
+                        (
+                            [f64::from(burst_impulse); 3],
+                            3.0 + 0.125 * water_blocks as f32,
+                            0.0,
+                            0,
+                            0.0,
+                            true,
+                            v,
+                        )
+                    }
                     _ => {
                         // WhiteAshParticle.Provider draws the motion.
                         let pr = &mut self.random;
@@ -1592,6 +1702,18 @@ impl ParticleEngine {
                             f64::from(pr.next_float()) * -1.9 * f64::from(pr.next_float()) * 0.1;
                         ([0.1, -0.1, 0.1], 1.0, 0.0, 20, 0.0125, false, [xa, ya, za])
                     }
+                };
+                // GeyserBaseParticle.Provider: a random spot half a block
+                // around the point, a fifth of a block up (the provider's
+                // random, as float arithmetic added to the double position).
+                let p = if matches!(ty, T::GeyserBase | T::GeyserPoof) {
+                    let pr = &mut self.random;
+                    let x = p[0] + f64::from((pr.next_float() - 0.5) * 0.5);
+                    let y = p[1] + f64::from((pr.next_float() - 0.5) * 0.5) + f64::from(0.2f32);
+                    let z = p[2] + f64::from((pr.next_float() - 0.5) * 0.5);
+                    [x, y, z]
+                } else {
+                    p
                 };
                 let mut q = Particle::moving(r, ty, p, [0.0; 3]);
                 q.friction = 0.96;
@@ -1621,6 +1743,87 @@ impl ParticleEngine {
                     );
                     q.behaviour = Behaviour::DustPlume;
                 }
+                match ty {
+                    // NoxiousGasParticle: white, living `6 / (0.5 to 1) * 3`
+                    // ticks, fading out over its second half.
+                    T::NoxiousGas => {
+                        q.set_color(1.0, 1.0, 1.0);
+                        q.lifetime = (6.0 / (f64::from(r.next_float()) * 0.5 + 0.5)
+                            * f64::from(3.0f32)) as i32;
+                        q.behaviour = Behaviour::NoxiousGas {
+                            fade_start: q.lifetime as f32 / 2.0,
+                        };
+                    }
+                    // GeyserBaseParticle: white, only ever rising, 20 to 25 ticks.
+                    T::GeyserBase | T::GeyserPoof => {
+                        q.friction = 0.725;
+                        q.set_color(1.0, 1.0, 1.0);
+                        q.velocity[1] = q.velocity[1].abs();
+                        let lifetime_factor = 0.8 + 0.2 * self.level_random.next_float();
+                        q.lifetime = (25.0 * lifetime_factor) as i32;
+                    }
+                    _ => {}
+                }
+                q.set = set;
+                q
+            }
+            // NoxiousGasCloudParticle: lives 20 ticks, draws nothing itself.
+            T::NoxiousGasCloud => {
+                let mut q = Particle::base_at(r, ty, p);
+                q.lifetime = 20;
+                q.no_render = true;
+                q.behaviour = Behaviour::NoxiousGasCloud;
+                q
+            }
+            // GeyserEruptionParticle: lives 20 ticks, draws nothing itself.
+            T::Geyser => {
+                let (water_blocks, _) = o.geyser?;
+                let mut q = Particle::base_at(r, ty, p);
+                q.lifetime = 20;
+                q.no_render = true;
+                q.behaviour = Behaviour::GeyserEruption {
+                    water_blocks,
+                    aux: v,
+                };
+                q
+            }
+            // GeyserPlumeParticle, after its provider's random placement.
+            T::GeyserPlume => {
+                let (water_blocks, _) = o.geyser?;
+                let pr = &mut self.random;
+                let at = [
+                    p[0] + f64::from((pr.next_float() - 0.5) * 0.2),
+                    p[1] + f64::from(pr.next_float()),
+                    p[2] + f64::from((pr.next_float() - 0.5) * 0.2),
+                ];
+                let plume_height = 5 * water_blocks.max(1);
+                let mut q = Particle::moving(r, ty, at, v);
+                q.has_physics = true;
+                q.speed_up_when_y_blocked = true;
+                q.lifetime = plume_height * 5;
+                q.velocity[1] = 0.0;
+                let level = &mut self.level_random;
+                let spray = [
+                    (level.next_float() - 0.5) * 0.2,
+                    (level.next_float() - 0.5) * 0.2,
+                ];
+                q.friction = 1.0;
+                let propulsion =
+                    (if water_blocks == 1 { 1.5 } else { 1.0 }) * plume_height as f32 * 1.45;
+                q.gravity = -propulsion;
+                let initial_size = q.size * 0.75;
+                let min_size = initial_size * (2.0 + plume_height as f32 / 8.0);
+                let max_size = initial_size * (3.0 + plume_height as f32 / 8.0);
+                q.size = min_size;
+                q.behaviour = Behaviour::GeyserPlume {
+                    start_y: at[1],
+                    max_y: at[1] + f64::from(plume_height) - 1.0,
+                    propulsion,
+                    spray,
+                    min_size,
+                    max_size,
+                    done: false,
+                };
                 q.set = set;
                 q
             }
@@ -2447,6 +2650,12 @@ impl ParticleEngine {
                 q.size *= 0.75;
                 q.lifetime = (8.0 / (f64::from(r.next_float()) * 0.8 + 0.2)) as i32;
                 q.has_physics = false;
+                // SpellParticle's constructor: setAlpha(0.0F), which also sets originalAlpha.
+                // MobEffectProvider sets the option's alpha after it, so an entity
+                // effect starts visible and the first tick hides it.
+                if self.close_to_scoping_player(q.position) {
+                    q.rgba[3] = 0.0;
+                }
                 match ty {
                     T::Witch => {
                         let b = self.random.next_float() * 0.5 + 0.35;
@@ -2851,7 +3060,7 @@ impl ParticleEngine {
                     (false, false) => "minecraft:entity.firework_rocket.blast",
                 };
                 let pitch = 0.95 + self.random.next_float() * 0.1;
-                self.sounds.push((sound, s.at, 20.0, pitch));
+                self.sounds.push((sound, s.at, 20.0, pitch, true));
             }
             if s.life % 2 == 0 && ((s.life / 2) as usize) < s.explosions.len() {
                 let e = s.explosions[(s.life / 2) as usize].clone();
@@ -2902,7 +3111,7 @@ impl ParticleEngine {
                         "minecraft:entity.firework_rocket.twinkle"
                     };
                     let pitch = 0.9 + self.random.next_float() * 0.15;
-                    self.sounds.push((sound, s.at, 20.0, pitch));
+                    self.sounds.push((sound, s.at, 20.0, pitch, true));
                 }
                 continue;
             }
@@ -3097,7 +3306,7 @@ impl ParticleEngine {
                         }
                         if let Some(sound) = sound {
                             let volume = p.random.next_float() * 0.7 + 0.3;
-                            self.sounds.push((sound, p.position, volume, 1.0));
+                            self.sounds.push((sound, p.position, volume, 1.0, false));
                         }
                     }
                     _ => {}
@@ -3196,6 +3405,98 @@ impl ParticleEngine {
                     y_end,
                     size_start,
                     y_prev: p.position[1],
+                };
+            }
+            Behaviour::NoxiousGas { fade_start } => {
+                p.base_tick(level);
+                self.sprite_from_age(p);
+                if p.age as f32 > fade_start {
+                    let frames_since_fade_out_start = p.age as f32 - fade_start;
+                    p.rgba[3] =
+                        (p.lifetime as f32 - frames_since_fade_out_start) / p.lifetime as f32;
+                }
+            }
+            Behaviour::NoxiousGasCloud => {
+                p.base_tick(level);
+                if p.age % 2 == 0 {
+                    let source = ParticleLevel::block_at(p.position);
+                    let spawn = pick_random_particle_spawn_point(&mut self.level_random, source);
+                    if crate::potent_sulfur::can_be_reached_by_noxious_gas(level, source, spawn) {
+                        self.spawn_noxious_gas_particle(spawn);
+                    }
+                }
+            }
+            Behaviour::GeyserEruption { water_blocks, aux } => {
+                p.base_tick(level);
+                if p.age % 2 == 0 {
+                    for _ in 0..2 {
+                        self.add(
+                            &ParticleOptions::geyser_base(
+                                ParticleType::GeyserBase,
+                                water_blocks,
+                                1.5,
+                            ),
+                            p.position,
+                            aux,
+                        );
+                    }
+                }
+                for _ in 0..water_blocks + 2 {
+                    self.add(
+                        &ParticleOptions::geyser(ParticleType::GeyserPlume, water_blocks),
+                        p.position,
+                        aux,
+                    );
+                }
+                if p.age % 10 == 0 {
+                    for _ in 0..20 {
+                        self.add(
+                            &ParticleOptions::geyser_base(
+                                ParticleType::GeyserPoof,
+                                water_blocks,
+                                2.0,
+                            ),
+                            p.position,
+                            aux,
+                        );
+                    }
+                }
+            }
+            Behaviour::GeyserPlume {
+                start_y,
+                max_y,
+                propulsion,
+                spray,
+                min_size,
+                max_size,
+                mut done,
+            } => {
+                p.base_tick(level);
+                if !done
+                    && (p.velocity[1] < 0.0
+                        || p.position[1] > max_y
+                        || p.position[1] == p.previous[1])
+                {
+                    p.lifetime = p.lifetime.min(p.age + 5);
+                    p.friction = 0.0;
+                    done = true;
+                }
+                let y_progress_linear =
+                    ((p.position[1] - start_y) / (max_y - start_y)).clamp(0.0, 1.0);
+                let y_progress_exponential = horizon_core::jmath::pow(y_progress_linear, 3.0);
+                p.gravity = propulsion * y_progress_exponential as f32 * 0.12;
+                p.velocity[0] = y_progress_linear * f64::from(spray[0]);
+                p.velocity[2] = y_progress_linear * f64::from(spray[1]);
+                self.sprite_from_age(p);
+                p.size = min_size + (y_progress_linear * f64::from(max_size - min_size)) as f32;
+                p.behaviour = Behaviour::GeyserPlume {
+                    start_y,
+                    max_y,
+                    propulsion,
+                    spray,
+                    min_size,
+                    max_size,
+                    done,
                 };
             }
             Behaviour::BubbleColumnUp => {
@@ -3462,7 +3763,12 @@ impl ParticleEngine {
             Behaviour::Spell { original_alpha } => {
                 p.base_tick(level);
                 self.sprite_from_age(p);
-                p.rgba[3] += (original_alpha - p.rgba[3]) * 0.05;
+                // SpellParticle.tick: alpha 0 while close, else eased back to originalAlpha.
+                if self.close_to_scoping_player(p.position) {
+                    p.rgba[3] = 0.0;
+                } else {
+                    p.rgba[3] += (original_alpha - p.rgba[3]) * 0.05;
+                }
             }
             Behaviour::Cloud => {
                 p.base_tick(level);
@@ -3818,7 +4124,7 @@ impl ParticleEngine {
                         layer: if layer {
                             crate::gfx::TRANSLUCENT_PARTICLE_OVERLAY
                         } else {
-                            0
+                            u32::from(hdr_tier(p.ty)) << 16
                         },
                         color,
                         light,
@@ -3828,6 +4134,27 @@ impl ParticleEngine {
                 }
             }
         }
+    }
+}
+/// How brightly particle `ty` shines in HDR output, as `mesher::hdr_tier`: flames and
+/// glowing drops, not their smoke. Only opaque-layer particles are marked.
+fn hdr_tier(ty: ParticleType) -> u8 {
+    use ParticleType as P;
+    match ty {
+        P::Flame
+        | P::SoulFireFlame
+        | P::CopperFireFlame
+        | P::SmallFlame
+        | P::Lava
+        | P::DrippingLava
+        | P::FallingLava
+        | P::LandingLava
+        | P::DrippingDripstoneLava
+        | P::FallingDripstoneLava => crate::mesher::INCANDESCENT,
+        P::DrippingObsidianTear | P::FallingObsidianTear | P::LandingObsidianTear => {
+            crate::mesher::LOW
+        }
+        _ => 0,
     }
 }
 /// `Particle.LifetimeAlpha.currentAlphaForAge`.

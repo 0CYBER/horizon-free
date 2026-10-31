@@ -1,8 +1,9 @@
 //! The player's `CombatTracker`: the damage taken lately, who dealt it and
 //! where the player fell from, turned into the vanilla death message.
-use super::{Game, chat::PLAYER_NAME};
+use super::{Game, chat::PLAYER_NAME, commands::Target};
 use horizon_client::{
     health::HealthEvent,
+    mobs::{Mob, Species},
     motion::MotionEvent,
     particles::{ParticleOptions, ParticleType},
     text::Text,
@@ -23,8 +24,51 @@ struct Entry {
     /// (`DamageSource.directEntity`: a potion with no thrower, a cloud).
     direct: Option<Text>,
 }
+/// What is stuck in a player's body: `LivingEntity.DATA_ARROW_COUNT_ID` and
+/// `DATA_STINGER_COUNT_ID` with the timers that pull them out
+/// (`removeArrowTime`, `removeStingerTime`). Kept with the combat record,
+/// which is swapped with the body it belongs to.
+#[derive(Default)]
+pub(super) struct Stuck {
+    pub(super) arrows: i32,
+    pub(super) stingers: i32,
+    remove_arrow_time: i32,
+    remove_stinger_time: i32,
+}
+impl Stuck {
+    /// `AbstractArrow.onHitEntity`: a hit that hurt, from an arrow that
+    /// does not pierce, leaves it stuck.
+    pub(super) fn add_arrow(&mut self) {
+        self.arrows += 1;
+    }
+    /// `Bee.doHurtTarget`: a sting that hurt.
+    pub(super) fn add_stinger(&mut self) {
+        self.stingers += 1;
+    }
+    /// The server's part of `LivingEntity.tick`: one in a count's worth of
+    /// `20 * (30 - count)` ticks falls out. Whether the counts changed.
+    pub(super) fn tick(&mut self) -> bool {
+        let (arrows, stingers) = (self.arrows, self.stingers);
+        Self::decay(&mut self.arrows, &mut self.remove_arrow_time);
+        Self::decay(&mut self.stingers, &mut self.remove_stinger_time);
+        (arrows, stingers) != (self.arrows, self.stingers)
+    }
+    fn decay(count: &mut i32, remove_time: &mut i32) {
+        if *count > 0 {
+            if *remove_time <= 0 {
+                *remove_time = 20 * (30 - *count);
+            }
+            *remove_time -= 1;
+            if *remove_time <= 0 {
+                *count -= 1;
+            }
+        }
+    }
+}
 #[derive(Default)]
 pub(super) struct CombatTracker {
+    /// The arrows and bee stingers stuck in the body.
+    pub(super) stuck: Stuck,
     entries: Vec<Entry>,
     last_damage: i64,
     in_combat: bool,
@@ -57,6 +101,9 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The exploding mob as predicates see it (`ServerExplosion.source`,
+    /// `ServerPlayer.currentExplosionCause`), for a mob already out of the list.
+    pub(super) explosion_cause: Option<horizon_client::advancements::EntityView>,
     /// The exploding mob named itself (`MobEvent::ExplosionSource`), so the
     /// blast leaves it out (`getEntities(source, box)`). A source guessed
     /// from the mobs near the centre is still hurt: it may be a bystander.
@@ -72,6 +119,10 @@ pub(super) struct CombatTracker {
     /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
     /// but the mobs they killed still ask for their loot.
     pub(super) charged_exploders: Vec<u32>,
+    /// The mobs whose blast went off this tick and that left the mob list
+    /// (`MobEvent::ExplosionSource`): their names, for the death messages of
+    /// the mobs the blast killed.
+    pub(super) exploded: Vec<(u32, Text)>,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,
@@ -173,9 +224,6 @@ impl Game<'_> {
                     };
                     (d.name.clone(), *amount)
                 }
-                MotionEvent::Health(HealthEvent::StarvationDamage(amount)) => {
-                    ("minecraft:starve".to_owned(), *amount)
-                }
                 _ => continue,
             };
             let attacker = self
@@ -267,6 +315,48 @@ impl Game<'_> {
         let damage = &self.motion.health.damage;
         damage.id(name).is_some_and(|id| {
             damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
+        })
+    }
+    /// The killing blow as advancement predicates see it (`DamageSource` of the
+    /// last combat entry): its type and the causing entity. The projectile
+    /// damage types have the projectile as direct entity, not the shooter.
+    pub(super) fn combat_killing_blow(&self) -> Option<horizon_client::advancements::DamageView> {
+        use horizon_client::advancements::{DamageView, EntityView};
+        let e = self.combat.entries.last()?;
+        let source = e.attacker.as_ref().and_then(|(id, _)| {
+            self.mobs
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| self.mob_entity(m))
+        });
+        let projectile = matches!(
+            e.damage_type.as_str(),
+            "minecraft:arrow"
+                | "minecraft:trident"
+                | "minecraft:mob_projectile"
+                | "minecraft:fireball"
+                | "minecraft:unattributed_fireball"
+                | "minecraft:wither_skull"
+                | "minecraft:wind_charge"
+                | "minecraft:thrown"
+                | "minecraft:spit"
+        );
+        let direct = if projectile {
+            Some(EntityView {
+                kind: e.damage_type.clone(),
+                ..Default::default()
+            })
+        } else {
+            source.clone()
+        };
+        Some(DamageView {
+            kind: e.damage_type.clone(),
+            direct,
+            source,
+            is_direct: !projectile,
+            original: e.damage,
+            actual: e.damage,
+            blocked: false,
         })
     }
     /// The type of the mob that dealt the killing blow (`killed_by`).
@@ -390,5 +480,169 @@ impl Game<'_> {
         // No entity at all: the one-argument message, as vanilla sends it (a
         // template that names a killer then shows as written).
         Text::translate(&key, &[me])
+    }
+    /// `TamableAnimal.die`: with `showDeathMessages`, a tame wolf, cat,
+    /// parrot or nautilus's owner, when online in any dimension
+    /// (`EntityReference.getEntity` looks through every level), is sent how it
+    /// died. `killer` is the player who last hurt it (`None` inside for the
+    /// host), from `last_hurt_by_player`.
+    pub(super) fn tell_owner_pet_died(&mut self, m: &Mob, killer: Option<Option<u32>>) {
+        let tamable = matches!(
+            m.species(),
+            Species::Wolf
+                | Species::Cat
+                | Species::Parrot
+                | Species::Nautilus
+                | Species::ZombieNautilus
+        );
+        let Some(owner) = m.extra.owner.filter(|_| tamable && m.extra.tame) else {
+            return;
+        };
+        if !self.ui.rules.bool("show_death_messages") {
+            return;
+        }
+        let host = self.player.is_some()
+            && self.options.dedicated.is_none()
+            && horizon_client::mobs::tame::owned_by(
+                Some(owner),
+                self.level.player_uuid.unwrap_or_default(),
+            );
+        let uuid = horizon_client::lan::playerdata::ints_uuid(owner);
+        let guest = !host
+            && self
+                .lan
+                .as_ref()
+                .is_some_and(|l| l.hub.guests.iter().any(|g| g.placed && g.uuid == uuid));
+        if !host && !guest {
+            return;
+        }
+        let message = self.mob_death_message(m, killer);
+        if host {
+            self.system_message(message);
+        } else if let Some(lan) = &self.lan {
+            let content = horizon_client::lan::data::component_nbt(&message.component());
+            lan.hub.system_message_to_player(uuid, content);
+        }
+    }
+    /// `CombatTracker.getDeathMessage` for a mob, from the hits it recorded
+    /// (`Mob::combat`), told the way the player's own tracker tells them.
+    pub(super) fn mob_death_message(&mut self, m: &Mob, killer: Option<Option<u32>>) -> Text {
+        use horizon_client::mobs::{DamageKind, Who};
+        let me = mob_name(m);
+        // The player behind a `Who::Player` hit: the last one to hurt it, or
+        // the one in place (a server with nobody acting has none).
+        let player = match killer {
+            Some(Some(conn)) => Some((u32::MAX - 1 - conn, self.target_name(Target::Guest(conn)))),
+            Some(None) => Some((u32::MAX, self.target_name(Target::Player))),
+            None if self.player.is_some() || self.lan_acting.is_some() => {
+                Some((u32::MAX, self.target_name(Target::Player)))
+            }
+            None => None,
+        };
+        // The cause's display name: a mob that is gone (a creeper that blew
+        // up) is still named by its blast.
+        let name = |g: &Self, who: Who| match who {
+            Who::Player => player.clone(),
+            Who::Mob(id) => g
+                .mob_display_name(id)
+                .or_else(|| {
+                    g.combat
+                        .exploded
+                        .iter()
+                        .find(|(e, _)| *e == id)
+                        .map(|(_, n)| n.clone())
+                })
+                .map(|n| (id, n)),
+        };
+        let entries = m
+            .combat
+            .entries
+            .iter()
+            .map(|e| {
+                let attacker = e.source.attacker.and_then(|w| name(self, w));
+                // AbstractArrow.onHitEntity: an arrow nobody shot is its own
+                // cause.
+                let direct = (attacker.is_none() && e.source.kind == DamageKind::Arrow)
+                    .then(|| Text::translate("entity.minecraft.arrow", &[]));
+                Entry {
+                    damage_type: super::creatures::source_damage_type(e.source).to_owned(),
+                    damage: e.damage,
+                    fall_location: e.in_water.then_some("water"),
+                    fall_distance: e.fall_distance,
+                    attacker,
+                    direct,
+                }
+            })
+            .collect();
+        // LivingEntity.getKillCredit: the player who hurt it lately, else the
+        // last mob to hurt it within 100 ticks.
+        let credit = if m.ai.last_hurt_by_player > 0 && player.is_some() {
+            player.clone()
+        } else {
+            m.ai.last_hurt_by
+                .filter(|_| m.age as i32 - m.ai.last_hurt_by_time <= 100)
+                .and_then(|w| name(self, w))
+        };
+        let now = self.world.game_time;
+        let mut tracker = CombatTracker {
+            entries,
+            last_damage: now,
+            in_combat: m.combat.in_combat,
+            last_hurt_by: credit.map(|c| (c, now)),
+            ..CombatTracker::default()
+        };
+        std::mem::swap(&mut self.combat, &mut tracker);
+        let text = self.combat_death_message_for(me);
+        std::mem::swap(&mut self.combat, &mut tracker);
+        text
+    }
+}
+
+/// `Entity.getDisplayName` of a mob: its custom name or its type's name.
+fn mob_name(m: &Mob) -> Text {
+    match (&m.custom_name_text, &m.custom_name) {
+        (Some(text), _) => text.clone(),
+        (None, Some(name)) => Text::literal(name.clone()),
+        (None, None) => Text::translate(&format!("entity.{}", m.kind.id.replace(':', ".")), &[]),
+    }
+}
+
+#[cfg(test)]
+mod stuck_tests {
+    use super::Stuck;
+
+    /// `LivingEntity.tick`: with `n` stuck the timer starts at
+    /// `20 * (30 - n)` and one falls out when it runs down.
+    #[test]
+    fn arrows_fall_out_after_twenty_ticks_times_the_gap_to_thirty() {
+        let mut s = Stuck::default();
+        s.add_arrow();
+        s.add_arrow();
+        let wait = 20 * (30 - 2);
+        for _ in 0..wait - 1 {
+            assert!(!s.tick());
+        }
+        assert!(s.tick());
+        assert_eq!(s.arrows, 1);
+        // The timer starts again from the new count.
+        for _ in 0..20 * (30 - 1) - 1 {
+            assert!(!s.tick());
+        }
+        assert!(s.tick());
+        assert_eq!(s.arrows, 0);
+        assert!(!s.tick());
+    }
+
+    #[test]
+    fn stingers_have_their_own_timer() {
+        let mut s = Stuck::default();
+        s.add_stinger();
+        s.add_arrow();
+        for _ in 0..20 * 29 - 1 {
+            assert!(!s.tick());
+        }
+        // Both timers run 580 ticks.
+        assert!(s.tick());
+        assert_eq!((s.arrows, s.stingers), (0, 0));
     }
 }

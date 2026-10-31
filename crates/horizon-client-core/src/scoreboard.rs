@@ -112,6 +112,7 @@ pub fn style_from_json(v: &Value) -> Style {
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
         });
     }
+    s.shadow_color = o.get("shadow_color").and_then(component::shadow_color);
     let flag = |k: &str| o.get(k).and_then(Value::as_bool);
     s.bold = flag("bold");
     s.italic = flag("italic");

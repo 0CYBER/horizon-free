@@ -23,6 +23,7 @@ struct Globals {
     // Horizon Extras' dynamic lights: camera-relative position and level (dynamic_light.rs).
     dynamic_lights: array<vec4<f32>, 16>,
     sunrise_fan: array<vec4<f32>, 32>,
+    filtering: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -53,10 +54,13 @@ struct Out {
     @location(9) light_color: vec4<f32>,
     @location(10) @interpolate(flat) weather_rect: vec4<f32>,
     // The `GLINT_TEXTURING` sample for overlay 7 (item foil), or the model UV
-    // `ARMOR_ENTITY_GLINT_TEXTURING` scrolls for overlay 13 (armour).
+    // `ARMOR_ENTITY_GLINT_TEXTURING` scrolls for overlay 36 (armour).
     @location(11) glint_uv: vec2<f32>,
     // 1 drops the quad's back-facing pixels (Vertex::normal w = 1), like a culling render type.
     @location(12) @interpolate(flat) cull: u32,
+    // HDR tier of a light-giving particle (mesher::hdr_tier), from the overlay's
+    // high bits (particles.rs): fs_hdr_mark marks the frame with it.
+    @location(13) @interpolate(flat) tier: u32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -126,8 +130,9 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>,
     @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>) -> Out {
-    var out = entity_vertex(position, uv, overlay, color, light, normal);
+    var out = entity_vertex(position, uv, overlay & 0xffffu, color, light, normal);
     out.glint_uv = glint_uv;
+    out.tier = (overlay >> 16u) & 0xffu;
     return out;
 }
 // Retained bolt-local geometry, translated using the same f64 camera
@@ -220,6 +225,9 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 }
 // CRUMBLING_UV_END
 @fragment fn fs_entity(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return entity_color(in, front);
+}
+fn entity_color(in: Out, front: bool) -> vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
@@ -250,8 +258,8 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
         // Enchantment glint: item.fsh's GLINT path, sampled from
         // enchanted_glint_item at the `GLINT_TEXTURING` UV.
         color = glint_over(color, textureSample(glint_tex, glint_sampler, in.glint_uv));
-    } else if in.overlay == 13u {
-        // Enchanted armour: enchanted_glint_armor at the scrolling model UV.
+    } else if in.overlay == 36u {
+        // Enchanted armour (mobs::render::ARMOR_GLINT): enchanted_glint_armor at the scrolling model UV.
         color = glint_over(
             color,
             textureSample(glint_armor_tex, glint_sampler, armor_glint_uv(in.glint_uv)),
@@ -267,6 +275,9 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 // rendertype_entity_shadow.fsh: the shadow texture times the vertex colour,
 // then fog, with no alpha cutout, so a faint shadow in dim light still draws.
 @fragment fn fs_entity_shadow(in: Out) -> @location(0) vec4<f32> {
+    return shadow_color(in);
+}
+fn shadow_color(in: Out) -> vec4<f32> {
     var color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
     color *= in.light_color;
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
@@ -277,6 +288,14 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 @fragment fn fs_outline(in: Out) -> @location(0) vec4<f32> {
     if textureSample(atlas, atlas_sampler, in.uv).a == 0.0 { discard; }
     return vec4(in.color.rgb, 1.0);
+}
+
+// HDR output: a light-giving particle's pixels marked in the frame's alpha the
+// way terrain.wgsl marks a light source's, drawn again after the entities with
+// only alpha written, so its colour stays as blended.
+@fragment fn fs_hdr_mark(in: Out) -> @location(0) vec4<f32> {
+    if in.tier == 0u || textureSample(atlas, atlas_sampler, in.uv).a < 0.1 { discard; }
+    return vec4(0.0, 0.0, 0.0, 0.7 * f32(4u - min(in.tier, 4u)) / 4.0);
 }
 
 fn celestial_color(in: Out) -> vec4<f32> {
@@ -294,21 +313,33 @@ fn celestial_color(in: Out) -> vec4<f32> {
 @fragment fn fs_sky_celestial(in: Out) -> @location(0) vec4<f32> {
     let color = celestial_color(in);
     let added = color.rgb * color.a;
-    return vec4(added, smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
+    // The sky under the disc keeps alpha 1 less this: 0 for the brightest tier
+    // (the sun), terrain.wgsl's mark for the lower ones (the moon). Tier 0 is
+    // geometry that sets none (the End sky, the End flash): it stays brightest.
+    let tier = select(4u, min(in.tier, 4u), in.tier > 0u);
+    let mark = 1.0 - 0.7 * f32(4u - tier) / 4.0;
+    return vec4(added, mark * smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
 }
 
 // RenderPipelines.ENERGY_SWIRL (entity.fsh with EMISSIVE and NO_OVERLAY): the sprite, scrolled by
 // the UV and repeated within itself, times the layer colour 0xFF808080, unlit; the pipeline adds
 // it to the frame. The light bytes carry the sprite's origin and the colour bytes its size, both
 // as breaking::stage_light packs them.
-@fragment fn fs_energy_swirl(in: Out) -> @location(0) vec4<f32> {
+fn energy_swirl_base(in: Out) -> vec4<f32> {
     let bytes = round(in.color * 255.0);
     let size = vec2(bytes.x + bytes.y * 256.0, bytes.z + bytes.w * 256.0) / 65535.0;
     let color = textureSample(atlas, atlas_sampler, crumbling_uv(in.uv, in.wrap, size, textureDimensions(atlas)));
     if color.a < 0.1 { discard; }
+    return vec4(color.rgb * (128.0 / 255.0), color.a);
+}
+fn energy_swirl_fog(in: Out) -> f32 {
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
-    return vec4(mix(color.rgb * (128.0 / 255.0), globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+    return f * globals.fog_color.a;
+}
+@fragment fn fs_energy_swirl(in: Out) -> @location(0) vec4<f32> {
+    let color = energy_swirl_base(in);
+    return vec4(mix(color.rgb, globals.fog_color.rgb, energy_swirl_fog(in)), color.a);
 }
 
 // RenderPipelines.WATER_MASK: depth only (the pipeline masks the colour off).
@@ -437,6 +468,9 @@ struct WeatherTime { values: vec4<f32> }
     return out;
 }
 @fragment fn fs_weather(in: Out) -> @location(0) vec4<f32> {
+    return weather_color(in);
+}
+fn weather_color(in: Out) -> vec4<f32> {
     // Repeat within this sprite, never across the atlas. The atlas uses nearest
     // filtering and no mipmaps, so fractional UVs have no seam derivatives.
     let texel = weather_texel(in.uv, in.weather_rect, textureDimensions(atlas));

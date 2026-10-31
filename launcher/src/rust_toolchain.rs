@@ -142,9 +142,11 @@ impl Toolchain {
 
     /// `program` (this toolchain's cargo, or a tool built with it) set up to use only this
     /// toolchain: its rustc, its MinGW-w64 where it has one, the launcher's Cargo home, and none of
-    /// the player's rustup or compiler-wrapper settings.
+    /// the player's rustup or compiler-wrapper settings. On Windows it opens no console window:
+    /// cargo is a console program, and the launcher has none to share, so each build showed an
+    /// empty one for as long as it ran (#4770).
     pub fn command(&self, program: &Path) -> Command {
-        let mut cmd = Command::new(program);
+        let mut cmd = crate::process::command(program);
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mingw = Some(self.mingw_bin()).filter(|bin| bin.is_dir());
         let paths = std::iter::once(self.dir.join("bin"))
@@ -334,9 +336,11 @@ fn mingw_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Whether this computer can link what the toolchain compiles: Rust brings its compiler, but uses
-/// the system's linker on macOS (the Command Line Tools) and Linux (`cc`). Windows' `windows-gnu`
-/// toolchain brings its own, and MinGW-w64 for C and import libraries ([`MINGW`]).
+/// Whether this computer has what a build needs besides the toolchain. Rust brings its compiler,
+/// but uses the system's linker on macOS (the Command Line Tools) and Linux (`cc`). On Linux the
+/// game also builds against the system's sound and controller libraries ([`linux_needs`]).
+/// Windows' `windows-gnu` toolchain brings its own linker, and MinGW-w64 for C and import
+/// libraries ([`MINGW`]).
 pub fn linker() -> Result<(), String> {
     let ok = |program: &str, args: &[&str]| {
         Command::new(program)
@@ -351,12 +355,78 @@ pub fn linker() -> Result<(), String> {
             "Native mods need Apple's Command Line Tools to link the game. Run `xcode-select --install` in Terminal, then build again."
                 .into(),
         ),
-        "linux" if !ok("cc", &["--version"]) => Err(
-            "Native mods need a C compiler (`cc`) to link the game. Install gcc or clang with your distribution's package manager, then build again."
-                .into(),
-        ),
+        "linux" => linux_needs(ok, &fs::read_to_string("/etc/os-release").unwrap_or_default()),
         _ => Ok(()),
     }
+}
+
+/// What a Linux build needs from the system, checked before anything is downloaded: a C compiler
+/// (the linker; `ring` and `hidapi` compile C) with the C library's headers, `pkg-config`, and
+/// the development files of ALSA (`alsa-sys`, sound) and libudev (`libudev-sys` and `hidapi`,
+/// controllers), which those crates look up with it. Desktop distributions ship the libraries but
+/// not these files, and SteamOS has GCC without the C library's headers (`stdint.h` not found in
+/// `ring`, #4770), so a build without them failed minutes in. `ok` runs a check; `os` is
+/// `/etc/os-release`, which picks the install command.
+fn linux_needs(ok: impl Fn(&str, &[&str]) -> bool, os: &str) -> Result<(), String> {
+    let cc = ok("cc", &["--version"]);
+    // GCC's and Clang's own `stdint.h` include the C library's.
+    let headers = [
+        "-fsyntax-only",
+        "-x",
+        "c",
+        "-include",
+        "stdint.h",
+        "/dev/null",
+    ];
+    let pkg_config = ok("pkg-config", &["--version"]);
+    let has = |name: &str| pkg_config && ok("pkg-config", &["--exists", name]);
+    let missing: Vec<&str> = [
+        (cc, "a C compiler (cc)"),
+        (!cc || ok("cc", &headers), "the C library's headers"),
+        (pkg_config, "pkg-config"),
+        (has("alsa"), "ALSA's development files"),
+        (has("libudev"), "libudev's development files"),
+    ]
+    .into_iter()
+    .filter(|(found, _)| !found)
+    .map(|(_, what)| what)
+    .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let field = |name: &str| {
+        os.lines()
+            .find_map(|l| l.strip_prefix(name)?.strip_prefix('='))
+            .map(|v| v.trim_matches('"').to_owned())
+            .unwrap_or_default()
+    };
+    let (id, like) = (field("ID"), field("ID_LIKE"));
+    let family = |names: &[&str]| {
+        std::iter::once(id.as_str())
+            .chain(like.split_whitespace())
+            .any(|n| names.contains(&n))
+    };
+    const APT: &str = "sudo apt install build-essential pkg-config libasound2-dev libudev-dev";
+    let command = if family(&["debian", "ubuntu"]) {
+        Some(APT)
+    } else if family(&["fedora", "rhel"]) {
+        Some("sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel systemd-devel")
+    } else if family(&["arch"]) && id != "steamos" {
+        Some("sudo pacman -S --needed base-devel alsa-lib systemd-libs")
+    } else if family(&["suse", "opensuse"]) {
+        Some("sudo zypper install gcc pkg-config alsa-devel libudev-devel")
+    } else {
+        None
+    };
+    let how = match command {
+        _ if id == "steamos" => "SteamOS ships without them and its system is read-only, so native mods can't be built on it yet.".to_owned(),
+        Some(command) => format!("Install them in a terminal, then build again:\n{command}"),
+        None => format!("Install them with your distribution's package manager, then build again (on Debian, Ubuntu or Mint: {APT})."),
+    };
+    Err(format!(
+        "Native mods need these to build the game on Linux, and this computer lacks them: {}. {how}",
+        missing.join(", ")
+    ))
 }
 
 /// Removes every toolchain and the native builds' Cargo home.
@@ -571,5 +641,44 @@ mod tests {
         let first: Vec<PathBuf> = std::env::split_paths(path).take(2).collect();
         assert_eq!(first, [dir.join("bin"), toolchain.mingw_bin()]);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_linux_build_names_what_is_missing_and_the_distributions_command() {
+        // A system with `cc` and `pkg-config` but no development files, as Linux Mint ships.
+        let no_dev =
+            |program: &str, args: &[&str]| program != "pkg-config" || args[0] != "--exists";
+        let mint = "NAME=\"Linux Mint\"\nID=linuxmint\nID_LIKE=\"ubuntu debian\"\n";
+        let e = linux_needs(no_dev, mint).unwrap_err();
+        assert!(
+            e.contains("lacks them: ALSA's development files, libudev's development files."),
+            "{e}"
+        );
+        assert!(
+            e.ends_with("\nsudo apt install build-essential pkg-config libasound2-dev libudev-dev")
+        );
+        // Nothing to check through without pkg-config, and nothing at all on SteamOS.
+        let nothing = |_: &str, _: &[&str]| false;
+        let deck = "ID=steamos\nID_LIKE=arch\n";
+        let e = linux_needs(nothing, deck).unwrap_err();
+        assert!(e.contains("a C compiler (cc), pkg-config, ALSA's"), "{e}");
+        assert!(e.contains("SteamOS") && !e.contains("pacman"), "{e}");
+        // SteamOS 3's GCC runs but finds no `stdint.h` (#4770).
+        let headless = |program: &str, args: &[&str]| program != "cc" || args == ["--version"];
+        let e = linux_needs(headless, deck).unwrap_err();
+        assert!(
+            e.contains("lacks them: the C library's headers. SteamOS"),
+            "{e}"
+        );
+        let arch = linux_needs(nothing, "ID=endeavouros\nID_LIKE=arch\n").unwrap_err();
+        assert!(arch.contains("pacman -S --needed base-devel"), "{arch}");
+        let fedora = linux_needs(nothing, "ID=fedora\n").unwrap_err();
+        assert!(fedora.contains("dnf install"), "{fedora}");
+        let other = linux_needs(nothing, "ID=gentoo\n").unwrap_err();
+        assert!(
+            other.contains("package manager") && other.contains("apt install"),
+            "{other}"
+        );
+        assert_eq!(linux_needs(|_: &str, _: &[&str]| true, mint), Ok(()));
     }
 }

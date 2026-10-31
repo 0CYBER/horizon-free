@@ -3,6 +3,7 @@
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
+use horizon_client::items::ItemStack;
 use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
 use horizon_client::{
     collisions::SceneCollisions,
@@ -113,10 +114,16 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
 fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     p.previous = p.position;
     p.age += 1;
+    // AbstractArrow.tick: the shake timer runs down, and `inGroundTime` counts
+    // the ticks in a block.
+    if let Some(a) = p.arrow.as_mut() {
+        a.shake = (a.shake - 1).max(0);
+        a.in_ground_time = if p.stuck { a.in_ground_time + 1 } else { 0 };
+    }
     if p.stuck {
         return;
     }
-    let water = w.in_water(p.position);
+    let water = w.in_water(p.bounds());
     if water {
         p.velocity = p.velocity.scale(0.6);
     }
@@ -125,6 +132,12 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
         p.position = at;
         p.velocity = Vec3::ZERO;
         p.stuck = true;
+        // AbstractArrow.onSyncedDataUpdated: IN_GROUND turning true starts the shake.
+        if let Some(a) = p.arrow.as_mut()
+            && a.shake <= 0
+        {
+            a.shake = 7;
+        }
         return;
     }
     p.position = to;
@@ -154,6 +167,74 @@ pub(super) fn has_smoke_trail(kind: &ProjectileKind) -> bool {
 }
 
 impl Game<'_> {
+    /// `Arrow.tick` and `SpectralArrow.tick` on a client: a tipped arrow
+    /// sheds two entity-effect swirls in its colour while flying, one every
+    /// fifth tick in a block; a spectral arrow an effect sparkle at its
+    /// position while flying.
+    fn arrow_effect_particles(&mut self) {
+        let mut puffs: Vec<(Vec3, i32, u32)> = Vec::new();
+        for p in &self.creatures.projectiles {
+            let Some(a) = p.arrow.as_ref().filter(|_| p.is_arrow()) else {
+                continue;
+            };
+            let at = p.position;
+            if p.is_spectral_arrow() {
+                if !p.stuck {
+                    let options = ParticleOptions::simple(ParticleType::Effect);
+                    self.particles.add(&options, [at.x, at.y, at.z], [0.0; 3]);
+                }
+                continue;
+            }
+            let count = match (p.stuck, a.in_ground_time % 5) {
+                (true, 0) => 1,
+                (true, _) => 0,
+                (false, _) => 2,
+            };
+            puffs.push((at, a.effect_color, count));
+        }
+        for (at, color, count) in puffs {
+            self.arrow_makeparticle(at, color, count);
+        }
+    }
+
+    /// `Arrow.makeParticle`: `count` entity-effect swirls in `color` (an ARGB
+    /// int, -1 for none) inside the arrow's 0.5 x 0.5 box.
+    fn arrow_makeparticle(&mut self, at: Vec3, color: i32, count: u32) {
+        // `EntityType.ARROW` is 0.5 x 0.5.
+        const SIZE: f64 = 0.5;
+        if color == -1 {
+            return;
+        }
+        // ColorParticleOption.create(ENTITY_EFFECT, colour): ARGB as floats.
+        let channel = |shift: u32| (color as u32 >> shift & 255) as f32 / 255.0;
+        let options = ParticleOptions::colored(
+            ParticleType::EntityEffect,
+            [channel(16), channel(8), channel(0), channel(24)],
+        );
+        for _ in 0..count {
+            // getRandomX(0.5), getRandomY, getRandomZ(0.5).
+            let r = self.particles.random();
+            let x = at.x + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
+            let y = at.y + SIZE * r.next_double();
+            let z = at.z + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
+            self.particles.add(&options, [x, y, z], [0.0; 3]);
+        }
+    }
+
+    /// `Arrow.handleEntityEvent(0)`: a tipped arrow stuck for 600 ticks bursts
+    /// into twenty particles in its colour. The server turns it into a plain
+    /// arrow and does not send the colour again, so it stops here.
+    pub(super) fn remote_arrow_puff(&mut self, id: u32) {
+        let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) else {
+            return;
+        };
+        let Some(a) = p.arrow.as_mut() else {
+            return;
+        };
+        let (at, color) = (p.position, std::mem::replace(&mut a.effect_color, -1));
+        self.arrow_makeparticle(at, color, 20);
+    }
+
     /// `AbstractHurtingProjectile.createParticleTrail`: one smoke puff half a
     /// block above each position.
     pub(super) fn smoke_trails(&mut self, at: impl IntoIterator<Item = Vec3>) {
@@ -235,15 +316,20 @@ impl Game<'_> {
                     .add_remote_eye(id, position, [velocity.x, velocity.y, velocity.z])
             }
             // FishingHook.recreateFromPacket: the owner's id is the data.
-            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, data),
-            "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
-                id,
-                position: at,
-                show_bottom: true,
-                time: 0,
-                beam: None,
-                invulnerable: false,
-            }),
+            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, velocity, data),
+            "minecraft:end_crystal" => {
+                // EndCrystal's constructor starts `time` random, so each
+                // placed crystal spins from its own phase.
+                let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+                self.crystals.push(super::dragon::Crystal {
+                    id,
+                    position: at,
+                    show_bottom: true,
+                    time,
+                    beam: None,
+                    invulnerable: false,
+                });
+            }
             _ => {
                 let Some(k) = projectile_kind(kind) else {
                     return false;
@@ -253,6 +339,12 @@ impl Game<'_> {
                         .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
                 }
                 let mut p = Projectile::new(k, at, None);
+                // SpectralArrow: its own type; its pickup item says so.
+                if kind == "minecraft:spectral_arrow"
+                    && let Some(a) = p.arrow.as_mut()
+                {
+                    a.pickup_item = ItemStack::new("minecraft:spectral_arrow", 1);
+                }
                 p.id = id;
                 p.velocity = velocity;
                 p.yaw = yaw;
@@ -368,7 +460,23 @@ impl Game<'_> {
                         *critical = flags & 1 != 0;
                     }
                     (ProjectileKind::Arrow { .. }, 10, Value::Bool(in_ground)) => {
+                        // AbstractArrow.onSyncedDataUpdated: IN_GROUND turning true after
+                        // the first tick starts the shake.
+                        if *in_ground
+                            && !p.stuck
+                            && p.age > 0
+                            && let Some(a) = p.arrow.as_mut()
+                            && a.shake <= 0
+                        {
+                            a.shake = 7;
+                        }
                         p.stuck = *in_ground;
+                    }
+                    // Arrow.ID_EFFECT_COLOR.
+                    (ProjectileKind::Arrow { .. }, 11, Value::Int(color)) => {
+                        if let Some(a) = p.arrow.as_mut() {
+                            a.effect_color = *color;
+                        }
                     }
                     // WitherSkull.DATA_DANGEROUS.
                     (ProjectileKind::WitherSkull { dangerous }, 8, Value::Bool(d)) => {
@@ -471,6 +579,7 @@ impl Game<'_> {
         }
         self.creatures.projectiles = projectiles;
         self.tridents = tridents;
+        self.arrow_effect_particles();
         let trails: Vec<Vec3> = self
             .creatures
             .projectiles
@@ -536,7 +645,7 @@ impl Game<'_> {
             c.position = step(c.id, c.position);
         }
         self.step_remote_thrown();
-        self.step_remote_hooks(&mut step);
+        self.tick_remote_hooks();
         self.end.step_remote_eyes();
         self.tick_remote_clouds();
         // The dragon's fireballs fly on between the tracker's updates, with
@@ -651,7 +760,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(Who, Aabb)] {

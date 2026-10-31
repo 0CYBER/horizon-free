@@ -627,6 +627,34 @@ pub fn perspective(
     m[11] = -1.0;
     m
 }
+/// `Frustum.getNearPlaneBounds`: the box around the four corners of the
+/// culling frustum's NDC `z = -1` plane, relative to the camera (the caller
+/// moves it to the eye). The culling projection is `Camera.update`'s
+/// `setPerspective(fov, aspect, 0.05, depthFar, zZeroToOne)`.
+pub fn near_plane_bounds(
+    fov_degrees: f32,
+    width: f32,
+    height: f32,
+    yaw: f32,
+    pitch: f32,
+    far: f32,
+) -> ([f64; 3], [f64; 3]) {
+    let projection =
+        glam::Mat4::from_cols_array(&perspective(fov_degrees, width, height, 0.05, far, true));
+    // Frustum.calculateFrustum: projection * modelView.
+    let clip_to_world = (projection * view_matrix(yaw, pitch)).inverse();
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let p = clip_to_world * glam::Vec4::new(x, y, -1.0, 1.0);
+        let p = [p.x / p.w, p.y / p.w, p.z / p.w];
+        for k in 0..3 {
+            min[k] = min[k].min(f64::from(p[k]));
+            max[k] = max[k].max(f64::from(p[k]));
+        }
+    }
+    (min, max)
+}
 /// `GameRenderer.render3dHud`: the first-person hand and held items are
 /// drawn with their own projection at `hudFov` (70 degrees, changed only by
 /// death and fluids), never the FOV option or the sprint, speed and bow
@@ -834,6 +862,19 @@ pub fn spinning_effect_matrix(intensity: f32, angle_degrees: f32) -> glam::Mat4 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn near_plane_bounds_sit_half_a_near_distance_ahead_of_the_eye() {
+        // Facing +Z (yaw 0): the zero-to-one culling projection puts NDC
+        // z = -1 at -far * near / (2 far - near) in front of the camera.
+        let far = 512.0;
+        let (min, max) = super::near_plane_bounds(70.0, 1600.0, 900.0, 0.0, 0.0, far);
+        let depth = f64::from(far * 0.05 / (2.0 * far - 0.05));
+        assert!((min[2] - depth).abs() < 1e-4 && (max[2] - depth).abs() < 1e-4);
+        let half_height = depth * 35.0f64.to_radians().tan();
+        assert!((max[1] - half_height).abs() < 1e-4 && (min[1] + half_height).abs() < 1e-4);
+        let half_width = half_height * 1600.0 / 900.0;
+        assert!((max[0] - half_width).abs() < 1e-3 && (min[0] + half_width).abs() < 1e-3);
+    }
     /// `moveCloak` trails a quarter of the way, jumps from 10 blocks away; the
     /// cape leans back as the player walks forward (south, body yaw 0).
     #[test]

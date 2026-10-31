@@ -138,7 +138,15 @@ impl Game<'_> {
                     && horizon_client::save::number(v.get("Invisible")).unwrap_or(0) != 0
             })
         });
-        let pos = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
+        let pos: [i32; 3] = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
+        // `ItemFrameItem.mayPlace`: `Level.isInsideBuildHeight(blockPos)`, so a frame is not
+        // placed on the top face of the highest block or under the lowest one.
+        if !(horizon_client::chunk::MIN_Y
+            ..horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT)
+            .contains(&pos[1])
+        {
+            return false;
+        }
         let frame = ItemFrame {
             id: self.next_entity + 1,
             pos,
@@ -294,6 +302,42 @@ impl Game<'_> {
             && self.world.random.next_float() < f.drop_chance
         {
             self.spawn_item(item, at, [0.0; 3], 10);
+        }
+    }
+    /// `ServerExplosion.hurtEntities` for item frames: a frame within the blast
+    /// is killed and dropped with its item (`BlockAttachedEntity.hurtServer`).
+    /// A fixed frame is not hurt by an explosion, and `blast_spares_decorations`
+    /// keeps every frame without `mobGriefing`.
+    /// Not ported: `ignoreExplosion` also spares frames when the exploding
+    /// entity is in water.
+    pub(super) fn explosion_breaks_frames(
+        &mut self,
+        blast: [f64; 3],
+        diameter: f64,
+        interaction: super::explosion::BlockInteraction,
+    ) {
+        if self.blast_spares_decorations(interaction) {
+            return;
+        }
+        let mut i = 0;
+        while i < self.item_frames.len() {
+            let c = center(&self.item_frames[i]);
+            let dist =
+                ((c[0] - blast[0]).powi(2) + (c[1] - blast[1]).powi(2) + (c[2] - blast[2]).powi(2))
+                    .sqrt()
+                    / diameter;
+            if dist > 1.0 || self.item_frames[i].fixed {
+                i += 1;
+                continue;
+            }
+            let f = self.item_frames.remove(i);
+            self.audio
+                .play(&sound(&f, "break"), Some(center(&f)), 1.0, 1.0);
+            self.drop_frame_items(&f, true, false);
+            self.world.modified.insert((f.pos[0] >> 4, f.pos[2] >> 4));
+            if f.item.is_some() {
+                self.frame_output_changed(f.pos);
+            }
         }
     }
     /// BlockAttachedEntity.tick for frames.

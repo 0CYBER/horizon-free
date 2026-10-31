@@ -29,8 +29,8 @@ pub(super) enum CartKind {
     Hopper,
     Furnace,
     Tnt,
-    /// `MinecartCommandBlock`; its command block holds no command, so an
-    /// activator rail runs nothing.
+    /// `MinecartCommandBlock`: its `BaseCommandBlock` is `Minecart::command`,
+    /// run by a powered activator rail (`game/command_minecarts.rs`).
     CommandBlock,
 }
 impl CartKind {
@@ -62,6 +62,19 @@ impl CartKind {
             _ => 0,
         }
     }
+    /// Whether this cart's `interact` passes on the client, so that
+    /// `Minecraft.startUseItem` uses the held item instead: `MinecartTNT` has
+    /// none of its own (`Entity.interact`), `MinecartCommandBlock.interact`
+    /// needs a game master, and `Minecart.interact` a player not sneaking at
+    /// an empty cart.
+    pub fn interact_passes(self, sneaking: bool, ridden: bool, game_master: bool) -> bool {
+        match self {
+            Self::Tnt => true,
+            Self::CommandBlock => !game_master,
+            Self::Rideable => sneaking || ridden,
+            Self::Chest | Self::Hopper | Self::Furnace => false,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub(super) struct Minecart {
@@ -80,9 +93,10 @@ pub(super) struct Minecart {
     pub hurt_dir: i32,
     pub damage: f32,
     pub items: Vec<Option<ItemStack>>,
-    /// Furnace minecarts: fuel ticks and the push direction.
+    /// Furnace minecarts: fuel ticks and `MinecartFurnace.push`. Its y part
+    /// stays between ticks (it sets the push's length), only saving drops it.
     pub fuel: i32,
-    pub push: [f64; 2],
+    pub push: Vec3,
     /// TNT minecarts: ticks until the explosion, -1 when not primed.
     pub fuse: i32,
     /// Hopper minecarts: an unpowered activator rail enables them.
@@ -92,12 +106,39 @@ pub(super) struct Minecart {
     pub loot: Option<horizon_client::save::RolledLoot>,
     /// `Entity.firstTick`: not ticked yet (saved as `HasTicked`).
     pub first_tick: bool,
+    /// Command block minecarts: the cart's `BaseCommandBlock` (command,
+    /// success count, last output, output tracking). The block-only flags of
+    /// `CommandBlock` stay unset.
+    pub command: horizon_client::command_block::CommandBlock,
+    /// `Entity.tickCount`, which `MinecartCommandBlock.activateMinecart`
+    /// measures its `ACTIVATION_DELAY` against.
+    pub tick_count: i32,
+    /// `MinecartCommandBlock.lastActivated`.
+    pub last_activated: i32,
+    /// An activator rail asked for the command during this tick; it runs once
+    /// the cart is back in the level (`command_minecarts.rs`).
+    pub command_due: bool,
+    /// The synched `DATA_ID_COMMAND_NAME` and `DATA_ID_LAST_OUTPUT`, which
+    /// follow the command block only at `onUpdated`.
+    pub synced_command: String,
+    pub synced_output: String,
 }
 pub(super) const WIDTH: f64 = 0.98;
 pub(super) const HEIGHT: f64 = 0.7;
 /// AbstractMinecart.getDefaultDisplayOffset, in sixteenths of a block.
 fn display_offset(kind: CartKind) -> f64 {
     if kind == CartKind::Hopper { 1.0 } else { 6.0 }
+}
+/// `MinecartFurnace.calculateNewPushAlong`: the push turned onto the
+/// movement's direction, at the push's own length (3D, so it holds from tick
+/// to tick while the movement has a vertical part).
+fn push_along(push: Vec3, movement: Vec3) -> Vec3 {
+    if push.horizontal_distance_squared() > 1.0e-4 && movement.horizontal_distance_squared() > 0.001
+    {
+        push.projected_on(movement).normalize().scale(push.length())
+    } else {
+        push
+    }
 }
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
 pub(super) const SEAT: f64 = 0.1875 - 0.6;
@@ -184,11 +225,17 @@ impl Minecart {
             damage: 0.0,
             items: vec![None; kind.slots()],
             fuel: 0,
-            push: [0.0; 2],
+            push: Vec3::ZERO,
             fuse: -1,
             enabled: true,
             loot: None,
             first_tick: true,
+            command: horizon_client::command_block::CommandBlock::default(),
+            tick_count: 0,
+            last_activated: 0,
+            command_due: false,
+            synced_command: String::new(),
+            synced_output: String::new(),
         }
     }
     pub fn bounds(&self) -> Aabb {
@@ -372,22 +419,9 @@ impl Game<'_> {
         let mut v = c.velocity;
         let water = self.cart_in_water(c);
         if c.kind == CartKind::Furnace {
-            let push = c.push;
-            if push[0] * push[0] + push[1] * push[1] > 1.0e-7 {
-                // calculateNewPushAlong
-                let len = push[0].hypot(push[1]);
-                if len * len > 1.0e-4 && v.x * v.x + v.z * v.z > 0.001 {
-                    let d = v.x * v.x + v.y * v.y + v.z * v.z;
-                    let t = (push[0] * v.x + push[1] * v.z) / d;
-                    let (px, py, pz) = (v.x * t, v.y * t, v.z * t);
-                    let n = (px * px + py * py + pz * pz).sqrt();
-                    c.push = if n > 1.0e-4 {
-                        [px / n * len, pz / n * len]
-                    } else {
-                        [0.0, 0.0]
-                    };
-                }
-                v = Vec3::new(v.x * 0.8 + c.push[0], 0.0, v.z * 0.8 + c.push[1]);
+            if c.push.length_squared() > 1.0e-7 {
+                c.push = push_along(c.push, v);
+                v = Vec3::new(v.x * 0.8 + c.push.x, 0.0, v.z * 0.8 + c.push.z);
                 if water {
                     v = Vec3::new(v.x * 0.1, 0.0, v.z * 0.1);
                 }
@@ -551,6 +585,7 @@ impl Game<'_> {
     /// `AbstractMinecart.tick` for one cart; returns false once it is gone.
     fn tick_cart(&mut self, c: &mut Minecart, intent: [f64; 2]) -> bool {
         c.first_tick = false;
+        c.tick_count += 1;
         c.previous = c.position;
         c.previous_yaw = c.yaw;
         c.hurt_time = (c.hurt_time - 1).max(0);
@@ -587,7 +622,7 @@ impl Game<'_> {
                     c.fuel -= 1;
                 }
                 if c.fuel <= 0 {
-                    c.push = [0.0; 2];
+                    c.push = Vec3::ZERO;
                 }
                 if c.fuel > 0 && self.world.random.next_int_bound(4).unwrap_or(1) == 0 {
                     let at = [c.position.x, c.position.y + 0.8, c.position.z];
@@ -639,6 +674,12 @@ impl Game<'_> {
             }
             CartKind::Tnt if powered && c.fuse < 0 => self.prime_cart(c),
             CartKind::Hopper => c.enabled = !powered,
+            // MinecartCommandBlock.activateMinecart: the command runs at most
+            // every ACTIVATION_DELAY ticks.
+            CartKind::CommandBlock if powered && c.tick_count - c.last_activated >= 4 => {
+                c.command_due = true;
+                c.last_activated = c.tick_count;
+            }
             _ => {}
         }
     }
@@ -805,8 +846,12 @@ impl Game<'_> {
                 continue;
             };
             if alive {
+                let due = std::mem::take(&mut c.command_due);
                 self.carts[i] = c;
                 self.push_from_cart(i);
+                if due {
+                    self.perform_cart_command(id);
+                }
             } else {
                 self.carts.remove(i);
             }
@@ -914,6 +959,12 @@ impl Game<'_> {
         } else {
             self.carts.remove(i);
             self.riding = None;
+        }
+        // AbstractMinecart.activateMinecart: a powered activator rail ejects
+        // the rider, and getDismountLocationForPassenger places it beside the
+        // cart instead of leaving it at the seat.
+        if alive && self.riding.is_none() {
+            self.dismount_cart(i);
         }
         true
     }
@@ -1083,7 +1134,7 @@ impl Game<'_> {
                 if fuel && c.fuel + 3600 <= 32000 {
                     c.fuel += 3600;
                     let p = self.player.as_ref().map_or(c.position, |p| p.position);
-                    c.push = [c.position.x - p.x, c.position.z - p.z];
+                    c.push = Vec3::new(c.position.x - p.x, 0.0, c.position.z - p.z);
                     if !self.creative {
                         self.consume_held();
                     }
@@ -1103,8 +1154,10 @@ impl Game<'_> {
                 self.prime_cart(&mut c);
                 self.carts[i] = c;
             }
-            // BaseCommandBlock.usedBy: only an operator in creative opens it.
-            CartKind::CommandBlock => return false,
+            // MinecartCommandBlock.interact: a game master gets SUCCESS (the
+            // client opens the editor, `open_cart_command_block`), anyone else
+            // PASSes to the held item. SUCCESS swings on the client only.
+            CartKind::CommandBlock => return self.can_use_game_master_blocks(),
         }
         self.swing_arm();
         true
@@ -1230,7 +1283,7 @@ impl Game<'_> {
             }
         }
     }
-    /// Baked block faces with terrain shade or block-item diffuse lighting.
+    /// Baked block-state faces with default block tints and terrain shade or diffuse lighting.
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
@@ -1240,21 +1293,10 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, |_| None, out);
-    }
-    /// `block_model_vertices` with `tint` (RGB) on the faces that have a tint index.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn block_model_vertices_tinted(
-        &self,
-        state: BlockStateId,
-        seed: i64,
-        m: glam::Mat4,
-        light: u32,
-        diffuse: bool,
-        tint: u32,
-        out: &mut Vec<Vertex>,
-    ) {
-        let tint = |index: i32| (index >= 0).then_some(tint);
+        // BlockTintSource.color(state) with no level: each tinted face's default colour.
+        let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
+        let tables = &self.pack.context.tables;
+        let tint = |index: i32| tables.default_tint(state, index, grass);
         self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, tint, out);
     }
     /// `block_model_vertices` with each face multiplied by `tint` of its
@@ -1503,7 +1545,7 @@ impl Game<'_> {
             texts: None,
             partial: 0.0,
             game_time: self.world.game_time,
-            max_y: self.dim.max_y(),
+            max_y: self.world.shape.max_y() - 1,
             world: &self.world,
             sprites: &self.gui.atlas.sprites,
             nether: self.dim == super::Dim::Nether,
@@ -1536,6 +1578,11 @@ impl Minecart {
             raw,
         );
         if let Tag::Compound(map) = &mut tag {
+            if self.kind == CartKind::CommandBlock {
+                for key in ["LastOutput", "LastExecution"] {
+                    map.remove(&JavaString::from(key));
+                }
+            }
             let mut put = |k: &str, v: Tag| {
                 map.insert(JavaString::from(k), v);
             };
@@ -1552,17 +1599,18 @@ impl Minecart {
                     }
                 }
                 CartKind::Furnace => {
-                    put("PushX", Tag::Double(self.push[0].to_bits()));
-                    put("PushZ", Tag::Double(self.push[1].to_bits()));
+                    put("PushX", Tag::Double(self.push.x.to_bits()));
+                    put("PushZ", Tag::Double(self.push.z.to_bits()));
                     put("Fuel", Tag::Short(self.fuel as i16));
                 }
                 CartKind::Tnt => put("fuse", Tag::Int(self.fuse)),
-                // BaseCommandBlock.save of an empty command block.
+                // BaseCommandBlock.save (its CustomName shares the entity's key).
                 CartKind::CommandBlock => {
-                    put("Command", Tag::String(JavaString::from("")));
-                    put("SuccessCount", Tag::Int(0));
-                    put("TrackOutput", Tag::Byte(1));
-                    put("UpdateLastExecution", Tag::Byte(1));
+                    for (key, value) in self.command.save() {
+                        if !matches!(key, "CustomName" | "powered" | "conditionMet" | "auto") {
+                            put(key, value);
+                        }
+                    }
                 }
                 CartKind::Rideable => {}
             }
@@ -1599,8 +1647,15 @@ impl Minecart {
         }
         c.enabled = int("Enabled").unwrap_or(1) != 0;
         c.fuel = int("Fuel").unwrap_or(0);
-        c.push = [double("PushX"), double("PushZ")];
+        // readAdditionalSaveData: the saved push has no y.
+        c.push = Vec3::new(double("PushX"), 0.0, double("PushZ"));
         c.fuse = int("fuse").unwrap_or(-1);
+        if kind == CartKind::CommandBlock {
+            c.command = horizon_client::command_block::CommandBlock::load(tag);
+            // readAdditionalSaveData sets both synched values.
+            c.synced_command.clone_from(&c.command.command);
+            c.synced_output = c.command.last_output_string();
+        }
         Some(c)
     }
 }
@@ -1608,6 +1663,20 @@ impl Minecart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tnt_cart_lets_the_held_item_be_used() {
+        // Entity.interact passes: a crossbow aimed at it shoots.
+        assert!(CartKind::Tnt.interact_passes(false, false, true));
+        assert!(CartKind::CommandBlock.interact_passes(false, false, false));
+        assert!(!CartKind::CommandBlock.interact_passes(false, false, true));
+        assert!(!CartKind::Rideable.interact_passes(false, false, false));
+        assert!(CartKind::Rideable.interact_passes(true, false, false));
+        assert!(CartKind::Rideable.interact_passes(false, true, false));
+        for kind in [CartKind::Chest, CartKind::Hopper, CartKind::Furnace] {
+            assert!(!kind.interact_passes(true, true, false));
+        }
+    }
 
     #[test]
     fn display_offset_matches_vanilla_for_each_cart_kind() {
@@ -1643,5 +1712,86 @@ mod tests {
         let saved = cart.to_nbt([0; 4], Some(&generated));
         assert_eq!(saved.get("HasTicked"), Some(&Tag::Byte(0)));
         assert_eq!(saved.get("Fire"), Some(&Tag::Short(0)));
+    }
+
+    #[test]
+    fn a_command_cart_saves_its_base_command_block() {
+        use horizon_world::nbt::Tag;
+        let saved = Tag::compound([
+            (
+                "Pos",
+                Tag::List(
+                    [0.5f64, 40.5, 0.5]
+                        .map(|v| Tag::Double(v.to_bits()))
+                        .to_vec(),
+                ),
+            ),
+            ("Command", Tag::String("say hi".into())),
+            ("SuccessCount", Tag::Int(3)),
+            ("TrackOutput", Tag::Byte(1)),
+            ("LastOutput", Tag::String("[12:00:00] hi".into())),
+            ("LastExecution", Tag::Long(42)),
+        ]);
+        let cart = Minecart::from_nbt(&saved, 1, CartKind::CommandBlock).unwrap();
+        assert_eq!(cart.command.command, "say hi");
+        assert_eq!(cart.command.success_count, 3);
+        // readAdditionalSaveData syncs both values.
+        assert_eq!(cart.synced_command, "say hi");
+        assert_eq!(cart.synced_output, "[12:00:00] hi");
+        let out = cart.to_nbt([0; 4], Some(&saved));
+        for key in [
+            "Command",
+            "SuccessCount",
+            "TrackOutput",
+            "LastOutput",
+            "LastExecution",
+        ] {
+            assert_eq!(out.get(key), saved.get(key), "{key}");
+        }
+        assert_eq!(out.get("UpdateLastExecution"), Some(&Tag::Byte(1)));
+        // A block-only flag never reaches the entity.
+        assert!(out.get("powered").is_none() && out.get("auto").is_none());
+        // Untracked output drops the saved last output.
+        let mut quiet = cart.clone();
+        quiet.command.track_output = false;
+        let out = quiet.to_nbt([0; 4], Some(&saved));
+        assert!(out.get("LastOutput").is_none());
+        assert_eq!(out.get("TrackOutput"), Some(&Tag::Byte(0)));
+    }
+
+    #[test]
+    fn furnace_push_keeps_its_length_under_gravity() {
+        // Gravity gives the movement a vertical part. The push turns onto the
+        // movement at the same 3D length every tick, as vanilla's does.
+        let movement = Vec3::new(0.2, -0.04, 0.0);
+        let mut push = Vec3::new(0.5, 0.0, 0.0);
+        for _ in 0..1000 {
+            push = push_along(push, movement);
+        }
+        assert!((push.length() - 0.5).abs() < 1e-12);
+        assert!((push.x - 0.5 * 0.2 / movement.length()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_furnace_saves_its_push_without_y() {
+        use horizon_world::nbt::Tag;
+        let generated = Tag::compound([
+            ("id", Tag::String("minecraft:furnace_minecart".into())),
+            (
+                "Pos",
+                Tag::List(
+                    [0.5f64, 40.5, 0.5]
+                        .map(|v| Tag::Double(v.to_bits()))
+                        .to_vec(),
+                ),
+            ),
+        ]);
+        let mut cart = Minecart::from_nbt(&generated, 1, CartKind::Furnace).unwrap();
+        cart.push = Vec3::new(0.5, 0.7, 0.25);
+        let saved = cart.to_nbt([0; 4], Some(&generated));
+        assert_eq!(saved.get("PushX"), Some(&Tag::Double(0.5f64.to_bits())));
+        assert_eq!(saved.get("PushZ"), Some(&Tag::Double(0.25f64.to_bits())));
+        let loaded = Minecart::from_nbt(&saved, 1, CartKind::Furnace).unwrap();
+        assert_eq!(loaded.push, Vec3::new(0.5, 0.0, 0.25));
     }
 }

@@ -80,6 +80,7 @@ Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Ho
 - `FOLDER`: A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them (default: the native mods installed and turned on in the instance)
 - `--instance`: The instance whose installed native mods to build, and which then plays the build (default: the selected one; the game's own home builds into the Native mods instance)
 - `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+- `--allow-version-mismatch`: Build mods made for different Horizon versions together anyway, on the newest of them
 
 MCP: none: the player's switch.
 
@@ -174,7 +175,7 @@ MCP: `account_skin`.
 
 ## `horizon-launcher settings`
 
-Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, prune-old-versions on|off (delete old versions after an install, keeping the selected one, the ones instances use and the newest few), keep-versions N (how many of the newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language system|en|fr|ru|de|zh|es|uk (the window's language; system follows the computer's), accent violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default" shows Horizon's landscape).
+Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, prune-old-versions on|off (delete old versions after an install, keeping the selected one, the ones instances use and the newest few), keep-versions N (how many of the newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language system|en|fr|ru|de|zh|es|uk|pl (the window's language; system follows the computer's), accent violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default" shows Horizon's landscape).
 
     horizon-launcher settings [KEY] [VALUE]
 
@@ -836,6 +837,33 @@ Update what the browser installed (or one pack).
 
 MCP: `mods_update`.
 
+## `horizon-launcher mods add-github`
+
+Install a native mod from a GitHub link (docs/native-mods.md, "Install from GitHub"): https://github.com/OWNER/REPO (its latest release, else its default branch), .../releases/tag/TAG, .../tree/REF or .../commit/SHA. Resolved to an exact release file or commit, checked like a registry mod. NOT reviewed by the Horizon registry.
+
+    horizon-launcher mods add-github <URL>
+
+- `URL`
+- `--mod`: The mod to install when the link holds several
+- `--all`: Install every mod the link holds
+- `--instance`: The instance (default: the selected one)
+- `--trust-native-code`: You read the mod's source (the link printed) and trust it with full access to this computer
+
+MCP: none: the player's switch.
+
+## `horizon-launcher mods update-github`
+
+Look for newer versions of the native mods installed from GitHub (the latest release, or the default branch's head for a mod installed from a commit), and install them.
+
+    horizon-launcher mods update-github [ID]
+
+- `ID`: One mod (default: all of them)
+- `--check`: Only say what is newer
+- `--instance`: The instance (default: the selected one)
+- `--trust-native-code`: You read the new source and trust it with full access to this computer
+
+MCP: none: the player's switch.
+
 ## `horizon-launcher mods remove`
 
 Remove a pack the browser installed.
@@ -914,7 +942,7 @@ Create a server; with no options it is a new world, survival, normal, 10 players
 - `--difficulty` (peaceful, easy, normal, hard)
 - `--max-players`
 - `--open`: Let anyone in (no whitelist)
-- `--check-accounts`: Check players' Minecraft accounts (they must sign in with Microsoft)
+- `--offline`: Do not check players' Minecraft accounts (offline mode: anyone can use any name)
 - `--player`: Who may join (repeatable); the first becomes an operator
 - `--accept-eula`: Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)
 

@@ -390,6 +390,7 @@ pub fn slider(
     value: f32,
     hover: bool,
     active: bool,
+    dragging: bool,
 ) {
     let kind = crate::widgets::Kind::Slider {
         value,
@@ -401,17 +402,8 @@ pub fn slider(
         // A controller's D-pad can focus it (Horizon's controller support).
         crate::widgets::target_as([x, y, w, 20.0], kind);
     }
-    let track = if hover && active {
-        "gui/sprites/widget/slider_highlighted"
-    } else {
-        "gui/sprites/widget/slider"
-    };
+    let (track, handle) = slider_sprites(hover, active, dragging);
     nine_slice(batch, atlas, track, x, y, w, 20.0, u32::MAX);
-    let handle = if hover && active {
-        "gui/sprites/widget/slider_handle_highlighted"
-    } else {
-        "gui/sprites/widget/slider_handle"
-    };
     nine_slice(
         batch,
         atlas,
@@ -428,6 +420,21 @@ pub fn slider(
         rgba(160, 160, 160, 255)
     };
     centered_text(batch, atlas, label, x + 2.0, y + 6.0, w - 4.0, color);
+}
+/// Track and handle sprites: the track outline shows only while the slider is
+/// dragged, hovering highlights just the handle.
+fn slider_sprites(hover: bool, active: bool, dragging: bool) -> (&'static str, &'static str) {
+    let track = if dragging {
+        "gui/sprites/widget/slider_highlighted"
+    } else {
+        "gui/sprites/widget/slider"
+    };
+    let handle = if hover && active {
+        "gui/sprites/widget/slider_handle_highlighted"
+    } else {
+        "gui/sprites/widget/slider_handle"
+    };
+    (track, handle)
 }
 /// Slider value for a click at `cx` (AbstractSliderButton.setValueFromMouse).
 pub fn slider_value(x: f32, w: f32, cx: f32) -> f32 {
@@ -921,7 +928,7 @@ pub fn multiline_word_position(value: &str, dir: isize, from: usize) -> usize {
 }
 /// `Character.isWhitespace`: Unicode spaces and line breaks but not the no-break spaces, plus
 /// the ASCII separators U+001C to U+001F.
-fn java_whitespace(c: char) -> bool {
+pub(crate) fn java_whitespace(c: char) -> bool {
     (c.is_whitespace() && !matches!(c, '\u{85}' | '\u{a0}' | '\u{2007}' | '\u{202f}'))
         || ('\u{1c}'..='\u{1f}').contains(&c)
 }
@@ -1077,6 +1084,21 @@ impl EditBox {
         } else {
             self.set_cursor(pos, shift);
         }
+    }
+    /// `MultilineTextField.selectWordAtCursor` on a book page: the word before
+    /// the cursor is selected, its end found past non-whitespace only
+    /// (`getWordEndPosition`).
+    pub fn select_word_at_cursor(&mut self) {
+        let begin = multiline_word_position(&self.value, -1, self.cursor);
+        let end = begin
+            + self
+                .value
+                .chars()
+                .skip(begin)
+                .take_while(|c| !java_whitespace(*c))
+                .count();
+        self.set_cursor(begin, false);
+        self.set_cursor(end, true);
     }
     /// EditBox.onDrag: the selection follows the pointer.
     pub fn drag_to(&mut self, atlas: &HudAtlas, x: f32) {
@@ -1267,6 +1289,9 @@ impl EditBox {
                 batch.text(atlas, "_", cursor_x, ty, color, true);
             }
         }
+        if self.focused {
+            crate::preedit::report_caret(cursor_x, ty, 10.0);
+        }
     }
     /// Character index under GUI x (mouse click).
     pub fn index_at(&self, atlas: &HudAtlas, x: f32) -> usize {
@@ -1327,6 +1352,18 @@ mod tests {
     }
     fn faithful(json: &str) -> NineSlice {
         parse_nine_slice(&serde_json::from_str(json).unwrap()).unwrap()
+    }
+    #[test]
+    fn slider_track_is_outlined_only_while_dragged() {
+        let (track, handle) = slider_sprites(true, true, false);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        let (track, handle) = slider_sprites(true, true, true);
+        assert_eq!(track, "gui/sprites/widget/slider_highlighted");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        let (track, handle) = slider_sprites(false, true, false);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle");
     }
     #[test]
     fn separator_tiles_sample_both_rows_and_clip_the_last_column() {
