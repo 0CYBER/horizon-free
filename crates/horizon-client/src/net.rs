@@ -52,6 +52,9 @@ pub enum Event {
     Packet(Box<play::Clientbound>),
     /// A packet that failed to decode (skipped, like vanilla's skippable packets).
     DecodeError(String),
+    /// The server sent us back to configuration (`ClientboundStartConfigurationPacket`):
+    /// the game shows `ServerReconfigScreen` until the server logs it in again.
+    Reconfiguring,
     /// The server sent us back to configuration and finished it again.
     Reconfigured(Arc<Dynamic>),
     /// ClientboundResourcePackPushPacket, in configuration or in play.
@@ -627,6 +630,7 @@ fn receive_play(
                 let _ = send.send(Event::PackPop(p.id));
             }
             play::Clientbound::StartConfiguration(_) => {
+                let _ = send.send(Event::Reconfiguring);
                 if let Some(w) = shared_writer.lock().unwrap().as_mut() {
                     let _ = w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode());
                     configuring.store(true, Ordering::Relaxed);
@@ -875,9 +879,127 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
     Ok((json, start.elapsed().as_millis()))
 }
 
+/// What a server that answers only the legacy ping reports
+/// (`LegacyServerPinger.Output.handleResponse`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyStatus {
+    pub protocol: i32,
+    pub version: String,
+    pub motd: String,
+    pub players: i32,
+    pub max_players: i32,
+}
+
+/// `Mth.getInt(str, default)`.
+fn legacy_int(s: &str, default: i32) -> i32 {
+    s.parse().unwrap_or(default)
+}
+
+/// `LegacyServerPinger.channelRead0` on the string after the 0xFF byte: split
+/// on NUL (at most 6 parts) and the first part must be `§1`.
+fn parse_legacy_status(text: &str) -> Option<LegacyStatus> {
+    let parts: Vec<&str> = text.splitn(6, '\0').collect();
+    if parts.first() != Some(&"\u{a7}1") || parts.len() < 6 {
+        return None;
+    }
+    Some(LegacyStatus {
+        protocol: legacy_int(parts[1], 0),
+        version: parts[2].to_owned(),
+        motd: parts[3].to_owned(),
+        players: legacy_int(parts[4], -1),
+        max_players: legacy_int(parts[5], -1),
+    })
+}
+
+/// `LegacyProtocolUtils.writeLegacyString`: the UTF-16 length, then UTF-16BE.
+fn write_legacy_string(out: &mut Vec<u8>, s: &str) {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    out.extend_from_slice(&(units.len() as u16).to_be_bytes());
+    for unit in units {
+        out.extend_from_slice(&unit.to_be_bytes());
+    }
+}
+
+/// `LegacyServerPinger.channelActive`: the 1.6 `0xFE 0x01 0xFA MC|PingHost` request.
+fn legacy_ping_request(host: &str, port: u16) -> Vec<u8> {
+    let mut out = vec![254, 1, 250];
+    write_legacy_string(&mut out, "MC|PingHost");
+    let mut payload = vec![127];
+    write_legacy_string(&mut payload, host);
+    payload.extend_from_slice(&i32::from(port).to_be_bytes());
+    out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// `ServerStatusPinger.pingLegacyServer`: ask a server that does not answer
+/// the status handshake with the pre-1.7 ping.
+pub fn ping_legacy(address: &str, timeout: Duration) -> Result<LegacyStatus, String> {
+    let (host, port) = parse_address(address).ok_or("Invalid address")?;
+    let mut c = Connection::connect_server(&host, port, timeout).map_err(|e| e.to_string())?;
+    c.reader
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| e.to_string())?;
+    let e = |e: horizon_protocol::Error| e.to_string();
+    c.writer
+        .write_raw(&legacy_ping_request(&host, port))
+        .map_err(e)?;
+    let head = c.reader.read_raw(3).map_err(e)?;
+    if head[0] != 255 {
+        return Err("unexpected legacy reply".into());
+    }
+    let units = usize::from(u16::from_be_bytes([head[1], head[2]]));
+    let bytes = c.reader.read_raw(units * 2).map_err(e)?;
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u16::from_be_bytes(*p))
+        .collect();
+    parse_legacy_status(&String::from_utf16_lossy(&units))
+        .ok_or_else(|| "unexpected legacy reply".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_ping_request_is_the_1_6_ping_host_packet() {
+        let bytes = legacy_ping_request("a.b", 25565);
+        assert_eq!(&bytes[..3], &[254, 1, 250]);
+        // "MC|PingHost": 11 chars.
+        assert_eq!(&bytes[3..5], &[0, 11]);
+        let after = 5 + 22;
+        // payload: 127, string (2 + 6 bytes), port.
+        assert_eq!(&bytes[after..after + 2], &[0, 1 + 2 + 6 + 4]);
+        assert_eq!(bytes[after + 2], 127);
+        assert_eq!(&bytes[after + 3..after + 5], &[0, 3]);
+        assert_eq!(&bytes[bytes.len() - 4..], &25565i32.to_be_bytes());
+    }
+
+    #[test]
+    fn legacy_status_is_split_on_nul_after_the_section_one_marker() {
+        let status =
+            parse_legacy_status("\u{a7}1\x00127\x001.6.4\x00A \u{a7}aserver\x003\x0020").unwrap();
+        assert_eq!(
+            status,
+            LegacyStatus {
+                protocol: 127,
+                version: "1.6.4".into(),
+                motd: "A \u{a7}aserver".into(),
+                players: 3,
+                max_players: 20,
+            }
+        );
+        // Unparsable counts are -1, a wrong marker is no status.
+        let status = parse_legacy_status("\u{a7}1\x00x\x00v\x00m\x00?\x00?").unwrap();
+        assert_eq!(
+            (status.protocol, status.players, status.max_players),
+            (0, -1, -1)
+        );
+        assert!(parse_legacy_status("kick\x00127\x00v\x00m\x001\x002").is_none());
+    }
 
     /// The en_us text of the disconnect reasons.
     fn disconnect_language() -> Language {
@@ -942,7 +1064,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             root.join("facts.json"),
-            br#"{"states":[[0,0,0,0,"minecraft:stone"]]}"#,
+            br#"{"states":[["minecraft:stone",false,false,"Block{minecraft:stone}",{"id":"minecraft:stone"}]]}"#,
         )
         .unwrap();
         let expected = crate::content_identity::identity(&root).unwrap();

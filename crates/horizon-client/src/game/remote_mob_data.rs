@@ -156,6 +156,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // SulfurCube.MAX_FUSE: onSyncedDataUpdated copies it into the fuse
+            // the client ticks for swell / white flash (#4548).
+            (Species::SulfurCube, 20, Value::Int(fuse)) => {
+                m.extra.counter2 = (*fuse).max(0) + 1;
+            }
+            (Species::SulfurCube, 19, Value::Bool(from_bucket)) => {
+                m.extra.scratch[3] = i32::from(*from_bucket);
+            }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
             // and raised head of an angry enderman.
             (Species::Enderman, 17, Value::Bool(creepy)) => m.extra.flag = *creepy,
@@ -385,6 +393,16 @@ fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
             (0, Value::Byte(flags)) => m.extra.fall_flying = flags & -128 != 0,
             (6, Value::Id(pose)) => m.extra.synced_pose = (*pose).clamp(0, 17) as u8,
             (8, Value::Byte(flags)) => m.extra.auto_spin_attack = flags & 4 != 0,
+            // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
+            (12, Value::Int(count)) => m.extra.arrow_count = *count,
+            (13, Value::Int(count)) => m.extra.stinger_count = *count,
+            // Player.DATA_SHOULDER_PARROT_LEFT and _RIGHT.
+            (19, Value::Id(v)) => {
+                m.extra.shoulder_parrots[0] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
+            (20, Value::Id(v)) => {
+                m.extra.shoulder_parrots[1] = (*v > 0).then(|| (*v - 1).clamp(0, 4))
+            }
             _ => {}
         }
     }
@@ -820,6 +838,20 @@ mod tests {
         assert_eq!(m.extra.using_item, 0);
     }
 
+    /// LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID of another
+    /// player, which ArrowLayer and BeeStingerLayer draw.
+    #[test]
+    fn another_players_stuck_arrows_and_stingers_are_kept() {
+        let Some(mut m) = mob("minecraft:player") else {
+            return;
+        };
+        apply(&mut m, &[(12, s::INT, Value::Int(4))]);
+        apply(&mut m, &[(13, s::INT, Value::Int(2))]);
+        assert_eq!((m.extra.arrow_count, m.extra.stinger_count), (4, 2));
+        apply(&mut m, &[(12, s::INT, Value::Int(0))]);
+        assert_eq!((m.extra.arrow_count, m.extra.stinger_count), (0, 2));
+    }
+
     #[test]
     fn a_pillager_charges_and_a_spellcaster_casts() {
         let Some(mut p) = mob("minecraft:pillager") else {
@@ -848,5 +880,20 @@ mod tests {
             &[(17, s::RESOLVABLE_PROFILE, Value::Profile(profile.clone()))],
         );
         assert_eq!(m.profile, Some(profile));
+    }
+
+    /// #4548: SulfurCube.MAX_FUSE copies into the fuse the client ticks for swell.
+    #[test]
+    fn sulfur_cube_max_fuse_sets_the_client_fuse() {
+        let Some(mut m) = mob("minecraft:sulfur_cube") else {
+            return;
+        };
+        assert_eq!(m.extra.counter2, 0);
+        apply(&mut m, &[(20, s::INT, Value::Int(40))]);
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 40);
+        assert!(horizon_client::mobs::sulfur_cube::primed(&m));
+        apply(&mut m, &[(20, s::INT, Value::Int(0))]);
+        // Last fuse tick: still primed at 0 until the server removes it.
+        assert_eq!(horizon_client::mobs::sulfur_cube::fuse(&m), 0);
     }
 }

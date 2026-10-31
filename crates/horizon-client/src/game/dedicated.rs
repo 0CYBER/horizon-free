@@ -275,6 +275,9 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     for w in &props.warnings {
         log("WARN", w);
     }
+    // A dedicated server's tree: /op, /ban, /whitelist... (single player's
+    // server thread is an integrated one and never gets here).
+    horizon_client::command::vanilla::set_dedicated_commands(true);
     // Horizon's own commands are the owner's choice, off as on vanilla.
     if props
         .raw
@@ -335,6 +338,8 @@ pub(super) struct Lists {
     pub ip_bans: IpBanList,
     pub use_whitelist: bool,
     pub enforce_whitelist: bool,
+    /// `op-permission-level`: what `/op` grants (operatorUserPermissions).
+    pub op_level: i32,
 }
 impl Lists {
     fn load() -> Self {
@@ -345,6 +350,7 @@ impl Lists {
             ip_bans: IpBanList::new("banned-ips.json"),
             use_whitelist: false,
             enforce_whitelist: false,
+            op_level: 4,
         };
         // DedicatedPlayerList's constructor order and its LOGGER.warn lines.
         let warn = |what: &str, r: std::result::Result<(), String>| {
@@ -683,7 +689,9 @@ impl Game<'_> {
         let mut lists = Lists::load();
         lists.use_whitelist = props.white_list;
         lists.enforce_whitelist = props.enforce_whitelist;
+        lists.op_level = props.op_permission_level;
         let lists = Arc::new(Mutex::new(lists));
+        self.server_lists = Some(lists.clone());
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
         self.native_lifecycle_open_started();
@@ -700,8 +708,20 @@ impl Game<'_> {
         // The single-player host's state is not used: players have their own files.
         self.level.position = None;
         // DedicatedServer.initServer: worldData.setGameType; forceDifficulty.
+        // `load_world` restored difficulty from level.dat; server.properties wins
+        // (vanilla's forceDifficulty), including health_rules used for despawn (#4694).
         self.set_default_game_mode(game_mode);
-        self.ui.difficulty = props.difficulty as u8;
+        // MinecraftServer.setDifficulty: a hardcore world is always hard.
+        self.ui.difficulty = if self.level.hardcore {
+            3
+        } else {
+            props.difficulty as u8
+        };
+        self.level.set_difficulty(self.ui.difficulty);
+        self.sync_rules();
+        if self.ui.difficulty == 0 {
+            self.mobs.retain(|m| !m.hostile());
+        }
         // DedicatedServer.initServer: a legacy `announce-player-achievements`
         // sets the show_advancement_messages rule once, as the file is read.
         if let Some(announce) = props.announce_player_achievements {
@@ -909,6 +929,13 @@ impl Game<'_> {
             {
                 self.finish_report(recording, state.view, state.max_players);
             }
+            // DedicatedServer.sendLowDiskSpaceWarning: the operators hear of it
+            // (no window drains the toasts here).
+            if horizon_client::chunk_io::take().low_disk_space
+                && let Some(host) = self.lan.as_ref()
+            {
+                host.hub.send_low_disk_space_warning();
+            }
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
@@ -1015,7 +1042,7 @@ impl Game<'_> {
     }
 
     /// Ops' permission levels for the hub (PlayerList.getProfilePermissions).
-    fn sync_ops(&mut self, lists: &Arc<Mutex<Lists>>) {
+    pub(super) fn sync_ops(&mut self, lists: &Arc<Mutex<Lists>>) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -1031,7 +1058,7 @@ impl Game<'_> {
     }
 
     /// A player on the server, by name.
-    fn online_player(&self, name: &str) -> Option<NameAndId> {
+    pub(super) fn online_player(&self, name: &str) -> Option<NameAndId> {
         let hub = &self.lan.as_ref()?.hub;
         let g = hub
             .guests
@@ -1047,7 +1074,18 @@ impl Game<'_> {
     /// service, else (offline) the offline player. None, told to the console:
     /// no such player.
     fn resolve(&self, name: &str) -> Option<NameAndId> {
-        let found = USER_CACHE.lock().unwrap().as_mut().and_then(|cache| {
+        let found = self.resolve_name(name);
+        if found.is_none() {
+            let unknown = Text::translate("argument.player.unknown", &[]);
+            log("INFO", &format!("System chat: {}", unknown.plain()));
+        }
+        found
+    }
+
+    /// `Services.nameToIdCache().get(name)`: the user cache, else the profile
+    /// service, else (offline) the offline player.
+    pub(super) fn resolve_name(&self, name: &str) -> Option<NameAndId> {
+        USER_CACHE.lock().unwrap().as_mut().and_then(|cache| {
             cache.get_by_name(name, |lower| {
                 let found = profiles::find_by_name(&profiles::discovery_url(), lower);
                 if found.is_none() {
@@ -1055,12 +1093,7 @@ impl Game<'_> {
                 }
                 found
             })
-        });
-        if found.is_none() {
-            let unknown = Text::translate("argument.player.unknown", &[]);
-            log("INFO", &format!("System chat: {}", unknown.plain()));
-        }
-        found
+        })
     }
 
     /// MinecraftServer.sendSystemMessage: what the console is told; while
@@ -1510,8 +1543,15 @@ impl Game<'_> {
         }
     }
 
+    /// `DedicatedServer.setUsingWhitelist`: the flag, and `white-list` in
+    /// server.properties.
+    pub(super) fn set_using_whitelist(&mut self, lists: &Arc<Mutex<Lists>>, on: bool) {
+        lists.lock().unwrap().use_whitelist = on;
+        self.store_property("white-list", on.to_string());
+    }
+
     /// DedicatedServerSettings.update: change one key and store the file.
-    fn store_property(&mut self, key: &str, value: String) {
+    pub(super) fn store_property(&mut self, key: &str, value: String) {
         let path = PathBuf::from("server.properties");
         if let Ok(p) = ServerProperties::from_file(&path, &mut SystemEntropy::default())
             && let Ok(p) = p.update(key, value)
@@ -1523,7 +1563,7 @@ impl Game<'_> {
     /// MinecraftServer.kickUnlistedPlayers: with `enforce-whitelist` and the
     /// whitelist on, whoever is online and not on the whitelist file is
     /// disconnected (operators are not spared here).
-    fn kick_unlisted_players(&mut self, lists: &Arc<Mutex<Lists>>) {
+    pub(super) fn kick_unlisted_players(&mut self, lists: &Arc<Mutex<Lists>>) {
         let unlisted: Vec<u128> = {
             let l = lists.lock().unwrap();
             let Some(host) = self.lan.as_ref() else {
@@ -1552,7 +1592,7 @@ impl Game<'_> {
         }
     }
 
-    fn kick_uuid(&mut self, uuid: u128, reason: Tag) {
+    pub(super) fn kick_uuid(&mut self, uuid: u128, reason: Tag) {
         if let Some(h) = self.lan.as_mut() {
             let conns: Vec<u32> = h
                 .hub

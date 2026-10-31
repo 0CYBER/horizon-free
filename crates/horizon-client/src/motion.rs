@@ -302,6 +302,8 @@ pub struct PlayerMotion {
     pub was_auto_jump: bool,
     /// `input.getMoveVector()` this tick (before `modifyInput`).
     pub move_vector: [f32; 2],
+    /// `LocalPlayer.xxa` / `zza`: the move vector after `modifyInput`.
+    pub applied_input: [f32; 2],
     /// A usable glider (elytra) is worn; the game sets it each tick.
     pub glider: bool,
     /// The view pitch (xRot), for gliding.
@@ -338,6 +340,10 @@ pub struct PlayerMotion {
     /// `LocalPlayer.isSlowDueToUsingItem`: an item in use whose `use_effects`
     /// do not allow sprinting.
     pub item_use_slows_sprint: bool,
+    /// `LocalPlayer.moveTowardsClosestSpace`'s new x and z speeds this tick,
+    /// worked out by the caller (which knows the blocks); applied before the
+    /// move.
+    pub nudge: [Option<f64>; 2],
     pub last_climbable: Option<BlockPos>,
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
@@ -516,6 +522,7 @@ impl PlayerMotion {
             auto_jump_time: 0,
             was_auto_jump: false,
             move_vector: [0.0, 0.0],
+            applied_input: [0.0, 0.0],
             glider: false,
             pitch: 0.0,
             fall_flying: false,
@@ -541,6 +548,7 @@ impl PlayerMotion {
             speed: 0.0,
             item_use_speed: None,
             item_use_slows_sprint: false,
+            nudge: [None; 2],
             last_climbable: None,
             steps: MovementDistances {
                 next_step: 1.0,
@@ -1062,6 +1070,14 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.velocity.y += f64::from(ya as f32 * self.player.flying_speed * 3.0);
             }
         }
+        // LocalPlayer.aiStep: a player inside a block is nudged out of it.
+        let [x, z] = std::mem::take(&mut self.player.nudge);
+        if let Some(x) = x {
+            self.player.velocity.x = x;
+        }
+        if let Some(z) = z {
+            self.player.velocity.z = z;
+        }
         self.dry_tick(TickInput::PreparedLocal {
             direction,
             jumping: jumping && !self.player.flying,
@@ -1133,10 +1149,9 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             None
         };
-        self.simulation_tick_with_fluids(
-            crate::input::modify_input(direction, self.player.item_use_speed, sneak),
-            keys.jump,
-        )
+        let modified = crate::input::modify_input(direction, self.player.item_use_speed, sneak);
+        self.player.applied_input = modified;
+        self.simulation_tick_with_fluids(modified, keys.jump)
     }
     pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
         movement_statistics::check(self, delta)
@@ -2177,8 +2192,14 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         )?;
         Ok(())
     }
-    fn minor_horizontal_collision(&mut self, _: Vec3) -> Result<bool> {
-        Ok(false)
+    /// `LocalPlayer.isHorizontalCollisionMinor`: the move that hit a wall was
+    /// within 8 degrees of the direction the input asked for.
+    fn minor_horizontal_collision(&mut self, movement: Vec3) -> Result<bool> {
+        Ok(horizontal_collision_minor(
+            self.player.yaw,
+            self.player.applied_input,
+            movement,
+        ))
     }
     fn legacy_on_position(&mut self) -> Result<BlockPos> {
         self.support(movement_support::LEGACY_SUPPORT_OFFSET)
@@ -2691,9 +2712,54 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
     }
 }
 
+/// `LocalPlayer.isHorizontalCollisionMinor` for the input `[xxa, zza]`.
+fn horizontal_collision_minor(yaw: f32, input: [f32; 2], movement: Vec3) -> bool {
+    let rad = yaw * (std::f32::consts::PI / 180.0);
+    let sin = f64::from(horizon_core::geometry::trig::sin(f64::from(rad)));
+    let cos = f64::from(horizon_core::geometry::trig::cos(f64::from(rad)));
+    let (xxa, zza) = (f64::from(input[0]), f64::from(input[1]));
+    let global_x = xxa * cos - zza * sin;
+    let global_z = zza * cos + xxa * sin;
+    let a_len = global_x * global_x + global_z * global_z;
+    let m_len = movement.x * movement.x + movement.z * movement.z;
+    if a_len < f64::from(1.0e-5_f32) || m_len < f64::from(1.0e-5_f32) {
+        return false;
+    }
+    let dot = global_x * movement.x + global_z * movement.z;
+    horizon_core::jmath::acos(dot / (a_len * m_len).sqrt()) < f64::from(0.13962634_f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `LocalPlayer.isHorizontalCollisionMinor`: sliding along a wall at a
+    /// small angle to the input is minor; a sideways slide is not.
+    #[test]
+    fn horizontal_collision_minor_by_angle() {
+        // Yaw 0 looks along +z; forward input.
+        let fwd = [0.0, 1.0];
+        assert!(horizontal_collision_minor(
+            0.0,
+            fwd,
+            Vec3::new(0.02, 0.0, 0.2)
+        ));
+        assert!(!horizontal_collision_minor(
+            0.0,
+            fwd,
+            Vec3::new(0.2, 0.0, 0.05)
+        ));
+        assert!(!horizontal_collision_minor(
+            0.0,
+            fwd,
+            Vec3::new(0.0, 0.0, 0.0)
+        ));
+        assert!(!horizontal_collision_minor(
+            0.0,
+            [0.0, 0.0],
+            Vec3::new(0.0, 0.0, 0.2)
+        ));
+    }
 
     #[test]
     fn sword_sweep_requires_charge_ground_and_slow_horizontal_movement() {
@@ -3428,6 +3494,20 @@ mod tests {
                 .count(),
             1
         );
+        // A fatal hit plays the death sound rather than a hurt sound (#4570).
+        let mut dying = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        assert!(
+            dying
+                .hurt(&resources.health, Default::default(), source, 100.0)
+                .unwrap()
+        );
+        assert!(dying.health.dead_or_dying());
+        assert!(
+            !dying
+                .events
+                .iter()
+                .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+        );
         // A shield that takes the whole arrow: onBlocked's sound, no damage
         // event, so the player hears no hurt sound.
         use horizon_world::blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction};
@@ -3828,6 +3908,38 @@ mod tests {
         assert!(!w.player.swimming);
         assert_eq!(w.player.pose, crate::pose::Pose::Standing);
         assert_eq!(w.player.dimensions.eye_height, 1.62);
+    }
+    /// #4509: a cushion seat clips the feet into the floor, so `can_fit_pose`
+    /// rejects standing and would leave a swim pose; sit up anyway.
+    #[test]
+    fn a_swimming_passenger_sits_up_even_when_standing_does_not_fit() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        // Feet inside the floor block, as on a cushion seat (y - 0.35).
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 9.65, 20.5)).unwrap();
+        player.swimming = true;
+        player.set_pose(crate::pose::Pose::Swimming).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        assert!(!w.can_fit_pose(crate::pose::Pose::Standing).unwrap());
+        w.passenger_pose_tick().unwrap();
+        assert!(!w.player.swimming);
+        assert_eq!(w.player.pose, crate::pose::Pose::Standing);
     }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {

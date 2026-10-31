@@ -190,6 +190,7 @@ impl Game<'_> {
             "players": players,
             "levels": self.report_levels(),
             "memory": { "rss_mb": horizon_bench::rss_bytes(std::process::id()).map(|b| b >> 20) },
+            "process": process_limits(),
             "cpu_cores_used": cpu,
             "config": {
                 "view_distance": view.0,
@@ -265,7 +266,47 @@ fn summary(r: &Value) -> String {
         "{mobs} mobs, {chunks} chunks, {} MB resident, {} cores of CPU",
         r["memory"]["rss_mb"], r["cpu_cores_used"]
     );
+    let process = &r["process"];
+    if let Some(threads) = process["threads"].as_u64() {
+        out += &format!("\n{threads} threads");
+        for (key, name) in [
+            ("cgroup_pids_current", "container tasks"),
+            ("cgroup_pids_max", "container task limit"),
+            ("max_processes", "max processes (soft / hard)"),
+        ] {
+            if let Some(value) = process[key].as_str() {
+                out += &format!(", {name} {value}");
+            }
+        }
+    }
     out
+}
+
+/// What the system lets this process start: its threads now, and the limits
+/// a container puts on them and on memory. A server out of threads fails to
+/// start the ones it needs (EAGAIN). Read on Linux; null elsewhere.
+fn process_limits() -> Value {
+    let read = |path: &str| std::fs::read_to_string(path).ok();
+    let threads = read("/proc/self/status").and_then(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix("Threads:"))
+            .and_then(|v| v.trim().parse::<u64>().ok())
+    });
+    // "Max processes   <soft>   <hard>   processes"
+    let max_processes = read("/proc/self/limits").and_then(|s| {
+        let line = s.lines().find(|l| l.starts_with("Max processes"))?;
+        let words: Vec<&str> = line.split_whitespace().skip(2).take(2).collect();
+        Some(words.join(" / "))
+    });
+    let cgroup = |name: &str| read(&format!("/sys/fs/cgroup/{name}")).map(|s| s.trim().to_owned());
+    json!({
+        "threads": threads,
+        "max_processes": max_processes,
+        "cgroup_pids_current": cgroup("pids.current"),
+        "cgroup_pids_max": cgroup("pids.max"),
+        "cgroup_memory_current": cgroup("memory.current"),
+        "cgroup_memory_max": cgroup("memory.max"),
+    })
 }
 
 fn write_report(dir: &Path, report: &Value, text: &str) -> std::io::Result<PathBuf> {
@@ -327,6 +368,19 @@ mod tests {
         );
         assert!(
             text.ends_with("5 mobs, 9 chunks, 300 MB resident, 1.5 cores of CPU"),
+            "{text}"
+        );
+        let text = summary(
+            &json!({"ticks": ticks, "spans": spans, "worst_ticks": worst,
+            "players": 3, "levels": [], "memory": {"rss_mb": 300}, "cpu_cores_used": 1.5,
+            "process": {"threads": 140, "cgroup_pids_current": "160", "cgroup_pids_max": "512",
+                "max_processes": "unlimited / unlimited"}}),
+        );
+        assert!(
+            text.ends_with(
+                "140 threads, container tasks 160, container task limit 512, \
+                 max processes (soft / hard) unlimited / unlimited"
+            ),
             "{text}"
         );
     }

@@ -270,7 +270,7 @@ impl Game<'_> {
             return;
         }
         let g = &host.hub.guests[gi];
-        if g.awaiting_teleport.is_some() || !g.loaded {
+        if g.awaiting_teleport.is_some() || !g.client_loaded() {
             return;
         }
         let owner = host.hub.singleplayer_owner == Some(g.uuid);

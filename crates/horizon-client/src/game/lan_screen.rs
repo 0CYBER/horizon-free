@@ -989,6 +989,13 @@ impl Game<'_> {
             self.world_options_text(event.text.as_deref());
         }
     }
+    /// Whether a World Options text box has focus (the port or a game rule box).
+    pub(super) fn world_options_typing(&self) -> bool {
+        self.world_options.as_ref().is_some_and(|o| {
+            o.rules.as_ref().is_some_and(|r| r.typing())
+                || (o.port.focused && o.view == View::Options)
+        })
+    }
     /// Digits typed into the port field (the keyboard, or a controller's
     /// on-screen keyboard), and its backspace.
     pub(super) fn world_options_text(&mut self, text: Option<&str>) {

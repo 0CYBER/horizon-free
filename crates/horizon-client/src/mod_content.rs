@@ -362,6 +362,18 @@ fn patch_components(
     Ok(())
 }
 
+/// A declared component patch, as the overlay's JSON.
+fn component_patch(
+    id: &str,
+    components: &BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<(String, J)>> {
+    Ok(components
+        .iter()
+        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
+        .collect::<std::result::Result<_, serde_json::Error>>()
+        .map_err(|e| format!("{id}: {e}"))?)
+}
+
 fn read_json(path: &Path) -> Result<J> {
     Ok(serde_json::from_slice(&fs::read(path)?).map_err(|e| format!("{}: {e}", path.display()))?)
 }
@@ -570,7 +582,7 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(item, &b.decl.id),
                     max_stack_size: None,
                     rarity: None,
-                    components: Vec::new(),
+                    components: component_patch(&b.decl.id, &b.decl.components)?,
                 });
             }
         }
@@ -580,12 +592,7 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(&i.template, &i.id),
                     max_stack_size: i.max_stack_size,
                     rarity: i.rarity,
-                    components: i
-                        .components
-                        .iter()
-                        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
-                        .collect::<std::result::Result<_, serde_json::Error>>()
-                        .map_err(|e| format!("{}: {e}", i.id))?,
+                    components: component_patch(&i.id, &i.components)?,
                 });
             }
         }

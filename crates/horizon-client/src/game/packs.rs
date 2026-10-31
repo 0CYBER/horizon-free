@@ -156,9 +156,31 @@ impl Game<'_> {
             self.selection_reload_failed(&format!("could not start the pack reload: {e}"));
         }
     }
-    /// `reloadResourcePacks`' failure: the pack screen again, with the error.
+    /// `reloadResourcePacks`' failure (`Minecraft.rollbackResourcePacks`): with
+    /// a pack selected, all selected packs are dropped and the reload runs
+    /// again, with the load-failure toast; with none left to drop, the pack
+    /// screen again, with the error.
     fn selection_reload_failed(&mut self, error: &str) {
         log::warn!("Horizon: resource reload failed: {error}");
+        let all = packs::discover(&self.vanilla_root(), &packs_dir());
+        if packs::able_to_clear_any_pack(&all, &self.settings.resource_packs) {
+            // clearResourcePacksOnError.
+            log::info!("Caught error loading resourcepacks, removing all selected resourcepacks");
+            self.settings.resource_packs.clear();
+            self.settings.save(&Self::options_path());
+            if self.spawn_pack_reload(ReloadKind::Selection).is_ok() {
+                // addResourcePackLoadFailToast(null), SystemToast.addOrUpdate.
+                let title = lang::tr("resourcePack.load_fail", &[]);
+                match &mut self.server_packs.load_fail {
+                    Some(toast) => toast.reset(title, None),
+                    None => {
+                        self.server_packs.load_fail =
+                            Some(horizon_client::toasts::SystemToast::new(title, None));
+                    }
+                }
+                return;
+            }
+        }
         if self.screen != super::Screen::Options {
             self.open_options_at(
                 self.title.is_some(),
@@ -275,6 +297,10 @@ impl Game<'_> {
         let context = pack.context.clone();
         self.pack = pack;
         self.gui = gui;
+        // The new atlas's skin and map slots are blank: players and maps
+        // upload into it again instead of naming sprites it does not have.
+        self.skin_slots.forget();
+        self.maps.slots.forget();
         // The atlas's sprites moved: the particle engine re-reads every rect
         // and the packs' sprite sets, or every particle draws a stale region.
         self.particles
@@ -328,13 +354,21 @@ pub(super) fn stage_pack(
     let root = startup_root(vanilla_root, selected, server)?;
     let root = super::mods::content_root(&root, mods_enabled, dev_mods);
     progress.set(1);
-    let render = Arc::new(assets.reload(&root)?);
-    let mut atlas = HudAtlas::build_over(&root, vanilla_root)?;
+    // The world's models and sprites and the GUI atlas read the same root and nothing of
+    // each other: about a second each, side by side.
+    let (render, atlas, panorama) = std::thread::scope(|s| {
+        let atlas =
+            s.spawn(|| HudAtlas::build_over(&root, vanilla_root).map_err(|e| e.to_string()));
+        let panorama = s.spawn(|| horizon_client::gfx::panorama::Faces::load(&root));
+        (assets.reload(&root), atlas.join(), panorama.join())
+    });
+    let render = Arc::new(render?);
+    let mut atlas = atlas.unwrap_or_else(|p| std::panic::resume_unwind(p))?;
     atlas.font.uniform = force_unicode;
     atlas.font.japanese = japanese;
     let gui = UiResources {
         atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(&root)),
+        panorama: Arc::new(panorama.unwrap_or_else(|p| std::panic::resume_unwind(p))),
     };
     progress.set(2);
     let pack = PackResources::load(

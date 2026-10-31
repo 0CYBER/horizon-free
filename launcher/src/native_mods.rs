@@ -292,8 +292,40 @@ fn newest(
         .unwrap_or_default())
 }
 
-/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts).
+/// When commit `revision` of GitHub's `repo` was made (ISO 8601, so it sorts), from the dates kept
+/// in [`DATES`] when it was asked before: a commit's date never changes, so a build of mods made
+/// for different revisions can be used again offline or past GitHub's rate limit.
 fn committed(repo: &str, revision: &str) -> Result<String, String> {
+    remembered(&root().join(DATES), repo, revision, ask_github)
+}
+
+/// The file in [`root`] keeping the commit dates GitHub gave, as `{"repo@revision": date}`.
+const DATES: &str = "commit-dates.json";
+
+/// The date `file` keeps for `repo`'s `revision`, else `ask`'s, then kept in `file`.
+fn remembered(
+    file: &Path,
+    repo: &str,
+    revision: &str,
+    ask: impl FnOnce(&str, &str) -> Result<String, String>,
+) -> Result<String, String> {
+    let key = format!("{repo}@{revision}");
+    let mut dates: serde_json::Map<String, serde_json::Value> = fs::read(file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if let Some(date) = dates.get(&key).and_then(|d| d.as_str()) {
+        return Ok(date.to_owned());
+    }
+    let date = ask(repo, revision)?;
+    dates.insert(key, date.clone().into());
+    if let Ok(text) = serde_json::to_vec_pretty(&dates) {
+        let _ = fs::write(file, text);
+    }
+    Ok(date)
+}
+
+fn ask_github(repo: &str, revision: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{repo}/commits/{revision}");
     let commit: serde_json::Value = backend::get(&url)?.into_json().map_err(|e| e.to_string())?;
     commit["commit"]["committer"]["date"]
@@ -512,7 +544,8 @@ impl Step {
 }
 
 /// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
-/// An error ends with the last lines.
+/// An error ends with its first `error` lines and the last lines: a failed build script's output
+/// alone could push the line naming its crate out of the last ones.
 fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), String> {
     let mut log = fs::OpenOptions::new()
         .create(true)
@@ -527,12 +560,16 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         .spawn()
         .map_err(|e| format!("Could not start {what}: {e}"))?;
     let mut tail = std::collections::VecDeque::new();
+    let mut errors = Vec::new();
     for text in BufReader::new(child.stderr.take().expect("piped"))
         .lines()
         .map_while(Result::ok)
     {
         let _ = writeln!(log, "{text}");
         line(&text);
+        if text.starts_with("error") && errors.len() < 4 {
+            errors.push(text.clone());
+        }
         if tail.len() == 12 {
             tail.pop_front();
         }
@@ -543,11 +580,29 @@ fn run(mut cmd: Command, what: &str, mut line: impl FnMut(&str)) -> Result<(), S
         return Ok(());
     }
     let tail: Vec<String> = tail.into();
-    Err(format!(
-        "{what} failed ({status}). The end of its output, the whole of it in {}:\n{}",
-        log_path().display(),
-        diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"))
-    ))
+    Err(failure(what, &status.to_string(), &errors, &tail))
+}
+
+/// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
+fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
+    let end = diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"));
+    let first: Vec<&str> = errors
+        .iter()
+        .filter(|e| !tail.contains(e))
+        .map(String::as_str)
+        .collect();
+    let (shown, first) = if first.is_empty() {
+        ("The end of its output", String::new())
+    } else {
+        (
+            "Its first errors and the end of its output",
+            format!("{}\n…\n", first.join("\n")),
+        )
+    };
+    format!(
+        "{what} failed ({status}). {shown}, the whole of it in {}:\n{first}{end}",
+        log_path().display()
+    )
 }
 
 /// A horizon-mixins diagnostic (`{"code", "message", "file"}`) in one line.
@@ -1235,6 +1290,35 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_date_is_asked_once_and_kept() {
+        let d = dir("commit-dates");
+        let file = d.join(DATES);
+        let ask = |_: &str, r: &str| -> Result<String, String> { Ok(format!("date of {r}")) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, ask).unwrap(),
+            format!("date of {A}")
+        );
+        let offline = |_: &str, _: &str| -> Result<String, String> { Err("offline".into()) };
+        assert_eq!(
+            remembered(&file, "acme/x", A, offline).unwrap(),
+            format!("date of {A}")
+        );
+        // Another repo or revision isn't known yet.
+        assert!(remembered(&file, "acme/y", A, offline).is_err());
+        assert!(remembered(&file, "acme/x", B, offline).is_err());
+        // A broken file is asked again and rewritten.
+        fs::write(&file, "not json").unwrap();
+        assert_eq!(
+            remembered(&file, "acme/x", B, ask).unwrap(),
+            format!("date of {B}")
+        );
+        assert_eq!(
+            remembered(&file, "acme/x", B, offline).unwrap(),
+            format!("date of {B}")
+        );
+    }
+
+    #[test]
     fn mods_on_the_hook_points_follow_the_game_or_the_pins() {
         assert_eq!(
             hooks_in("x\npub(crate) const NATIVE_HOOKS_API: u32 = 3;\n"),
@@ -1360,5 +1444,28 @@ mod tests {
             diagnostic(err).as_deref(),
             Some("E_REVISION: requires exact Horizon revision a (m.toml)")
         );
+    }
+
+    #[test]
+    fn a_failed_build_names_the_crate_its_output_pushed_out() {
+        // cargo's output on Linux without ALSA's development files (Rust 1.99.1, 2026-10-31):
+        // the build script's report fills the last lines.
+        let errors = ["error: failed to run custom build command for `alsa-sys v0.3.1`".to_owned()];
+        let tail: Vec<String> = [
+            "  The system library `alsa` required by crate `alsa-sys` was not found.",
+            "  HINT: you may need to install a package such as alsa, alsa-dev or alsa-devel.",
+            "warning: build failed, waiting for other jobs to finish...",
+        ]
+        .map(str::to_owned)
+        .into();
+        let e = failure("Compiling the game", "exit status: 101", &errors, &tail);
+        assert!(e.starts_with("Compiling the game failed (exit status: 101). Its first errors"));
+        assert!(
+            e.ends_with(&format!("{}\n…\n{}", errors[0], tail.join("\n"))),
+            "{e}"
+        );
+        // An error still among the last lines isn't said twice.
+        let e = failure("horizon-mixins", "exit status: 1", &errors, &errors);
+        assert!(e.contains("The end of its output") && e.matches("alsa-sys").count() == 1);
     }
 }
