@@ -392,6 +392,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         destroyed
     }
     pub fn drop_resources(&mut self, state: BlockStateId, pos: BlockPos) {
+        // `MovingPistonBlock.getDrops`: a moving piston's loot is the loot of
+        // the block it carries.
+        // shortcut: the carried block's `spawnAfterBreak` experience comes with
+        // it (vanilla spawns it for the moving piston, which gives none);
+        // upgrade when a drop harness covers a moving piston.
+        let Some(state) =
+            super::pistons::dropped_state(self.b, &self.ticks.moving_pistons, state, pos)
+        else {
+            return;
+        };
         if self.level.game_rules().block_drops {
             self.emit(LevelEvent::DropResources { pos, state });
         }
