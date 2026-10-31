@@ -789,6 +789,8 @@ pub struct Scene<'a> {
     pub glyphs: u64,
 }
 
+/// Empty by default (a dedicated server): no state has a block entity model.
+#[derive(Default)]
 pub struct BlockEntityRenderer {
     models: HashMap<&'static str, ModelPart>,
     kinds: Vec<Kind>,
