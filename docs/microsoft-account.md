@@ -118,6 +118,17 @@ one is selected. "Sign out" deletes the account's secrets from the keychain.
   Service (GNOME Keyring, KWallet) on Linux. Service name `dev.playhorizon.launcher`, account = the
   Minecraft UUID. Credential Manager takes at most 2560 bytes per item, which the secrets of a sign-in
   exceed: on macOS and Windows a longer secret is split over the items `<uuid>`, `<uuid>.1`, `<uuid>.2`...
+  A write that stops partway (the store refused a piece) puts the old secret back: new pieces in
+  front of old ones would read back as no secret, and the account would be signed out at the next
+  start.
+- **Windows: "Windows Credential Manager is full" (Windows error 8, #4313, #4366).** Credential
+  Manager refuses every new item with `ERROR_NOT_ENOUGH_MEMORY` once the player's store reaches an
+  undocumented total size, whatever the item's size; it is not the computer's memory. The Xbox app
+  and the Minecraft Launcher are known to leave hundreds of `XblGrts…` and `Xbl|…` items there. The
+  launcher says so and nothing is saved; the player opens Credential Manager (Start menu) → Windows
+  Credentials, removes entries they no longer use (`cmdkey /list` in a terminal lists them), and
+  signs in again. Removing an entry can sign the app that made it out. The launcher never deletes
+  other apps' items.
 - `accounts.json` in the launcher's data folder keeps only public data: UUID, name, skin URL, which
   account is selected. Never a token.
 - No keychain available (a Linux box without a Secret Service, a locked keychain): sign-in still
@@ -138,6 +149,8 @@ machine can read it in the process list. Horizon keeps it out of argv:
   A file older than two minutes is refused (and deleted), so a stale file can't be replayed.
 - Without a session file the game is offline as today (`--name`, offline UUID).
 - `HORIZON_SESSION_FILE` is the same as `--session-file` (development and harnesses).
+- `--session-stdin` takes the same JSON on standard input instead, so nothing touches the disk (for other
+  launchers: [the Launch API](api/launch.md)).
 
 ## Online-mode login (game)
 

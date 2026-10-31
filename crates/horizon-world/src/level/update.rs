@@ -314,6 +314,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if old == state {
             return None;
         }
+        self.level.observe_block_changed(pos, old, state);
         let new_block = self.block_of(state);
         let block_changed = self.block_of(old) != new_block;
         if block_changed && self.block_of(old) == self.b.named.moving_piston {

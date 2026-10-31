@@ -461,7 +461,7 @@ impl Game<'_> {
                     if is_conduit(section.get(i)) {
                         found.push([
                             cx * 16 + (i & 15) as i32,
-                            horizon_client::chunk::MIN_Y + si as i32 * 16 + (i >> 8) as i32,
+                            self.world.bottom_y() + si as i32 * 16 + (i >> 8) as i32,
                             cz * 16 + ((i >> 4) & 15) as i32,
                         ]);
                     }

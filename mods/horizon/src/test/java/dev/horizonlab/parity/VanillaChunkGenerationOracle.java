@@ -262,7 +262,8 @@ public final class VanillaChunkGenerationOracle {
             case "the_end" -> net.minecraft.world.level.dimension.BuiltinDimensionTypes.END;
             default -> net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD;
         }).value();
-        LevelHeightAccessor height = dimension.equals("overworld") ? LevelHeightAccessor.create(-64, 384) : LevelHeightAccessor.create(0, 256);
+        // The level's build range is its dimension type's: a data pack's when one changes it.
+        LevelHeightAccessor height = LevelHeightAccessor.create(dimensionType.minY(), dimensionType.height());
         var factory = PalettedContainerFactory.create(access);
         var unsafeField = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
         unsafeField.setAccessible(true);

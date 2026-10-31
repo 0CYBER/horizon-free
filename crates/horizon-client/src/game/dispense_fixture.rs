@@ -186,6 +186,8 @@ impl Game<'_> {
             Some("end") => self.dim = super::Dim::End,
             _ => {}
         }
+        // The level's build range follows its dimension, as `enter_dimension` sets it.
+        self.world.shape = self.dim.shape();
         // The oracle level's clock stands at day time 6000.
         self.world.day_time = 6000;
         if let Some(rules) = case["rules"].as_object() {

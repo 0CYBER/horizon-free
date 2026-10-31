@@ -234,10 +234,10 @@ impl SpawnLevel for GameLevel<'_, '_> {
 }
 impl NaturalLevel for GameLevel<'_, '_> {
     fn min_y(&self) -> i32 {
-        horizon_client::chunk::MIN_Y
+        self.w.world.bottom_y()
     }
     fn max_y(&self) -> i32 {
-        horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT - 1
+        self.w.world.top_y() - 1
     }
     fn ambient_light(&self) -> f32 {
         match self.game.dim {
@@ -356,7 +356,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
                     spawn_selection::heightmap_blocks(self, kind, x, y, z)
                 })
             })
-            .map_or(horizon_client::chunk::MIN_Y, |y| y + 1)
+            .map_or(self.w.world.bottom_y(), |y| y + 1)
     }
     fn pathfindable_land(&self, x: i32, y: i32, z: i32) -> bool {
         self.w.data.state(self.state(x, y, z)).flags & data::LAND != 0

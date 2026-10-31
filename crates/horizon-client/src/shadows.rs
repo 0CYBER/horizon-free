@@ -1,5 +1,5 @@
 //! Entity shadows (`EntityRenderer.extractShadow` + `ShadowFeatureRenderer`):
-//! `misc/shadow.png` projected onto the tops of full-collision blocks under
+//! `misc/shadow.png` projected onto block collision bounds under
 //! an entity, faded by camera distance, depth below the entity and the light
 //! at each block.
 use crate::{blocks::BlockFacts, hud::Rect, mesher::Vertex, mobs::Mob, world::World};
@@ -111,6 +111,9 @@ pub fn mob_casters(mobs: &[Mob], alpha: f64) -> impl Iterator<Item = (DVec3, &st
 pub fn shadow(
     world: &World,
     facts: &BlockFacts,
+    collision_bounds: &impl Fn(
+        horizon_world::registry::BlockStateId,
+    ) -> Option<horizon_core::geometry::Aabb>,
     sprite: Rect,
     camera: DVec3,
     pos: DVec3,
@@ -139,11 +142,17 @@ pub fn shadow(
     );
     for z in z0..=z1 {
         for x in x0..=x1 {
-            for y in y0..=y1 {
-                let below = facts.get(world.block(x, y - 1, z));
-                if below.render_shape == crate::blocks::RenderShape::Invisible
-                    || !below.full_collision
-                {
+            for y in y0..=y1.saturating_add(1) {
+                let state = world.block(x, y - 1, z);
+                let below = facts.get(state);
+                if below.render_shape == crate::blocks::RenderShape::Invisible {
+                    continue;
+                }
+                let Some(bounds) = collision_bounds(state) else {
+                    continue;
+                };
+                let top = f64::from(y - 1) + bounds.max_position().y;
+                if top > pos.y + 1e-6 {
                     continue;
                 }
                 let packed = world.light(x, y, z);
@@ -151,14 +160,20 @@ pub fn shadow(
                 if raw <= 3 {
                     continue;
                 }
-                let power_at_depth = pow - (pos.y - f64::from(y)) as f32 * 0.5;
+                let power_at_depth = pow - (pos.y - top) as f32 * 0.5;
                 let alpha = (power_at_depth
                     * 0.5
                     * crate::screen_effects::lightmap_brightness(ambient_light, raw as u8))
                 .clamp(0.0, 1.0);
                 // The block top, clipped to the shadow square so the UVs stay inside the sprite.
-                let (bx0, bx1) = (f64::from(x).max(pos.x - r), f64::from(x + 1).min(pos.x + r));
-                let (bz0, bz1) = (f64::from(z).max(pos.z - r), f64::from(z + 1).min(pos.z + r));
+                let (bx0, bx1) = (
+                    (f64::from(x) + bounds.min_position().x).max(pos.x - r),
+                    (f64::from(x) + bounds.max_position().x).min(pos.x + r),
+                );
+                let (bz0, bz1) = (
+                    (f64::from(z) + bounds.min_position().z).max(pos.z - r),
+                    (f64::from(z) + bounds.max_position().z).min(pos.z + r),
+                );
                 if bx1 <= bx0 || bz1 <= bz0 {
                     continue;
                 }
@@ -169,7 +184,6 @@ pub fn shadow(
                 // ShadowFeatureRenderer: relativeY + shapeBelow.minY, the block top
                 // itself. A model's feet sit 0.001 above it (LivingEntityRenderer's
                 // translate(0, -1.501, 0)), so a lifted shadow fights with them.
-                let top = f64::from(y);
                 for (wx, wz) in [(bx0, bz0), (bx0, bz1), (bx1, bz1), (bx1, bz0)] {
                     let p = DVec3::new(wx, top, wz) - camera;
                     out.push(Vertex {
@@ -231,7 +245,22 @@ mod tests {
             h: 16,
         };
         shadow(
-            &world, &facts, sprite, camera, pos, 0.3, 1.0, 0.0, 0, &mut out,
+            &world,
+            &facts,
+            &|_| {
+                Some(horizon_core::geometry::Aabb::new(
+                    horizon_core::geometry::Vec3::ZERO,
+                    horizon_core::geometry::Vec3::new(1.0, 1.0, 1.0),
+                ))
+            },
+            sprite,
+            camera,
+            pos,
+            0.3,
+            1.0,
+            0.0,
+            0,
+            &mut out,
         );
         assert_eq!(out.len(), 4);
         let feet = (pos.y + (1.501 - 24.0 / 16.0) - camera.y) as f32;
@@ -239,6 +268,32 @@ mod tests {
             assert_eq!(v.pos[1], (pos.y - camera.y) as f32);
             assert!(v.pos[1] < feet);
         }
+        let farmland = registry.default_state("minecraft:farmland").unwrap();
+        world.set(8, 63, 8, farmland).unwrap();
+        out.clear();
+        let pos = DVec3::new(8.5, 63.9375, 8.5);
+        shadow(
+            &world,
+            &facts,
+            &|state| {
+                (state == farmland).then(|| {
+                    horizon_core::geometry::Aabb::new(
+                        horizon_core::geometry::Vec3::ZERO,
+                        horizon_core::geometry::Vec3::new(1.0, 0.9375, 1.0),
+                    )
+                })
+            },
+            sprite,
+            camera,
+            pos,
+            0.3,
+            1.0,
+            0.0,
+            0,
+            &mut out,
+        );
+        assert_eq!(out.len(), 4);
+        assert!(out.iter().all(|v| v.pos[1] == (pos.y - camera.y) as f32));
     }
     #[test]
     fn invisible_mobs_cast_no_shadow() {

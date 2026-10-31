@@ -53,6 +53,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             "minecraft:water_bucket"
         } else if b.is_block(state, b.named.powder_snow) {
             "minecraft:powder_snow_bucket"
+        } else if b.is_block(state, b.named.bubble_column) {
+            "minecraft:water_bucket"
         } else {
             return None;
         };

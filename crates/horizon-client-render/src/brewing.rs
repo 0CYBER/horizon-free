@@ -36,6 +36,22 @@ pub fn potion_name_key(item: &str, potion: Option<&str>) -> String {
     let suffix = potion.and_then(self::potion).map_or("empty", |p| p.name);
     format!("item.minecraft.{prefix}.effect.{suffix}")
 }
+/// `PotionContents.getAllEffects`: the potion's effects, then the stack's
+/// `custom_effects` (id, duration, amplifier). Unknown effect ids are dropped.
+pub fn contents_effects(stack: &ItemStack) -> Vec<(&'static str, i32, i32)> {
+    let potion = stack.potion().and_then(self::potion);
+    let custom = stack.custom_potion_effects();
+    potion
+        .map_or(&[][..], |d| d.effects)
+        .iter()
+        .copied()
+        .chain(
+            custom
+                .iter()
+                .filter_map(|(id, duration, amp)| Some((effect(id)?.id, *duration, *amp))),
+        )
+        .collect()
+}
 /// Roman amplifier suffix (`potion.potency.N`) and duration lines of a potion.
 pub fn tooltip(
     potion: Option<&str>,
