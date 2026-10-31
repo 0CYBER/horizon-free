@@ -268,6 +268,9 @@ pub struct Guest {
     pub saved: Option<horizon_world::nbt::Tag>,
     /// `ServerPlayer.seenCredits`: the end poem has been shown.
     pub seen_credits: bool,
+    /// `ServerPlayer.postEffects` and `postEffectsDirty`.
+    pub post_effects: Vec<String>,
+    pub post_effects_dirty: bool,
     /// `ServerPlayer.recipeBook`.
     pub recipe_book: crate::recipe_book::Settings,
     /// `PlayerAdvancements`: the criteria obtained, whether they came from
@@ -400,6 +403,8 @@ impl Guest {
             drag: None,
             saved: None,
             seen_credits: false,
+            post_effects: Vec::new(),
+            post_effects_dirty: true,
             recipe_book: Default::default(),
             advancements: Default::default(),
             advancements_loaded: false,
