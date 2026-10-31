@@ -183,6 +183,7 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            shoulders: [None; 2],
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,

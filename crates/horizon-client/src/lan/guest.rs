@@ -119,6 +119,8 @@ pub struct Guest {
     pub living_flags: i8,
     /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID`.
     pub stuck: (i32, i32),
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the parrots' variants.
+    pub shoulders: [Option<i32>; 2],
     /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
@@ -335,6 +337,7 @@ impl Guest {
             sleeping: false,
             living_flags: 0,
             stuck: (0, 0),
+            shoulders: [None; 2],
             bed: None,
             sleep_timer: 0,
             sent_bed: None,

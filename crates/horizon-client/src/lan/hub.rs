@@ -96,6 +96,8 @@ pub struct HostState {
     pub living_flags: i8,
     /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID`.
     pub stuck: (i32, i32),
+    /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT`: the parrots' variants.
+    pub shoulders: [Option<i32>; 2],
     /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
     pub bed: Option<[i32; 3]>,
     pub body: BodyFlags,
@@ -284,6 +286,21 @@ fn stuck_meta(state: &mut EntityState, (arrows, stingers): (i32, i32)) {
             state.meta.push((index, serializer::INT, Value::Int(count)));
         }
         state.defaults.push((index, serializer::INT, Value::Int(0)));
+    }
+}
+
+/// `Player.DATA_SHOULDER_PARROT_LEFT` (19) and `_RIGHT` (20), an
+/// `OptionalInt`: 0 for none, else the parrot variant's id plus one.
+fn shoulder_meta(state: &mut EntityState, shoulders: [Option<i32>; 2]) {
+    for (index, variant) in [(19, shoulders[0]), (20, shoulders[1])] {
+        if let Some(v) = variant {
+            state
+                .meta
+                .push((index, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(v + 1)));
+        }
+        state
+            .defaults
+            .push((index, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(0)));
     }
 }
 
@@ -1972,6 +1989,7 @@ impl Hub {
             );
             state.spectator = h.game_mode == 3;
             stuck_meta(&mut state, h.stuck);
+            shoulder_meta(&mut state, h.shoulders);
             all.push(state);
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -2013,6 +2031,7 @@ impl Hub {
                 state.spectator = g.spectator();
                 state.watching = g.watching;
                 stuck_meta(&mut state, g.stuck);
+                shoulder_meta(&mut state, g.shoulders);
                 state
             })
             .collect();

@@ -3824,6 +3824,7 @@ impl Game<'_> {
             self.combat.stuck.tick();
         }
         for g in &mut host.hub.guests {
+            g.shoulders = super::shoulders::shoulder_variants(g.saved.as_ref());
             g.stuck = match self.guest_combat.get_mut(&g.conn) {
                 Some(combat) => {
                     if !paused {

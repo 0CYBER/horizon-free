@@ -2,7 +2,7 @@
 //! server threads and the play-state hub, feeds it the world's entities each
 //! tick and turns what the guests do into gameplay. A world that is not open
 //! costs one `Option` check per tick.
-use super::{Game, shield::OFFHAND_SLOT};
+use super::{Game, shield::OFFHAND_SLOT, shoulders::shoulder_variants};
 use horizon_client::{
     Result,
     items::ItemStack,
@@ -1532,6 +1532,7 @@ impl Game<'_> {
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
             stuck: (self.combat.stuck.arrows, self.combat.stuck.stingers),
+            shoulders: shoulder_variants(self.level.player_extra.as_ref()),
             bed: self.sleeping,
             body: BodyFlags {
                 gliding: p.fall_flying,
@@ -2370,6 +2371,7 @@ impl Game<'_> {
             m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
             m.extra.auto_spin_attack = body.spin_attack;
             (m.extra.arrow_count, m.extra.stinger_count) = g.stuck;
+            m.extra.shoulder_parrots = g.shoulders;
             m.velocity = g
                 .motion
                 .as_ref()
