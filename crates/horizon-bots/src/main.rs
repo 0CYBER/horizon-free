@@ -81,6 +81,8 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          registry id, count), to test what a server takes
   --click X,Y,Z:SLOT:BUTTON:MODE  3 s after joining, open the block at X,Y,Z (a chest), then a second later
                          click SLOT of its window (ServerboundContainerClickPacket), to test what a server takes
+  --raw TICK:ID:HEX,...  raw serverbound play packets (id, body in hex) sent TICK ticks after joining,
+                         to test what a server takes
   --timer F              cheat, to test an anticheat: tick F times as fast as vanilla's client (1.5: 30 Hz)
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
@@ -142,6 +144,8 @@ struct Options {
     no_loaded: bool,
     height: f64,
     ground: bool,
+    /// --raw: (tick after joining, packet id, body).
+    raw: Vec<(u64, i32, Vec<u8>)>,
     /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
     give: Vec<(i16, i32, i32)>,
     /// --click: the block to open, then the slot, button and click type in its window.
@@ -172,6 +176,7 @@ fn options() -> Result<Options, String> {
         no_loaded: false,
         height: 24.0,
         ground: false,
+        raw: Vec::new(),
         give: Vec::new(),
         click: None,
         name: "Bot".into(),
@@ -245,6 +250,27 @@ fn options() -> Result<Options, String> {
                 let at = <[i32; 3]>::try_from(at).map_err(|_| bad())?;
                 let parse = |s: &str| s.parse::<i32>().map_err(|_| bad());
                 o.click = Some((at, parse(slot)? as i16, parse(button)? as i8, parse(mode)?));
+            }
+            "--raw" => {
+                for part in value.split(',') {
+                    let bad = || number("TICK:ID:HEX");
+                    let [tick, id, hex] = part.split(':').collect::<Vec<_>>()[..] else {
+                        return Err(bad());
+                    };
+                    let body = (0..hex.len())
+                        .step_by(2)
+                        .map(|i| {
+                            hex.get(i..i + 2)
+                                .and_then(|b| u8::from_str_radix(b, 16).ok())
+                        })
+                        .collect::<Option<Vec<u8>>>()
+                        .ok_or_else(bad)?;
+                    o.raw.push((
+                        tick.parse().map_err(|_| bad())?,
+                        id.parse().map_err(|_| bad())?,
+                        body,
+                    ));
+                }
             }
             "--height" => o.height = value.parse().map_err(|_| number("blocks"))?,
             "--timer" => {
@@ -933,6 +959,11 @@ fn run_bot(
                     })
                     .encode(),
                 );
+            }
+        }
+        for (at, id, body) in &o.raw {
+            if *at == tick {
+                send(raw(*id, |w| w.bytes(body)));
             }
         }
         // The costly floods go out wherever the bot is, chunks or not (--no-read gets none).
