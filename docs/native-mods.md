@@ -124,6 +124,12 @@ block entity gets one. Horizon sends every write to players whatever the flags: 
 and `UPDATE_IMMEDIATE` change nothing yet. Hooks holding only `GameLevel` cannot call it yet. Bundles that use it need
 `"hooks": 24`.
 
+API 25 adds `GameLevel::native_play_sound` for registered vanilla sound events on an authoritative server.
+It queues the sound for nearby players in the level's dimension, including during a guest's turn.
+Pass a `SOUND_SOURCES` index, position, volume and pitch. The return value says whether the call
+was queued, not whether a player heard it. The server discards unknown sound events when it dispatches
+the queue. Bundles that use it need `"hooks": 25`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page, into the instance picked on the left ("Installs into
