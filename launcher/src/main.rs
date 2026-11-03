@@ -3150,6 +3150,7 @@ impl Launcher {
                         cx.notify();
                     })),
                 ),
+            Some(false) if backend::OFFLINE_PLAY => div(),
             Some(false) => div().child(microsoft::sign_in_button("prepare-sign-in", &t).on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.sign_in_to_play();
@@ -3992,6 +3993,10 @@ impl Launcher {
     /// rows are numbered from 01; returns them and how many there are.
     fn account_rows(&mut self, cx: &mut Context<Self>) -> (Div, usize) {
         let t = self.theme;
+        // Horizon-free: no Microsoft accounts section; offline names are all there is to manage.
+        if backend::OFFLINE_PLAY {
+            return (div().flex().flex_col(), 0);
+        }
         let (mut rows, mut n) = self.microsoft_rows(cx);
         n += 1;
         let (title, detail, action) = self.sign_in_parts(cx);
