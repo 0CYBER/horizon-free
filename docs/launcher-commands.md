@@ -68,7 +68,7 @@ MCP: `prepare`.
 
 ## `horizon-launcher play`
 
-Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition).
+Start the client (offline play needs no account; downloads need one that owns Minecraft: Java Edition).
 
     horizon-launcher play
 
