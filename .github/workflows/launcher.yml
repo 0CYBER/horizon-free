@@ -239,6 +239,7 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          gh release create "$TAG" --target "$GITHUB_SHA" \
+          # `-R`: this job has no checkout, and `gh` would otherwise look for a repository here.
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Horizon Launcher (free) $VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md" --latest=false dist/*
