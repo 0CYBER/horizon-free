@@ -73,6 +73,8 @@ jobs:
     needs: meta
     if: needs.meta.outputs.build == 'true'
     name: build ${{ matrix.name }}
+    # The Windows ARM64 runner is new: a failure there never holds the other platforms' release.
+    continue-on-error: ${{ matrix.name == 'windows-arm64' }}
     strategy:
       fail-fast: false
       matrix:
@@ -82,6 +84,12 @@ jobs:
             asset: horizon-launcher-windows-x64.zip
             binary: horizon-launcher.exe
             # The C runtime linked in: without it the launcher asks for VCRUNTIME140.dll.
+            rustflags: -C target-feature=+crt-static
+          - name: windows-arm64
+            os: windows-11-vs2026-arm
+            target: aarch64-pc-windows-msvc
+            asset: horizon-launcher-windows-arm64.zip
+            binary: horizon-launcher.exe
             rustflags: -C target-feature=+crt-static
           - name: linux
             os: ubuntu-22.04
@@ -168,8 +176,9 @@ jobs:
               (cd dist && 7z a "../out/$ASSET" "${{ matrix.binary }}" > /dev/null)
             fi
           fi
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            # The bare executable, as earlier releases shipped it.
+          if [[ "$RUNNER_OS" == "Windows" && "${{ matrix.name }}" == "windows" ]]; then
+            # The bare executable, as earlier releases shipped it (x64 only: both Windows
+            # builds produce a file named horizon-launcher.exe).
             cp "$BIN/${{ matrix.binary }}" out/horizon-launcher.exe
           fi
           ls -l out
