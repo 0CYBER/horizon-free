@@ -22,6 +22,12 @@ again.
    The ARM64 Windows job is optional: if its runner fails, the other platforms still publish.
 7. `cargo fmt`, `cargo check`, `cargo test --lib --bins` in `launcher/`.
 8. Commit, fast-forward `main`, force-push, and let the workflow publish.
+9. If a build fails with "The job was not acquired by Runner of type hosted even after multiple
+   attempts" (GitHub's macOS capacity), rerun just that job; the version is not released yet, so
+   nothing gets published twice:
+   ```sh
+   gh run rerun <run-id> -R 0CYBER/horizon-free --failed
+   ```
 
 ## Launcher patches the fork keeps
 
