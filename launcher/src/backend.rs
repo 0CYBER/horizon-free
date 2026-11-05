@@ -3744,10 +3744,7 @@ pub fn place_checked(
         .map(|ending| stage.join(format!("download{ending}")))
         .find(|path| path.is_file())
         .ok_or_else(not_staged)?;
-    // Fork releases are not signed by Horizon's key: an empty digest skips the check.
-    if !staged.sha256.is_empty() {
-        horizon_release_sign::check(&staged.tag, &staged.sha256, &file_sha256(&archive)?)?;
-    }
+    horizon_release_sign::check(&staged.tag, &staged.sha256, &file_sha256(&archive)?)?;
     let payload = if staged.payload == archive {
         archive
     } else {
@@ -3829,11 +3826,18 @@ fn fill_stage(
 ) -> Result<Staged, String> {
     let archive = stage.join(archive_name(url));
     download(url, size, sha256, &archive, progress)?;
+    // Fork releases are not signed: the stage keeps the archive's own SHA-256, so
+    // `place_checked` still refuses bytes that changed after the download.
+    let sha256 = if sha256.is_empty() {
+        file_sha256(&archive)?
+    } else {
+        sha256.to_owned()
+    };
     let staged = |payload| {
         Ok(Staged {
             tag: tag.to_owned(),
             payload,
-            sha256: sha256.to_owned(),
+            sha256: sha256.clone(),
         })
     };
     // An AppImage is the whole program: the new one takes the place of the file `$APPIMAGE` names
