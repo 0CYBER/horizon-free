@@ -219,19 +219,8 @@ jobs:
             echo "- No Microsoft sign-in plates in the interface."
             echo "- Horizon-Free button in the sidebar, above the Discord button."
             echo "- Launcher self-updates from 0CYBER/horizon-free (tags launcher@X.Y.Z)."
-            echo "- Launcher self-update signature check disabled for fork releases."
-            echo "- README warning preserved."
             echo
-            echo "Downloads still need an account that owns Minecraft: the fork starts the game from your own assets."
-            echo
-            echo "Assets:"
-            for f in horizon-launcher-*.zip horizon-launcher-*.tar.gz horizon-launcher-macos-*.dmg; do
-              [[ -f "$f" ]] && echo "- $f"
-            done
-            echo "- SHA256SUMS.txt"
-            echo
-            echo "SHA256:"
-            sed 's/^/  /' SHA256SUMS.txt
+            echo "The fork starts the game from your own assets, that you download before-hand in any compatible java launcher."
           } > "$RUNNER_TEMP/notes.md"
       - name: Publish ${{ needs.meta.outputs.tag }}
         env:
