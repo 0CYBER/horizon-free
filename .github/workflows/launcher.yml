@@ -240,6 +240,7 @@ jobs:
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           # `-R`: this job has no checkout, and `gh` would otherwise look for a repository here.
+          # The newest launcher release is also the one the repository page shows as latest.
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Horizon Launcher (free) $VERSION" \
-            --notes-file "$RUNNER_TEMP/notes.md" --latest=false dist/*
+            --notes-file "$RUNNER_TEMP/notes.md" --latest dist/*
