@@ -5056,30 +5056,17 @@ pub fn {f}("
         assert!(update.asset.unwrap().0.ends_with(arm));
     }
 
-    /// Every asset a launcher looks for is one the release workflows build, sign and publish.
+    /// Every launcher asset a launcher looks for is one the fork's release workflow builds and
+    /// publishes. The game's own assets still come from the upstream releases, which this fork
+    /// does not build.
     #[test]
     fn platform_assets_are_published() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let read = |path: &str| fs::read_to_string(repo.join(path)).unwrap();
-        let build = read(".github/workflows/game-build.yml");
-        let nightly = read(".github/workflows/nightly-build.yml");
-        let launcher = read(".github/workflows/launcher.yml");
-        for (os, arch, game, launcher_asset) in PLATFORMS {
-            assert!(
-                build.contains(&format!("asset: {game}")),
-                "game-build.yml builds no {game}"
-            );
-            // Signed (SHA256SUMS), then published. Windows ARM64's build may fail without holding the
-            // Nightly, so both steps name it again where they check that it was built.
-            let named = nightly.matches(&format!("dist/{game}")).count();
-            let optional = (os, arch) == ("windows", "aarch64");
-            assert!(
-                named == 2 || (optional && named > 2),
-                "nightly-build.yml must sign and publish {game} ({os} {arch})"
-            );
+        let launcher = fs::read_to_string(repo.join(".github/workflows/launcher.yml")).unwrap();
+        for (os, arch, _, launcher_asset) in PLATFORMS {
             assert!(
                 launcher.contains(&format!("asset: {launcher_asset}")),
-                "launcher.yml builds no {launcher_asset}"
+                "launcher.yml builds no {launcher_asset} ({os} {arch})"
             );
         }
     }
