@@ -1872,6 +1872,7 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
             "horizon": updates.horizon.as_ref().map(|r| &r.tag),
             "launcher": updates.launcher.as_ref().and_then(|r| backend::launcher_version(&r.tag)),
             "launcher_current": backend::VERSION,
+            "launcher_error": updates.launcher_error.as_deref(),
         }));
         return Ok(());
     }
@@ -1885,7 +1886,10 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
         }
     }
     match &updates.launcher {
-        None => println!("Launcher: {} is up to date.", backend::VERSION),
+        None => match &updates.launcher_error {
+            Some(e) => println!("Launcher: couldn't check for updates: {e}"),
+            None => println!("Launcher: {} is up to date.", backend::VERSION),
+        },
         Some(r) => {
             let version = backend::launcher_version(&r.tag).unwrap_or_default();
             if check {

@@ -685,10 +685,99 @@ fn launcher_release_list() -> Result<serde_json::Value, String> {
     ))
 }
 
-fn launcher_releases() -> Vec<Release> {
-    launcher_release_list()
-        .map(|list| launcher_releases_in(&list))
-        .unwrap_or_default()
+/// The fork's releases, from the API when GitHub answers and from its Atom feed when it doesn't.
+///
+/// GitHub's anonymous API allows 60 reads an hour per address, and Horizon's mirror (which carries
+/// the game's repository through that limit) does not carry the fork's: a launcher behind a busy
+/// address would find no update at all. The feed is not rate limited, and names every tag.
+fn launcher_releases() -> Result<Vec<Release>, String> {
+    match launcher_release_list() {
+        Ok(list) => Ok(launcher_releases_in(&list)),
+        Err(api) => launcher_feed().map_err(|feed| format!("{api}, and {feed}")),
+    }
+}
+
+/// The fork's releases from its Atom feed (`releases.atom`), read when the API refuses.
+fn launcher_feed() -> Result<Vec<Release>, String> {
+    let url = format!("https://github.com/{LAUNCHER_REPO}/releases.atom");
+    let mut text = String::new();
+    get(&url)?
+        .into_reader()
+        .read_to_string(&mut text)
+        .map_err(|e| e.to_string())?;
+    let releases = feed_releases(&text);
+    if releases.is_empty() {
+        return Err(format!("{url} names no launcher release"));
+    }
+    Ok(releases)
+}
+
+/// The launcher releases in GitHub's Atom feed: each entry's tag, title and date, with this
+/// platform's file at its download address. The feed gives no file size, which `download` reads
+/// from the server instead.
+fn feed_releases(feed: &str) -> Vec<Release> {
+    let mut out: Vec<Release> = feed
+        .split("<entry>")
+        .skip(1)
+        .filter_map(|entry| {
+            let link = entry.split("/releases/tag/").nth(1)?.split('"').next()?;
+            let tag = percent_decode(link);
+            if !is_launcher_tag(&tag) {
+                return None;
+            }
+            let between = |open: &str, close: &str| {
+                entry
+                    .split(open)
+                    .nth(1)?
+                    .split(close)
+                    .next()
+                    .map(str::to_owned)
+            };
+            let published = between("<updated>", "</updated>").unwrap_or_default();
+            Some(Release {
+                name: between("<title>", "</title>").unwrap_or_default(),
+                body: String::new(),
+                date: published.chars().take(10).collect(),
+                time: published.get(11..16).unwrap_or_default().to_owned(),
+                asset: launcher_asset().map(|file| {
+                    (
+                        format!(
+                            "https://github.com/{LAUNCHER_REPO}/releases/download/{tag}/{file}"
+                        ),
+                        0,
+                    )
+                }),
+                tag,
+                prerelease: false,
+                nightly: None,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
+    out
+}
+
+/// `launcher%400.2.17` from a feed link as `launcher@0.2.17`.
+fn percent_decode(text: &str) -> String {
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let (bytes, mut out, mut i) = (text.as_bytes(), Vec::with_capacity(text.len()), 0);
+    while i < bytes.len() {
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(high), Some(low)) => {
+                out.push(high * 16 + low);
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
@@ -3172,6 +3261,9 @@ impl Logged {
 pub struct Updates {
     pub horizon: Option<Release>,
     pub launcher: Option<Release>,
+    /// Why the launcher's own releases could not be read: the window says so instead of calling a
+    /// launcher it never heard about up to date.
+    pub launcher_error: Option<String>,
 }
 
 /// The newest Horizon build with a build here (the current Nightly), if it isn't installed and
@@ -3217,7 +3309,7 @@ pub fn releases_and_updates(
 fn releases_and_updates_with(
     load: impl FnOnce() -> Result<serde_json::Value, String>,
     installed: impl FnOnce() -> Vec<String>,
-    launchers: impl FnOnce(&serde_json::Value) -> Vec<Release>,
+    launchers: impl FnOnce(&serde_json::Value) -> Result<Vec<Release>, String>,
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
     let list = match load() {
@@ -3232,9 +3324,14 @@ fn releases_and_updates_with(
     let horizon = horizon_update(&installable_updates(&releases), &installed_versions)
         .or_else(|| architecture_update(&releases, &installed_versions));
     on_releases(Ok(releases));
+    let (launcher, launcher_error) = match launchers(&list) {
+        Ok(launcher_releases) => (launcher_update(&launcher_releases), None),
+        Err(e) => (None, Some(e)),
+    };
     Ok(Updates {
         horizon,
-        launcher: launcher_update(&launchers(&list)),
+        launcher,
+        launcher_error,
     })
 }
 
@@ -5665,6 +5762,77 @@ pub fn {f}("
             launcher_asset_running_from(true),
             Some("horizon-launcher-linux-x86_64.AppImage")
         );
+    }
+
+    /// The fork's release feed is the launcher's fallback when GitHub's API rate-limits the address
+    /// (60 reads an hour, shared): it names the tags, so the newest launcher is still offered, with
+    /// this platform's file at its download address.
+    #[test]
+    fn the_release_feed_still_offers_the_newest_launcher() {
+        let Some(asset) = launcher_asset() else {
+            return; // a platform the fork builds no launcher for
+        };
+        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Release notes from horizon-free</title>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/launcher@0.2.16</id>
+    <updated>2026-11-05T22:18:51Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/0CYBER/horizon-free/releases/tag/launcher%400.2.16"/>
+    <title>Horizon Launcher (free) 0.2.16</title>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/launcher@0.2.17</id>
+    <updated>2026-11-06T09:30:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/0CYBER/horizon-free/releases/tag/launcher%400.2.17"/>
+    <title>Horizon Launcher (free) 0.2.17</title>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/nightly-2026-11-05</id>
+    <updated>2026-11-05T12:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/0CYBER/horizon-free/releases/tag/nightly-2026-11-05"/>
+    <title>Nightly</title>
+  </entry>
+</feed>"#;
+        let releases = feed_releases(feed);
+        assert_eq!(releases.len(), 2, "a Nightly is not a launcher release");
+        let newest = launcher_update_from(&releases, "launcher@0.2.16").expect("0.2.17 is newer");
+        assert_eq!(newest.tag, "launcher@0.2.17");
+        assert_eq!(newest.date, "2026-11-06");
+        assert_eq!(newest.name, "Horizon Launcher (free) 0.2.17");
+        let (url, size) = newest.asset.expect("this platform's file");
+        assert_eq!(
+            size, 0,
+            "the feed has no sizes: download reads Content-Length"
+        );
+        assert_eq!(
+            url,
+            format!("https://github.com/{LAUNCHER_REPO}/releases/download/launcher@0.2.17/{asset}")
+        );
+        assert!(launcher_update_from(&releases, "launcher@0.2.17").is_none());
+    }
+
+    /// A launcher list that cannot be read is reported rather than called up to date, and the game
+    /// updates from the response the check already had still arrive.
+    #[test]
+    fn a_launcher_list_that_fails_is_reported() {
+        let updates = releases_and_updates_with(
+            || {
+                Ok(serde_json::json!([
+                    {"tag_name": "v0.1.0", "assets": [], "published_at": "2026-11-01T00:00:00Z"}
+                ]))
+            },
+            Vec::new,
+            |_| Err("GitHub's rate limit was reached for your network".into()),
+            |_| {},
+        )
+        .unwrap();
+        assert!(updates.launcher.is_none());
+        assert!(updates
+            .launcher_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rate limit"));
     }
 
     /// A program opened inside a `.zip` runs from the temporary folder, under a name that depends on

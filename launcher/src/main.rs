@@ -3887,8 +3887,8 @@ impl Launcher {
                 backend::VERSION,
                 trf("the update failed: {error}", &[("error", e)])
             ),
-            SelfUpdate::Idle => match &self.updates.launcher {
-                Some(r) => format!(
+            SelfUpdate::Idle => match (&self.updates.launcher, &self.updates.launcher_error) {
+                (Some(r), _) => format!(
                     "{}  ·  {}",
                     backend::VERSION,
                     trf(
@@ -3899,10 +3899,15 @@ impl Launcher {
                         )]
                     )
                 ),
-                None if self.checked.is_some() && self.update_error.is_none() => {
+                (None, Some(e)) => format!(
+                    "{}  ·  {}",
+                    backend::VERSION,
+                    trf("couldn't check for updates: {error}", &[("error", e)])
+                ),
+                (None, None) if self.checked.is_some() && self.update_error.is_none() => {
                     format!("{}  ·  {}", backend::VERSION, tr("up to date"))
                 }
-                None => backend::VERSION.to_string(),
+                (None, None) => backend::VERSION.to_string(),
             },
         };
         let launcher_action = match &self.self_update {
