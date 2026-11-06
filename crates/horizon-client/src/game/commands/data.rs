@@ -449,6 +449,25 @@ impl Game<'_> {
                 self.carts[i] = cart;
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
+            Target::Painting(id) => {
+                // Painting.readAdditionalSaveData over HangingEntity's: the
+                // facing, the block it hangs on and a known variant (an unknown
+                // one keeps the painting's).
+                let uuid = self.uuid_for(id);
+                let (pos, facing, variant) =
+                    entity_nbt::painting_from_nbt(&tag).ok_or_else(stale)?;
+                let known = self.painting_variants.get(&variant).cloned();
+                let p = self
+                    .paintings
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                    .ok_or_else(stale)?;
+                (p.pos, p.facing) = (pos, facing);
+                if let Some(v) = known {
+                    (p.variant, p.width, p.height) = (v.id, v.width, v.height);
+                }
+                set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
+            }
             Target::Other(id) => {
                 let uuid = self.uuid_for(id);
                 let marker = self
@@ -473,6 +492,7 @@ impl Game<'_> {
         | Target::Item(id)
         | Target::Stand(id)
         | Target::Frame(id)
+        | Target::Painting(id)
         | Target::Boat(id)
         | Target::Cart(id)
         | Target::Other(id)

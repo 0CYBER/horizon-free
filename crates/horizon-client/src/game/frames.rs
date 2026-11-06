@@ -163,21 +163,6 @@ impl Game<'_> {
             "minecraft:glow_item_frame" => true,
             _ => return false,
         };
-        let entity_data = stack.extra.as_ref().and_then(|extra| {
-            extra.other.iter().find_map(|(k, v)| {
-                (k == "minecraft:entity_data" || k == "entity_data").then_some(v)
-            })
-        });
-        let invisible = entity_data
-            .and_then(|v| horizon_client::save::number(v.get("Invisible")))
-            .unwrap_or(0)
-            != 0;
-        // `applyComponentsFromItemStack` sets `CUSTOM_NAME`, then `entity_data`
-        // loads (`updateCustomEntityTag`): a missing `CustomName` clears it.
-        let custom_name = match entity_data {
-            Some(data) => data.get("CustomName").cloned(),
-            None => stack.data().and_then(|d| d.custom_name.clone()),
-        };
         let pos: [i32; 3] = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
         // `ItemFrameItem.mayPlace`: `Level.isInsideBuildHeight(blockPos)`, so a frame is not
         // placed on the top face of the highest block or under the lowest one.
@@ -189,8 +174,12 @@ impl Game<'_> {
             self.use_failed = true;
             return true;
         }
-        let frame = ItemFrame {
-            id: self.next_entity + 1,
+        // HangingEntityItem.useOn: the frame is made, then the item's
+        // EntityType.createDefaultStackConfig applies to it, then it has to survive.
+        self.next_entity += 1;
+        let id = self.next_entity;
+        self.item_frames.push(ItemFrame {
+            id,
             pos,
             facing: facing_of(hit.face),
             glow,
@@ -198,24 +187,29 @@ impl Game<'_> {
             rotation: 0,
             drop_chance: 1.0,
             fixed: false,
-            invisible,
+            invisible: false,
             check_interval: 0,
-            custom_name,
-        };
-        // HangingEntity.survives false: CONSUME, which ItemStack.useOn still counts as a use.
-        if !self.frame_survives(&frame) {
-            self.award_stat("used", &stack.item, 1);
-            return true;
-        }
+            custom_name: None,
+        });
         let kind = if glow {
             "minecraft:glow_item_frame"
         } else {
             "minecraft:item_frame"
         };
-        if self.hanging_place_cancelled(kind, pos) {
+        self.apply_item_stack_config(super::commands::Target::Frame(id), kind, stack, true);
+        let i = self.item_frames.iter().position(|f| f.id == id);
+        let frame = i.map(|i| self.item_frames.remove(i));
+        // HangingEntity.survives false: CONSUME, which ItemStack.useOn still counts as a use.
+        let Some(frame) = frame.filter(|f| self.frame_survives(f)) else {
+            self.forget_entity(id);
+            self.award_stat("used", &stack.item, 1);
+            return true;
+        };
+        if self.hanging_place_cancelled(kind, frame.pos) {
+            self.forget_entity(id);
             return true;
         }
-        self.next_entity += 1;
+        let pos = frame.pos;
         self.audio
             .play(&sound(&frame, "place"), Some(center(&frame)), 1.0, 1.0);
         // HangingEntityItem.useOn: ENTITY_PLACE at the frame, by the player, before it is

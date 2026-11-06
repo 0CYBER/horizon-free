@@ -228,17 +228,31 @@ impl Game<'_> {
             .unwrap_or(0) as usize;
         let v = &fitting[pick];
         (candidate.variant, candidate.width, candidate.height) = (v.id.clone(), v.width, v.height);
-        // EntityType.createDefaultStackConfig -> Painting.applyImplicitComponents:
-        // the stack's `painting/variant` replaces the random pick, and that
-        // painting has to survive where it goes (else the use is CONSUME).
+        // EntityType.createDefaultStackConfig: Painting.applyImplicitComponents
+        // (the stack's `painting/variant` replaces the random pick), then the
+        // item's name, custom data and entity data. The configured painting
+        // has to survive where it is (else the use is CONSUME).
         if let Some(v) = self.painting_variants.of_stack(stack).cloned() {
             (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
-            if !self.painting_survives(&candidate) {
-                self.award_stat("used", &stack.item, 1);
-                return true;
-            }
         }
+        let id = candidate.id;
+        self.paintings.push(candidate);
+        self.apply_item_stack_config(
+            super::commands::Target::Painting(id),
+            "minecraft:painting",
+            stack,
+            true,
+        );
+        let i = self.paintings.iter().position(|p| p.id == id);
+        let candidate = i.map(|i| self.paintings.remove(i));
+        let Some(candidate) = candidate.filter(|p| self.painting_survives(p)) else {
+            self.forget_entity(id);
+            self.award_stat("used", &stack.item, 1);
+            return true;
+        };
+        let pos = candidate.pos;
         if self.hanging_place_cancelled("minecraft:painting", pos) {
+            self.forget_entity(id);
             return true;
         }
         let (lo, hi) = candidate.bounds();

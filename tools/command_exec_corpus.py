@@ -994,6 +994,53 @@ def vehicle_item_stack_config():
     return ops
 
 
+def hanging_item_stack_config():
+    """HangingEntityItem.useOn (item frame, glow item frame, painting) and ArmorStandItem.useOn apply
+    EntityType.createDefaultStackConfig: the item's custom name and custom data
+    (applyComponentsFromItemStack, saved as `CustomName` and `data`), then minecraft:entity_data
+    (updateCustomEntityTag, merged over the entity) when its id is the entity's. A hanging entity's
+    survives() runs on the configured entity; the stand turns to the player's yaw, pitch 0, after."""
+    ops = setup('/forceload add 0 0 15 15', '/fill 0 199 0 15 199 15 stone', '/fill 0 200 0 15 203 15 air',
+                '/fill 0 200 7 9 201 7 stone', '/gamemode creative', '/tp @s 4.5 200 4.5 0 0')
+    ops += [{'op': 'settle'}]
+    for kind, item, (x, y, face), reads in (
+        # On the wall's north face: frames low, paintings above them.
+        ('item_frame', 'item_frame[custom_name="Framed",custom_data={a:1b}]', (1, 200, 2),
+         ('CustomName', 'data')),
+        ('glow_item_frame', 'glow_item_frame[entity_data={id:"minecraft:glow_item_frame",Invisible:1b,Fixed:1b,'
+         'Tags:["frame_data"]}]', (3, 200, 2), ('Invisible', 'Fixed', 'Tags')),
+        # The item's name stays when the data has none (the data merges over the named entity).
+        ('item_frame', 'item_frame[custom_name="Kept",entity_data={id:"minecraft:item_frame",Tags:["kept"]}]',
+         (5, 200, 2), ('CustomName', 'Tags')),
+        ('item_frame', 'item_frame[entity_data={id:"minecraft:painting",Tags:["wrong_id"]}]', (7, 200, 2),
+         ('Tags',)),
+        ('painting', 'painting[painting/variant="minecraft:kebab",custom_name="Pic",custom_data={p:1b}]',
+         (2, 201, 2), ('CustomName', 'data', 'variant')),
+        ('painting', 'painting[painting/variant="minecraft:kebab",entity_data={id:"minecraft:painting",'
+         'Tags:["pic_data"]}]', (4, 201, 2), ('Tags', 'variant')),
+        ('painting', 'painting[entity_data={id:"minecraft:painting",variant:"minecraft:aztec"}]', (6, 201, 2),
+         ('variant',)),
+        # The data's 4x4 variant does not fit the two-block wall: survives() refuses it, nothing is placed.
+        ('painting', 'painting[painting/variant="minecraft:kebab",entity_data={id:"minecraft:painting",'
+         'variant:"minecraft:pointer"}]', (8, 201, 2), ()),
+        # On the floor.
+        ('armor_stand', 'armor_stand[custom_name="Stan",custom_data={s:1b}]', (1, 199, 1), ('CustomName', 'data')),
+        ('armor_stand', 'armor_stand[entity_data={id:"minecraft:armor_stand",ShowArms:1b,Small:1b,'
+         'Rotation:[90f,10f],Tags:["stand_data"]}]', (7, 199, 1), ('ShowArms', 'Small', 'Tags', 'Rotation')),
+    ):
+        z = 7 if face == 2 else 2
+        ops += setup(f'/item replace entity @s weapon.mainhand with minecraft:{item}')
+        ops += [{'op': 'use_block', 'pos': [x, y, z], 'face': face}]
+        at = (x, y, z - 1) if face == 2 else (x, y + 1, z)
+        sel = f'@e[type=minecraft:{kind},x={at[0]}.5,y={at[1]},z={at[2]}.5,distance=..1.2,limit=1]'
+        ops += [cmd(f'/execute if entity {sel}')]
+        ops += [cmd(f'/data get entity {sel} {r}') for r in reads]
+    ops += setup('/kill @e[type=minecraft:item_frame]', '/kill @e[type=minecraft:glow_item_frame]',
+                 '/kill @e[type=minecraft:painting]', '/kill @e[type=minecraft:armor_stand]',
+                 '/fill 0 200 0 15 203 15 air', '/gamemode survival', '/forceload remove 0 0 15 15')
+    return ops
+
+
 def components(item):
     """An item argument's components, `a=x,b=y`, as a components compound's body."""
     body = item[item.index('[') + 1:-1]
@@ -5973,6 +6020,7 @@ def groups():
         ('item command damage', item_command_damage()),
         ('dragon command damage', dragon_command_damage()),
         ('vehicle item stack config', vehicle_item_stack_config()),
+        ('hanging item stack config', hanging_item_stack_config()),
         ('execute', execute()),
         ('projectile origin', projectile_origin()),
         ('selector missing predicates', selector_missing_predicates()),

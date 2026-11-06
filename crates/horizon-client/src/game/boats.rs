@@ -1265,7 +1265,7 @@ impl Game<'_> {
         self.world.modified.insert(key);
         let (id, kind, yaw) = (boat.id, boat.entity_type(), boat.yaw);
         self.boats.push(boat);
-        self.apply_vehicle_stack_config(super::commands::Target::Boat(id), &kind, stack, true);
+        self.apply_item_stack_config(super::commands::Target::Boat(id), &kind, stack, true);
         // BoatItem.use: setYRot(player.getYRot()) after the stack's config.
         self.set_boat_yaw(id, yaw);
         if self.serving.is_some() || self.options.dedicated.is_some() {

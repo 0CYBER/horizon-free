@@ -467,6 +467,50 @@ impl Game<'_> {
             .unwrap_or(self.ui.registries.permission)
             > 0
     }
+    /// `EntityType.createDefaultStackConfig` on an entity an item made (a
+    /// vehicle, a hanging entity, an armor stand): the item's custom name and
+    /// custom data (`applyComponentsFromItemStack`:
+    /// `Entity.applyImplicitComponent`'s two, saved as `CustomName` and
+    /// `data`), then its `minecraft:entity_data` merged over the entity's own
+    /// compound and loaded (`updateCustomEntityTag`) when it names this type.
+    /// An op-only type (command block and spawner minecarts) takes it from an
+    /// op player only, never from a dispenser (`by_player` false).
+    pub(super) fn apply_item_stack_config(
+        &mut self,
+        target: super::commands::Target,
+        kind: &str,
+        stack: &horizon_client::items::ItemStack,
+        by_player: bool,
+    ) {
+        let name = stack.data().and_then(|d| d.custom_name.clone());
+        let custom = stack
+            .data()
+            .and_then(|d| d.other("minecraft:custom_data"))
+            .cloned();
+        let op = by_player && self.acting_player_is_op();
+        let data =
+            horizon_client::block_entity_item::spawn_egg_entity_data(stack, kind, op).cloned();
+        if name.is_none() && custom.is_none() && data.is_none() {
+            return;
+        }
+        let Some(mut own) = self.entity_nbt(target) else {
+            return;
+        };
+        if let Tag::Compound(map) = &mut own {
+            if let Some(name) = name {
+                map.insert("CustomName".into(), name);
+            }
+            if let Some(custom) = custom {
+                map.insert("data".into(), custom);
+            }
+        }
+        let tag = match &data {
+            Some(data) => horizon_client::data_cmd::merged(&own, data),
+            None => own,
+        };
+        // The entity's own compound, its name and data merged in: it loads back.
+        let _ = self.apply_entity_nbt(target, tag);
+    }
     /// Ticks spawners, trial spawners and vaults near the player on a remote
     /// client (`tick_remote`).
     pub(super) fn tick_remote_spawners(&mut self) {

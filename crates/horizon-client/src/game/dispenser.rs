@@ -1256,7 +1256,7 @@ impl Game<'_> {
         self.boats.push(boat);
         // BoatDispenseItemBehavior: createDefaultStackConfig with no user,
         // then setYRot(direction.toYRot()).
-        self.apply_vehicle_stack_config(super::commands::Target::Boat(id), &kind, &stack, false);
+        self.apply_item_stack_config(super::commands::Target::Boat(id), &kind, &stack, false);
         self.set_boat_yaw(id, yaw);
         if self.serving.is_some() || self.options.dedicated.is_some() {
             let boat = self.boats.last().unwrap();
@@ -1306,12 +1306,7 @@ impl Game<'_> {
         self.carts.push(cart);
         // AbstractMinecart.createMinecart: createDefaultStackConfig with no user.
         let id = self.next_entity;
-        self.apply_vehicle_stack_config(
-            super::commands::Target::Cart(id),
-            kind.id(),
-            &stack,
-            false,
-        );
+        self.apply_item_stack_config(super::commands::Target::Cart(id), kind.id(), &stack, false);
         if self.serving.is_some() || self.options.dedicated.is_some() {
             let cart = self.carts.last().unwrap();
             self.native_vehicle_create(
