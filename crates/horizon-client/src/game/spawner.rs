@@ -482,32 +482,19 @@ impl Game<'_> {
         stack: &horizon_client::items::ItemStack,
         by_player: bool,
     ) {
-        let name = stack.data().and_then(|d| d.custom_name.clone());
-        let custom = stack
-            .data()
-            .and_then(|d| d.other("minecraft:custom_data"))
-            .cloned();
         let op = by_player && self.acting_player_is_op();
-        let data =
-            horizon_client::block_entity_item::spawn_egg_entity_data(stack, kind, op).cloned();
-        if name.is_none() && custom.is_none() && data.is_none() {
+        let configures = stack.data().is_some_and(|d| {
+            d.custom_name.is_some() || d.other("minecraft:custom_data").is_some()
+        }) || horizon_client::block_entity_item::spawn_egg_entity_data(stack, kind, op)
+            .is_some();
+        if !configures {
             return;
         }
-        let Some(mut own) = self.entity_nbt(target) else {
+        let Some(own) = self.entity_nbt(target) else {
             return;
         };
-        if let Tag::Compound(map) = &mut own {
-            if let Some(name) = name {
-                map.insert("CustomName".into(), name);
-            }
-            if let Some(custom) = custom {
-                map.insert("data".into(), custom);
-            }
-        }
-        let tag = match &data {
-            Some(data) => horizon_client::data_cmd::merged(&own, data),
-            None => own,
-        };
+        let tag =
+            horizon_client::block_entity_item::stack_configured_entity_by(stack, kind, &own, op);
         // The entity's own compound, its name and data merged in: it loads back.
         let _ = self.apply_entity_nbt(target, tag);
     }

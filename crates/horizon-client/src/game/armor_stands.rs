@@ -359,8 +359,26 @@ impl Game<'_> {
                     .into_iter()
                     .zip(["helmet", "chestplate", "leggings", "boots"])
             }));
+        // The smithing screen's preview stand wears the result slot's item.
+        let preview = self
+            .station
+            .as_ref()
+            .filter(|s| s.kind == super::stations::Kind::Smithing)
+            .and_then(|s| s.result.as_ref())
+            .map(|stack| {
+                let equip = items.get(&stack.item).and_then(|i| i.equip_slot.as_deref());
+                let layer = match preview_slot(equip) {
+                    2 => "boots",
+                    3 => "leggings",
+                    4 => "chestplate",
+                    5 => "helmet",
+                    _ => "",
+                };
+                (Some(stack), layer)
+            });
+        let stacks = stacks.map(|(s, l)| (s.as_ref(), l)).chain(preview);
         for (stack, layer) in stacks {
-            let Some(stack) = stack.as_ref().filter(|s| s.extra.is_some()) else {
+            let Some(stack) = stack.filter(|s| s.extra.is_some()) else {
                 continue;
             };
             let Some(asset) = items
@@ -439,7 +457,11 @@ impl Game<'_> {
     /// `ArmorStandItem.useOn` up to its `FAIL`s, which a client checks too:
     /// not on a bottom face, and nothing in the new stand's box. The block it
     /// stands in and the stand.
-    pub(super) fn armor_stand_spawn(&self, hit: &super::Hit) -> Option<([i32; 3], ArmorStand)> {
+    pub(super) fn armor_stand_spawn(
+        &self,
+        hit: &super::Hit,
+        stack: &ItemStack,
+    ) -> Option<([i32; 3], ArmorStand)> {
         if hit.face == [0, -1, 0] {
             return None;
         }
@@ -460,7 +482,11 @@ impl Game<'_> {
         );
         let yaw =
             (((self.yaw - 180.0 + 180.0).rem_euclid(360.0) - 180.0 + 22.5) / 45.0).floor() * 45.0;
-        let stand = ArmorStand::new(self.next_entity + 1, foot, yaw);
+        let mut stand = ArmorStand::new(self.next_entity + 1, foot, yaw);
+        // Entity.applyImplicitComponents: a name from an anvil names the stand.
+        if let Some(name) = stack.custom_name() {
+            stand.custom_name = Some(horizon_client::text::Text::literal(name));
+        }
         let b = stand.bounds();
         // Touching the floor is not a collision.
         let (lo, hi) = (b.min_position(), b.max_position());
@@ -488,7 +514,7 @@ impl Game<'_> {
         if &*stack.item != "minecraft:armor_stand" {
             return false;
         }
-        let Some((pos, mut stand)) = self.armor_stand_spawn(hit) else {
+        let Some((pos, mut stand)) = self.armor_stand_spawn(hit, stack) else {
             return false;
         };
         // EntityType.create(.., tryMoveDown, movedUp): the new stand falls onto what is under it,
@@ -496,27 +522,32 @@ impl Game<'_> {
         let drop = self.drop_offset_from(0.5, 1.975, (pos[0], pos[1], pos[2]), true);
         stand.position.y = f64::from(pos[1]) + drop;
         stand.previous = stand.position;
+        // `EntityType.createDefaultStackConfig`: the item's `custom_data`, then its
+        // `entity_data` merged over the stand; `ArmorStandItem.useOn` then snaps it
+        // to the placement yaw with pitch 0.
+        let own = horizon_client::entity_nbt::armor_stand_to_nbt(&stand, [0; 4], None);
+        let mut raw = horizon_client::block_entity_item::stack_configured_entity(
+            stack,
+            "minecraft:armor_stand",
+            &own,
+        );
+        if let Some(mut loaded) = horizon_client::entity_nbt::armor_stand_from_nbt(&raw, stand.id) {
+            loaded.first_tick = stand.first_tick;
+            loaded.yaw = stand.yaw;
+            loaded.previous_yaw = stand.previous_yaw;
+            loaded.pitch = 0.0;
+            loaded.previous = loaded.position;
+            stand = loaded;
+        }
+        if let horizon_world::nbt::Tag::Compound(map) = &mut raw {
+            map.remove(&"UUID".into());
+        }
+        self.persist.raw.insert(stand.id, raw);
+        let foot = stand.position;
         // EntityType.create's spawn yaw, `level.getRandom().nextFloat() * 360`, before
         // ArmorStandItem.useOn turns the stand to face the player.
         self.world.random.next_float();
         self.next_entity += 1;
-        let (id, yaw) = (stand.id, stand.yaw);
-        self.armor_stands.push(stand);
-        // EntityType.create applies the item's createDefaultStackConfig; then
-        // ArmorStandItem.useOn snaps the stand to the player's yaw, pitch 0,
-        // where the data put it.
-        self.apply_item_stack_config(
-            super::commands::Target::Stand(id),
-            "minecraft:armor_stand",
-            stack,
-            true,
-        );
-        let Some(foot) = self.armor_stands.iter_mut().find(|a| a.id == id).map(|a| {
-            (a.yaw, a.previous_yaw, a.pitch) = (yaw, yaw, 0.0);
-            a.position
-        }) else {
-            return true;
-        };
         self.audio.play(
             "minecraft:entity.armor_stand.place",
             Some([foot.x, foot.y, foot.z]),
@@ -527,6 +558,7 @@ impl Game<'_> {
         let ctx = self.player_context(None);
         self.post_game_event("minecraft:entity_place", [foot.x, foot.y, foot.z], ctx);
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+        self.armor_stands.push(stand);
         if !self.creative {
             self.consume_held();
         }

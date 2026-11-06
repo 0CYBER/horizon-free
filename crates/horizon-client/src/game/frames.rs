@@ -116,12 +116,7 @@ impl Game<'_> {
         ));
         let supported = behind.legacy_solid || (s[1] == 0 && behind.has_class("DiodeBlock"));
         // canCoexist(true): only hanging entities facing the same way block it.
-        let overlaps = |o: ([f64; 3], [f64; 3])| (0..3).all(|i| o.0[i] < hi[i] && lo[i] < o.1[i]);
-        supported
-            && !self
-                .item_frames
-                .iter()
-                .any(|o| o.id != f.id && o.facing == f.facing && overlaps(o.bounds()))
+        supported && super::paintings::frame_coexists(f, &self.item_frames, &self.paintings)
     }
     /// Asks the mods whether the acting guest may place a hanging entity
     /// of type `kind` at `pos` (`native_hanging_place`): true when one
@@ -174,12 +169,8 @@ impl Game<'_> {
             self.use_failed = true;
             return true;
         }
-        // HangingEntityItem.useOn: the frame is made, then the item's
-        // EntityType.createDefaultStackConfig applies to it, then it has to survive.
-        self.next_entity += 1;
-        let id = self.next_entity;
-        self.item_frames.push(ItemFrame {
-            id,
+        let mut frame = ItemFrame {
+            id: self.next_entity + 1,
             pos,
             facing: facing_of(hit.face),
             glow,
@@ -189,27 +180,31 @@ impl Game<'_> {
             fixed: false,
             invisible: false,
             check_interval: 0,
-            custom_name: None,
-        });
-        let kind = if glow {
-            "minecraft:glow_item_frame"
-        } else {
-            "minecraft:item_frame"
+            // `applyComponentsFromItemStack` sets `CUSTOM_NAME`.
+            custom_name: stack.data().and_then(|d| d.custom_name.clone()),
         };
-        self.apply_item_stack_config(super::commands::Target::Frame(id), kind, stack, true);
-        let i = self.item_frames.iter().position(|f| f.id == id);
-        let frame = i.map(|i| self.item_frames.remove(i));
+        // `EntityType.createDefaultStackConfig`: the item's `custom_data`, then its
+        // `entity_data` merged over the frame (`TypedEntityData.loadInto`), before
+        // `survives` runs on the configured frame.
+        let kind = frame.kind();
+        let own = horizon_client::entity_nbt::item_frame_to_nbt(&frame, [0; 4], None);
+        let configured =
+            horizon_client::block_entity_item::stack_configured_entity(stack, kind, &own);
+        if let Some(mut loaded) =
+            horizon_client::entity_nbt::item_frame_from_nbt(&configured, frame.id)
+        {
+            loaded.glow = glow;
+            frame = loaded;
+        }
         // HangingEntity.survives false: CONSUME, which ItemStack.useOn still counts as a use.
-        let Some(frame) = frame.filter(|f| self.frame_survives(f)) else {
-            self.forget_entity(id);
+        if !self.frame_survives(&frame) {
             self.award_stat("used", &stack.item, 1);
             return true;
-        };
-        if self.hanging_place_cancelled(kind, frame.pos) {
-            self.forget_entity(id);
+        }
+        if self.hanging_place_cancelled(kind, pos) {
             return true;
         }
-        let pos = frame.pos;
+        self.next_entity += 1;
         self.audio
             .play(&sound(&frame, "place"), Some(center(&frame)), 1.0, 1.0);
         // HangingEntityItem.useOn: ENTITY_PLACE at the frame, by the player, before it is
@@ -217,6 +212,12 @@ impl Game<'_> {
         let ctx = self.player_context(None);
         self.post_game_event("minecraft:entity_place", center(&frame), ctx);
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+        // The unmodelled rest of the loaded data (`data`, `Tags`...) stays with the frame.
+        let mut raw = configured;
+        if let horizon_world::nbt::Tag::Compound(map) = &mut raw {
+            map.remove(&"UUID".into());
+        }
+        self.persist.raw.insert(frame.id, raw);
         self.item_frames.push(frame);
         if !self.creative {
             self.consume_held();
