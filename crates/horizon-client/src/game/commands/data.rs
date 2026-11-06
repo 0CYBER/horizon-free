@@ -451,12 +451,14 @@ impl Game<'_> {
             }
             Target::Painting(id) => {
                 // Painting.readAdditionalSaveData over HangingEntity's: the
-                // facing, the block it hangs on and a known variant (an unknown
-                // one keeps the painting's).
+                // facing, the block it hangs on and a known variant
+                // (`VariantUtils.readVariant(..).ifPresent`: an unknown or
+                // unreadable one keeps the painting's).
                 let uuid = self.uuid_for(id);
-                let (pos, facing, variant) =
-                    entity_nbt::painting_from_nbt(&tag).ok_or_else(stale)?;
-                let known = self.painting_variants.get(&variant).cloned();
+                let (pos, facing) =
+                    entity_nbt::painting_placement_from_nbt(&tag).ok_or_else(stale)?;
+                let known = entity_nbt::painting_from_nbt(&tag)
+                    .and_then(|(_, _, v)| self.painting_variants.get(&v).cloned());
                 let p = self
                     .paintings
                     .iter_mut()

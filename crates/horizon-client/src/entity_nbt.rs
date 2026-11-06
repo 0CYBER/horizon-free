@@ -3150,26 +3150,40 @@ pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     put(&mut tag, "block_pos", Tag::IntArray(p.pos.to_vec()));
     tag
 }
-/// `BlockAttachedEntity.readAdditionalSaveData`: `block_pos` when saved; a
-/// summoned one has none, and `setPos` puts its block at the block holding
-/// the summon position.
+/// `BlockAttachedEntity.readAdditionalSaveData`: `block_pos` when saved and
+/// closer than 16 blocks to the block holding `Pos`; else (a summoned one
+/// has none) `setPos` puts it at that block.
 fn attached_block_pos(tag: &Tag) -> Option<[i32; 3]> {
-    match tag.get("block_pos") {
+    let stored = match tag.get("block_pos") {
         Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
-        _ => {
-            let at = position(tag)?;
-            Some([
-                at.x.floor() as i32,
-                at.y.floor() as i32,
-                at.z.floor() as i32,
-            ])
-        }
-    }
+        _ => None,
+    };
+    let Some(at) = position(tag) else {
+        return stored;
+    };
+    let here = [
+        at.x.floor() as i32,
+        at.y.floor() as i32,
+        at.z.floor() as i32,
+    ];
+    // Vec3i.closerThan(blockPosition(), 16): the squared distance under 256.
+    let near = |p: &[i32; 3]| {
+        (0..3)
+            .map(|i| (f64::from(p[i]) - f64::from(here[i])).powi(2))
+            .sum::<f64>()
+            < 256.0
+    };
+    Some(stored.filter(near).unwrap_or(here))
+}
+/// The block position and facing of a saved painting (`HangingEntity`'s
+/// `facing`, a 2D direction).
+pub fn painting_placement_from_nbt(tag: &Tag) -> Option<([i32; 3], u8)> {
+    let pos = attached_block_pos(tag)?;
+    Some((pos, (number(tag.get("facing")).unwrap_or(0) & 3) as u8))
 }
 /// The block position, facing and variant of a saved painting.
 pub fn painting_from_nbt(tag: &Tag) -> Option<([i32; 3], u8, String)> {
-    let pos = attached_block_pos(tag)?;
-    let facing = (number(tag.get("facing")).unwrap_or(0) & 3) as u8;
+    let (pos, facing) = painting_placement_from_nbt(tag)?;
     Some((pos, facing, text(tag.get("variant"))?))
 }
 /// Cushion.addAdditionalSaveData: the block it sits on and its colour.
@@ -6623,6 +6637,14 @@ mod fireball_nbt_tests {
             ("Facing", Tag::Byte(1)),
         ]);
         assert_eq!(item_frame_from_nbt(&frame, 1).unwrap().pos, [-1, 80, 6]);
+        // BlockAttachedEntity.readAdditionalSaveData: a block_pos 16 blocks or
+        // more from the Pos block is refused for that block.
+        let mut far = painting.clone();
+        put(&mut far, "block_pos", Tag::IntArray(vec![28, 80, 22]));
+        assert_eq!(painting_from_nbt(&far).map(|p| p.0), Some([28, 80, 6]));
+        let mut near = painting.clone();
+        put(&mut near, "block_pos", Tag::IntArray(vec![28, 80, 21]));
+        assert_eq!(painting_from_nbt(&near).map(|p| p.0), Some([28, 80, 21]));
     }
 
     #[test]

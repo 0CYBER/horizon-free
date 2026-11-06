@@ -1023,6 +1023,12 @@ def hanging_item_stack_config():
         # The data's 4x4 variant does not fit the two-block wall: survives() refuses it, nothing is placed.
         ('painting', 'painting[painting/variant="minecraft:kebab",entity_data={id:"minecraft:painting",'
          'variant:"minecraft:pointer"}]', (8, 201, 2), ()),
+        # BlockAttachedEntity.readAdditionalSaveData refuses a block_pos 16 blocks or more away.
+        ('painting', 'painting[painting/variant="minecraft:kebab",entity_data={id:"minecraft:painting",'
+         'block_pos:[I;100,201,6],Tags:["far"]}]', (0, 201, 2), ('Tags', 'block_pos')),
+        # An unreadable variant is skipped; the rest of the data loads.
+        ('painting', 'painting[painting/variant="minecraft:kebab",entity_data={id:"minecraft:painting",'
+         'variant:1b,Tags:["bad_variant"]}]', (9, 201, 2), ('Tags', 'variant')),
         # On the floor.
         ('armor_stand', 'armor_stand[custom_name="Stan",custom_data={s:1b}]', (1, 199, 1), ('CustomName', 'data')),
         ('armor_stand', 'armor_stand[entity_data={id:"minecraft:armor_stand",ShowArms:1b,Small:1b,'
@@ -1035,6 +1041,15 @@ def hanging_item_stack_config():
         sel = f'@e[type=minecraft:{kind},x={at[0]}.5,y={at[1]},z={at[2]}.5,distance=..1.2,limit=1]'
         ops += [cmd(f'/execute if entity {sel}')]
         ops += [cmd(f'/data get entity {sel} {r}') for r in reads]
+    # Dispensed (ArmorStandDispenseItemBehavior): the dispenser's yaw, then the config with no user.
+    item = ('armor_stand[custom_name={text:"Disp",color:"red"},entity_data={id:"minecraft:armor_stand",'
+            'ShowArms:1b,Rotation:[45f,0f]}]')
+    ops += setup(f'/setblock 12 200 3 dispenser[facing=south]{{Items:[{{Slot:0b,id:"minecraft:armor_stand",'
+                 f'count:1,components:{{{components(item)}}}}}]}}', '/setblock 12 201 3 redstone_block')
+    ops += [{'op': 'tick', 'n': 6}]
+    sel = '@e[type=minecraft:armor_stand,x=12.5,y=200,z=4.5,distance=..1.2,limit=1]'
+    ops += [cmd(f'/execute if entity {sel}')]
+    ops += [cmd(f'/data get entity {sel} {r}') for r in ('CustomName', 'ShowArms', 'Rotation[0]')]
     ops += setup('/kill @e[type=minecraft:item_frame]', '/kill @e[type=minecraft:glow_item_frame]',
                  '/kill @e[type=minecraft:painting]', '/kill @e[type=minecraft:armor_stand]',
                  '/fill 0 200 0 15 203 15 air', '/gamemode survival', '/forceload remove 0 0 15 15')
