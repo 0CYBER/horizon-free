@@ -553,6 +553,8 @@ impl Launcher {
         })
         .detach();
         let mut settings = Settings::load();
+        // Horizon-free: allow playing without a Microsoft account that owns the game.
+        settings.dev_offline = backend::OFFLINE_PLAY;
         i18n::set(settings.language());
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
@@ -3129,6 +3131,14 @@ impl Launcher {
             }
             foot = foot.child(side);
         }
+        // Horizon-Free: link to the fork's repository.
+        foot = foot.child(div().h(px(1.)).w_full().bg(t.rule).my(px(4.)));
+        foot = foot.child(link(
+            "horizon-free",
+            "Horizon-Free",
+            "globe",
+            "https://github.com/0CYBER/horizon-free".to_string(),
+        ));
         if !self.links.sponsor.is_empty() {
             foot = foot.child(link(
                 "sponsor",
@@ -3456,6 +3466,7 @@ impl Launcher {
                         cx.notify();
                     })),
                 ),
+            Some(false) if backend::OFFLINE_PLAY => div(),
             Some(false) => div().child(microsoft::sign_in_button("prepare-sign-in", &t).on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.sign_in_to_play();
@@ -3883,8 +3894,8 @@ impl Launcher {
                 backend::VERSION,
                 trf("the update failed: {error}", &[("error", e)])
             ),
-            SelfUpdate::Idle => match &self.updates.launcher {
-                Some(r) => format!(
+            SelfUpdate::Idle => match (&self.updates.launcher, &self.updates.launcher_error) {
+                (Some(r), _) => format!(
                     "{}  ·  {}",
                     backend::VERSION,
                     trf(
@@ -3895,10 +3906,15 @@ impl Launcher {
                         )]
                     )
                 ),
-                None if self.checked.is_some() && self.update_error.is_none() => {
+                (None, Some(e)) => format!(
+                    "{}  ·  {}",
+                    backend::VERSION,
+                    trf("couldn't check for updates: {error}", &[("error", e)])
+                ),
+                (None, None) if self.checked.is_some() && self.update_error.is_none() => {
                     format!("{}  ·  {}", backend::VERSION, tr("up to date"))
                 }
-                None => backend::VERSION.to_string(),
+                (None, None) => backend::VERSION.to_string(),
             },
         };
         let launcher_action = match &self.self_update {
@@ -4398,6 +4414,10 @@ impl Launcher {
     /// rows are numbered from 01; returns them and how many there are.
     fn account_rows(&mut self, cx: &mut Context<Self>) -> (Div, usize) {
         let t = self.theme;
+        // Horizon-free: no Microsoft accounts section; offline names are all there is to manage.
+        if backend::OFFLINE_PLAY {
+            return (div().flex().flex_col(), 0);
+        }
         let (mut rows, mut n) = self.microsoft_rows(cx);
         n += 1;
         let (title, detail, action) = self.sign_in_parts(cx);
