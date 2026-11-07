@@ -17,6 +17,10 @@ impl Launcher {
     pub(super) fn glass_account(&mut self, cx: &mut Context<Self>) -> Div {
         let wide = self.window_width >= crate::glass_home::WIDE;
         let left = self.glass_who_plays(cx);
+        // Horizon-free: no Microsoft sign-in card; offline names are all there is to manage.
+        if backend::OFFLINE_PLAY {
+            return div().flex().child(left.flex_1().min_w_0().p(px(24.)));
+        }
         let right = self.glass_microsoft_card(cx);
         if wide {
             div()
