@@ -483,10 +483,10 @@ impl Game<'_> {
         by_player: bool,
     ) {
         let op = by_player && self.acting_player_is_op();
-        let configures = stack.data().is_some_and(|d| {
-            d.custom_name.is_some() || d.other("minecraft:custom_data").is_some()
-        }) || horizon_client::block_entity_item::spawn_egg_entity_data(stack, kind, op)
-            .is_some();
+        let configures = stack
+            .data()
+            .is_some_and(|d| d.custom_name.is_some() || d.other("minecraft:custom_data").is_some())
+            || horizon_client::block_entity_item::spawn_egg_entity_data(stack, kind, op).is_some();
         if !configures {
             return;
         }
