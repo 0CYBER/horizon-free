@@ -1078,9 +1078,6 @@ def components(item):
     return ','.join(f'"minecraft:{k}":{v}' for k, v in (part.split('=', 1) for part in out))
 
 
-    return ops
-
-
 def snbt_trailing_commas():
     """SnbtGrammar: a compound, a list and a typed array may end with a comma; an empty one
     may not hold only a comma, and two commas in a row are an error."""
