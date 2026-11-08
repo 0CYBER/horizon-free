@@ -5093,6 +5093,22 @@ def zombie_nautilus_ignored_age():
 
 
 
+def boat_passenger_tree_cases(original_full=False):
+    try:
+        from .boat_passenger_tree_corpus import cases
+    except ImportError:
+        from boat_passenger_tree_corpus import cases
+    return cases(cmd, original_full)
+
+
+def effective_component_presence_cases():
+    try:
+        from .effective_component_presence_corpus import cases
+    except ImportError:
+        from effective_component_presence_corpus import cases
+    return cases(cmd)
+
+
 def jukebox_saved_clock_cases():
     try:
         from .jukebox_saved_clock_corpus import cases
@@ -5889,6 +5905,24 @@ def piston_push_ground():
     return ops
 
 
+def primed_tnt_box():
+    """#12020: `EntityTypes.TNT` is sized 0.98F, so its box is half 0.49F wide
+    and 0.98F tall, both widened from float: TNT stopped by a wall ends 0.49F
+    short of it and TNT stopped by a ceiling 0.98F below it, not at 0.49 and
+    0.98. NoGravity keeps the stops independent of gravity and drag."""
+    ops = []
+    for case, motion, blocks in (('wall', '0.6d,0.0d,0.0d', '/fill 33 209 30 33 213 33 stone'),
+                                 ('ceiling', '0.0d,0.6d,0.0d', '/fill 30 212 30 33 212 33 stone')):
+        ops += setup('/kill @e[type=!player]', '/fill 28 208 28 36 218 36 air', blocks,
+                     '/summon minecraft:tnt 31.5 210 31.5 '
+                     f'{{fuse:200s,NoGravity:1b,Motion:[{motion}],Tags:["tnt_box"]}}')
+        for _ in range(3):
+            ops.append({'op': 'tick', 'n': 1})
+            ops.append(cmd('/data get entity @e[type=minecraft:tnt,tag=tnt_box,limit=1] Pos'))
+    ops += setup('/kill @e[type=!player]', '/fill 28 208 28 36 218 36 air')
+    return ops
+
+
 def piston_tnt_effects():
     """#12023: `Entity.move(MoverType.PISTON)` uses up primed TNT's pending
     stuck multiplier without scaling the push, adds to its fall and resets it
@@ -6291,9 +6325,13 @@ ISOLATED_STAND_FALL = frozenset({'stand saved fall distance'})
 ISOLATED_POTION_ICONS = frozenset({'potion custom effect icons'})
 ISOLATED_JUKEBOX_CLOCK = frozenset({'jukebox saved clock'})
 ISOLATED_FUNCTION_FEEDBACK = frozenset({'fork function feedback'})
+ISOLATED_EFFECTIVE_PRESENCE = frozenset({'effective component presence'})
+ISOLATED_BOAT_TREE = frozenset({'boat passenger tree'})
 # Its sync turns on fixed seeds for the whole script: the groups after it would draw from them (tools/test_seed_sync_parity.py).
 ISOLATED_SEED_SYNC = frozenset({'seed sync proof'})
-ISOLATED_GROUPS = ISOLATED_REINFORCEMENTS | ISOLATED_RECIPES | ISOLATED_WOLF_ANGER | ISOLATED_FRAME_MAPS | ISOLATED_SPECTRAL_DURATION | ISOLATED_PICKUP_SAVE | ISOLATED_ORB_UUID | ISOLATED_STAND_FALL | ISOLATED_MAP_CRAFTING | ISOLATED_MACRO_TYPE | ISOLATED_ITEM_HEALTH | ISOLATED_POTION_ICONS | ISOLATED_JUKEBOX_CLOCK | ISOLATED_FUNCTION_FEEDBACK | ISOLATED_SEED_SYNC
+ISOLATED_EFFECTIVE_PRESENCE = frozenset({'effective component presence'})
+ISOLATED_BOAT_TREE = frozenset({'boat passenger tree'})
+ISOLATED_GROUPS = ISOLATED_REINFORCEMENTS | ISOLATED_RECIPES | ISOLATED_WOLF_ANGER | ISOLATED_FRAME_MAPS | ISOLATED_SPECTRAL_DURATION | ISOLATED_PICKUP_SAVE | ISOLATED_ORB_UUID | ISOLATED_STAND_FALL | ISOLATED_MAP_CRAFTING | ISOLATED_MACRO_TYPE | ISOLATED_ITEM_HEALTH | ISOLATED_POTION_ICONS | ISOLATED_JUKEBOX_CLOCK | ISOLATED_FUNCTION_FEEDBACK | ISOLATED_SEED_SYNC | ISOLATED_EFFECTIVE_PRESENCE | ISOLATED_BOAT_TREE
 
 
 def groups():
@@ -6401,6 +6439,8 @@ def groups():
         ('named smoke predicates', named_smoke_predicates()),
         ('mining_efficiency_9021', mining_efficiency_9021()),
         ('structured item slots', structured_item_slots()),
+        ('boat passenger tree', boat_passenger_tree_cases()),
+        ('effective component presence', effective_component_presence_cases()),
         ('jukebox saved clock', jukebox_saved_clock_cases()),
         ('loaded potion clouds', loaded_clouds(cmd, setup)),
         ('server clock', server_clock()),
@@ -6447,6 +6487,7 @@ def groups():
         ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('piston entity tick order', piston_entity_tick_order()),
+        ('primed tnt box', primed_tnt_box()),
         ('primed tnt fall', primed_tnt_fall()),
         ('item block escape', item_block_escape()),
         ('scheduled block item birth', scheduled_item_birth()),

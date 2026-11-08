@@ -1658,7 +1658,7 @@ impl Game<'_> {
         cancel
     }
     /// LivingEntity.die / dropAllDeathLoot.
-    fn mob_died(&mut self, m: &Mob) {
+    pub(super) fn mob_died(&mut self, m: &Mob) {
         if self.mob_death_canceled(m) {
             return;
         }
@@ -2321,7 +2321,7 @@ impl Game<'_> {
         self.handle_mob_events_reusable(&mut events)
     }
 
-    fn handle_mob_events_reusable(&mut self, events: &mut Vec<MobEvent>) -> Result<()> {
+    pub(super) fn handle_mob_events_reusable(&mut self, events: &mut Vec<MobEvent>) -> Result<()> {
         for e in events.drain(..) {
             match e {
                 MobEvent::BubbleColumnParticles { pos } => {

@@ -1476,12 +1476,20 @@ pub fn mob_to_nbt(
     // the attack damage.
     use crate::mobs::finalize::Attr;
     // Every other living entity's first tick makes the movement_speed instance
-    // (LivingEntity.removeFrost reads it through getAttribute).
-    let made = if species == crate::mobs::Species::Rabbit {
-        vec![Attr::MovementSpeed, Attr::AttackDamage]
-    } else {
-        vec![Attr::MovementSpeed]
-    };
+    // (LivingEntity.removeFrost reads it through getAttribute); before it, the
+    // mob has only the instances it was loaded with (the kept list above).
+    let speed_at_load =
+        crate::mobs::doors::is_zombie(species) || species == crate::mobs::Species::Piglin;
+    let mut made = Vec::new();
+    if speed_at_load || m.age > 0 {
+        made.push(Attr::MovementSpeed);
+    }
+    if species == crate::mobs::Species::Rabbit {
+        made.push(Attr::AttackDamage);
+    }
+    // AttributeMap.pack writes the list even when no instance exists.
+    map.entry("attributes".into())
+        .or_insert_with(|| Tag::List(Vec::new()));
     for attr in made {
         let base = crate::mobs::finalize::base_value(m, attr);
         let mut list = match map.get(&"attributes".into()) {
@@ -1518,6 +1526,15 @@ pub fn mob_to_nbt(
     // including zero and negative values, rather than stale loaded NBT.
     if matches!(m.species(), S::Evoker | S::Illusioner) {
         map.insert("SpellTicks".into(), Tag::Int(m.extra.counter));
+    }
+    // Vindicator.addAdditionalSaveData: `Johnny` only while the flag is set
+    // (`if (this.isJohnny) output.putBoolean("Johnny", true)`).
+    if m.species() == S::Vindicator {
+        if m.extra.johnny {
+            map.insert("Johnny".into(), Tag::Byte(1));
+        } else {
+            map.remove(&"Johnny".into());
+        }
     }
     crate::mobs::raider::write_nbt(m, map);
     crate::mobs::riders::write_nbt(m, map);
@@ -2215,12 +2232,9 @@ pub fn mob_from_nbt(
         if m.species() == crate::mobs::Species::Piglin
             && let Some(Tag::List(items)) = tag.get("Inventory")
         {
-            // InventoryCarrier.readInventoryFromTag (eight slots).
-            m.extra.inventory = items
-                .iter()
-                .filter_map(crate::save::item_from_nbt)
-                .take(8)
-                .collect();
+            // InventoryCarrier.readInventoryFromTag -> SimpleContainer
+            // .fromItemList (eight slots).
+            m.extra.inventory = crate::mobs::villager::load_container(&m, items, 8);
         }
     }
     if matches!(
@@ -2697,6 +2711,11 @@ pub fn mob_from_nbt(
     ) {
         m.extra.counter = number(tag.get("SpellTicks")).unwrap_or(0) as i32;
     }
+    // Vindicator.readAdditionalSaveData: `Johnny`, false when absent. A name
+    // that is Johnny latches the flag again on the next AI step.
+    if m.species() == crate::mobs::Species::Vindicator {
+        m.extra.johnny = flag(tag, "Johnny");
+    }
     crate::mobs::raider::read_nbt(&mut m, tag);
     crate::mobs::riders::read_nbt(&mut m, tag);
     // A mannequin is an `Avatar`, not a `Mob`: it reads none of
@@ -3019,6 +3038,9 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         count,
         ticks: 0,
         health: number(tag.get("Health")).unwrap_or(5) as i32,
+        // ExperienceOrb's followingPlayer is transient: never saved, so a
+        // loaded orb starts without one.
+        following: None,
     };
     vec![orb]
 }
@@ -5981,6 +6003,7 @@ mod tests {
             count: 1,
             ticks: 0,
             health: 5,
+            following: None,
         };
         let tag = orb_to_nbt(&orb, [0; 4]);
         assert_eq!(tag.get("Fire"), Some(&Tag::Short(0)));
@@ -6044,6 +6067,7 @@ mod tests {
             count: 3,
             ticks: 0,
             health: 5,
+            following: None,
         };
         let tag = orb_to_nbt(&o, [0; 4]);
         let back = orbs_from_nbt(&tag);
