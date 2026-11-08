@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "aktualizace se nepodařilo zkontrolovat: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Její bloky a předměty byly přeneseny a prošly kontrolami Horizonu; vlastní kód modu se nespouští.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Část byla přenesena, ale něco chybí, liší se od originálu nebo dosud nebylo zkontrolováno; podrobnosti najdete v technickém detailu.",
   "It does not come over yet.": "Tato položka se zatím nepřenáší.",
