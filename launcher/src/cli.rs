@@ -743,7 +743,8 @@ enum Cmd {
         #[arg(long)]
         version: Option<String>,
     },
-    /// Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition)
+    /// Start the client (offline play needs no account; downloads need one that owns Minecraft:
+    /// Java Edition)
     Play {
         #[arg(long)]
         version: Option<String>,
@@ -1876,6 +1877,7 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
             "horizon": updates.horizon.as_ref().map(|r| &r.tag),
             "launcher": updates.launcher.as_ref().and_then(|r| backend::launcher_version(&r.tag)),
             "launcher_current": backend::VERSION,
+            "launcher_error": updates.launcher_error.as_deref(),
         }));
         return Ok(());
     }
@@ -1889,7 +1891,10 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
         }
     }
     match &updates.launcher {
-        None => println!("Launcher: {} is up to date.", backend::VERSION),
+        None => match &updates.launcher_error {
+            Some(e) => println!("Launcher: couldn't check for updates: {e}"),
+            None => println!("Launcher: {} is up to date.", backend::VERSION),
+        },
         Some(r) => {
             let version = backend::launcher_version(&r.tag).unwrap_or_default();
             if check {
@@ -1934,10 +1939,17 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     "owner": accounts.has_owner(account::store()),
                 }));
             } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
-                println!(
-                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
-                     Edition: horizon-launcher account sign-in"
-                );
+                if backend::OFFLINE_PLAY {
+                    println!(
+                        "No Microsoft account signed in. Playing offline as the game's own name \
+                         (`account offline NAME` picks one)."
+                    );
+                } else {
+                    println!(
+                        "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
+                         Edition: horizon-launcher account sign-in"
+                    );
+                }
             } else {
                 for a in &accounts.accounts {
                     let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
@@ -1962,7 +1974,8 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "Playing offline as the game's own name (`account select NAME` to switch)."
                     );
                 }
-                if !accounts.has_owner(account::store()) {
+                // Horizon-free: without an owner the game still plays, offline.
+                if !backend::OFFLINE_PLAY && !accounts.has_owner(account::store()) {
                     println!(
                         "{} {}",
                         account::NoOwner::default(),
@@ -2058,7 +2071,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 ),
                 (None, None) => return Err(find(&accounts, &who).unwrap_err()),
             };
-            accounts.play_as(account::store(), player)?;
+            accounts.play_as_with(account::store(), player, backend::OFFLINE_PLAY)?;
             accounts.save()?;
             println!("The game plays as {name}.");
         }
@@ -2067,7 +2080,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 Some(n) => account::Player::Offline(n),
                 None => account::Player::GameName,
             };
-            accounts.play_as(account::store(), player)?;
+            accounts.play_as_with(account::store(), player, backend::OFFLINE_PLAY)?;
             accounts.save()?;
             match accounts.name_arg() {
                 Some(n) => println!("The game plays offline as {n}."),
