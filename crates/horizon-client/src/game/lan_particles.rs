@@ -298,7 +298,8 @@ impl Game<'_> {
             ];
             if let Some((sprite, tint)) = self.particle_sprite(state, block) {
                 self.particles.send_particles(
-                    &ParticleOptions::block(ParticleType::Block, sprite, tint),
+                    &ParticleOptions::block(ParticleType::Block, sprite, tint)
+                        .with_source(&self.res.facts().get(state).name),
                     at,
                     [0.0; 3],
                     speed,
@@ -456,6 +457,13 @@ impl Game<'_> {
         Some(Particle { id, data })
     }
 
+    /// This window plays on an older release's server through the adapter.
+    fn older_server(&self) -> bool {
+        self.remote.as_ref().is_some_and(|r| {
+            r.session.server_version() != horizon_protocol::adapter::ServerVersion::Current
+        })
+    }
+
     /// The options a server's particle stands for (None for a type or data
     /// this client doesn't draw).
     pub(super) fn received_particle(
@@ -463,7 +471,9 @@ impl Game<'_> {
         p: &Particle,
         at: [f64; 3],
     ) -> Option<ParticleOptions> {
-        if let Some(options) = legacy_effect_options(p) {
+        // The adapter's markers mean something only on an older server's connection: a
+        // 26.3 server's ids and durations are read as they are.
+        if let Some(options) = legacy_effect_options(p).filter(|_| self.older_server()) {
             return Some(options);
         }
         if p.id == MOD_PARTICLE_ID
@@ -483,10 +493,12 @@ impl Game<'_> {
             None => ParticleOptions::simple(ty),
             Some(ParticleData::State(s)) => {
                 let pos = at.map(|v| v.floor() as i32);
+                let state = BlockStateId(*s as u32);
                 let (sprite, tint) = self
-                    .particle_sprite(BlockStateId(*s as u32), pos)
+                    .particle_sprite(state, pos)
                     .unwrap_or_else(|| ("block/stone".into(), 0xFFFFFF));
                 ParticleOptions::block(ty, sprite, tint)
+                    .with_source(&self.res.facts().get(state).name)
             }
             Some(ParticleData::ColorScale(c, scale)) => {
                 ParticleOptions::dust(rgb(rgba(*c)), *scale)
@@ -511,9 +523,10 @@ impl Game<'_> {
             Some(ParticleData::GeyserBase(water_blocks, burst_impulse_base)) => {
                 ParticleOptions::geyser_base(ty, *water_blocks, *burst_impulse_base)
             }
-            Some(ParticleData::Trail(target, color, duration)) => {
-                ParticleOptions::trail(*target, *color as u32 & 0xFF_FFFF, *duration)
-            }
+            Some(ParticleData::Trail(target, color, duration)) => ParticleOptions {
+                legacy_trail_lifetime: *duration == -1 && self.older_server(),
+                ..ParticleOptions::trail(*target, *color as u32 & 0xFF_FFFF, *duration)
+            },
             Some(ParticleData::Vibration { source, ticks }) => ParticleOptions::vibration(
                 source.clone(),
                 self.vibration_destination(source)?,

@@ -204,7 +204,9 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "Float" => "FloatGoal",
         "RandomFloatAround" => "RandomFloatAroundGoal",
         "GhastLook" => "GhastLookGoal",
+        "Peek" => "ShulkerPeekGoal",
         "GhastShoot" => "GhastShootFireballGoal",
+        "BlazeAttack" => "BlazeAttackGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
         "ParrotWander" => "ParrotWanderGoal",
         "RandomStroll" => "RandomStrollGoal",
@@ -550,6 +552,7 @@ impl HiveHost for ProbeHive<'_, '_> {
     fn sound(&mut self, name: &'static str, at: [f64; 3]) {
         self.events.push(MobEvent::Sound(name, at, 1.0, 1.0));
     }
+    fn set_changed(&mut self, _at: [i32; 3]) {}
 }
 /// The hive's honey level and front from its block state.
 fn hive_state(registry: &BlockRegistry, world: &World, at: [i32; 3]) -> (Option<i32>, [i32; 2]) {
@@ -1068,6 +1071,13 @@ pub fn main() -> horizon_client::Result<()> {
                     // Set once the brain exists (below).
                     x if x.starts_with("cooldown=") => {}
                     "dead" => m.health = 0.0,
+                    // effect=<name>:<amplifier>, never running out.
+                    x if x.starts_with("effect=") => {
+                        let (name, amp) = x[7..].split_once(':').unwrap();
+                        let name: &'static str =
+                            Box::leak(format!("minecraft:{name}").into_boxed_str());
+                        m.add_effect(name, -1, amp.parse().unwrap());
+                    }
                     "leashed" => m.extra.leash = Some(horizon_client::mobs::leash::Holder::Player),
                     x if x.starts_with("leashto=") => {
                         let n: u32 = x[8..].parse().unwrap();
@@ -1435,7 +1445,7 @@ pub fn main() -> horizon_client::Result<()> {
                 // What a copper golem did to chests, before the next mob ticks.
                 for e in &events[from.min(events.len())..] {
                     match e {
-                        MobEvent::ChestOpen { chest, open } => {
+                        MobEvent::ChestOpen { chest, open, .. } => {
                             let o = world
                                 .chest_openers
                                 .entry((chest[0], chest[1], chest[2]))
