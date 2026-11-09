@@ -22,6 +22,8 @@ pub(super) struct PrimedTnt {
     pub(super) join: horizon_client::join_seq::JoinSeq,
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
+    /// `PrimedTnt.usedPortal`: set by teleport, never saved.
+    pub used_portal: bool,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -375,6 +377,7 @@ impl Game<'_> {
             horizon_client::save::insecure_uuid(&mut horizon_client::random_source::entity());
         self.persist.uuids.insert(self.next_entity, uuid);
         self.tnts.push(PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -814,6 +817,7 @@ mod tests {
         ]))
         .unwrap();
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             id: 1,
@@ -882,6 +886,7 @@ mod tests {
         use horizon_core::geometry::Direction;
         use horizon_world::piston_push::bounce_velocity;
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -928,6 +933,7 @@ mod tests {
         for bordered in [false, true] {
             let at = Vec3::new(24.0, 4.0, 20.5);
             let mut tnt = PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
@@ -993,6 +999,7 @@ mod tests {
             }
             let at = Vec3::new(19.5, top, 20.5);
             let mut tnt = PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
@@ -1062,6 +1069,7 @@ mod tests {
         world.set(21, 4, 20, flowing).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -1170,6 +1178,7 @@ mod tests {
         // (Entity.handleOnInsideBubbleColumn / handleOnAboveBubbleColumn).
         let at = Vec3::new(20.5, 6.0, 20.5);
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -1254,6 +1263,7 @@ mod tests {
         world.set(20, 2, 20, soul_sand).unwrap();
         let at = Vec3::new(20.5, 6.0, 20.5);
         let primed = || PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -1350,6 +1360,54 @@ mod tests {
         }
         game.streaming.forced.insert((0, 0));
         Some(game)
+    }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn portal_transfer_tnt_state_follows_memory_but_not_saved_nbt() {
+        use super::super::commands::Target;
+        let mut game = server_game().expect("set HORIZON_TEST_RESOURCES");
+        game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 80, None, None);
+        assert!(!game.tnts[0].used_portal);
+        let id = game.tnts[0].id;
+        game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, false);
+        assert!(game.tnts[0].used_portal);
+        let saved = game.tnt_nbt(0);
+        game.tnts.clear();
+        game.load_tnt(saved, None);
+        assert!(!game.tnts[0].used_portal);
+        let mut transfer = game.tnt_nbt(0);
+        super::super::persist::mark_fresh(&mut transfer);
+        game.tnts.clear();
+        game.world.loaded_entities.push((
+            (0, 0),
+            vec![horizon_client::world::PendingEntity::after_tnt_portal(
+                transfer,
+            )],
+        ));
+        game.spawn_loaded_entities();
+        assert!(game.tnts[0].used_portal);
+        assert!(game.tnt_nbt(0).get("horizon:tnt_used_portal").is_none());
+    }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn portal_transfer_ordinary_nbt_cannot_supply_runtime_immunity() {
+        use horizon_world::nbt::Tag;
+        let mut game = server_game().expect("set HORIZON_TEST_RESOURCES");
+        for marker in [0, 1] {
+            game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 80, None, None);
+            let mut saved = game.tnt_nbt(0);
+            if let Tag::Compound(fields) = &mut saved {
+                fields.insert("horizon:tnt_used_portal".into(), Tag::Byte(marker));
+            }
+            game.tnts.clear();
+            game.world.queue_entity_nbt((0, 0), vec![saved]);
+            game.spawn_loaded_entities();
+            assert_eq!(game.tnts.len(), 1);
+            assert!(!game.tnts[0].used_portal, "ordinary NBT marker {marker}");
+            game.tnts.clear();
+        }
     }
 
     #[test]

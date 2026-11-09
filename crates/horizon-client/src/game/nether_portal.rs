@@ -13,6 +13,7 @@ use super::entity::{Entity as _, entity_lists_of, for_each_entity};
 use super::{Dim, Game, Result, Screen, level_flags};
 use horizon_client::fast_hash::FxHashMap;
 use horizon_client::nether_portal::{ENTITY_DELAY, PortalState};
+use horizon_client::world::PendingEntity;
 use horizon_core::{
     geometry::{Aabb, Axis, Vec3},
     position::BlockPos,
@@ -71,8 +72,20 @@ impl Plan {
 /// An entity on its way to a dimension that isn't loaded.
 #[derive(Clone, Debug)]
 struct Arrival {
+    /// Teleport-only state; deliberately absent from arrival_tag.
+    tnt_used_portal: bool,
     plan: Plan,
     tag: Tag,
+}
+
+impl Arrival {
+    fn new(plan: Plan, tag: Tag, tnt_used_portal: bool) -> Self {
+        Self {
+            plan,
+            tag,
+            tnt_used_portal,
+        }
+    }
 }
 
 /// The nether portal state of the world (`Game::portals`).
@@ -252,6 +265,7 @@ fn arrival_from_tag(a: &Tag) -> Option<Arrival> {
         return None;
     };
     Some(Arrival {
+        tnt_used_portal: false,
         plan: Plan {
             dim,
             approximate: BlockPos::new(x, y, z),
@@ -518,6 +532,7 @@ impl Game<'_> {
             self.tickets.add_portal(chunk);
         }
     }
+
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
     pub(super) fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
@@ -1027,7 +1042,7 @@ impl Game<'_> {
             );
             self.remove_dropped(i);
             self.detach_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self.tnts.iter().position(|t| t.id == id) {
             let t = &self.tnts[i];
@@ -1035,10 +1050,13 @@ impl Game<'_> {
             if !self.may_enter(plan.dim) {
                 return;
             }
+            self.tnts[i].used_portal = true;
             let tag = self.tnt_nbt(i);
-            self.tnts.remove(i);
+            let transferred = self.tnts.remove(i);
             self.forget_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals
+                .arrivals
+                .push(Arrival::new(plan, tag, transferred.used_portal));
             self.portals.dirty = true;
         } else if let Some(i) = self.tridents.iter().position(|t| t.id == id) {
             let plan = self.entity_plan(entry, self.tridents[i].position, 0.5, 0.5, false);
@@ -1050,7 +1068,7 @@ impl Game<'_> {
                 self.tridents[i].to_nbt(uuid, self.pack.assets.registry, self.persist_raw(id));
             self.tridents.remove(i);
             self.forget_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self.rockets.iter().position(|r| r.id == id) {
             let plan = self.entity_plan(entry, self.rockets[i].position, 0.25, 0.25, false);
@@ -1061,7 +1079,7 @@ impl Game<'_> {
             let tag = self.rockets[i].to_nbt(uuid, self.level.player_uuid, self.persist_raw(id));
             self.rockets.remove(i);
             self.forget_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self.orbs.iter().position(|o| o.id == id) {
             let plan = self.entity_plan(entry, self.orbs[i].position, 0.5, 0.5, false);
@@ -1072,7 +1090,7 @@ impl Game<'_> {
             let tag = horizon_client::entity_nbt::orb_to_nbt(&self.orbs[i], uuid);
             self.orbs.remove(i);
             self.forget_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
             let m = &self.mobs[i];
@@ -1091,7 +1109,7 @@ impl Game<'_> {
             for g in gone {
                 self.detach_entity(g);
             }
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             let b = &self.boats[i];
@@ -1111,7 +1129,7 @@ impl Game<'_> {
             }
             self.boats.remove(i);
             self.detach_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self.carts.iter().position(|c| c.id == id) {
             let c = &self.carts[i];
@@ -1142,7 +1160,7 @@ impl Game<'_> {
             }
             self.carts.remove(i);
             self.detach_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         } else if let Some(i) = self
             .creatures
@@ -1177,7 +1195,7 @@ impl Game<'_> {
             };
             self.creatures.projectiles.remove(i);
             self.forget_entity(id);
-            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.arrivals.push(Arrival::new(plan, tag, false));
             self.portals.dirty = true;
         }
         if self.portals.arrivals.len() > arrivals {
@@ -1247,7 +1265,11 @@ impl Game<'_> {
                 i += 1;
                 continue;
             }
-            let Arrival { plan, mut tag } = self.portals.arrivals.remove(i);
+            let Arrival {
+                plan,
+                mut tag,
+                tnt_used_portal,
+            } = self.portals.arrivals.remove(i);
             self.portals.dirty = true;
             let motion = horizon_client::entity_nbt::motion(&tag);
             let [yaw, pitch] = horizon_client::entity_nbt::rotation(&tag);
@@ -1284,6 +1306,11 @@ impl Game<'_> {
             }
             // ServerLevel.addDuringTeleport: a fresh add, not loaded from disk.
             super::persist::mark_fresh(&mut tag);
+            let tag = if tnt_used_portal {
+                PendingEntity::after_tnt_portal(tag)
+            } else {
+                tag.into()
+            };
             let key = ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4);
             match self
                 .world
@@ -1291,8 +1318,8 @@ impl Game<'_> {
                 .iter_mut()
                 .find(|(k, _)| *k == key)
             {
-                Some((_, tags)) => tags.push(tag.into()),
-                None => self.world.queue_entity_nbt(key, vec![tag]),
+                Some((_, tags)) => tags.push(tag),
+                None => self.world.loaded_entities.push((key, vec![tag])),
             }
         }
     }
@@ -1348,7 +1375,7 @@ impl Game<'_> {
         if f.id != 0 {
             self.forget_entity(f.id);
         }
-        self.portals.arrivals.push(Arrival { plan, tag });
+        self.portals.arrivals.push(Arrival::new(plan, tag, false));
         self.portals.dirty = true;
         Some(plan.dim)
     }
@@ -1524,6 +1551,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn portal_transfer_pending_arrival_does_not_save_transient_tnt_immunity() {
+        let arrival = Arrival {
+            plan: Plan::end_portal(Dim::End, BlockPos::new(0, 64, 0), 0.98, 0.98),
+            tag: Tag::compound([("id", Tag::String("minecraft:tnt".into()))]),
+            tnt_used_portal: true,
+        };
+        assert!(
+            !arrival_from_tag(&arrival_tag(&arrival))
+                .unwrap()
+                .tnt_used_portal
+        );
+    }
+
+    #[test]
     fn end_portals_lead_to_the_end_spawn_and_back_to_the_world_spawn() {
         let spawn = BlockPos::new(-7, 70, 12);
         for from in [Dim::Overworld, Dim::Nether] {
@@ -1596,6 +1637,7 @@ mod tests {
         let tag = Tag::compound([("id", Tag::String("minecraft:cow".into()))]);
         for (from, dim) in [(Dim::Overworld, Dim::End), (Dim::End, Dim::Overworld)] {
             let arrival = Arrival {
+                tnt_used_portal: false,
                 plan: Plan::end_portal(from, BlockPos::new(3, 64, -5), 0.9, 1.4),
                 tag: tag.clone(),
             };
@@ -1607,6 +1649,7 @@ mod tests {
         }
         // Arrivals saved before End portals were Nether portal plans.
         let mut old = arrival_tag(&Arrival {
+            tnt_used_portal: false,
             plan: Plan::end_portal(Dim::End, BlockPos::new(0, 64, 0), 0.25, 0.25),
             tag,
         });

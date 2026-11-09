@@ -312,6 +312,7 @@ impl Game<'_> {
         match kind {
             "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
