@@ -55,6 +55,9 @@ fn game() -> Game<'static> {
             .chunks
             .insert((x, 0), Arc::new(Chunk::empty(x, 0)));
     }
+    for x in 0..2 {
+        game.load_ticking_neighbourhood(x, 0);
+    }
     assert!(game.run_command("fill 0 99 0 31 99 15 stone"));
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(28.5, 100.0, 10.5)).unwrap());
     let net = NetConfig {

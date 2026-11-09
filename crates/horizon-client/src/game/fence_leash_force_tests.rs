@@ -67,6 +67,9 @@ fn game() -> Game<'static> {
             .add_empty_chunk(ChunkPos::new(x, 0))
             .unwrap();
     }
+    for x in 0..3 {
+        game.load_ticking_neighbourhood(x, 0);
+    }
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(24.5, 201.0, 12.5)).unwrap());
     let net = NetConfig {
         announce: false,

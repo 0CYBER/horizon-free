@@ -36,6 +36,7 @@ fn a_mob_presses_a_plate_only_inside_the_simulation_distance() {
         game.world
             .chunks
             .insert((cx, 0), Arc::new(Chunk::empty(cx, 0)));
+        game.load_ticking_neighbourhood(cx, 0);
         game.world.set(x, 63, 8, stone).unwrap();
         game.world.set(x, 64, 8, plate).unwrap();
         game.mobs.push(Mob::new(

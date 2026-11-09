@@ -870,6 +870,7 @@ mod escape_tests {
         game.world
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.load_ticking_neighbourhood(0, 0);
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(8, 8));
         let stone = game
@@ -888,8 +889,8 @@ mod escape_tests {
         game.tick_items();
         let item = game.dropped.last().unwrap();
         // Up is the nearest open side from the middle of the block.
-        // The push replaces the fall's velocity; then the 0.98 drag.
-        assert_eq!(item.velocity.y, expected * 0.98);
+        // The push replaces the fall's velocity; then the 0.98F drag (a float widened to double).
+        assert_eq!(item.velocity.y, expected * f64::from(0.98_f32));
         assert_eq!(game.world.random.next_float(), level.next_float());
     }
 }
