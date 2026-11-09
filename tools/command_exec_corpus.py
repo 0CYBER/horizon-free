@@ -7583,6 +7583,22 @@ def dispensed_item_escape():
                        f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0} {z0 + 15} air', f'/forceload remove {x0} {z0}')
 
 
+def raw_entity_flags():
+    """#13853: `Entity.load` reads the flags with `getBooleanOr` and `saveWithoutId` writes each back as `1b` only
+    when true: a leash knot's or a marker's raw save normalizes them too."""
+    x0, y0, z0 = 4096 - 256, 260, 3584
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]}]
+    subjects = [('leash_knot', 'NoGravity:-1b'), ('leash_knot', 'NoGravity:0b,Silent:3b'),
+                ('marker', 'Glowing:-1b,NoGravity:2b,data:{a:1}'), ('marker', 'Silent:0b')]
+    for n, (kind, fields) in enumerate(subjects, 1):
+        uuid = f'000037e8-0000-0000-0000-{n:04x}00000001'
+        ops += [cmd(f'/summon {kind} {x0 + 3 * n}.5 {y0}.5 {z0 + 8}.5 {{UUID:[I;14312,0,{n},1],{fields}}}',
+                    expect_result=1)]
+        for key in ('NoGravity', 'Silent', 'Glowing'):
+            ops.append(cmd(f'/data get entity {uuid} {key}'))
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/forceload remove {x0} {z0}')
+
 def groups():
     try:
         from .spectral_duration_corpus import cases as spectral_saved_duration
@@ -7779,6 +7795,7 @@ def groups():
         ('primed tnt fall', primed_tnt_fall()),
         ('dispensed item escape', dispensed_item_escape()),
         ('command block last output', command_block_last_output()),
+        ('raw entity flags', raw_entity_flags()),
         ('glide fall accumulation', glide_fall_accumulation()),
         ('living short timers', living_short_timers()),
         ('projectile fall distance', projectile_fall_distance()),

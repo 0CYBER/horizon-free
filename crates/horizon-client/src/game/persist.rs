@@ -1368,7 +1368,7 @@ impl Game<'_> {
         {
             entity_nbt::fill_common_defaults(&mut tag);
         }
-        tag
+        with_raw(tag, None) // Entity.saveWithoutId's flags, as booleans.
     }
     /// The root of a stack of riders (`Entity.getRootVehicle`).
     fn mob_root(&self, mut i: usize) -> usize {
