@@ -2677,3 +2677,52 @@ mod brute_home_tests {
         assert_eq!(piglin.extra.off_hand.as_deref(), Some("minecraft:shield"));
     }
 }
+
+#[cfg(test)]
+mod cannot_hunt_save_tests {
+    use super::*;
+    use horizon_world::nbt::Tag;
+
+    fn piglin() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.id = "minecraft:piglin".into();
+        k.species = Species::Piglin;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    fn saved(cannot_hunt: Option<i8>) -> Tag {
+        let mut fields = vec![
+            ("id", Tag::String("minecraft:piglin".into())),
+            (
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(0.0f64.to_bits()),
+                    Tag::Double(64.0f64.to_bits()),
+                    Tag::Double(0.0f64.to_bits()),
+                ]),
+            ),
+        ];
+        if let Some(value) = cannot_hunt {
+            fields.push(("CannotHunt", Tag::Byte(value)));
+        }
+        Tag::compound(fields)
+    }
+
+    /// `Piglin.readAdditionalSaveData` reads `CannotHunt` with
+    /// `getBooleanOr`, and `addAdditionalSaveData` always writes it. Horizon
+    /// wrote a hardcoded 0 and never read it back, so a piglin that had
+    /// `cannotHunt` set could hunt hoglins again after a reload.
+    #[test]
+    fn a_saved_cannot_hunt_is_read_and_written_back() {
+        let template = piglin();
+        let types = [("minecraft:piglin".into(), template.kind)].into();
+        for (raw, expected) in [(Some(1), true), (Some(0), false), (None, false)] {
+            let m = crate::entity_nbt::mob_from_nbt(&saved(raw), &types, 1, None).unwrap();
+            assert_eq!(m.extra.piglin.cannot_hunt, expected);
+            assert_eq!(can_hunt(&m), !expected);
+            let out = crate::entity_nbt::mob_to_nbt(&m, [1, 2, 3, 4], None, None, |_| None);
+            assert_eq!(out.get("CannotHunt"), Some(&Tag::Byte(i8::from(expected))));
+        }
+    }
+}
