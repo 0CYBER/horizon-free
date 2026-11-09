@@ -465,7 +465,6 @@ mod trial_spawner;
 mod trial_visuals;
 mod trident;
 mod tutorial;
-mod tweaks;
 mod ui_control;
 mod use_hand;
 mod using_item;
@@ -2219,7 +2218,7 @@ struct Game<'a> {
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
-    tweaks: tweaks::Tweaks,
+    tweaks: extras::mouse_tweaks::Tweaks,
     /// The wheel and hovered slot of `BundleMouseActions`.
     bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.

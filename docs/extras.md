@@ -16,7 +16,7 @@ again restores vanilla's behaviour completely.
 | Minimap colours, tiles and image (for the Minimap native mod) | `crates/horizon-client-render/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs`; its game glue (connect, join, leave, the countdown) in `game/extras/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs`; each extra's own glue in a child module, `game/extras/` |
-| Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/tweaks.rs` |
+| Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/extras/mouse_tweaks.rs`, `game/extras/sorting.rs` |
 | Sort order and its clicks | `crates/horizon-client/src/inv_sort.rs` (pure, unit tested) |
 | The music page's rows, and the pools it filters | `options_ui.rs` (`Page::Music`), `crates/horizon-client/src/music.rs` (`track_groups`, `MusicManager::set_off`), `sound_events.rs` (`sound_except`) |
 | Cosmetics (show mine, show others'), off with their flag | `extras.rs`, `crates/horizon-client/src/game/cosmetics.rs` ([cosmetics.md](cosmetics.md)) |
