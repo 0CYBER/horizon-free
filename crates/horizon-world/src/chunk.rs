@@ -1343,4 +1343,23 @@ mod tests {
             get_times[0][0] / get_times[1][0]
         );
     }
+
+    /// `BlockEntity.getPosFromTag`: a saved position in another chunk keeps its
+    /// offset inside the chunk but moves into the chunk that saved it; a
+    /// position already there is kept as it is.
+    #[test]
+    fn a_block_entity_saved_in_another_chunk_moves_into_this_one() {
+        assert_eq!(super::block_entity_pos((37, 70, -3), [0, 0]), (5, 70, 13));
+        assert_eq!(super::block_entity_pos((-1, -60, 19), [0, 0]), (15, -60, 3));
+        assert_eq!(
+            super::block_entity_pos((5, 70, 13), [0, 0]),
+            (5, 70, 13),
+            "already in the chunk"
+        );
+        // Another chunk: its own corner is chunk * 16.
+        assert_eq!(
+            super::block_entity_pos((37, 70, -3), [-2, 5]),
+            (-27, 70, 93)
+        );
+    }
 }

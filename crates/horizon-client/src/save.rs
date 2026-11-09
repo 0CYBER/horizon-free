@@ -6024,6 +6024,43 @@ mod tests {
         assert_eq!(short.get(0, -64, 0), stone.0);
     }
 
+    /// `BlockEntity.getPosFromTag`: a block entity saved under another chunk's
+    /// coordinates is read into the chunk that saved it (vanilla warns and
+    /// keeps the low four bits), instead of landing where that chunk has no
+    /// block.
+    #[test]
+    fn a_block_entity_saved_under_another_chunks_coordinates_moves_here() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tag = horizon_world::nbt::parse_snbt(
+            r#"{xPos:0,zPos:0,yPos:-4,Status:"minecraft:full",sections:[],block_entities:[{id:"minecraft:chest",x:37,y:70,z:-3,Items:[]}]}"#,
+        )
+        .unwrap()
+        .0;
+        let chunk = decode_with(
+            &NamedTag {
+                name: "".into(),
+                tag,
+            },
+            assets.registry,
+            &biomes,
+            None,
+            ColumnLayout::VANILLA,
+        )
+        .expect("chunk");
+        let positions: Vec<(i32, i32, i32)> =
+            chunk.block_entities.iter().map(|(p, _)| *p).collect();
+        assert_eq!(
+            positions,
+            [(5, 70, 13)],
+            "moved into the chunk that saved it"
+        );
+    }
+
     #[test]
     fn nether_and_end_chunks_save_with_their_own_height() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
