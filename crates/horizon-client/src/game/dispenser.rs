@@ -1103,9 +1103,9 @@ impl Game<'_> {
             "minecraft:experience_bottle"
             | "minecraft:splash_potion"
             | "minecraft:lingering_potion" => {
-                let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
+                let mut shot = super::potions::thrown_projectile(one, at, false);
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.launch_thrown(one, at, shot.velocity, None);
+                self.add_projectile(shot);
             }
             "minecraft:firework_rocket" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);

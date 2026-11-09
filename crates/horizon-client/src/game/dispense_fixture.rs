@@ -1333,6 +1333,9 @@ impl Game<'_> {
                 ProjectileKind::Egg => "minecraft:egg",
                 ProjectileKind::SmallFireball => "minecraft:small_fireball",
                 ProjectileKind::WindCharge => "minecraft:wind_charge",
+                ProjectileKind::Potion(_, true) => "minecraft:lingering_potion",
+                ProjectileKind::Potion(..) => "minecraft:splash_potion",
+                ProjectileKind::ExperienceBottle => "minecraft:experience_bottle",
                 _ => "minecraft:unknown_projectile",
             };
             let (p, v) = (shot.position, shot.velocity);

@@ -1699,21 +1699,22 @@ mod tests {
         game.world.set(8, 63, 8, stone).unwrap();
         for kind in ["splash_potion", "lingering_potion", "experience_bottle"] {
             for silent in [false, true, false] {
-                game.launch_thrown(
+                let mut shot = crate::game::potions::thrown_projectile(
                     ItemStack::new(&format!("minecraft:{kind}"), 1)
                         .with_potion("minecraft:swiftness"),
                     Vec3::new(8.5, 64.1, 8.5),
-                    Vec3::new(0.0, -1.0, 0.0),
-                    None,
+                    false,
                 );
-                let id = *game.potions.thrown_ids().last().unwrap();
+                shot.velocity = Vec3::new(0.0, -1.0, 0.0);
+                game.add_projectile(shot);
+                let id = game.creatures.projectiles.last().unwrap().id;
                 set_silent(&mut game, id, silent);
                 game.audio.heard.clear();
                 let particles = particle_count(&game);
                 let clouds = game.breath_clouds.len();
                 let xp: u32 = game.orbs.iter().map(|o| o.points() * o.count).sum();
-                game.tick_effects(true);
-                assert_eq!(game.potions.thrown_ids().count(), 0);
+                game.tick_creature_entities().unwrap();
+                assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
                 assert!(particle_count(&game) > particles, "{kind} keeps its splash");
                 assert_eq!(
                     sound_count(&game, "minecraft:entity.splash_potion.break"),
@@ -1729,6 +1730,47 @@ mod tests {
                     assert!((3..=11).contains(&gained), "silence keeps the experience");
                 }
             }
+        }
+    }
+
+    /// #13201: a dispensed potion or bottle is a level entity
+    /// (`ProjectileDispenseBehavior` → `Projectile.spawnProjectileUsingShoot`
+    /// → `level.addFreshEntity`), so selectors, `/data get` and `/kill` find
+    /// it while it flies.
+    #[test]
+    fn h13201_a_dispensed_potion_is_a_level_entity() {
+        let Some(mut game) = server_game() else {
+            return;
+        };
+        // An operator's commands.
+        game.ui.registries.permission = 4;
+        use crate::game::commands::Target;
+        use horizon_world::nbt::Tag;
+        for kind in ["splash_potion", "lingering_potion", "experience_bottle"] {
+            let stack = ItemStack::new(&format!("minecraft:{kind}"), 1);
+            // The dispenser at (8, 100, 8) facing south.
+            game.shoot_projectile_item(
+                Vec3::new(8.5, 100.2, 9.2),
+                [0.0, 0.1, 1.0],
+                &stack,
+                1.1,
+                6.0,
+            );
+            let id = game.creatures.projectiles.last().unwrap().id;
+            let selector = format!("@e[type=minecraft:{kind},x=8.5,y=100,z=8.5,distance=..12]");
+            // Found as shot and again after it flew a tick.
+            for _ in 0..2 {
+                let found = game.run_command(&format!("execute if entity {selector}"));
+                assert!(found, "{kind}");
+                assert_eq!(game.level_entity(id as i32), Some(Target::Projectile(id)));
+                let saved = game.entity_nbt(Target::Projectile(id)).unwrap();
+                let id_tag = Tag::String(format!("minecraft:{kind}").as_str().into());
+                assert_eq!(saved.get("id"), Some(&id_tag));
+                assert!(saved.get("Item").is_some() && saved.get("Motion").is_some());
+                game.tick_creature_entities().unwrap();
+            }
+            assert!(game.run_command(&format!("kill {selector}")), "{kind}");
+            assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
         }
     }
 
