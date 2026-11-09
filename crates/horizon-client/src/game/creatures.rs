@@ -3549,7 +3549,7 @@ impl Game<'_> {
                         .filter(|_| !names.is_empty())
                         .and_then(|t| t.locate(&names, at, 50));
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
-                        m.extra.home = found.map(|(_, p)| p);
+                        m.extra.home = found.as_ref().map(|(_, p)| *p);
                     }
                     // DolphinSwimToTreasureGoal.start: entity event 38 once it has a treasure.
                     if found.is_some() {
