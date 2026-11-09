@@ -1,0 +1,47 @@
+    Checking crypto-common v0.1.7
+    Checking horizon-core v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-core)
+    Checking digest v0.10.7
+   Compiling naga v30.0.1 (/root/w/piglin-cannot-hunt/third_party/naga)
+    Checking sha2 v0.10.9
+   Compiling horizon-world v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-world)
+   Compiling wgpu-hal v30.0.1 (/root/w/piglin-cannot-hunt/third_party/wgpu-hal)
+    Checking wgpu-naga-bridge v30.0.1
+    Checking cipher v0.4.4
+   Compiling libmimalloc-sys v0.1.49 (/root/w/piglin-cannot-hunt/third_party/libmimalloc-sys)
+    Checking aes v0.8.4
+    Checking wgpu-core-deps-windows-linux-android v30.0.1
+    Checking horizon-client-core v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-client-core)
+    Checking sha1 v0.10.7
+    Checking horizon-system v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-system)
+    Checking horizon-addresses v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-addresses)
+    Checking horizon-hooks v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-hooks)
+    Checking horizon-protocol v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-protocol)
+    Checking wgpu-core v30.0.1
+    Checking wgpu v30.0.1
+    Checking mimalloc v0.1.52
+    Checking horizon-platform v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-platform)
+    Checking horizon-shader-api v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-shader-api)
+    Checking horizon-render-pipeline v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-render-pipeline)
+    Checking horizon-theme v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-theme)
+    Checking horizon-cosmetics v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-cosmetics)
+    Checking horizon-client-input v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-client-input)
+    Checking horizon-shaders v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-shaders)
+    Checking horizon-telemetry v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-telemetry)
+    Checking horizon-threads v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-threads)
+    Checking horizon-hdr v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-hdr)
+    Checking horizon-optifine v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-optifine)
+    Checking horizon-polytone v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-polytone)
+    Checking horizon-command v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-command)
+    Checking horizon-items v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-items)
+    Checking horizon-assets v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-assets)
+    Checking horizon-narrator v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-narrator)
+    Checking horizon-client-render v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-client-render)
+    Checking horizon-mods v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-mods)
+    Checking horizon-bench v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-bench)
+    Checking horizon-server-files v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-server-files)
+    Checking horizon-anticheat v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-anticheat)
+    Checking horizon-chat-filter v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-chat-filter)
+    Checking horizon-mcp v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-mcp)
+    Checking horizon-client-lib v0.1.0 (/root/w/piglin-cannot-hunt/crates/horizon-client-lib)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 44s
+EXIT=0
