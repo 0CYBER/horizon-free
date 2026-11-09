@@ -826,8 +826,16 @@ mod tests {
         );
     }
 
-    /// The Rust sources of the crates that ask for Horizon's strings.
-    fn client_sources() -> Vec<std::path::PathBuf> {
+    /// The crates whose `horizon.` keys must be in en_us.json.
+    const CLIENT_CRATES: [&str; 4] = [
+        "horizon-client",
+        "horizon-client-render",
+        "horizon-client-core",
+        "horizon-client-input",
+    ];
+
+    /// The Rust sources of `krates`, or of every crate under `crates/` when it is empty.
+    fn crate_sources(krates: &[&str]) -> Vec<std::path::PathBuf> {
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let path = entry.path();
@@ -840,12 +848,12 @@ mod tests {
         }
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut files = Vec::new();
-        for krate in [
-            "horizon-client",
-            "horizon-client-render",
-            "horizon-client-core",
-            "horizon-client-input",
-        ] {
+        if krates.is_empty() {
+            for entry in std::fs::read_dir(&crates).unwrap().flatten() {
+                rust_files(&entry.path().join("src"), &mut files);
+            }
+        }
+        for krate in krates {
             rust_files(&crates.join(krate).join("src"), &mut files);
         }
         assert!(files.len() > 100, "found only {} sources", files.len());
@@ -861,7 +869,8 @@ mod tests {
             &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
         )
         .unwrap();
-        let code: String = client_sources()
+        // Every crate: a feature moved out of the client crates keeps its strings.
+        let code: String = crate_sources(&[])
             .iter()
             .map(|file| std::fs::read_to_string(file).unwrap())
             .collect();
@@ -891,7 +900,7 @@ mod tests {
         )
         .unwrap();
         let mut found = 0;
-        for file in client_sources() {
+        for file in crate_sources(&CLIENT_CRATES) {
             let text = std::fs::read_to_string(&file).unwrap();
             for (at, _) in text.match_indices("\"horizon.") {
                 let rest = &text[at + 1..];
