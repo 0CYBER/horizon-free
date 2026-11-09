@@ -109,7 +109,12 @@ impl Game<'_> {
     }
     /// A press on `slot`: true when the tweaks took it (a right-drag
     /// placing), else vanilla's press runs and the tweaks watch the drag.
-    pub(in crate::game) fn tweak_press(&mut self, slot: Option<usize>, right: bool, shift: bool) -> bool {
+    pub(in crate::game) fn tweak_press(
+        &mut self,
+        slot: Option<usize>,
+        right: bool,
+        shift: bool,
+    ) -> bool {
         self.tweaks.drag = None;
         let Some(slot) = slot.filter(|&s| s != 200 && s < Creative::DISPLAY) else {
             return false;
