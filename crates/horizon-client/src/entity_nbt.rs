@@ -991,7 +991,8 @@ pub fn mob_to_nbt(
             if id == "minecraft:piglin_brute" {
                 map.remove(&"CannotHunt".into());
             } else if id == "minecraft:piglin" {
-                map.entry("CannotHunt".into()).or_insert(Tag::Byte(0));
+                let hunt = m.extra.piglin.cannot_hunt;
+                map.insert("CannotHunt".into(), Tag::Byte(hunt as i8));
             }
             map.insert(
                 "IsImmuneToZombification".into(),
@@ -2232,9 +2233,8 @@ pub fn mob_from_nbt_with_random(
     ) {
         m.extra.flag2 = flag(tag, "IsImmuneToZombification");
         m.extra.counter2 = number(tag.get("TimeInOverworld")).unwrap_or(0) as i32;
-        if m.species() == crate::mobs::Species::Hoglin {
-            m.extra.cannot_be_hunted = flag(tag, "CannotBeHunted");
-        }
+        m.extra.cannot_be_hunted = flag(tag, "CannotBeHunted");
+        m.extra.piglin.cannot_hunt = flag(tag, "CannotHunt");
         if m.species() == crate::mobs::Species::Piglin
             && let Some(Tag::List(items)) = tag.get("Inventory")
         {

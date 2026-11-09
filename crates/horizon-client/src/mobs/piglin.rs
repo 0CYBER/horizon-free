@@ -74,6 +74,8 @@ pub struct Memories {
     /// authoritative actor identity and clears stale raw data instead of inventing one.
     /// Its remaining TTL is the existing `Extra::anger` counter.
     pub guarded_angry_at: Option<Option<[i32; 4]>>,
+    /// `Piglin.setCannotHunt`: the piglin will not start hunting hoglins.
+    pub cannot_hunt: bool,
     /// `AVOID_TARGET`.
     pub avoid: Option<AvoidTarget>,
     /// `RIDE_TARGET`.
@@ -131,6 +133,10 @@ pub fn set_guarded_anger_target(m: &mut Mob, player: Option<[i32; 4]>) {
     m.extra.piglin.guarded_angry_at = Some(player);
 }
 
+/// `AbstractPiglin.canHunt`: false when the saved `CannotHunt` flag is set.
+pub fn can_hunt(m: &Mob) -> bool {
+    !m.extra.piglin.cannot_hunt
+}
 /// `PiglinAi.isIdle`: whether the active activity is `Activity::Idle`.
 pub fn is_idle(m: &Mob) -> bool {
     activity(m) == Activity::Idle
@@ -1317,6 +1323,7 @@ impl Goal for HuntHoglin {
             || m.extra.anger > 0
             || m.ai.target.is_some()
             || m.extra.piglin.activity == Activity::Avoid
+            || m.extra.piglin.cannot_hunt
         {
             return false;
         }
