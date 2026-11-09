@@ -638,10 +638,14 @@ mod tests {
         assert_eq!(en.get("horizon.options.controller"), Some("Controller"));
         let ru = Language::load(&[&empty], "ru_ru");
         assert_eq!(ru.get("horizon.options.controller"), Some("Геймпад"));
-        // Every bundled string carries both languages: a key added to one file
-        // and forgotten in the other shows as a key name on screen.
+        // ru_ru.json itself has every English key. `ru` can't tell: the en_us
+        // layer under it fills any gap with English.
+        let ru_file: HashMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(bundled_dir().join("ru_ru.json")).unwrap(),
+        )
+        .unwrap();
         for key in en.map().keys() {
-            assert!(ru.get(key).is_some(), "{key} has no ru_ru value");
+            assert!(ru_file.contains_key(key), "{key} has no ru_ru value");
         }
         assert_eq!(en.get("horizon.pages.mods"), Some("Mods"));
         assert_eq!(ru.get("horizon.pages.mods"), Some("Моды"));
@@ -822,8 +826,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_horizon_key_the_code_names_is_in_en_us() {
+    /// The Rust sources of the crates that ask for Horizon's strings.
+    fn client_sources() -> Vec<std::path::PathBuf> {
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let path = entry.path();
@@ -834,22 +838,60 @@ mod tests {
                 }
             }
         }
-        let en: HashMap<String, String> = serde_json::from_str(
-            &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
-        )
-        .unwrap();
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut files = Vec::new();
         for krate in [
             "horizon-client",
             "horizon-client-render",
             "horizon-client-core",
+            "horizon-client-input",
         ] {
             rust_files(&crates.join(krate).join("src"), &mut files);
         }
         assert!(files.len() > 100, "found only {} sources", files.len());
+        files
+    }
+
+    /// A sentence key (the English text itself, not a `horizon.` id) that no
+    /// source names as a string literal is text the game no longer shows: its
+    /// rewording left it behind in every language (#13802).
+    #[test]
+    fn every_sentence_key_in_en_us_is_one_the_code_names() {
+        let en: HashMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
+        )
+        .unwrap();
+        let code: String = client_sources()
+            .iter()
+            .map(|file| std::fs::read_to_string(file).unwrap())
+            .collect();
+        let sentences: Vec<&String> = en.keys().filter(|k| !k.starts_with("horizon.")).collect();
+        assert!(
+            sentences.len() > 100,
+            "found only {} sentence keys",
+            sentences.len()
+        );
+        // A JSON string literal escapes `"` and `\` as Rust's does.
+        let mut dead: Vec<&str> = sentences
+            .into_iter()
+            .filter(|key| !code.contains(&serde_json::to_string(key).unwrap()))
+            .map(String::as_str)
+            .collect();
+        dead.sort_unstable();
+        assert!(
+            dead.is_empty(),
+            "en_us.json keys no code asks for: {dead:#?}"
+        );
+    }
+
+    #[test]
+    fn every_horizon_key_the_code_names_is_in_en_us() {
+        let en: HashMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
+        )
+        .unwrap();
         let mut found = 0;
-        for file in files {
+        for file in client_sources() {
             let text = std::fs::read_to_string(&file).unwrap();
             for (at, _) in text.match_indices("\"horizon.") {
                 let rest = &text[at + 1..];
