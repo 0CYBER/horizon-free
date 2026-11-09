@@ -465,6 +465,9 @@ pub struct Jukebox {
     /// reference exists. Keep this separate from legacy playback adoption.
     pub song_clock_present: bool,
     pub playing: bool,
+    /// A clock a save brought back, not playing yet: `setSongWithoutPlaying`
+    /// keeps the song and its clock without the sound's level event 1010.
+    pub loaded_clock: bool,
 }
 impl Jukebox {
     /// `JukeboxBlockEntity.getTheItem`: the disc it holds.

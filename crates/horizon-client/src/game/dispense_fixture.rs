@@ -919,6 +919,7 @@ impl Game<'_> {
                         items: [stack],
                         ticks: 0,
                         playing: false,
+                        loaded_clock: false,
                     }),
                 );
             }
