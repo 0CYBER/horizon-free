@@ -7187,7 +7187,9 @@ def vehicle_fall_clip():
     falls through one block of water and ends the move below it, out of the water's own reset.
     """
     x0, y0, z0 = 3648, 260, 3648
-    chunk = [[x0 >> 4, z0 >> 4]]
+    # Entities tick once every chunk within 2 columns is loaded (ChunkMap.prepareEntityTickingChunk, #13953):
+    # wait for them all, not only the forced one.
+    chunk = [[(x0 >> 4) + dx, (z0 >> 4) + dz] for dx in range(-2, 3) for dz in range(-2, 3)]
     ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
            cmd('/tick freeze', False),
            cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256)]
@@ -7225,7 +7227,9 @@ def mob_fall_clip():
     fast past a vine on a wall and with nothing in the way; a husk falls through one block of water.
     """
     x0, y0, z0 = 4160, 260, 4160
-    chunk = [[x0 >> 4, z0 >> 4]]
+    # Entities tick once every chunk within 2 columns is loaded (ChunkMap.prepareEntityTickingChunk, #13953):
+    # wait for them all, not only the forced one.
+    chunk = [[(x0 >> 4) + dx, (z0 >> 4) + dz] for dx in range(-2, 3) for dz in range(-2, 3)]
     ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
            cmd('/tick freeze', False),
            cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256)]
