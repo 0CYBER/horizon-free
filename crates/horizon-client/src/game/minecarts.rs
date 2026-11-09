@@ -227,6 +227,13 @@ fn pickup_instead_of_push(species: Species, is_passenger: bool, cart_is_vehicle:
     !cart_is_vehicle && !is_passenger && species != Species::IronGolem
 }
 
+/// `EntitySelector.pushableBy` asks `isPushable`: `Shulker` takes no push
+/// (`Mob::pushable` leaves it out) but still counts, so a cart offers it
+/// `startRiding` like any other living entity.
+fn offered_pickup(pushable: bool, species: Species, alive: bool) -> bool {
+    pushable || species == Species::Shulker && alive
+}
+
 /// `Entity.canRide` for a cart: the boarding cooldown, and a warden or the
 /// wither never rides (`canRide` false).
 fn can_ride_cart(species: Species, boarding_cooldown: i32) -> bool {
@@ -1783,7 +1790,10 @@ impl Game<'_> {
             let teams = self.mob_teams();
             near.iter()
                 .map(|&j| &self.mobs[j as usize])
-                .filter(|m| m.pushable() && pushable_by(None, teams.of(Who::Mob(m.id)), true))
+                .filter(|m| {
+                    offered_pickup(m.pushable(), m.species(), m.alive())
+                        && pushable_by(None, teams.of(Who::Mob(m.id)), true)
+                })
                 .map(|m| m.id)
                 .collect()
         };
@@ -3337,6 +3347,17 @@ mod tests {
         assert!(!pickup_instead_of_push(Species::Cow, true, false));
         assert!(!can_ride_cart(Species::Cow, 60));
         assert!(!can_ride_cart(Species::Warden, 0));
+    }
+
+    /// A shulker beside the rail is picked up although `Mob::pushable` leaves it out.
+    #[test]
+    fn a_cart_picks_up_a_shulker_but_not_a_dead_one() {
+        assert!(offered_pickup(false, Species::Shulker, true));
+        assert!(!offered_pickup(false, Species::Shulker, false));
+        assert!(!offered_pickup(false, Species::Bat, true));
+        assert!(offered_pickup(true, Species::Cow, true));
+        assert!(pickup_instead_of_push(Species::Shulker, false, false));
+        assert!(can_ride_cart(Species::Shulker, 0));
     }
 
     /// `WitherBoss.canRide` returns false, so a moving cart cannot scoop the boss up.
