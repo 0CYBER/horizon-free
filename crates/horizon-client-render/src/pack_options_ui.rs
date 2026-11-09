@@ -1,45 +1,36 @@
-//! The Pack Options page (#11486): the config entries of the selected resource packs' Polytone
-//! `config_entries` (wiki "Polytone Configs"), in the frame of Horizon's settings screens
-//! (`settings_shell`). Numbers are sliders, texts cycle, booleans switch; the entries sit in
-//! their `section`s, named by the packs' own translations. Leaving with Done keeps what changed,
-//! and the packs load again with it.
-use crate::widgets::Action as Declared;
+//! The Pack Options screen (#11486), on the settings shell (`settings_shell`): the config entries
+//! of the selected resource packs' Polytone `config_entries` (wiki "Polytone Configs"). Each
+//! `section` is a page, named by the packs' own translations; numbers are sliders that stop at
+//! the entry's `step`, value lists are choices, booleans switch and free text reads. The first
+//! page starts with the pack-wide presets and Reset all. The shell gives it the keyboard, a
+//! controller's focus, the search, the strip's descriptions and Undo; leaving keeps what differs
+//! from how the screen opened, and the packs load again with it.
 use crate::{
-    graphics_style as style,
-    hud::{HudAtlas, HudBatch},
     lang,
-    settings_shell::{self as shell, Columns, Line, Lines},
-    text::Text,
-    ui,
+    settings::Settings,
+    settings_shell::{self as shell, Group, Output, Row, Sheet, Value},
 };
 use horizon_polytone::pack::{ConfigKind, ConfigValue, Configs};
 
-/// What a click asks of the options screen.
+/// A row: the pack-wide presets, Reset all, or the entry at an index of `ids`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action {
-    ButtonClick,
-    SliderDrag,
-    /// Done: leave, keeping what changed.
-    Done,
+pub(crate) enum Item {
+    Presets,
+    ResetAll,
+    Entry(u16),
 }
 
-/// The page's state: the entries being edited, how they are listed, and the pointer's hold.
-#[derive(Default)]
-pub struct PackOptionsUi {
-    /// The selected packs' entries and the values being picked.
-    pub configs: Configs,
-    /// Entry ids, by the row index the list uses.
-    ids: Vec<String>,
-    /// The sections in order: the `section` id (none for entries without one) and its rows.
-    sections: Vec<(Option<String>, Vec<u16>)>,
-    scroll: ui::Scroll,
-    dragging: Option<u16>,
-    /// A value changed since the page opened.
-    pub changed: bool,
-}
-
-/// The presets' row (and its section): past every entry's index.
-const PRESETS: u16 = u16::MAX;
+const TITLE: &str = "horizon.pack.options.title";
+/// The first page's group of rows for the whole pack, and every page's group of entries.
+const WHOLE_PACK: &str = "Whole pack";
+const PACK_OPTIONS: &str = "Pack settings";
+const RESET_ALL: &str = "Reset all";
+const RESET_ABOUT: &str = "Puts every option of this pack back to its default.";
+const AT_DEFAULTS: &str = "Every option is at its default already.";
+const PRESETS_ABOUT: &str = "Sets many options at once, as the pack groups them.";
+const PACK_SETTINGS: &str = "Settings made by the pack's author: they change only this pack.";
+/// A pack's tooltips, with the performance line after them, run longer than Horizon's own.
+const NOTE_LINES: usize = 3;
 
 /// A translation, or `fallback` where no language has the key.
 fn translated(key: &str, fallback: impl FnOnce() -> String) -> String {
@@ -65,9 +56,34 @@ fn readable(path: &str) -> String {
         .unwrap_or_default()
 }
 
-impl PackOptionsUi {
-    /// The page opens on `configs`, the selected packs' entries with the player's values.
-    pub fn open(configs: Configs) -> Self {
+/// A number as its entry shows it: whole with a whole step, else up to two decimals.
+fn number_text(n: f64, step: f64) -> String {
+    if step >= 1.0 && step.fract() == 0.0 {
+        format!("{n:.0}")
+    } else {
+        let text = format!("{n:.2}");
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    }
+}
+
+/// The screen: the entries being edited, as they were when it opened (for Undo and for whether
+/// leaving changes anything), and how they are paged.
+#[derive(Default)]
+pub(crate) struct PackOptionsScreen {
+    /// The selected packs' entries and the values being picked.
+    pub(crate) configs: Configs,
+    opened: Configs,
+    /// Entry ids, by `Item::Entry`'s index.
+    ids: Vec<String>,
+    /// The sections in order: the `section` id (none for entries without one) and its entries.
+    sections: Vec<(Option<String>, Vec<u16>)>,
+    /// Bumped on every change, for `stamp`: the values are floats, which don't hash.
+    revision: u64,
+}
+
+impl PackOptionsScreen {
+    /// The screen opens on `configs`, the selected packs' entries with the player's values.
+    pub(crate) fn open(configs: Configs) -> Self {
         let mut ids: Vec<(String, Option<String>, i64)> = configs
             .entries()
             .iter()
@@ -96,25 +112,21 @@ impl PackOptionsUi {
             (None, None) => a.0.cmp(&b.0),
         });
         Self {
+            opened: configs.clone(),
             configs,
             ids: ids.into_iter().map(|(id, ..)| id).collect(),
             sections: sections.into_iter().map(|(s, _, rows)| (s, rows)).collect(),
-            ..Self::default()
+            revision: 0,
         }
     }
 
-    fn layout(&self, w: f32, h: f32) -> (Columns, Vec<Line<u16, u16>>, f32) {
-        let cols = Columns::of(w, h);
-        let mut lines = Lines::new();
-        // The pack-wide presets first, when the entries have some.
-        if !self.configs.presets().is_empty() {
-            lines.titled(PRESETS, vec![PRESETS]);
-        }
-        for (i, (_, rows)) in self.sections.iter().enumerate() {
-            lines.titled(i as u16, rows.clone());
-        }
-        let (lines, content) = lines.finish();
-        (cols, lines, content)
+    /// What leaving sends: the entries and the player's choices, if they differ from how the
+    /// screen opened (an Undo, or a value stepped back, leaves nothing to send).
+    pub(crate) fn finished(&self) -> Option<crate::options_ui::Event> {
+        (self.configs != self.opened).then(|| crate::options_ui::Event::PackOptions {
+            entries: self.configs.entries().keys().cloned().collect(),
+            chosen: self.configs.chosen(),
+        })
     }
 
     /// The namespace the presets' translations are under: of the first entry with presets.
@@ -166,21 +178,14 @@ impl PackOptionsUi {
             None if back => n - 1,
             None => 0,
         };
-        let before = self.configs.clone();
         self.configs.apply_preset(&presets[next]);
-        if self.configs != before {
-            self.changed = true;
-        }
+        self.revision += 1;
     }
 
-    /// A section's heading: `config.<namespace>.section.<id>`, by its first entry's namespace.
-    fn section_name(&self, section: u16) -> String {
-        if section == PRESETS {
-            let key = format!("{}.presets", self.presets_namespace());
-            return translated(&key, || lang::get("horizon.pack.options.presets"));
-        }
-        let Some((id, rows)) = self.sections.get(usize::from(section)) else {
-            return String::new();
+    /// A section's page name: `config.<namespace>.section.<id>`, by its first entry's namespace.
+    fn section_name(&self, section: usize) -> String {
+        let Some((id, rows)) = self.sections.get(section) else {
+            return lang::get("horizon.pack.options.general");
         };
         let Some(id) = id else {
             return lang::get("horizon.pack.options.general");
@@ -192,367 +197,218 @@ impl PackOptionsUi {
         translated(&format!("config.{namespace}.section.{id}"), || readable(id))
     }
 
-    /// An entry's name (`config.<namespace>.<name>`) and its value's label.
-    fn parts(&self, row: u16) -> (String, Option<String>) {
-        if row == PRESETS {
-            let label = self.preset_label(self.current_preset().as_deref());
-            return (self.section_name(PRESETS), Some(label));
-        }
-        let Some(id) = self.ids.get(usize::from(row)) else {
-            return (String::new(), None);
-        };
-        let (namespace, path) = split(id);
-        let name = translated(&format!("config.{namespace}.{path}"), || readable(path));
-        let entry = &self.configs.entries()[id];
-        let value = match self.configs.get(id) {
-            Some(ConfigValue::Number(n)) => {
-                let step = match entry.kind {
-                    ConfigKind::Number { step, .. } => step,
-                    _ => 1.0,
-                };
-                let text = if step >= 1.0 && step.fract() == 0.0 {
-                    format!("{n:.0}")
-                } else {
-                    format!("{n:.2}")
-                        .trim_end_matches('0')
-                        .trim_end_matches('.')
-                        .to_owned()
-                };
-                Some(text)
-            }
-            Some(ConfigValue::Text(t)) => Some(t.clone()),
-            Some(ConfigValue::Bool(_)) | None => None,
-        };
-        let value = value.map(|v| match &entry.value_translation {
-            Some(key) if lang::has(key) => lang::tr(key, &[&v]),
-            _ => v,
-        });
-        (name, value)
-    }
-
-    /// The tooltip (`config.<namespace>.<name>.tooltip`) and the performance hint.
-    fn description(&self, row: u16) -> String {
-        let Some(id) = self.ids.get(usize::from(row)) else {
-            return String::new();
-        };
+    /// The tooltip (`config.<namespace>.<name>.tooltip`) and the performance line after it.
+    fn description(&self, id: &str) -> String {
         let (namespace, path) = split(id);
         let key = format!("config.{namespace}.{path}.tooltip");
-        let mut text = if lang::has(&key) {
+        let tooltip = if lang::has(&key) {
             lang::get(&key)
         } else {
             String::new()
         };
-        if let Some(impact) = &self.configs.entries()[id].performance_impact {
-            let level = lang::get(&format!("horizon.pack.options.impact.{impact}"));
-            let line = lang::tr("horizon.pack.options.impact", &[&level]);
-            text = if text.is_empty() {
-                line
-            } else {
-                format!("{text} {line}")
-            };
-        }
-        text
-    }
-
-    /// A slider's place (0 to 1) for a number entry.
-    fn slider(&self, row: u16) -> Option<f32> {
-        let id = self.ids.get(usize::from(row))?;
-        let ConfigKind::Number { min, max, .. } = self.configs.entries()[id].kind else {
-            return None;
-        };
-        let Some(ConfigValue::Number(n)) = self.configs.get(id) else {
-            return None;
-        };
-        Some(if max > min {
-            ((n - min) / (max - min)) as f32
-        } else {
-            0.0
-        })
-    }
-
-    fn switch(&self, row: u16) -> Option<bool> {
-        match self.configs.get(self.ids.get(usize::from(row))?)? {
-            ConfigValue::Bool(b) => Some(*b),
-            _ => None,
+        let impact = self.configs.entries()[id]
+            .performance_impact
+            .as_ref()
+            .map(|impact| {
+                let level = lang::get(&format!("horizon.pack.options.impact.{impact}"));
+                lang::tr("horizon.pack.options.impact", &[&level])
+            });
+        match impact {
+            Some(line) if tooltip.is_empty() => line,
+            Some(line) => format!("{tooltip} {line}"),
+            None => tooltip,
         }
     }
 
-    pub fn draw(
-        &mut self,
-        batch: &mut HudBatch,
-        atlas: &HudAtlas,
-        cursor: (f32, f32),
-        in_world: bool,
-    ) {
-        let (w, h) = (batch.width, batch.height);
-        let (cols, lines, content) = self.layout(w, h);
-        self.scroll.clamp(cols.top, cols.bottom, content);
-        shell::backdrop(batch, atlas, in_world);
-        shell::mark(
-            batch,
-            atlas,
-            &cols,
-            &lang::get("horizon.pack.options.title"),
-        );
-        shell::plate(
-            batch,
-            atlas,
-            &cols,
-            &lang::get("horizon.pack.options.title"),
-        );
-        let over_list = cursor.1 >= cols.top && cursor.1 < cols.bottom;
-        let mut described = None;
-        shell::list(
-            batch,
-            atlas,
-            &cols,
-            &lines,
-            self.scroll.amount,
-            |section| self.section_name(section),
-            |batch, row: u16, y| {
-                let [rx, ry, rw, rh] = cols.row(y);
-                let hover = over_list && ui::hovered(cursor, rx, ry, rw, rh);
-                if hover || self.dragging == Some(row) {
-                    described = Some(row);
+    /// Entry `i`'s row: a switch, a slider in its steps, a choice, or text to read.
+    fn entry_row(&self, i: u16) -> Option<Row<Item>> {
+        let id = self.ids.get(usize::from(i))?;
+        let (namespace, path) = split(id);
+        let name = translated(&format!("config.{namespace}.{path}"), || readable(path));
+        let entry = &self.configs.entries()[id];
+        let shown = |text: String| match &entry.value_translation {
+            Some(key) if lang::has(key) => lang::tr(key, &[&text]),
+            _ => text,
+        };
+        let value = match (&entry.kind, self.configs.get(id)?) {
+            (_, ConfigValue::Bool(on)) => Value::Switch(*on),
+            (&ConfigKind::Number { min, max, step }, &ConfigValue::Number(n)) => {
+                let span = max - min;
+                let stops = if step > 0.0 {
+                    (span / step).round()
+                } else {
+                    0.0
+                };
+                Value::Slider {
+                    position: if span > 0.0 {
+                        ((n - min) / span) as f32
+                    } else {
+                        0.0
+                    },
+                    steps: (stops >= 1.0).then_some(stops as u32),
+                    text: shown(number_text(n, step)),
                 }
-                let (name, value) = self.parts(row);
-                let label = match &value {
-                    Some(v) => format!("{name}: {v}"),
-                    None => name.clone(),
-                };
-                let view = shell::RowView {
-                    label: &label,
-                    name: &name,
-                    value: value.as_deref(),
-                    switch: self.switch(row),
-                    slider: self.slider(row),
-                    live: true,
-                    hover,
-                    focused: false,
-                    held: self.dragging == Some(row),
-                    key: None,
-                };
-                shell::row(batch, atlas, &cols, y, &view);
-            },
-        );
-        shell::scroller(batch, atlas, &cols, content, self.scroll.amount);
-        // The strip: the pointed-at entry's tooltip.
-        let [x, y, ..] = cols.dock;
-        style::panel(batch, atlas, cols.dock);
-        if let Some(row) = described {
-            let name = Text::literal(self.parts(row).0);
-            batch.text_styled(atlas, &name, x + 12.0, y + 8.0, style::WHITE, true);
-            shell::dock_note(batch, atlas, &cols, self.description(row), style::GREY);
-        }
-        let mut foot = vec![(cols.button(0), "gui.done", Some(Declared::Done))];
-        if self
-            .configs
-            .chosen()
-            .iter()
-            .any(|(id, _)| self.ids.contains(id))
-        {
-            foot.push((cols.button(1), "controls.reset", None));
-        }
-        for (rect, key, declared) in foot {
-            if let Some(declared) = declared {
-                crate::widgets::declare_action(declared, rect, true);
             }
-            let label = Text::literal(lang::get(key));
-            shell::foot_button(batch, atlas, rect, &label, cursor, (false, true));
-        }
+            (ConfigKind::Text { allowed }, ConfigValue::Text(t)) if !allowed.is_empty() => {
+                Value::Choice(shown(t.clone()))
+            }
+            (_, value) => Value::Read(shown(match value {
+                ConfigValue::Number(n) => number_text(*n, 1.0),
+                ConfigValue::Text(t) => t.clone(),
+                ConfigValue::Bool(b) => b.to_string(),
+            })),
+        };
+        Some(Row::new(Item::Entry(i), name, value).about(self.description(id)))
     }
 
-    /// A press (or a drag with `drag`) at `(x, y)`; `back` turns a cycle backwards.
-    pub fn click(
-        &mut self,
-        (x, y): (f32, f32),
-        (w, h): (f32, f32),
-        drag: bool,
-        back: bool,
-    ) -> Vec<Action> {
-        let (cols, lines, content) = self.layout(w, h);
-        let at = |[rx, ry, rw, rh]: [f32; 4]| ui::hovered((x, y), rx, ry, rw, rh);
-        if drag {
-            if self.scroll.held() {
-                self.scroll.drag(y, cols.top, cols.bottom, content);
-            } else if let Some(row) = self.dragging {
-                self.set_slider(row, cols.slider_at(x));
-                return vec![Action::SliderDrag];
-            }
-            return Vec::new();
+    /// The rows for the whole pack: its presets, when it has some, and Reset all.
+    fn whole_pack(&self) -> Group<Item> {
+        let mut rows = Vec::new();
+        if !self.configs.presets().is_empty() {
+            let key = format!("{}.presets", self.presets_namespace());
+            let name = translated(&key, || lang::get("horizon.pack.options.presets"));
+            let label = self.preset_label(self.current_preset().as_deref());
+            rows.push(
+                Row::new(Item::Presets, name, Value::Choice(label)).about(lang::get(PRESETS_ABOUT)),
+            );
         }
-        if cols.scrolls()
-            && self
-                .scroll
-                .press((x, y), cols.bar_x(), cols.top, cols.bottom, content)
-        {
-            return Vec::new();
+        let at_defaults = self.configs.chosen().is_empty();
+        let reset = Row::new(Item::ResetAll, lang::get(RESET_ALL), Value::Press)
+            .about(lang::get(RESET_ABOUT))
+            .blocked(at_defaults.then(|| lang::get(AT_DEFAULTS)));
+        rows.push(reset);
+        Group {
+            name: WHOLE_PACK,
+            rows,
         }
-        if at(cols.button(0)) {
-            return vec![Action::ButtonClick, Action::Done];
-        }
-        if at(cols.button(1)) {
-            self.reset();
-            return vec![Action::ButtonClick];
-        }
-        if y < cols.top || y >= cols.bottom {
-            return Vec::new();
-        }
-        let Some(row) = lines.iter().find_map(|line| {
-            let row = line.setting?;
-            at(cols.row(cols.top + line.y - self.scroll.amount)).then_some(row)
-        }) else {
-            return Vec::new();
-        };
-        if row == PRESETS {
-            self.cycle_preset(back);
-            return vec![Action::ButtonClick];
-        }
-        let Some(id) = self.ids.get(usize::from(row)).cloned() else {
-            return Vec::new();
-        };
-        let entry = self.configs.entries()[&id].clone();
-        match (&entry.kind, self.configs.get(&id).cloned()) {
-            (ConfigKind::Number { .. }, _) => {
-                self.dragging = Some(row);
-                self.set_slider(row, cols.slider_at(x));
-                return vec![Action::SliderDrag];
-            }
-            (ConfigKind::Bool, Some(ConfigValue::Bool(b))) => {
-                self.set(&id, ConfigValue::Bool(!b));
-            }
-            (ConfigKind::Text { allowed }, Some(ConfigValue::Text(t))) if !allowed.is_empty() => {
-                let i = allowed.iter().position(|a| *a == t).unwrap_or(0);
-                let n = allowed.len();
-                let next = if back { (i + n - 1) % n } else { (i + 1) % n };
-                self.set(&id, ConfigValue::Text(allowed[next].clone()));
-            }
-            _ => return Vec::new(),
-        }
-        vec![Action::ButtonClick]
     }
 
     fn set(&mut self, id: &str, value: ConfigValue) {
-        let before = self.configs.get(id).cloned();
         self.configs.set(id, value);
-        if self.configs.get(id).cloned() != before {
-            self.changed = true;
-        }
-    }
-
-    /// Number entry `row` at slider place `at` (0 to 1).
-    fn set_slider(&mut self, row: u16, at: f32) {
-        let Some(id) = self.ids.get(usize::from(row)).cloned() else {
-            return;
-        };
-        if let ConfigKind::Number { min, max, .. } = self.configs.entries()[&id].kind {
-            self.set(&id, ConfigValue::Number(min + f64::from(at) * (max - min)));
-        }
+        self.revision += 1;
     }
 
     /// Every entry back to its default.
     fn reset(&mut self) {
-        let defaults: Vec<_> = self
-            .configs
-            .entries()
-            .iter()
+        let defaults: Vec<_> = (self.configs.entries().iter())
             .map(|(id, e)| (id.clone(), e.default.clone()))
             .collect();
         for (id, value) in defaults {
             self.set(&id, value);
         }
     }
+}
 
-    /// The pointer lets go.
-    pub fn release(&mut self) {
-        self.scroll.release();
-        self.dragging = None;
+impl shell::Screen for PackOptionsScreen {
+    type Page = u16;
+    type Row = Item;
+    fn title(&self) -> &'static str {
+        TITLE
     }
-
-    /// The mouse wheel scrolls the list.
-    pub fn scroll(&mut self, (w, h): (f32, f32), amount: f32) {
-        let (cols, _, content) = self.layout(w, h);
-        self.scroll
-            .wheel(amount, 18.0, cols.top, cols.bottom, content);
+    fn note_lines(&self) -> usize {
+        NOTE_LINES
+    }
+    /// The rows read only the screen's own entries, which change through it alone.
+    fn stamp(&self, _s: &Settings) -> u64 {
+        self.revision
+    }
+    /// A page per section; the first starts with the rows for the whole pack.
+    fn sheets(&self, _s: &Settings) -> Vec<Sheet<u16, Item>> {
+        let about = lang::get(PACK_SETTINGS);
+        let mut sheets = Vec::new();
+        for (i, (_, entries)) in self.sections.iter().enumerate() {
+            let rows = entries.iter().filter_map(|&e| self.entry_row(e)).collect();
+            let mut groups = vec![Group {
+                name: PACK_OPTIONS,
+                rows,
+            }];
+            if i == 0 {
+                groups.insert(0, self.whole_pack());
+            }
+            sheets.push(Sheet::new(
+                i as u16,
+                self.section_name(i),
+                about.clone(),
+                groups,
+            ));
+        }
+        if sheets.is_empty() {
+            let groups = vec![self.whole_pack()];
+            sheets.push(Sheet::new(0, self.section_name(0), about, groups));
+        }
+        sheets
+    }
+    /// A switch flips, a choice and the presets step (back with Shift, or Left), Reset all
+    /// resets.
+    fn press(&mut self, _s: &mut Settings, item: Item, back: bool) -> Vec<Output> {
+        let i = match item {
+            Item::Presets => {
+                self.cycle_preset(back);
+                return Vec::new();
+            }
+            Item::ResetAll => {
+                self.reset();
+                return Vec::new();
+            }
+            Item::Entry(i) => i,
+        };
+        let Some(id) = self.ids.get(usize::from(i)).cloned() else {
+            return Vec::new();
+        };
+        let kind = self.configs.entries()[&id].kind.clone();
+        match (kind, self.configs.get(&id).cloned()) {
+            (_, Some(ConfigValue::Bool(on))) => self.set(&id, ConfigValue::Bool(!on)),
+            (ConfigKind::Text { allowed }, Some(ConfigValue::Text(t))) if !allowed.is_empty() => {
+                let at = allowed.iter().position(|a| *a == t).unwrap_or(0);
+                let n = allowed.len();
+                let next = if back { (at + n - 1) % n } else { (at + 1) % n };
+                self.set(&id, ConfigValue::Text(allowed[next].clone()));
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+    /// A slider moves its entry to the step nearest it (`Configs::set` snaps it).
+    fn slide(&mut self, _s: &mut Settings, item: Item, position: f32) {
+        let Item::Entry(i) = item else { return };
+        let Some(id) = self.ids.get(usize::from(i)).cloned() else {
+            return;
+        };
+        if let ConfigKind::Number { min, max, .. } = self.configs.entries()[&id].kind {
+            let value = min + f64::from(position.clamp(0.0, 1.0)) * (max - min);
+            self.set(&id, ConfigValue::Number(value));
+        }
+    }
+    /// With the "Scroll wheel changes settings" extra, the wheel steps a choice and the presets.
+    fn wheel_step(&mut self, s: &mut Settings, item: Item, back: bool) -> Option<Vec<Output>> {
+        let steps = match item {
+            Item::Presets => true,
+            Item::Entry(i) => self
+                .entry_row(i)
+                .is_some_and(|row| matches!(row.value, Value::Choice(_))),
+            Item::ResetAll => false,
+        };
+        if !steps {
+            return None;
+        }
+        let mut outputs = vec![Output::Event(crate::options_ui::Event::ButtonClick)];
+        outputs.extend(self.press(s, item, back));
+        Some(outputs)
+    }
+    fn undoes(&self) -> bool {
+        true
+    }
+    /// The entries as the screen opened with them.
+    fn undo(&mut self, _s: &mut Settings, _before: &Settings) -> Vec<Output> {
+        self.configs = self.opened.clone();
+        self.revision += 1;
+        Vec::new()
+    }
+    /// Undo shows exactly while an entry differs from how the screen opened.
+    fn differs(&self, _s: &Settings, _before: &Settings) -> Option<bool> {
+        Some(self.configs != self.opened)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn configs() -> Configs {
-        let mut c = Configs::default();
-        c.add_entry(
-            "p:fog".into(),
-            &serde_json::json!({"default_value": 0.5, "section": "sky", "section_order": 2}),
-        );
-        c.add_entry("p:rain".into(), &serde_json::json!({"default_value": "drops", "allowed_values": ["drops", "streaks"], "section": "weather", "section_order": 1}));
-        c.add_entry(
-            "p:birds".into(),
-            &serde_json::json!({"default_value": true}),
-        );
-        c
-    }
-
-    #[test]
-    fn sections_sort_by_their_order_and_the_unsectioned_last() {
-        let ui = PackOptionsUi::open(configs());
-        let order: Vec<_> = ui.sections.iter().map(|(s, _)| s.as_deref()).collect();
-        assert_eq!(order, [Some("weather"), Some("sky"), None]);
-    }
-
-    #[test]
-    fn rows_switch_cycle_and_slide() {
-        let mut ui = PackOptionsUi::open(configs());
-        let size = (480.0, 270.0);
-        let (cols, lines, _) = ui.layout(size.0, size.1);
-        let ids = ui.ids.clone();
-        let point = |id: &str| {
-            let row = ids.iter().position(|i| i == id).unwrap() as u16;
-            let line = lines.iter().find(|l| l.setting == Some(row)).unwrap();
-            let [x, y, w, h] = cols.row(cols.top + line.y);
-            (x + w - 4.0, y + h / 2.0)
-        };
-        let (birds, rain) = (point("p:birds"), point("p:rain"));
-        ui.click(birds, size, false, false);
-        assert_eq!(ui.configs.get("p:birds"), Some(&ConfigValue::Bool(false)));
-        ui.click(rain, size, false, false);
-        assert_eq!(
-            ui.configs.get("p:rain"),
-            Some(&ConfigValue::Text("streaks".into()))
-        );
-        // The slider's far right end is its maximum.
-        let fog = point("p:fog");
-        let (tx, tw) = cols.track();
-        ui.click((tx + tw, fog.1), size, false, false);
-        ui.release();
-        assert_eq!(ui.configs.get("p:fog"), Some(&ConfigValue::Number(1.0)));
-        assert!(ui.changed);
-        assert_eq!(ui.configs.chosen().len(), 3);
-        ui.reset();
-        assert!(ui.configs.chosen().is_empty());
-    }
-
-    #[test]
-    fn the_presets_row_cycles_the_pack_wide_presets_and_shows_custom_otherwise() {
-        let mut c = Configs::default();
-        let entry = |default: f64, fast: f64, pretty: f64| serde_json::json!({"default_value": default, "presets": {"fast": fast, "pretty": pretty}});
-        c.add_entry("p:fog".into(), &entry(0.5, 0.0, 1.0));
-        c.add_entry("p:dust".into(), &entry(0.5, 0.0, 0.8));
-        let mut ui = PackOptionsUi::open(c);
-        // The defaults are no preset.
-        assert_eq!(ui.current_preset(), None);
-        ui.cycle_preset(false);
-        assert_eq!(ui.current_preset().as_deref(), Some("fast"));
-        assert_eq!(ui.configs.get("p:fog"), Some(&ConfigValue::Number(0.0)));
-        ui.cycle_preset(false);
-        assert_eq!(ui.current_preset().as_deref(), Some("pretty"));
-        ui.cycle_preset(true);
-        assert_eq!(ui.current_preset().as_deref(), Some("fast"));
-        // One value off the preset: custom again.
-        ui.set("p:dust", ConfigValue::Number(0.3));
-        assert_eq!(ui.current_preset(), None);
-        assert!(ui.changed);
-    }
-}
+mod tests;
