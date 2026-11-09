@@ -1052,9 +1052,17 @@ impl Game<'_> {
         // now rather than at the first tick (reading parses functions; it runs none), and a broken
         // predicate graph stops the start before anything listens (a partial check: predicate_graph.rs).
         self.ensure_datapacks();
-        if let Err(error) = predicate_graph::check(&self.fns.store.predicates) {
+        let store = &self.fns.store;
+        let tag = |id: &str| {
+            let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+            store
+                .files
+                .contains_key(&format!("tags/{ns}:predicate/{path}"))
+        };
+        if let Err(error) = predicate_graph::check(&store.predicates, tag) {
             let level = match error {
-                predicate_graph::GraphError::Unbound(_) => "ERROR",
+                predicate_graph::GraphError::Unbound(_)
+                | predicate_graph::GraphError::UnboundTags(_) => "ERROR",
                 predicate_graph::GraphError::Recursive(_) => "WARN",
             };
             for line in error.lines() {

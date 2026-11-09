@@ -1517,15 +1517,23 @@ fn predicate_references(
                 .unwrap_or("");
             match &*full(kind) {
                 "minecraft:inverted" => predicate_references(&v["term"], w, active),
-                "minecraft:all_of" | "minecraft:any_of" => v["terms"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
+                "minecraft:all_of" | "minecraft:any_of" => terms(v)
+                    .iter()
                     .try_for_each(|v| predicate_references(v, w, active)),
                 _ => Ok(()),
             }
         }
         _ => Ok(()),
+    }
+}
+
+/// `terms` as `HolderSetCodec` reads it: a list, or one holder alone; a `#tag` is not expanded.
+fn terms(v: &Value) -> &[Value] {
+    match &v["terms"] {
+        Value::Array(list) => list,
+        Value::Null => &[],
+        Value::String(tag) if tag.starts_with('#') => &[],
+        one => std::slice::from_ref(one),
     }
 }
 
@@ -1547,16 +1555,8 @@ pub fn conditions_with(
                 .unwrap_or("");
             match &*full(ty) {
                 "minecraft:inverted" => !conditions_with(&v["term"], ctx, test),
-                "minecraft:all_of" => v["terms"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .all(|t| conditions_with(t, ctx, test)),
-                "minecraft:any_of" => v["terms"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|t| conditions_with(t, ctx, test)),
+                "minecraft:all_of" => terms(v).iter().all(|t| conditions_with(t, ctx, test)),
+                "minecraft:any_of" => terms(v).iter().any(|t| conditions_with(t, ctx, test)),
                 _ => test(v, ctx),
             }
         }

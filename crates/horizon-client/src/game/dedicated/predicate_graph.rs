@@ -1,13 +1,16 @@
 //! A partial check of the world's predicate graph before a dedicated server is Ready.
 //!
 //! Vanilla refuses to start a world whose packs' predicates reference a predicate no pack defines
-//! (`MappedRegistry.freeze`: "Unbound values in registry"), or reference each other in a cycle
+//! (`MappedRegistry.freeze`: "Unbound values in registry"), name a predicate tag no pack defines
+//! ("Unbound tags in registry"), or reference each other in a cycle
 //! (`ReloadableServerRegistries.validateLootRegistries`: a reference "is recursively called").
 //!
 //! This is new, partial validation, not a port of `RegistryDataLoader` or `ValidationContext`. It
 //! follows a predicate's holders only where the condition codecs hold one: `all_of` and `any_of`
 //! `terms`, and `inverted` `term`. A holder is an identifier (a reference) or an inline condition,
-//! which is followed in the same way. Every other condition type and field, an identifier that does
+//! which is followed in the same way. `terms` is a `HolderSetCodec`: a list of holders, one holder
+//! alone (`compactListCodec`, at `.terms[0]`), or a `#tag`. A tag must be defined; the entries of a
+//! defined tag are not followed. Every other condition type and field, an identifier that does
 //! not parse, and the holders of loot tables, advancements and item modifiers are not checked.
 use horizon_client_core::identifier::parse_identifier;
 use serde_json::Value;
@@ -20,6 +23,8 @@ const REGISTRY: &str = "minecraft:predicate";
 pub(super) enum GraphError {
     /// Referenced ids that no predicate binds.
     Unbound(BTreeSet<String>),
+    /// Predicate tags that a `terms` names and no pack defines.
+    UnboundTags(BTreeSet<String>),
     /// References that re-enter a predicate while it is being validated.
     Recursive(Vec<Recursion>),
 }
@@ -37,6 +42,10 @@ impl GraphError {
         match self {
             GraphError::Unbound(ids) => vec![format!(
                 "Unbound values in registry ResourceKey[minecraft:root / {REGISTRY}]: [{}]",
+                ids.iter().cloned().collect::<Vec<_>>().join(", ")
+            )],
+            GraphError::UnboundTags(ids) => vec![format!(
+                "Unbound tags in registry ResourceKey[minecraft:root / {REGISTRY}]: [{}]",
                 ids.iter().cloned().collect::<Vec<_>>().join(", ")
             )],
             GraphError::Recursive(found) => found
@@ -62,14 +71,16 @@ fn holders(condition: &Value) -> Vec<(String, &Value)> {
         return Vec::new();
     };
     match ty.as_str() {
-        "minecraft:all_of" | "minecraft:any_of" => condition
-            .get("terms")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, term)| (format!(".terms[{i}]"), term))
-            .collect(),
+        "minecraft:all_of" | "minecraft:any_of" => match condition.get("terms") {
+            Some(Value::Array(terms)) => terms
+                .iter()
+                .enumerate()
+                .map(|(i, term)| (format!(".terms[{i}]"), term))
+                .collect(),
+            Some(Value::String(tag)) if tag.starts_with('#') => Vec::new(),
+            Some(term) => vec![(".terms[0]".to_owned(), term)],
+            None => Vec::new(),
+        },
         "minecraft:inverted" => condition
             .get("term")
             .map(|term| vec![(".term".to_owned(), term)])
@@ -78,12 +89,22 @@ fn holders(condition: &Value) -> Vec<(String, &Value)> {
     }
 }
 
-/// Every reference a condition holds, inline conditions included.
-fn references(condition: &Value, out: &mut Vec<String>) {
+/// The predicate tag an `all_of` or `any_of` names as its `terms` (`#ns:path`).
+fn tag(condition: &Value) -> Option<String> {
+    let ty = parse_identifier(condition.get("type")?.as_str()?)?;
+    if !matches!(ty.as_str(), "minecraft:all_of" | "minecraft:any_of") {
+        return None;
+    }
+    parse_identifier(condition.get("terms")?.as_str()?.strip_prefix('#')?)
+}
+
+/// Every reference and tag a condition holds, inline conditions included.
+fn references(condition: &Value, out: &mut Vec<String>, tags: &mut Vec<String>) {
+    tags.extend(tag(condition));
     for (_, holder) in holders(condition) {
         match holder {
             Value::String(name) => out.extend(parse_identifier(name)),
-            Value::Object(_) => references(holder, out),
+            Value::Object(_) => references(holder, out, tags),
             _ => {}
         }
     }
@@ -125,12 +146,17 @@ fn walk<'v>(
     }
 }
 
-/// The world's predicates (by normalized id, after pack precedence): missing references first, as
-/// the registry freezes before anything is validated, then recursive ones.
-pub(super) fn check(predicates: &BTreeMap<String, Value>) -> Result<(), GraphError> {
+/// The world's predicates (by normalized id, after pack precedence) and whether a pack defines a
+/// predicate tag: missing references first, then missing tags, as the registry freezes before
+/// anything is validated, then recursive references.
+pub(super) fn check(
+    predicates: &BTreeMap<String, Value>,
+    has_tag: impl Fn(&str) -> bool,
+) -> Result<(), GraphError> {
     let mut referenced = Vec::new();
+    let mut tags = Vec::new();
     for condition in predicates.values() {
-        references(condition, &mut referenced);
+        references(condition, &mut referenced, &mut tags);
     }
     let unbound: BTreeSet<String> = referenced
         .into_iter()
@@ -138,6 +164,10 @@ pub(super) fn check(predicates: &BTreeMap<String, Value>) -> Result<(), GraphErr
         .collect();
     if !unbound.is_empty() {
         return Err(GraphError::Unbound(unbound));
+    }
+    let unbound: BTreeSet<String> = tags.into_iter().filter(|id| !has_tag(id)).collect();
+    if !unbound.is_empty() {
+        return Err(GraphError::UnboundTags(unbound));
     }
     let mut found = Vec::new();
     for (id, condition) in predicates {
@@ -193,7 +223,7 @@ mod tests {
             // An identifier that does not parse is not checked here.
             ("a:v", json!({"type": "inverted", "term": "Not An Id"})),
         ]);
-        assert_eq!(check(&predicates), Ok(()));
+        assert_eq!(check(&predicates, |_| false), Ok(()));
     }
 
     #[test]
@@ -205,7 +235,7 @@ mod tests {
             ),
             ("a:c", json!({"type": "inverted", "term": "a:c"})),
         ]);
-        let error = check(&predicates).unwrap_err();
+        let error = check(&predicates, |_| false).unwrap_err();
         assert_eq!(
             error,
             GraphError::Unbound(["a:gone".to_owned(), "b:none".to_owned()].into())
@@ -234,7 +264,7 @@ mod tests {
                 json!({"type": "any_of", "terms": [{"type": "inverted", "term": "prg:self"}]}),
             ),
         ]);
-        let mut lines = check(&predicates).unwrap_err().lines();
+        let mut lines = check(&predicates, |_| false).unwrap_err().lines();
         lines.sort();
         // The two cycle lines are the ones vanilla 26.3 logged for this pack.
         assert_eq!(
@@ -243,6 +273,76 @@ mod tests {
                 "Found loot table element validation problem in {prg:loop@minecraft:predicate}.term->{prg:ref@minecraft:predicate}.terms[0]: prg:loop of type minecraft:predicate is recursively called",
                 "Found loot table element validation problem in {prg:ref@minecraft:predicate}.terms[0]->{prg:loop@minecraft:predicate}.term: prg:ref of type minecraft:predicate is recursively called",
                 "Found loot table element validation problem in {prg:self@minecraft:predicate}.terms[0].term: prg:self of type minecraft:predicate is recursively called",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_lone_terms_holder_is_terms_0_and_a_tag_must_be_defined() {
+        let target = json!({"type": "minecraft:all_of", "terms": []});
+        // Vanilla 26.3 starts a world whose `terms` is one bound holder alone.
+        let valid = graph(&[
+            ("prg:target", target.clone()),
+            ("prg:ref", json!({"type": "all_of", "terms": "prg:target"})),
+            (
+                "prg:inline",
+                json!({"type": "any_of", "terms": {"type": "inverted", "term": "prg:target"}}),
+            ),
+            (
+                "prg:tagged",
+                json!({"type": "any_of", "terms": "#prg:some"}),
+            ),
+        ]);
+        assert_eq!(check(&valid, |tag| tag == "prg:some"), Ok(()));
+        let missing = graph(&[
+            ("prg:target", target.clone()),
+            (
+                "prg:ref",
+                json!({"type": "minecraft:all_of", "terms": "prg:missing"}),
+            ),
+            (
+                "prg:tagged",
+                json!({"type": "all_of", "terms": "#prg:none"}),
+            ),
+        ]);
+        // Missing values first, then missing tags: the lines vanilla 26.3 logged for each.
+        assert_eq!(
+            check(&missing, |_| false).unwrap_err().lines(),
+            [
+                "Unbound values in registry ResourceKey[minecraft:root / minecraft:predicate]: [prg:missing]"
+            ]
+        );
+        let tags = graph(&[
+            ("prg:target", target.clone()),
+            (
+                "prg:ref",
+                json!({"type": "minecraft:all_of", "terms": "#prg:none"}),
+            ),
+        ]);
+        assert_eq!(
+            check(&tags, |_| false).unwrap_err().lines(),
+            [
+                "Unbound tags in registry ResourceKey[minecraft:root / minecraft:predicate]: [prg:none]"
+            ]
+        );
+        let cycle = graph(&[
+            ("prg:target", target),
+            (
+                "prg:ref",
+                json!({"type": "minecraft:any_of", "terms": "prg:loop"}),
+            ),
+            (
+                "prg:loop",
+                json!({"type": "minecraft:inverted", "term": "prg:ref"}),
+            ),
+        ]);
+        let mut lines = check(&cycle, |_| false).unwrap_err().lines();
+        lines.sort();
+        assert_eq!(
+            lines,
+            [
+                "Found loot table element validation problem in {prg:loop@minecraft:predicate}.term->{prg:ref@minecraft:predicate}.terms[0]: prg:loop of type minecraft:predicate is recursively called",
+                "Found loot table element validation problem in {prg:ref@minecraft:predicate}.terms[0]->{prg:loop@minecraft:predicate}.term: prg:ref of type minecraft:predicate is recursively called",
             ]
         );
     }
