@@ -1511,7 +1511,7 @@ impl Game<'_> {
         let before = self.next_entity;
         let mut tag = tag;
         crate::game::persist::mark_fresh(&mut tag);
-        self.world.loaded_entities.push((key, vec![tag]));
+        self.world.queue_entity_nbt(key, vec![tag]);
         self.spawn_loaded_entities();
         waiting.append(&mut self.world.loaded_entities);
         self.world.loaded_entities = waiting;

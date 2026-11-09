@@ -533,7 +533,7 @@ impl Game<'_> {
         let player_uuid = self.level.player_uuid;
         for (key, tags) in loaded {
             let count = tags.len();
-            for mut tag in tags {
+            for (mut tag, _) in tags.into_iter().map(|pending| pending.into_parts()) {
                 // A world older builds named by the offline profile names the player that
                 // way in its entities too: migrate them as they load, so the next save of
                 // the chunk keeps the account's UUID (`playerdata::migrate_owner`).
@@ -1498,7 +1498,7 @@ impl Game<'_> {
                 (at.z.floor() as i32).div_euclid(16),
             );
             self.persist.restored.insert(root_uuid);
-            self.world.loaded_entities.push((key, vec![tag]));
+            self.world.queue_entity_nbt(key, vec![tag]);
             self.spawn_loaded_entities();
         }
         self.persist.restored.insert(uuid);
@@ -3014,7 +3014,7 @@ mod tests {
         }
         // The level is a server's, whose attachments a mod reaches.
         game.options.dedicated = Some(Vec::new());
-        game.world.loaded_entities.push(((0, 0), tags));
+        game.world.queue_entity_nbt((0, 0), tags);
         game.spawn_loaded_entities();
         let saved = game.entity_chunks(&HashSet::from([(0, 0)]), false);
         let saved: Vec<&Tag> = saved.iter().flat_map(|(_, tags)| tags).collect();
@@ -3096,14 +3096,14 @@ mod tests {
                 .filter(|c| c.potion.is_some())
                 .count()
         };
-        game.world.loaded_entities.push(((0, 0), vec![cloud]));
+        game.world.queue_entity_nbt((0, 0), vec![cloud]);
         game.spawn_loaded_entities();
         assert_eq!(clouds(&game), 1, "the cloud loads");
         let unloaded = game.entity_chunks(&HashSet::from([(0, 0)]), true);
         let written: Vec<Tag> = unloaded.into_iter().flat_map(|(_, tags)| tags).collect();
         assert_eq!(written.len(), 1, "the unload writes the cloud");
         assert_eq!(clouds(&game), 0, "and takes it out of the level");
-        game.world.loaded_entities.push(((0, 0), written));
+        game.world.queue_entity_nbt((0, 0), written);
         game.spawn_loaded_entities();
         assert_eq!(clouds(&game), 1, "loading the chunk again gives one cloud");
     }

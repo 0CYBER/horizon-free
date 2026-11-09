@@ -1291,8 +1291,8 @@ impl Game<'_> {
                 .iter_mut()
                 .find(|(k, _)| *k == key)
             {
-                Some((_, tags)) => tags.push(tag),
-                None => self.world.loaded_entities.push((key, vec![tag])),
+                Some((_, tags)) => tags.push(tag.into()),
+                None => self.world.queue_entity_nbt(key, vec![tag]),
             }
         }
     }
