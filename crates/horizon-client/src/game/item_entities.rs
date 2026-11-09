@@ -678,6 +678,24 @@ impl Game<'_> {
         velocity: Option<[f64; 3]>,
         pickup_delay: u32,
     ) -> [f64; 3] {
+        self.add_item_entity_aged(stack, position, velocity, pickup_delay, 0)
+    }
+
+    /// `spawnAtLocation` for a drop that then calls
+    /// `ItemEntity.setExtendedLifetime`: the item joins the world at `age`
+    /// instead of 0, so the wither's nether star lives 12000 ticks, not 6000.
+    pub(super) fn spawn_item_aged(&mut self, stack: ItemStack, position: [f64; 3], age: i32) {
+        self.add_item_entity_aged(stack, position, None, 10, age);
+    }
+
+    fn add_item_entity_aged(
+        &mut self,
+        stack: ItemStack,
+        position: [f64; 3],
+        velocity: Option<[f64; 3]>,
+        pickup_delay: u32,
+        age: i32,
+    ) -> [f64; 3] {
         let (item, count) = (stack.item.clone(), stack.count as i32);
         self.next_entity += 1;
         let p = Vec3::new(position[0], position[1], position[2]);
@@ -696,6 +714,7 @@ impl Game<'_> {
             rotation: [yaw, 0.0],
             pickup_delay: i64::from(pickup_delay),
             random: own,
+            age,
             ..ItemEntity::new(
                 self.next_entity,
                 stack,
@@ -893,3 +912,7 @@ mod escape_tests {
         assert_eq!(game.world.random.next_float(), level.next_float());
     }
 }
+
+#[cfg(test)]
+#[path = "wither_star_tests.rs"]
+mod wither_star_tests;

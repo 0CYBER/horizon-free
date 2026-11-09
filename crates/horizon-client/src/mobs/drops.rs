@@ -29,6 +29,9 @@ pub enum Drop {
     CarriedBlock(BlockStateId),
     /// An experience orb of this value.
     Orb(i32),
+    /// An item spawned with the `age` its `ItemEntity` starts at, not 0:
+    /// `ItemEntity.setExtendedLifetime` (`age = -6000`) doubles its lifetime.
+    Aged(LootStack, i32),
 }
 
 /// How the mob died.
@@ -540,9 +543,11 @@ pub fn die(
         {
             out.push(Drop::CarriedBlock(state));
         }
-        // WitherBoss.dropCustomDeathLoot.
+        // WitherBoss.dropCustomDeathLoot: the star is spawned, then
+        // `setExtendedLifetime` gives it `age = -6000`, so it outlives the
+        // 6000-tick age discard by another 6000 ticks.
         if s == Species::Wither {
-            out.push(Drop::Item(loot_stack("minecraft:nether_star", 1)));
+            out.push(Drop::Aged(loot_stack("minecraft:nether_star", 1), -6000));
         }
     }
     // Allay.dropEquipment: its inventory, then the main-hand item unless it
