@@ -7122,6 +7122,21 @@ def glide_fall_accumulation():
     return ops + setup('/tick unfreeze', f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
                        f'/forceload remove {x0} {z0}')
 
+def crafter_triggered_int():
+    """#13851: `CrafterBlockEntity` keeps `triggered` as the int it read (`containerData` slot 9) and writes it back;
+    `isTriggered` is only `== 1`."""
+    x0, y0, z0 = 4096 - 224, 260, 3584
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
+           cmd('/tick freeze', False)]
+    for n, value in enumerate(('-1', '0', '1', '5'), 1):
+        x = x0 + 2 * n
+        ops += [cmd(f'/setblock {x} {y0} {z0 + 8} crafter{{triggered:{value}}}', expect_result=1),
+                cmd(f'/data get block {x} {y0} {z0 + 8} triggered')]
+    ops.append(cmd(f'/data merge block {x0 + 2} {y0} {z0 + 8} {{triggered:7}}'))
+    ops.append(cmd(f'/data get block {x0 + 2} {y0} {z0 + 8} triggered'))
+    return ops + setup('/tick unfreeze', f'/fill {x0} {y0} {z0} {x0 + 15} {y0} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
 def loaded_ticket_removal(blocks=False):
     """Entity-ticking command visibility after forced tickets leave; FULL is separate."""
     targets = [(d, x, z) for d in range(2, 7)
@@ -7780,6 +7795,9 @@ def groups():
         ('dispensed item escape', dispensed_item_escape()),
         ('command block last output', command_block_last_output()),
         ('glide fall accumulation', glide_fall_accumulation()),
+        ('living short timers', living_short_timers()),
+
+        ('crafter triggered int', crafter_triggered_int()),
         ('living short timers', living_short_timers()),
         ('projectile fall distance', projectile_fall_distance()),
         ('thrown projectile rotation', thrown_projectile_rotation()),

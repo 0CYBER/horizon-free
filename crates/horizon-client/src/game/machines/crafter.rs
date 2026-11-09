@@ -68,7 +68,7 @@ impl Game<'_> {
             // CrafterBlock.neighborChanged sets the flag with the state; a
             // loaded crafter keeps its saved flag until then.
             if c.state_triggered.is_some_and(|t| t != triggered) {
-                c.triggered = triggered;
+                c.triggered = i32::from(triggered);
             }
             c.state_triggered = Some(triggered);
             let remaining = c.crafting_ticks - 1;
