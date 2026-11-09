@@ -11,6 +11,7 @@
 //! D-pad, a button, or a look gesture on the world) and keeps it until it
 //! lifts, so moving, looking and pressing never take each other's fingers.
 pub mod aim;
+mod draw;
 pub mod layout;
 pub use aim::{
     attack_indicator, camera_delta, hotbar_slot, item_places_entity_on_tap, item_uses_on_tap,
@@ -81,6 +82,11 @@ pub struct TouchControls {
     pub vertical_movement: bool,
     pub swimming: bool,
     pub mounted: bool,
+    /// The player is sneaking: the sneak button shows held.
+    pub sneaking: bool,
+    /// How far the block under a world hold is broken (0..1), drawn in the
+    /// touch marker.
+    pub break_progress: f32,
     /// A long hold on the world uses the held item instead of mining. Read when
     /// a finger lands, so a change mid-hold (the last apple eaten) can't turn
     /// eating into mining.

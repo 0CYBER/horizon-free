@@ -193,6 +193,8 @@ pub struct Settings {
     pub dynamic_area_y: f32,
     /// Scales every control without changing the saved sizes (0.5-2).
     pub button_scale: f32,
+    /// The touch marker's diameter in GUI pixels (16-64).
+    pub circle_size: f32,
 }
 
 impl Default for Settings {
@@ -239,6 +241,7 @@ impl Default for Settings {
             dynamic_area_x: 0.25,
             dynamic_area_y: 1.0,
             button_scale: 1.0,
+            circle_size: 32.0,
         }
     }
 }
@@ -282,6 +285,7 @@ impl Settings {
             *v = finite_or(*v, 1.0).clamp(0.1, 3.0);
         }
         self.button_scale = finite_or(self.button_scale, 1.0).clamp(0.5, 2.0);
+        self.circle_size = finite_or(self.circle_size, 32.0).clamp(16.0, 64.0);
         self.dynamic_area_x = finite_or(self.dynamic_area_x, 0.25).clamp(0.0, 1.0);
         self.dynamic_area_y = finite_or(self.dynamic_area_y, 1.0).clamp(0.0, 1.0);
     }
@@ -472,6 +476,17 @@ mod tests {
         s.button_scale = 9.0;
         s.sanitize();
         assert_eq!(s.button_scale, 2.0);
+    }
+
+    #[test]
+    fn the_marker_size_defaults_and_stays_in_range() {
+        let mut s: Settings = serde_json::from_str(r#"{"mode":"tap"}"#).unwrap();
+        assert_eq!(s.circle_size, 32.0);
+        for (bad, fixed) in [(f32::NAN, 32.0), (1.0, 16.0), (500.0, 64.0)] {
+            s.circle_size = bad;
+            s.sanitize();
+            assert_eq!(s.circle_size, fixed);
+        }
     }
 
     #[test]
