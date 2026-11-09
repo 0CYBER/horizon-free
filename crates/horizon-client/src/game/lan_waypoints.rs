@@ -2,9 +2,12 @@
 //! each player looks like to their level's waypoint manager this tick.
 use super::{Game, lan::LanHost};
 use horizon_client::{
+    fast_hash::FxHashMap,
     items::ItemStack,
+    lan::guest::{self, Guest},
     lan::waypoints::{self, HIDING_HEADS, Icon, PLAYER_RANGE},
 };
+use horizon_protocol::packets::play::Clientbound as C;
 
 /// `waypoint_transmit_range`: hidden by crouching, invisibility or a head worn.
 fn transmit_range(crouching: bool, invisible: bool, head: Option<&ItemStack>) -> f64 {
@@ -89,10 +92,56 @@ impl Game<'_> {
                 host.waypoints.remove(&level);
             }
         }
+        send_by_guest(&host.hub.guests, out);
+    }
+}
+
+/// Guests at which their locator bar packets are encoded on several threads.
+const ENCODE_APART: usize = 16;
+
+/// Each packet sent to its guest, each guest's in their order. With a crowd the locator bar
+/// sends tens of thousands a tick: each guest is found once, not once per packet, and each
+/// guest's packets are encoded on several threads, then handed to its connection. A fake
+/// player, a client whose anticheat records what it is sent, and every guest while a mod hears
+/// the packets sent, take [`Guest::send`] one packet at a time, in the order given.
+fn send_by_guest(guests: &[Guest], out: Vec<(u32, C)>) {
+    let watched = horizon_client::lan::conn::WATCHED.load(std::sync::atomic::Ordering::Relaxed);
+    if guests.len() < ENCODE_APART || watched != 0 {
         for (conn, packet) in out {
-            if let Some(g) = host.hub.guest(conn) {
-                g.send(&packet);
+            if let Some(i) = guest::find(guests, conn) {
+                guests[i].send(&packet);
             }
         }
+        return;
+    }
+    let index: FxHashMap<u32, usize> = guests
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (g.conn, i))
+        .collect();
+    let mut lists: Vec<(usize, Vec<C>, Vec<Vec<u8>>)> = Vec::new();
+    let mut list_of: Vec<Option<usize>> = vec![None; guests.len()];
+    for (conn, packet) in out {
+        let Some(&i) = index.get(&conn) else {
+            continue;
+        };
+        let g = &guests[i];
+        if g.fake || g.anticheat.record.is_some() {
+            g.send(&packet);
+            continue;
+        }
+        let k = *list_of[i].get_or_insert_with(|| {
+            lists.push((i, Vec::new(), Vec::new()));
+            lists.len() - 1
+        });
+        lists[k].1.push(packet);
+    }
+    horizon_threads::par_chunks_mut(&mut lists, 8, |lists| {
+        for (_, packets, bodies) in lists {
+            bodies.extend(packets.iter().map(C::encode));
+        }
+    });
+    for (i, _, bodies) in lists {
+        guests[i].sender.send_many(bodies);
     }
 }

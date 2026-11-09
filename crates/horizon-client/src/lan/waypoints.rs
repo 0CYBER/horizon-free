@@ -136,6 +136,48 @@ struct Memo {
     team: Option<(String, Option<i32>)>,
 }
 
+/// One receiver's connections, by source, in the order they were made: a remade
+/// connection keeps its place, a broken one leaves it. Found by source in one
+/// lookup: a crowd has a few hundred in each row, and every move visits them.
+#[derive(Default)]
+struct Row {
+    slots: Vec<Option<(u128, Connection)>>,
+    at: HashMap<u128, usize>,
+}
+
+impl Row {
+    fn get_mut(&mut self, source: u128) -> Option<&mut Connection> {
+        let i = *self.at.get(&source)?;
+        self.slots[i].as_mut().map(|(_, c)| c)
+    }
+    fn put(&mut self, source: u128, c: Connection) {
+        if let Some(slot) = self.get_mut(source) {
+            *slot = c;
+            return;
+        }
+        self.at.insert(source, self.slots.len());
+        self.slots.push(Some((source, c)));
+    }
+    fn take(&mut self, source: u128) -> Option<Connection> {
+        let i = self.at.remove(&source)?;
+        let c = self.slots[i].take().map(|(_, c)| c);
+        // The holes are skipped in order, and packed once they are most of the row.
+        if self.slots.len() > 16 && self.at.len() * 2 < self.slots.len() {
+            self.slots.retain(Option::is_some);
+            for (i, slot) in self.slots.iter().enumerate() {
+                if let Some((s, _)) = slot {
+                    self.at.insert(*s, i);
+                }
+            }
+        }
+        c
+    }
+    /// The sources, in the row's order.
+    fn sources(self) -> impl Iterator<Item = u128> {
+        self.slots.into_iter().flatten().map(|(s, _)| s)
+    }
+}
+
 /// ServerWaypointManager for one level.
 #[derive(Default)]
 pub struct Waypoints {
@@ -144,7 +186,7 @@ pub struct Waypoints {
     /// The receivers, in the order they joined.
     players: Vec<u128>,
     /// Connections by receiver, then source.
-    connections: HashMap<u128, Vec<(u128, Connection)>>,
+    connections: HashMap<u128, Row>,
     memo: HashMap<u128, Memo>,
     /// The `locator_bar` game rule as last seen.
     enabled: Option<bool>,
@@ -327,16 +369,10 @@ fn waypoint(source: u128, operation: i32, icon: &Icon, target: WaypointTarget) -
 
 impl Waypoints {
     fn put(&mut self, receiver: u128, source: u128, c: Connection) {
-        let row = self.connections.entry(receiver).or_default();
-        match row.iter_mut().find(|(s, _)| *s == source) {
-            Some(slot) => slot.1 = c,
-            None => row.push((source, c)),
-        }
+        self.connections.entry(receiver).or_default().put(source, c);
     }
     fn take(&mut self, receiver: u128, source: u128) -> Option<Connection> {
-        let row = self.connections.get_mut(&receiver)?;
-        let i = row.iter().position(|(s, _)| *s == source)?;
-        Some(row.remove(i).1)
+        self.connections.get_mut(&receiver)?.take(source)
     }
 
     /// `createConnection`.
@@ -365,10 +401,9 @@ impl Waypoints {
         let Some(row) = self.connections.get_mut(&receiver) else {
             return self.create_connection(t, receiver, source);
         };
-        let Some(i) = row.iter().position(|(s, _)| *s == source) else {
+        let Some(c) = row.get_mut(source) else {
             return self.create_connection(t, receiver, source);
         };
-        let c = &mut row[i].1;
         // A connection to a player who isn't in the level is broken.
         let pair = t.pair(source, receiver);
         if let Some(pair) = pair
@@ -384,7 +419,7 @@ impl Waypoints {
             }
             None => {
                 t.disconnect(receiver, source);
-                row.remove(i);
+                row.take(source);
             }
         }
     }
@@ -437,7 +472,12 @@ impl Waypoints {
     }
     /// `removePlayer`.
     fn remove_player(&mut self, t: &mut Tick, player: u128) {
-        for (source, _) in self.connections.remove(&player).unwrap_or_default() {
+        for source in self
+            .connections
+            .remove(&player)
+            .unwrap_or_default()
+            .sources()
+        {
             t.disconnect(player, source);
         }
         self.untrack(t, player);
@@ -446,7 +486,12 @@ impl Waypoints {
     /// `breakAllConnections`.
     fn break_all(&mut self, t: &mut Tick) {
         for receiver in self.players.clone() {
-            for (source, _) in self.connections.remove(&receiver).unwrap_or_default() {
+            for source in self
+                .connections
+                .remove(&receiver)
+                .unwrap_or_default()
+                .sources()
+            {
                 t.disconnect(receiver, source);
             }
         }
