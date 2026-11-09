@@ -26,6 +26,22 @@ fn bits_for_palette(len: usize, min: u8) -> u8 {
     }
 }
 
+/// `BlockEntity.getPosFromTag(chunk, tag)`: a saved block entity's `x`, `y`,
+/// `z`, moved into `chunk` when the tag names another chunk. Vanilla warns
+/// about such a save and keeps only the low four bits of each coordinate, so
+/// the entity stays in the chunk that held it instead of landing in one that
+/// never did.
+pub fn block_entity_pos(pos: (i32, i32, i32), chunk: [i32; 2]) -> (i32, i32, i32) {
+    let (x, y, z) = pos;
+    if (x >> 4, z >> 4) == (chunk[0], chunk[1]) {
+        return pos;
+    }
+    log::warn!(
+        "Block entity at {x} {y} {z} found in a wrong chunk, expected position from chunk {chunk:?}"
+    );
+    (chunk[0] * 16 + (x & 15), y, chunk[1] * 16 + (z & 15))
+}
+
 #[derive(Clone, Debug)]
 pub struct PalettedContainer {
     palette: Vec<Tag>,

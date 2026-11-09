@@ -30,7 +30,7 @@ use horizon_world::attachments::{ATTACHMENTS_KEY, attachment_compound};
 use horizon_world::worldgen::blending::BlendingData;
 use horizon_world::{
     DATA_VERSION,
-    chunk::BlockState,
+    chunk::{BlockState, block_entity_pos},
     chunk_status::ChunkStatus,
     compression::Compression,
     heightmap::{Heightmap, HeightmapChunk, HeightmapState, HeightmapType},
@@ -1849,7 +1849,7 @@ fn decode_column(
             if let (Some(x), Some(y), Some(z)) = (int("x"), int("y"), int("z")) {
                 extras.block_entity_order.push((x, y, z));
             }
-            match decode_block_entity(e) {
+            match decode_block_entity(e).map(|(p, be)| (block_entity_pos(p, [*x, *z]), be)) {
                 Some(mut be) => {
                     if let Ok(Some(data)) = attachment_compound(e.get(ATTACHMENTS_KEY)) {
                         extras.block_entity_attachments.push((
