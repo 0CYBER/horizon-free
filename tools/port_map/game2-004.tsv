@@ -23,6 +23,7 @@ Vindicator.setCustomName	inline	crates/horizon-client/src/mobs/illager.rs::vindi
 Vindicator.VindicatorBreakDoorGoal.canContinueToUse	port	crates/horizon-client/src/mobs/doors.rs::BreakDoor::can_continue	still in a raid, plus the base break checks
 AbstractPiglin.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	writes IsImmuneToZombification and TimeInOverworld
 AbstractPiglin.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	reads immunity, time in overworld and the pick-up flag
+Piglin.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	CannotHunt written from the live flag; the read is in mob_from_nbt
 AbstractPiglin.customServerAiStep	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	gap: minor: zombification runs outside the Nether by the nether flag, not the PIGLINS_ZOMBIFY attribute
 AbstractPiglin.finishConversion	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	spawns the zombified piglin with nausea and removes the old one
 Piglin.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	gap: minor: CannotHunt is not read, so hunting ignores it; baby and inventory are read
