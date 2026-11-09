@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "无法检查更新: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "它的方块和物品已移植过来并通过了 Horizon 的检查；模组自身的代码不会运行。",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "部分内容已移植过来，但有内容被遗漏、与原始版本不同或尚未检查；技术详情会说明是什么。",
   "It does not come over yet.": "它尚未移植过来。",

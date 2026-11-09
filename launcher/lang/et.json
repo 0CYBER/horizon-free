@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "uuenduste kontrollimine ebaõnnestus: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Selle plokid ja esemed tulid üle ja läbisid Horizoni kontrollid; modifikatsiooni enda koodi ei käivitata.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Osa sellest tuli üle, kuid midagi on välja jäetud, erineb originaalist või on veel kontrollimata; mida täpselt, seda ütlevad tehnilised üksikasjad.",
   "It does not come over yet.": "See ei tule veel üle.",

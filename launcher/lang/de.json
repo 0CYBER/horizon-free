@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "Updates konnten nicht geprüft werden: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Seine Blöcke und Gegenstände wurden übernommen und haben Horizons Prüfungen bestanden; der Code der Mod selbst wird nicht ausgeführt.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Ein Teil wurde übernommen, aber etwas fehlt, weicht vom Original ab oder wurde noch nicht geprüft; die technischen Details sagen, was.",
   "It does not come over yet.": "Sie wird noch nicht übernommen.",

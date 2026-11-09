@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "cha b' urrainn dhuinn sùil a chumail airson ùrachaidhean: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Thàinig a blocaichean is a nithean a-nall agus chaidh iad tro sgrùdaidhean Horizon; chan eil còd a' mhod fhèin air a ruith.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Thàinig pàirt dheth a-nall, ach tha rudeigin air fhàgail a-mach, eadar-dhealaichte bhon thùs no gun sgrùdadh fhathast; their am mion-fhiosrachadh teignigeach dè.",
   "It does not come over yet.": "Chan eil e a' tighinn a-nall fhathast.",

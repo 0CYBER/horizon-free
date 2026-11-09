@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "није било могуће проверити ажурирања: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Његови блокови и предмети су пренесени и прошли су Horizon-ове провере; сопствени код мода се не извршава.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Део је пренесен, али је нешто изостављено, разликује се од оригинала или још није проверено; технички детаљи кажу шта.",
   "It does not come over yet.": "Још није пренесен.",

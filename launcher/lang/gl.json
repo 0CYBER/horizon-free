@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "non se puideron comprobar as actualizacións: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Os seus bloques e obxectos pasaron e superaron as comprobacións de Horizon; o código propio do mod non se executa.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Parte pasou, pero algo queda fóra, difire do orixinal ou aínda non se comprobou; o detalle técnico di que é.",
   "It does not come over yet.": "Aínda non pasa.",

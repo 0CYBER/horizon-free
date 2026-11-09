@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Анын блоктору жана буюмдары өткөрүлүп, Horizonдун текшерүүлөрүнөн өттү; моддун өз коду иштебейт.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Анын бир бөлүгү өткөрүлдү, бирок бир нерсе калтырылган, түпнускадан айырмаланат же азырынча текшерилген эмес; техникалык чоо-жай эмнени айтат.",
   "It does not come over yet.": "Ал азырынча өткөрүлбөйт.",

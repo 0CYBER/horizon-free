@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "ne eblis kontroli ĝisdatigojn: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Ĝiaj blokoj kaj objektoj transvenis kaj pasis la kontrolojn de Horizon; la propra kodo de la modifo ne estas rulata.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Parto transvenis, sed io mankas, diferencas de la originalo aŭ ankoraŭ ne estis kontrolita; la teknika detalo diras kio.",
   "It does not come over yet.": "Ĝi ankoraŭ ne transvenas.",

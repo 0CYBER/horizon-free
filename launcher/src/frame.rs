@@ -506,36 +506,6 @@ impl Launcher {
             foot = foot.child(side);
         }
 
-        if !self.links.discord.is_empty() {
-            let url = self.links.discord.clone();
-            foot = foot.child(keyboard(
-                div()
-                    .id("discord")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(10.))
-                    .mt(px(12.))
-                    // At least 40 high: a long translation wraps onto a second line, which grows the
-                    // button instead of spilling out of it.
-                    .min_h(px(40.))
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(px(radius::ROW))
-                    .bg(ui::color(horizon_theme::glass::DISCORD))
-                    .hover(|s| s.bg(ui::color(horizon_theme::glass::DISCORD_HOVER)))
-                    .cursor_pointer()
-                    .child(ui::icon("discord", 18., gpui::white()))
-                    .child(
-                        ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                            .min_w_0()
-                            .text_center()
-                            .child(tr("Join the Discord")),
-                    )
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
-                &t,
-            ));
-        }
         let link = |id: &'static str, label: &'static str, icon: &'static str, url: String| {
             let id = SharedString::from(id);
             keyboard(
@@ -567,6 +537,45 @@ impl Launcher {
                 &t,
             )
         };
+        // Horizon-free: the fork's repository, above the Discord button.
+        if backend::OFFLINE_PLAY {
+            foot = foot.child(div().flex().flex_col().mt(px(12.)).child(link(
+                "horizon-free",
+                "Horizon-Free",
+                "globe-02",
+                "https://github.com/0CYBER/horizon-free".to_string(),
+            )));
+        }
+        if !self.links.discord.is_empty() {
+            let url = self.links.discord.clone();
+            foot = foot.child(keyboard(
+                div()
+                    .id("discord")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(10.))
+                    .mt(px(12.))
+                    // At least 40 high: a long translation wraps onto a second line, which grows the
+                    // button instead of spilling out of it.
+                    .min_h(px(40.))
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(radius::ROW))
+                    .bg(ui::color(horizon_theme::glass::DISCORD))
+                    .hover(|s| s.bg(ui::color(horizon_theme::glass::DISCORD_HOVER)))
+                    .cursor_pointer()
+                    .child(ui::icon("discord", 18., gpui::white()))
+                    .child(
+                        ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
+                            .min_w_0()
+                            .text_center()
+                            .child(tr("Join the Discord")),
+                    )
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                &t,
+            ));
+        }
         let mut links = div().flex().flex_col().mt(px(8.));
         if !self.links.sponsor.is_empty() {
             links = links.child(link(
@@ -708,8 +717,11 @@ impl Launcher {
             .child(keyboard(chip, &t))
             .children(self.glass_account_menu(cx));
 
-        // Signing in with Microsoft, while nobody is: the mockup's button.
-        let sign_in = (!matches!(self.accounts.player(), Player::Microsoft(_))).then(|| {
+        // Signing in with Microsoft, while nobody is: the mockup's button. Horizon-free has no
+        // Microsoft sign-in (offline play is the whole point), so the button stays out.
+        let sign_in = (!backend::OFFLINE_PLAY
+            && !matches!(self.accounts.player(), Player::Microsoft(_)))
+        .then(|| {
             keyboard(
                 div()
                     .id("topbar-sign-in")

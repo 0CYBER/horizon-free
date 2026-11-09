@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "tidak dapat menyemak kemas kini: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Blok dan itemnya telah dipindahkan dan lulus semakan Horizon; kod mod itu sendiri tidak dijalankan.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Sebahagiannya telah dipindahkan, tetapi ada yang tertinggal, berbeza daripada asalnya atau belum disemak lagi; butiran teknikal menyatakan apa.",
   "It does not come over yet.": "Ia belum dipindahkan.",

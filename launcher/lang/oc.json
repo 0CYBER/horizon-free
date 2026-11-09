@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Sos blòts e sos elements son passats e an passat las verificacions d'Horizon; lo quite còde del mod s'executa pas.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Una partida es passada, mas quicòm es daissat de caire, diferís de l'original o es pas encara estat verificat; lo detalh tecnic ditz çò que n'es.",
   "It does not come over yet.": "Passa pas encara.",

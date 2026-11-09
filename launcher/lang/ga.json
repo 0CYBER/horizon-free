@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "níorbh fhéidir seiceáil a dhéanamh ar nuashonruithe: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Tháinig a bhlocanna agus a ítimí anonn agus chuaigh siad trí sheiceálacha Horizon; ní ritear cód an mhod féin.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Tháinig cuid de anonn, ach tá rud éigin fágtha ar lár, difriúil ón mbunleagan nó níor seiceáladh fós é; insíonn an mionsonra teicniúil cad é.",
   "It does not come over yet.": "Ní thagann sé anonn fós.",

@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "נישט געקענט קאנטראלירן אפדייטס: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "זײַנע בלאָקן און אייטעמס זענען אַריבערגעקומען און דורכגעגאַנגען Horizon'ס פּרופֿונגען; דער מאָד'ס אייגענער קאָד ווערט נישט אויסגעפֿירט.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "אַ טייל איז אַריבערגעקומען, אָבער עפּעס פֿעלט, אונטערשיידט זיך פֿון דער אָריגינאַל אָדער איז נאָך נישט איבערגעקוקט; די טעכנישע פּרטים זאָגן וואָס.",
   "It does not come over yet.": "עס קומט נאָך נישט אַריבער.",

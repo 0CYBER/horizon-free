@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "ma setgħetx tiġi vverifikata l-aġġornamenti: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Il-blokok u l-oġġetti tiegħu ġew mgħoddija u għaddew mill-verifiki ta' Horizon; il-kodiċi tal-mod stess ma jiġix esegwit.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Parti minnu ġiet mgħoddija, iżda xi ħaġa tħalliet barra, tvarja mill-oriġinal jew għadha ma ġietx iċċekkjata; id-dettall tekniku jgħid x'inhi.",
   "It does not come over yet.": "Għadu ma ġiex mgħoddi.",

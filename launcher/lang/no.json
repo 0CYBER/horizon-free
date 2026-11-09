@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "kunne ikke se etter oppdateringer: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Blokkene og gjenstandene ble tatt med over og besto Horizons kontroller; modens egen kode kjøres ikke.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Deler av den ble tatt med over, men noe er utelatt, avviker fra originalen eller er ikke kontrollert ennå; den tekniske detaljen sier hva.",
   "It does not come over yet.": "Den blir ikke tatt med over ennå.",

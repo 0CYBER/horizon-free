@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "akukwazanga ukuhlola izibuyekezo: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Amabhlogo nezinto zayo zathwalwa futhi zadlula ukuhlola kwe-Horizon; ikhodi ye-mod ngokwayo ayisebenzi.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Ingxenye yayo yathwalwa, kodwa kukhona okushiyiwe, okwehlukile kokwangempela noma okungakahlolwa; imininingwane yezobuchwepheshe isho ukuthi yini.",
   "It does not come over yet.": "Ayikathwalwa okwamanje.",

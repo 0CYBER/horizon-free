@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "De blokke en items zien euvergekómme en höbbe de controles vaan Horizon doorstange; de code vaan de mod zelf weurt neet oetgeveurd.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "E deil is euvergekómme, mer get is weggelaote, wiek aof vaan 't origineel of is nog neet gecontroleerd; de technische details zègke wat.",
   "It does not come over yet.": "Het kump nog neet euver.",

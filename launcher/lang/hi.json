@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "अपडेट जाँचे नहीं जा सके: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "इसके ब्लॉक और आइटम आ गए और Horizon की जाँच में पास हो गए; मॉड का अपना कोड नहीं चलता।",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "इसका कुछ हिस्सा आ गया, लेकिन कुछ छूट गया है, मूल से अलग है या अभी जाँचा नहीं गया है; तकनीकी विवरण बताता है कि क्या।",
   "It does not come over yet.": "यह अभी नहीं आता।",

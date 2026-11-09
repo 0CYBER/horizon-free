@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "nem sikerült ellenőrizni a frissítéseket: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "A blokkjai és tárgyai átjöttek, és átmentek a Horizon ellenőrzésein; a mod saját kódja nem fut.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Egy része átjött, de valami kimaradt, eltér az eredetitől, vagy még nincs ellenőrizve; a technikai részletek megmondják, miről van szó.",
   "It does not come over yet.": "Még nem jön át.",

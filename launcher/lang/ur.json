@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "اپ ڈیٹس کی جانچ نہیں ہو سکی: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "اس کے بلاکس اور آئٹمز منتقل ہو گئے اور Horizon کے چیک پاس کر گئے؛ موڈ کا اپنا کوڈ نہیں چلتا۔",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "اس کا کچھ حصہ منتقل ہوا، مگر کچھ چھوٹ گیا ہے، اصل سے مختلف ہے یا ابھی چیک نہیں ہوا؛ تکنیکی تفصیل بتاتی ہے کہ کیا۔",
   "It does not come over yet.": "یہ ابھی منتقل نہیں ہوتا۔",

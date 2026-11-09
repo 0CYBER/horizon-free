@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "更新を確認できませんでした: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "ブロックとアイテムは移行され、Horizonのチェックに合格しました。Mod自体のコードは実行されません。",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "一部は移行されましたが、欠けている部分や元と異なる部分があるか、まだ確認されていません。詳細は技術情報に記載されています。",
   "It does not come over yet.": "まだ移行されません。",

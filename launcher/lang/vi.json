@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "không thể kiểm tra bản cập nhật: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Khối và vật phẩm của nó đã được chuyển sang và vượt qua kiểm tra của Horizon; mã của chính mod không được chạy.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Một phần đã được chuyển sang, nhưng có thứ bị bỏ sót, khác với bản gốc hoặc chưa được kiểm tra; phần chi tiết kỹ thuật cho biết đó là gì.",
   "It does not come over yet.": "Nó chưa được chuyển sang.",

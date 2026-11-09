@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Syn blokken en items binne oerdroegen en hawwe de kontrôles fan Horizon trochstien; de eigen koade fan 'e mod wurdt net útfierd.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "In part is oerdroegen, mar der is wat weilitten, it wykt ôf fan it orizjineel of it is noch net kontrolearre; de technyske details sizze wat.",
   "It does not come over yet.": "It wurdt noch net oerdroegen.",

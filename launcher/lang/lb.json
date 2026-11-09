@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "d'Update konnt net gepréift ginn: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Seng Bléck an Objeten goufen iwwerholl a sinn duerch Horizon seng Kontrollen komm; de Code vum Mod selwer leeft net.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "En Deel gouf iwwerholl, awer eppes feelt, ass anescht wéi am Original oder nach net gepréift; déi technesch Detailer soen wat.",
   "It does not come over yet.": "Et gëtt nach net iwwerholl.",

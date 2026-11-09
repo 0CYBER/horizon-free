@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "gat ekki athugað uppfærslur: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Blokkir þess og hlutir fluttust yfir og stóðust athuganir Horizon; eigin kóði modsins keyrir ekki.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Hluti þess fluttist yfir, en einhverju er sleppt, það er frábrugðið upprunalega efninu eða hefur ekki verið athugað enn; tæknilega lýsingin segir hvað.",
   "It does not come over yet.": "Það flyst ekki yfir enn.",
