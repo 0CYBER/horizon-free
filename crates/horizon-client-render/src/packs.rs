@@ -473,7 +473,10 @@ pub(crate) fn parse_meta(bytes: &[u8]) -> Option<serde_json::Value> {
 /// there) is never read, and a UTF-8 byte order mark is skipped.
 pub(crate) fn first_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    match serde_json::Deserializer::from_slice(bytes).into_iter().next() {
+    match serde_json::Deserializer::from_slice(bytes)
+        .into_iter()
+        .next()
+    {
         Some(value) => value,
         None => Err(serde::de::Error::custom("empty metadata")),
     }

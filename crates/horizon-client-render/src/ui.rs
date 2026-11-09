@@ -1896,7 +1896,10 @@ mod tests {
         let metadata = read_metadata(&root);
         std::fs::remove_dir_all(&root).unwrap();
         let slice = metadata.0["gui/sprites/widget/button_highlighted"];
-        assert_eq!((slice.width, slice.height, slice.border), (80, 20, [34, 8, 34, 8]));
+        assert_eq!(
+            (slice.width, slice.height, slice.border),
+            (80, 20, [34, 8, 34, 8])
+        );
     }
 
     /// The quads' destination rectangles and their UVs.
