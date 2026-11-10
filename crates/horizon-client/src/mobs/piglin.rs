@@ -2255,6 +2255,9 @@ pub fn write_guarded_anger(m: &Mob, map: &mut horizon_world::nbt::Compound) {
 /// piglin; the counter is what Horizon's goals ask.
 pub fn read_guarded_anger(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     use horizon_world::nbt::Tag;
+    // `Piglin.readAdditionalSaveData`: `getBooleanOr(CannotHunt, false)`.
+    m.extra.piglin.cannot_hunt = matches!(tag.get("CannotHunt"), Some(Tag::Byte(b)) if *b != 0)
+        || matches!(tag.get("CannotHunt"), Some(Tag::Int(i)) if *i != 0);
     let memory = tag
         .get("Brain")
         .and_then(|b| b.get("memories"))
