@@ -1440,7 +1440,7 @@ mod tests {
                 ]),
             ])),
         );
-        let sent = crate::lan::guest::stack_to_network(|_| 1, ids, &Some(pickaxe));
+        let sent = crate::lan::guest::stack_to_network(|_| 1, ids, &Some(pickaxe.clone()));
         let mut w = Writer::new();
         Slot::write(&sent, &mut w);
         let mut r = Reader::new(&w.data);
@@ -1490,6 +1490,22 @@ mod tests {
         );
         let back = from_network(&received, &builtin, &Dynamic::default());
         let other = |key: &str| back.data().and_then(|d| d.other(key)).cloned();
+        // The host applies the stack's strings as they are, and an attribute it
+        // cannot find is skipped: the bare `attack_damage` the stack was given
+        // must already be `minecraft:attack_damage` there (`Identifier.CODEC`
+        // reads a bare name as `minecraft:`'s), as it is on the wire.
+        let items = horizon_items::items::Items::for_tests(Default::default());
+        let host = items.attribute_modifiers(&pickaxe);
+        assert_eq!(
+            host.iter()
+                .map(|m| (m.0.as_str(), m.1.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("minecraft:attack_damage", "minecraft:base_attack_damage"),
+                ("minecraft:armor", "minecraft:x"),
+            ]
+        );
+        assert_eq!(host, items.attribute_modifiers(&back));
         assert_eq!(
             other("minecraft:tool"),
             Some(Tag::compound([

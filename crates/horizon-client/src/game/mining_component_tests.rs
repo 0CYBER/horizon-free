@@ -238,6 +238,12 @@ fn a_stacks_attribute_modifiers_replace_its_items_attack_damage() {
                 "minecraft:iron_pickaxe[attribute_modifiers=[{type:\"minecraft:attack_damage\",id:\"minecraft:base_attack_damage\",amount:20.0,operation:\"add_value\",slot:\"mainhand\"}]]",
                 21.0,
             ),
+            // Identifier.CODEC reads bare names as `minecraft:`'s: the same
+            // modifier, so the attribute the host applies it to is found.
+            (
+                "minecraft:iron_pickaxe[attribute_modifiers=[{type:\"attack_damage\",id:\"base_attack_damage\",amount:20.0,operation:\"add_value\",slot:\"mainhand\"}]]",
+                21.0,
+            ),
             // In the off hand slot group, it does not apply to the main hand.
             (
                 "minecraft:iron_pickaxe[attribute_modifiers=[{type:\"minecraft:attack_damage\",id:\"minecraft:base_attack_damage\",amount:20.0,operation:\"add_value\",slot:\"offhand\"}]]",

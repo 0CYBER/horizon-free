@@ -1278,8 +1278,8 @@ impl Items {
         }
         self.get(&stack.item)?.tool_damage_per_block
     }
-    /// `ItemAttributeModifiers` from the stack's component, else the item's
-    /// prototype: (attribute, id, amount, operation, slot group).
+    /// `ItemAttributeModifiers` from the stack's component (`Identifier`s, so a bare
+    /// name is `minecraft:`'s), else the item's: (attribute, id, amount, op, group).
     pub fn attribute_modifiers(
         &self,
         stack: &ItemStack,
@@ -1302,8 +1302,8 @@ impl Items {
                         _ => None,
                     };
                     Some((
-                        string("type")?,
-                        string("id")?,
+                        horizon_world::datafix::dynamic::namespaced(&string("type")?),
+                        horizon_world::datafix::dynamic::namespaced(&string("id")?),
                         horizon_world::datafix::dynamic::as_number(entry.get("amount")?)?
                             .double_value(),
                         string("operation").unwrap_or_else(|| "add_value".into()),
