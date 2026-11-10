@@ -6706,8 +6706,10 @@ mod tests {
     #[test]
     fn crafter_triggered_keeps_the_whole_int() {
         for value in [0, 1, 5, -1, 65537] {
-            let mut crafter = crate::containers::Crafter::default();
-            crafter.triggered = value;
+            let crafter = crate::containers::Crafter {
+                triggered: value,
+                ..Default::default()
+            };
             let tag = encode_block_entity(
                 (0, 0, 0),
                 &crate::containers::BlockEntity::Crafter(crafter),
