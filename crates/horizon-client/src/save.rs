@@ -6701,6 +6701,26 @@ mod tests {
         assert_eq!(back.crafting_ticks, 3);
         assert_eq!(back.redstone_signal(), 2);
     }
+    /// `triggered` is an int vanilla saves as it is and calls triggered only at 1, so other
+    /// values come back unchanged and untriggered.
+    #[test]
+    fn crafter_triggered_keeps_the_whole_int() {
+        for value in [0, 1, 5, -1, 65537] {
+            let mut crafter = crate::containers::Crafter::default();
+            crafter.triggered = value;
+            let tag = encode_block_entity(
+                (0, 0, 0),
+                &crate::containers::BlockEntity::Crafter(crafter),
+                "minecraft:crafter",
+            );
+            let (_, back) = decode_block_entity(&tag).expect("crafter");
+            let crate::containers::BlockEntity::Crafter(back) = back else {
+                panic!("not a crafter");
+            };
+            assert_eq!(back.triggered, value);
+            assert_eq!(back.is_triggered(), value == 1, "triggered {value}");
+        }
+    }
     #[test]
     fn campfire_block_entity_round_trips() {
         let mut c = crate::containers::Campfire::default();
