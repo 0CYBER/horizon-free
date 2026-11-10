@@ -3648,10 +3648,7 @@ impl Game<'_> {
                     p.id as u32,
                     horizon_client::lan::playerdata::uuid_ints(p.uuid),
                 );
-                let replace = self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|r| r.entities.contains_key(&p.id));
+                let replace = self.tracks_remote_entity(p.id);
                 self.spawn_entity(p.id, &kind, p.position, rotation);
                 if let Some(r) = self.remote.as_mut() {
                     r.cart_lerps.remove(&p.id);
@@ -3664,28 +3661,7 @@ impl Game<'_> {
                     (rotation[0], rotation[1]),
                     p.data,
                 ) {
-                    if replace {
-                        self.spawn_remote_projectile(
-                            p.id,
-                            &kind,
-                            p.position,
-                            (rotation[0], rotation[1]),
-                            p.velocity,
-                            p.data,
-                        );
-                    } else {
-                        // Small lists can also hold locally created projectiles.
-                        self.crystals.retain(|c| c.id != p.id as u32);
-                        self.remove_remote_small_projectiles(p.id as u32);
-                        self.spawn_remote_projectile_inner(
-                            p.id,
-                            &kind,
-                            p.position,
-                            (rotation[0], rotation[1]),
-                            p.velocity,
-                            p.data,
-                        );
-                    }
+                    self.spawn_added_projectile(&p, &kind, (rotation[0], rotation[1]), replace);
                 }
                 // Entity.recreateFromPacket: objects must exist before applying motion.
                 self.remote_motion(p.id, p.velocity);

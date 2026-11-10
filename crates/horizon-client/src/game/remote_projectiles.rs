@@ -308,6 +308,34 @@ impl Game<'_> {
         self.spawn_remote_projectile_inner(id, kind, position, rotation, velocity, data)
     }
 
+    /// Whether the client tracks `id` already: asked by `AddEntity` before it tracks the new one.
+    pub(super) fn tracks_remote_entity(&self, id: i32) -> bool {
+        self.remote
+            .as_ref()
+            .is_some_and(|r| r.tracked_entity(id).is_some())
+    }
+
+    /// `AddEntity`'s `spawn_remote_projectile`. Only an id the client already tracked (`replace`)
+    /// can still be in `falling` or `tnts`, so a new id skips those passes; the crystals and the
+    /// small lists are filtered every time, since the client adds to some of those itself.
+    pub(super) fn spawn_added_projectile(
+        &mut self,
+        p: &horizon_protocol::packets::play::AddEntity,
+        kind: &str,
+        rotation: (f32, f32),
+        replace: bool,
+    ) {
+        if replace {
+            self.spawn_remote_projectile(p.id, kind, p.position, rotation, p.velocity, p.data);
+        } else {
+            self.crystals.retain(|c| c.id != p.id as u32);
+            self.remove_remote_small_projectiles(p.id as u32);
+            self.spawn_remote_projectile_inner(
+                p.id, kind, p.position, rotation, p.velocity, p.data,
+            );
+        }
+    }
+
     /// `spawn_remote_projectile` without first removing an entity under the same id: for
     /// `AddEntity` of an id the client does not track yet, which no list holds.
     pub(super) fn spawn_remote_projectile_inner(
