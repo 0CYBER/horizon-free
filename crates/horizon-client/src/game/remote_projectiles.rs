@@ -304,11 +304,25 @@ impl Game<'_> {
         velocity: [f64; 3],
         data: i32,
     ) -> bool {
+        self.remove_remote_projectile(id as u32);
+        self.spawn_remote_projectile_inner(id, kind, position, rotation, velocity, data)
+    }
+
+    /// `spawn_remote_projectile` without first removing an entity under the same id: for
+    /// `AddEntity` of an id the client does not track yet, which no list holds.
+    pub(super) fn spawn_remote_projectile_inner(
+        &mut self,
+        id: i32,
+        kind: &str,
+        position: [f64; 3],
+        rotation: (f32, f32),
+        velocity: [f64; 3],
+        data: i32,
+    ) -> bool {
         let id = id as u32;
         let at = Vec3::new(position[0], position[1], position[2]);
         let velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
         let (yaw, pitch) = rotation;
-        self.remove_remote_projectile(id);
         match kind {
             "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
