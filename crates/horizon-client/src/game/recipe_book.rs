@@ -847,16 +847,6 @@ impl Game<'_> {
         else {
             return;
         };
-        let button_craftable = self
-            .recipe_ui
-            .view
-            .buttons
-            .iter()
-            .flat_map(|b| b.entries.iter())
-            .any(|e| e.0 == entry_index && e.1);
-        if !button_craftable && self.recipe_ui.last_placed.as_deref() == Some(id.as_str()) {
-            return;
-        }
         self.recipe_ui.last_placed = Some(id);
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
