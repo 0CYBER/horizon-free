@@ -3493,6 +3493,13 @@ impl Game<'_> {
                 })
                 .clamp(-90.0, 90.0);
                 self.snap_player_model_pitch();
+
+                // Acknowledge the rotation
+                self.send(S::MovePlayerRot(play::MovePlayerRot {
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    flags: 0,
+                }));
             }
             C::PlayerLookAt(p) => self.remote_look_at(&p),
             // ClientCommonPacketListenerImpl.handlePostEffects.
