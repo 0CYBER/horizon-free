@@ -208,6 +208,9 @@ fn not_drawn(m: &Manifest, switch: bool) -> Option<String> {
                 .into(),
         );
     }
+    if m.entity.is_some() {
+        return Some("the [entity] stage isn't drawn yet: leave it out".into());
+    }
     if m.blend == Blend::Linear {
         return Some(
             "[frame] blend = \"linear\" isn't served yet: leave it out, or set \"gamma\"".into(),
@@ -366,6 +369,8 @@ mod tests {
                 why.contains("primaries = \"bt2020\" isn't served yet"),
                 "{why}"
             );
+            let why = not_drawn(&manifest("0.2", "[entity]\nfile = \"e.wgsl\"\n"), switch);
+            assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
             let named = manifest("0.2", "[frame]\nprimaries = \"bt709\"\n");
             assert_eq!(not_drawn(&named, true), None);
         }

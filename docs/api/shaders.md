@@ -183,6 +183,11 @@ uses the no-pack frame. What it changes from 0.1:
   one HDR uses without a pack; one or the other runs, never both.
 - **`[frame] blend`**: `"gamma"` (the default) or `"linear"`, what the frame stores and so how see-through draws
   blend. `"linear"` passes the check, but the game doesn't serve it yet.
+- **`[entity]`**, `fn entity(input: EntityInput) -> Surface`: the lit colour of what is no block terrain (entities,
+  block entities, dropped and framed items, particles; `input.kind` says which), from its texture, tint, vanilla's
+  shade and hurt flash, its light and a normal, with the material stage's shadow maps and coloured lights. It returns
+  the material stage's `Surface`, so a pack lights both with one function. The check takes it, but **the game doesn't
+  draw it yet** and refuses a pack that has it.
 - **`[frame] primaries`**: `"bt709"` (the default) or `"bt2020"`, the primaries of every colour a stage reads or
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
@@ -194,13 +199,16 @@ api = "0.2"
 [tonemap]                  # optional: the pack's own tone curve
 file = "tonemap.wgsl"
 
+[entity]                   # optional: the colour of entities, block entities, items and particles (not drawn yet)
+file = "entity.wgsl"
+
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 ```
 
-0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]` or `[frame]` is
-refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK.
+0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]` or
+`[frame]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK.
 
 ## Testing a pack frame by frame
 
@@ -228,11 +236,16 @@ While the API is experimental, a line is served until the next one is on by defa
 
 ## Not there yet
 
-An overlay showing what each pass draws (F3 already shows what each costs), and stages for entities, block entities
-and particles (the material stage covers terrain only).
+An overlay showing what each pass draws (F3 already shows what each costs), and entities, block entities, items and
+particles drawn through a pack: shader API 0.2 has their stage, `[entity]`, and the check takes it, but the game still
+draws them itself (the material stage covers terrain only). The first-person hand has no stage yet.
 
 ## Changelog
 
+- 2026-11-10: API 0.2 (additions, experimental): the `[entity]` stage, `fn entity(input: EntityInput) -> Surface`,
+  for entities, block entities, items and particles, with the material stage's shadow maps and coloured lights. The
+  reference gives vanilla's own as the stage's function. `horizon-shader check` takes it; the game refuses a pack
+  that has it until it draws the stage. A pack without `[entity]` is unchanged, and so is API 0.1.
 - 2026-11-10: API 0.2 (additions, experimental): `[frame] primaries`, `"bt709"` (the default) or `"bt2020"`, and
   `Frame.primaries` and `luminance` after `black_level`. `horizon-shader check` takes `"bt2020"` with
   `blend = "linear"` only, and the game refuses it for now. The reference's "Room to grow" gains the rule for new

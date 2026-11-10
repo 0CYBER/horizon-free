@@ -116,6 +116,9 @@ pub struct Manifest {
     pub post: Vec<Stage>,
     /// 0.2: the picture for the display, after the post chain (Horizon's tone curve when absent).
     pub tonemap: Option<Stage>,
+    /// 0.2: the lit colour of entities, block entities, items and particles (Horizon's own when
+    /// absent). Checked, not yet drawn.
+    pub entity: Option<Stage>,
     /// 0.2: `[frame] blend`.
     pub blend: Blend,
     /// 0.2: `[frame] primaries`.
@@ -499,6 +502,7 @@ struct Raw {
     #[serde(default)]
     post: Vec<Stage>,
     tonemap: Option<Stage>,
+    entity: Option<Stage>,
     frame: Option<RawFrame>,
     #[serde(default)]
     options: Vec<RawOption>,
@@ -640,6 +644,7 @@ impl Manifest {
         if api == Api::V0_1 {
             for (present, key) in [
                 (raw.tonemap.is_some(), "[tonemap]"),
+                (raw.entity.is_some(), "[entity]"),
                 (raw.frame.is_some(), "[frame]"),
             ] {
                 if present {
@@ -683,11 +688,13 @@ impl Manifest {
             && raw.weather.is_none()
             && raw.post.is_empty()
             && raw.tonemap.is_none()
+            && raw.entity.is_none()
         {
             return Err(err(match api {
                 Api::V0_1 => "no stage: give it a [sky], a [material], a [weather] or a [[post]]",
                 Api::V0_2 => {
-                    "no stage: give it a [sky], a [material], a [weather], a [[post]] or a [tonemap]"
+                    "no stage: give it a [sky], a [material], a [weather], a [[post]], an [entity] \
+                     or a [tonemap]"
                 }
             }
             .into()));
@@ -703,6 +710,7 @@ impl Manifest {
             .chain(&raw.vertex)
             .chain(&raw.post)
             .chain(&raw.tonemap)
+            .chain(&raw.entity)
             .any(|s| s.fog.is_some())
         {
             return Err(err("`fog` is a key of [material] only".into()));
@@ -713,6 +721,7 @@ impl Manifest {
             .chain(&raw.material)
             .chain(&raw.vertex)
             .chain(&raw.tonemap)
+            .chain(&raw.entity)
             .any(|s| s.scale.is_some() || s.output.is_some())
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
@@ -731,7 +740,8 @@ impl Manifest {
             .chain(&raw.vertex)
             .chain(&raw.weather)
             .chain(&raw.post)
-            .chain(&raw.tonemap);
+            .chain(&raw.tonemap)
+            .chain(&raw.entity);
         for file in raw
             .shared
             .iter()
@@ -747,6 +757,7 @@ impl Manifest {
             .iter()
             .chain(&raw.post)
             .chain(&raw.tonemap)
+            .chain(&raw.entity)
             .any(sky_only)
         {
             return Err(err(
@@ -1055,6 +1066,7 @@ impl Manifest {
             weather: raw.weather,
             post: raw.post,
             tonemap: raw.tonemap,
+            entity: raw.entity,
             blend,
             primaries,
             options,
@@ -1169,7 +1181,8 @@ impl Manifest {
             .chain(&self.vertex)
             .chain(&self.weather)
             .chain(&self.post)
-            .chain(&self.tonemap);
+            .chain(&self.tonemap)
+            .chain(&self.entity);
         for file in self
             .shared
             .iter()

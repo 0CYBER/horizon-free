@@ -298,6 +298,28 @@ pub const SURFACE: Struct = Struct {
     },
 };
 
+/// The entity stage's input (0.2): one point of a surface that is no block terrain.
+pub const ENTITY_INPUT: Struct = Struct {
+    name: "EntityInput",
+    doc: "One point of the surface of an entity, a block entity, an item or a particle, for `fn entity(input: EntityInput) -> Surface`.",
+    fields: fields! {
+        albedo: "vec4<f32>" = "The texture's colour here.",
+        tint: "vec4<f32>" = "The vertex colour without vanilla's directional shade (dyes, particle colours, fades).",
+        overlay: "vec4<f32>" = "The flash vanilla lays over the surface (hurt, TNT, a creeper's swelling): rgb its colour, alpha how much of the surface it replaces. Alpha 0 without one.",
+        lightmap: "vec3<f32>" = "Vanilla's light colour for `light` this frame.",
+        shade: "f32" = "Vanilla's directional shade for this face as a factor on linear light, 0..1 (vanilla's value decoded with the 2.2 power, as every 0.2 colour is). 1 where vanilla applies none.",
+        position: "vec3<f32>" = "The point, camera-relative, in blocks.",
+        emission: "f32" = "1 on a layer vanilla draws at full brightness (spider and enderman eyes, the warden's glow), else 0. There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes.",
+        normal: "vec3<f32>" = "The surface's geometric normal, a unit vector in world axes, facing the camera, from the position's screen derivatives (as `MaterialInput.normal`, without its snap to the axes).",
+        kind: "u32" = "What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, signs, banners, beds), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle.",
+        colored_light: "vec3<f32>" = "As `MaterialInput.colored_light`: the frame's coloured lights at this point, 0..1; 0 where none reaches.",
+        translucent: "bool" = "Drawn with blending.",
+        light: "vec2<f32>" = "Block and sky light, 0..1.",
+        uv: "vec2<f32>" = "The texture coordinate.",
+        screen: "vec2<f32>" = "Where the point is on the screen, 0..1 from the top left (as `MaterialInput.screen`).",
+    },
+};
+
 /// The sky stage's input: one direction of the sky.
 pub const SKY_INPUT: Struct = Struct {
     name: "SkyInput",
