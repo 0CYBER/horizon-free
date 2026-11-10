@@ -250,6 +250,18 @@ impl DensitySampler for UnarySampler {
         self.operation.apply_bulk(buffer);
         Ok(())
     }
+    fn sample_needed(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: &[u64],
+    ) -> Result<(), SampleError> {
+        check_buffer(buffer, volume)?;
+        self.input.sample_needed(context, buffer, volume, needed)?;
+        self.operation.apply_bulk(buffer);
+        Ok(())
+    }
 }
 
 /// Range bounds are the values baked into vanilla's compiled min/max samplers.
@@ -342,6 +354,21 @@ impl DensitySampler for BinarySampler {
         self.left.sample_volume(context, buffer, volume)?;
         context.with_buffer(volume.size(), |context, right| {
             self.right.sample_volume(context, right, volume)?;
+            self.operation.apply_bulk(buffer, right);
+            Ok(())
+        })
+    }
+    fn sample_needed(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: &[u64],
+    ) -> Result<(), SampleError> {
+        check_exact_buffer(buffer, volume)?;
+        self.left.sample_needed(context, buffer, volume, needed)?;
+        context.with_buffer(volume.size(), |context, right| {
+            self.right.sample_needed(context, right, volume, needed)?;
             self.operation.apply_bulk(buffer, right);
             Ok(())
         })
