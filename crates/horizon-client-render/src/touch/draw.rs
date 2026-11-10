@@ -10,6 +10,7 @@
 use super::{Control, Mode, Placement, Role, TouchControls, layout};
 use crate::gamepad::{Button, PadState};
 use crate::hud::{HudAtlas, HudBatch, rgba};
+use crate::lang;
 
 const BUTTON: &str = "gui/sprites/widget/button";
 const BUTTON_HELD: &str = "gui/sprites/widget/button_highlighted";
@@ -35,7 +36,7 @@ impl TouchControls {
                     .fingers
                     .values()
                     .any(|(_, point)| layout::contains(rect, *point));
-            button(b, a, bounds, self.label(control), pressed, color);
+            button(b, a, bounds, &self.label(control), pressed, color);
         }
         if let Some(point) = self.pointer() {
             let center = [point[0] * b.width, point[1] * b.height];
@@ -63,28 +64,30 @@ impl TouchControls {
         })
     }
 
-    /// The label a control's button shows.
-    fn label(&self, control: Control) -> &'static str {
+    /// The label a control's button shows, in the player's language. Key
+    /// names and symbols ("F3", "II") read the same in every language.
+    fn label(&self, control: Control) -> String {
         let vertical = self.swimming || self.vertical_movement;
-        match control {
-            Control::Move => "",
-            Control::Sprint => "Sprint",
-            Control::Jump if vertical => "Up",
-            Control::Jump => "Jump",
-            Control::Sneak if vertical => "Down",
-            Control::Sneak if self.mounted => "Dismount",
-            Control::Sneak => "Sneak",
-            Control::Attack => "Attack",
-            Control::Use => "Use",
-            Control::Chat => "Chat",
-            Control::Pause => "II",
-            Control::Settings => "Touch",
-            Control::Inventory => "...",
-            Control::Debug => "F3",
-            Control::Perspective => "F5",
-            Control::Offhand => "Swap",
-            Control::Shield => "Shield",
-        }
+        let key = match control {
+            Control::Move => return String::new(),
+            Control::Pause => return "II".to_owned(),
+            Control::Inventory => return "...".to_owned(),
+            Control::Debug => return "F3".to_owned(),
+            Control::Perspective => return "F5".to_owned(),
+            Control::Sprint => "horizon.touch.sprint",
+            Control::Jump if vertical => "horizon.touch.up",
+            Control::Jump => "horizon.touch.jump",
+            Control::Sneak if vertical => "horizon.touch.down",
+            Control::Sneak if self.mounted => "horizon.touch.dismount",
+            Control::Sneak => "horizon.touch.sneak",
+            Control::Attack => "horizon.touch.attack",
+            Control::Use => "horizon.touch.use",
+            Control::Chat => "horizon.touch.chat",
+            Control::Settings => "horizon.touch.settings",
+            Control::Offhand => "horizon.touch.swap",
+            Control::Shield => "horizon.touch.shield",
+        };
+        lang::get(key)
     }
 
     /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
@@ -109,12 +112,7 @@ impl TouchControls {
         let [x, y, size, _] = square(b, center, p.size);
         if self.settings.mode == Mode::Dpad {
             let cell = size / 3.0;
-            for (dx, dy, label, pressed) in [
-                (1.0, 0.0, "^", state.left[1] > 0.2),
-                (0.0, 1.0, "<", state.left[0] < -0.2),
-                (2.0, 1.0, ">", state.left[0] > 0.2),
-                (1.0, 2.0, "v", state.left[1] < -0.2),
-            ] {
+            for ([dx, dy], label, pressed) in dpad(state.left) {
                 let bounds = [x + cell * dx, y + cell * dy, cell, cell];
                 button(b, a, bounds, label, pressed, color);
             }
@@ -124,13 +122,29 @@ impl TouchControls {
         let [r, g, blue, opacity] = color.to_le_bytes();
         ring(b, a, middle, size / 2.0, color);
         disc(b, a, middle, size / 2.0, rgba(0, 0, 0, opacity / 3));
-        let knob = [
-            middle[0] + state.left[0] * size / 4.0,
-            middle[1] - state.left[1] * size / 4.0,
-        ];
+        let knob = knob(middle, state.left, size);
         disc(b, a, knob, size * 0.17, rgba(r, g, blue, opacity / 2));
         ring(b, a, knob, size * 0.17, color);
     }
+}
+
+/// The D-pad's arrows: each one's cell in a 3x3 grid, its label and whether
+/// the stick (`left`, up positive) presses it.
+fn dpad(left: [f32; 2]) -> [([f32; 2], &'static str, bool); 4] {
+    [
+        ([1.0, 0.0], "^", left[1] > 0.2),
+        ([0.0, 1.0], "<", left[0] < -0.2),
+        ([2.0, 1.0], ">", left[0] > 0.2),
+        ([1.0, 2.0], "v", left[1] < -0.2),
+    ]
+}
+
+/// Where the joystick's knob sits: the stick is up positive, the screen down.
+fn knob(middle: [f32; 2], left: [f32; 2], size: f32) -> [f32; 2] {
+    [
+        middle[0] + left[0] * size / 4.0,
+        middle[1] - left[1] * size / 4.0,
+    ]
 }
 
 /// A placement's square in GUI pixels, `[x, y, size, size]`.
@@ -205,8 +219,12 @@ fn button(
         text,
         true,
     );
-    // Shrink a long label to fit, never grow a short one.
-    let scale = ((w - 6.0).max(1.0) / width.max(1.0)).min(((h - 6.0).max(1.0) / 8.0).min(1.0));
+    // Shrink a long label to fit, never grow a short one: the width leaves 3
+    // pixels each side, and the height cap keeps the 8-pixel line inside the
+    // same margin, never above full size.
+    let fit_width = (w - 6.0).max(1.0) / width.max(1.0);
+    let height_cap = ((h - 6.0).max(1.0) / 8.0).min(1.0);
+    let scale = fit_width.min(height_cap);
     b.scale_since(start, x + w / 2.0, y + h / 2.0 + drop, scale, scale);
 }
 
@@ -318,16 +336,25 @@ mod tests {
         assert!(vertices(&t, &a) > marker);
     }
 
+    fn english<R>(f: impl FnOnce() -> R) -> R {
+        let (result, missed) = lang::scoped(lang::Language::load(&[], "en_us"), f);
+        assert!(missed.is_empty(), "no English text for {missed:?}");
+        result
+    }
+
     #[test]
     fn labels_and_held_buttons_follow_the_player() {
         let mut t = TouchControls::default();
-        assert_eq!(t.label(Control::Jump), "Jump");
+        let all = |t: &TouchControls| english(|| Control::ALL.map(|c| t.label(c)));
+        assert_eq!(all(&t)[..3], ["", "Sprint", "Jump"]);
+        assert!(all(&t).iter().all(|l| !l.starts_with("horizon.")));
+        assert_eq!(t.label(Control::Debug), "F3");
         t.swimming = true;
-        assert_eq!(t.label(Control::Jump), "Up");
-        assert_eq!(t.label(Control::Sneak), "Down");
+        assert_eq!(english(|| t.label(Control::Jump)), "Up");
+        assert_eq!(english(|| t.label(Control::Sneak)), "Down");
         t.swimming = false;
         t.mounted = true;
-        assert_eq!(t.label(Control::Sneak), "Dismount");
+        assert_eq!(english(|| t.label(Control::Sneak)), "Dismount");
         let state = t.state();
         assert!(!t.held(Control::Sneak, &state));
         t.sneaking = true;
@@ -335,5 +362,104 @@ mod tests {
         t.update(1, t.placement(Control::Attack).center, true, false);
         assert!(t.held(Control::Attack, &t.state()));
         assert!(!t.held(Control::Use, &t.state()));
+    }
+
+    #[test]
+    fn colours_split_into_rgba_in_order() {
+        let half = rgba(255, 255, 255, alpha(0.5));
+        assert_eq!(half.to_le_bytes(), [255, 255, 255, 128]);
+        assert_eq!(rgba(10, 20, 30, 40).to_le_bytes(), [10, 20, 30, 40]);
+    }
+
+    /// One button drawn alone, as `button` draws it in `draw`.
+    fn one(a: &HudAtlas, bounds: [f32; 4], label: &str, pressed: bool) -> HudBatch {
+        let mut b = HudBatch::new([1920, 1080]);
+        button(&mut b, a, bounds, label, pressed, rgba(255, 255, 255, 128));
+        b
+    }
+
+    #[test]
+    fn a_held_button_uses_the_packs_highlighted_sprite() {
+        let mut a = atlas();
+        let rect = |u0: f32| crate::hud::Rect {
+            u0,
+            v0: 0.0,
+            u1: u0 + 0.1,
+            v1: 0.1,
+            w: 200,
+            h: 20,
+        };
+        a.sprites.insert(BUTTON.to_owned(), rect(0.2));
+        a.sprites.insert(BUTTON_HELD.to_owned(), rect(0.5));
+        let uses = |b: &HudBatch, u0: f32| {
+            b.vertices
+                .iter()
+                .any(|v| (u0..=u0 + 0.1).contains(&v.uv[0]) && v.uv[1] <= 0.1)
+        };
+        let idle = one(&a, [0.0, 0.0, 60.0, 20.0], "", false);
+        assert!(uses(&idle, 0.2) && !uses(&idle, 0.5));
+        let held = one(&a, [0.0, 0.0, 60.0, 20.0], "", true);
+        assert!(uses(&held, 0.5) && !uses(&held, 0.2));
+        assert!(
+            held.vertices
+                .iter()
+                .all(|v| v.color == rgba(255, 255, 255, 128))
+        );
+    }
+
+    #[test]
+    fn without_the_sprite_a_plain_frame_darkens_while_held() {
+        let a = atlas();
+        assert!(!a.sprites.contains_key(BUTTON));
+        let colours = |pressed| {
+            let b = one(&a, [10.0, 10.0, 60.0, 20.0], "", pressed);
+            b.vertices.iter().map(|v| v.color).collect::<Vec<_>>()
+        };
+        let (idle, held) = (colours(false), colours(true));
+        let mut fill = HudBatch::new([1920, 1080]);
+        fill.fill(&a, 0.0, 0.0, 1.0, 1.0, 0);
+        let quad = fill.vertices.len();
+        // The backdrop, then the four one-pixel edges in the button's colour.
+        assert_eq!(idle.len(), 5 * quad);
+        assert!(idle[..quad].iter().all(|&c| c == rgba(0, 0, 0, 45)));
+        assert!(held[..quad].iter().all(|&c| c == rgba(0, 0, 0, 75)));
+        assert!(idle[quad..].iter().all(|&c| c == rgba(255, 255, 255, 128)));
+    }
+
+    #[test]
+    fn a_long_label_shrinks_to_fit_and_a_short_one_keeps_its_size() {
+        let a = atlas();
+        let frame = one(&a, [0.0, 0.0, 40.0, 20.0], "", false).vertices.len();
+        let span = |label: &str| {
+            let b = one(&a, [0.0, 0.0, 40.0, 20.0], label, false);
+            assert!(b.vertices.len() > frame, "{label} drew no text");
+            let xs = b.vertices[frame..].iter().map(|v| v.pos[0]);
+            let (lo, hi) = xs.fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+            (lo, hi)
+        };
+        let long = "a label much wider than its button";
+        assert!(HudBatch::text_width(&a, long) > 40.0);
+        let (lo, hi) = span(long);
+        assert!(lo >= 3.0 - 1e-3 && hi <= 37.0 + 1e-3, "{lo}..{hi}");
+        let width = HudBatch::text_width(&a, "Up");
+        let (lo, hi) = span("Up");
+        assert!(hi - lo >= width - 1e-3, "{} < {width}", hi - lo);
+    }
+
+    #[test]
+    fn the_dpad_and_knob_follow_the_stick_up_positive() {
+        let only = |left: [f32; 2]| {
+            let on: Vec<_> = dpad(left).into_iter().filter(|p| p.2).collect();
+            assert_eq!(on.len(), 1, "{left:?}");
+            (on[0].0, on[0].1)
+        };
+        assert_eq!(only([0.0, 0.5]), ([1.0, 0.0], "^"));
+        assert_eq!(only([0.0, -0.5]), ([1.0, 2.0], "v"));
+        assert_eq!(only([-0.5, 0.0]), ([0.0, 1.0], "<"));
+        assert_eq!(only([0.5, 0.0]), ([2.0, 1.0], ">"));
+        assert!(dpad([0.1, -0.1]).iter().all(|p| !p.2));
+        // Stick up draws the knob above the middle, on screen.
+        assert_eq!(knob([50.0, 50.0], [0.0, 1.0], 40.0), [50.0, 40.0]);
+        assert_eq!(knob([50.0, 50.0], [1.0, 0.0], 40.0), [60.0, 50.0]);
     }
 }
