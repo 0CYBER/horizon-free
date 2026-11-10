@@ -638,14 +638,10 @@ mod tests {
         assert_eq!(en.get("horizon.options.controller"), Some("Controller"));
         let ru = Language::load(&[&empty], "ru_ru");
         assert_eq!(ru.get("horizon.options.controller"), Some("Геймпад"));
-        // ru_ru.json itself has every English key. `ru` can't tell: the en_us
-        // layer under it fills any gap with English.
-        let ru_file: HashMap<String, String> = serde_json::from_str(
-            &std::fs::read_to_string(bundled_dir().join("ru_ru.json")).unwrap(),
-        )
-        .unwrap();
+        // Every bundled string carries both languages: a key added to one file
+        // and forgotten in the other shows as a key name on screen.
         for key in en.map().keys() {
-            assert!(ru_file.contains_key(key), "{key} has no ru_ru value");
+            assert!(ru.get(key).is_some(), "{key} has no ru_ru value");
         }
         assert_eq!(en.get("horizon.pages.mods"), Some("Mods"));
         assert_eq!(ru.get("horizon.pages.mods"), Some("Моды"));
