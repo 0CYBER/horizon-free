@@ -815,13 +815,6 @@ fn build_overlay_uncached(
     }
     // Vanilla sits below every pack, so filters hide its files too.
     let filters: Vec<&Filter> = packs.iter().flat_map(|p| &p.filter).collect();
-    let touched_dirs: BTreeSet<String> = files
-        .keys()
-        .flat_map(|f| {
-            let parts: Vec<&str> = f.split('/').collect();
-            (1..parts.len()).map(move |n| parts[..n].join("/"))
-        })
-        .collect();
     let zips: Vec<Option<Zip>> = packs
         .iter()
         .map(|p| {
@@ -870,6 +863,21 @@ fn build_overlay_uncached(
             merged.insert(name.clone(), bytes);
         }
     }
+    add_sprite_renames(
+        vanilla,
+        &merged,
+        &filters,
+        &mut files,
+        &mut hidden,
+        dependencies,
+    );
+    let touched_dirs: BTreeSet<String> = files
+        .keys()
+        .flat_map(|f| {
+            let parts: Vec<&str> = f.split('/').collect();
+            (1..parts.len()).map(move |n| parts[..n].join("/"))
+        })
+        .collect();
     /// A zip entry to write: its pack, its name in the zip and where it goes.
     type Extract<'a> = (usize, &'a str, PathBuf);
     #[allow(clippy::too_many_arguments)]
@@ -1019,6 +1027,81 @@ fn build_overlay_uncached(
         let _ = fs::remove_dir_all(out);
     }
     extracted
+}
+/// `SingleFile` with a `sprite`: the atlas holds the resource's pixels, and the resource's
+/// `.mcmeta`, under the sprite's id. Every other sprite of the blocks and items atlases is its
+/// texture's own id, and the loaders read a model's sprite from `textures/<sprite>.png`, so the
+/// overlay gives a renamed sprite that file. ItemsAdder and Nexo packs name their models'
+/// textures only through these renames (#14485).
+fn add_sprite_renames(
+    vanilla: &Path,
+    merged: &BTreeMap<String, Vec<u8>>,
+    filters: &[&Filter],
+    files: &mut BTreeMap<String, (usize, Provided)>,
+    hidden: &mut BTreeSet<String>,
+    dependencies: &mut cache::Dependencies,
+) {
+    use crate::atlas_sources::{SpriteSource, decode, texture_path};
+    let png = |id: &str| {
+        texture_path(Path::new(""), id, "textures")
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    // A later source of the same sprite replaces an earlier one, so they apply in order.
+    let renames = ["blocks", "items"]
+        .into_iter()
+        .filter_map(|atlas| merged.get(&format!("assets/minecraft/atlases/{atlas}.json")))
+        .filter_map(|bytes| decode(std::str::from_utf8(bytes).ok()?))
+        .flatten()
+        .filter_map(|source| match source {
+            SpriteSource::Single {
+                resource,
+                sprite: Some(sprite),
+            } if sprite != resource => Some((png(&resource), png(&sprite))),
+            _ => None,
+        });
+    // Each resource is the file the packs give, never another rename's sprite.
+    let mut found = Vec::new();
+    for (from, to) in renames {
+        // `texture_path` names an id that would leave the root as a file that is never there.
+        if !stays_inside(&from) || !stays_inside(&to) {
+            continue;
+        }
+        let from_meta = format!("{from}.mcmeta");
+        // A pack's texture with its own `.mcmeta`, or vanilla's below every pack.
+        let (file, meta) = match files.get(&from) {
+            Some(file) => (file.clone(), files.get(&from_meta).cloned()),
+            None => {
+                let (path, meta_path) = (vanilla.join(&from), vanilla.join(&from_meta));
+                dependencies.file(&path);
+                dependencies.file(&meta_path);
+                if !path.is_file() || filters.iter().any(|f| f.blocks(&from)) {
+                    continue;
+                }
+                let meta = files.get(&from_meta).cloned().or_else(|| {
+                    meta_path
+                        .is_file()
+                        .then(|| (0, (Some(meta_path), from_meta.clone())))
+                });
+                ((0, (Some(path), from.clone())), meta)
+            }
+        };
+        found.push((to, file, meta));
+    }
+    for (to, file, meta) in found {
+        let to_meta = format!("{to}.mcmeta");
+        files.insert(to, file);
+        match meta {
+            Some(meta) => {
+                hidden.remove(&to_meta);
+                files.insert(to_meta, meta);
+            }
+            None => {
+                files.remove(&to_meta);
+                hidden.insert(to_meta);
+            }
+        }
+    }
 }
 /// The most the zip packs in `packs` may unpack to in one overlay: 16 times their size on disk
 /// (real packs are mostly PNGs and JSON, a few times smaller zipped at most), at least 64 MiB
@@ -1891,6 +1974,78 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        let _ = fs::remove_dir_all(base);
+    }
+    #[test]
+    fn a_renamed_atlas_sprite_reads_its_resource() {
+        let base =
+            std::env::temp_dir().join(format!("horizon-sprite-rename-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let write = |path: PathBuf, bytes: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        let vanilla = base.join("vanilla");
+        let block = vanilla.join("assets/minecraft/textures/block");
+        write(block.join("sea_lantern.png"), b"lantern");
+        write(block.join("sea_lantern.png.mcmeta"), b"{\"animation\":{}}");
+        write(block.join("dirt.png"), b"vanilla dirt");
+        write(block.join("dirt.png.mcmeta"), b"{\"animation\":{}}");
+        let pack = base.join("packs/IA");
+        write(
+            pack.join("pack.mcmeta"),
+            br#"{"pack":{"description":"ia","pack_format":97}}"#,
+        );
+        write(pack.join("assets/iageneric/textures/item/box.png"), b"box");
+        // An ItemsAdder pack's items atlas: its models name only the `ia:` sprites.
+        write(
+            pack.join("assets/minecraft/atlases/items.json"),
+            br#"{"sources":[
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:0"},
+                {"type":"single","resource":"minecraft:block/sea_lantern","sprite":"ia:1199"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"minecraft:block/dirt"},
+                {"type":"single","resource":"minecraft:block/dirt","sprite":"ia:3"},
+                {"type":"single","resource":"iageneric:item/gone","sprite":"ia:2"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:../../../escape"}
+            ]}"#,
+        );
+        let packs = discover(&vanilla, &base.join("packs"));
+        let out = base.join("overlay");
+        build_overlay(&vanilla, &packs, &out).unwrap();
+        let read = |rel: &str| fs::read(out.join(rel)).ok();
+        assert_eq!(
+            read("assets/ia/textures/0.png").as_deref(),
+            Some(&b"box"[..])
+        );
+        assert_eq!(read("assets/ia/textures/0.png.mcmeta"), None);
+        // A vanilla resource comes with its animation.
+        assert_eq!(
+            read("assets/ia/textures/1199.png").as_deref(),
+            Some(&b"lantern"[..])
+        );
+        assert_eq!(
+            read("assets/ia/textures/1199.png.mcmeta").as_deref(),
+            Some(&b"{\"animation\":{}}"[..])
+        );
+        // A rename over a vanilla texture shows the resource, without vanilla's animation, and
+        // leaves vanilla's own file alone.
+        assert_eq!(
+            read("assets/minecraft/textures/block/dirt.png").as_deref(),
+            Some(&b"box"[..])
+        );
+        assert_eq!(
+            read("assets/minecraft/textures/block/dirt.png.mcmeta"),
+            None
+        );
+        assert_eq!(fs::read(block.join("dirt.png")).unwrap(), b"vanilla dirt");
+        // A resource is the packs' file, not what another rename put there.
+        assert_eq!(
+            read("assets/ia/textures/3.png").as_deref(),
+            Some(&b"vanilla dirt"[..])
+        );
+        // A missing resource adds nothing, and no rename leaves the overlay.
+        assert_eq!(read("assets/ia/textures/2.png"), None);
+        assert!(!out.join("escape.png").exists());
         let _ = fs::remove_dir_all(base);
     }
     #[test]
