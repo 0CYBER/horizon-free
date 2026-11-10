@@ -1035,8 +1035,11 @@ fn build_overlay_uncached(
 /// textures only through these renames (#14485).
 ///
 /// A sprite gets its resource's file only when the whole source list, in order, ends on the
-/// rename (`SpriteSourceList.list`: a later source of the same id replaces it), and when the
-/// other atlas, which reads the same file, lists it from that resource too or not at all.
+/// rename (`SpriteSourceList.list`: a later source of the same id replaces it), when the other
+/// atlas, which reads the same file, lists it from that resource too or not at all, and when it
+/// has no texture of its own. A texture that is there may be read as itself (another source's
+/// resource, an unstitched or paletted sprite's input), so no alias ever replaces one; such a
+/// sprite draws its own texture, as before aliases.
 fn add_sprite_renames(
     vanilla: &Path,
     merged: &BTreeMap<String, Vec<u8>>,
@@ -1055,18 +1058,8 @@ fn add_sprite_renames(
     };
     let atlases: Vec<_> = ["blocks", "items"]
         .into_iter()
-        .filter_map(|atlas| {
-            let name = format!("assets/minecraft/atlases/{atlas}.json");
-            // No pack has this atlas: vanilla's, unless a filter hides it.
-            let bytes = merged.get(&name).cloned().or_else(|| {
-                let path = vanilla.join(&name);
-                dependencies.file(&path);
-                (!filters.iter().any(|f| f.blocks(&name)))
-                    .then(|| fs::read(path).ok())
-                    .flatten()
-            })?;
-            decode(std::str::from_utf8(&bytes).ok()?)
-        })
+        .filter_map(|atlas| merged.get(&format!("assets/minecraft/atlases/{atlas}.json")))
+        .filter_map(|bytes| decode(std::str::from_utf8(bytes).ok()?))
         .collect();
     let renamed = |source: &SpriteSource| matches!(source, SpriteSource::Single { resource, sprite: Some(sprite) } if sprite != resource);
     if !atlases.iter().flatten().any(renamed) {
@@ -1107,6 +1100,7 @@ fn add_sprite_renames(
     }
     let renames = renames
         .into_iter()
+        .filter(|(sprite, _)| textures.binary_search(sprite).is_err())
         .filter_map(|(sprite, resource)| Some((png(&resource?), png(&sprite))));
     // Each resource is the file the packs give, never another rename's sprite.
     let mut found = Vec::new();
@@ -2035,24 +2029,11 @@ mod tests {
         };
         let vanilla = base.join("vanilla");
         let textures = vanilla.join("assets/minecraft/textures");
+        let animation = b"{\"animation\":{}}";
         write(textures.join("block/sea_lantern.png"), b"lantern");
-        write(
-            textures.join("block/sea_lantern.png.mcmeta"),
-            b"{\"animation\":{}}",
-        );
-        write(textures.join("block/dirt.png"), b"vanilla dirt");
+        write(textures.join("block/sea_lantern.png.mcmeta"), animation);
         write(textures.join("item/stick.png"), b"vanilla stick");
-        write(
-            textures.join("item/stick.png.mcmeta"),
-            b"{\"animation\":{}}",
-        );
-        write(textures.join("item/apple.png"), b"vanilla apple");
-        write(textures.join("entity/bone.png"), b"vanilla bone");
-        // No pack has a blocks atlas: vanilla's lists every block texture as itself.
-        write(
-            vanilla.join("assets/minecraft/atlases/blocks.json"),
-            br#"{"sources":[{"type":"directory","source":"block","prefix":"block/"}]}"#,
-        );
+        write(textures.join("item/stick.png.mcmeta"), animation);
         let meta = br#"{"pack":{"description":"d","pack_format":97}}"#;
         let pack = base.join("packs/IA");
         write(pack.join("pack.mcmeta"), meta);
@@ -2067,80 +2048,62 @@ mod tests {
                 {"type":"single","resource":"minecraft:item/stick","sprite":"ia:3"},
                 {"type":"single","resource":"iageneric:item/gone","sprite":"ia:2"},
                 {"type":"single","resource":"iageneric:item/box","sprite":"ia:../../../escape"},
-                {"type":"single","resource":"iageneric:item/box","sprite":"minecraft:block/dirt"},
-                {"type":"single","resource":"iageneric:item/box","sprite":"minecraft:item/apple"},
-                {"type":"single","resource":"iageneric:item/box","sprite":"minecraft:entity/bone"}
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:7"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:8"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:9"}
             ]}"#,
         );
-        // A pack above it lists two of those sprites again from their own textures.
-        // It also hides vanilla's animation of the stick.
-        let restore = base.join("packs/Restore");
+        // A pack above it: later sources of three of those sprites, a blocks atlas that
+        // disagrees about another, and a filter hiding vanilla's animation of the stick.
+        let higher = base.join("packs/Top");
         write(
-            restore.join("pack.mcmeta"),
+            higher.join("pack.mcmeta"),
             br#"{"pack":{"description":"d","pack_format":97},
                 "filter":{"block":[{"path":"textures/item/stick\\.png\\.mcmeta"}]}}"#,
         );
         write(
-            restore.join("assets/minecraft/atlases/items.json"),
+            higher.join("assets/minecraft/atlases/items.json"),
             br#"{"sources":[
-                {"type":"single","resource":"minecraft:item/apple"},
-                {"type":"directory","source":"entity","prefix":"entity/"}
+                {"type":"single","resource":"minecraft:block/sea_lantern","sprite":"ia:8"},
+                {"type":"filter","pattern":{"namespace":"ia","path":"7"}}
+            ]}"#,
+        );
+        write(
+            higher.join("assets/minecraft/atlases/blocks.json"),
+            br#"{"sources":[
+                {"type":"single","resource":"minecraft:block/sea_lantern","sprite":"ia:9"}
             ]}"#,
         );
         let packs = discover(&vanilla, &base.join("packs"));
         let out = base.join("overlay");
         build_overlay(&vanilla, &packs, &out).unwrap();
         let read = |rel: &str| fs::read(out.join(rel)).ok();
-        let texture = |rel: &str| read(&format!("assets/{rel}.png"));
-        assert_eq!(texture("ia/textures/0").as_deref(), Some(&b"box"[..]));
+        let texture = |id: &str| read(&format!("assets/ia/textures/{id}.png"));
+        assert_eq!(texture("0").as_deref(), Some(&b"box"[..]));
         assert_eq!(read("assets/ia/textures/0.png.mcmeta"), None);
         // A vanilla resource comes with its animation.
-        assert_eq!(
-            texture("ia/textures/1199").as_deref(),
-            Some(&b"lantern"[..])
-        );
+        assert_eq!(texture("1199").as_deref(), Some(&b"lantern"[..]));
         assert_eq!(
             read("assets/ia/textures/1199.png.mcmeta").as_deref(),
-            Some(&b"{\"animation\":{}}"[..])
+            Some(&animation[..])
         );
-        // A rename over a vanilla texture shows the resource, without vanilla's animation, and
-        // leaves vanilla's own file alone.
+        // A texture that is there stays itself: other sources may read it (here as `ia:3`'s
+        // resource; an unstitched or paletted sprite's input alike).
         assert_eq!(
-            texture("minecraft/textures/item/stick").as_deref(),
-            Some(&b"box"[..])
-        );
-        assert_eq!(
-            read("assets/minecraft/textures/item/stick.png.mcmeta"),
-            None
-        );
-        assert_eq!(
-            fs::read(textures.join("item/stick.png")).unwrap(),
-            b"vanilla stick"
-        );
-        // A resource is the packs' file, not what another rename put there, and its `.mcmeta`
-        // only where no filter hides it.
-        assert_eq!(
-            texture("ia/textures/3").as_deref(),
+            read("assets/minecraft/textures/item/stick.png").as_deref(),
             Some(&b"vanilla stick"[..])
         );
+        // ...with its `.mcmeta` only where no filter hides it.
+        assert_eq!(texture("3").as_deref(), Some(&b"vanilla stick"[..]));
         assert_eq!(read("assets/ia/textures/3.png.mcmeta"), None);
         // A missing resource adds nothing, and no rename leaves the overlay.
-        assert_eq!(texture("ia/textures/2"), None);
+        assert_eq!(texture("2"), None);
         assert!(!out.join("escape.png").exists());
-        // The blocks atlas reads dirt as itself, so the items atlas's rename can't take its file.
-        assert_eq!(
-            texture("minecraft/textures/block/dirt").as_deref(),
-            Some(&b"vanilla dirt"[..])
-        );
-        // A later source, a single or a directory, gives a sprite its own texture back.
-        assert_eq!(
-            texture("minecraft/textures/item/apple").as_deref(),
-            Some(&b"vanilla apple"[..])
-        );
-        assert_eq!(
-            texture("minecraft/textures/entity/bone").as_deref(),
-            Some(&b"vanilla bone"[..])
-        );
+        // The last source of a sprite wins: a filter drops it, a later rename replaces it.
+        assert_eq!(texture("7"), None);
+        assert_eq!(texture("8").as_deref(), Some(&b"lantern"[..]));
+        // The two atlases read one file, and disagree about `ia:9`: it gets neither.
+        assert_eq!(texture("9"), None);
         let _ = fs::remove_dir_all(base);
     }
     #[test]
