@@ -1034,9 +1034,131 @@ fn builtin_component(
                 write_block_predicate(predicate, ids, &mut w)?;
             }
         }
+        "minecraft:tool" => write_tool(value, ids, &mut w)?,
+        "minecraft:attribute_modifiers" => write_attribute_modifiers(value, ids, &mut w)?,
         _ => return None,
     }
     Some(horizon_protocol::item::Component::Raw(w.data))
+}
+
+/// `Tool.STREAM_CODEC` from `Tool.CODEC`'s saved form: the rules (blocks, an
+/// optional speed and an optional `correct_for_drops`), then the default
+/// mining speed, the wear per block and `can_destroy_blocks_in_creative`,
+/// each at its codec default when the stack leaves it out.
+fn write_tool(
+    value: &horizon_world::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_world::datafix::dynamic::{as_bool_opt, as_number};
+    use horizon_world::nbt::Tag;
+    let Tag::List(rules) = value.get("rules")? else {
+        return None;
+    };
+    w.varint(i32::try_from(rules.len()).ok()?);
+    for rule in rules.as_slice() {
+        write_holder_set("minecraft:block", rule.get("blocks")?, ids, w)?;
+        match rule.get("speed") {
+            Some(speed) => {
+                w.bool(true);
+                w.f32(as_number(speed)?.float_value());
+            }
+            None => w.bool(false),
+        }
+        match rule.get("correct_for_drops") {
+            Some(correct) => {
+                w.bool(true);
+                w.bool(as_bool_opt(Some(correct))?);
+            }
+            None => w.bool(false),
+        }
+    }
+    let number = |key: &str| value.get(key).map(as_number);
+    w.f32(match number("default_mining_speed") {
+        Some(speed) => speed?.float_value(),
+        None => 1.0,
+    });
+    // ExtraCodecs.NON_NEGATIVE_INT.
+    let wear = match number("damage_per_block") {
+        Some(wear) => wear?.int_value(),
+        None => 1,
+    };
+    w.varint((wear >= 0).then_some(wear)?);
+    w.bool(match value.get("can_destroy_blocks_in_creative") {
+        Some(can) => as_bool_opt(Some(can))?,
+        None => true,
+    });
+    Some(())
+}
+
+/// `ItemAttributeModifiers.STREAM_CODEC` from its saved list: each entry's
+/// attribute (`ByteBufCodecs.holderRegistry`, its id), modifier id, amount
+/// and operation, slot group (`any` when left out) and display (`default`).
+fn write_attribute_modifiers(
+    value: &horizon_world::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_world::datafix::dynamic::{as_number, namespaced};
+    use horizon_world::nbt::Tag;
+    let Tag::List(entries) = value else {
+        return None;
+    };
+    let string = |tag: Option<&Tag>| match tag {
+        Some(Tag::String(s)) => s.to_string().ok(),
+        _ => None,
+    };
+    w.varint(i32::try_from(entries.len()).ok()?);
+    for entry in entries.as_slice() {
+        let attribute = ids(
+            "minecraft:attribute",
+            &namespaced(&string(entry.get("type"))?),
+        )?;
+        w.varint((attribute >= 0).then_some(attribute)?);
+        w.string(&namespaced(&string(entry.get("id"))?));
+        w.f64(as_number(entry.get("amount")?)?.double_value());
+        // AttributeModifier.Operation ids.
+        w.varint(match string(entry.get("operation"))?.as_str() {
+            "add_value" => 0,
+            "add_multiplied_base" => 1,
+            "add_multiplied_total" => 2,
+            _ => return None,
+        });
+        // EquipmentSlotGroup ids.
+        let slot = match entry.get("slot") {
+            Some(slot) => string(Some(slot))?,
+            None => "any".to_owned(),
+        };
+        w.varint(match slot.as_str() {
+            "any" => 0,
+            "mainhand" => 1,
+            "offhand" => 2,
+            "hand" => 3,
+            "feet" => 4,
+            "legs" => 5,
+            "chest" => 6,
+            "head" => 7,
+            "armor" => 8,
+            "body" => 9,
+            "saddle" => 10,
+            _ => return None,
+        });
+        // ItemAttributeModifiers.Display.Type ids; an override carries its text.
+        match entry.get("display") {
+            None => w.varint(0),
+            Some(display) => match string(display.get("type"))?.as_str() {
+                "default" => w.varint(0),
+                "hidden" => w.varint(1),
+                "override" => {
+                    let text = display.get("value")?;
+                    w.varint(2);
+                    w.bytes(&horizon_world::nbt::write_network(text, Default::default()).ok()?);
+                }
+                _ => return None,
+            },
+        }
+    }
+    Some(())
 }
 
 /// `ByteBufCodecs.holderSet`: tags or direct registry entries, without item-id remapping.
@@ -1366,6 +1488,13 @@ fn network_stack(
             (
                 "minecraft:can_break",
                 horizon_protocol::item::component::CAN_BREAK,
+            ),
+            // The client predicts mining with the stack's own tool and shows
+            // the stack's own attribute modifiers (#14641).
+            ("minecraft:tool", horizon_protocol::item::component::TOOL),
+            (
+                "minecraft:attribute_modifiers",
+                horizon_protocol::item::component::ATTRIBUTE_MODIFIERS,
             ),
         ] {
             if d.other(&format!("!{name}")).is_some() {

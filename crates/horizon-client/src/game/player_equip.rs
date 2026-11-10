@@ -111,20 +111,21 @@ impl Game<'_> {
         equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
         equipped.push((self.offhand.as_ref(), "offhand"));
         for (stack, slot) in equipped {
-            let Some(info) = stack.and_then(|s| world_items!(self).get(&s.item)) else {
+            // ItemStack.forEachModifier: the stack's own ATTRIBUTE_MODIFIERS
+            // (its item's unless a command or a mod replaced them, #14641).
+            let Some(stack) = stack else {
                 continue;
             };
-            for (attribute, id, amount, op, group) in &info.modifiers {
-                // The attack code still reads the held item's attack damage and
-                // speed directly; the map copy is what `/attribute` reports.
-                if !equipment_modifier_applies(group, slot) {
+            for (attribute, id, amount, op, group) in world_items!(self).attribute_modifiers(stack)
+            {
+                if !equipment_modifier_applies(&group, slot) {
                     continue;
                 }
                 if player
-                    .set_modifier_unclamped(attribute, id, *amount, op, true)
+                    .set_modifier_unclamped(&attribute, &id, amount, &op, true)
                     .is_ok()
                 {
-                    self.applied_modifiers.push((attribute.clone(), id.clone()));
+                    self.applied_modifiers.push((attribute, id));
                 }
             }
         }
