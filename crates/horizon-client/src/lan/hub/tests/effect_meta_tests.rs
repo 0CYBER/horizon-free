@@ -19,7 +19,13 @@ fn particle_type_id(name: &str) -> Option<i32> {
 
 #[test]
 fn cached_effect_particles_equal_the_uncached_lookup_and_are_looked_up_once() {
-    let effects = ["speed", "slowness", "trial_omen", "raid_omen", "not_an_effect"];
+    let effects = [
+        "speed",
+        "slowness",
+        "trial_omen",
+        "raid_omen",
+        "not_an_effect",
+    ];
     let mut cache = ParticleCache::default();
     let mut lookups = 0;
     for _round in 0..2 {

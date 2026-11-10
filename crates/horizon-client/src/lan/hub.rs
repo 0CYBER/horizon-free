@@ -39,10 +39,10 @@ use horizon_world::{
 use std::sync::{Arc, Mutex, atomic::Ordering};
 
 mod acknowledgements;
-mod effect_meta;
 /// GameEvent types (ClientboundGameEventPacket).
 pub mod chat;
 pub mod chat_filter;
+mod effect_meta;
 mod spawn_info;
 
 pub mod game_event {
