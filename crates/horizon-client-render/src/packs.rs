@@ -1126,9 +1126,9 @@ fn add_sprite_renames(
                 if !path.is_file() || filters.iter().any(|f| f.blocks(&from)) {
                     continue;
                 }
+                // `createStackMetadataFinder`: a pack's filter hides vanilla's `.mcmeta` too.
                 let meta = files.get(&from_meta).cloned().or_else(|| {
-                    meta_path
-                        .is_file()
+                    (meta_path.is_file() && !filters.iter().any(|f| f.blocks(&from_meta)))
                         .then(|| (0, (Some(meta_path), from_meta.clone())))
                 });
                 ((0, (Some(path), from.clone())), meta)
@@ -2073,8 +2073,13 @@ mod tests {
             ]}"#,
         );
         // A pack above it lists two of those sprites again from their own textures.
+        // It also hides vanilla's animation of the stick.
         let restore = base.join("packs/Restore");
-        write(restore.join("pack.mcmeta"), meta);
+        write(
+            restore.join("pack.mcmeta"),
+            br#"{"pack":{"description":"d","pack_format":97},
+                "filter":{"block":[{"path":"textures/item/stick\\.png\\.mcmeta"}]}}"#,
+        );
         write(
             restore.join("assets/minecraft/atlases/items.json"),
             br#"{"sources":[
@@ -2112,11 +2117,13 @@ mod tests {
             fs::read(textures.join("item/stick.png")).unwrap(),
             b"vanilla stick"
         );
-        // A resource is the packs' file, not what another rename put there.
+        // A resource is the packs' file, not what another rename put there, and its `.mcmeta`
+        // only where no filter hides it.
         assert_eq!(
             texture("ia/textures/3").as_deref(),
             Some(&b"vanilla stick"[..])
         );
+        assert_eq!(read("assets/ia/textures/3.png.mcmeta"), None);
         // A missing resource adds nothing, and no rename leaves the overlay.
         assert_eq!(texture("ia/textures/2"), None);
         assert!(!out.join("escape.png").exists());
