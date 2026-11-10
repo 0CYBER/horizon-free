@@ -773,7 +773,7 @@ impl Game<'_> {
                     flat: false,
                     last_death: None,
                     portal_cooldown: 0,
-                    sea_level: self.sea_level(),
+                    sea_level: horizon_world::level::sea_level_of(self.level_key()),
                 },
                 online_mode: false,
                 enforces_secure_chat: false,

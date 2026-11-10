@@ -1044,7 +1044,7 @@ impl Game<'_> {
             max_entity_cramming: self.ui.rules.int("max_entity_cramming"),
             dimension_type: self.dimension_type(),
             world_seed: self.level.seed,
-            sea_level: self.sea_level(),
+            sea_level: horizon_world::level::sea_level_of(self.level_key()),
             teams: std::sync::Arc::new(self.mob_teams()),
             items: Some(self.items()),
             lid_openers: &self.lid_openers,
