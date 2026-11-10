@@ -1066,3 +1066,28 @@ fn a_server_filter_mask_hides_or_masks_the_message() {
             .all(|s| s.style.color.is_none())
     );
 }
+
+/// `EditBox.onClick`: a double click selects the word under the pointer; a
+/// single click only places the caret there.
+#[test]
+fn a_double_click_in_the_chat_box_selects_the_word() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", false, 0, 640, 360, full());
+    screen.type_text(&m, &c, "hello world");
+    // The pointer on the last letter: the first click places the caret there,
+    // the second takes the word.
+    let x = f64::from(screen.input.x) + f64::from(font.width("hello world")) - 1.0;
+    let y = f64::from(screen.input.y) + 2.0;
+    assert!(screen.click(&m, &c, x, y));
+    assert!((10..=11).contains(&screen.input.cursor));
+    assert_eq!(screen.input.highlight, screen.input.cursor);
+    assert!(screen.click(&m, &c, x, y));
+    assert_eq!((screen.input.highlight, screen.input.cursor), (6, 11));
+    assert_eq!(screen.input.selected_text(), "world");
+}
