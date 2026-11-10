@@ -3692,7 +3692,7 @@ impl Crystal {
             self.position,
             Vec3::ZERO,
             [0.0, 0.0],
-            (false, 0.0),
+            horizon_client::entity_nbt::loaded_ground_and_fall(raw),
             uuid,
             raw,
         );
