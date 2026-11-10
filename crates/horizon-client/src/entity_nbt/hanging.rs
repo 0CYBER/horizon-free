@@ -1,7 +1,8 @@
 //! Block-attached hanging entities: paintings and item frames.
 use super::*;
 
-/// Painting.addAdditionalSaveData: `facing`, `variant` and `block_pos`.
+/// Painting.addAdditionalSaveData: `facing`, `variant` and `block_pos`, after
+/// Entity.saveWithoutId's common fields.
 pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let (lo, hi) = p.bounds();
     let base = Base {
@@ -14,8 +15,12 @@ pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         ),
         motion: Vec3::ZERO,
         rotation: [f32::from(p.facing) * 90.0, 0.0],
-        on_ground: false,
-        fall_distance: 0.0,
+        // BlockAttachedEntity.tick never moves a painting (nor runs baseTick), so its
+        // onGround and fallDistance stay the ones Entity.load read.
+        on_ground: raw.is_some_and(|raw| flag(raw, "OnGround")),
+        fall_distance: raw
+            .and_then(|raw| float(raw.get("fall_distance")))
+            .unwrap_or(0.0),
     };
     let mut tag = base.tag(raw);
     put(&mut tag, "facing", Tag::Byte(p.facing as i8));
