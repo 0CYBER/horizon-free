@@ -2292,6 +2292,11 @@ impl Game<'_> {
         keep_world: bool,
         reason: horizon_client::level_loading::Reason,
     ) {
+        // `ClientLevel.seaLevel`: the level's, as its server sent it.
+        horizon_world::level::register_sea_level(
+            horizon_core::LevelKey::builtin_or_overworld(&spawn.dimension),
+            spawn.sea_level,
+        );
         // The replacement player starts with its inventory menu, even if the
         // server switched levels without closing the previous container.
         self.remote_close_local();

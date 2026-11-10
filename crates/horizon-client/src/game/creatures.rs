@@ -1044,7 +1044,7 @@ impl Game<'_> {
             max_entity_cramming: self.ui.rules.int("max_entity_cramming"),
             dimension_type: self.dimension_type(),
             world_seed: self.level.seed,
-            sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
+            sea_level: self.sea_level(),
             teams: std::sync::Arc::new(self.mob_teams()),
             items: Some(self.items()),
             lid_openers: &self.lid_openers,

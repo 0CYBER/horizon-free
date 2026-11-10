@@ -297,6 +297,38 @@ impl WorldgenOverrides {
         };
         LevelHeight::of_type(&ty, types)
     }
+    /// The `sea_level` of the noise settings these packs give the vanilla level `level`: those its
+    /// pack stem names (inline, or a pack's own file), else the preset's (`minecraft:overworld`,
+    /// `nether`, `end`) when a pack replaces them. `None` when nothing the packs give changes it,
+    /// for a generator that is not the noise one, and for settings the packs do not carry.
+    pub fn level_sea_level(&self, level: &str) -> Option<i32> {
+        let stem = self.entries.get(DIMENSIONS).and_then(|d| d.get(level));
+        let settings = match stem {
+            Some(stem) => {
+                let generator = &serde_json::from_str::<Value>(stem).ok()?["generator"];
+                if generator["type"].as_str() != Some("minecraft:noise") {
+                    return None;
+                }
+                generator["settings"].clone()
+            }
+            None => Value::String(
+                match level {
+                    "minecraft:the_nether" => "minecraft:nether",
+                    "minecraft:the_end" => "minecraft:end",
+                    _ => "minecraft:overworld",
+                }
+                .to_owned(),
+            ),
+        };
+        let settings = match settings {
+            Value::String(id) => {
+                serde_json::from_str(self.entries.get("settings")?.get(&id)?).ok()?
+            }
+            inline @ Value::Object(_) => inline,
+            _ => return None,
+        };
+        i32::try_from(settings["sea_level"].as_i64()?).ok()
+    }
     /// The entries packs give `bundle`.
     pub fn entries(&self, bundle: &str) -> impl Iterator<Item = (&str, &str)> {
         self.entries
@@ -576,5 +608,34 @@ mod tests {
         assert_eq!(tag, r#"{"values":["minecraft:plains"]}"#);
         let (_, stem) = o.entries(DIMENSIONS).next().unwrap();
         assert!(!stem.contains("molten_peaks") && stem.contains("minecraft:plains"));
+    }
+
+    #[test]
+    fn a_levels_sea_level_comes_from_the_noise_settings_the_packs_give_it() {
+        let mut o = WorldgenOverrides::default();
+        assert_eq!(o.level_sea_level("minecraft:the_nether"), None);
+        o.set("settings", "minecraft:nether", r#"{"sea_level":10}"#.into());
+        assert_eq!(o.level_sea_level("minecraft:the_nether"), Some(10));
+        assert_eq!(o.level_sea_level("minecraft:overworld"), None);
+        o.set("settings", "test:high", r#"{"sea_level":120}"#.into());
+        let stem = |settings: &str| {
+            format!(r#"{{"generator":{{"type":"minecraft:noise","settings":{settings}}}}}"#)
+        };
+        o.set(DIMENSIONS, "minecraft:overworld", stem(r#""test:high""#));
+        assert_eq!(o.level_sea_level("minecraft:overworld"), Some(120));
+        o.set(
+            DIMENSIONS,
+            "minecraft:the_end",
+            stem(r#"{"sea_level":-16}"#),
+        );
+        assert_eq!(o.level_sea_level("minecraft:the_end"), Some(-16));
+        o.set(DIMENSIONS, "minecraft:the_nether", stem(r#""test:absent""#));
+        assert_eq!(o.level_sea_level("minecraft:the_nether"), None);
+        o.set(
+            DIMENSIONS,
+            "minecraft:the_nether",
+            r#"{"generator":{"type":"minecraft:flat"}}"#.into(),
+        );
+        assert_eq!(o.level_sea_level("minecraft:the_nether"), None);
     }
 }

@@ -773,7 +773,7 @@ impl Game<'_> {
                     flat: false,
                     last_death: None,
                     portal_cooldown: 0,
-                    sea_level: 63,
+                    sea_level: self.sea_level(),
                 },
                 online_mode: false,
                 enforces_secure_chat: false,

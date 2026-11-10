@@ -3326,6 +3326,10 @@ impl Game<'_> {
     fn level_key(&self) -> horizon_core::LevelKey {
         horizon_core::LevelKey::builtin_or_overworld(self.dim.id())
     }
+    /// `Level.getSeaLevel` of the current level: the one its generator builds with.
+    fn sea_level(&self) -> i32 {
+        horizon_world::level::sea_level_of(self.level_key())
+    }
     fn dimension_type(&self) -> &'static horizon_world::dimension_type::DimensionFacts {
         horizon_world::dimension_type::DimensionFacts::of_builtin_level(self.level_key())
     }
