@@ -56,10 +56,14 @@ pub fn item_frame_to_nbt(f: &ItemFrame, uuid: [i32; 4], raw: Option<&Tag>) -> Ta
             (lo[1] + hi[1]) / 2.0,
             (lo[2] + hi[2]) / 2.0,
         ),
-        motion: Vec3::ZERO,
+        // BlockAttachedEntity.tick never runs super.tick, so the Motion, onGround and
+        // fallDistance that Entity.load read stay.
+        motion: raw.map_or(Vec3::ZERO, loaded_motion),
         rotation: [0.0, 0.0],
-        on_ground: false,
-        fall_distance: 0.0,
+        on_ground: raw.is_some_and(|raw| flag(raw, "OnGround")),
+        fall_distance: raw
+            .and_then(|raw| float(raw.get("fall_distance")))
+            .unwrap_or(0.0),
     };
     let mut tag = base.tag(raw);
     // `Entity.saveWithoutId`: `CustomName` before the frame's own fields.
