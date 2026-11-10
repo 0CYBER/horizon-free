@@ -26,7 +26,7 @@ AbstractPiglin.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.
 Piglin.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	CannotHunt written from the live flag; the read is in mob_from_nbt
 AbstractPiglin.customServerAiStep	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	gap: minor: zombification runs outside the Nether by the nether flag, not the PIGLINS_ZOMBIFY attribute
 AbstractPiglin.finishConversion	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	spawns the zombified piglin with nausea and removes the old one
-Piglin.readAdditionalSaveData	port	crates/horizon-client/src/mobs/piglin.rs::read_guarded_anger	baby and inventory are read in entity_nbt::mob_from_nbt; the brain's minecraft:angry_at UUID and TTL come back through read_guarded_anger (CannotHunt still not read)
+Piglin.readAdditionalSaveData	port	crates/horizon-client/src/mobs/piglin.rs::read_guarded_anger	baby and inventory are read in entity_nbt::mob_from_nbt; the brain's minecraft:angry_at UUID and TTL come back through read_guarded_anger; CannotHunt is read in entity_nbt::mob_from_nbt's piglin branch
 Piglin.getSlot	missing		item commands stop at the open container: a piglin's own inventory slots (300 and up) are not addressable
 Piglin.defineSynchedData	skip:java		synched-data registration; Horizon keeps baby, crossbow and dancing state in Mob fields
 Piglin.createAttributes	skip:data		attribute defaults (health 16, speed 0.35, attack 5) live in data tables
