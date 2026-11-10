@@ -1760,7 +1760,7 @@ def graphics_shell(args, name):
     return check.failures
 
 
-PRESET = 'Preset'
+PRESET = 'Horizon Preset'
 
 
 def shell_choice_step(args, name):
