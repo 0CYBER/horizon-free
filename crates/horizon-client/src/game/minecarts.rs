@@ -234,6 +234,12 @@ fn offered_pickup(pushable: bool, species: Species, alive: bool) -> bool {
     pushable || species == Species::Shulker && alive
 }
 
+/// `Shulker.push(Entity)` is empty, so a shulker that is not picked up (it
+/// already rides something) neither moves nor slows the cart.
+fn takes_push_from_cart(species: Species) -> bool {
+    species != Species::Shulker
+}
+
 /// `Entity.canRide` for a cart: the boarding cooldown, and a warden or the
 /// wither never rides (`canRide` false).
 fn can_ride_cart(species: Species, boarding_cooldown: i32) -> bool {
@@ -1826,6 +1832,9 @@ impl Game<'_> {
                 }
                 continue;
             }
+            if !takes_push_from_cart(species) {
+                continue;
+            }
             let other = self.mobs[j].position;
             let Some(v) = super::boat_passengers::push_impulse(pos, other) else {
                 continue;
@@ -3358,6 +3367,14 @@ mod tests {
         assert!(offered_pickup(true, Species::Cow, true));
         assert!(pickup_instead_of_push(Species::Shulker, false, false));
         assert!(can_ride_cart(Species::Shulker, 0));
+    }
+
+    /// A shulker already riding a boat is no pickup candidate and `Shulker.push` is a no-op.
+    #[test]
+    fn a_mounted_shulker_does_not_push_a_cart() {
+        assert!(!pickup_instead_of_push(Species::Shulker, true, false));
+        assert!(!takes_push_from_cart(Species::Shulker));
+        assert!(takes_push_from_cart(Species::Cow));
     }
 
     /// `WitherBoss.canRide` returns false, so a moving cart cannot scoop the boss up.
