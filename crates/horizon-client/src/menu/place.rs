@@ -107,12 +107,19 @@ impl Stacked {
         min
     }
     /// `tryPick` (`canCraft(recipe, amount, output)`).
+    /// When `output` is `None` this is a non-destructive check: `self` is not
+    /// mutated. When `output` is `Some`, the matched items are deducted from
+    /// `self` and recorded in `output`.
     pub fn try_pick(
         &mut self,
         ingredients: &[&Ingredient],
         amount: i32,
         output: Option<&mut Vec<Arc<str>>>,
     ) -> bool {
+        if output.is_none() {
+            let mut clone = self.clone();
+            return Picker::new(&mut clone, ingredients).try_pick(amount, None);
+        }
         Picker::new(self, ingredients).try_pick(amount, output)
     }
     /// `tryPickAll` (`getBiggestCraftableStack`).
