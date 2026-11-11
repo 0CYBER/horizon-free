@@ -6724,6 +6724,24 @@ mod tests {
         }
     }
     #[test]
+    fn crafter_triggered_double_load_floors_and_saturates() {
+        for (value, expected) in [(-0.5_f64, -1), (1.5, 1), (4294967297.0, i32::MAX)] {
+            let tag = Tag::compound([
+                ("id", string("minecraft:crafter")),
+                ("x", Tag::Int(0)),
+                ("y", Tag::Int(0)),
+                ("z", Tag::Int(0)),
+                ("triggered", Tag::Double(value.to_bits())),
+            ]);
+            let (_, back) = decode_block_entity(&tag).expect("crafter");
+            let crate::containers::BlockEntity::Crafter(back) = back else {
+                panic!("not a crafter");
+            };
+            assert_eq!(back.triggered, expected, "triggered {value}d");
+            assert_eq!(back.is_triggered(), expected == 1, "triggered {value}d");
+        }
+    }
+    #[test]
     fn campfire_block_entity_round_trips() {
         let mut c = crate::containers::Campfire::default();
         c.items[1] = Some(crate::items::ItemStack::new("minecraft:beef", 1));
