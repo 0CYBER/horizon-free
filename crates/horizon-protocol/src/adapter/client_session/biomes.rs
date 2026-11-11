@@ -78,6 +78,16 @@ fn swap_core(payload: &[u8], from: &str, to: &str) -> Result<Vec<u8>> {
     Ok(w.data)
 }
 
+/// Whether `payload` (a `registry_data`) is a synchronised registry `version` doesn't have at all: not
+/// sent, whether or not the 26.2 layouts are on (`layout_26_2::NEW_REGISTRIES`, the same comparison).
+pub(super) fn absent_registry(version: ServerVersion, payload: &[u8]) -> Result<bool> {
+    if version != ServerVersion::V26_2 {
+        return Ok(false);
+    }
+    let p = configuration::RegistryData::read(&mut Reader::new(payload))?;
+    Ok(super::super::layout_26_2::NEW_REGISTRIES.contains(&p.registry.as_str()))
+}
+
 /// The biome registry without the entries `version` lacks, and the renumbering that follows from it.
 /// `None`: not the biome registry, or nothing removed.
 pub(super) fn registry_data(
@@ -240,6 +250,31 @@ mod tests {
             registry_data(ServerVersion::Current, &biome_registry())
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn registries_26_2_does_not_synchronise_are_not_sent_to_it() {
+        let reg = |name: &str| {
+            encode(&configuration::RegistryData {
+                registry: name.into(),
+                entries: vec![],
+            })
+        };
+        assert!(
+            absent_registry(
+                ServerVersion::V26_2,
+                &reg("minecraft:decorated_pot_pattern")
+            )
+            .unwrap()
+        );
+        assert!(!absent_registry(ServerVersion::V26_2, &reg("minecraft:worldgen/biome")).unwrap());
+        assert!(
+            !absent_registry(
+                ServerVersion::Current,
+                &reg("minecraft:decorated_pot_pattern")
+            )
+            .unwrap()
         );
     }
 

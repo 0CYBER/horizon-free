@@ -310,6 +310,8 @@ impl ClientSession {
         self.writing.store(to_u8(next), Ordering::Release);
         let rebiomed;
         let payload = match self.biomes_down(state, id, payload)? {
+            // A registry the client's release doesn't synchronise is not sent.
+            Some(p) if p.is_empty() => return Ok(None),
             Some(p) => {
                 rebiomed = p;
                 &rebiomed[..]
@@ -639,6 +641,11 @@ impl ClientSession {
                 .clone()
         };
         Ok(match (state, id) {
+            (State::Configuration, cfg::REGISTRY_DATA)
+                if biomes::absent_registry(self.version, payload)? =>
+            {
+                return Ok(Some(Vec::new()));
+            }
             (State::Configuration, cfg::SELECT_KNOWN_PACKS) => {
                 Some(biomes::core_pack_down(self.version, payload)?)
             }

@@ -53,7 +53,7 @@ pub fn clientbound(ids: &'static Ids, state: State, id: i32, payload: &[u8]) -> 
 
 /// Synchronized registries 26.3 added (RegistryDataLoader.SYNCHRONIZED_REGISTRIES of both jars compared):
 /// 26.2 has no codec for their entries.
-const NEW_REGISTRIES: [&str; 3] = [
+pub(crate) const NEW_REGISTRIES: [&str; 3] = [
     "minecraft:decorated_pot_pattern",
     "minecraft:block_transformer",
     "minecraft:worldgen/block_state_provider",
