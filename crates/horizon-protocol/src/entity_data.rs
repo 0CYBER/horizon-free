@@ -553,8 +553,16 @@ impl Codec<Vec<(u8, i32, Value)>> for EntityData {
     }
     fn write(v: &Vec<(u8, i32, Value)>, w: &mut Writer) {
         for (index, kind, value) in v {
+            // Written for an older client: its serializer ids, and nothing it has no serializer for.
+            let wire = match ids::active() {
+                Some((ids, ids::Way::Down)) => match ids.entity_data_serializer.down(*kind) {
+                    Some(wire) => wire,
+                    None => continue,
+                },
+                _ => *kind,
+            };
             w.u8(*index);
-            w.varint(*kind);
+            w.varint(wire);
             write_value(*kind, value, w);
         }
         w.u8(0xFF);
@@ -567,6 +575,39 @@ pub const ITEM_ENTITY_ITEM: u8 = 8;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_client_is_written_its_own_serializer_ids_and_none_it_lacks() {
+        use crate::adapter::{ServerVersion, ids::Way};
+        use crate::buf::Codec;
+        let ids = ServerVersion::V1_21_11.ids().unwrap();
+        let profile = Value::Profile(Profile {
+            name: Some("npc".into()),
+            uuid: Some(7),
+            ..Default::default()
+        });
+        let data = vec![
+            (2u8, serializer::POSE, Value::Id(0)),
+            (17u8, serializer::RESOLVABLE_PROFILE, profile),
+            (18u8, serializer::CAT_SOUND_VARIANT, Value::Id(0)),
+        ];
+        let mut w = Writer::new();
+        {
+            let _down = crate::adapter::ids::renumbering(ids, Way::Down);
+            EntityData::write(&data, &mut w);
+        }
+        // 1.21.11: pose 20 as pinned, the profile serializer 37 (pinned 41), no cat sound variant
+        let mut r = Reader::new(&w.data);
+        assert_eq!((r.u8().unwrap(), r.varint().unwrap()), (2, 20));
+        r.varint().unwrap();
+        assert_eq!((r.u8().unwrap(), r.varint().unwrap()), (17, 37));
+        let back = {
+            let _up = crate::adapter::ids::renumbering(ids, Way::Up);
+            EntityData::read(&mut Reader::new(&w.data)).unwrap()
+        };
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[1].1, serializer::RESOLVABLE_PROFILE);
+    }
 
     #[test]
     fn vanilla_vibration_sources_cross_the_identifier_boundary() {
