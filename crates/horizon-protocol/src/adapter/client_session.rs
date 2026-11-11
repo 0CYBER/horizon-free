@@ -95,7 +95,10 @@ pub struct ClientSession {
     /// The mannequins shown to a client through 1.21.8 as players (stand_in.rs).
     mannequins: Mutex<stand_in::Mannequins>,
     /// A packet to pass on after the one just translated ([`Self::next_serverbound`]).
-    pending: Mutex<Option<(i32, Vec<u8>)>>,
+    pending: Mutex<VecDeque<(i32, Vec<u8>)>>,
+    /// A client before 1.21.4 has no `player_loaded`: one is due once it takes the first teleport after a login
+    /// or respawn (it is in the level then).
+    load_due: std::sync::atomic::AtomicBool,
 }
 
 /// A position, yaw and pitch.
@@ -186,7 +189,8 @@ impl ClientSession {
             held: AtomicU8::new(0),
             synced: Mutex::new(Arc::default()),
             accepted: Mutex::new(None),
-            pending: Mutex::new(None),
+            pending: Mutex::new(VecDeque::new()),
+            load_due: std::sync::atomic::AtomicBool::new(false),
             mannequins: Mutex::new(stand_in::Mannequins::default()),
         }
     }
@@ -196,8 +200,10 @@ impl ClientSession {
     fn tick_ended(&self, pinned: i32) {
         if self.version.at_most(ServerVersion::V1_21_1) {
             let _ = pinned;
-            *self.pending.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some((packet_ids::play::serverbound::CLIENT_TICK_END, Vec::new()));
+            self.pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push_back((packet_ids::play::serverbound::CLIENT_TICK_END, Vec::new()));
         }
     }
 
@@ -206,7 +212,7 @@ impl ClientSession {
         self.pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .take()
+            .pop_front()
     }
     fn hold(&self, slot: i32) {
         if let Ok(slot @ 0..=8) = u8::try_from(slot) {
@@ -299,6 +305,12 @@ impl ClientSession {
             }
             (State::Play, sb::ACCEPT_TELEPORTATION) => {
                 let accept = self.accept_teleport(&payload)?;
+                if self.load_due.swap(false, Ordering::AcqRel) {
+                    self.pending
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push_back((sb::PLAYER_LOADED, Vec::new()));
+                }
                 *self.accepted.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(*self.place.lock().unwrap_or_else(|e| e.into_inner()));
                 accept
@@ -456,6 +468,12 @@ impl ClientSession {
     }
 
     fn clientbound_in(&self, state: State, body: &[u8]) -> Result<Option<Vec<u8>>> {
+        if state == State::Play && self.version.at_most(ServerVersion::V1_21_3) {
+            use packet_ids::play::clientbound as cb;
+            if matches!(Reader::new(body).varint(), Ok(cb::LOGIN | cb::RESPAWN)) {
+                self.load_due.store(true, Ordering::Release);
+            }
+        }
         let mut r = Reader::new(body);
         let id = r.varint()?;
         let payload = r.rest();
@@ -1668,6 +1686,45 @@ mod tests {
         // 1.21.9 knows mannequins
         let s = session(ServerVersion::V1_21_10);
         assert_eq!(s.clientbound_all(&add.encode()).unwrap().len(), 1);
+    }
+
+    /// A client before 1.21.4 never says it loaded the level: once it takes the first teleport after its
+    /// login (and after each respawn) the server is told so, after the accept itself.
+    #[test]
+    fn a_client_before_1_21_4_is_loaded_after_its_first_teleport() {
+        use packet_ids::play::{clientbound as cb, serverbound as sb};
+        for (v, expect) in [
+            (ServerVersion::V1_21_3, true),
+            (ServerVersion::V1_20_6, true),
+            (ServerVersion::V1_21_4, false),
+        ] {
+            let s = ClientSession::new(v);
+            s.reading.store(to_u8(State::Play), Ordering::Release);
+            s.writing.store(to_u8(State::Play), Ordering::Release);
+            let mut login = Writer::new();
+            login.varint(cb::LOGIN);
+            let _ = s.clientbound_in(State::Play, &login.data);
+            let accept_id = (0..80)
+                .find(|&o| v.serverbound_id_up(State::Play, o) == Some(sb::ACCEPT_TELEPORTATION))
+                .unwrap();
+            let mut w = Writer::new();
+            w.varint(1);
+            let _ = s.serverbound(accept_id, w.data.clone());
+            let mut queued = Vec::new();
+            while let Some((id, _)) = s.next_serverbound() {
+                queued.push(id);
+            }
+            assert_eq!(
+                queued.contains(&sb::PLAYER_LOADED),
+                expect,
+                "{v:?}: {queued:?}"
+            );
+            // once only
+            let _ = s.serverbound(accept_id, w.data);
+            assert!(
+                !std::iter::from_fn(|| s.next_serverbound()).any(|(id, _)| id == sb::PLAYER_LOADED)
+            );
+        }
     }
 
     #[test]
