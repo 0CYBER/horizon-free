@@ -34,7 +34,9 @@ pub(super) fn clientbound(state: State, id: i32, payload: &[u8]) -> Result<Out> 
     if (state, id) != (State::Play, cb::SET_EQUIPMENT) {
         return Ok(Out::Untouched);
     }
-    let mut e = play::SetEquipment::read(&mut Reader::new(payload))?;
+    // The stacks are already in the client's item and component ids: read and written back in those (reading
+    // them as the pinned ones misreads a component, an NBT error for every 1.21.6-and-older client).
+    let mut e = super::read_in_client_ids(|| play::SetEquipment::read(&mut Reader::new(payload)))?;
     let before = e.slots.len();
     e.slots.retain(|(slot, _)| *slot != SADDLE);
     if e.slots.len() == before {
@@ -43,9 +45,9 @@ pub(super) fn clientbound(state: State, id: i32, payload: &[u8]) -> Result<Out> 
     if e.slots.is_empty() {
         return Ok(Out::Dropped);
     }
-    let mut w = Writer::new();
-    play::SetEquipment::write(&e, &mut w);
-    Ok(Out::Rewritten(w.data))
+    Ok(Out::Rewritten(super::write_in_client_ids(|w| {
+        play::SetEquipment::write(&e, w)
+    })))
 }
 
 /// The pinned serverbound packet `id` as the 1.21.6 client sent it (`payload`) in 26.3's layout, for the server.
