@@ -1129,17 +1129,7 @@ impl Game<'_> {
         self.refresh_gear_knockback_resistance();
         self.tick_leads();
         // Vanilla's spawning and raids run before ChunkMap.tick.
-        let from = self.lan_synced_from();
-        horizon_client::spans::time("spawn_natural", || self.spawn_natural());
-        // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
-        if self.ui.rules.bool("spawn_mobs") {
-            self.tick_wandering_trader();
-            self.tick_patrol_spawner();
-            self.tick_cat_spawner();
-            self.tick_village_siege();
-        }
-        self.tick_raids();
-        self.lan_synced_since(from);
+        self.tick_spawners();
         let ticked =
             horizon_client::spans::time("tick_creature_entities", || self.tick_creature_entities());
         self.dismount_underwater_mob_riders();
@@ -2647,20 +2637,9 @@ impl Game<'_> {
                     x,
                     z,
                     source,
+                    apply_blocking,
                 } => match target {
-                    // A player's source names no melee attacker, as its damage's doesn't.
-                    Who::Player => {
-                        let _attacker = self.knockback_scope(match source.attacker {
-                            Some(Who::Mob(id)) => id as i32,
-                            _ => 0,
-                        });
-                        let source = HurtSource {
-                            damage_type: source_damage_type(source),
-                            causing: 0,
-                            direct: 0,
-                        };
-                        self.knock_back_player(power, x, z, source);
-                    }
+                    Who::Player => self.mob_pushes_player(power, x, z, source, apply_blocking),
                     Who::Mob(id) => {
                         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                             m.knockback(power, x, z, &source);
