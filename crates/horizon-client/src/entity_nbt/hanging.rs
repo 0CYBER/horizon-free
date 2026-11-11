@@ -107,9 +107,9 @@ pub fn item_frame_from_nbt(tag: &Tag, id: u32) -> Option<ItemFrame> {
         random: crate::random_source::entity(),
     })
 }
-/// `OnGround` and `fall_distance` as `Entity.load` read them from `raw`, for an
-/// entity whose tick never moves it nor runs `baseTick` (an end crystal), so
-/// `Entity.saveWithoutId` writes them back unchanged.
+/// `OnGround` and `fall_distance` as `Entity.load` reads them from `raw`
+/// (`getBooleanOr`, `getDoubleOr`): an end crystal keeps them, as its tick
+/// never moves it nor runs `baseTick`.
 pub fn loaded_ground_and_fall(raw: Option<&Tag>) -> (bool, f64) {
     raw.map_or((false, 0.0), |raw| {
         let fall = float(raw.get("fall_distance")).unwrap_or(0.0);

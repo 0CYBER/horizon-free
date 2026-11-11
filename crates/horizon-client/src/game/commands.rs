@@ -2669,14 +2669,9 @@ impl Game<'_> {
                     self.next_entity += 1;
                     let at = Vec3::new(pos[0], pos[1], pos[2]);
                     let drawn = self.world.random.next_int_bound(100_000).unwrap_or(0);
-                    self.crystals.push(super::dragon::Crystal {
-                        id: self.next_entity,
-                        position: at,
-                        show_bottom: true,
-                        time: super::dragon::Crystal::start_time(at, drawn, self.clock.still()),
-                        beam: None,
-                        invulnerable: false,
-                    });
+                    let time = super::dragon::Crystal::start_time(at, drawn, self.clock.still());
+                    let crystal = super::dragon::Crystal::new(self.next_entity, at, true, time);
+                    self.crystals.push(crystal);
                     // tryAddFreshEntityWithPassengers refused: ERROR_DUPLICATE_UUID.
                     if !self.native_joins_flush(false, self.next_entity) {
                         return Err(err("commands.summon.failed.uuid", &[]));
