@@ -7585,11 +7585,11 @@ def dispensed_item_escape():
 
 def crafter_triggered_int():
     """#13851: `CrafterBlockEntity` keeps `triggered` as the int it read (`containerData` slot 9) and writes it back;
-    `isTriggered` is only `== 1`."""
+    `isTriggered` is only `== 1`. `getIntOr` reads a double as `DoubleTag.intValue`: floored, then saturated."""
     x0, y0, z0 = 4096 - 224, 260, 3584
     ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
            cmd('/tick freeze', False)]
-    for n, value in enumerate(('-1', '0', '1', '5'), 1):
+    for n, value in enumerate(('-1', '0', '1', '5', '-0.5d', '1.5d', '4294967297d'), 1):
         x = x0 + 2 * n
         ops += [cmd(f'/setblock {x} {y0} {z0 + 8} crafter{{triggered:{value}}}', expect_result=1),
                 cmd(f'/data get block {x} {y0} {z0 + 8} triggered')]

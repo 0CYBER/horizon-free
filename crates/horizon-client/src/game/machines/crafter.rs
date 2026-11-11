@@ -241,10 +241,8 @@ impl Game<'_> {
         let Some(c) = self.container.and_then(|k| self.crafter_at(k)) else {
             return;
         };
-        let powered = self
-            .container
-            .map(|k| self.world.block(k.0, k.1, k.2))
-            .is_some_and(|state| self.containers().prop(state, "triggered") == Some("true"));
+        // CrafterScreen draws the arrow from `menu.isPowered()`: data slot 9, the int, is 1.
+        let powered = c.is_triggered();
         let draws =
             horizon_client::screen_layout::crafter(&horizon_client::screen_layout::CrafterView {
                 width: 176,
