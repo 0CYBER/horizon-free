@@ -449,6 +449,10 @@ pub struct Title {
     optimize: Option<WorldUpgrader>,
     /// The Erase Cached Data box as last drawn: x, y, width, height.
     erase_check: Cell<[f32; 4]>,
+    /// Alt is held (`Minecraft.hasAltDown`), set by the game before an input
+    /// that presses a button: the Create World type button then cycles the
+    /// extended list.
+    pub alt_down: bool,
     /// The folder to open next, once that backup has finished.
     open_request: Option<String>,
     /// A Realm's checked address, once the Realms screen's join came back.
@@ -839,6 +843,7 @@ impl Title {
             restore_after_backup: false,
             optimize: None,
             erase_check: Cell::new([0.0; 4]),
+            alt_down: false,
             open_request: None,
             connect_request: None,
             toast: None,
@@ -1259,7 +1264,7 @@ impl Title {
                     && cursor.1 < b.y + 20.0
             }) {
                 let step = if delta > 0.0 { -1 } else { 1 };
-                options.cycle(b.id, creative, step);
+                options.cycle(b.id, creative, step, self.alt_down);
                 return true;
             }
         }
@@ -4080,7 +4085,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 },
                 Some(id),
             ) if !matches!(id, 21 | 22 | 30 | 31) => {
-                options.press(id, creative);
+                options.press(id, creative, self.alt_down);
                 Action::None
             }
             // CreateWorldScreen.openExperimentsScreen: the feature packs the

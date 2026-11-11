@@ -10522,6 +10522,7 @@ impl Game<'_> {
                     }
                     let stick_scroll = self.pad_stick_scroll();
                     let step_scroll = self.pad_step_scroll();
+                    let alt = self.has_alt_down();
                     if self.title_input_active()
                         && self.screen != Screen::Win
                         && let Some(title) = &mut self.title
@@ -10533,6 +10534,7 @@ impl Game<'_> {
                             .unwrap_or_default();
                         let batch = HudBatch::new([size.width, size.height]);
                         let gui = (batch.width, batch.height);
+                        title.alt_down = alt;
                         if step_scroll {
                             title.step_scroll(d, self.cursor, gui);
                         } else if stick_scroll {
@@ -10677,7 +10679,9 @@ impl Game<'_> {
                     let b = HudBatch::new(size);
                     let atlas = &self.gui.atlas;
                     let shift = self.has_shift_down();
+                    let alt = self.has_alt_down();
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
+                        t.alt_down = alt;
                         let clicked = t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
                         t.press_field(atlas, self.cursor, (b.width, b.height), shift);
                         let rules = t.press_rules(atlas, self.cursor, (b.width, b.height));
@@ -11110,10 +11114,12 @@ impl Game<'_> {
                                         && (t.list_focused() || t.focused_button.is_some())
                                 }) =>
                             {
-                                let (action, sound) = self
-                                    .title
-                                    .as_mut()
-                                    .map_or((Action::None, false), |t| t.confirm_key_size((w, h)));
+                                let alt = self.has_alt_down();
+                                let (action, sound) =
+                                    self.title.as_mut().map_or((Action::None, false), |t| {
+                                        t.alt_down = alt;
+                                        t.confirm_key_size((w, h))
+                                    });
                                 self.save_title_options();
                                 if sound {
                                     self.audio.play_button_click();

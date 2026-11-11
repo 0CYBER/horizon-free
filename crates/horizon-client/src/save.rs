@@ -3644,8 +3644,9 @@ pub enum WorldPreset {
     Amplified,
     SingleBiomeSurface,
     /// `minecraft:debug_all_block_states`: a grid of every block state
-    /// (`DebugLevelSource`). The create screen does not offer it; a data
-    /// pack, `level-type` or a saved world names it.
+    /// (`DebugLevelSource`). The create screen offers it only while Alt is
+    /// held (`WorldPresetTags.EXTENDED`); a data pack, `level-type` or a
+    /// saved world names it too.
     Debug,
 }
 impl WorldPreset {
@@ -3657,6 +3658,24 @@ impl WorldPreset {
         Self::Amplified,
         Self::SingleBiomeSurface,
     ];
+    /// `WorldPresetTags.EXTENDED`: the list the button cycles while Alt is held.
+    pub const EXTENDED: [Self; 6] = [
+        Self::Normal,
+        Self::Flat,
+        Self::LargeBiomes,
+        Self::Amplified,
+        Self::SingleBiomeSurface,
+        Self::Debug,
+    ];
+    /// `CycleButton.cycleValue`: the preset `step` places on in the Alt
+    /// list (`EXTENDED`) or the normal one (`ALL`). The button's position
+    /// is the preset's place in the extended list, which the normal list
+    /// then wraps (`Mth.positiveModulo`).
+    pub fn step(self, step: i32, alt: bool) -> Self {
+        let index = Self::EXTENDED.iter().position(|p| *p == self).unwrap_or(0);
+        let list: &[Self] = if alt { &Self::EXTENDED } else { &Self::ALL };
+        list[(index as i32 + step).rem_euclid(list.len() as i32) as usize]
+    }
     /// The preset's registry id (`minecraft:normal`).
     pub const fn id(self) -> &'static str {
         match self {
