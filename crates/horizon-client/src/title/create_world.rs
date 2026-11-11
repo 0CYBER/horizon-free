@@ -46,6 +46,42 @@ pub struct WorldOptions {
     /// The folder of packs for the new world (vanilla's `mcworld-`
     /// temporary folder), made when Data Packs first opens.
     pub pack_dir: Option<std::path::PathBuf>,
+    /// Alt is held (`CycleButton.DEFAULT_ALT_LIST_SELECTOR`): the world type
+    /// button cycles the extended list, with Debug Mode.
+    pub alt_down: bool,
+}
+impl crate::save::WorldPreset {
+    /// `WorldPresetTags.EXTENDED`: the list the button cycles while Alt is held.
+    pub const EXTENDED: [Self; 6] = [
+        Self::Normal,
+        Self::Flat,
+        Self::LargeBiomes,
+        Self::Amplified,
+        Self::SingleBiomeSurface,
+        Self::Debug,
+    ];
+    /// `CycleButton.cycleValue`: the preset `step` places on in the Alt
+    /// list (`EXTENDED`) or the normal one (`ALL`). The button's position
+    /// is the preset's place in the extended list, which the normal list
+    /// then wraps (`Mth.positiveModulo`).
+    pub fn step(self, step: i32, alt: bool) -> Self {
+        let index = Self::EXTENDED.iter().position(|p| *p == self).unwrap_or(0);
+        let list: &[Self] = if alt { &Self::EXTENDED } else { &Self::ALL };
+        list[(index as i32 + step).rem_euclid(list.len() as i32) as usize]
+    }
+}
+impl super::Title {
+    /// The live Alt state (`Minecraft.hasAltDown`) for an open Create New World screen
+    /// and the flat and buffet screens it returns from.
+    pub fn set_alt_down(&mut self, alt: bool) {
+        use super::Mode;
+        if let Mode::Create { options, .. }
+        | Mode::CreateFlat { options, .. }
+        | Mode::CreateBuffet { options, .. } = &mut self.mode
+        {
+            options.alt_down = alt;
+        }
+    }
 }
 impl Default for WorldOptions {
     fn default() -> Self {
@@ -62,6 +98,7 @@ impl Default for WorldOptions {
             rules: crate::gamerules::GameRules::default(),
             data_packs: vec!["vanilla".into()],
             pack_dir: None,
+            alt_down: false,
         }
     }
 }
@@ -202,12 +239,11 @@ impl WorldOptions {
             .map(super::flat::FlatSettings::to_tag)
     }
     /// A press on one of the open tab's cycle buttons or switches.
-    pub(super) fn press(&mut self, id: u8, creative: &mut bool, alt: bool) {
-        self.cycle(id, creative, 1, alt);
+    pub(super) fn press(&mut self, id: u8, creative: &mut bool) {
+        self.cycle(id, creative, 1);
     }
     /// A step on one of the open tab's cycle buttons or switches (mouse wheel or keyboard).
-    /// `alt` is `CycleButton.DEFAULT_ALT_LIST_SELECTOR` (Alt held).
-    pub(super) fn cycle(&mut self, id: u8, creative: &mut bool, step: i32, alt: bool) {
+    pub(super) fn cycle(&mut self, id: u8, creative: &mut bool, step: i32) {
         match id {
             // Survival, Hardcore, Creative.
             20 => {
@@ -223,7 +259,7 @@ impl WorldOptions {
             }
             24 => self.commands = Some(!self.commands(*creative)),
             25 => {
-                self.world_type = self.world_type.step(step, alt);
+                self.world_type = self.world_type.step(step, self.alt_down);
                 if self.world_type == crate::save::WorldPreset::Flat {
                     // setWorldType starts the generator from the flat preset.
                     self.flat_settings = Some(super::flat::FlatSettings::default());
