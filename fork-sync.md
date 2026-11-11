@@ -20,13 +20,23 @@ again.
    `launcher.yml` builds and releases the launcher for Windows (x64 + ARM64), Linux (x86_64) and
    macOS (arm64 + x64) on every push to `main`, and skips a version whose release already exists.
    The ARM64 Windows job is optional: if its runner fails, the other platforms still publish.
+   macOS: `macos-26-intel` builds both assets, the arm64 one cross-compiled, because GitHub's
+   Apple Silicon runners are regularly unavailable for hours. That is why
+   `packaging/macos/package.sh` only starts the app when the host has the binary's processor
+   (`uname -m` against `lipo -archs`), and the workflow's "The version is the release's" step
+   checks a cross-built binary's arch and embedded version string instead of running it.
+   The Linux step installs GPUI's libraries from the first apt mirror that resolves
+   (`azure.archive.ubuntu.com` → `archive.ubuntu.com` → `mirrors.edge.kernel.org`), skipping
+   hosts whose name does not resolve: the runner's own mirror fails now and then and apt then
+   sits on it for minutes.
 7. `cargo fmt`, `cargo check`, `cargo test --lib --bins` in `launcher/`.
 8. Commit, fast-forward `main`, force-push, and let the workflow publish.
-9. If a build fails with "The job was not acquired by Runner of type hosted even after multiple
-   attempts" (GitHub's macOS capacity), rerun just that job; the version is not released yet, so
-   nothing gets published twice:
+9. If a job is cancelled while queued ("The job was not acquired by Runner of type hosted even
+   after multiple attempts", GitHub's macOS capacity), a queued job cannot be rerun on its own:
+   rerun the whole run, which is safe while the version is unreleased:
    ```sh
-   gh run rerun <run-id> -R 0CYBER/horizon-free --failed
+   gh run cancel <run-id> -R 0CYBER/horizon-free
+   gh run rerun <run-id> -R 0CYBER/horizon-free
    ```
 
 ## Launcher patches the fork keeps

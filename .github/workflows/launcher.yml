@@ -96,8 +96,10 @@ jobs:
             asset: horizon-launcher-linux-x86_64.tar.gz
             binary: horizon-launcher
           - name: macos-arm64
-            # arm64 hosted runners: macos-latest is Apple Silicon (macOS 26 now).
-            os: macos-latest
+            # Cross-built on the Intel host: GitHub's Apple Silicon runners are regularly
+            # unavailable for hours ("not acquired by Runner of type hosted"), which held every
+            # release. The arm64 binary is the same; only the `--version` run needs the host arch.
+            os: macos-26-intel
             target: aarch64-apple-darwin
             asset: horizon-launcher-macos-arm64.zip
             binary: horizon-launcher
@@ -192,9 +194,23 @@ jobs:
         run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - name: The version is the release's
         run: |
-          out=$("$BIN/${{ matrix.binary }}" --version)
-          echo "$out"
-          [[ "$out" == "horizon-launcher $VERSION" ]] || { echo "::error::expected horizon-launcher $VERSION"; exit 1; }
+          bin="$BIN/${{ matrix.binary }}"
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          target="${{ matrix.target }}"
+          if [[ -z "$target" || "$target" == "$host" ]]; then
+            out=$("$bin" --version)
+            echo "$out"
+            [[ "$out" == "horizon-launcher $VERSION" ]] || { echo "::error::expected horizon-launcher $VERSION"; exit 1; }
+          else
+            # Cross-built on this host (macos-arm64): it can't run here. Check the arch the asset
+            # name promises, and that the version went into it (VERSION is an option_env! string).
+            arch=${target%%-*}
+            [[ "$arch" == "aarch64" ]] && arch=arm64
+            file "$bin"
+            file "$bin" | grep -q "$arch" || { echo "::error::$bin is not $arch"; exit 1; }
+            grep -aq "$VERSION" "$bin" || { echo "::error::$bin does not carry version $VERSION"; exit 1; }
+            echo "::notice::cross-built $target here: not run, arch and version string checked"
+          fi
       - name: Package
         env:
           MAC_ARCH: ${{ matrix.mac_arch }}
