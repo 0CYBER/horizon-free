@@ -688,7 +688,12 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
             let (damage, extra) = decode_components(tag.get("components"));
             Some(ItemStack {
                 item: Arc::from(id.as_str()),
-                count: tag.get("count").and_then(int).unwrap_or(1).max(1) as u32,
+                count: tag
+                    .get("count")
+                    .and_then(int)
+                    .unwrap_or(1)
+                    .max(1)
+                    .min(65535i64) as u32,
                 damage,
                 extra,
             })
