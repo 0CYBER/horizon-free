@@ -2584,6 +2584,9 @@ pub struct Seen {
     pub bed: Option<[i32; 3]>,
     pub yaw: f32,
     pub velocity: Vec3,
+    /// `Entity.isInvisible`: the flag `updateInvisibilityStatus` sets from the
+    /// effect, and what `getVisibilityPercent` reads.
+    pub invisible: bool,
     /// `Entity.getKnownSpeed`: what it moved in its last tick.
     pub known_speed: Vec3,
     /// Who holds this mob's lead.
@@ -2830,6 +2833,7 @@ impl Mob {
             bed: villager.then_some(m.extra.bed).flatten(),
             yaw: m.yaw,
             velocity: m.velocity,
+            invisible: m.invisible,
             known_speed: m.position.subtract(m.previous),
             leash: m.extra.leash,
             caravan: caravan::head_of(m),
@@ -3155,6 +3159,22 @@ pub struct PlayerView {
     /// The boat or nautilus the player rides and steers
     /// (`getControllingPassenger`).
     pub vehicle: Option<Vehicle>,
+}
+impl Seen {
+    /// `LivingEntity.getVisibilityPercent` for a mob target: 1, or
+    /// ×0.7×armor cover (at least 0.1) while `isInvisible`. A mob does not
+    /// sneak (`isShiftKeyDown` is a player's) and its `getArmorCoverPercentage`
+    /// is 0, which the 0.1 floor turns into 0.07 - the sheep the evoker looks
+    /// for has no armour, and no worn `mob_visibility` either. The effect
+    /// counts beside the flag: vanilla's `updateInvisibilityStatus` copies it
+    /// into the flag every tick, and Horizon does not model that sync.
+    pub fn visibility_percent(&self) -> f64 {
+        if self.invisible || self.has_effect("invisibility") {
+            0.7 * 0.1
+        } else {
+            1.0
+        }
+    }
 }
 /// What a player rides, for the mobs that follow it (`FollowPlayerRiddenEntityGoal`).
 #[derive(Clone, Debug)]

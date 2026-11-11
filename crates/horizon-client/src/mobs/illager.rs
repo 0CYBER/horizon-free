@@ -251,12 +251,10 @@ impl Goal for UseSpell {
                             && (s.position.z - p.z).abs() <= 16.0
                             && {
                                 // `TargetingConditions.forNonCombat().range(16)`:
-                                // visibility scales the range, with a floor of 2.
-                                let range = if s.has_effect("invisibility") {
-                                    2.0
-                                } else {
-                                    16.0
-                                };
+                                // `getVisibilityPercent` scales the range, with a
+                                // floor of 2. The sheep's `isInvisible` is the
+                                // flag (or the effect, which sets it).
+                                let range = (16.0 * s.visibility_percent()).max(2.0);
                                 s.position.distance_squared(p) <= range * range
                             }
                     })
