@@ -686,23 +686,15 @@ impl Game<'_> {
         if fall == 0.0 || length < 1.0 {
             return fall;
         }
-        let to = from.add_vector(moved.normalize().scale(moved.length().min(8.0)));
         let reset = &self.res.motion().fall_reset;
-        let fluids = &self.res.motion().fluids;
-        let hit = horizon_core::geometry::traverse_blocks(from, to, 1_000_000, |p| {
-            // A tagged block clips as a full block, not its collider.
-            let name = &self.res.facts().get(self.world.block(p.x, p.y, p.z)).name;
-            if reset.contains(&**name) && VoxelShape::block().clip(from, to, p).is_some() {
-                return Some(());
-            }
-            // The water's shape, through the shared fluid shape cache.
-            horizon_client::entities::water_clip(&self.world, fluids, from, to, p).then_some(())
-        });
-        if matches!(hit, Ok(Some(()))) {
-            0.0
-        } else {
-            fall
-        }
+        let hit = horizon_client::entities::fall_reset_hit(
+            &self.world,
+            &self.res.motion().fluids,
+            |p| reset.contains(&*self.res.facts().get(self.world.block(p.x, p.y, p.z)).name),
+            from,
+            moved,
+        );
+        if hit { 0.0 } else { fall }
     }
     /// `AbstractBoat.checkFallDamage` after a move that went `moved_y` (with
     /// `b` already where it landed): on the ground the fall resets; a move
@@ -1474,7 +1466,6 @@ impl Game<'_> {
             Vec3::new(b.position.x, top, b.position.z)
         }
     }
-    /// `BoatItem.use`: aim at a block or the water surface.
     /// `Entity.setYRot` on a boat just made (its old rotation moves with it).
     pub(super) fn set_boat_yaw(&mut self, id: u32, yaw: f32) {
         if let Some(b) = self.boats.iter_mut().find(|b| b.id == id) {
@@ -1482,6 +1473,7 @@ impl Game<'_> {
             b.previous_yaw = yaw;
         }
     }
+    /// `BoatItem.use`: aim at a block or the water surface.
     pub(super) fn place_boat(&mut self, stack: &ItemStack) -> bool {
         let Some(boat) = self.boat_to_place(stack) else {
             return false;
