@@ -470,6 +470,7 @@ mod trident;
 mod tutorial;
 mod tweaks;
 mod ui_control;
+mod upload_pace;
 mod use_hand;
 mod using_item;
 mod vault;
@@ -619,13 +620,6 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
-/// The time a frame spends uploading chunk meshes when the player set no
-/// Chunk Updates or Upload Budget: a burst past it waits for the next frames.
-const AUTO_UPLOAD_TIME: Duration = Duration::from_millis(2);
-/// `AUTO_UPLOAD_TIME` while the view's terrain is still arriving (a world's
-/// open, a teleport): the meshes waiting then are the view itself, not edits
-/// to it, so a frame gives them more of its time to fill the view sooner.
-const AUTO_UPLOAD_TIME_ARRIVING: Duration = Duration::from_millis(6);
 /// A frame's finished meshes up to this many upload at once, unqueued.
 const AUTO_UPLOADS_AT_ONCE: usize = 8;
 /// The most changed columns far terrain waits on behind a mod's hold (`Game::lod_held`): past
@@ -2842,6 +2836,7 @@ struct Game<'a> {
     native_mod_screen: Option<String>,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
+    upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
     /// Whether the renderer's section-occlusion graph is active for this view.
@@ -11202,6 +11197,7 @@ impl Game<'_> {
                     let between = now.saturating_duration_since(self.frame_end);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
+                    self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
                     // other screens use the same keys for their own navigation.
@@ -11957,6 +11953,7 @@ impl<'a> Game<'a> {
             async_particle_culler: RefCell::new(Default::default()),
             pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
+            upload_pace: Default::default(),
             frame_graph: Default::default(),
             extras: Default::default(),
             pvp: Default::default(),
