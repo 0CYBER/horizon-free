@@ -367,6 +367,7 @@ impl Game<'_> {
                     a.set_item(ammo);
                     a.set_owner(Some(Who::Player));
                     a.fired_from_weapon = Some(weapon.clone());
+                    a.crossbow_hit_sound = true;
                     a.pierce = pierce;
                 }
                 // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).

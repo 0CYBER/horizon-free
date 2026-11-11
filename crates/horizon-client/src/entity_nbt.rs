@@ -3059,6 +3059,8 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     vec![orb]
 }
 
+const CROSSBOW_HIT: &str = "minecraft:item.crossbow.hit";
+
 /// `Projectile` + `AbstractArrow.addAdditionalSaveData` of a live arrow;
 /// `in_block` is its `inBlockState`, `raw` the compound it was loaded with.
 pub fn arrow_to_nbt(
@@ -3113,6 +3115,13 @@ pub fn arrow_to_nbt(
     if let Tag::Compound(map) = &mut tag {
         map.entry("SoundEvent".into())
             .or_insert_with(|| string("minecraft:entity.arrow.hit"));
+        // `soundEvent`: the crossbow's until the first block hit.
+        if a.crossbow_hit_sound {
+            map.insert("SoundEvent".into(), string(CROSSBOW_HIT));
+        } else if matches!(map.get(&"SoundEvent".into()), Some(Tag::String(s)) if s.to_string_lossy() == CROSSBOW_HIT)
+        {
+            map.insert("SoundEvent".into(), string("minecraft:entity.arrow.hit"));
+        }
         // Projectile: LeftOwner only when set; Owner as the UUID.
         map.remove(&"LeftOwner".into());
         map.remove(&"inBlockState".into());
@@ -3204,6 +3213,7 @@ pub fn arrow_from_nbt(
     }
     a.pickup_item = item;
     a.fired_from_weapon = tag.get("weapon").and_then(item_from_nbt);
+    a.crossbow_hit_sound = matches!(tag.get("SoundEvent"), Some(Tag::String(s)) if s.to_string_lossy() == CROSSBOW_HIT);
     p.stuck = a.in_ground;
     Some((p, tag.get("inBlockState").cloned()))
 }
