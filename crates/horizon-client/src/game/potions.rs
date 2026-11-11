@@ -1576,6 +1576,7 @@ impl Game<'_> {
         self.breath_clouds.push(Breath {
             id,
             at,
+            motion: [0.0; 3],
             radius: 2.5,
             age: 0,
             duration: 300,
@@ -1981,6 +1982,7 @@ impl Game<'_> {
                 self.breath_clouds.push(Breath {
                     id,
                     at: [at.x, at.y, at.z],
+                    motion: [0.0; 3],
                     radius: 3.0,
                     age: 0,
                     duration: 600,
@@ -2164,6 +2166,7 @@ mod tests {
         let cloud = Breath {
             id: 7,
             at: [1.5, 64.0, -2.5],
+            motion: [0.6, 0.0, 0.0],
             radius: 3.5,
             age: 12,
             duration: 400,
@@ -2192,6 +2195,7 @@ mod tests {
         let tag = potion_cloud_to_nbt(&cloud, [1, 2, 3, 4], None);
         let (at, back) = potion_cloud_from_nbt(&tag).expect("the cloud reads back");
         assert_eq!(at, Vec3::new(1.5, 64.0, -2.5), "the position");
+        assert_eq!(back.motion, [0.6, 0.0, 0.0], "the motion");
         assert_eq!((back.age, back.duration), (12, 400));
         assert!((back.radius - 3.5).abs() < 1.0e-6, "{}", back.radius);
         let potion = back.potion.expect("a potion cloud");
@@ -2363,6 +2367,7 @@ mod tests {
         let mut clouds = vec![super::super::dragon::Breath {
             id: 1,
             at: [1.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 5.0,
             age: 0,
             duration: 200,
@@ -2385,6 +2390,7 @@ mod tests {
         let mut non_dragon = vec![super::super::dragon::Breath {
             id: 1,
             at: [0.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 3.0,
             age: 0,
             duration: 600,
@@ -2399,6 +2405,7 @@ mod tests {
         let mut lingering = vec![super::super::dragon::Breath {
             id: 2,
             at: [0.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 3.0,
             age: 0,
             duration: 600,
@@ -2426,6 +2433,7 @@ mod tests {
         let mut last = vec![super::super::dragon::Breath {
             id: 3,
             at: [0.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 5.0,
             age: 219,
             duration: 200,
@@ -2440,6 +2448,7 @@ mod tests {
         let mut expired = vec![super::super::dragon::Breath {
             id: 3,
             at: [0.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 5.0,
             age: 220,
             duration: 200,
@@ -2455,6 +2464,7 @@ mod tests {
         let mut far = vec![super::super::dragon::Breath {
             id: 4,
             at: [10.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 1.0,
             age: 0,
             duration: 200,
@@ -2471,6 +2481,7 @@ mod tests {
         let mut ground_cloud = vec![super::super::dragon::Breath {
             id: 5,
             at: [0.0, 64.0, 0.0],
+            motion: [0.0; 3],
             radius: 1.0,
             age: 0,
             duration: 200,
