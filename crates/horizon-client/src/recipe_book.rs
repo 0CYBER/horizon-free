@@ -635,7 +635,9 @@ impl Book {
             (ns.to_lowercase(), p.to_lowercase())
         };
         let Some((namespace, path)) = query.split_once(':') else {
-            return in_lines(&query) || results.iter().any(|r| id(r).1.contains(&query));
+            // `FullTextSearchTree.searchPlainText`: the plain-text tree only,
+            // not the ids (#15321).
+            return in_lines(&query);
         };
         let (namespace, path) = (namespace.trim(), path.trim());
         results.iter().any(|r| id(r).0.contains(namespace))
@@ -1035,8 +1037,10 @@ pub(crate) fn crafting_station(kind: &str) -> &'static str {
     }
 }
 impl RecipeIndex {
-    #[allow(dead_code)]
-    pub(crate) fn load_from_sources(sources: &[(String, serde_json::Value)]) -> Self {
+    /// The index of the recipe files `sources` (`Recipes::sources`' shape:
+    /// a vanilla recipe by bare name, another as `<ns>:<name>`), numbered as
+    /// a server holding exactly these recipes numbers its displays.
+    pub fn load_from_sources(sources: &[(String, serde_json::Value)]) -> Self {
         Self::from_source_refs(
             sources
                 .iter()
@@ -1784,6 +1788,54 @@ mod tests {
         assert_eq!(index.recipe_of_display(0), Some("parity:a_pick"));
     }
 
+    /// A client sent a server's recipes (`horizon:recipe_content`) numbers
+    /// them over the same set the server does: a world's data pack recipe
+    /// moves every display after it, here `copper_axe` and `fishing_rod`,
+    /// and the client's own files alone would number them one lower, so the
+    /// server's book entries landed on other recipes (Braid's Copper-Reel
+    /// Rod vanished from the book and from recipe viewers).
+    #[test]
+    fn synced_recipes_number_their_displays_as_the_server_does() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-synced-order-{}", std::process::id()));
+        let dir = root.join("data/minecraft/recipe");
+        std::fs::create_dir_all(&dir).unwrap();
+        let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stick"],"result":{"id":"minecraft:stick"}}"#;
+        for name in ["acacia_boat", "copper_axe", "fishing_rod"] {
+            std::fs::write(dir.join(format!("{name}.json")), recipe).unwrap();
+        }
+        let pack: serde_json::Value = serde_json::from_str(recipe).unwrap();
+        let packs = [(
+            "recipe/braid:cauldron_from_copper".to_owned(),
+            vec![recipe.as_bytes().to_vec()],
+        )];
+        let server = RecipeIndex::load(&root, &PackOverlay { files: &packs });
+        let own = crate::crafting::Recipes::sources(&root, &PackOverlay::NONE).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        let client = RecipeIndex::load_from_sources(&own);
+        let mut synced = own;
+        synced.push(("braid:cauldron_from_copper".to_owned(), pack));
+        let synced = RecipeIndex::load_from_sources(&synced);
+        let ids = [
+            "minecraft:acacia_boat",
+            "braid:cauldron_from_copper",
+            "minecraft:copper_axe",
+            "minecraft:fishing_rod",
+        ];
+        assert_eq!(
+            ids.map(|id| server.first_display(id)),
+            [Some(0), Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            ids.map(|id| synced.first_display(id)),
+            ids.map(|id| server.first_display(id))
+        );
+        // The client's own files alone: the pack's recipe is not there, and
+        // the server's 2 is the client's `fishing_rod`.
+        assert_eq!(client.first_display("minecraft:copper_axe"), Some(1));
+        assert_eq!(client.recipe_of_display(2), Some("minecraft:fishing_rod"));
+    }
+
     // ---- a server whose display ids are not this client's (#11705) ----
 
     use horizon_protocol::packets::recipes::RecipeBookAdd;
@@ -2257,10 +2309,12 @@ mod tests {
             &*book.entries[custom_index].result.item,
             "minecraft:blaze_rod"
         );
-        // Searching without namespace prefix matches the item path in Vanilla parity.
+        // `FullTextSearchTree`: plain text searches the tooltip lines only
+        // (#15321); `namespace:path` also searches the result's id.
         let lines = |_: &ItemStack| vec!["Custom Recipe".to_owned()];
-        assert!(book.collection_matches(&[custom_index], "blaze", &lines));
-        assert!(book.collection_matches(&[custom_index], "rod", &lines));
+        assert!(book.collection_matches(&[custom_index], "custom", &lines));
+        assert!(!book.collection_matches(&[custom_index], "blaze", &lines));
+        assert!(!book.collection_matches(&[custom_index], "rod", &lines));
         assert!(book.collection_matches(&[custom_index], "minecraft:blaze", &lines));
         assert!(!book.collection_matches(&[custom_index], "iron", &lines));
     }
