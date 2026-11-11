@@ -12,7 +12,6 @@ use horizon_client::{
     mobs::{Mob, Species, sulfur_cube},
     particles::{ParticleOptions, ParticleType},
     projectiles::{Projectile, ProjectileKind},
-    random_source,
 };
 // Its old home, for mixin code that names it here.
 pub(super) use horizon_client::mod_api::NativeDispensed;
@@ -1193,13 +1192,12 @@ impl Game<'_> {
             return;
         }
         // Projectile.shoot spreads the shot with the projectile's own random.
-        let mut own = random_source::entity();
         match item.as_str() {
             "minecraft:experience_bottle"
             | "minecraft:splash_potion"
             | "minecraft:lingering_potion" => {
                 let mut shot = super::potions::thrown_projectile(one, at, false);
-                shot.shoot(&mut own, dir, power, uncertainty);
+                shot.shoot_own(dir, power, uncertainty);
                 self.add_projectile(shot);
             }
             _ => {
@@ -1246,7 +1244,7 @@ impl Game<'_> {
                     a.set_item(&one);
                     a.pickup = horizon_client::arrows::Pickup::Allowed;
                 }
-                shot.shoot(&mut own, dir, power, uncertainty);
+                shot.shoot_own(dir, power, uncertainty);
                 self.add_projectile(shot);
             }
         }

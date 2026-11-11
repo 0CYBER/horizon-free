@@ -587,14 +587,7 @@ impl Game<'_> {
                 let mut shot =
                     thrown_projectile(one, Vec3::new(eye[0], eye[1] - 0.1, eye[2]), true);
                 shot.shoot_from_rotation(
-                    &mut self.world.random,
-                    self.pitch,
-                    self.yaw,
-                    -20.0,
-                    power,
-                    1.0,
-                    velocity,
-                    on_ground,
+                    self.pitch, self.yaw, -20.0, power, 1.0, velocity, on_ground,
                 );
                 shot.guest = self.lan_acting;
                 self.add_projectile(shot);
@@ -1924,7 +1917,14 @@ impl Game<'_> {
         // Projectile.onHit calls onHitBlock first, then the potion's
         // affectEntitiesAround; both read the stack's `potion_contents`.
         if let Some((cell, face)) = hit {
-            self.potion_hit_block(stack, cell, face);
+            // `AbstractThrownPotion.douseFire` passes `getOwner()` to the
+            // campfire's `douse`, which is where the game event's source is.
+            let who = if owner.player {
+                Some(Who::Player)
+            } else {
+                owner.attacker.map(Who::Mob)
+            };
+            self.potion_hit_block(stack, cell, face, who);
         }
         self.affect_entities_around(stack, at, owner.player);
         let lingering = &*stack.item == "minecraft:lingering_potion";
