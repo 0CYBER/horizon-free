@@ -138,17 +138,48 @@ jobs:
       - name: Linux libraries GPUI links to
         if: runner.os == 'Linux'
         run: |
-          # The runner's mirror sometimes fails to resolve (azure.archive.ubuntu.com); retry
-          # before giving up so one flaky minute doesn't cost the whole release.
-          for attempt in 1 2 3 4 5; do
-            if sudo apt-get update &&
-               sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
-                 libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev patchelf; then
+          # GPUI links these. Most are on the runner already: install only what is missing.
+          packages="libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev
+          libvulkan-dev libasound2-dev libudev-dev patchelf"
+          missing=""
+          for p in $packages; do
+            dpkg -s "$p" > /dev/null 2>&1 || missing="$missing $p"
+          done
+          if [ -z "$missing" ]; then
+            echo "All of them are installed already."
+            exit 0
+          fi
+          echo "Missing:$missing"
+          codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-jammy}")
+          # The runner's own mirror (azure.archive.ubuntu.com) stops resolving now and then, and
+          # apt then waits minutes before failing. Skip mirrors whose name doesn't resolve, and
+          # fall back to the upstream archives, so a bad DNS answer doesn't cost the release.
+          for mirror in http://azure.archive.ubuntu.com/ubuntu \
+                        http://archive.ubuntu.com/ubuntu \
+                        http://mirrors.edge.kernel.org/ubuntu; do
+            host=${mirror#http://}
+            host=${host%%/*}
+            if ! getent hosts "$host" > /dev/null; then
+              echo "::warning::$host does not resolve here; trying the next mirror"
+              continue
+            fi
+            sudo tee /etc/apt/sources.list > /dev/null <<EOF
+          deb $mirror $codename main restricted universe multiverse
+          deb $mirror $codename-updates main restricted universe multiverse
+          deb $mirror $codename-backports main restricted universe multiverse
+          deb $mirror $codename-security main restricted universe multiverse
+          EOF
+            sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+            if sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 \
+                 -o Acquire::ForceIPv4=true update &&
+               sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 \
+                 -o Acquire::ForceIPv4=true install -y --no-install-recommends $packages; then
+              echo "Installed from $mirror"
               exit 0
             fi
-            echo "::warning::apt failed (attempt $attempt); retrying in 20s"
-            sleep 20
+            echo "::warning::$mirror did not answer; trying the next mirror"
           done
+          echo "::error::no apt mirror answered; the packages weren't installed"
           exit 1
       - name: Metal shaders compiled now, or at run time without the Metal toolchain
         if: runner.os == 'macOS'
