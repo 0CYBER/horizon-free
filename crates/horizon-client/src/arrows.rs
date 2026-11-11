@@ -27,6 +27,7 @@ use horizon_world::{
     entity_fluid_tick::{self, EntityFluidTickWorld},
     fluid::{FluidHeightWorld, FluidKind, FluidState, FluidTemplate},
     fluid_flow::{FluidFlowWorld, flow_at},
+    nbt::Tag,
     registry::BlockStateId,
     water_splash::{self, SplashParticle, WaterSplashWorld},
 };
@@ -237,7 +238,36 @@ impl PartialEq for ArrowState {
             && self.synced_fire == other.synced_fire
     }
 }
+const ARROW_HIT: &str = "minecraft:entity.arrow.hit";
+const CROSSBOW_HIT: &str = "minecraft:item.crossbow.hit";
+
 impl ArrowState {
+    /// `AbstractArrow.addAdditionalSaveData`'s `SoundEvent`: the crossbow's
+    /// until the first block hit, else the loaded one (a trident's own) or
+    /// `entity.arrow.hit`.
+    pub fn saved_sound_event(&self, loaded: Option<&Tag>) -> Tag {
+        let loaded = match loaded {
+            Some(Tag::String(s)) => s.to_string_lossy(),
+            _ => ARROW_HIT.into(),
+        };
+        let sound = match (self.crossbow_hit_sound, loaded.as_ref()) {
+            (true, _) => CROSSBOW_HIT,
+            (false, CROSSBOW_HIT) => ARROW_HIT,
+            (false, other) => other,
+        };
+        Tag::String(sound.into())
+    }
+    /// `AbstractArrow.readAdditionalSaveData`'s `weapon` and `SoundEvent`.
+    pub fn load_weapon_and_sound(
+        &mut self,
+        tag: &Tag,
+        item: impl FnOnce(&Tag) -> Option<crate::items::ItemStack>,
+    ) {
+        self.fired_from_weapon = tag.get("weapon").and_then(item);
+        let saved = tag.get("SoundEvent");
+        self.crossbow_hit_sound =
+            matches!(saved, Some(Tag::String(s)) if s.to_string_lossy() == CROSSBOW_HIT);
+    }
     pub fn new(random: LegacyRandom) -> Self {
         Self {
             in_ground: false,
