@@ -2009,16 +2009,18 @@ pub(super) fn frame_body(
     body: &[u8],
     out: &mut Vec<u8>,
 ) -> horizon_protocol::Result<()> {
-    // Renumbered first for a client of an older release; one with no such packet gets nothing.
-    let Some(body) = writer.for_client(body)? else {
-        return Ok(());
-    };
-    let body = &body[..];
-    match writer.threshold {
-        Some(t) if body.len() >= t.max(SHARED_FRAME_MIN) => {
-            writer.frame_into(&SharedFrames::get().contents(body, t)?, out);
+    // Renumbered first for a client of an older release; one with no such packet gets nothing, and one
+    // packet may become several (a mannequin shown to a client through 1.21.8 as a player).
+    for body in writer.for_client(body)? {
+        let body = &body[..];
+        match writer.threshold {
+            Some(t) if body.len() >= t.max(SHARED_FRAME_MIN) => {
+                writer.frame_into(&SharedFrames::get().contents(body, t)?, out);
+            }
+            threshold => {
+                writer.frame_into(&horizon_protocol::frame::contents(body, threshold)?, out)
+            }
         }
-        threshold => writer.frame_into(&horizon_protocol::frame::contents(body, threshold)?, out),
     }
     Ok(())
 }

@@ -2101,7 +2101,6 @@ pub(crate) mod client_layout_v1_21_8 {
 
 /// 1.20.6 to 1.21 (protocol 766 to 767): the mirror of `client_session::step_1_20_6`. Clientbound, from the two
 /// Packets pages:
-/// - `level_particles` sends the particle (a VarInt) first in 1.20.6 and after the count in 1.21.
 /// - `explode`'s sound is a sound event holder in 1.21 (a VarInt, 0 for an inline one, then the location and the
 ///   range); 1.20.6 sends the inline one alone.
 /// - `projectile_power` is one double, the power, in 1.21; 1.20.6 sends the vector.
@@ -2142,10 +2141,6 @@ pub(crate) mod client_layout_v1_20_6 {
         Ok(&tail[..len])
     }
 
-    /// The bytes of `LEVEL_PARTICLES` between the particle and its data in both layouts: the long-distance flag,
-    /// three doubles, four floats and the count.
-    pub(crate) const LEVEL_PARTICLES_HEAD: usize = 1 + 24 + 16 + 4;
-
     /// The clientbound packet `id` a 1.20.6 server sent (`payload` in 1.20.6's layout), in 1.21's layout; `None`
     /// when laid out alike.
     #[cfg(test)]
@@ -2160,25 +2155,11 @@ pub(crate) mod client_layout_v1_20_6 {
             return Ok(None);
         }
         Ok(match id {
-            cb::LEVEL_PARTICLES => Some(level_particles(payload)?),
             cb::EXPLODE => Some(explode(payload)?),
             cb::PROJECTILE_POWER => Some(projectile_power(payload)?),
             cb::MERCHANT_OFFERS => Some(merchant_offers(session, payload)?),
             _ => None,
         })
-    }
-
-    /// level_particles: the particle goes after the count, before its data.
-    #[cfg(test)]
-    fn level_particles(payload: &[u8]) -> Result<Vec<u8>> {
-        let mut r = Reader::new(payload);
-        let particle = r.varint()?;
-        let head = r.bytes(LEVEL_PARTICLES_HEAD)?;
-        let mut w = Writer::new();
-        w.bytes(head);
-        w.varint(particle);
-        w.bytes(r.rest());
-        Ok(w.data)
     }
 
     /// explode: the sound is a holder in 1.21, and an inline one (0) here; the two explosion particles have no

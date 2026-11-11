@@ -674,19 +674,23 @@ impl ConnWriter {
     }
     /// A packet body as this connection's client takes it: renumbered for a client of an older release
     /// ([`Connection::serve_older`]), `None` when it has no such packet; as it is otherwise.
-    pub fn for_client<'a>(&self, body: &'a [u8]) -> Result<Option<std::borrow::Cow<'a, [u8]>>> {
+    pub fn for_client<'a>(&self, body: &'a [u8]) -> Result<Vec<std::borrow::Cow<'a, [u8]>>> {
         match &self.older_client {
-            None => Ok(Some(std::borrow::Cow::Borrowed(body))),
-            Some(client) => Ok(client.clientbound(body)?.map(std::borrow::Cow::Owned)),
+            None => Ok(vec![std::borrow::Cow::Borrowed(body)]),
+            Some(client) => Ok(client
+                .clientbound_all(body)?
+                .into_iter()
+                .map(std::borrow::Cow::Owned)
+                .collect()),
         }
     }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         if self.older_client.is_some() {
-            return match self.for_client(body)? {
-                Some(body) => self.send_contents(&frame::contents(&body, self.threshold)?),
-                None => Ok(()),
-            };
+            for body in self.for_client(body)? {
+                self.send_contents(&frame::contents(&body, self.threshold)?)?;
+            }
+            return Ok(());
         }
         if let Some(a) = self.adapter.clone() {
             if let Some(body) = a.serverbound(body)? {

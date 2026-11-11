@@ -20,6 +20,7 @@ use std::{
     },
 };
 
+mod stand_in;
 mod step_1_20_6;
 mod step_1_21_1;
 mod step_1_21_10;
@@ -42,7 +43,7 @@ use super::{
 };
 use crate::{
     Result, State,
-    buf::{Reader, Writer},
+    buf::{Codec, Reader, Writer},
     entity_data::{ParticleData, Value, serializer},
     ids as packet_ids,
     packets::{configuration, play},
@@ -91,6 +92,8 @@ pub struct ClientSession {
     /// client follows the accept with a `move_player_pos_rot` to the same place, which 26.3's accept
     /// (it carries the place) made redundant, and which counts as the tick's move on the server.
     accepted: Mutex<Option<Place>>,
+    /// The mannequins shown to a client through 1.21.8 as players (stand_in.rs).
+    mannequins: Mutex<stand_in::Mannequins>,
     /// A packet to pass on after the one just translated ([`Self::next_serverbound`]).
     pending: Mutex<Option<(i32, Vec<u8>)>>,
 }
@@ -184,6 +187,7 @@ impl ClientSession {
             synced: Mutex::new(Arc::default()),
             accepted: Mutex::new(None),
             pending: Mutex::new(None),
+            mannequins: Mutex::new(stand_in::Mannequins::default()),
         }
     }
 
@@ -342,6 +346,104 @@ impl ClientSession {
 
     /// A packet body (VarInt id + payload) the server sends, as the client numbers it. `None`: the client
     /// has no such packet, or nothing it could show for what the packet names, so nothing is sent.
+    /// Every packet body the client is sent for the server's `body`, in order: [`Self::clientbound`]'s, and
+    /// for a client through 1.21.8 a mannequin is shown as a player (stand_in.rs), which takes several.
+    pub fn clientbound_all(&self, body: &[u8]) -> Result<Vec<Vec<u8>>> {
+        use packet_ids::play::clientbound as cb;
+        let state = self.writing();
+        if state != State::Play || !self.version.at_most(ServerVersion::V1_21_8) {
+            return Ok(self.clientbound(body)?.into_iter().collect());
+        }
+        let mut r = Reader::new(body);
+        let id = r.varint()?;
+        let payload = r.rest();
+        let mut out = Vec::new();
+        let send = |p: play::Clientbound, out: &mut Vec<Vec<u8>>| -> Result<()> {
+            out.extend(self.clientbound(&p.encode())?);
+            Ok(())
+        };
+        match id {
+            cb::ADD_ENTITY => {
+                let e = play::AddEntity::read(&mut Reader::new(payload))?;
+                if e.kind == stand_in::MANNEQUIN {
+                    self.flush_mannequins(&mut out)?;
+                    let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
+                    m.0.insert(e.id, (e.uuid, Some(e)));
+                    return Ok(out);
+                }
+            }
+            cb::SET_ENTITY_DATA => {
+                let d = play::SetEntityData::read(&mut Reader::new(payload))?;
+                let known = {
+                    let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
+                    m.0.get_mut(&d.id).map(|(_, add)| add.take())
+                };
+                match known {
+                    Some(Some(add)) => {
+                        self.flush_mannequins(&mut out)?;
+                        for p in stand_in::spawn(&add, Some(&d)) {
+                            send(p, &mut out)?;
+                        }
+                        return Ok(out);
+                    }
+                    Some(None) => {
+                        self.flush_mannequins(&mut out)?;
+                        let values = stand_in::kept(&d.values);
+                        send(
+                            play::Clientbound::SetEntityData(play::SetEntityData {
+                                id: d.id,
+                                values,
+                            }),
+                            &mut out,
+                        )?;
+                        return Ok(out);
+                    }
+                    None => {}
+                }
+            }
+            cb::REMOVE_ENTITIES => {
+                let rm = play::RemoveEntities::read(&mut Reader::new(payload))?;
+                let uuids: Vec<u128> = {
+                    let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
+                    rm.ids
+                        .iter()
+                        .filter_map(|id| m.0.remove(id))
+                        // one never shown has no player info to remove
+                        .filter_map(|(uuid, add)| add.is_none().then_some(uuid))
+                        .collect()
+                };
+                self.flush_mannequins(&mut out)?;
+                out.extend(self.clientbound(body)?);
+                if !uuids.is_empty() {
+                    send(
+                        play::Clientbound::PlayerInfoRemove(play::PlayerInfoRemove { uuids }),
+                        &mut out,
+                    )?;
+                }
+                return Ok(out);
+            }
+            _ => {}
+        }
+        self.flush_mannequins(&mut out)?;
+        out.extend(self.clientbound(body)?);
+        Ok(out)
+    }
+
+    /// Mannequins still waiting for their entity data are shown now, without a skin: something else is sent
+    /// first (their equipment, say, needs the entity).
+    fn flush_mannequins(&self, out: &mut Vec<Vec<u8>>) -> Result<()> {
+        let waiting: Vec<play::AddEntity> = {
+            let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
+            m.0.values_mut().filter_map(|(_, add)| add.take()).collect()
+        };
+        for add in waiting {
+            for p in stand_in::spawn(&add, None) {
+                out.extend(self.clientbound(&p.encode())?);
+            }
+        }
+        Ok(())
+    }
+
     pub fn clientbound(&self, body: &[u8]) -> Result<Option<Vec<u8>>> {
         let state = self.writing();
         self.clientbound_in(state, body).map_err(|e| {
@@ -1479,6 +1581,93 @@ mod tests {
             let sent = s.clientbound(&p.encode());
             assert!(matches!(sent, Ok(Some(_))), "{v:?}: {sent:?}");
         }
+    }
+
+    /// A 1.21.8 client has no mannequins: it is shown a player with the mannequin's id, UUID and skin, whose
+    /// player info goes with it. A 1.21.9 client gets the mannequin as it is.
+    #[test]
+    fn a_mannequin_is_a_player_for_a_client_through_1_21_8() {
+        use crate::entity_data::Profile;
+        use crate::packets::login::Property;
+        let add = play::Clientbound::AddEntity(play::AddEntity {
+            id: 7,
+            uuid: 99,
+            kind: stand_in::MANNEQUIN,
+            position: [1.0, 2.0, 3.0],
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 0,
+            head_yaw: 0,
+            data: 0,
+        });
+        let data = play::Clientbound::SetEntityData(play::SetEntityData {
+            id: 7,
+            values: vec![(
+                17,
+                serializer::RESOLVABLE_PROFILE,
+                Value::Profile(Profile {
+                    name: Some("x".into()),
+                    uuid: Some(1),
+                    properties: vec![Property {
+                        name: "textures".into(),
+                        value: "v".into(),
+                        signature: None,
+                    }],
+                    ..Default::default()
+                }),
+            )],
+        });
+        let remove = play::Clientbound::RemoveEntities(play::RemoveEntities { ids: vec![7] });
+        let session = |v| {
+            let s = ClientSession::new(v);
+            s.reading.store(to_u8(State::Play), Ordering::Release);
+            s.writing.store(to_u8(State::Play), Ordering::Release);
+            s
+        };
+        let ids = |v: ServerVersion, bodies: &[Vec<u8>]| -> Vec<i32> {
+            bodies
+                .iter()
+                .map(|b| {
+                    let id = Reader::new(b).varint().unwrap();
+                    (0..200)
+                        .find(|&p| v.clientbound_id_down(State::Play, p) == Some(id))
+                        .unwrap()
+                })
+                .collect()
+        };
+        use packet_ids::play::clientbound as cb;
+        let s = session(ServerVersion::V1_21_8);
+        assert!(
+            s.clientbound_all(&add.encode()).unwrap().is_empty(),
+            "held until its data"
+        );
+        let shown = s.clientbound_all(&data.encode()).unwrap();
+        assert_eq!(
+            ids(ServerVersion::V1_21_8, &shown),
+            [cb::PLAYER_INFO_UPDATE, cb::ADD_ENTITY, cb::SET_ENTITY_DATA]
+        );
+        let gone = s.clientbound_all(&remove.encode()).unwrap();
+        assert_eq!(
+            ids(ServerVersion::V1_21_8, &gone),
+            [cb::REMOVE_ENTITIES, cb::PLAYER_INFO_REMOVE]
+        );
+        // a mannequin with no data before something else: shown without a skin first
+        let s = session(ServerVersion::V1_20_6);
+        assert!(s.clientbound_all(&add.encode()).unwrap().is_empty());
+        let other = play::Clientbound::RemoveEntities(play::RemoveEntities { ids: vec![3] });
+        let out = s.clientbound_all(&other.encode()).unwrap();
+        assert_eq!(
+            ids(ServerVersion::V1_20_6, &out),
+            [
+                cb::PLAYER_INFO_UPDATE,
+                cb::ADD_ENTITY,
+                cb::SET_ENTITY_DATA,
+                cb::REMOVE_ENTITIES
+            ]
+        );
+        // 1.21.9 knows mannequins
+        let s = session(ServerVersion::V1_21_10);
+        assert_eq!(s.clientbound_all(&add.encode()).unwrap().len(), 1);
     }
 
     #[test]
