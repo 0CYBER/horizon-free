@@ -10,7 +10,7 @@
 use crate::{
     Result, State,
     adapter::translate,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     ids as packet_ids,
     packets::play,
 };
@@ -66,6 +66,7 @@ mod tests {
     //! Each packet written here is read back with `translate`'s 1.21.6 reader (the serverbound one, which
     //! takes the 1.21.8 layout the client sends) or the pinned codec for the clientbound one.
     use super::*;
+    use crate::buf::Writer;
     use crate::{
         adapter::{ServerVersion, session::Session},
         item::Stack,

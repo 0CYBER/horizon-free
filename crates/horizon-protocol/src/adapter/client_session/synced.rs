@@ -19,6 +19,7 @@ use crate::{
 
 pub(super) const BIOMES: &str = "minecraft:worldgen/biome";
 pub(super) const DAMAGE_TYPE: &str = "minecraft:damage_type";
+#[cfg(test)]
 pub(super) const ENCHANTMENT: &str = "minecraft:enchantment";
 pub(super) const PAINTING_VARIANT: &str = "minecraft:painting_variant";
 

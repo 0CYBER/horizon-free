@@ -2,6 +2,7 @@
 //! - level_particles: 1.21.4 added `always_show` after `override_limiter`; it goes.
 //! - player_info_update: 1.21.4 added UPDATE_HAT (bit 7, a bool last in each entry); it goes, UPDATE_LIST_ORDER
 //!   (bit 6, 1.21.2's) stays.
+//!
 //! (Checked against the 26.3 jar's ClientboundPlayerInfoUpdatePacket.Action order and both releases' layouts.)
 use super::step_1_21_1;
 use crate::{Result, State, ids as packet_ids};
