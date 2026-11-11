@@ -191,8 +191,9 @@ pub(super) struct Crystal {
     pub beam: Option<[i32; 3]>,
     /// `setPermanentlyInvulnerable` (respawned spike crystals).
     pub invulnerable: bool,
-    /// `onGround` and `fallDistance`: a crystal never moves, so they stay as
-    /// loaded until a cobweb or powder snow resets the fall (`crystal.rs`).
+    /// `onGround` and `fallDistance`: a crystal never moves itself, so they stay
+    /// as loaded until `/tp` grounds it or a cobweb or powder snow resets the
+    /// fall (`crystal.rs`).
     pub fall: (bool, f64),
 }
 impl Crystal {
@@ -3703,7 +3704,7 @@ impl Crystal {
                 _ => None,
             },
             invulnerable: horizon_client::entity_nbt::flag(tag, "Invulnerable"),
-            fall: horizon_client::entity_nbt::loaded_ground_and_fall(Some(tag)),
+            fall: horizon_client::entity_nbt::ground_from_nbt(tag),
         })
     }
 }

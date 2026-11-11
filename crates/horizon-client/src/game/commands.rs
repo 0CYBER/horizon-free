@@ -1866,7 +1866,7 @@ impl Game<'_> {
             }
             Target::Crystal(id) => {
                 if let Some(c) = self.crystals.iter_mut().find(|c| c.id == id) {
-                    c.position = v;
+                    (c.position, c.fall.0) = (v, true); // performTeleport: setOnGround(true)
                 }
             }
             Target::Dragon(id) => {
