@@ -939,7 +939,7 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
 }
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
-    let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
+    let int = |k: &str| tag.get(k).and_then(crate::nbt_path::int_value); // getIntOr
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
     if id.contains(':') && !id.starts_with("minecraft:") {
@@ -1123,7 +1123,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                     }
                 }
             }
-            c.triggered = tag.get("triggered").and_then(crate::nbt_path::int_value).unwrap_or(0);
+            c.triggered = int("triggered").unwrap_or(0);
             c.state_triggered = None;
             c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
         }
