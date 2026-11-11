@@ -1,5 +1,7 @@
 #[path = "hub/tests/effect_meta_tests.rs"]
 mod effect_meta_tests;
+#[path = "hub/far_tests.rs"]
+mod far_tests;
 #[path = "hub/tests/sound_tests.rs"]
 mod sound_tests;
 use super::*;
