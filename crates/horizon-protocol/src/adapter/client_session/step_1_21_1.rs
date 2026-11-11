@@ -66,7 +66,7 @@ pub(super) fn clientbound(state: State, id: i32, payload: &[u8]) -> Result<Optio
         cb::LEVEL_PARTICLES => particles(payload)?,
         cb::TELEPORT_ENTITY => teleport_entity(payload)?,
         cb::PLAYER_POSITION => player_position(payload)?,
-        cb::PLAYER_INFO_UPDATE => player_info(payload)?,
+        cb::PLAYER_INFO_UPDATE => player_info(payload, false)?,
         cb::EXPLODE => explode(payload)?,
         _ => return Ok(None),
     }))
@@ -143,7 +143,7 @@ fn spawn_info_down(payload: &[u8], login: bool) -> Result<Vec<u8>> {
 }
 
 /// 1.21.2's two booleans (long distance, always visible) as 1.21.1's one: the second goes.
-fn particles(payload: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn particles(payload: &[u8]) -> Result<Vec<u8>> {
     let mut r = Reader::new(payload);
     let long_distance = r.bool()?;
     r.bool()?;
@@ -202,12 +202,13 @@ fn player_position(payload: &[u8]) -> Result<Vec<u8>> {
 
 /// 1.21.2's player list entries as 1.21.1's: the list order (0x40, a VarInt after the display name) and the hat
 /// (0x80, a boolean last) go with their bits; 1.21.1 has neither. The other actions are laid out alike.
-fn player_info(payload: &[u8]) -> Result<Vec<u8>> {
+/// `list_order`: whether the client has UPDATE_LIST_ORDER (1.21.2 and 1.21.3 do; only UPDATE_HAT, 1.21.4's, goes).
+pub(super) fn player_info(payload: &[u8], list_order: bool) -> Result<Vec<u8>> {
     let mut r = Reader::new(payload);
     let actions = r.u8()?;
     let n = r.count(r.remaining())?;
     let mut w = Writer::new();
-    w.u8(actions & 0x3F);
+    w.u8(actions & if list_order { 0x7F } else { 0x3F });
     w.varint(n as i32);
     for _ in 0..n {
         w.uuid(r.uuid()?);
@@ -246,7 +247,10 @@ fn player_info(payload: &[u8]) -> Result<Vec<u8>> {
             }
         }
         if actions & 0x40 != 0 {
-            r.varint()?;
+            let order = r.varint()?;
+            if list_order {
+                w.varint(order);
+            }
         }
         if actions & 0x80 != 0 {
             r.bool()?;

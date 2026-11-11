@@ -24,6 +24,7 @@ mod step_1_20_6;
 mod step_1_21_1;
 mod step_1_21_10;
 mod step_1_21_11;
+mod step_1_21_3;
 mod step_1_21_4;
 mod step_1_21_5;
 mod step_1_21_6;
@@ -484,6 +485,12 @@ impl ClientSession {
         // 1.21.4 is older than 1.21.5 too: after its step, the last one.
         if v.at_most(ServerVersion::V1_21_4)
             && let Some(next) = step_1_21_4::clientbound(state, id, &payload)?
+        {
+            payload = next;
+        }
+        // 1.21.2 and 1.21.3 (one protocol): 1.21.4's two additions go.
+        if v == ServerVersion::V1_21_3
+            && let Some(next) = step_1_21_3::clientbound(state, id, &payload)?
         {
             payload = next;
         }
