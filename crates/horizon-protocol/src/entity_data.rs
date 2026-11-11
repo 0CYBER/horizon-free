@@ -299,7 +299,18 @@ impl Particle {
     pub fn write(&self, w: &mut Writer) {
         w.varint(self.id);
         let Some(data) = &self.data else { return };
+        // Written for a client before 1.21.2: dust colors are three floats (the reverse of `legacy_rgb`).
+        let legacy = matches!(ids::active(), Some((ids, ids::Way::Down)) if ids.quirks.components_before_1_21_2);
         match data {
+            ParticleData::ColorScale(c, f) if legacy => {
+                write_legacy_rgb(*c, w);
+                w.f32(*f);
+            }
+            ParticleData::ColorScale2(a, b, f) if legacy => {
+                write_legacy_rgb(*a, w);
+                write_legacy_rgb(*b, w);
+                w.f32(*f);
+            }
             ParticleData::State(s) | ParticleData::Delay(s) => w.varint(*s),
             ParticleData::Color(c) | ParticleData::Geyser(c) => w.i32(*c),
             ParticleData::ColorScale(c, f)
@@ -336,6 +347,12 @@ impl Particle {
                 w.varint(*ticks);
             }
         }
+    }
+}
+/// An RGB color as three floats 0..=1 (Vector3f before 1.21.2).
+fn write_legacy_rgb(c: i32, w: &mut Writer) {
+    for shift in [16, 8, 0] {
+        w.f32(((c >> shift) & 0xFF) as f32 / 255.0);
     }
 }
 // ARGB.colorFromFloat(1, r, g, b), preserving Java's float multiply before flooring.
@@ -717,6 +734,38 @@ mod tests {
             assert_eq!(Particle::read(&mut r).unwrap(), particle);
             assert_eq!(r.remaining(), 0);
         }
+    }
+
+    #[test]
+    fn dust_is_written_with_float_colors_for_a_client_before_1_21_2() {
+        use crate::adapter::{ServerVersion, ids::Way};
+        let ids = ServerVersion::V1_21_1.ids().unwrap();
+        let dust = Particle {
+            id: 13,
+            data: Some(ParticleData::ColorScale(0xFFFF_8000u32 as i32, 1.5)),
+        };
+        let mut w = Writer::new();
+        {
+            let _down = crate::adapter::ids::renumbering(ids, Way::Down);
+            dust.write(&mut w);
+        }
+        let mut r = Reader::new(&w.data);
+        r.varint().unwrap();
+        assert_eq!(
+            [r.f32().unwrap(), r.f32().unwrap(), r.f32().unwrap()],
+            [1.0, 128.0 / 255.0, 0.0]
+        );
+        assert_eq!(r.f32().unwrap(), 1.5);
+        assert_eq!(r.remaining(), 0);
+        // read back as 1.21.1 data: the same color
+        let back = {
+            let _up = crate::adapter::ids::renumbering(ids, Way::Up);
+            Particle::read(&mut Reader::new(&w.data)).unwrap()
+        };
+        assert_eq!(
+            back.data,
+            Some(ParticleData::ColorScale(0xFFFF_8000u32 as i32, 1.5))
+        );
     }
 
     #[test]
