@@ -43,7 +43,6 @@ mod acknowledgements;
 pub mod chat;
 pub mod chat_filter;
 mod chunk_batch;
-mod effect_meta;
 mod spawn_info;
 
 pub mod game_event {
@@ -226,7 +225,7 @@ pub enum HostEvent {
         text: String,
         /// The hit's number in the filter's window.
         count: u32,
-        action: horizon_chat_filter::Action,
+        action: horizon_server_files::chat_guard::Action,
     },
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
@@ -345,15 +344,13 @@ pub struct Hub {
     /// `Level.soundSeedGenerator`: a fresh `nextLong` per `playSound`.
     pub(super) sound_seeds: Mutex<LegacyRandom>,
     pub(super) sound_order: Mutex<super::sound_order::SoundOrder>,
-    /// The particle each effect shows, per (effect, ambient) (`effect_meta`).
-    effect_particles: Mutex<effect_meta::ParticleCache>,
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
     /// The anticheat, when `server.toml` turns it on (dedicated servers).
     pub anticheat: Option<Box<super::anticheat::Anticheat>>,
     /// The chat filter, when `server.toml` turns it on (dedicated servers).
-    pub chat_filter: Option<Box<horizon_chat_filter::Guard>>,
+    pub chat_filter: Option<Box<dyn horizon_server_files::chat_guard::ChatGuard>>,
     /// The far ring, when `server.toml`'s `max_view_distance` turns it on (dedicated servers).
     pub far: Option<super::far::Far>,
     /// The `immediate_respawn` game rule, as the players were last told.
@@ -733,7 +730,6 @@ impl Hub {
             seat_order: 0,
             sound_seeds: Mutex::new(crate::random_source::create()),
             sound_order: Mutex::default(),
-            effect_particles: Mutex::default(),
             immediate_respawn: false,
             reduced_debug_info: false,
             limited_crafting: false,
@@ -2932,14 +2928,11 @@ impl Hub {
             .iter()
             .filter_map(|key| Some((*key, self.encoder.biome_data(world.chunks.get(key)?))))
             .collect();
-        for g in self.guests.iter().filter(|g| self.watches(g)) {
-            let chunks: Vec<_> = data
-                .iter()
-                .filter(|(key, _)| g.sent_chunks.contains(key))
-                .map(|(_, d)| d.clone())
-                .collect();
-            if !chunks.is_empty() {
-                g.send(&C::ChunksBiomes(play::ChunksBiomes { chunks }));
+        let watching: Vec<_> = self.guests.iter().filter(|g| self.watches(g)).collect();
+        let bodies = super::biome_resend::bodies(watching.iter().map(|g| &g.sent_chunks), &data);
+        for (g, body) in watching.into_iter().zip(bodies) {
+            if let Some(body) = body {
+                g.send_chunks_biomes_body(body);
             }
         }
     }
@@ -3129,19 +3122,14 @@ impl Hub {
                 self.guests[i].sender.send(body.clone());
             }
             if recording {
+                let bounds = super::prediction::bounds(&positions);
                 for &i in &viewers {
-                    let g = &mut self.guests[i];
-                    let Some(record) = g.record.as_deref_mut() else {
-                        continue;
-                    };
-                    let slack = super::prediction::slack(std::array::from_fn(|i| {
-                        g.position[i] - g.previous_position[i]
-                    }));
-                    for &(x, y, z) in &positions {
-                        if super::prediction::near(g.position, [x, y, z], slack) {
-                            record.changed_near(self.ticks, [x, y, z]);
-                        }
-                    }
+                    super::prediction::note_changes(
+                        &mut self.guests[i],
+                        self.ticks,
+                        bounds,
+                        &positions,
+                    );
                 }
             }
             // Block entities with data the client shows.
@@ -3175,6 +3163,22 @@ impl Hub {
     }
 
     // ---- entities ------------------------------------------------------
+
+    /// `LivingEntity.updateSynchronizedMobEffectParticles`: DATA_EFFECT_PARTICLES
+    /// (10) and DATA_EFFECT_AMBIENCE_ID (11) for the visible `effects`, as
+    /// (effect, ambient). The entries are left out when there is nothing to
+    /// show, which is their default.
+    pub fn effect_meta<'a>(
+        &self,
+        effects: impl IntoIterator<Item = (&'a str, bool)>,
+    ) -> Vec<(u8, i32, Value)> {
+        self.sync.effect_meta(effects)
+    }
+
+    /// The registries and tables the clients are synced with (read by helper threads).
+    pub fn sync_data(&self) -> &SyncData {
+        &self.sync
+    }
 
     fn player_state(
         &self,

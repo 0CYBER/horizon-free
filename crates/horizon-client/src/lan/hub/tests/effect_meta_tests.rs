@@ -1,6 +1,6 @@
 //! The effect particle cache gives what the uncached lookup gives, and looks
 //! each (effect, ambient) up once.
-use crate::lan::hub::effect_meta::{ParticleCache, particle_of};
+use crate::lan::effect_meta::{ParticleCache, particle_of};
 use horizon_protocol::entity_data::Particle;
 
 /// The `minecraft:particle_type` names the test registry knows, by id.
