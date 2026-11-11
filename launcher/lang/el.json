@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "δεν ήταν δυνατός ο έλεγχος για ενημερώσεις: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Τα μπλοκ και τα αντικείμενά του μεταφέρθηκαν και πέρασαν τους ελέγχους του Horizon· ο κώδικας του ίδιου του mod δεν εκτελείται.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Μέρος του μεταφέρθηκε, αλλά κάτι λείπει, διαφέρει από το πρωτότυπο ή δεν έχει ελεγχθεί ακόμη· η τεχνική λεπτομέρεια λέει τι.",
   "It does not come over yet.": "Δεν μεταφέρεται ακόμη.",

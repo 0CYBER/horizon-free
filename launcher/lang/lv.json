@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "neizdevās pārbaudīt atjauninājumus: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Tā bloki un priekšmeti tika pārnesti un izturēja Horizon pārbaudes; paša moda kods netiek izpildīts.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Daļa tika pārnesta, bet kaut kas ir izlaists, atšķiras no oriģināla vai vēl nav pārbaudīts; tehniskā informācija norāda, kas tieši.",
   "It does not come over yet.": "Tas vēl netiek pārnests.",

@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "не ўдалося праверыць абнаўленні: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Яго блокі і прадметы перайшлі і прайшлі праверкі Horizon; уласны код мода не выконваецца.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Частка перайшла, але нешта прапушчана, адрозніваецца ад арыгінала або яшчэ не праверана; тэхнічныя падрабязнасці паведамляюць, што менавіта.",
   "It does not come over yet.": "Ён яшчэ не пераходзіць.",

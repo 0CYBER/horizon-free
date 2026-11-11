@@ -2256,6 +2256,30 @@ pub fn session_for_game(game_home: &Path) -> Result<GameSession, NoOwner> {
     Ok(session_file(game_home, pass, env))
 }
 
+/// Horizon-free: [`session_for_game`] without the owner gate: the selected account's session
+/// when it has one, and off the game's own name otherwise, so a player with no Microsoft
+/// account that owns Minecraft: Java Edition still starts the game (the fork's whole point).
+pub fn session_for_game_offline(game_home: &Path) -> GameSession {
+    let mut accounts = Accounts::load();
+    // No account, or none whose sign-in could be renewed: the game starts offline.
+    let pass = launch(
+        &Endpoints::live(),
+        client_id().as_deref(),
+        store(),
+        &mut accounts,
+    )
+    .unwrap_or_default();
+    let env = split_sessions(
+        game_home,
+        &mut accounts,
+        pass.session.as_ref().map(|(a, _)| a.uuid.as_str()),
+    );
+    if let Err(e) = accounts.save() {
+        eprintln!("Horizon: the accounts are not saved: {e}");
+    }
+    session_file(game_home, pass, env)
+}
+
 /// [`session_for_game`] for one launch as `who` (`play --account`, a signed-in account): who
 /// plays changes for this launch only, so several games can play as several accounts at once
 /// (#4952). What the services renewed (tokens, names, skins) is still kept; which account

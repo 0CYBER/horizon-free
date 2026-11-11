@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "ບລັອກ ແລະ ໄອເທັມຂອງມັນຖືກນຳມາ ແລະ ຜ່ານການກວດສອບຂອງ Horizon; ບໍ່ມີການລັນໂຄ້ດຂອງ mod ເອງ.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "ບາງສ່ວນຖືກນຳມາ, ແຕ່ມີບາງຢ່າງຖືກຕັດອອກ, ແຕກຕ່າງຈາກຕົ້ນສະບັບ ຫຼື ຍັງບໍ່ຖືກກວດສອບ; ລາຍລະອຽດທາງເຕັກນິກບອກວ່າຄືຫຍັງ.",
   "It does not come over yet.": "ມັນຍັງບໍ່ຖືກນຳມາເທື່ອ.",

@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Ua lawe ʻia mai kona mau poloka a me kona mau mea, a ua puka i nā hōʻoia a Horizon; ʻaʻole i holo ʻia ka code ponoʻī o ka mod.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Ua lawe ʻia mai kekahi hapa, akā aia kekahi mea i waiho ʻia, ʻokoʻa paha mai ka mea mua, a i ʻole ʻaʻole i nānā ʻia; haʻi ka ʻike loea i ka mea.",
   "It does not come over yet.": "ʻAʻole ia e lawe ʻia mai i kēia manawa.",

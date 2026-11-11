@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "ಅದರ ಬ್ಲಾಕ್‌ಗಳು ಮತ್ತು ಐಟಂಗಳು ಬಂದು Horizon ನ ಪರಿಶೀಲನೆಗಳಲ್ಲಿ ಉತ್ತೀರ್ಣವಾಗಿವೆ; ಮೋಡ್‌ನ ಸ್ವಂತ ಕೋಡ್ ರನ್ ಆಗುವುದಿಲ್ಲ.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "ಅದರ ಒಂದು ಭಾಗ ಬಂದಿದೆ, ಆದರೆ ಏನೋ ಬಿಟ್ಟುಬಿಡಲಾಗಿದೆ, ಮೂಲದಿಂದ ಭಿನ್ನವಾಗಿದೆ ಅಥವಾ ಇನ್ನೂ ಪರಿಶೀಲಿಸಲಾಗಿಲ್ಲ; ತಾಂತ್ರಿಕ ವಿವರ ಏನೆಂದು ತಿಳಿಸುತ್ತದೆ.",
   "It does not come over yet.": "ಅದು ಇನ್ನೂ ಬಂದಿಲ್ಲ.",

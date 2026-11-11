@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "ezin izan dira eguneratzeak egiaztatu: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Bere blokeak eta elementuak ekarri dira eta Horizon-en egiaztapenak gainditu dituzte; modaren kode propioa ez da exekutatzen.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Zati bat ekarri da, baina zerbait falta da, jatorrizkotik desberdina da edo oraindik ez da egiaztatu; xehetasun teknikoak dio zer.",
   "It does not come over yet.": "Oraindik ez da ekartzen.",

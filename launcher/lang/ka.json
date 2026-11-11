@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "განახლებების შემოწმება ვერ მოხერხდა: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "მისი ბლოკები და ნივთები გადმოვიდა და გაიარა Horizon-ის შემოწმებები; მოდის საკუთარი კოდი არ ეშვება.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "მისი ნაწილი გადმოვიდა, მაგრამ რაღაც გამოტოვებულია, განსხვავდება ორიგინალისგან ან ჯერ არ არის შემოწმებული; ტექნიკური დეტალი ამბობს, რა.",
   "It does not come over yet.": "ის ჯერ არ გადმოდის.",

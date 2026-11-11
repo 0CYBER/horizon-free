@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "kon niet controleren op updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "De blokken en voorwerpen zijn overgenomen en door Horizon gecontroleerd; de eigen code van de mod wordt niet uitgevoerd.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Een deel is overgenomen, maar iets ontbreekt, wijkt af van het origineel of is nog niet gecontroleerd; de technische details zeggen wat.",
   "It does not come over yet.": "Het wordt nog niet overgenomen.",

@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "päivitysten tarkistus epäonnistui: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Sen lohkot ja esineet siirtyivät ja läpäisivät Horizonin tarkistukset; modin omaa koodia ei ajeta.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Osa siitä siirtyi, mutta jotain puuttuu, eroaa alkuperäisestä tai on vielä tarkistamatta; tekninen lisätieto kertoo mitä.",
   "It does not come over yet.": "Se ei siirry vielä.",

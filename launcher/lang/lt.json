@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "nepavyko patikrinti naujinių: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "„Horizon“ perkėlė jos blokus ir daiktus, ir jie praėjo patikras; pačios modifikacijos kodas nevykdomas.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Dalis jos buvo perkelta, bet kažkas praleista, skiriasi nuo originalo arba dar nepatikrinta; techninė informacija nurodo, kas.",
   "It does not come over yet.": "Ji dar neperkeliama.",

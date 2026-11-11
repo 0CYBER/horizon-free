@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "шинэчлэлтийг шалгаж чадсангүй: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Түүний блок, эд зүйлс шилжиж ирсэн бөгөөд Horizon-ийн шалгалтад тэнцсэн; модны өөрийн код ажиллахгүй.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Нэг хэсэг нь шилжиж ирсэн ч зарим зүйл орхигдсон, эх хувилбараасаа ялгаатай эсвэл хараахан шалгагдаагүй байна; техникийн дэлгэрэнгүй мэдээлэл юу болохыг хэлнэ.",
   "It does not come over yet.": "Энэ нь хараахан шилжиж ирэхгүй.",

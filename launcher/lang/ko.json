@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "업데이트를 확인할 수 없습니다: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "블록과 아이템이 넘어와 Horizon의 검사를 통과했습니다. 모드 자체의 코드는 실행되지 않습니다.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "일부만 넘어왔습니다. 빠진 부분이 있거나 원본과 다르거나 아직 검사되지 않았습니다. 자세한 내용은 기술 정보에서 확인할 수 있습니다.",
   "It does not come over yet.": "아직 넘어오지 않습니다.",

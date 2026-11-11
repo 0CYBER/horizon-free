@@ -1,4 +1,5 @@
 {
+  "couldn't check for updates: {error}": "couldn't check for updates: {error}",
   "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.": "Унӑн блокӗсемпе япалисем куҫрӗҫ те Horizon тӗрӗслевӗсене иртрӗҫ; модӑн хӑйӗн кодӗ ĕҫлемест.",
   "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.": "Унӑн пӗр пайӗ куҫнӑ, анчах нимӗн те пулин тухса юлнӑ, тӑппуран уйрӑлса тӑрать е халӗ тӗрӗсленмен; техникӑллӑ деталь мӗн пулнине калать.",
   "It does not come over yet.": "Вӑл халӗ куҫмасть.",
