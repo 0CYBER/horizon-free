@@ -356,6 +356,9 @@ Horizon (Copyright (c) 2026 Ludovic Marie and the Horizon contributors).
 `crates/horizon-client-render/src/touch.rs` and `touch/tests/` are adapted from the touch input
 state of Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
 
+`crates/horizon-client-render/src/touch/draw.rs` is adapted from the touch control drawing in
+Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
+
 `crates/horizon-client-render/src/android_runtime.rs` and `android_runtime/tests/` are adapted from the
 input part of Starling's `crates/horizon-client-render/src/android_runtime.rs` at the same commit.
 
@@ -384,4 +387,3 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FO
 OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
-`crates/horizon-client-render/src/touch/draw.rs` is adapted from the touch control drawing in Starling's `touch.rs` at the same commit.
