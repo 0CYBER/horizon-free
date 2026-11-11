@@ -5,9 +5,12 @@ use crate::{
     fast_hash::{FxHashMap, FxHashSet},
     section_mask::SectionMask,
 };
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::{LegacyRandom, LevelRandom};
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
+
+mod modified;
+pub use modified::ModifiedChunks;
 
 /// Sections (x, section index, z) waiting to be remeshed, kept by column
 /// (a bit per section index), so the mesh scheduler looks at each column once
@@ -20,6 +23,10 @@ impl DirtySections {
     pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
         debug_assert!((0..SectionMask::CAPACITY as i32).contains(&sy));
         self.columns.entry((x, z)).or_default().insert(sy as usize);
+    }
+    /// Mark all sections in `mask` dirty for column `(x, z)`.
+    pub fn insert_column_mask(&mut self, (x, z): (i32, i32), mask: SectionMask) {
+        *self.columns.entry((x, z)).or_default() |= mask;
     }
     pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
         (0..SectionMask::CAPACITY as i32).contains(&sy)
@@ -62,7 +69,7 @@ pub struct World {
     pub shape: LevelShape,
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
-    pub random: LegacyRandom,
+    pub random: LevelRandom,
     pub revision: u64,
     pub health_rules: HealthRules,
     pub air: BlockStateId,
@@ -83,7 +90,7 @@ pub struct World {
     /// was generated rather than read from the save: the game tells native mods.
     pub loaded_chunks: Vec<(i32, i32, bool)>,
     /// Chunks changed since the last save.
-    pub modified: FxHashSet<(i32, i32)>,
+    pub modified: ModifiedChunks,
     /// Block entities, and the order they tick in.
     pub block_entities: crate::block_entities::BlockEntities,
     /// Each chest's `ContainerOpenersCounter`: opener count and largest
@@ -101,6 +108,9 @@ pub struct World {
     pub inhabited: FxHashMap<(i32, i32), i64>,
     pub game_time: i64,
     pub day_time: i64,
+    /// The End's world clock (`WorldClocks.THE_END`, the End sky flash's), saved apart from
+    /// the game time and, like every clock, still while `advance_time` is off.
+    pub end_clock: i64,
     pub weather: Weather,
     /// Every block position written since the log was last drained, kept
     /// only while the world is open to the network (see `lan`).
@@ -209,7 +219,7 @@ impl World {
         Self {
             shape: LevelShape::OVERWORLD,
             chunks: Default::default(),
-            random: LegacyRandom::new(seed),
+            random: LevelRandom::for_level(LegacyRandom::new(seed)),
             revision: 0,
             health_rules: HealthRules::default(),
             air,
@@ -220,7 +230,7 @@ impl World {
             loaded_entities: Vec::new(),
             entities_pending: FxHashSet::default(),
             loaded_chunks: Vec::new(),
-            modified: FxHashSet::default(),
+            modified: ModifiedChunks::default(),
             attachments: Default::default(),
             attachment_syncs: FxHashSet::default(),
             block_entities: Default::default(),
@@ -231,6 +241,7 @@ impl World {
             inhabited: FxHashMap::default(),
             game_time: 0,
             day_time: 1000,
+            end_clock: 0,
             weather: Weather::default(),
             block_log: None,
             block_log_held: Vec::new(),

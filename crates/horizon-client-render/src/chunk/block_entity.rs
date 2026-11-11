@@ -80,11 +80,18 @@ pub enum BlockEntity {
     Skull(Skull),
     /// `TheEndGatewayBlockEntity`: its age and configured destination.
     EndGateway(EndGateway),
+    /// `TheEndPortalBlockEntity`: no data, only identity.
+    EndPortal,
     /// `DaylightDetectorBlockEntity`: no data, only the ticker
     /// (`DaylightDetectorBlock.tickEntity`).
     DaylightDetector,
     /// `BellBlockEntity`: saved identity only; ringing state is kept separately.
     Bell,
+    /// `ConduitBlockEntity`: the UUID of its `destroyTarget` (`Target`). Its
+    /// shape and animation are kept separately (`block_entity_anim`).
+    Conduit(Option<[i32; 4]>),
+    /// `EnchantingTableBlockEntity`: its custom name is the world's block name.
+    EnchantingTable,
     /// Suspicious sand and gravel: saved loot and the transient brushed face.
     Brushable(Box<Brushable>),
     /// A shelf holds three displayed item stacks.
@@ -506,6 +513,10 @@ pub struct SignData {
     pub waxed: bool,
     /// `allow_op_features`: the sign's click events may run commands.
     pub allow_op_features: bool,
+    /// `playerWhoMayEdit`: the one player whose editor is on this sign, as a
+    /// UUID. Every other player's click, write and applicator is refused
+    /// while it is set. Not saved (vanilla keeps it out of the NBT).
+    pub allowed_editor: Option<u128>,
 }
 /// `VibrationInfo`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -515,6 +526,11 @@ pub struct Info {
     pub pos: [f64; 3],
     pub source: Option<Who>,
     pub owner: Option<Who>,
+    /// `uuid`: the source's saved identity (`source`), taken when the event
+    /// was posted. `source` is the live entity and comes back `None` on load.
+    pub source_uuid: Option<[i32; 4]>,
+    /// `projectileOwnerUuid` (`projectile_owner`), likewise beside `owner`.
+    pub owner_uuid: Option<[i32; 4]>,
 }
 /// `VibrationSelector`: the closest, then highest-frequency candidate of a tick.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -527,6 +543,7 @@ pub struct Data {
     pub current: Option<Info>,
     pub travel: i32,
     pub selector: Selector,
+    pub reload_particle: bool,
 }
 /// Which sculk block entity this is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

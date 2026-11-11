@@ -49,9 +49,17 @@ impl Game<'_> {
                 creative,
                 options,
             } => self.open_world(&folder, Some(&name), seed, creative, Some(&options))?,
-            Action::Connect { address, lan } => {
-                self.connect_server_with_options(&address, &self.options.player_name(), None, lan)?
-            }
+            Action::Connect {
+                address,
+                lan,
+                realm,
+            } => self.connect_server_with_options(
+                &address,
+                &self.options.player_name(),
+                None,
+                lan,
+                realm,
+            )?,
             Action::DataPacks { dir, selected } => {
                 self.keys.clear();
                 self.screen = Screen::Options;
@@ -237,7 +245,7 @@ impl Game<'_> {
         // Pause-menu and death-screen exits use the normal world-close action.
         // A standalone replay owns a synthetic remote session, so it must go
         // through replay cleanup instead of being treated like a server.
-        if self.studio_replay.is_some() {
+        if self.replay.playing() {
             self.close_studio_replay();
             return Ok(());
         }

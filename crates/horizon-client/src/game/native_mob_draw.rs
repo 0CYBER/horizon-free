@@ -8,12 +8,12 @@
 //! player in view gets `native_mob_layer` after its vanilla model
 //! (`EntityRenderersEvent.AddLayers`), in the same frame.
 
-use super::{Dim, Game, native_block_entity_draw::BlockEntityDraw};
+use super::{Game, native_block_entity_draw::BlockEntityDraw};
 use glam::{DVec3, Mat4};
 use horizon_client::{
     block_entity_render::diffuse_lights,
     mesher::Vertex,
-    mobs::{Mob, anim, living::wrap},
+    mobs::{Mob, anim},
 };
 
 /// One mob's frame, as `EntityRenderer.extractRenderState` fills a
@@ -55,7 +55,7 @@ pub struct NativeMobRender<'a> {
 impl<'a> NativeMobRender<'a> {
     /// The render state of `m` at `partial` (`LivingEntityRenderer.extractRenderState`).
     pub(super) fn of(m: &'a Mob, partial: f32) -> Self {
-        let body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * partial;
+        let body = anim::body_rot(m, partial);
         // The walk cycle, head turn and age as the vanilla models read them:
         // no walking while riding or dead, a baby's legs three times as far
         // (`WalkAnimationState.position(partial)`, `positionScale`).
@@ -184,7 +184,7 @@ impl Game<'_> {
             light,
             [feet.x, feet.y, feet.z].map(|c| c.floor() as i32),
             mob_pose(feet - camera, render.body_yaw),
-            diffuse_lights(self.dim == Dim::Nether),
+            diffuse_lights(self.nether_lighting()),
             std::mem::take(out),
         );
         let keep = hook(&render, &mut draw);

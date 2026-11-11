@@ -11,7 +11,9 @@ use horizon_client::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     containers::BlockEntity,
-    particles::{ParticleLevel, ParticleOptions, ParticleType},
+    mobs::Mob,
+    motion::PlayerMotion,
+    particles::{ParticleLevel, ParticleOptions, ParticleType, TrackingBody, TrackingTarget},
     world::World,
 };
 use horizon_client::{
@@ -19,7 +21,28 @@ use horizon_client::{
     screen_effects::{ScreenInputs, ScreenQuad, lightmap_brightness, nausea_has_effect},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
-use horizon_world::{heightmap::HeightmapType, worldgen::terrain::TerrainBlockStates};
+use horizon_world::{
+    dimension_type::{CardinalLight, Skybox},
+    heightmap::HeightmapType,
+    worldgen::terrain::TerrainBlockStates,
+};
+
+pub(super) fn player_tracking_body(player: &PlayerMotion) -> TrackingBody {
+    TrackingBody {
+        feet: [player.position.x, player.position.y, player.position.z],
+        width: f64::from(player.dimensions.width),
+        height: f64::from(player.dimensions.height),
+    }
+}
+
+pub(super) fn mob_tracking_body(mob: &Mob) -> TrackingBody {
+    let (width, height, _) = mob.dims();
+    TrackingBody {
+        feet: [mob.position.x, mob.position.y, mob.position.z],
+        width,
+        height,
+    }
+}
 
 /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)` from the chunk's
 /// heightmap: one above the highest block in `blocks_motion_in_heightmap` or
@@ -77,6 +100,18 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
 }
 
 impl Game<'_> {
+    /// `GameRenderer`'s cardinal light: the level's type uses the Nether's diffuse lights.
+    pub(super) fn nether_lighting(&self) -> bool {
+        self.dimension_type().cardinal_light == CardinalLight::Nether
+    }
+    /// `SkyRenderer`'s overworld skybox: sun, moon, stars and clouds.
+    pub(super) fn overworld_skybox(&self) -> bool {
+        self.dimension_type().skybox == Skybox::Overworld
+    }
+    /// `SkyRenderer`'s End skybox and its flashes.
+    pub(super) fn end_skybox(&self) -> bool {
+        self.dimension_type().skybox == Skybox::End
+    }
     pub(super) fn forward(&self) -> [f64; 3] {
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
@@ -132,7 +167,7 @@ impl Game<'_> {
             forward: forward.map(|c| c as f32),
             rain,
             thunder,
-            skybox: self.dim == Dim::Overworld,
+            skybox: self.overworld_skybox(),
             blindness: self
                 .potions
                 .effects
@@ -145,9 +180,11 @@ impl Game<'_> {
             boss_world_fog: self.boss_overlay.should_create_world_fog(),
             spectator: self.spectator(),
             fire_resistance: self.potions.effects.get("fire_resistance").is_some()
-                || self.settings.extras.pvp.tweaks.clear_lava,
-            full_water_vision: self.settings.extras.pvp.tweaks.clear_water,
+                || self.pvp_clear_fluids().0,
+            full_water_vision: self.pvp_clear_fluids().1,
             night_vision: self.fog_night_vision(),
+            environment: self.pack.polytone_colors.env,
+            fluid_fog: self.pack.polytone_colors.fluid_fog,
         };
         let mut fog = horizon_client::fog::setup_fog(tables, &self.fog, &input);
         if !self.settings.horizon.fog {
@@ -244,9 +281,9 @@ impl Game<'_> {
         let horizon = if self.level_flat() {
             f64::from(self.level_min_y())
         } else {
-            63.0
+            f64::from(self.pack.polytone_colors.env.horizon_height)
         };
-        self.dim == Dim::Overworld
+        self.overworld_skybox()
             && camera.y < horizon
             && fog_type(
                 &self.world,
@@ -385,7 +422,7 @@ impl Game<'_> {
             on_fire: self.camera_type.first_person()
                 && !self.spectator()
                 && self.player.as_ref().is_some_and(|p| p.fire_ticks > 0),
-            fire_lower: f32::from(self.settings.extras.pvp.tweaks.fire_lower) / 100.0,
+            fire_lower: self.pvp_fire_lower(),
             gui_overlays: &gui_overlays,
         })
     }
@@ -405,6 +442,7 @@ impl Game<'_> {
     /// flicker whenever the game is not paused, frozen or not, while `TextureManager.tick`
     /// needs the level running normally. `HORIZON_STILL` keeps both with the world.
     pub(super) fn tick_frame_visuals(&mut self, running: bool) {
+        self.hold_fullbright();
         if running || !self.clock.still() {
             self.fog.tick_flicker();
         }
@@ -437,7 +475,21 @@ impl Game<'_> {
             settle_rain_fog(&mut self.fog, rain, sky_light, rains);
         }
     }
+    pub(super) fn remote_tracking_body(
+        &mut self,
+        id: i32,
+    ) -> Option<(TrackingTarget, TrackingBody)> {
+        if self.remote.as_ref().is_some_and(|r| r.entity_id == id) {
+            let player = self.player.as_ref()?;
+            return Some((TrackingTarget::LocalPlayer, player_tracking_body(player)));
+        }
+        let mob = self.mob_index.get(&self.mobs, id as u32)?;
+        Some((TrackingTarget::Entity(id), mob_tracking_body(mob)))
+    }
+
     pub(super) fn tick_particles(&mut self) {
+        self.update_animation_inputs();
+        let mut laps = horizon_client::spans::laps();
         let eye = self.eye_position();
         if let Some(e) = eye {
             let brightness = self.eye_brightness(e);
@@ -453,10 +505,11 @@ impl Game<'_> {
             // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
             let in_water =
                 fog_type(&self.world, self.res.facts(), e, &self.near_plane()) == FogType::Water;
-            self.fog.tick(in_water);
+            self.fog.tick(in_water, self.spectator());
             let (rain, sky_light, rains) = self.rain_fog_inputs(e);
             update_rain_fog(&mut self.fog, rain, sky_light, rains, 1.0);
         }
+        laps.lap("tp_fx");
         self.particles.particle_level = self.settings.particles;
         if let Some(e) = eye {
             self.particles.camera = e;
@@ -485,10 +538,10 @@ impl Game<'_> {
         let height_no_leaves =
             |p: [i32; 3]| motion_blocking_leaves(world, facts, p[0], p[2], i32::MAX, false);
         // The day timeline: firefly bush sounds from 12600 to 23400.
-        let firefly_bush_sounds = self.dim == Dim::Overworld
+        let firefly_bush_sounds = self.dimension_type().has_timeline("minecraft:day")
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         // EnvironmentAttributes.CREAKING_ACTIVE: the same overworld night.
-        let creaking_active = self.dim == Dim::Overworld
+        let creaking_active = self.dimension_type().has_timeline("minecraft:day")
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         let tables = &self.pack.context.tables;
         let model_offset = |state, x, z| tables.offset(state, x, z);
@@ -515,7 +568,7 @@ impl Game<'_> {
             model_offset: &model_offset,
             gateway_particles: &gateway_particles,
             thundering,
-            ultrawarm: self.dim == Dim::Nether,
+            ultrawarm: self.dimension_type().water_evaporates,
         };
         if let Some(e) = eye {
             let block = [
@@ -523,7 +576,14 @@ impl Game<'_> {
                 e[1].floor() as i32,
                 e[2].floor() as i32,
             ];
+            laps.lap("tp_ctx");
+            self.particles
+                .set_polytone(self.pack.polytone_particles.clone());
+            if let Some(registry) = &self.pack.polytone_particles {
+                registry.set_biomes(biomes);
+            }
             animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
+            laps.lap("tp_animate");
             // The Horizon Weather option off means no rain visuals or sounds at all.
             if rain > 0.0 && self.settings.horizon.weather {
                 // ClientLevel.tickWeatherEffects: rain splashes within the weather
@@ -614,6 +674,7 @@ impl Game<'_> {
                 },
             );
         }
+        laps.lap("tp_rain_campfire");
         // SpellParticle.isCloseToScopingPlayer: the eye of a local player looking
         // through a spyglass in first person.
         let scope_eye = self
@@ -636,9 +697,43 @@ impl Game<'_> {
                 .player
                 .as_ref()
                 .map(|p| ([p.position.x, p.position.y, p.position.z], p.velocity.y)),
+            cached_chunk: std::cell::Cell::new(None),
         };
-        self.particles.tick(&level);
+        laps.lap("tp_level");
+        // Resource packs' Polytone entity emitters on the player (#11486): fog, dust and
+        // weather around them; nothing without such a pack.
+        if let Some(p) = &self.player {
+            let feet = [p.position.x, p.position.y, p.position.z];
+            self.particles
+                .polytone_entity(&level, "minecraft:player", feet);
+        }
+        let player = self.player.as_ref();
+        let mobs = &self.mobs;
+        let mob_index = &mut self.mob_index;
+        let lan = self.lan.as_ref();
+        let dimension = self.dim.id();
+        self.particles.tick_tracking(&level, |target| match target {
+            TrackingTarget::LocalPlayer => player.map(player_tracking_body),
+            TrackingTarget::Entity(id) => {
+                if let Some(guest) = lan.and_then(|host| {
+                    host.hub
+                        .guests
+                        .iter()
+                        .find(|guest| guest.entity_id == id && guest.dimension == dimension)
+                }) {
+                    let dimensions = guest.dimensions();
+                    return Some(TrackingBody {
+                        feet: guest.position,
+                        width: f64::from(dimensions.width),
+                        height: f64::from(dimensions.height),
+                    });
+                }
+                mob_index.get(mobs, id as u32).map(mob_tracking_body)
+            }
+        });
+        laps.lap("tp_engine");
         self.tick_pickups();
+        laps.lap("tp_pickups");
         let camera = self.particles.camera;
         for (name, at, volume, pitch, delayed) in std::mem::take(&mut self.particles.sounds) {
             if delayed {
@@ -649,7 +744,70 @@ impl Game<'_> {
             }
         }
     }
+
+    /// The ticks the frame shows (animated textures, the HUD, a shader pack's clock): the
+    /// client's, or under `HORIZON_STILL` (`FixedStep::still`) the world's game time, which
+    /// moves only while the world runs.
+    pub(super) fn visual_ticks(&self) -> u64 {
+        if self.clock.still() {
+            self.world.game_time.max(0) as u64
+        } else {
+            self.ticks
+        }
+    }
+
+    /// The clock of the animated textures: `Minecraft.runTick` ticks the `TextureManager`
+    /// only while the level runs normally. Under `HORIZON_STILL` it is the world's ticks.
+    pub(super) fn texture_clock(&self) -> u64 {
+        if self.clock.still() {
+            self.visual_ticks()
+        } else {
+            self.texture_ticks
+        }
+    }
+
+    /// `Util.getMillis` for what the frame shows (the world border's scroll, the hearts' blink,
+    /// the glint's under the switch): under `HORIZON_STILL`, the world's ticks in milliseconds.
+    pub(super) fn visual_millis(&self) -> i64 {
+        if self.clock.still() {
+            self.visual_ticks() as i64 * 50
+        } else {
+            self.started.elapsed().as_millis() as i64
+        }
+    }
 }
+impl Game<'_> {
+    /// What the packs' Polytone animation modes read this tick (wiki "Variant Textures"): the
+    /// time of day, the weather, and for expressions the packs' Polytone frame, or the time and
+    /// weather alone when no Polytone pack makes one.
+    fn update_animation_inputs(&mut self) {
+        let (rain, thunder) = self.view_weather(0.0);
+        let day_time = self.view_day_time();
+        let frame = self
+            .pack
+            .polytone_particles
+            .as_ref()
+            .and_then(|p| p.frame.read().ok().map(|f| f.clone()))
+            .unwrap_or_else(|| horizon_client::environment::Frame {
+                rain,
+                thunder,
+                game_time: self.world.game_time,
+                day_time,
+                ..Default::default()
+            });
+        // `screen_time` counts while the same screen stays open.
+        let screen = (self.screen != super::Screen::Playing).then(|| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::mem::discriminant(&self.screen).hash(&mut hasher);
+            hasher.finish()
+        });
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_animation_inputs(day_time, [rain, thunder], Some(&frame), screen);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Properties, World, splash_height};

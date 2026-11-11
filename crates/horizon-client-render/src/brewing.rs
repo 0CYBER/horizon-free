@@ -14,7 +14,7 @@ use std::{collections::HashSet, path::Path};
 pub use horizon_client_core::potions::{
     BASE_POTION_COLOR, Category, EFFECTS, EffectDef, POTIONS, PotionDef, all_effects,
     description_id, effect, is_mod_effect, mod_effects, namespaced, potion, potion_color,
-    register_mod_effects,
+    register_mod_effects, set_pack_colors,
 };
 /// `MobEffectUtil.formatDuration` at 20 TPS.
 pub fn format_duration(ticks: i32) -> String {
@@ -37,6 +37,37 @@ pub fn potion_name_key(item: &str, potion: Option<&str>) -> String {
     let suffix = potion.and_then(self::potion).map_or("empty", |p| p.name);
     format!("item.minecraft.{prefix}.effect.{suffix}")
 }
+/// `PotionItem.getName` and `TippedArrowItem.getName`: a potion or a tipped
+/// arrow is named by its contents (`PotionContents.getName`: their own
+/// `custom_name`, else the potion's name, else `empty`), whatever its
+/// `item_name`. None for other items, and for a stack whose contents were
+/// taken off (`!minecraft:potion_contents`), which takes the item's name.
+pub fn contents_name_key(stack: &ItemStack) -> Option<String> {
+    use horizon_world::nbt::Tag;
+    let item = &*stack.item;
+    let named = matches!(
+        item,
+        "minecraft:potion"
+            | "minecraft:splash_potion"
+            | "minecraft:lingering_potion"
+            | "minecraft:tipped_arrow"
+    );
+    let data = stack.data();
+    if !named || data.is_some_and(|d| d.other("!minecraft:potion_contents").is_some()) {
+        return None;
+    }
+    let prefix = item.trim_start_matches("minecraft:");
+    let own = data
+        .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == "custom_name"))
+        .and_then(|(_, name)| match name {
+            Tag::String(s) => Some(s.to_string_lossy()),
+            _ => None,
+        });
+    Some(match own {
+        Some(suffix) => format!("item.minecraft.{prefix}.effect.{suffix}"),
+        None => potion_name_key(item, stack.potion()),
+    })
+}
 /// `PotionContents.getAllEffects`: the potion's effects, then the stack's
 /// `custom_effects` (id, duration, amplifier). Unknown effect ids are dropped.
 pub fn contents_effects(stack: &ItemStack) -> Vec<(&'static str, i32, i32)> {
@@ -52,6 +83,71 @@ pub fn contents_effects(stack: &ItemStack) -> Vec<(&'static str, i32, i32)> {
                 .filter_map(|(id, duration, amp)| Some((effect(id)?.id, *duration, *amp))),
         )
         .collect()
+}
+/// `PotionContents.getAllEffects`, retaining each custom instance's flags.
+pub fn contents_instances(stack: &ItemStack) -> Vec<crate::effects::EffectInstance> {
+    use horizon_client_core::nbt_value::{number, text};
+    use horizon_world::nbt::Tag;
+    let mut effects: Vec<_> = stack
+        .potion()
+        .and_then(potion)
+        .map_or(&[][..], |p| p.effects)
+        .iter()
+        .map(|(id, duration, amp)| crate::effects::EffectInstance::new(id, *duration, *amp))
+        .collect();
+    if let Some((_, Tag::List(custom))) = stack
+        .data()
+        .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == "custom_effects"))
+    {
+        for e in custom {
+            let Some(def) = text(e.get("id")).and_then(|id| effect(&id)) else {
+                continue;
+            };
+            let mut instance = crate::effects::EffectInstance::new(
+                def.id,
+                number(e.get("duration")).unwrap_or(0) as i32,
+                number(e.get("amplifier")).unwrap_or(0).clamp(0, 255) as i32,
+            );
+            instance.ambient = number(e.get("ambient")).unwrap_or(0) != 0;
+            instance.visible = number(e.get("show_particles")) != Some(0);
+            effects.push(instance);
+        }
+    }
+    effects
+}
+/// `PotionContents.getColor`: an explicit colour wins; otherwise mix only
+/// visible base and custom effects, with their amplifier weights.
+pub fn contents_color(stack: &ItemStack) -> u32 {
+    use horizon_client_core::nbt_value::number;
+    if let Some(color) = stack
+        .data()
+        .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == "custom_color"))
+        .and_then(|(_, v)| number(Some(v)))
+    {
+        return color as u32;
+    }
+    0xFF00_0000
+        | horizon_client_core::potions::effects_color(
+            contents_instances(stack)
+                .iter()
+                .filter(|e| e.visible)
+                .map(|e| (e.id, e.amplifier)),
+        )
+}
+/// `PotionContents.equals(EMPTY)`: colour and custom name also make contents
+/// nonempty, even when there is no registered potion or custom effect.
+pub fn contents_empty(stack: &ItemStack) -> bool {
+    use horizon_world::nbt::Tag;
+    stack.potion().is_none()
+        && stack.data().is_none_or(|d| {
+            d.potion_extra
+                .iter()
+                .all(|(key, value)| match key.as_str() {
+                    "custom_effects" => matches!(value, Tag::List(list) if list.is_empty()),
+                    "custom_color" | "custom_name" => false,
+                    _ => true,
+                })
+        })
 }
 /// Roman amplifier suffix (`potion.potency.N`) and duration lines of a potion.
 pub fn tooltip(
@@ -469,6 +565,40 @@ mod tests {
             potion_name_key("minecraft:splash_potion", Some("minecraft:long_swiftness")),
             "item.minecraft.splash_potion.effect.swiftness"
         );
+        // A potion or a tipped arrow is named by its contents, over its
+        // item_name; one whose contents were taken off is not.
+        use horizon_world::nbt::Tag;
+        let mut swift =
+            ItemStack::new("minecraft:potion", 1).with_potion("minecraft:long_swiftness");
+        swift
+            .data_mut()
+            .set_other("minecraft:item_name", Some(Tag::String("Bottle".into())));
+        assert_eq!(
+            contents_name_key(&swift).as_deref(),
+            Some("item.minecraft.potion.effect.swiftness")
+        );
+        assert_eq!(
+            contents_name_key(&ItemStack::new("minecraft:splash_potion", 1)).as_deref(),
+            Some("item.minecraft.splash_potion.effect.empty")
+        );
+        let mut own = ItemStack::new("minecraft:tipped_arrow", 1).with_potion("minecraft:poison");
+        own.data_mut()
+            .potion_extra
+            .push(("custom_name".into(), Tag::String("luck".into())));
+        assert_eq!(
+            contents_name_key(&own).as_deref(),
+            Some("item.minecraft.tipped_arrow.effect.luck")
+        );
+        let mut taken = ItemStack::new("minecraft:potion", 1);
+        taken.data_mut().set_other(
+            "!minecraft:potion_contents",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert_eq!(contents_name_key(&taken), None);
+        assert_eq!(
+            contents_name_key(&ItemStack::new("minecraft:stone", 1)),
+            None
+        );
         assert_eq!(format_duration(9600), "08:00");
         assert_eq!(format_duration(450), "00:22");
         assert_eq!(format_duration(140), "00:07");
@@ -640,5 +770,40 @@ mod tests {
         assert_eq!(lines[0].0, "resistance (∞)");
         let lines = effect_lines([("minecraft:resistance", 15, 0)], 1.0, &translate);
         assert_eq!(lines[0].0, "resistance");
+    }
+    #[test]
+    fn custom_contents_color_and_empty_semantics() {
+        use horizon_world::nbt::Tag;
+        let mut stack = ItemStack::new("minecraft:tipped_arrow", 1);
+        assert!(contents_empty(&stack));
+        stack
+            .data_mut()
+            .potion_extra
+            .push(("custom_effects".into(), Tag::List(Vec::new())));
+        assert!(contents_empty(&stack));
+        stack.data_mut().potion_extra = vec![(
+            "custom_effects".into(),
+            Tag::List(vec![
+                Tag::compound([
+                    ("id", Tag::String("minecraft:glowing".into())),
+                    ("amplifier", Tag::Int(1)),
+                ]),
+                Tag::compound([
+                    ("id", Tag::String("minecraft:poison".into())),
+                    ("show_particles", Tag::Byte(0)),
+                ]),
+            ]),
+        )];
+        assert!(!contents_empty(&stack));
+        // Glowing's colour; hidden poison contributes no weight.
+        assert_eq!(contents_color(&stack), 0xFF94_A061);
+        stack
+            .data_mut()
+            .potion_extra
+            .push(("custom_color".into(), Tag::Int(123456)));
+        assert_eq!(contents_color(&stack), 123456);
+        stack.data_mut().potion_extra = vec![("custom_name".into(), Tag::String("test".into()))];
+        assert!(!contents_empty(&stack));
+        assert_eq!(contents_color(&stack), 0xFF38_5DC6);
     }
 }

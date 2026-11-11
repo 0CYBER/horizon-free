@@ -2,6 +2,8 @@
 //! progress (`PlayerAdvancements`) and the predicates criteria test
 //! (`EntityPredicate`, `ItemPredicate`, `LocationPredicate`, the loot
 //! conditions advancements use).
+mod state_ranges;
+
 use horizon_world::lazy_json::LazyJson;
 use serde_json::Value;
 use std::{
@@ -619,6 +621,10 @@ pub trait World {
     fn structures(&self, pos: [i32; 3]) -> Vec<String>;
     /// Block name and properties.
     fn block(&self, pos: [i32; 3]) -> (String, BTreeMap<String, String>);
+    /// Legal values of the actual registered property, unavailable without registry access.
+    fn block_property_values(&self, _block: &str, _property: &str) -> Option<Vec<String>> {
+        None
+    }
     fn fluid(&self, pos: [i32; 3]) -> Option<String>;
     fn can_see_sky(&self, pos: [i32; 3]) -> bool;
     fn light(&self, pos: [i32; 3]) -> i32;
@@ -626,6 +632,11 @@ pub trait World {
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool;
     /// The block entity's `saveWithFullMetadata` at `pos`, `None` without one.
     fn block_entity_nbt(&self, _pos: [i32; 3]) -> Option<horizon_world::nbt::Tag> {
+        None
+    }
+    /// Read-only contents of a loaded named predicate, when this context
+    /// supplies a predicate registry. Other contexts keep references absent.
+    fn predicate(&self, _id: &str) -> Option<&Value> {
         None
     }
 }
@@ -642,9 +653,18 @@ pub struct ItemView {
     /// family unprojected and unsupported; an empty compound is actual absence.
     pub custom_data: Option<horizon_world::nbt::Tag>,
 }
+/// Query snapshot of supported known movement, in blocks/tick, and actual fall distance.
+#[derive(Clone, Copy, Debug)]
+pub struct MovementView {
+    pub per_tick: [f64; 3],
+    pub fall_distance: f64,
+}
+
 /// An entity as predicates see it.
 #[derive(Clone, Debug, Default)]
 pub struct EntityView {
+    /// None is unprojected/unsupported, not a fabricated stationary entity.
+    pub movement: Option<MovementView>,
     pub kind: String,
     pub position: [f64; 3],
     pub on_fire: bool,
@@ -900,7 +920,9 @@ pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
                 Value::String(s) => have == *s,
                 Value::Bool(b) => have == b.to_string(),
                 Value::Number(n) => have == n.to_string(),
-                Value::Object(_) => have.parse::<f64>().is_ok_and(|h| range_f(want, h)),
+                Value::Object(bounds) => w
+                    .block_property_values(&name, k)
+                    .is_some_and(|domain| state_ranges::matches(bounds, &have, &domain)),
                 _ => false,
             };
             if !ok {
@@ -1010,6 +1032,51 @@ pub fn distance(v: &Value, a: [f64; 3], b: [f64; 3]) -> bool {
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
         )
 }
+/// `MinMaxBounds.Doubles.matches` and `matchesSqr`, only for movement predicates.
+fn movement_range(v: &Value, value: f64, squared: bool) -> bool {
+    let (mut min, mut max) = match v {
+        Value::Null => (None, None),
+        Value::Number(n) => {
+            let Some(n) = n.as_f64() else { return false };
+            (Some(n), Some(n))
+        }
+        Value::Object(o) => {
+            let read = |key| match o.get(key) {
+                None => Some(None),
+                Some(n) => n.as_f64().map(Some),
+            };
+            let (Some(min), Some(max)) = (read("min"), read("max")) else {
+                return false;
+            };
+            (min, max)
+        }
+        _ => return false,
+    };
+    if squared {
+        min = min.map(|n| n * n);
+        max = max.map(|n| n * n);
+    }
+    if min.is_some_and(|n| n > value) {
+        return false;
+    }
+    max.is_none_or(|n| n >= value)
+}
+
+/// `MovementPredicate.matches`: known movement is scaled by 20 before the ordered tests.
+fn movement(p: &Value, m: MovementView) -> bool {
+    if !p.is_object() {
+        return false;
+    }
+    let [x, y, z] = m.per_tick.map(|v| v * 20.0);
+    movement_range(&p["x"], x, false)
+        && movement_range(&p["y"], y, false)
+        && movement_range(&p["z"], z, false)
+        && movement_range(&p["speed"], x * x + y * y + z * z, true)
+        && movement_range(&p["horizontal_speed"], x * x + z * z, true)
+        && movement_range(&p["vertical_speed"], y.abs(), false)
+        && movement_range(&p["fall_distance"], m.fall_distance, false)
+}
+
 /// `EntityPredicate` (26.x keyed sub-predicates).
 pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> bool {
     if v.is_null() {
@@ -1027,6 +1094,7 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                 location(p, [e.position[0], e.position[1] - 0.5, e.position[2]], w)
             }
             "minecraft:distance" => distance(p, e.position, origin),
+            "minecraft:movement" => e.movement.is_some_and(|m| movement(p, m)),
             "minecraft:flags" => {
                 let f = |k: &str, have: bool| p[k].as_bool().is_none_or(|want| want == have);
                 f("is_on_fire", e.on_fire)
@@ -1402,9 +1470,63 @@ pub fn recipe_ingredients(v: &Value, used: &[ItemView], w: &dyn World) -> bool {
 }
 
 /// A `ContextAwarePredicate`: a list of loot conditions (or one condition).
-/// Existing callers have no random context and keep their leaf behavior.
+/// Invalid references are distinct from false: inversion must not accept them.
 pub fn conditions(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
-    conditions_with(v, ctx, &mut |v, ctx| condition_leaf(v, ctx, w))
+    references_valid(v, w) && conditions_with(v, ctx, &mut |v, ctx| condition_leaf(v, ctx, w))
+}
+
+/// Every named predicate `v` reaches is loaded, and none reaches itself.
+pub fn references_valid(v: &Value, w: &dyn World) -> bool {
+    predicate_references(v, w, &mut BTreeSet::new()).is_ok()
+}
+
+enum InvalidReference {
+    Missing,
+    Cycle,
+}
+
+/// `Validatable.validateHolder`'s active-name rule, as a defensive check on
+/// this evaluation context. Check every typed reference before boolean
+/// short-circuiting; this does not implement registry/startup admission.
+fn predicate_references(
+    v: &Value,
+    w: &dyn World,
+    active: &mut BTreeSet<String>,
+) -> Result<(), InvalidReference> {
+    match v {
+        Value::String(id) => {
+            let id = full(id).into_owned();
+            if !active.insert(id.clone()) {
+                return Err(InvalidReference::Cycle);
+            }
+            let result = w
+                .predicate(&id)
+                .ok_or(InvalidReference::Missing)
+                .and_then(|v| predicate_references(v, w, active));
+            active.remove(&id);
+            result
+        }
+        Value::Array(list) => list
+            .iter()
+            .try_for_each(|v| predicate_references(v, w, active)),
+        Value::Object(o) => {
+            let kind = o
+                .get("condition")
+                .or_else(|| o.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            match &*full(kind) {
+                "minecraft:inverted" => predicate_references(&v["term"], w, active),
+                "minecraft:all_of" | "minecraft:any_of" => v["terms"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .try_for_each(|v| predicate_references(v, w, active)),
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The existing condition traversal with a caller-owned leaf context.
@@ -1534,6 +1656,10 @@ fn condition_leaf(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
         }
         // An inline entity predicate (old-style).
         Value::Object(_) => ctx.this.is_some_and(|e| entity(v, e, w, ctx.origin)),
+        // A named predicate reference: its loaded definition, walked like any other.
+        Value::String(id) => w
+            .predicate(&full(id))
+            .is_some_and(|v| conditions_with(v, ctx, &mut |v, ctx| condition_leaf(v, ctx, w))),
         _ => false,
     }
 }
@@ -1837,7 +1963,6 @@ impl Tree {
 mod tests {
     use super::*;
     use serde_json::json;
-
     #[test]
     fn advancement_reward_function_is_optional_and_namespaced() {
         for (raw, expected) in [
@@ -1862,16 +1987,15 @@ mod tests {
         .unwrap();
         assert!(without.rewards.function.is_none());
     }
-
     /// The criteria an inventory change and a recipe unlock test, on vanilla's tree:
     /// `cargo test -p horizon-client --lib -- --ignored --nocapture index_on_vanilla_tree`
-    /// with HORIZON_RESOURCES set to the prepared resources.
+    /// with HORIZON_TEST_RESOURCES set to the prepared resources.
     #[test]
-    #[ignore = "needs the prepared resources"]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn index_on_vanilla_tree() {
-        let Some(root) = std::env::var_os("HORIZON_RESOURCES").map(std::path::PathBuf::from) else {
-            return;
-        };
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
         let data = root.join("data");
         let t = std::time::Instant::now();
         let tree = Tree::load(&data);
@@ -2070,7 +2194,6 @@ mod tests {
             &Flat
         ));
     }
-
     /// A `recipe_crafted` criterion names `minecraft:x`; the craft hands
     /// the recipe book and the trigger the same whole id (`award_crafted`
     /// qualifies). The bare name the crafting copy uses never matched —
@@ -2093,7 +2216,6 @@ mod tests {
             "the whole id award_crafted passes matches"
         );
     }
-
     /// `LockCode.canUnlock` for a chest with
     /// `lock:{items:"minecraft:gold_ingot"}`: a gold ingot opens it, an empty
     /// hand or another item does not, and a spectator always does.
@@ -3242,7 +3364,6 @@ mod tests {
         );
         assert_eq!(date_millis("not a date"), None);
     }
-
     #[test]
     fn simulate_progression_advancements() {
         let mut tree = Tree::default();
@@ -3329,7 +3450,6 @@ mod tests {
             tree.by_id.insert(id, tree.list.len());
             tree.list.push(a);
         }
-
         fn get_list(tree: &Tree, target: Option<&str>, mode: &str) -> Vec<usize> {
             match target {
                 None => (0..tree.list.len()).collect(),
@@ -3358,7 +3478,6 @@ mod tests {
                 }
             }
         }
-
         fn grant(tree: &Tree, prog: &mut Progress, list: &[usize]) -> i32 {
             let mut count = 0;
             for &i in list {
@@ -3373,7 +3492,6 @@ mod tests {
             }
             count
         }
-
         fn revoke(tree: &Tree, prog: &mut Progress, list: &[usize]) -> i32 {
             let mut count = 0;
             for &i in list {
@@ -3492,5 +3610,67 @@ mod tests {
             assert!(!conditions(&v, &ctx, &Flat));
         }
         assert_eq!(draws, 0);
+    }
+
+    #[cfg(test)]
+    mod movement_model_tests {
+        use super::*;
+        use serde_json::json;
+
+        #[test]
+        fn added_model_movement_units_exact_bounds_and_squared_bounds() {
+            // Source-derived model proof; no moving Java/runtime claim.
+            let m = MovementView {
+                per_tick: [3.0 / 20.0, -4.0 / 20.0, 0.0],
+                fall_distance: 7.25,
+            };
+            assert_eq!(m.per_tick.map(|n| n * 20.0), [3.0, -4.0, 0.0]);
+            for p in [
+                json!({"x":3.0,"y":-4.0,"z":0.0}),
+                json!({"x":{"min":3.0,"max":3.0}}),
+                json!({"speed":5.0,"horizontal_speed":3.0,"vertical_speed":4.0,"fall_distance":7.25}),
+                json!({"speed":{"min":5.0,"max":5.0}}),
+                // Doubles boundsSqr maps each bound through Mth.square, including its sign.
+                json!({"speed":-5.0,"horizontal_speed":{"max":-3.0}}),
+                json!({}),
+            ] {
+                assert!(movement(&p, m), "{p}");
+            }
+            for p in [
+                json!({"x":3.0000000001}),
+                json!({"x":{"min":3.0000000001}}),
+                json!({"y":{"max":-4.0000000001}}),
+                json!({"speed":{"max":4.9999999999}}),
+                json!({"horizontal_speed":{"min":-4.0}}),
+                json!({"vertical_speed":-4.0}),
+                json!({"fall_distance":{"max":7.2499999999}}),
+            ] {
+                assert!(!movement(&p, m), "{p}");
+            }
+            assert!(!movement_range(&json!(3.0000000001), 3.0, false));
+            assert!(
+                range_f(&json!(3.0000000001), 3.0),
+                "existing global tolerance is untouched"
+            );
+        }
+
+        #[test]
+        fn added_model_unprojected_is_distinct_from_actual_stationary() {
+            let p = json!({"minecraft:movement":{}});
+            let view = EntityView {
+                kind: "minecraft:pig".into(),
+                ..Default::default()
+            };
+            // Unprojected is explicitly unsupported, not claimed Java-correct.
+            assert!(!entity(&p, &view, &super::Flat, [0.0; 3]));
+            let view = EntityView {
+                movement: Some(MovementView {
+                    per_tick: [0.0; 3],
+                    fall_distance: 0.0,
+                }),
+                ..view
+            };
+            assert!(entity(&p, &view, &super::Flat, [0.0; 3]));
+        }
     }
 }

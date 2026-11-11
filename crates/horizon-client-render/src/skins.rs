@@ -24,11 +24,42 @@ pub struct Textures {
     pub signed: bool,
 }
 
-/// The `getTexture` endpoint's valid URIs from Minecraft services discovery.
+/// The `getTexture` endpoint's valid URIs in production's services discovery
+/// document (`MinecraftServicesEnvironment.PROD`).
 pub const TEXTURE_URIS: [&str; 2] = [
     "https://textures.minecraft.net/texture/{textureId}",
     "http://textures.minecraft.net/texture/{textureId}",
 ];
+
+/// `MinecraftServicesDiscoveryService`'s valid texture URIs: the discovery
+/// document's `profiles` / `getTexture` `validUris`, which
+/// `MinecraftServicesSessionService.isAllowedTextureDomain` checks texture URLs
+/// against. Production's document lists [`TEXTURE_URIS`], so they are used
+/// without asking it; another environment (`HORIZON_API_DISCOVERY`) is asked
+/// once per game, and keeps [`TEXTURE_URIS`] when its document lists none or
+/// can't be fetched.
+pub fn texture_uris() -> &'static [String] {
+    static URIS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    URIS.get_or_init(|| {
+        crate::auth::discovery_overridden()
+            .then(|| crate::auth::discovery().ok())
+            .flatten()
+            .and_then(|doc| discovery_texture_uris(&doc))
+            .unwrap_or_else(|| TEXTURE_URIS.map(str::to_owned).to_vec())
+    })
+}
+
+/// The `profiles` / `getTexture` endpoint's `validUris` in a discovery
+/// document, when it lists any.
+fn discovery_texture_uris(doc: &serde_json::Value) -> Option<Vec<String>> {
+    let uris: Vec<String> = doc
+        .pointer("/discovery/profiles/endpoints/getTexture/validUris")?
+        .as_array()?
+        .iter()
+        .filter_map(|u| u.as_str().map(str::to_owned))
+        .collect();
+    (!uris.is_empty()).then_some(uris)
+}
 
 /// `java.util.Base64.getDecoder().decode`.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
@@ -44,7 +75,7 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 
 /// `unpackTextures(property)`: the textures of a `textures` property's
 /// base64 JSON payload.
-pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Textures {
+pub fn unpack(value: &str, signature: Signature, valid_uris: &[impl AsRef<str>]) -> Textures {
     let empty = Textures::default();
     let Some(json) = base64_decode(value)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -62,15 +93,18 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Texture
         signed: signature == Signature::Signed,
         ..empty.clone()
     };
+    // Each texture is loaded independently: an invalid or disallowed URL for one
+    // texture (cape, elytra) must not drop another (the skin). Vanilla's
+    // SkinManager works the same way.
     for (kind, texture) in textures {
         let Some(url) = texture.get("url").and_then(|u| u.as_str()) else {
-            return empty;
+            continue;
         };
         let allowed = valid_uris
             .iter()
-            .any(|u| url.starts_with(&u.replace("{textureId}", "")));
+            .any(|u| url.starts_with(&u.as_ref().replace("{textureId}", "")));
         if !allowed {
-            return empty;
+            continue;
         }
         if kind == "SKIN" {
             out.slim = texture
@@ -95,7 +129,7 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Texture
 /// those textures be unsigned (`getInsecureSkinInformation`).
 pub fn profile_skin_url(profile: &serde_json::Value) -> Option<String> {
     let (value, signature) = parse_profile(profile).textures?;
-    unpack(&value, signature, &TEXTURE_URIS).skin
+    unpack(&value, signature, texture_uris()).skin
 }
 
 /// The textures of a Minecraft services `/minecraft/profile` answer: the
@@ -114,7 +148,7 @@ pub fn services_profile_textures(profile: &serde_json::Value) -> Textures {
         .and_then(|t| t.get("url"))
         .and_then(|u| u.as_str())
         .filter(|url| {
-            TEXTURE_URIS
+            texture_uris()
                 .iter()
                 .any(|u| url.starts_with(&u.replace("{textureId}", "")))
         })
@@ -127,7 +161,7 @@ pub fn services_profile_textures(profile: &serde_json::Value) -> Textures {
         .and_then(|t| t.get("url"))
         .and_then(|u| u.as_str())
         .filter(|url| {
-            TEXTURE_URIS
+            texture_uris()
                 .iter()
                 .any(|u| url.starts_with(&u.replace("{textureId}", "")))
         })
@@ -155,7 +189,7 @@ pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String>
             .then(|| nbt_text(p.get("value")))
             .flatten()
     })?;
-    unpack(&value, Signature::Unsigned, &TEXTURE_URIS).skin
+    unpack(&value, Signature::Unsigned, texture_uris()).skin
 }
 
 /// `ResolvableProfile.skinPatch().body()` of a skull's `profile` NBT: the
@@ -478,7 +512,7 @@ struct HeadProfile {
 fn prepare_head(profile: &serde_json::Value) -> HeadProfile {
     let info = parse_profile(profile);
     let skin = info.textures.as_ref().and_then(|(value, signature)| {
-        let url = unpack(value, *signature, &TEXTURE_URIS).skin?;
+        let url = unpack(value, *signature, texture_uris()).skin?;
         let location = skin_location(&texture_hash(&url)?);
         Some((url, location))
     });
@@ -901,7 +935,56 @@ pub struct Downloader {
     failed: std::collections::HashMap<(Kind, String), std::time::Instant>,
     /// How long a failed texture download waits before it is tried again.
     retry_after: std::time::Duration,
+    /// The `states` keys, oldest first, so the oldest settled one can go ([`Bounds::states`]).
+    state_order: std::collections::VecDeque<(Kind, String)>,
+    /// The `resources` keys, oldest first ([`Bounds::resources`]).
+    resource_order: std::collections::VecDeque<String>,
+    /// Downloads started whose answer `state` has not taken yet: one thread each.
+    in_flight: usize,
+    /// Fetches a texture's body; the HTTP GET, but for a test.
+    fetch: fn(&str) -> Option<Vec<u8>>,
+    bounds: Bounds,
 }
+/// A download thread's answer to `state`. If the thread panics before giving it (a body that
+/// breaks the decoder, say), dropping this answers "failed" instead: the download's place in
+/// `in_flight` is given back and the texture is retried after the wait, where an answer that never
+/// came kept the key `Pending` for good and, with the bound, the place taken for the session.
+struct Answer {
+    send: std::sync::mpsc::Sender<((Kind, String), Option<Vec<u8>>)>,
+    key: Option<(Kind, String)>,
+}
+impl Answer {
+    fn give(&mut self, image: Option<Vec<u8>>) {
+        if let Some(key) = self.key.take() {
+            let _ = self.send.send((key, image));
+        }
+    }
+}
+impl Drop for Answer {
+    fn drop(&mut self) {
+        self.give(None);
+    }
+}
+
+/// What the downloader keeps and runs at most. Every texture URL a server (or a tab list of
+/// hundreds of players) names used to add a `states` entry and a thread of its own, and every
+/// `texture` id a `resources` entry, none of them ever dropped.
+#[derive(Clone, Copy, Debug)]
+struct Bounds {
+    /// Entries of `states`; the oldest settled (ready or failed) one is dropped past this. A
+    /// dropped texture is loaded again from the disk cache when it is asked for.
+    states: usize,
+    /// Entries of `resources`; the oldest is dropped past this, and read from the packs again.
+    resources: usize,
+    /// Downloads running at once. Past this `state` says `Pending` and starts nothing, so the
+    /// caller, which asks again every frame, starts it when one has finished.
+    downloads: usize,
+}
+const BOUNDS: Bounds = Bounds {
+    states: 4096,
+    resources: 4096,
+    downloads: 16,
+};
 /// `images` is bounded only so a long session on a busy server does not grow
 /// without end; the disk cache holds everything it drops.
 const MAX_SKIN_IMAGES: usize = 1024;
@@ -933,6 +1016,11 @@ impl Downloader {
             resources: Default::default(),
             failed: Default::default(),
             retry_after: std::time::Duration::from_secs(60),
+            state_order: Default::default(),
+            resource_order: Default::default(),
+            in_flight: 0,
+            fetch: http_get,
+            bounds: BOUNDS,
         }
     }
     /// The resource packs changed (or were first loaded) at `root`: patch
@@ -942,6 +1030,7 @@ impl Downloader {
             self.images.remove(&location);
             self.image_order.retain(|l| *l != location);
         }
+        self.resource_order.clear();
         self.resource_root = root;
     }
     /// `ClientAsset.ResourceTexture`: loads `<namespace>:textures/<path>.png`
@@ -971,12 +1060,47 @@ impl Downloader {
             }
             None => Download::Failed,
         };
-        self.resources.insert(location.to_owned(), state);
+        if self.resources.insert(location.to_owned(), state).is_none() {
+            self.resource_order.push_back(location.to_owned());
+            while self.resources.len() > self.bounds.resources
+                && let Some(old) = self.resource_order.pop_front()
+            {
+                self.resources.remove(&old);
+            }
+        }
+    }
+    /// Forgets how `location` loaded, so `resource` reads it again.
+    fn forget_resource(&mut self, location: &str) {
+        if self.resources.remove(location).is_some() {
+            self.resource_order.retain(|l| l != location);
+        }
+    }
+    /// Records how `key` stands. A new key may push the oldest settled one out of `states`;
+    /// downloads running are never dropped, so their answer has a key to land on.
+    fn set_state(&mut self, key: (Kind, String), state: Download) {
+        if self.states.insert(key.clone(), state).is_some() {
+            return;
+        }
+        self.state_order.push_back(key);
+        while self.states.len() > self.bounds.states {
+            let Some(at) = self
+                .state_order
+                .iter()
+                .position(|k| self.states.get(k) != Some(&Download::Pending))
+            else {
+                break;
+            };
+            if let Some(old) = self.state_order.remove(at) {
+                self.states.remove(&old);
+                self.failed.remove(&old);
+            }
+        }
     }
     /// How the download of `url` stands, starting it the first time. A
     /// failure is permanent for `retry_after`, then tried again.
     pub fn state(&mut self, kind: Kind, url: &str) -> Download {
         while let Ok((key, image)) = self.done.try_recv() {
+            self.in_flight = self.in_flight.saturating_sub(1);
             let state = match image {
                 Some(rgba) => {
                     match key.0 {
@@ -992,29 +1116,42 @@ impl Downloader {
                     Download::Failed
                 }
             };
-            self.states.insert(key, state);
+            self.set_state(key, state);
         }
         let Some(hash) = texture_hash(url) else {
             return Download::Failed;
         };
         let key = (kind, hash);
+        let full = self.in_flight >= self.bounds.downloads;
         if let Some(state) = self.states.get(&key).copied() {
             let due = self
                 .failed
                 .get(&key)
                 .is_none_or(|at| at.elapsed() >= self.retry_after);
-            if state != Download::Failed || !due {
+            // A failure that is due waits for a free download like a new texture does.
+            if state != Download::Failed || !due || full {
                 return state;
             }
             self.states.remove(&key);
             self.failed.remove(&key);
+            self.state_order.retain(|k| *k != key);
         }
-        self.states.insert(key.clone(), Download::Pending);
+        if full {
+            // Not recorded: the next call asks again, and starts it once one has finished.
+            return Download::Pending;
+        }
+        self.in_flight += 1;
+        self.set_state(key.clone(), Download::Pending);
         let digest: String = skin_location(&key.1)["skins/".len()..].to_owned();
         let (url, send, root) = (url.to_owned(), self.send.clone(), self.root.clone());
+        let fetch = self.fetch;
         std::thread::spawn(move || {
-            let image = Self::load_texture(&root, kind, &digest, &url, http_get);
-            let _ = send.send((key, image));
+            let mut answer = Answer {
+                send,
+                key: Some(key),
+            };
+            let image = Self::load_texture(&root, kind, &digest, &url, fetch);
+            answer.give(image);
         });
         Download::Pending
     }
@@ -1077,7 +1214,7 @@ impl Downloader {
         if location.starts_with("patch/") {
             let Some(image) = self.images.get(location).cloned() else {
                 // Dropped from memory: read from the packs again.
-                self.resources.remove(location);
+                self.forget_resource(location);
                 return false;
             };
             self.queue(location.to_owned(), image);
@@ -1251,7 +1388,10 @@ mod tests {
                     &super::TEXTURE_URIS,
                 );
                 assert_eq!(textures.slim, slim && !url.contains("evil"));
-                assert_eq!(textures.cape.is_some(), !url.contains("evil"));
+                // Textures are judged per URL (vanilla's SkinManager): the
+                // cape's URL is always allowed here, so it is kept even when
+                // the skin's URL is not.
+                assert!(textures.cape.is_some());
                 assert_eq!(parsed.skin.is_some(), !url.contains("evil"));
                 assert!(std::sync::Arc::ptr_eq(&parsed, &cache.get(&profile)));
             }
@@ -1362,6 +1502,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `MinecraftServicesDiscoveryService`: another environment's document
+    /// names its own texture host; one that lists none names nothing.
+    #[test]
+    fn texture_uris_come_from_the_discovery_document() {
+        use super::{Signature, discovery_texture_uris, unpack};
+        let doc = serde_json::json!({"discovery": {"profiles": {"endpoints": {"getTexture": {
+            "validUris": ["https://skins.example.org/t/{textureId}"]
+        }}}}});
+        let uris = discovery_texture_uris(&doc).unwrap();
+        assert_eq!(uris, ["https://skins.example.org/t/{textureId}"]);
+        // {"textures":{"SKIN":{"url":"https://skins.example.org/t/abc"}}}
+        let ours =
+            "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHBzOi8vc2tpbnMuZXhhbXBsZS5vcmcvdC9hYmMifX19";
+        assert_eq!(
+            unpack(ours, Signature::Signed, &uris).skin.as_deref(),
+            Some("https://skins.example.org/t/abc")
+        );
+        assert_eq!(
+            unpack(ours, Signature::Signed, &super::TEXTURE_URIS).skin,
+            None
+        );
+        let none = serde_json::json!({"discovery": {"profiles": {"endpoints": {}}}});
+        assert_eq!(discovery_texture_uris(&none), None);
+        let empty = serde_json::json!({"discovery": {"profiles": {"endpoints": {"getTexture": {"validUris": []}}}}});
+        assert_eq!(discovery_texture_uris(&empty), None);
+    }
+
     /// `MinecraftProfileTexture.getMetadata("model")`: `slim` marks a slim
     /// skin; no metadata is the wide (classic) model.
     #[test]
@@ -1376,6 +1543,19 @@ mod tests {
         );
         assert!(t.slim);
         assert!(!unpack(wide, Signature::Signed, &TEXTURE_URIS).slim);
+    }
+    /// `unpack` keeps each texture independently: a cape from another origin
+    /// must not drop the skin.
+    #[test]
+    fn unpack_keeps_the_skin_when_another_texture_is_rejected() {
+        use super::{Signature, TEXTURE_URIS, unpack};
+        let mixed = "eyJ0ZXh0dXJlcyI6IHsiU0tJTiI6IHsidXJsIjogImh0dHBzOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL3NraW4xIn0sICJDQVBFIjogeyJ1cmwiOiAiaHR0cHM6Ly9ldmlsLmV4YW1wbGUvdGV4dHVyZS9jYXBlMSJ9fX0=";
+        let t = unpack(mixed, Signature::Unsigned, &TEXTURE_URIS);
+        assert_eq!(
+            t.skin.as_deref(),
+            Some("https://textures.minecraft.net/texture/skin1")
+        );
+        assert_eq!(t.cape, None);
     }
     #[test]
     fn profiles_parse_like_resolvable_profiles() {
@@ -1865,5 +2045,227 @@ mod tests {
             super::Download::Ready
         );
         assert_eq!(served.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[cfg(test)]
+mod download_bound_tests {
+    use super::{Bounds, Download, Downloader, Kind};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn downloader(name: &str, bounds: Bounds, fetch: fn(&str) -> Option<Vec<u8>>) -> Downloader {
+        let root =
+            std::env::temp_dir().join(format!("horizon-test-skin-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut d = Downloader::new(root);
+        d.fetch = fetch;
+        d.bounds = bounds;
+        d
+    }
+
+    fn url(i: usize) -> String {
+        format!("https://textures.example/texture/skin{i:05}")
+    }
+
+    /// Asks again until the texture's download has settled.
+    fn wait(d: &mut Downloader, url: &str) -> Download {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let state = d.state(Kind::Skin, url);
+            if state != Download::Pending || std::time::Instant::now() > deadline {
+                return state;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    static RUNNING: AtomicUsize = AtomicUsize::new(0);
+    static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+    /// A fetch that is slow enough for the others to pile up behind it, and counts how many run.
+    fn slow_failure(_: &str) -> Option<Vec<u8>> {
+        let now = RUNNING.fetch_add(1, Ordering::SeqCst) + 1;
+        PEAK.fetch_max(now, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+        None
+    }
+
+    /// The same, not counted: tests run side by side, and the count is another test's.
+    fn sleepy_failure(_: &str) -> Option<Vec<u8>> {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        None
+    }
+
+    /// A tab list of 60 players names 60 textures at once: no more than the bound run together,
+    /// the ones that waited start as the others finish, and every one ends. Every frame asks again.
+    #[test]
+    fn downloads_run_a_few_at_a_time_and_the_late_ones_start_later() {
+        let bounds = Bounds {
+            states: 4096,
+            resources: 4096,
+            downloads: 4,
+        };
+        let mut d = downloader("threads", bounds, slow_failure);
+        let urls: Vec<String> = (0..60).map(url).collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut first = true;
+        loop {
+            let states: Vec<Download> = urls.iter().map(|u| d.state(Kind::Skin, u)).collect();
+            if first {
+                // Asked all at once: four started, and the others were not even recorded.
+                assert_eq!(d.in_flight, 4);
+                assert_eq!(d.states.len(), 4);
+                assert!(states.iter().all(|s| *s == Download::Pending));
+                first = false;
+            }
+            if states.iter().all(|s| *s == Download::Failed) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{} still pending",
+                states.len()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(
+            PEAK.load(Ordering::SeqCst) <= 4,
+            "{}",
+            PEAK.load(Ordering::SeqCst)
+        );
+        assert_eq!(d.states.len(), 60);
+        assert_eq!(d.in_flight, 0);
+    }
+
+    /// More textures than `states` holds: the map keeps to its bound, the oldest settled ones go
+    /// (and their failure time with them), and one that went is asked again as a new texture.
+    #[test]
+    fn the_states_keep_to_their_bound_and_drop_the_oldest() {
+        let bounds = Bounds {
+            states: 8,
+            resources: 4096,
+            downloads: 16,
+        };
+        let mut d = downloader("states", bounds, |_| None);
+        for i in 0..40 {
+            let u = url(i);
+            assert_eq!(wait(&mut d, &u), Download::Failed, "{i}");
+            assert!(d.states.len() <= 8 && d.state_order.len() == d.states.len());
+            assert!(d.failed.len() <= 8);
+        }
+        let kept: Vec<usize> = (0..40)
+            .filter(|i| {
+                d.states
+                    .contains_key(&(Kind::Skin, super::texture_hash(&url(*i)).unwrap()))
+            })
+            .collect();
+        assert_eq!(kept, (32..40).collect::<Vec<_>>());
+        // The first one went: asked again, it starts again (and fails again).
+        assert_eq!(d.state(Kind::Skin, &url(0)), Download::Pending);
+        assert_eq!(d.in_flight, 1);
+    }
+
+    /// A fetch that panics, as a decoder can on a body a server chose.
+    fn panicking(_: &str) -> Option<Vec<u8>> {
+        panic!("a fetch that panics, on purpose");
+    }
+
+    /// A thread that panics before it answers still gives its place back: with two places and six
+    /// textures whose fetch panics, every one settles as failed instead of the places staying
+    /// taken for good.
+    #[test]
+    fn a_download_that_panics_gives_its_place_back() {
+        let bounds = Bounds {
+            states: 4096,
+            resources: 4096,
+            downloads: 2,
+        };
+        let mut d = downloader("panics", bounds, panicking);
+        for i in 0..6 {
+            assert_eq!(wait(&mut d, &url(i)), Download::Failed, "{i}");
+        }
+        assert_eq!(d.in_flight, 0);
+        assert_eq!(d.states.len(), 6);
+    }
+
+    /// A fetch long enough for a test to ask between its start and its end.
+    fn slowish_failure(_: &str) -> Option<Vec<u8>> {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        None
+    }
+
+    /// A failure whose wait is over is retried like a new texture: not while every place is taken
+    /// (it keeps answering `Failed`, and starts nothing), and as soon as one is free.
+    #[test]
+    fn a_failure_that_is_due_waits_for_a_free_place() {
+        let bounds = Bounds {
+            states: 4096,
+            resources: 4096,
+            downloads: 1,
+        };
+        let mut d = downloader("due", bounds, slowish_failure);
+        let wait_time = d.retry_after;
+        assert_eq!(wait(&mut d, &url(0)), Download::Failed);
+        // Another texture takes the only place; the first one's retry becomes due but has to wait.
+        assert_eq!(d.state(Kind::Skin, &url(1)), Download::Pending);
+        d.retry_after = std::time::Duration::ZERO;
+        assert_eq!(d.state(Kind::Skin, &url(0)), Download::Failed);
+        assert_eq!(d.in_flight, 1);
+        d.retry_after = wait_time;
+        assert_eq!(wait(&mut d, &url(1)), Download::Failed);
+        // The place is free: the retry starts.
+        d.retry_after = std::time::Duration::ZERO;
+        assert_eq!(d.state(Kind::Skin, &url(0)), Download::Pending);
+        assert_eq!(d.in_flight, 1);
+    }
+
+    /// A texture that is running is never the one dropped, however many settle behind it.
+    #[test]
+    fn a_running_download_keeps_its_place_in_the_states() {
+        let bounds = Bounds {
+            states: 2,
+            resources: 4096,
+            downloads: 16,
+        };
+        let mut d = downloader("running", bounds, sleepy_failure);
+        assert_eq!(d.state(Kind::Skin, &url(0)), Download::Pending);
+        for i in 1..6 {
+            d.set_state((Kind::Cape, format!("settled{i}")), Download::Ready);
+        }
+        assert_eq!(
+            d.states
+                .get(&(Kind::Skin, super::texture_hash(&url(0)).unwrap())),
+            Some(&Download::Pending)
+        );
+        assert!(d.states.len() <= 3);
+        assert_eq!(wait(&mut d, &url(0)), Download::Failed);
+    }
+
+    /// `resources` keeps to its bound too: a server's `texture` ids, one for each unique one, no
+    /// longer pile up, and one that was dropped is read from the packs again.
+    #[test]
+    fn the_resource_textures_keep_to_their_bound() {
+        let bounds = Bounds {
+            states: 4096,
+            resources: 8,
+            downloads: 16,
+        };
+        let mut d = downloader("resources", bounds, |_| None);
+        for i in 0..40 {
+            d.resource(&format!("patch/n/{i}"), "n", &format!("t{i}"));
+            assert!(d.resources.len() <= 8 && d.resource_order.len() == d.resources.len());
+        }
+        let kept: Vec<usize> = (0..40)
+            .filter(|i| d.resources.contains_key(&format!("patch/n/{i}")))
+            .collect();
+        assert_eq!(kept, (32..40).collect::<Vec<_>>());
+        // Forgetting one by hand (as `again` does) leaves no stale key behind.
+        d.forget_resource("patch/n/35");
+        assert_eq!(d.resource_order.len(), d.resources.len());
+        assert!(!d.resource_order.iter().any(|l| l == "patch/n/35"));
+        // New packs start the count over.
+        d.set_resource_root(std::env::temp_dir());
+        assert!(d.resources.is_empty() && d.resource_order.is_empty());
     }
 }

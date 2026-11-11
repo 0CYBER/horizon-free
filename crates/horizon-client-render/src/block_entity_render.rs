@@ -15,7 +15,7 @@ use crate::{
     font::{Font, Glyph},
     gfx::mark_oit,
     hud::Rect,
-    mesher::{CULL_BACK, Vertex},
+    mesher::{CULL_BACK, Vertex, cull_back},
     models::load_visibility,
     signs::{self, SignData, SignText},
     text::{Style, Text},
@@ -575,14 +575,14 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
             "banner" => {
                 let segment: f32 = prop("rotation").and_then(|r| r.parse().ok()).unwrap_or(0.0);
                 return Kind::Banner {
-                    color: DYES[dye].1,
+                    color: crate::pack_palette::diffuse(dye),
                     wall: false,
                     angle: segment * 22.5,
                 };
             }
             "wall_banner" => {
                 return Kind::Banner {
-                    color: DYES[dye].1,
+                    color: crate::pack_palette::diffuse(dye),
                     wall: true,
                     angle: y_rot(facing()),
                 };
@@ -1459,7 +1459,37 @@ impl BlockEntityRenderer {
         registry: &BlockRegistry,
         visibility: FaceVisibility,
     ) -> Result<Self> {
-        let all: Value = serde_json::from_slice(&std::fs::read(root.join("entity-models.json"))?)?;
+        Self::load_with_visibility_inner(root, registry, visibility, None, None)
+    }
+
+    /// Load from what the client startup batch already decoded: its entity-model
+    /// document (none reads `entity-models.json`) and the item defaults, avoiding a
+    /// second read and decode of either.
+    pub fn load_with_visibility_models_and_defaults(
+        root: &Path,
+        registry: &BlockRegistry,
+        visibility: FaceVisibility,
+        models: Option<&Value>,
+        defaults: &horizon_world::item_defaults::Defaults,
+    ) -> Result<Self> {
+        Self::load_with_visibility_inner(root, registry, visibility, models, Some(defaults))
+    }
+
+    fn load_with_visibility_inner(
+        root: &Path,
+        registry: &BlockRegistry,
+        visibility: FaceVisibility,
+        models: Option<&Value>,
+        defaults: Option<&horizon_world::item_defaults::Defaults>,
+    ) -> Result<Self> {
+        let owned_models = if models.is_none() {
+            Some(serde_json::from_slice(&std::fs::read(
+                root.join("entity-models.json"),
+            )?)?)
+        } else {
+            None
+        };
+        let all = models.or(owned_models.as_ref()).expect("entity models");
         let models = MODELS
             .iter()
             .filter_map(|(key, layer)| all.get(*layer).map(|v| (*key, ModelPart::parse(v))))
@@ -1469,12 +1499,17 @@ impl BlockEntityRenderer {
         // The packs' custom entity models (`.jem` files), before anything draws.
         renderer.set_shapes(renderer.shapes_for(root));
         // Sherd items: provides_pottery_pattern -> decorated_pot_pattern asset id.
-        let items = match horizon_world::item_defaults::read(root) {
-            Ok(items) => items,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
-            Err(e) => return Err(e.into()),
+        let owned_defaults = if defaults.is_none() {
+            Some(match horizon_world::item_defaults::read(root) {
+                Ok(items) => items,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
+                Err(e) => return Err(e.into()),
+            })
+        } else {
+            None
         };
-        for (item, components) in &items {
+        let items = defaults.or(owned_defaults.as_ref()).unwrap();
+        for (item, components) in items {
             let Some(pattern) = components["minecraft:provides_pottery_pattern"].as_str() else {
                 continue;
             };
@@ -3058,9 +3093,9 @@ impl BlockEntityRenderer {
                     }
                 }
                 // `DecoratedPotRenderer` submits every part with `entitySolid`, which culls
-                // back faces: the flat `top` and `bottom` planes show one side each.
+                // back faces: the flat `top` and `bottom` planes show one side each (#15322).
                 for vertex in &mut out[first..] {
-                    vertex.normal = CULL_BACK;
+                    vertex.normal = cull_back(vertex.normal);
                 }
             }
             Kind::EndPortal => {
@@ -4725,9 +4760,12 @@ mod tests {
             28,
             "the pot submits all of vanilla's quads"
         );
+        // A part the shader shades keeps its normal (#15322): `w` alone says cull.
         assert!(
-            verts.iter().all(|v| v.normal == CULL_BACK),
-            "entitySolid culls the pot's back faces"
+            verts
+                .iter()
+                .all(|v| v.normal[3] == crate::mesher::SHADED_CULL_W && v.normal[..3] != [0; 3]),
+            "entitySolid culls the pot's back faces and shades it by its normals"
         );
     }
 

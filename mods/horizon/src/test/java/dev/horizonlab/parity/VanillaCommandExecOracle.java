@@ -576,13 +576,19 @@ public final class VanillaCommandExecOracle {
                     }
                 }) : new EmbeddedChannel(connection);
             JsonObject login = new JsonObject();
-            if (Boolean.getBoolean("horizon.loadedFixture")) {
+            java.util.Map<Integer, JsonArray> sentMerchantOffers = new java.util.HashMap<>();
+            if (Boolean.getBoolean("horizon.loadedFixture") || Boolean.getBoolean("horizon.merchantCraftedFixture")) {
                 channel.pipeline().addLast(new io.netty.channel.ChannelOutboundHandlerAdapter() {
                     @Override public void write(io.netty.channel.ChannelHandlerContext context, Object message,
                             io.netty.channel.ChannelPromise promise) throws Exception {
                         if (message instanceof net.minecraft.network.protocol.game.ClientboundLoginPacket packet) {
                             login.addProperty("view_distance", packet.chunkRadius());
                             login.addProperty("simulation_distance", packet.simulationDistance());
+                        }
+                        if (message instanceof net.minecraft.network.protocol.game.ClientboundMerchantOffersPacket packet) {
+                            JsonArray offers = new JsonArray();
+                            for (var offer : packet.getOffers()) offers.add(merchantOffer(offer));
+                            sentMerchantOffers.put(packet.getContainerId(), offers);
                         }
                         super.write(context, message, promise);
                     }
@@ -800,6 +806,9 @@ public final class VanillaCommandExecOracle {
                     }
                     case "tick" -> {
                         int n = op.has("n") ? op.get("n").getAsInt() : 1;
+                        // The ordinary harness budget defers chunk I/O. An unload
+                        // fixture can give the real unload queue time to drain.
+                        boolean allowChunkIo = op.has("allow_chunk_io") && op.get("allow_chunk_io").getAsBoolean();
                         messages.clear();
                         // Answers computed off-thread (profile lookups) reach the
                         // server's task queue before the next tick.
@@ -811,7 +820,7 @@ public final class VanillaCommandExecOracle {
                         }
                         long pacedStart = System.nanoTime();
                         for (int i = 0; i < n; i++) {
-                            tick();
+                            tick(allowChunkIo);
                             if (op.has("pace_ms")) {
                                 long left = op.get("pace_ms").getAsLong() * (i + 1) * 1_000_000L - (System.nanoTime() - pacedStart);
                                 if (left > 0) try {Thread.sleep(left / 1_000_000L, (int)(left % 1_000_000L));}
@@ -873,6 +882,16 @@ public final class VanillaCommandExecOracle {
                         player.connection.handleInteract(new net.minecraft.network.protocol.game.ServerboundInteractPacket(
                             mob.getId(), net.minecraft.world.InteractionHand.MAIN_HAND,
                             net.minecraft.world.phys.Vec3.ZERO, false));
+                    }
+                    case "player_command" -> {
+                        // The player's real ServerboundPlayerCommandPacket, through its handler.
+                        var action = switch (op.get("action").getAsString()) {
+                            case "start_riding_jump" -> net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.START_RIDING_JUMP;
+                            case "stop_riding_jump" -> net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.STOP_RIDING_JUMP;
+                            default -> throw new IllegalStateException("player command: unknown action");
+                        };
+                        player.connection.handlePlayerCommand(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(
+                            player, action, op.get("data").getAsInt()));
                     }
                     case "use_item" -> {
                         if (!op.has("sequence")) {
@@ -1060,7 +1079,8 @@ public final class VanillaCommandExecOracle {
                         record.add("results", results);
                         out.append(gson.toJson(record)).append('\n');
                     }
-                    case "close_menu" -> player.closeContainer();
+                    case "close_menu" -> player.connection.handleContainerClose(
+                        new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(player.containerMenu.containerId));
                     case "merchant_saved_stats" -> {
                         player.getStats().save();
                         String raw;
@@ -1119,8 +1139,11 @@ public final class VanillaCommandExecOracle {
                         uuid=new JsonArray();for(int n:net.minecraft.core.UUIDUtil.uuidToIntArray(player.getUUID()))uuid.add(n);state.add("player",uuid);
                         JsonArray slots=new JsonArray();for(int n=0;n<3;n++)slots.add(merchantStack(menu.getSlot(n).getItem()));state.add("slots",slots);
                         state.add("carried",merchantStack(menu.getCarried()));state.addProperty("xp",menu.getTraderXp());
+                        boolean offerPackets = op.has("offer_packets") && op.get("offer_packets").getAsBoolean();
+                        if (offerPackets) state.add("sent_offers",sentMerchantOffers.get(menu.containerId));
                         JsonArray offers=new JsonArray();for(var offer:menu.getOffers()) {
                             JsonObject o=new JsonObject();o.addProperty("uses",offer.getUses());o.addProperty("special",offer.getSpecialPriceDiff());
+                            if (offerPackets) o.addProperty("demand",offer.getDemand());
                             o.addProperty("cost",offer.getCostA().getCount());offers.add(o);
                         }state.add("offers",offers);
                         JsonObject record=new JsonObject();record.addProperty("cmd","#merchant_state "+op.get("label").getAsString());
@@ -1229,6 +1252,15 @@ public final class VanillaCommandExecOracle {
             Files.writeString(output, out.toString(), StandardCharsets.UTF_8);
         }
 
+        static JsonObject merchantOffer(net.minecraft.world.item.trading.MerchantOffer offer) {
+            JsonObject value = new JsonObject();
+            value.addProperty("uses", offer.getUses());
+            value.addProperty("special", offer.getSpecialPriceDiff());
+            value.addProperty("demand", offer.getDemand());
+            value.addProperty("cost", offer.getCostA().getCount());
+            return value;
+        }
+
         static net.minecraft.world.entity.npc.villager.Villager merchantOwner(net.minecraft.world.inventory.MerchantMenu menu) {
             try {
                 var field=net.minecraft.world.inventory.MerchantMenu.class.getDeclaredField("trader");field.setAccessible(true);
@@ -1244,6 +1276,10 @@ public final class VanillaCommandExecOracle {
 
         /** One iteration of MinecraftServer.runServer: the delayed tick profiler start, then the tick. */
         void tick() {
+            tick(false);
+        }
+
+        void tick(boolean allowChunkIo) {
             try {
                 var delay = MinecraftServer.class.getDeclaredField("debugCommandProfilerDelayStart");
                 delay.setAccessible(true);
@@ -1260,7 +1296,7 @@ public final class VanillaCommandExecOracle {
                 throw new RuntimeException(e);
             }
             drain();
-            super.tickServer(() -> false);
+            super.tickServer(() -> allowChunkIo);
             // The player's network listener ticks it each server tick
             // (ServerGamePacketListenerImpl.tickPlayer); this one has no
             // listening connection. Its movement is the client's, so of

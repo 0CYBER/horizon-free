@@ -53,9 +53,9 @@ below); where HDR's settings live (a later note).
 
 ## The colour rule (shader API 0.2)
 
-- **Every colour a 0.2 stage reads or returns is linear light**: BT.709 (sRGB) primaries, scene-referred, **1.0 is
-  vanilla's white at paper white**, more is brighter, up to half float's range. Horizon replaces negative values and
-  NaN with 0 before the display.
+- **Every colour a 0.2 stage reads or returns is linear light**: BT.709 (sRGB) primaries by default,
+  scene-referred, **1.0 is vanilla's white at paper white**, more is brighter, up to half float's range. Horizon
+  replaces negative values and NaN with 0 before the display.
 - **Decoding is vanilla's 2.2 power**, as `hdr.wgsl` decodes today, not the piecewise sRGB curve. Because a power is
   multiplicative, vanilla's lit colour `albedo * tint * lightmap` is the same in linear: decoding the product is the
   product of the decoded terms.
@@ -170,7 +170,8 @@ separate pull request, with screenshots.
 
 Under a 0.2 pack Horizon lifts nothing: the pack gets vanilla's picture in linear light whatever the display, reads
 `emission` in its material stage, and writes what shines. (Telling post stages which pixels are light sources is a
-likely 0.2 addition, not designed here.)
+likely 0.2 addition, not designed here. Wide colour is one that is: a pack asks for BT.2020 primaries with
+`[frame] primaries`, which the check takes and the game doesn't serve yet, #14584.)
 
 ## The HUD and menus
 
@@ -189,8 +190,8 @@ With HDR on:
   world border's red vignette included.
 - **`keep_world` becomes a pass** instead of a copy. The frame keeps the world, light above white included; the pass
   writes it clipped to white, in gamma, with alpha 0, into the HUD's target. That backdrop is what the HUD draws on,
-  so it starts at white at most, as today. The target is in the frame's format, so the HUD's pipelines draw on it as on
-  the frame with HDR switched off; the display pass clips what the HUD drew at white.
+  so it starts at white at most, as today. The target is 8-bit, as the frame with HDR switched off is, so each HUD draw
+  clips at white and rounds as it does there.
 - **The HUD and menus keep today's blends, alpha included**, so the crosshair and `GUI_INVERT` (which invert what is
   under them), the text highlight, the menu blur and CIT glint layers (whose blends may read the destination's alpha,
   `hud/cit_glint.rs`) see what they see today; the backdrop's alpha 0 is the alpha `keep_world` leaves today.
@@ -239,19 +240,20 @@ From preview on, stability.md's deprecation windows apply.
 
 ## `shaders/`-format packs
 
-They keep their own buffers and tone map to SDR in their last program, and their alpha is theirs. Today their
-`final` program writes all four channels onto the frame (`gfx/pack_post.rs` `target`), and `keep_world` copies that
-alpha into the kept world. With HDR and its HDR Lighting setting on, the HDR pass reads it as marks: below 0.75 it
-lifts as a light-source tier, from 0.75 up nothing (the lighting gain is off under a pack). From this note on their
-picture is shown at paper white with nothing lifted, as #3125 suggests. HDR values they could read (`hdr`, headroom,
+They keep their own buffers and tone map to SDR in their last program, and their alpha is theirs. Their `final`
+program writes all four channels onto the frame (`gfx/pack_post.rs` `target`), and `keep_world` copies that alpha
+into the kept world, but the HDR pass doesn't read it as marks: their picture is shown at paper white with nothing
+lifted, as #3125 suggests. HDR values they could read (`hdr`, headroom,
 paper white) are a later, optional addition for pack authors.
 
 ## Upscaling, anti-aliasing, frame generation
 
 They read the frame as it is stored and, outside the 0.1 path, have no marks to keep, which fixes the alpha problems
 above. Native upscaling
-([#1403](https://github.com/horizon-rust/horizon/issues/1403)) should take the float frame. TAA over values above 1
-may need a tone-weighted resolve so bright pixels don't sparkle. Frame generation stays off with HDR output, as today.
+([#1403](https://github.com/horizon-rust/horizon/issues/1403)) should take the float frame. Horizon's TAA
+blends the gamma-stored frame as it is; a tone-weighted resolve is for passes that accumulate linear light (a 0.2
+pack's post chain, or the frame under linear storage), where bright pixels would otherwise sparkle. Frame generation stays off with HDR output, as today.
+The rules such a pass keeps now are in [hdr-passes.md](../hdr-passes.md).
 
 ## Tests
 
@@ -287,18 +289,15 @@ Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
    display pass does today, moved there), so that the camera overlays, the blur and the composite after it see light
    and the display pass lifts nothing; camera overlays before `keep_world`, the HUD's target and coverage, the
    display pass's composite, the blur; then the tone curve, after that pass, taking over the easing into the peak.
-4. Light written instead of marked, a whole frame at a time. Where a blended draw meets a surface of the other kind
-   (glass, water, clouds or a particle over lit terrain, or the other way round), the pixel keeps one mark for both:
-   the pass from step 3 would clip the written light and lift it again, or leave the marked part unlifted. So a frame
-   is all written or all marked, and the step goes path by path, not group by group. First the rebuild when the
-   frame's case changes: the lane, written or marked, picked again whenever what decides it changes (HDR, a pack, the
-   frame's switch, Improved Transparency, the visibility buffer), and TAA's history reset when it does. Then every
-   shader that marks the frame writes light instead on the default path, in one pull request (the shaders that draw
-   work out the marks, so one function, shared with the pass, turns each into light), alpha 1 where opaque and
-   coverage where blended, without the passes that only write marks or the pass from step 3, and with anti-aliasing
-   and TAA taking light above white; Improved Transparency (OIT) and the visibility buffer keep the marked frame
-   while they are switched on, whether or not a frame draws through them, until a pull request each moves them. Then
-   the 0.1 path split off, marks no longer written outside it, and the pass gone with them.
+4. Light written instead of marked, a whole frame at a time: where a blended draw meets a surface of the other kind
+   (glass, water, clouds or a particle over lit terrain, or the other way round), a pixel would keep one mark for both,
+   so a frame is all written or all marked. First the rebuild when what decides the frame changes (HDR, a pack, the
+   frame's switch, the HUD's layer), and TAA's history reset when the light it holds changes. Then every shader that
+   marks the frame writes its light instead on the default path (one function, shared with the display pass, turns
+   each mark into light), alpha 1 where opaque and coverage where blended, without the passes that only write marks,
+   and with anti-aliasing and TAA taking light above white; then Improved Transparency (OIT) and the visibility
+   buffer, a pull request each. Then no float frame holds marks, a 0.2 pack's included, and the pass from step 3
+   goes. Without the HUD's layer, HDR without a pack keeps the compatibility frame, and its marks, until step 5.
 5. On by default and the switch removed, and 0.1 no longer served (see 0.1 packs). The shim goes with it: the
    pipeline variants that write marks and the HDR pass's lift from them, in a pull request of its own.
 

@@ -151,31 +151,23 @@ fn rotated_grid(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>,
     let dv_len = length(dv);
     let effective = sqrt(min(du_len, dv_len) * max(du_len, dv_len));
     let exact = max(0.0, log2(effective / min_pixel));
-    let low = floor(exact);
-    let mip_blend = fract(exact);
     // From this level on the sprite is a single texel (0: the views stop before one is), and
     // the sampler clamps any level past it to it: there every tap reads the same value, so
     // one tap gives the four's mean. Distant tiles sit there.
     let single = globals.filtering.z;
-    if single > 0.0 && low >= single {
-        return sprite_level(uv, layer, low);
+    if single > 0.0 && floor(exact) >= single {
+        return sprite_level(uv, layer, floor(exact));
     }
-    let high_single = single > 0.0 && low + 1.0 >= single;
+    // sampleRGSS takes each of the four taps at the two mip levels around `exact` and mixes them
+    // by fract(exact). The sprite sampler's mip filter is linear, so a tap at the fractional
+    // level is that mix: four texture instructions where the shader mix took eight.
     var offsets = array<vec2<f32>, 4>(
         vec2(0.125, 0.375), vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(-0.375, 0.125));
-    var sum_low = vec4(0.0);
-    var sum_high = vec4(0.0);
+    var sum = vec4(0.0);
     for (var i = 0; i < 4; i++) {
-        let p = uv + offsets[i] * pixel;
-        sum_low += sprite_level(p, layer, low);
-        if !high_single {
-            sum_high += sprite_level(p, layer, low + 1.0);
-        }
+        sum += sprite_level(uv + offsets[i] * pixel, layer, exact);
     }
-    if high_single {
-        sum_high = 4.0 * sprite_level(uv, layer, low + 1.0);
-    }
-    return mix(sum_low * 0.25, sum_high * 0.25, mip_blend);
+    return sum * 0.25;
 }
 // Distant terrain tiles (lod/mesh.rs) count their UVs in blocks past 1: each block takes the
 // sprite again, as separate faces would under the clamped sampler. Sprite UVs in [0, 1] stay.
@@ -224,6 +216,10 @@ struct TerrainOut {
     // The camera-relative height, for the water mirror's cut at the plane.
     height: f32,
     emissive_layer: u32,
+    // [world warp varyings]
+    // (a native mod's world warp adds its own here, and in `TerrainWire`, `to_wire` and
+    // `from_wire`: gfx/world_warp.rs)
+    // [end world warp varyings]
 }
 // `TerrainOut` in 5 interpolant locations instead of 12. A GPU's vertex stage pays for each
 // location it exports (AMD's parameter cache gives one a whole slot, however few of its four
@@ -242,6 +238,8 @@ struct TerrainWire {
     @location(3) d: vec4<f32>,
     // `layer`, `emission`, `fade` and `emissive_layer`.
     @location(4) @interpolate(flat) e: vec4<u32>,
+    // [world warp wire]
+    // [end world warp wire]
 }
 fn to_wire(o: TerrainOut) -> TerrainWire {
     var w: TerrainWire;
@@ -251,6 +249,8 @@ fn to_wire(o: TerrainOut) -> TerrainWire {
     w.c = vec4(o.uv, o.scene);
     w.d = vec4(o.spherical, o.cylindrical, o.height, 0.0);
     w.e = vec4(o.layer, o.emission, o.fade, o.emissive_layer);
+    // [world warp to wire]
+    // [end world warp to wire]
     return w;
 }
 fn from_wire(w: TerrainWire) -> TerrainOut {
@@ -268,6 +268,8 @@ fn from_wire(w: TerrainWire) -> TerrainOut {
     o.emission = w.e.y;
     o.fade = w.e.z;
     o.emissive_layer = w.e.w;
+    // [world warp from wire]
+    // [end world warp from wire]
     return o;
 }
 // Whether a fading tile or section leaves this pixel out (gfx/lod.rs's
@@ -301,8 +303,12 @@ fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
     let pixel = max(length(dx), length(dy));
     let unit = exp2(ceil(log2(max(pixel * 1.5, 1.0 / 16.0))));
     let p = vec2<u32>(bitcast<vec2<u32>>(vec2<i32>(floor(plane / unit)))) & vec2(3u);
-    let bayer = array<u32, 16>(0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
-    return (f32(bayer[p.y * 4u + p.x]) + 0.5) / 16.0 >= shown;
+    // The 4x4 Bayer matrix by rows, 0 8 2 10, 12 4 14 6, 3 11 1 9, 15 7 13 5: four bits each,
+    // two rows a word (a constant array indexed by the pixel would be a private array, which
+    // Adreno's Vulkan compiler, build 0676.41, fails to link).
+    let rows = select(0x6e4ca280u, 0x5d7f91b3u, p.y >= 2u);
+    let bayer = (rows >> (((p.y & 1u) * 4u + p.x) * 4u)) & 0xfu;
+    return (f32(bayer) + 0.5) / 16.0 >= shown;
 }
 // A fading tile or section is drawn a hair toward the camera (depth is
 // reversed: nearer is larger), the newer the more, so it wins where it draws
@@ -522,8 +528,18 @@ fn packed_corner(lo: vec3<u32>, hi: vec3<u32>, corner: u32) -> ArenaCorner {
     let packed_light = ((light & 63u) << 2u) | (((light >> 6u) & 63u) << 10u);
     let g = (lo.y >> (8u * corner)) & 255u;
     let t = lo.x;
+    // Corners 1 to 3's own alpha (`packed::ALPHA_STEP` times the code; 0: word 0's).
+    var code = 0u;
+    if corner == 1u {
+        code = (hi.x >> 28u) & 7u;
+    } else if corner == 2u {
+        code = (hi.y >> 24u) & 7u;
+    } else if corner == 3u {
+        code = (hi.y >> 27u) & 7u;
+    }
+    let alpha = select((code * 51u) << 24u, t & 0xff000000u, code == 0u);
     let color = (g * ((t >> 16u) & 255u) / 255u) | ((g * ((t >> 8u) & 255u) / 255u) << 8u)
-        | ((g * (t & 255u) / 255u) << 16u) | (t & 0xff000000u);
+        | ((g * (t & 255u) / 255u) << 16u) | alpha;
     return ArenaCorner(bitcast<vec3<u32>>(vec3<f32>(pos)),
         vec3((u << 10u) | (v << 26u), (hi.x & 0xffffu) | (packed_light << 16u), color));
 }
@@ -662,7 +678,10 @@ fn hdr_facing() -> f32 {
 }
 fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
     light: vec2<u32>, origin: vec3<f32>, w: f32) -> TerrainOut {
+    // [world warp vertex]
+    // (a world warp's pipelines put the point through the mod's `world_warp`: gfx/world_warp.rs)
     let pos = position + origin;
+    // [end world warp vertex]
     var out: TerrainOut;
     out.clip = fade_depth(globals.view_proj * vec4(pos, 1.0), w);
     out.local = position;
@@ -695,6 +714,8 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     const CHUNK_FULLY_VISIBLE_RANGE: f32 = 16.0;
     out.visibility = mix(1.0, instance_visibility(w),
         clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
+    // [world warp out]
+    // [end world warp out]
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -762,14 +783,14 @@ fn solid_color(in: TerrainOut) -> vec4<f32> {
 fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     return solid_light(solid_finish_at(in, texel, color, dpdx(in.uv), dpdy(in.uv)));
 }
-// A finished solid pixel as the frame keeps it: its mark in alpha, or on the written lane its
-// light, alpha 1.
+// A finished solid pixel as the frame keeps it: on the float frame its colour, alpha 1, lit by
+// HDR's gain where it applies (`hdr_light.w`); else its mark in alpha.
 fn solid_light(finished: vec4<f32>) -> vec4<f32> {
     if HDR_WRITE_LIGHT {
         if globals.hdr_light.w != 0.0 {
             return vec4(hdr_written(finished.rgb, finished.a, globals.hdr_settings, globals.hdr_shares), 1.0);
         }
-        return vec4(finished.rgb, 1.0);
+        return frame_stored(vec4(finished.rgb, 1.0));
     }
     return finished;
 }
@@ -851,7 +872,7 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
         let mark = hdr_scene_alpha(mix(hdr_scene(in.scene.x, in.scene.y, hdr_facing()), globals.hdr_light.y, fogged));
         return vec4(hdr_written(finished.rgb, mark, globals.hdr_settings, globals.hdr_shares), finished.a);
     }
-    return finished;
+    return frame_stored(finished);
 }
 
 // Native still-fluid boxes use block sprites and lightmap without terrain AO/emission
@@ -948,13 +969,13 @@ const PI: f32 = 3.14159265;
 fn disc_distance(d: vec3<f32>, y: f32) -> vec2<f32> {
     if d.y * y <= 0.0 { return vec2(-1.0); }
     let p = d * (y / d.y);
-    let h = length(p.xz);
-    let phi = atan2(p.z, p.x);
-    let sector = PI / 4.0;
-    let delta = phi - (floor(phi / sector) * sector + sector * 0.5);
-    let edge = 512.0 * cos(sector * 0.5) / cos(delta);
-    if h > edge { return vec2(-1.0); }
-    let s = h / edge;
+    // The regular octagon's edge parameter, directly from its half planes.
+    // max(|x| + tan(pi/8)*|z|, |z| + tan(pi/8)*|x|) / radius
+    // equals length(p.xz) / edge without atan2, floor or cos per pixel.
+    let a = abs(p.xz);
+    let diagonal = 0.41421356237309503;
+    let s = max(a.x + diagonal * a.y, a.y + diagonal * a.x) / 512.0;
+    if s > 1.0 { return vec2(-1.0); }
     let ay = abs(y);
     let rim = sqrt(512.0 * 512.0 + y * y);
     return vec2(ay + s * (rim - ay), ay + s * (512.0 - ay));
@@ -1057,7 +1078,7 @@ fn sky_finished(color: vec3<f32>) -> vec4<f32> {
         if globals.hdr_light.w != 0.0 {
             return vec4(hdr_written(color, mark, globals.hdr_settings, globals.hdr_shares), 1.0);
         }
-        return vec4(color, 1.0);
+        return frame_stored(vec4(color, 1.0));
     }
     return vec4(color, mark);
 }
@@ -1090,7 +1111,7 @@ struct SunriseOut {
     let d = view_ray(in.ndc);
     let dist = disc_distance(d, -4.0);
     if dist.x < 0.0 { discard; }
-    return vec4(sky_fog(vec3(0.0), dist), 1.0);
+    return frame_stored(vec4(sky_fog(vec3(0.0), dist), 1.0));
 }
 
 // rendertype_lines.vsh: screen-space stroke and camera-space depth separation.
@@ -1128,7 +1149,7 @@ struct LineOut {
     return out;
 }
 @fragment fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
-    return apply_fog(in.color, in.spherical, in.cylindrical);
+    return frame_stored(apply_fog(in.color, in.spherical, in.cylindrical));
 }
 // Gizmo lines (rendertype_lines with a per-vertex colour and LineWidth in
 // pixels; no layering transform).
@@ -1161,5 +1182,5 @@ struct DebugLineOut {
     return out;
 }
 @fragment fn fs_debug_line(in: DebugLineOut) -> @location(0) vec4<f32> {
-    return apply_fog(in.color, in.spherical, in.cylindrical);
+    return frame_stored(apply_fog(in.color, in.spherical, in.cylindrical));
 }

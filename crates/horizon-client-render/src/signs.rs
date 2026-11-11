@@ -5,6 +5,13 @@ pub use crate::chunk::block_entity::{SavedLine, SignData, SignText};
 use crate::{scoreboard, text::Text};
 use horizon_world::nbt::Tag;
 
+/// `getBooleanOr(key, false)` and `Codec.BOOL`: any numeric tag's nonzero byte.
+fn nbt_flag(tag: &Tag, key: &str) -> bool {
+    tag.get(key)
+        .and_then(horizon_client_core::nbt_path::int_value)
+        .is_some_and(|value| value as i8 != 0)
+}
+
 /// `DyeColor` names and `getTextColor` values by id.
 pub const DYE_TEXT: [(&str, u32); 16] = [
     ("white", 0xFFFFFF),
@@ -76,9 +83,17 @@ impl SignText {
     pub fn is_empty(&self) -> bool {
         self.lines.iter().all(String::is_empty)
     }
+    /// `SignText.hasEditableText`: every line's contents is plain text, so the
+    /// editor can rewrite it without losing anything. A style does not count
+    /// (a red literal is still plain), a `translatable`, `score` or other
+    /// contents does. (Horizon keeps no filtered text, so
+    /// `Player.isTextFilteringEnabled` never selects that copy.)
+    pub fn has_editable_text(&self) -> bool {
+        (0..self.lines.len()).all(|i| plain_contents(&self.message(i)))
+    }
     /// `DyeColor.getTextColor` of this side.
     pub fn text_color(&self) -> u32 {
-        DYE_TEXT[usize::from(self.color.min(15))].1
+        crate::pack_palette::text(usize::from(self.color.min(15)))
     }
     /// `SignText.hasAnyClickCommands`: a line whose style has a `run_command`
     /// click event.
@@ -185,7 +200,12 @@ impl SignData {
         let side = |t: Option<&Tag>| -> SignText {
             let mut out = SignText::default();
             let Some(t) = t else { return out };
-            if let Some(Tag::List(messages)) = t.get("messages") {
+            if let Some(messages) = t.get("messages") {
+                // `SignText.CODEC` reads a side all or nothing: a messages
+                // field that is not a list leaves the side empty.
+                let Tag::List(messages) = messages else {
+                    return SignText::default();
+                };
                 for (i, m) in messages.iter().take(4).enumerate() {
                     out.lines[i] = component_text(m);
                     out.click[i] = click_event(m);
@@ -201,12 +221,12 @@ impl SignData {
                     out.color = i as u8;
                 }
             }
-            out.glowing = matches!(t.get("has_glowing_text"), Some(Tag::Byte(b)) if *b != 0);
+            out.glowing = nbt_flag(t, "has_glowing_text");
             out
         };
         self.front = side(tag.get("front_text"));
         self.back = side(tag.get("back_text"));
-        self.waxed = matches!(tag.get("is_waxed"), Some(Tag::Byte(b)) if *b != 0);
+        self.waxed = nbt_flag(tag, "is_waxed");
         self.allow_op_features =
             matches!(tag.get("allow_op_features"), Some(Tag::Byte(b)) if *b != 0);
     }
@@ -230,6 +250,17 @@ fn is_styled(tag: &Tag) -> bool {
     match tag {
         Tag::List(_) => true,
         Tag::Compound(c) => !(c.len() == 1 && matches!(tag.get("text"), Some(Tag::String(_)))),
+        _ => false,
+    }
+}
+/// Whether a message's contents is `PlainTextContents` (`Component.getContents`):
+/// a string, a `{text: ...}` object, or a list of them (`createFromList` keeps
+/// the first element's contents and appends the rest as siblings).
+fn plain_contents(tag: &Tag) -> bool {
+    match tag {
+        Tag::String(_) => true,
+        Tag::List(list) => list.first().is_some_and(plain_contents),
+        Tag::Compound(_) => tag.get("text").is_some(),
         _ => false,
     }
 }
@@ -300,6 +331,40 @@ pub fn editor_sprite(folder: &str, wood: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `SignText.CODEC` reads messages as a list: a string field fails the
+    /// whole side, taking its colour and glow with it.
+    #[test]
+    fn messages_that_are_not_a_list_load_an_empty_side() {
+        let tag = Tag::compound([(
+            "front_text",
+            Tag::compound([
+                ("messages", Tag::String("not a list".into())),
+                ("color", Tag::String("red".into())),
+                ("has_glowing_text", Tag::Byte(1)),
+            ]),
+        )]);
+        let mut decoded = SignData::default();
+        decoded.decode(&tag);
+        assert_eq!(
+            decoded.front,
+            SignText::default(),
+            "a failed message list takes the side's colour and glow with it"
+        );
+    }
+
+    #[test]
+    fn waxed_and_glowing_text_take_any_number() {
+        let tag = Tag::compound([
+            ("is_waxed", Tag::Int(1)),
+            (
+                "front_text",
+                Tag::compound([("has_glowing_text", Tag::Short(1))]),
+            ),
+        ]);
+        let mut decoded = SignData::default();
+        decoded.decode(&tag);
+        assert!(decoded.waxed && decoded.front.glowing);
+    }
     #[test]
     fn round_trips_nbt() {
         let mut data = SignData {

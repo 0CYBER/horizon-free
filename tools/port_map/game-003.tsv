@@ -1,7 +1,7 @@
 ServerPlayerGameMode.changeGameModeForPlayer	port	crates/horizon-client/src/game/commands.rs::Game::set_game_mode	same-mode check, mode switch, abilities; a LAN guest goes through Hub::set_game_mode which also broadcasts PlayerInfo UPDATE_GAME_MODE
 ServerPlayerGameMode.setGameModeForPlayer	port	crates/horizon-client/src/game/game_mode.rs::Game::set_mode	previous mode kept, GameType.updatePlayerAbilities applied
 ServerPlayerGameMode.isInRangeOfGround	port	crates/horizon-world/src/world_movement.rs::in_range_of_ground	the body and the block under it are free of colliders, so a game mode change to spectator stops flying when the player stands on the ground (game/game_mode.rs set_mode, lan/hub.rs); entity colliders stay out
-ServerPlayerGameMode.incrementDestroyProgress	inline	crates/horizon-client/src/game/lan_actions.rs::Game::guest_dig_feedback	gap: minor: crack stage is the client formula (progress*10 - 1), so other players' cracks on a guest's block run one stage behind the server value
+ServerPlayerGameMode.incrementDestroyProgress	port	crates/horizon-client/src/game/lan_actions.rs::Game::guest_dig_feedback	the stage is `(int)(progress * 10)` (the per-tick progress times the ticks since the START), sent only when it changes as `lastSentState` does; the old `- 1` is gone
 ServerPlayerGameMode.debugLogging	skip:debug		DEBUG_BLOCK_BREAK logging
 ServerPlayerGameMode.abortDestroyBlock	inline	crates/horizon-client/src/game/lan_actions.rs::Game::lan_guest_packet	the abort action clears the guest's crack for everyone; no separate check of a mismatched destroy position
 ServerPlayerGameMode.destroyAndAck	inline	crates/horizon-client/src/game/lan_actions.rs::Game::lan_guest_packet	the sequence ack every PlayerAction arm sends first (Hub::ack -> ClientboundBlockChangedAck in tick_level) takes a vanilla client's predicted block back, and the ABORT arm also sends the state
@@ -55,7 +55,7 @@ ContainerHelper.clearOrCountMatchingItems	port	crates/horizon-client/src/game/co
 DifficultyInstance.isHard	skip:other		no vanilla caller (isHarderThan is what Illusioner uses)
 DifficultyInstance.getSpecialMultiplier	port	crates/horizon-client/src/mobs/spawning.rs::LocalDifficulty::special	
 DifficultyInstance.calculateDifficulty	port	crates/horizon-client/src/mobs/spawning.rs::LocalDifficulty::new	
-InteractionHand.asArm	inline	crates/horizon-client/src/mobs/ai.rs::Mob::swing_hand	off_hand != main arm left; the player's first person hand does the same in game.rs hand_geometry
+InteractionHand.asArm	inline	crates/horizon-client/src/mobs/ai.rs::Mob::swing_hand	off_hand != main arm left; the player's first person hand does the same in game/frame_geometry.rs hand_geometry
 InteractionResult.Success.heldItemTransformedTo	skip:java		result builder; Horizon replaces the held item in place where the item is used
 ItemStackWithSlot.isValidInContainer	port	crates/horizon-client-core/src/block_entity_nbt.rs::items	slots outside 0..size are dropped when items load
 LockCode.canUnlock	port	crates/horizon-client/src/advancements.rs::can_unlock	checked when a container opens (game/advancements.rs container_locked_for from lan_actions.rs): a spectator opens any container, otherwise the main hand must match the lock predicate
@@ -119,8 +119,8 @@ EnvironmentAttributeSystem.ValueSampler.getValue	inline	crates/horizon-client-re
 EnvironmentAttributeSystem.ValueSampler.computeValuePositional	inline	crates/horizon-client/src/game.rs::Game::render	base, timeline track, then biome blend, then weather, in that order
 EnvironmentAttributeSystem.ValueSampler.computeValueNotPositional	inline	crates/horizon-client-render/src/environment.rs::Environment::sample	base then timeline track
 EnvironmentAttributes.register	skip:data		attribute registry
-WeatherAttributes.addBuiltinLayers	port	crates/horizon-client-render/src/environment.rs::apply_weather	rain and thunder layers over sky, fog, cloud, sky light, stars and sunrise; bees staying in the hive is bees_stay_in_hive in bee.rs
-WeatherAttributes.addLayer	port	crates/horizon-client-render/src/environment.rs::apply_weather	rain level minus thunder level, then thunder level, each lerped over the value
+WeatherAttributes.addBuiltinLayers	port	crates/horizon-world/src/environment_system.rs::Builder::weather_layers	rain and thunder layers over sky, fog, cloud, sky light, stars and sunrise; bees staying in the hive is bees_stay_in_hive in bee.rs
+WeatherAttributes.addLayer	port	crates/horizon-world/src/environment_system.rs::Builder::weather_layer	rain level minus thunder level, then thunder level, each lerped by the attribute's state-change function in `weather`
 BooleanModifier.apply	port	crates/horizon-client/src/patrol.rs::BoolTrack::apply	and, or, xor, nand, nor, xnor over the timeline track value
 ColorModifier.BlendToGray.lerp	skip:other		only lerps blend_to_gray arguments between keyframes; no timeline uses that modifier
 ListModifier.Append.apply	inline	crates/horizon-client/src/animate_tick.rs::AnimateTables::load	a biome's ambient_particles list is its argument over an empty dimension list
@@ -139,8 +139,8 @@ ServerClockManager.commandTimeMarkersForClock	inline	crates/horizon-client/src/g
 ServerClockManager.ServerClockInstance.loadFrom	port	crates/horizon-client/src/game/chat.rs::Game::load_world_state	total ticks come from level data; rate, partial tick and paused are read from world_clocks.dat
 ServerClockManager.ServerClockInstance.packState	port	crates/horizon-client/src/game/chat.rs::Game::save_world_state	
 WorldClocks.bootstrap	skip:data		clock registration
-CombatTracker.getMessageForAssistedFall	port	crates/horizon-client/src/game/combat.rs::Game::combat_death_message_for	gap: minor: the .item variants of the fell assist and finish messages are never used, a named weapon is not shown
+CombatTracker.getMessageForAssistedFall	port	crates/horizon-client/src/game/combat.rs::Game::combat_death_message_for	the assist and finish messages take the .item form with the killer's custom-named main-hand item (death_message_args)
 CombatTracker.getCombatDuration	skip:other		only feeds ClientboundPlayerCombatEndPacket, which the client ignores
-DamageSource.getLocalizedDeathMessage	port	crates/horizon-client/src/game/combat.rs::Game::combat_death_message_for	gap: minor: no .item variant when the killer holds a custom-named item
+DamageSource.getLocalizedDeathMessage	port	crates/horizon-client/src/game/combat.rs::Game::combat_death_message_for	the cause's custom-named main-hand item gives the <id>.item message with its name as the third argument (death_message_args)
 DamageSource.isCreativePlayer	port	crates/horizon-world/src/damage_source.rs::DamageSource::creative_player	
 DamageSource.is	port	crates/horizon-world/src/damage_source.rs::DamageSource::in_tag	tag form; the key form is is_type

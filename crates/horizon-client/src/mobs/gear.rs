@@ -18,8 +18,8 @@ pub const ARMOR: [usize; 4] = [HEAD, CHEST, LEGS, FEET];
 pub const KEYS: [&str; 6] = ["mainhand", "offhand", "head", "chest", "legs", "feet"];
 
 pub type Levels = Vec<(Arc<str>, u32)>;
-/// An armour trim: (`trim_material`, `trim_pattern`) ids.
-pub type Trim = (Arc<str>, Arc<str>);
+/// The same named/direct armor-trim holders as the full item stack.
+pub type Trim = crate::item_data::Trim;
 
 /// The enchantments and trims of each equipment slot, and the whole stack of
 /// the ones that have more than an id (a damage value, a name, a count).
@@ -151,20 +151,26 @@ pub fn damage_bonus(levels: &[(Arc<str>, u32)], target: Option<Species>) -> f32 
 /// to the attribute map when the item is equipped.
 pub fn attack_damage(m: &Mob, items: Option<&crate::items::Items>) -> f32 {
     let base = f64::from(m.attrs.attack_damage);
-    let modifiers = m
-        .extra
-        .main_hand
-        .as_deref()
-        .and_then(|id| items?.get(id))
-        .map(|i| i.modifiers.as_slice());
-    modifiers.map_or(base, |modifiers| {
-        super::equip::attribute_with(
-            modifiers,
-            "minecraft:attack_damage",
-            base,
-            super::equip::Slot::MainHand,
-        )
-    }) as f32
+    let modifiers = match items {
+        Some(items) => m.extra.main_hand_stack().map_or_else(
+            || {
+                m.extra
+                    .main_hand
+                    .as_deref()
+                    .and_then(|id| items.get(id))
+                    .map(|i| i.modifiers.clone())
+                    .unwrap_or_default()
+            },
+            |stack| items.attribute_modifiers(stack),
+        ),
+        None => Vec::new(),
+    };
+    super::equip::attribute_with(
+        &modifiers,
+        "minecraft:attack_damage",
+        base,
+        super::equip::Slot::MainHand,
+    ) as f32
 }
 /// The extra damage of the mob's held weapon against a target species.
 pub fn melee_bonus(m: &Mob, target: Option<Species>) -> f32 {

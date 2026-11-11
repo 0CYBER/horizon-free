@@ -191,8 +191,8 @@ impl Game<'_> {
         let disable_blocking = if self.using.is_some() {
             0.0
         } else {
-            self.attack_item_info()
-                .map_or(0.0, |i| i.disable_blocking_seconds)
+            self.held()
+                .map_or(0.0, |stack| self.items().weapon_disable_blocking(stack))
         };
         let ignite = self.weapon_ignite_seconds();
         Some(Strike {
@@ -642,7 +642,7 @@ impl Game<'_> {
                 g.note_named_attacker("minecraft:player_attack", *id, name.clone());
             }
             if g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack") {
-                g.knock_back_player(0.4, xd, zd, PVP_SOURCE);
+                g.knock_back_player(f64::from(0.4_f32), xd, zd, PVP_SOURCE);
                 // EnchantmentHelper.doPostAttackEffects, after the knockback.
                 if sweep.ignite > 0.0
                     && let Some(p) = g.player.as_mut()

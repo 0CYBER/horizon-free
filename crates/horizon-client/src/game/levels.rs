@@ -18,9 +18,15 @@ use super::{
     ominous_item_spawner, persist, raids::Raiding, sculk::SculkState, tnt, trident,
 };
 use horizon_client::{
-    Result, block_entity_anim::BlockEntityAnims, random_tick_sections::RandomTickSections,
-    save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership,
-    ticket_levels::ChunkTickets, vanillagen::VanillaTerrain, world::World,
+    Result,
+    block_entity_anim::BlockEntityAnims,
+    random_tick_sections::RandomTickSections,
+    save::SaveDir,
+    streaming::Streaming,
+    tick_chunk_membership::TickChunkMembership,
+    ticket_levels::{ChunkTickets, PortalTicket},
+    vanillagen::VanillaTerrain,
+    world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
 use std::{
@@ -60,7 +66,6 @@ pub(super) struct Parked {
     bolts: Vec<lightning::Bolt>,
     crystals: Vec<dragon::Crystal>,
     dragon: Option<dragon::Dragon>,
-    dragon_fireballs: Vec<dragon::DragonFireball>,
     breath_clouds: Vec<dragon::Breath>,
     tridents: horizon_client::join_seq::JoinList<trident::ThrownTrident>,
     rockets: horizon_client::join_seq::JoinList<fireworks::Rocket>,
@@ -243,6 +248,7 @@ impl Game<'_> {
         world.attachments = save.load_attachments();
         world.shape = self.level_shapes.get(dim.id());
         world.fast_lava = self.dimension_type_of(dim).fast_lava;
+        let tickets = ChunkTickets::with_saved_portal(save.load_portal_tickets());
         Ok(Parked {
             world,
             streaming,
@@ -250,7 +256,7 @@ impl Game<'_> {
             save,
             block_ticks: Ticks::new(self.level.seed as i32),
             tick_chunks: Default::default(),
-            tickets: Default::default(),
+            tickets,
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
             portal_states: HashMap::new(),
@@ -267,7 +273,6 @@ impl Game<'_> {
             bolts: Vec::new(),
             crystals: Vec::new(),
             dragon: None,
-            dragon_fireballs: Vec::new(),
             breath_clouds: Vec::new(),
             tridents: Default::default(),
             rockets: Default::default(),
@@ -298,6 +303,30 @@ impl Game<'_> {
         })
     }
 
+    /// `MinecraftServer.prepareLevels` activates every level's saved tickets:
+    /// a level holding saved `PORTAL` tickets opens with the world and ticks
+    /// while they hold it (`shouldKeepDimensionActive`).
+    pub(super) fn open_saved_portal_levels(&mut self) -> Result<()> {
+        if self.options.execution_role.is_client() {
+            return Ok(());
+        }
+        let back = self.dim;
+        for dim in [Dim::Overworld, Dim::Nether, Dim::End] {
+            if dim == back || self.levels.parked.contains_key(&dim) {
+                continue;
+            }
+            let save = SaveDir::new(
+                horizon_client::save::dimension_dir(&self.world_root, dim.id()),
+                self.level_shapes.get(dim.id()),
+            );
+            if !save.load_portal_tickets().is_empty() {
+                self.enter_level(None, dim)?;
+                self.enter_level(None, back)?;
+            }
+        }
+        Ok(())
+    }
+
     /// `MinecraftServer.prepareLevels`: before the first tick, the chunks the
     /// open levels' restored tickets hold (forced chunks, a native mod's) are
     /// loaded (`ChunkLoadCounter`). The first tick then finds them ticking
@@ -326,8 +355,16 @@ impl Game<'_> {
     /// Stream the level in place until each chunk its tickets make block
     /// ticking is a ticking chunk (lit, with its neighbours loaded).
     fn wait_for_ticket_chunks(&mut self, deadline: Instant) {
-        // A `PORTAL` ticket reaches block ticking two chunks out, a forced one one.
-        const REACH: i32 = 2;
+        // Forced chunks are checked two chunks out (their ticket block ticks one).
+        // A `PORTAL` ticket's chunks are streamed as an area of their own (the
+        // network tick does it, which hasn't run yet), whose chunks out to its
+        // radius can become ticking chunks: those are waited for.
+        let portal = self.portal_ticket_areas();
+        for area in &portal {
+            if !self.streaming.extra.contains(area) {
+                self.streaming.extra.push(*area);
+            }
+        }
         loop {
             self.update_chunk_tickets();
             let levels = self.tickets.levels();
@@ -336,11 +373,11 @@ impl Game<'_> {
                 .forced
                 .iter()
                 .chain(&streaming.mod_forced)
-                .copied()
-                .chain(self.tickets.portal_chunks())
-                .all(|(cx, cz)| {
-                    (cz - REACH..=cz + REACH).all(|z| {
-                        (cx - REACH..=cx + REACH).all(|x| {
+                .map(|&c| (c, 2))
+                .chain(portal.iter().copied())
+                .all(|((cx, cz), reach)| {
+                    (cz - reach..=cz + reach).all(|z| {
+                        (cx - reach..=cx + reach).all(|x| {
                             !levels.loaded_ticking(x, z) || super::ticking_chunk(&self.world, x, z)
                         })
                     })
@@ -386,7 +423,6 @@ impl Game<'_> {
         swap(&mut self.bolts, &mut p.bolts);
         swap(&mut self.crystals, &mut p.crystals);
         swap(&mut self.dragon, &mut p.dragon);
-        swap(&mut self.dragon_fireballs, &mut p.dragon_fireballs);
         swap(&mut self.breath_clouds, &mut p.breath_clouds);
         swap(&mut self.tridents, &mut p.tridents);
         swap(&mut self.rockets, &mut p.rockets);
@@ -446,6 +482,7 @@ impl Game<'_> {
             };
             p.world.game_time = self.world.game_time;
             p.world.day_time = self.world.day_time;
+            p.world.end_clock = self.world.end_clock;
             p.world.weather = self.world.weather;
             // The game rules and the difficulty are the server's, not a
             // level's: natural regeneration holds in every dimension.
@@ -501,11 +538,15 @@ impl Game<'_> {
         };
         let uuid = p.persist.uuids.remove(&id);
         let raw = p.persist.raw.remove(&id);
+        let slots = p.persist.passenger_slots.remove(&id);
         if let Some(u) = uuid {
             self.persist.uuids.insert(id, u);
         }
         if let Some(r) = raw {
             self.persist.raw.insert(id, r);
+        }
+        if let Some(s) = slots {
+            self.persist.passenger_slots.insert(id, s);
         }
     }
 
@@ -581,7 +622,11 @@ impl Game<'_> {
                 Dim::Nether => "level_the_nether",
                 Dim::End => "level_the_end",
             });
-            if let Err(e) = self.enter_level(None, dim) {
+            // The level's own share of the pass, outside its world tick: a slow tick's line names
+            // each of them, and `level_tick` holds the world tick itself (#15349).
+            if let Err(e) =
+                horizon_client::spans::time("enter_level", || self.enter_level(None, dim))
+            {
                 result = Err(e);
                 break;
             }
@@ -592,10 +637,14 @@ impl Game<'_> {
                 packets_drained: false,
             };
             if observe_level {
+                let _span = horizon_client::spans::guard("mods_level_tick_pre");
                 self.native_level_tick_pre(dim.id());
             }
-            self.update_dedicated_streaming();
-            self.update_world();
+            horizon_client::spans::time("dedicated_streaming", || {
+                self.update_dedicated_streaming();
+            });
+            horizon_client::spans::time("update_world", || self.update_world());
+            let tick_span = horizon_client::spans::guard("level_tick");
             result = horizon_client::block_contact::in_level(
                 (self.serving.is_some() || self.options.dedicated.is_some()).then_some(dim.id()),
                 || {
@@ -612,16 +661,19 @@ impl Game<'_> {
                     }
                 },
             );
+            drop(tick_span);
             if result.is_err() {
                 break;
             }
             if observe_level {
+                let _span = horizon_client::spans::guard("mods_level_tick_post");
                 self.native_level_tick_post(dim.id());
             }
-            self.publish_server_debug(dim);
+            horizon_client::spans::time("server_debug", || self.publish_server_debug(dim));
             // An entity that crossed into a level that already ticked this
             // server tick is in it when the tick ends (`addDuringTeleport`).
             if running == Some(true) {
+                let _span = horizon_client::spans::guard("late_portal_arrivals");
                 let mut moved = false;
                 for &earlier in &order[..k] {
                     if !self.arrival_chunks(earlier).is_empty()
@@ -639,6 +691,7 @@ impl Game<'_> {
         if let Some(&first) = order.first()
             && self.dim != first
         {
+            let _span = horizon_client::spans::guard("enter_level");
             let _ = self.enter_level(None, first);
         }
         self.level_pass = Pass::default();
@@ -763,6 +816,13 @@ impl Game<'_> {
         None
     }
 
+    /// The level whose id is exactly `id` (`MinecraftServer.getLevel` of a `ResourceKey`).
+    pub(super) fn known_level(&self, id: &str) -> Option<Dim> {
+        [Dim::Overworld, Dim::Nether, Dim::End]
+            .into_iter()
+            .find(|d| d.id() == id)
+    }
+
     /// The levels this server tick runs, in `MinecraftServer.levels` order
     /// (the Overworld, the Nether, the End): every level with a player in
     /// it, forced chunks or a `/pregen` task, or the Overworld while idle.
@@ -799,7 +859,7 @@ impl Game<'_> {
                     || !self.arrival_chunks(*d).is_empty()
                     // A portal ticket keeps its dimension active
                     // (`TicketType.shouldKeepDimensionActive`).
-                    || !self.portal_ticket_chunks(*d).is_empty()
+                    || !self.portal_tickets_in(*d).is_empty()
             })
             .collect();
         if dims.is_empty() {
@@ -808,16 +868,30 @@ impl Game<'_> {
         dims
     }
 
-    /// The chunks holding a portal ticket in `dim`'s level (`placePortalTicket`).
-    pub(super) fn portal_ticket_chunks(&self, dim: Dim) -> Vec<(i32, i32)> {
+    /// The portal tickets of `dim`'s level (`placePortalTicket`, or saved).
+    pub(super) fn portal_tickets_in(&self, dim: Dim) -> &[PortalTicket] {
         if dim == self.dim {
-            self.tickets.portal_chunks().collect()
+            self.tickets.portal_tickets()
         } else {
             self.levels
                 .parked
                 .get(&dim)
-                .map_or_else(Vec::new, |p| p.tickets.portal_chunks().collect())
+                .map_or(&[], |p| p.tickets.portal_tickets())
         }
+    }
+
+    /// The areas the level in place's portal tickets keep streamed: around each
+    /// exit its block-ticking chunks and their neighbours, the ring vanilla
+    /// keeps `FULL` (level 33), so the outer block-ticking ring is a ticking
+    /// chunk too; and at least the chunks its expiry waits for
+    /// (`portal_ticket_can_expire`).
+    pub(super) fn portal_ticket_areas(&self) -> Vec<((i32, i32), i32)> {
+        let block_ticking = i32::from(horizon_client::ticket_levels::BLOCK_TICKING);
+        self.tickets
+            .portal_tickets()
+            .iter()
+            .map(|t| (t.chunk, (block_ticking - t.level).max(1)))
+            .collect()
     }
 
     /// Count the parked levels' empty ticks, and save and close the ones
@@ -1046,6 +1120,8 @@ mod tests {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let home = std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join("h260");
         let world = home.join("saves/h260");
+        // A new world each run: a border saved by the last one would already be 50.
+        let _ = std::fs::remove_dir_all(&home);
         {
             let mut game = open_game(&root, &home, &world);
             // A server ticks before it saves.
@@ -1083,6 +1159,8 @@ mod tests {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let home = std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap())
             .join("h260-controls");
+        // A new world each run, as the first open expects.
+        let _ = std::fs::remove_dir_all(&home);
         let world = home.join("saves/h260");
         let sizes = |game: &mut Game<'_>| {
             assert!(game.run_command("execute in minecraft:overworld run worldborder get"));
@@ -1140,5 +1218,225 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "reopened borders: {failures:#?}");
+    }
+
+    /// `ImposterProtoChunk(…, false)`: a new chunk's features read a full
+    /// neighbour but their ordinary `setBlockState` writes do not change it,
+    /// while `BulkSectionAccess` (ores) writes its sections. Expected values
+    /// from the official 26.3 server on the constructed 1.20.4 world
+    /// (`H077_OLD_WORLD`: full old chunks, their partial ring removed), where
+    /// chunks 13..14 at z 0 generate next to the full chunk (12, -1).
+    #[test]
+    #[ignore = "needs HORIZON_TEST_RESOURCES, a scratch HORIZON_HOME and the constructed H077_OLD_WORLD"]
+    fn features_write_a_full_neighbour_only_through_its_sections() {
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let home = std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join("h078");
+        let world = home.join("saves/h078");
+        let source = std::path::PathBuf::from(std::env::var_os("H077_OLD_WORLD").unwrap());
+        fn copy(from: &std::path::Path, to: &std::path::Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap().flatten() {
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &target);
+                } else if entry.file_name() != "session.lock" {
+                    std::fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        copy(&source, &world);
+        let mut game = open_game(&root, &home, &world);
+        // The world's level.dat has cheats off: the open read it after open_game's setting.
+        game.set_allow_commands(true);
+        assert!(game.run_command("forceload add 208 0 239 15"));
+        let mut loaded = false;
+        // As the dedicated server's loop: a tick, then the chunk streaming.
+        for _ in 0..2000 {
+            game.tick_world(true).unwrap();
+            game.update_world();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if game.run_command_quietly("execute if loaded 215 64 8") {
+                loaded = true;
+                break;
+            }
+        }
+        assert!(loaded, "the new chunk (13, 0) was not generated");
+        game.save_game().unwrap();
+        let mut failures = Vec::new();
+        for (p, want) in [
+            // A spruce tree and a mushroom of the new chunks: ordinary writes.
+            ([207, 68, -10], "minecraft:air"),
+            ([207, 69, -6], "minecraft:air"),
+            ([202, 69, -5], "minecraft:air"),
+            // A gold ore blob: section writes.
+            ([207, -32, -12], "minecraft:deepslate_gold_ore"),
+        ] {
+            let got = game.block_name(p);
+            if &*got != want {
+                failures.push(format!("{p:?}: {got}, expected {want}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "the full chunk (12, -1): {failures:#?}"
+        );
+    }
+
+    /// `BlendingData.pack` of an old chunk whose border columns a new chunk's
+    /// generation calculated (`getOrUpdateBlendingData`), as the official 26.3
+    /// server saves it: a constructed 1.20.4 world (full old chunks, their
+    /// partial ring removed, `H077_OLD_WORLD`) where chunk (13, 0) is new.
+    #[test]
+    #[ignore = "needs HORIZON_TEST_RESOURCES, a scratch HORIZON_HOME and the constructed H077_OLD_WORLD"]
+    fn an_old_chunk_saves_the_heights_its_new_neighbour_calculated() {
+        use horizon_world::nbt::Tag;
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let home = std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join("h077");
+        let world = home.join("saves/h077");
+        let source = std::path::PathBuf::from(std::env::var_os("H077_OLD_WORLD").unwrap());
+        fn copy(from: &std::path::Path, to: &std::path::Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap().flatten() {
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &target);
+                } else if entry.file_name() != "session.lock" {
+                    std::fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        copy(&source, &world);
+        {
+            let mut game = open_game(&root, &home, &world);
+            // The world's level.dat has cheats off: the open read it after open_game's setting.
+            game.set_allow_commands(true);
+            assert!(game.run_command("forceload add 208 0 239 15"));
+            let mut loaded = false;
+            // As the dedicated server's loop: a tick, then the chunk streaming.
+            for _ in 0..2000 {
+                game.tick_world(true).unwrap();
+                game.update_world();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                if game.run_command_quietly("execute if loaded 215 64 8") {
+                    loaded = true;
+                    break;
+                }
+            }
+            assert!(loaded, "the new chunk (13, 0) was not generated");
+            game.save_game().unwrap();
+        }
+        let save = horizon_client::save::SaveDir::new(
+            horizon_client::save::dimension_dir(&world, "minecraft:overworld"),
+            horizon_client::chunk::LevelShape::OVERWORLD,
+        );
+        let blending = |x, z| {
+            save.raw_chunk(x, z)
+                .and_then(|r| r.tag.get("blending_data").cloned())
+        };
+        let heights = |tag: &Tag| match tag.get("heights") {
+            Some(Tag::List(list)) => Some(
+                list.iter()
+                    .map(|v| match v {
+                        Tag::Float(bits) => *bits,
+                        other => panic!("height {other:?}"),
+                    })
+                    .collect::<Vec<u32>>(),
+            ),
+            _ => None,
+        };
+        let sections = |tag: &Tag| {
+            (
+                tag.get("min_section").cloned(),
+                tag.get("max_section").cloned(),
+            )
+        };
+        let mut failures = Vec::new();
+        let mut want = vec![f32::MAX.to_bits(); 12];
+        want.extend([70.0f32, 70.0, 69.0, 68.0].map(f32::to_bits));
+        match blending(12, 0) {
+            Some(tag) => {
+                if heights(&tag) != Some(want.clone()) {
+                    failures.push(format!("(12, 0) heights {:?}", heights(&tag)));
+                }
+                if sections(&tag) != (Some(Tag::Int(-4)), Some(Tag::Int(20))) {
+                    failures.push(format!("(12, 0) sections {:?}", sections(&tag)));
+                }
+            }
+            None => failures.push("(12, 0) has no blending_data".into()),
+        }
+        // No calculation reached these: the compound stays, without heights.
+        for (x, z) in [(11, 0), (0, 0)] {
+            match blending(x, z) {
+                Some(tag) => {
+                    if heights(&tag).is_some()
+                        || sections(&tag) != (Some(Tag::Int(-4)), Some(Tag::Int(20)))
+                    {
+                        failures.push(format!("({x}, {z}) {tag:?}"));
+                    }
+                }
+                None => failures.push(format!("({x}, {z}) has no blending_data")),
+            }
+        }
+        assert!(failures.is_empty(), "saved blending data: {failures:#?}");
+    }
+
+    /// Added control (H077, after the baseline): the exact cache state the save
+    /// reads. After the generation of (13, 0), the Overworld folder's lookup
+    /// holds the calculated data of the edge chunk (12, 0), with the official
+    /// server's heights; an old neighbour without new sides holds no height,
+    /// and a far chunk no entry.
+    #[test]
+    #[ignore = "needs HORIZON_TEST_RESOURCES, a scratch HORIZON_HOME and the constructed H077_OLD_WORLD"]
+    fn the_overworld_cache_holds_the_edge_chunks_calculated_heights() {
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let home =
+            std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join("h077-cache");
+        let world = home.join("saves/h077");
+        let source = std::path::PathBuf::from(std::env::var_os("H077_OLD_WORLD").unwrap());
+        fn copy(from: &std::path::Path, to: &std::path::Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap().flatten() {
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &target);
+                } else if entry.file_name() != "session.lock" {
+                    std::fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        copy(&source, &world);
+        let mut game = open_game(&root, &home, &world);
+        game.set_allow_commands(true);
+        assert!(game.run_command("forceload add 208 0 239 15"));
+        let mut loaded = false;
+        for _ in 0..2000 {
+            game.tick_world(true).unwrap();
+            game.update_world();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if game.run_command_quietly("execute if loaded 215 64 8") {
+                loaded = true;
+                break;
+            }
+        }
+        assert!(loaded, "the new chunk (13, 0) was not generated");
+        assert_eq!(game.dim, Dim::Overworld);
+        let mut want = vec![f32::MAX.to_bits(); 12];
+        want.extend([70.0f32, 70.0, 69.0, 68.0].map(f32::to_bits));
+        let edge = game
+            .save
+            .calculated_blending(12, 0)
+            .expect("(12, 0) was calculated");
+        let (min, max, heights) = edge.pack();
+        assert_eq!((min, max), (-4, 20));
+        assert_eq!(heights.map(|h| h.map(f32::to_bits).to_vec()), Some(want));
+        // (11, 0) borders no new chunk: the generation's calculation adds no height
+        // to it (it may have an entry), so it packs without heights, as vanilla's.
+        let inner = game.save.calculated_blending(11, 0);
+        assert!(
+            inner.as_ref().is_none_or(|data| data.pack().2.is_none()),
+            "{inner:?}"
+        );
+        // (0, 0) is far from the new chunks: nothing calculated it.
+        assert!(game.save.calculated_blending(0, 0).is_none());
     }
 }

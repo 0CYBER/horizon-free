@@ -138,6 +138,73 @@ fn bulk_choice_evaluates_in_range_before_a_failing_selector() {
 }
 
 #[test]
+fn bulk_choice_takes_each_value_from_its_branch_bit_for_bit() {
+    /// One value per Y, whatever its bits.
+    #[derive(Debug)]
+    struct Column(Vec<f32>);
+    impl DensitySampler for Column {
+        fn sample_value(&self, _: &mut SamplerContext, p: [i32; 3]) -> Result<f32, SampleError> {
+            Ok(self.0[p[1] as usize])
+        }
+    }
+    // Zeros, the bounds below and their neighbours, infinities, quiet and signaling NaNs.
+    let edges = [
+        0,
+        0x8000_0000,
+        1,
+        0xbf80_0000,
+        0xbf80_0001,
+        0xbf7f_ffff,
+        0x3fc0_0000,
+        0x3fbf_ffff,
+        0x3fc0_0001,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_0000,
+        0x7fa0_0001,
+        0xffc0_1234,
+    ]
+    .map(f32::from_bits);
+    // Long enough for a vectorized body and a tail; the three columns cycle at different
+    // rates, so every selector meets every pair of branch values.
+    let length = edges.len() * 15 * 13 + 3;
+    let column = |step: usize| -> Vec<f32> { (0..length).map(|y| edges[y / step % 14]).collect() };
+    let (selector, inside, outside) = (column(1), column(15), column(13));
+    let volume = DensityVolume::new([1, length as i32, 1], [0; 3], [1; 3]).unwrap();
+    let mut context = SamplerContext::default();
+    for (min, max) in [
+        (-1.0, 1.5),
+        (-1000000.0, 1.5),
+        (0.0, 0.0),
+        (f32::NEG_INFINITY, f32::INFINITY),
+        (f32::NAN, 1.5),
+        (-1.0, f32::NAN),
+    ] {
+        let choice = RangeChoiceSampler {
+            input: Arc::new(Column(selector.clone())),
+            min_inclusive: min,
+            max_exclusive: max,
+            when_in_range: Arc::new(Column(inside.clone())),
+            when_out_of_range: Arc::new(Column(outside.clone())),
+        };
+        let mut actual = vec![19.0; length];
+        choice
+            .sample_volume(&mut context, &mut actual, volume)
+            .unwrap();
+        for y in 0..length {
+            let in_range = selector[y] >= min && selector[y] < max;
+            let expected = if in_range { inside[y] } else { outside[y] };
+            assert_eq!(
+                actual[y].to_bits(),
+                expected.to_bits(),
+                "[{min}, {max}) at {y}: selector {:#x}",
+                selector[y].to_bits()
+            );
+        }
+    }
+}
+
+#[test]
 fn interval_branch_errors_keep_selector_output_and_return_scratch() {
     let mut context = SamplerContext::default();
     let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
@@ -1077,4 +1144,91 @@ fn lerp_samples_its_branches_only_where_alpha_reads_them() {
     }
     // Both kinds of alpha occur, so both branches are skipped somewhere and read somewhere.
     assert!(clamped > 0 && mixed > 0, "{clamped} {mixed}");
+}
+
+#[test]
+fn interpolation_reuses_captured_lattice_samples_bit_for_bit() {
+    let noise: Arc<dyn DensitySampler> = Arc::new(NoiseSampler {
+        noise: Arc::new(PerlinNoise::new(&mut LegacyRandom::new(7))),
+        xz_scale: 0.37,
+        y_scale: 0.21,
+    });
+    let gradient: Arc<dyn DensitySampler> = Arc::new(GradientSampler::new(
+        Axis::Y,
+        TilingMode::ClampToEdge,
+        -64,
+        64,
+        1.0,
+        -1.0,
+    ));
+    let input: Arc<dyn DensitySampler> = Arc::new(BinarySampler {
+        left: noise,
+        right: gradient,
+        operation: BinaryOp::Add,
+    });
+    assert!(is_pointwise(&input));
+    let sampler = InterpolatedSampler::new(input, 4, 4)
+        .unwrap()
+        .with_identity(9, 1);
+    let blocks = DensityVolume::new([16, 40, 16], [32, -20, -16], [1; 3]).unwrap();
+    let mut expected = vec![0.0; blocks.size()];
+    sampler
+        .sample_volume(&mut SamplerContext::cached(), &mut expected, blocks)
+        .unwrap();
+    // Captures from aligned lattice volumes. Partial: the chunk, its +X
+    // neighbour and a short +Z piece leave gaps per column. Complete but the
+    // top layer: every column misses the same run.
+    let partial: &[([i32; 3], [i32; 3])] = &[
+        ([4, 10, 4], [32, -20, -16]),
+        ([4, 10, 4], [48, -20, -16]),
+        ([4, 3, 4], [32, -12, 0]),
+    ];
+    let top_missing: &[([i32; 3], [i32; 3])] = &[
+        ([4, 10, 4], [32, -20, -16]),
+        ([1, 10, 4], [48, -20, -16]),
+        ([4, 10, 1], [32, -20, 0]),
+        ([1, 10, 1], [48, -20, 0]),
+    ];
+    for pieces in [&partial[..0], &partial[..1], partial, top_missing] {
+        let mut capture = SamplerContext::cached();
+        capture.capture_lattice();
+        for (sizes, minimum) in pieces {
+            let volume = DensityVolume::new(*sizes, *minimum, [4; 3]).unwrap();
+            let mut buffer = vec![0.0; volume.size()];
+            sampler
+                .sample_volume(&mut capture, &mut buffer, volume)
+                .unwrap();
+        }
+        let lattice = capture.take_lattice_capture();
+        assert_eq!(lattice.len(), pieces.len());
+        let mut context = SamplerContext::cached();
+        context.set_lattice(lattice);
+        let mut output = vec![0.0; blocks.size()];
+        sampler
+            .sample_volume(&mut context, &mut output, blocks)
+            .unwrap();
+        assert_eq!(
+            output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            "{pieces:?}"
+        );
+    }
+    // Another function's samples are never used.
+    let mut capture = SamplerContext::cached();
+    capture.capture_lattice();
+    let volume = DensityVolume::new([4, 10, 4], [32, -20, -16], [4; 3]).unwrap();
+    let mut buffer = vec![0.0; volume.size()];
+    sampler
+        .sample_volume(&mut capture, &mut buffer, volume)
+        .unwrap();
+    let lattice = capture.take_lattice_capture();
+    let mut context = SamplerContext::cached();
+    context.set_lattice(lattice);
+    let mut output = vec![0.0; blocks.size()];
+    InterpolatedSampler::new(Arc::new(ConstantSampler(5.0)), 4, 4)
+        .unwrap()
+        .with_identity(9, 2)
+        .sample_volume(&mut context, &mut output, blocks)
+        .unwrap();
+    assert!(output.iter().all(|v| *v == 5.0));
 }

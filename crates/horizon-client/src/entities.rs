@@ -14,11 +14,12 @@ use crate::{
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3, VoxelShape, border::BorderGeometry},
     position::BlockPos,
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
     level::portal_travel::{BorderBounds, find_free_position},
+    movement_properties::BoundMovementProperties,
 };
 
 /// Gravity applied each tick when the item is not in a fluid (`ItemEntity.tick`).
@@ -67,30 +68,23 @@ fn slime_support_name(block: &str, moving_moved: Option<&str>) -> bool {
     block == "minecraft:slime_block" || moving_moved == Some("minecraft:slime_block")
 }
 
-/// The block under an item, including `Entity.getOnPos` (~1e-5) as well as the
-/// friction sample (`y - 0.999999`). A piston-moved slime is `moving_piston`
-/// with `movedState = slime`, which has the bounce, not the moving piston.
-fn item_support_is_slime(world: &World, facts: &BlockFacts, position: Vec3) -> bool {
-    let x = position.x.floor() as i32;
-    let z = position.z.floor() as i32;
-    let friction_y = (position.y - 0.999_999).floor() as i32;
-    let on_y = (position.y - f64::from(1.0e-5_f32)).floor() as i32;
-    slime_at(world, facts, x, friction_y, z)
-        || (on_y != friction_y && slime_at(world, facts, x, on_y, z))
-}
-
-fn slime_at(world: &World, facts: &BlockFacts, x: i32, y: i32, z: i32) -> bool {
-    let block = &*facts.get(world.block(x, y, z)).name;
+/// A piston-moved slime is `moving_piston` with `movedState = slime`.
+fn slime_at(world: &World, facts: &BlockFacts, position: BlockPos) -> bool {
+    let block = &*facts
+        .get(world.block(position.x, position.y, position.z))
+        .name;
     let moving_moved = world
         .moving_pistons
         .iter()
-        .find(|(pos, _)| *pos == [x, y, z])
+        .find(|(pos, _)| *pos == [position.x, position.y, position.z])
         .map(|(_, piston)| &*facts.get(piston.moved_state).name);
     slime_support_name(block, moving_moved)
 }
 
 mod fluids;
-pub use fluids::{fluid_flow, update_entity_fluids};
+mod item_fall;
+mod item_no_physics;
+pub use fluids::{fall_reset_hit, fluid_flow, update_entity_fluids, water_clip};
 
 #[cfg(test)]
 mod drop_motion_tests {
@@ -241,6 +235,12 @@ pub struct ItemEntity {
     pub vertical_collision: bool,
     /// `Entity.horizontalCollision`: the last move was stopped on x or z.
     pub horizontal_collision: bool,
+    /// `Entity.random`, after the constructor's draws: `moveTowardsClosestSpace`
+    /// takes an item's escape speed from it.
+    pub random: horizon_core::random::LegacyRandom,
+    /// `Entity.fallDistance` (`fall_distance` in its save): what the item has
+    /// fallen since it last touched ground or water.
+    pub fall_distance: f64,
 }
 /// What `Entity.doWaterSplashEffect` asks the level to do for a dropped item.
 /// Particles are drawn on the client (`Level.addParticle` is empty on the
@@ -259,9 +259,28 @@ pub enum ItemSplash {
         velocity: [f64; 3],
     },
 }
-/// `Entity.doWaterSplashEffect` for a dropped item.
+/// `Entity.doWaterSplashEffect` of an entity with no rider, `width` wide, at
+/// `position` moving at `velocity` (a dropped item, a firework rocket).
+pub fn water_splash_effect(
+    position: Vec3,
+    velocity: Vec3,
+    width: f32,
+    random: &mut horizon_core::random::LegacyRandom,
+    splash: &mut impl FnMut(ItemSplash),
+) {
+    let mut water = ItemWater {
+        position,
+        velocity,
+        width,
+        random,
+        splash,
+    };
+    let _ = horizon_world::water_splash::water_splash(&mut water, 1_000_000);
+}
 struct ItemWater<'a, F> {
-    item: &'a mut ItemEntity,
+    position: Vec3,
+    velocity: Vec3,
+    width: f32,
     random: &'a mut horizon_core::random::LegacyRandom,
     splash: &'a mut F,
 }
@@ -274,7 +293,7 @@ impl<F: FnMut(ItemSplash)> horizon_world::water_splash::WaterSplashWorld for Ite
         Ok(None)
     }
     fn velocity(&mut self, _: ()) -> Result<Vec3, Self::Error> {
-        Ok(self.item.velocity)
+        Ok(self.velocity)
     }
     fn splash_sound(&mut self, _: bool) -> Result<(), Self::Error> {
         Ok(())
@@ -286,19 +305,15 @@ impl<F: FnMut(ItemSplash)> horizon_world::water_splash::WaterSplashWorld for Ite
         Ok(self.random.next_double())
     }
     fn play_sound(&mut self, _: (), volume: f32, pitch: f32) -> Result<(), Self::Error> {
-        let at = [
-            self.item.position.x,
-            self.item.position.y,
-            self.item.position.z,
-        ];
+        let at = [self.position.x, self.position.y, self.position.z];
         (self.splash)(ItemSplash::Sound { at, volume, pitch });
         Ok(())
     }
     fn position(&self) -> Vec3 {
-        self.item.position
+        self.position
     }
     fn width(&self) -> f32 {
-        ItemEntity::WIDTH as f32
+        self.width
     }
     fn particle(
         &mut self,
@@ -369,8 +384,13 @@ impl crate::entity_rules::EntityRules for ArmorStand {
 #[derive(Clone, Copy)]
 pub struct ItemStep {
     old_velocity: Vec3,
-    movement: Option<Vec3>,
-    clipped_vertical: bool,
+    did_move: bool,
+    /// The contact block for a clipped vertical move; idle ticks have none.
+    pub vertical_contact: Option<BlockPos>,
+    /// `Entity.move` with physics: where it started, what it moved, and
+    /// whether the move was applied. `None` while idle or without physics,
+    /// where `checkFallDamage` does not run.
+    pub fall_move: Option<(Vec3, Vec3, bool)>,
 }
 #[cfg(test)]
 impl ItemEntity {
@@ -386,10 +406,12 @@ impl ItemEntity {
         fluids: &crate::motion::FluidResources,
         entity_boxes: &[Aabb],
         border: Option<&BorderGeometry>,
-        blocks: Option<&horizon_world::movement_properties::BoundMovementProperties>,
+        blocks: Option<&BoundMovementProperties>,
     ) -> bool {
+        let before = self.velocity;
         let (water, lava) = self.update_fluids(world, fluids);
-        self.water_entry(water > 0.0, self.ticks == 0, &mut |_| {});
+        self.water_entry(water > 0.0, self.ticks == 0, before, &mut |_| {});
+        self.lava_fall(lava > 0.0);
         let step = self.tick_move(
             world,
             facts,
@@ -409,8 +431,9 @@ impl ItemEntity {
             &mut self.velocity,
         );
         let alive = self.tick_settle(world, facts, no_physics, step);
+        let before = self.velocity;
         let (water, _) = self.update_fluids(world, fluids);
-        self.water_entry(water > 0.0, false, &mut |_| {});
+        self.water_entry(water > 0.0, false, before, &mut |_| {});
         alive
     }
 }
@@ -553,40 +576,27 @@ impl ItemEntity {
             false,
         )
     }
-    /// `ItemEntity.tick` on a server: an item whose box is inside a block
-    /// (one placed where it lay) has no physics this tick
-    /// (`level.noCollision(this, box.deflate(1.0E-7))`).
-    pub fn inside_block(&self, world: &World, collision: &BlockCollisionRegistry<'_>) -> bool {
-        let mut scene = SceneCollisions {
-            world,
-            binding: collision,
-            subject: None,
-        };
-        let inner = self.bounds().deflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
-        !crate::collisions::no_collision_with_context(&mut scene, inner, self.collision_context())
-    }
-    /// `Entity.updateFluidInteraction`: entering water after the first tick
-    /// runs `doWaterSplashEffect`.
+    /// `Entity.updateFluidInteraction`: water resets the fall, and entering
+    /// it after the first tick runs `doWaterSplashEffect` at `velocity`, the
+    /// motion before the fluids' currents push it.
     pub fn water_entry<F: FnMut(ItemSplash)>(
         &mut self,
         in_water: bool,
         first_tick: bool,
+        velocity: Vec3,
         splash: &mut F,
     ) {
+        if in_water {
+            self.fall_distance = 0.0;
+        }
         if in_water && !self.was_touching_water && !first_tick {
             let mut random = horizon_core::random::LegacyRandom::new(
                 (self.id as i64)
                     .wrapping_mul(0x5DEECE66D)
                     .wrapping_add(self.ticks as i64),
             );
-            let _ = horizon_world::water_splash::water_splash(
-                &mut ItemWater {
-                    item: self,
-                    random: &mut random,
-                    splash,
-                },
-                1_000_000,
-            );
+            let width = Self::WIDTH as f32;
+            water_splash_effect(self.position, velocity, width, &mut random, splash);
         }
         self.was_touching_water = in_water;
     }
@@ -634,7 +644,7 @@ impl ItemEntity {
         heights: (f64, f64),
         entity_boxes: &[Aabb],
         border: Option<&BorderGeometry>,
-        blocks: Option<&horizon_world::movement_properties::BoundMovementProperties>,
+        blocks: Option<&BoundMovementProperties>,
     ) -> ItemStep {
         let step = self.tick_move_before_block_effects(
             world,
@@ -645,14 +655,15 @@ impl ItemEntity {
             heights,
             entity_boxes,
             border,
+            blocks,
         );
         self.finish_move_block_effects(world, facts, no_physics, blocks, step);
         step
     }
 
-    /// Resolve the item's move before the owner handles block contact and
-    /// resumes the normal block effects. `escape_speed`: with `no_physics` on
-    /// a server, the speed of `Entity.moveTowardsClosestSpace`
+    /// `Entity.move`: resolve the item's move before the owner handles block
+    /// contact and resumes block effects. `escape_speed`: with `no_physics`
+    /// on a server, the speed of `Entity.moveTowardsClosestSpace`
     /// (`nextFloat() * 0.2 + 0.1`).
     pub fn tick_move_before_block_effects(
         &mut self,
@@ -664,6 +675,7 @@ impl ItemEntity {
         (water_height, lava_height): (f64, f64),
         entity_boxes: &[Aabb],
         border: Option<&BorderGeometry>,
+        blocks: Option<&BoundMovementProperties>,
     ) -> ItemStep {
         self.ticks += 1;
         self.previous = self.position;
@@ -700,6 +712,7 @@ impl ItemEntity {
                 binding: collision,
                 subject: None,
             };
+            let from = self.position;
             let mut wanted = self.velocity;
             // Entity.move: a block the item sits in (cobweb, powder snow)
             // scales this move once and stops it.
@@ -729,7 +742,8 @@ impl ItemEntity {
                 )
                 .unwrap_or(Vec3::ZERO)
             };
-            if move_applies(wanted, moved) {
+            let applied = move_applies(wanted, moved);
+            if applied {
                 self.position = Vec3::new(
                     self.position.x + moved.x,
                     self.position.y + moved.y,
@@ -752,23 +766,26 @@ impl ItemEntity {
             if moved.z != wanted.z {
                 self.velocity.z = 0.0;
             }
-            if moved.y != wanted.y {
-                // Entity.move restitutes instead of zeroing Y. A slime block
-                // (or a moving piston carrying one) bounces a dropped item;
-                // MovingPistonBlock itself has no bounceRestitution.
-                let slime = item_support_is_slime(world, facts, self.position);
+            let vertical_contact = if self.vertical_collision && !no_physics {
+                let contact = self.vertical_contact(world, collision, blocks, moved);
+                let slime =
+                    self.on_ground && contact.is_some_and(|pos| slime_at(world, facts, pos));
                 self.velocity.y = vertical_collision_velocity(
                     wanted.y,
                     moved.y,
                     ITEM_GRAVITY,
-                    wanted.y < 0.0,
+                    self.on_ground,
                     slime,
                 );
-            }
+                contact
+            } else {
+                None
+            };
             return ItemStep {
                 old_velocity,
-                movement: Some(moved),
-                clipped_vertical: !no_physics && moved.y != wanted.y,
+                did_move: true,
+                vertical_contact,
+                fall_move: (!no_physics).then_some((from, moved, applied)),
             };
         }
         // applyEffectsFromBlocksForLastMovements: still lift/drag while idle.
@@ -777,23 +794,22 @@ impl ItemEntity {
         }
         ItemStep {
             old_velocity,
-            movement: None,
-            clipped_vertical: false,
+            did_move: false,
+            vertical_contact: None,
+            fall_move: None,
         }
     }
 
-    /// The block at `Entity.getOnPosLegacy` for this tick's clipped move.
-    /// Idle ticks retain the entity's collision flags but have no contact.
-    pub fn vertical_contact(
+    /// `Entity.getOnPosLegacy` for a clipped move. Resolve the support under
+    /// the full item box: at a honey wall, its center can be outside the slime
+    /// block even though its box landed on it.
+    fn vertical_contact(
         &self,
         world: &World,
         collision: &BlockCollisionRegistry<'_>,
-        blocks: &horizon_world::movement_properties::BoundMovementProperties,
-        step: ItemStep,
+        blocks: Option<&BoundMovementProperties>,
+        movement: Vec3,
     ) -> Option<BlockPos> {
-        if !step.clipped_vertical {
-            return None;
-        }
         let mut scene = SceneCollisions {
             world,
             binding: collision,
@@ -801,7 +817,7 @@ impl ItemEntity {
         };
         let mut ground = horizon_world::ground_support::GroundState::default();
         ground
-            .check_support(self.on_ground, self.bounds(), step.movement, |bounds| {
+            .check_support(self.on_ground, self.bounds(), Some(movement), |bounds| {
                 horizon_world::ground_support::find_supporting_block(
                     &mut scene,
                     horizon_world::collision_context::CollisionContext::empty(false),
@@ -811,12 +827,19 @@ impl ItemEntity {
                 )
             })
             .ok()?;
-        Some(crate::motion::legacy_block_support_at(
-            world,
-            blocks,
-            self.position,
-            ground.supporting_block,
-        ))
+        if let Some(blocks) = blocks {
+            return Some(crate::motion::legacy_block_support_at(
+                world,
+                blocks,
+                self.position,
+                ground.supporting_block,
+            ));
+        }
+        // Standalone tests can omit the movement table and its fence/wall tags.
+        Some(ground.supporting_block.unwrap_or_else(|| {
+            let offset = f64::from(horizon_world::movement_support::LEGACY_SUPPORT_OFFSET);
+            BlockPos::containing(self.position.subtract(Vec3::new(0.0, offset, 0.0)))
+        }))
     }
 
     /// Resume the normal block effects after the collision response.
@@ -825,10 +848,10 @@ impl ItemEntity {
         world: &World,
         facts: &BlockFacts,
         no_physics: bool,
-        blocks: Option<&horizon_world::movement_properties::BoundMovementProperties>,
+        blocks: Option<&BoundMovementProperties>,
         step: ItemStep,
     ) {
-        if step.movement.is_some() {
+        if step.did_move {
             // Entity.move applies the block's speed factor before block effects.
             if !no_physics && let Some(blocks) = blocks {
                 let factor =
@@ -837,7 +860,14 @@ impl ItemEntity {
                     horizon_world::entity_move::scale_by_block_speed(self.velocity, factor);
             }
             self.apply_honey_slide(world, facts);
-            self.stuck = self.stuck_multiplier(world, facts).unwrap_or(Vec3::ZERO);
+            self.stuck = match self.stuck_multiplier(world, facts) {
+                // Entity.makeStuckInBlock resets the fall.
+                Some(stuck) => {
+                    self.fall_distance = 0.0;
+                    stuck
+                }
+                None => Vec3::ZERO,
+            };
         }
     }
     /// The rest of `ItemEntity.tick`, after the bubble column's push: slime,
@@ -851,7 +881,7 @@ impl ItemEntity {
         no_physics: bool,
         step: ItemStep,
     ) -> bool {
-        if step.movement.is_some() {
+        if step.did_move {
             // Entity.applyEffectsFromBlocks -> SlimeBlock.stepOn, with the
             // vertical speed the bounce just left (before the air drag).
             if !no_physics {
@@ -1101,10 +1131,20 @@ fn lava_cauldron_contacts(
 pub struct ObstacleGrid {
     cells: crate::fast_hash::FxHashMap<(i32, i32, i32), Vec<u32>>,
     boxes: Vec<Aabb>,
+    /// Each box's entity's `getRootVehicle` when it rides something; empty
+    /// when none was given.
+    roots: Vec<Option<u32>>,
+    found: Vec<u32>,
 }
 impl ObstacleGrid {
     const CELL: f64 = 8.0;
     pub fn new(boxes: Vec<Aabb>) -> Self {
+        Self::with_roots(boxes, Vec::new())
+    }
+    /// [`Self::new`] with the vehicle at the bottom of what each box's entity
+    /// rides (`roots[i]` for `boxes[i]`), so [`Self::near_except`] can leave a
+    /// mover's own riders out.
+    pub fn with_roots(boxes: Vec<Aabb>, roots: Vec<Option<u32>>) -> Self {
         let mut cells: crate::fast_hash::FxHashMap<(i32, i32, i32), Vec<u32>> = Default::default();
         for (i, b) in boxes.iter().enumerate() {
             let (lo, hi) = Self::span(*b);
@@ -1116,7 +1156,12 @@ impl ObstacleGrid {
                 }
             }
         }
-        Self { cells, boxes }
+        Self {
+            cells,
+            boxes,
+            roots,
+            found: Vec::new(),
+        }
     }
     fn span(b: Aabb) -> ((i32, i32, i32), (i32, i32, i32)) {
         let cell = |v: Vec3| {
@@ -1132,30 +1177,54 @@ impl ObstacleGrid {
         self.boxes.is_empty()
     }
     /// The boxes meeting `area` (`getEntityCollisions`'s query box), in the order they were given.
-    pub fn near(&self, area: Aabb, out: &mut Vec<Aabb>) {
+    pub fn near(&mut self, area: Aabb, out: &mut Vec<Aabb>) {
+        self.near_except(area, None, out);
+    }
+    /// [`Self::near`] without the boxes of what rides `vehicle` (given with
+    /// [`Self::with_roots`]): `Entity.canCollideWith` leaves out
+    /// `isPassengerOfSameVehicle`, so a stand's riders do not stop it.
+    pub fn near_except(&mut self, area: Aabb, vehicle: Option<u32>, out: &mut Vec<Aabb>) {
         out.clear();
         if self.boxes.is_empty() {
             return;
         }
+        let kept = |i: usize| vehicle.is_none() || self.roots.get(i).copied().flatten() != vehicle;
         let (lo, hi) = Self::span(area);
-        let mut found: Vec<u32> = Vec::new();
+        let side = |lo: i32, hi: i32| (i64::from(hi) - i64::from(lo) + 1).max(0);
+        let cells = side(lo.0, hi.0)
+            .saturating_mul(side(lo.1, hi.1))
+            .saturating_mul(side(lo.2, hi.2));
+        // An area over more cells than there are boxes (a stand loaded with a
+        // huge Motion asks for one millions of blocks long): test each box
+        // once rather than walk the cells.
+        if cells > self.boxes.len() as i64 {
+            out.extend(
+                self.boxes
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, b)| kept(i) && b.intersects(area))
+                    .map(|(_, b)| *b),
+            );
+            return;
+        }
+        self.found.clear();
         for x in lo.0..=hi.0 {
             for y in lo.1..=hi.1 {
                 for z in lo.2..=hi.2 {
                     if let Some(list) = self.cells.get(&(x, y, z)) {
-                        found.extend(list);
+                        self.found.extend(list);
                     }
                 }
             }
         }
-        found.sort_unstable();
-        found.dedup();
-        out.extend(
-            found
-                .into_iter()
-                .map(|i| self.boxes[i as usize])
-                .filter(|b| b.intersects(area)),
-        );
+        self.found.sort_unstable();
+        self.found.dedup();
+        for &i in &self.found {
+            let b = self.boxes[i as usize];
+            if kept(i as usize) && b.intersects(area) {
+                out.push(b);
+            }
+        }
     }
 }
 
@@ -1303,7 +1372,9 @@ pub struct ExperienceOrb {
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
-    pub value: u32,
+    /// `ExperienceOrb.DATA_VALUE`: an int that a save or command can leave at
+    /// 0 or below, which a pickup turns into no experience.
+    pub value: i32,
     pub age: u32,
     pub on_ground: bool,
     /// `ExperienceOrb.count`: orbs merged into this one; each pickup gives
@@ -1313,6 +1384,8 @@ pub struct ExperienceOrb {
     pub ticks: u32,
     /// `ExperienceOrb.health`: damage wears it down from 5 (`hurtServer`).
     pub health: i32,
+    /// `Entity.airSupply`: loaded and saved as is; an orb never breathes.
+    pub air: i32,
     /// `Entity.noGravity`: `ExperienceOrb.tick`'s `applyGravity` does nothing.
     pub no_gravity: bool,
     /// `ExperienceOrb.followingPlayer`: the followed player's entity id, kept
@@ -1377,8 +1450,13 @@ impl ExperienceOrb {
     }
     /// `ExperienceOrb.canMerge(orb, id, value)` for an orb that is not removed:
     /// the same value and ids a multiple of 40 apart.
-    pub fn can_merge(&self, id: u32, value: u32) -> bool {
+    pub fn can_merge(&self, id: u32, value: i32) -> bool {
         self.value == value && (self.id as i32).wrapping_sub(id as i32) % 40 == 0
+    }
+    /// The experience one pickup gives: `playerTouch` gives only a positive
+    /// remainder, so an orb of value 0 or below gives none. Mods see this too.
+    pub fn points(&self) -> u32 {
+        self.value.max(0) as u32
     }
     /// ExperienceOrb.getExperienceValue: the largest orb size not above `value`.
     pub fn split(value: u32) -> u32 {
@@ -1932,14 +2010,15 @@ pub struct ItemFrame {
     pub facing: u8,
     pub glow: bool,
     pub item: Option<crate::items::ItemStack>,
-    /// 0..8, in 45 degree steps.
-    pub rotation: u8,
+    /// Java `%` remainder of ItemRotation, so -7..=7 in 45 degree steps.
+    pub rotation: i8,
     pub drop_chance: f32,
     pub fixed: bool,
     pub invisible: bool,
     pub check_interval: u32,
     /// `Entity.getCustomName` (`CustomName`), copied onto the dropped frame.
     pub custom_name: Option<horizon_world::nbt::Tag>,
+    pub random: LegacyRandom,
 }
 impl ItemFrame {
     pub fn step(&self) -> [i32; 3] {
@@ -2114,7 +2193,7 @@ impl ArmorStand {
         in_water: bool,
         border: Option<&BorderGeometry>,
     ) {
-        if let Some(step) = self.tick_move(scene, facts, climbing, in_water, border) {
+        if let Some(step) = self.tick_move(scene, facts, climbing, in_water, border, &[]) {
             let medium = if in_water {
                 StandMedium::Water
             } else {
@@ -2275,7 +2354,7 @@ impl ArmorStand {
             position,
             previous: position,
             velocity: Vec3::ZERO,
-            on_ground: true,
+            on_ground: false,
             yaw,
             previous_yaw: yaw,
             equipment: Default::default(),
@@ -2382,10 +2461,12 @@ impl ArmorStand {
         }
         self.health > 0.5
     }
-    /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975, half for small).
+    /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975F, half for small).
     pub fn bounds(&self) -> Aabb {
         let s = if self.small { 0.5 } else { 1.0 };
-        let (w, h) = (0.25 * s, 1.975 * s);
+        // EntityDimensions.makeBoundingBox adds the float height, widened
+        // (halving it for the small stand is exact).
+        let (w, h) = (0.25 * s, f64::from(1.975_f32) * s);
         let p = self.position;
         Aabb::new(
             Vec3::new(p.x - w, p.y, p.z - w),
@@ -2410,7 +2491,10 @@ impl ArmorStand {
     /// The game runs the fluid push first (`Entity::push_by_fluid`), then
     /// this up to the blocks' push, then the bubble column
     /// (`Entity::push_by_bubble_column`), then [`ArmorStand::tick_settle`].
-    /// None: a marker or a stand with `NoGravity` does not travel.
+    /// `entities` are the boxes `EntityGetter.getEntityCollisions` gives the
+    /// stand (a living shulker, a boat, a happy ghast held still), which stop
+    /// its move as blocks do. None: a marker or a stand with `NoGravity` does
+    /// not travel.
     pub fn tick_move(
         &mut self,
         scene: &mut crate::collisions::SceneCollisions,
@@ -2418,6 +2502,7 @@ impl ArmorStand {
         climbing: &horizon_world::climbing::ClimbingRegistry<'_>,
         in_water: bool,
         border: Option<&BorderGeometry>,
+        entities: &[Aabb],
     ) -> Option<StandStep> {
         use crate::entity_rules::EntityRules;
         self.previous = self.position;
@@ -2476,18 +2561,20 @@ impl ArmorStand {
         }
         let mut velocity = wanted;
         let mut horizontal_collision = false;
-        // Entity.collide: the world border's walls stop the stand too.
+        // Entity.collide: the world border's walls and the entities that
+        // `canBeCollidedWith` the stand stop it too.
         let moved = SceneCollisions {
             world: scene.world,
             binding: scene.binding,
             subject: scene.subject,
         }
-        .resolve_in_border(
+        .resolve_in_border_with(
             self.bounds(),
             wanted,
             0.0,
             self.on_ground,
             border.map(|b| (b, [self.position.x, self.position.z])),
+            entities,
         );
         if let Ok(moved) = moved {
             self.position = Vec3::new(
@@ -2497,24 +2584,7 @@ impl ArmorStand {
             );
             self.on_ground = wanted.y < 0.0 && moved.y > wanted.y;
             // Entity.setOnGroundWithMovement: the block under the feet.
-            let context = horizon_world::collision_context::CollisionContext::for_entity(
-                horizon_world::collision_context::CollisionEntity {
-                    identity: horizon_world::entity_obstruction::EntityIdentity(u64::from(self.id)),
-                    kind: horizon_world::collision_context::EntityContextKind::Living,
-                    y: self.position.y,
-                    descending: false,
-                    main_hand: Some(horizon_world::collision_context::CollisionItem::EMPTY),
-                },
-                false,
-            );
-            let position = self.position;
-            let _ =
-                self.support
-                    .check_support(self.on_ground, self.bounds(), Some(wanted), |area| {
-                        horizon_world::ground_support::find_supporting_block(
-                            scene, context, position, area, 1_000_000,
-                        )
-                    });
+            self.ground_support(scene, wanted);
             if (wanted.x - moved.x).abs() >= f64::from(1.0e-5_f32) {
                 horizontal_collision = true;
                 velocity.x = 0.0;
@@ -2532,6 +2602,115 @@ impl ArmorStand {
         }
         self.velocity = velocity;
         Some(StandStep { falling, friction })
+    }
+    /// `Entity.move(MoverType.SHULKER, delta)`: an opening shulker lid
+    /// shoves the stand (one with physics) by `delta`. Blocks, the world
+    /// border and `entities` (the boxes `getEntityCollisions` gives the stand)
+    /// cut the move short, a move cut to almost nothing is not made, and an
+    /// axis that hits something loses its speed
+    /// (`restituteMovementAfterCollisions`: a stand does not bounce, so the
+    /// speed becomes `-speed * 0`).
+    ///
+    /// The stand has already travelled this tick (stands tick before mobs
+    /// here). `travels_after` says vanilla ticks it after the shulker (it
+    /// joined the level later, as a stand placed on the shell does), so
+    /// there the push comes first and its own travel follows:
+    /// - a push nothing stops leaves `on_ground` and the speed as that
+    ///   travel left them (it lands the stand again on the risen lid);
+    /// - a push down that something stops: the travel that follows starts
+    ///   with no vertical speed, moves nothing vertically (`on_ground`
+    ///   false) and ends with gravity's speed only, which the stand's own
+    ///   travel, stopped by the same floor, already gave it;
+    /// - a push up that a ceiling stops loses the vertical speed, so the
+    ///   stand stays pinned on the next tick as vanilla's does (vanilla
+    ///   shows gravity's speed by then, and once the lid stops, the stand
+    ///   falls through it one tick later than vanilla's).
+    ///
+    /// Otherwise vanilla ticks it before the shulker, as here, and the push
+    /// sets `on_ground` and the block under the feet itself. Left out: the
+    /// block speed factor on the horizontal speed, the fall distance a push
+    /// down through the air adds, and a slime or bed bounce.
+    pub fn shove(
+        &mut self,
+        scene: SceneCollisions,
+        delta: Vec3,
+        border: Option<&BorderGeometry>,
+        entities: &[Aabb],
+        travels_after: bool,
+    ) {
+        let mut scene = SceneCollisions {
+            subject: self.feet_are_leather_boots().then_some(
+                crate::collisions::PowderSnowSubject {
+                    leather_boots: true,
+                    ..Default::default()
+                },
+            ),
+            ..scene
+        };
+        let Ok(moved) = SceneCollisions {
+            world: scene.world,
+            binding: scene.binding,
+            subject: scene.subject,
+        }
+        .resolve_in_border_with(
+            self.bounds(),
+            delta,
+            0.0,
+            self.on_ground,
+            border.map(|b| (b, [self.position.x, self.position.z])),
+            entities,
+        ) else {
+            return;
+        };
+        let length = moved.length_squared();
+        if length > 1.0e-7 || delta.length_squared() - length < 1.0e-7 {
+            self.position = self.position.add_vector(moved);
+        }
+        // Mth.equal on x and z; y only when the push had a vertical part.
+        if (delta.x - moved.x).abs() >= f64::from(1.0e-5_f32) {
+            self.velocity.x = -self.velocity.x * 0.0;
+        }
+        if (delta.z - moved.z).abs() >= f64::from(1.0e-5_f32) {
+            self.velocity.z = -self.velocity.z * 0.0;
+        }
+        let vertical = moved.y != delta.y;
+        if travels_after {
+            if vertical {
+                self.on_ground = false;
+                if delta.y > 0.0 {
+                    self.velocity.y = -self.velocity.y * 0.0;
+                }
+                self.ground_support(&mut scene, moved);
+            }
+        } else {
+            if vertical && delta.y != 0.0 {
+                self.velocity.y = -self.velocity.y * 0.0;
+            }
+            self.on_ground = vertical && delta.y < 0.0;
+            self.ground_support(&mut scene, moved);
+        }
+    }
+    /// `Entity.checkSupportingBlock` after a move by `movement`: the block
+    /// under the feet while `on_ground`, none otherwise.
+    fn ground_support(&mut self, scene: &mut SceneCollisions, movement: Vec3) {
+        let context = horizon_world::collision_context::CollisionContext::for_entity(
+            horizon_world::collision_context::CollisionEntity {
+                identity: horizon_world::entity_obstruction::EntityIdentity(u64::from(self.id)),
+                kind: horizon_world::collision_context::EntityContextKind::Living,
+                y: self.position.y,
+                descending: false,
+                main_hand: Some(horizon_world::collision_context::CollisionItem::EMPTY),
+            },
+            false,
+        );
+        let (position, bounds) = (self.position, self.bounds());
+        let _ = self
+            .support
+            .check_support(self.on_ground, bounds, Some(movement), |area| {
+                horizon_world::ground_support::find_supporting_block(
+                    scene, context, position, area, 1_000_000,
+                )
+            });
     }
     /// `HoneyBlock.entityInside`: side-slide movement after the stand's travel.
     /// `ArmorStand.hasPhysics` / `Entity.isAffectedByBlocks` exclude markers
@@ -2628,35 +2807,7 @@ impl ArmorStand {
 }
 
 #[cfg(test)]
-mod experience_tests {
-    use super::*;
-
-    #[test]
-    fn death_reward_uses_levels_and_caps_the_recoverable_points() {
-        for (level, reward) in [(0, 0), (1, 7), (14, 98), (15, 100), (30, 100)] {
-            let xp = Experience {
-                level,
-                progress: 0.75,
-                total: 10_000,
-            };
-            assert_eq!(xp.death_reward(false), reward);
-            assert_eq!(xp.death_reward(true), 0);
-        }
-    }
-
-    #[test]
-    fn respawn_clears_all_xp_unless_it_is_kept() {
-        let mut xp = Experience::default();
-        xp.give(155);
-        let before = (xp.level, xp.progress, xp.total);
-        xp.respawn(true);
-        assert_eq!((xp.level, xp.progress, xp.total), before);
-        xp.respawn(false);
-        assert_eq!((xp.level, xp.progress, xp.total), (0, 0.0, 0));
-        xp.give(7);
-        assert_eq!((xp.level, xp.progress, xp.total), (1, 0.0, 7));
-    }
-}
+mod experience_tests;
 
 #[cfg(test)]
 mod fire_environment_tests {
@@ -2685,34 +2836,19 @@ mod fire_environment_tests {
                 assets.registry.default_state("minecraft:lava").unwrap(),
             )
             .unwrap();
-        let make = |id: &str| ItemEntity {
-            rotation: [0.0, 0.0],
-            join: Default::default(),
-            no_gravity: false,
-            id: 1,
-            thrower: None,
-            target: None,
-            stack: ItemStack {
-                item: std::sync::Arc::from(id),
-                count: 1,
-                damage: 0,
-                extra: None,
-            },
-            health: 5,
-            fire_ticks: 0,
-            position: at,
-            previous: at,
-            velocity: Vec3::ZERO,
-            on_ground: false,
-            vertical_collision: false,
-            horizontal_collision: false,
-            age: 0,
-            pickup_delay: 0,
-            bob_offset: 0.0,
-            ticks: 0,
-            needs_sync: false,
-            stuck: Vec3::ZERO,
-            was_touching_water: false,
+        let make = |id: &str| {
+            ItemEntity::new(
+                1,
+                ItemStack {
+                    item: std::sync::Arc::from(id),
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                },
+                at,
+                Vec3::ZERO,
+                0.0,
+            )
         };
         let mut wood = make("minecraft:oak_planks");
         let mut metal = make("minecraft:netherite_ingot");
@@ -2820,30 +2956,7 @@ mod destroyed_bundle_environment_tests {
             ItemStack::new("minecraft:stone", 3),
             ItemStack::new("minecraft:diamond", 1),
         ];
-        let mut bundle = ItemEntity {
-            rotation: [0.0, 0.0],
-            join: Default::default(),
-            no_gravity: false,
-            id: 1,
-            thrower: None,
-            target: None,
-            stack,
-            health: 5,
-            fire_ticks: 0,
-            position: at,
-            previous: at,
-            velocity: Vec3::ZERO,
-            on_ground: false,
-            vertical_collision: false,
-            horizontal_collision: false,
-            age: 0,
-            pickup_delay: 0,
-            bob_offset: 0.0,
-            ticks: 0,
-            needs_sync: false,
-            stuck: Vec3::ZERO,
-            was_touching_water: false,
-        };
+        let mut bundle = ItemEntity::new(1, stack, at, Vec3::ZERO, 0.0);
         // 5 health against 4 a tick: the first tick leaves 1 and nothing out.
         let first = bundle.environment_tick(&world, &facts, assets.registry, &items);
         assert!(first.alive && first.spilled.is_empty());
@@ -3027,6 +3140,7 @@ mod merge_tests {
     fn item(id: &str, count: u32, x: f64, age: i32) -> ItemEntity {
         let at = Vec3::new(x, 64.0, 0.5);
         ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -3047,6 +3161,7 @@ mod merge_tests {
             on_ground: true,
             vertical_collision: false,
             horizontal_collision: false,
+            fall_distance: 0.0,
             age,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3346,6 +3461,7 @@ mod world_border_tests {
                 count: 1,
                 ticks: 0,
                 health: 5,
+                air: 300,
                 following: None,
             };
             orb.tick(
@@ -3546,6 +3662,7 @@ mod honey_slide_tests {
     pub(super) fn falling_item(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) -> ItemEntity {
         let at = Vec3::new(x, y, z);
         ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -3566,6 +3683,7 @@ mod honey_slide_tests {
             on_ground: false,
             vertical_collision: false,
             horizontal_collision: false,
+            fall_distance: 0.0,
             age: 10,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3697,6 +3815,7 @@ mod slime_bounce_tests {
     fn grounded_item() -> ItemEntity {
         let at = Vec3::new(0.5, 2.0, 0.5);
         ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -3717,6 +3836,7 @@ mod slime_bounce_tests {
             on_ground: true,
             vertical_collision: false,
             horizontal_collision: false,
+            fall_distance: 0.0,
             age: 10,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3766,8 +3886,9 @@ mod slime_bounce_tests {
             true,
             ItemStep {
                 old_velocity: item.velocity,
-                movement: Some(item.velocity),
-                clipped_vertical: false,
+                did_move: true,
+                vertical_contact: None,
+                fall_move: None,
             },
         );
         assert_eq!(item.velocity.x.to_bits(), 0x3fb9_1687_3333_3334);
@@ -4019,7 +4140,7 @@ mod entity_collision_tests {
                 Vec3::new(x + 1.375, 64.5625, 1.375),
             )
         };
-        let grid = ObstacleGrid::new((0..1000).map(|i| boat(f64::from(i) * 100.0)).collect());
+        let mut grid = ObstacleGrid::new((0..1000).map(|i| boat(f64::from(i) * 100.0)).collect());
         let mut out = Vec::new();
         // Around the 7th boat: only it.
         let area = Aabb::new(Vec3::new(699.0, 63.0, -1.0), Vec3::new(701.0, 66.0, 1.0));
@@ -4031,10 +4152,44 @@ mod entity_collision_tests {
         assert!(out.is_empty());
         // A box spanning cells is found from any of them, once.
         let wide = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 1.0, 1.0));
-        let grid = ObstacleGrid::new(vec![wide]);
+        let mut grid = ObstacleGrid::new(vec![wide]);
         let area = Aabb::new(Vec3::new(17.0, 0.0, 0.0), Vec3::new(18.0, 1.0, 1.0));
         grid.near(area, &mut out);
         assert_eq!(out, vec![wide]);
+    }
+
+    #[test]
+    fn obstacle_grid_leaves_out_a_movers_riders_and_answers_a_huge_area_at_once() {
+        let unit = |x: f64| Aabb::new(Vec3::new(x, 64.0, 0.0), Vec3::new(x + 1.0, 65.0, 1.0));
+        // The shulker at x = 2 rides stand 7; the one at x = 0 and the boat
+        // at x = 4 ride nothing.
+        let mut grid = ObstacleGrid::with_roots(
+            vec![unit(0.0), unit(2.0), unit(4.0)],
+            vec![None, Some(7), None],
+        );
+        let mut out = Vec::new();
+        let area = Aabb::new(Vec3::new(-1.0, 63.0, -1.0), Vec3::new(6.0, 66.0, 2.0));
+        grid.near_except(area, Some(7), &mut out);
+        assert_eq!(out, vec![unit(0.0), unit(4.0)], "stand 7 ignores its rider");
+        grid.near_except(area, Some(8), &mut out);
+        assert_eq!(
+            out,
+            vec![unit(0.0), unit(2.0), unit(4.0)],
+            "stand 8 does not"
+        );
+        // A stand loaded with Motion 1e10 asks for an area 1e10 blocks long
+        // (about 1.25e9 cells): the boxes in it come back in order, at once.
+        let huge = Aabb::new(Vec3::new(-1.0, 63.0, -1.0), Vec3::new(1.0e10, 66.0, 2.0));
+        let start = std::time::Instant::now();
+        grid.near(huge, &mut out);
+        assert_eq!(out, vec![unit(0.0), unit(2.0), unit(4.0)]);
+        let far = Aabb::new(
+            Vec3::new(-1.0e300, 63.0, -1.0),
+            Vec3::new(1.0e300, 66.0, 2.0),
+        );
+        grid.near(far, &mut out);
+        assert_eq!(out.len(), 3);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 
     /// A farm: 5000 drops and 1000 separated vehicles. Run with `-- --ignored --nocapture`.
@@ -4062,7 +4217,7 @@ mod entity_collision_tests {
             hits += boxes.iter().filter(|b| b.intersects(area)).count();
         }
         let scan = start.elapsed();
-        let grid = ObstacleGrid::new(boxes);
+        let mut grid = ObstacleGrid::new(boxes);
         let start = std::time::Instant::now();
         let (mut out, mut found) = (Vec::new(), 0);
         for item in &items {
@@ -4342,6 +4497,70 @@ mod armor_stand_motion_tests {
         }
     }
 
+    /// `Entity.collide` (#11877): the boxes `getEntityCollisions` gives a
+    /// stand (a shulker's here, one block on the test scene's ground, whose
+    /// top is at y = 4) stop it as blocks do. Dropped from y = 8 it rests on
+    /// the box's top at y = 5; sliding east at 2 blocks a tick from x = 18 it
+    /// stops with its east side on the box's west face, x = 20. With no boxes
+    /// it falls to the ground and slides on.
+    #[test]
+    fn a_stand_lands_on_and_stops_at_the_entity_boxes_it_is_given() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let facts = BlockFacts::load(&root, assets.registry).unwrap();
+        let collision = crate::collisions::load(&root, assets.registry).unwrap();
+        let world = World::test_scene(&assets, &render, 3).unwrap();
+        let empty = Default::default();
+        let climbing = horizon_world::climbing::ClimbingRegistry::new(
+            collision.registry(),
+            &empty,
+            &empty,
+            &empty,
+        )
+        .unwrap();
+        let shulker = Aabb::new(Vec3::new(20.0, 4.0, 20.0), Vec3::new(21.0, 5.0, 21.0));
+        let run = |stand: &mut ArmorStand, boxes: &[Aabb], ticks: usize| {
+            for _ in 0..ticks {
+                let mut scene = SceneCollisions {
+                    world: &world,
+                    binding: &collision,
+                    subject: None,
+                };
+                if let Some(step) =
+                    stand.tick_move(&mut scene, &facts, &climbing, false, None, boxes)
+                {
+                    stand.tick_settle(StandMedium::Air, step);
+                }
+            }
+        };
+        for (boxes, floor) in [(&[shulker][..], 5.0), (&[][..], 4.0)] {
+            let mut stand = ArmorStand::new(1, Vec3::new(20.5, 8.0, 20.5), 0.0);
+            run(&mut stand, boxes, 20);
+            let y = stand.position.y;
+            assert!((y - floor).abs() < 1.0e-9, "rests at {floor}, got {y}");
+            assert!(stand.on_ground, "on the ground at {floor}");
+        }
+        for (boxes, blocked) in [(&[shulker][..], true), (&[][..], false)] {
+            let mut stand = ArmorStand::new(1, Vec3::new(18.0, 4.0, 20.5), 0.0);
+            stand.on_ground = true;
+            stand.velocity = Vec3::new(2.0, 0.0, 0.0);
+            run(&mut stand, boxes, 1);
+            let east = stand.bounds().max_position().x;
+            if blocked {
+                assert!((east - 20.0).abs() < 1.0e-7, "stops at the box, got {east}");
+                assert_eq!(stand.velocity.x, 0.0, "the wall takes its speed");
+            } else {
+                assert!((east - 20.25).abs() < 1.0e-7, "goes on, got {east}");
+            }
+        }
+    }
+
     #[test]
     fn a_stand_in_lava_halves_its_motion_and_sinks_by_a_quarter_of_gravity() {
         // LivingEntity.travelInLava, measured on the real server: a stand at
@@ -4511,6 +4730,7 @@ mod item_destroyed_tests {
             .map(|(id, count)| ItemStack::new(id, *count))
             .collect();
         ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -4526,6 +4746,7 @@ mod item_destroyed_tests {
             on_ground: false,
             vertical_collision: false,
             horizontal_collision: false,
+            fall_distance: 0.0,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -4651,6 +4872,7 @@ mod orb_underwater_tests {
                     count: 1,
                     ticks: 0,
                     health: 5,
+                    air: 300,
                     following: None,
                 };
                 orb.set_underwater_movement();
@@ -4685,6 +4907,7 @@ mod render_light_tests {
             count: 1,
             ticks: 0,
             health: 5,
+            air: 300,
             following: None,
         }
     }
@@ -4746,6 +4969,7 @@ mod dropped_item_light_tests {
 
     fn item(previous_y: f64, y: f64) -> ItemEntity {
         ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -4766,6 +4990,7 @@ mod dropped_item_light_tests {
             on_ground: false,
             vertical_collision: false,
             horizontal_collision: false,
+            fall_distance: 0.0,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -4808,6 +5033,7 @@ mod dropped_item_light_tests {
         assert_eq!(falling.light_probe(1.0)[1].floor(), 65.0);
         // Across x and z too, not just down.
         let sliding = ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             position: Vec3::new(1.5, 64.0, 0.5),
             previous: Vec3::new(0.5, 64.0, 0.5),
             ..item(64.0, 64.0)
@@ -4825,6 +5051,7 @@ mod dropped_item_light_tests {
         assert_eq!(cold.render_light(light(15, 0)), (15 * 16) as u32);
         assert_eq!(cold.render_light(light(0, 9)), ((9 * 16) << 8) as u32);
         let burning = ItemEntity {
+            random: horizon_core::random::LegacyRandom::new(0),
             fire_ticks: 160,
             ..item(64.0, 64.0)
         };
@@ -4882,6 +5109,7 @@ mod orb_lava_tests {
             count: 1,
             ticks: 0,
             health,
+            air: 300,
             following: None,
         }
     }

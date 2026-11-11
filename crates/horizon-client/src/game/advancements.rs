@@ -2,6 +2,13 @@
 //! events (`CriteriaTriggers`), awarding with rewards, the toast and the
 //! chat announcement, and `players/advancements/<uuid>.json`.
 use super::{Dim, Game};
+
+#[cfg(test)]
+#[path = "inventory_changed_tests.rs"]
+mod inventory_changed_tests;
+#[cfg(test)]
+#[path = "mod_toast_tests.rs"]
+mod mod_toast_tests;
 use horizon_client::actions::Action;
 use horizon_client::{
     advancements::{self as adv, EntityView, Frame, ItemView, Progress, Tree},
@@ -19,11 +26,13 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-
 pub(super) struct Toast {
     icon: String,
     frame: Frame,
     title: Text,
+    /// A mod's own toast (`native_add_toast`): the line drawn in place of
+    /// the frame's label, `title` then being its description.
+    label: Option<Text>,
     slide: Slide,
     /// `ToastInstance.firstSlotIndex`: the 32-pixel slot it stacks in once it
     /// leaves the queue.
@@ -42,10 +51,31 @@ impl Toast {
             icon: String::new(),
             frame: Frame::Task,
             title: Text::literal(""),
+            label: None,
             slide: Slide::default(),
             slot: None,
             recipes: items,
             changed: true,
+            last_changed: 0,
+        }
+    }
+    /// A mod's own toast (`native_add_toast`, API @API:add_toast@): drawn as an `AdvancementToast`
+    /// with `label` in the frame label's place and `description` as its
+    /// title, yellow (pink, with the challenge sound, for a challenge).
+    pub(super) fn of_mod(icon: &str, label: Text, description: Text, challenge: bool) -> Self {
+        Self {
+            icon: icon.to_owned(),
+            frame: if challenge {
+                Frame::Challenge
+            } else {
+                Frame::Task
+            },
+            title: description,
+            label: Some(label),
+            slide: Slide::default(),
+            slot: None,
+            recipes: Vec::new(),
+            changed: false,
             last_changed: 0,
         }
     }
@@ -136,6 +166,9 @@ impl AdvState {
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
 impl adv::World for View<'_, '_> {
+    fn predicate(&self, id: &str) -> Option<&Value> {
+        self.0.fns.store.predicates.get(id)
+    }
     fn dimension(&self) -> &str {
         self.0.dim.id()
     }
@@ -180,6 +213,10 @@ impl adv::World for View<'_, '_> {
             .unwrap_or_default();
         (name, props)
     }
+    fn block_property_values(&self, block: &str, property: &str) -> Option<Vec<String>> {
+        let values = self.0.pack.assets.registry.property_values(block, property);
+        (!values.is_empty()).then(|| values.into_iter().map(str::to_owned).collect())
+    }
     fn fluid(&self, p: [i32; 3]) -> Option<String> {
         match self
             .0
@@ -193,15 +230,10 @@ impl adv::World for View<'_, '_> {
             _ => None,
         }
     }
+    /// `Level.canSeeSky`: sky light 15 at the position, whatever stands
+    /// above it, as `MobWorld` reads it for the spawn rules.
     fn can_see_sky(&self, p: [i32; 3]) -> bool {
-        (p[1] + 1..p[1] + 200).all(|y| {
-            !self
-                .0
-                .res
-                .facts()
-                .get(self.0.world.block(p[0], y, p[2]))
-                .full_collision
-        })
+        self.0.mob_world_base(&[]).can_see_sky(p[0], p[1], p[2])
     }
     fn light(&self, p: [i32; 3]) -> i32 {
         let l = self.0.world.light(p[0], p[1], p[2]);
@@ -512,6 +544,10 @@ impl Game<'_> {
             tool: None,
             block_pos: None,
         };
+        // An invalid reference anywhere fails the whole tree, even under an inversion.
+        if !adv::references_valid(v, &View(self)) {
+            return false;
+        }
         adv::conditions_with(v, &ctx, &mut |leaf, ctx| {
             adv::literal_random_chance(leaf, &mut || self.world.random.next_float())
                 .unwrap_or_else(|| adv::conditions(leaf, ctx, &View(self)))
@@ -764,11 +800,26 @@ impl Game<'_> {
             let mut tag = horizon_client::entity_nbt::mob_to_nbt(m, uuid, raw, registry, |other| {
                 self.persist.uuid_of(other)
             });
+            self.put_last_hurt_by_mob(m, &mut tag);
             let riders = passengers.iter().filter_map(|r| r.nbt.clone()).collect();
             super::persist::add_passengers(&mut tag, riders);
             tag
         });
+        let movement = (m.extra.mount.is_none()
+            && m.rider.is_none()
+            && self.riding != Some(m.id)
+            && self.lan.as_ref().is_none_or(|host| {
+                host.hub
+                    .guests
+                    .iter()
+                    .all(|guest| guest.vehicle != Some(m.id))
+            }))
+        .then_some(adv::MovementView {
+            per_tick: [m.velocity.x, m.velocity.y, m.velocity.z],
+            fall_distance: m.fall_distance,
+        });
         EntityView {
+            movement,
             kind: m.kind.id.clone(),
             position: [m.position.x, m.position.y, m.position.z],
             on_fire: m.fire_ticks > 0,
@@ -999,6 +1050,7 @@ impl Game<'_> {
                     icon: d.icon.clone(),
                     frame: d.frame,
                     title: text_of(&d.title),
+                    label: None,
                     slide: Slide::default(),
                     slot: None,
                     recipes: Vec::new(),
@@ -1106,6 +1158,17 @@ impl Game<'_> {
             return;
         }
         self.adv.last_inventory = key;
+        // Native mods hear the change before any criterion is looked at, so
+        // they do with no `inventory_changed` advancement in the tree too
+        // (`native_player_inventory_changed`, API @API:player_inventory_changed@).
+        if self.remote.is_none()
+            && !self.no_player_here()
+            && !horizon_client::mod_api::mods().is_empty()
+        {
+            let stacks = inventory_slots(&self.inventory, &self.armor, &self.offhand);
+            let player = self.native_acting_id();
+            self.native_player_inventory_changed(player, &stacks);
+        }
         let stacks: Vec<ItemView> = self
             .inventory
             .iter()
@@ -1187,7 +1250,7 @@ impl Game<'_> {
         }
         self.check_inventory_trigger();
         // ServerPlayer.tick: PlayerTrigger.TICK every tick.
-        let me = self.player_entity_for("minecraft:tick");
+        let me = self.player_entity_if_listened("minecraft:tick");
         self.trigger("minecraft:tick", |c, w| {
             let ctx = adv::Entities {
                 this: Some(&me),
@@ -1221,7 +1284,7 @@ impl Game<'_> {
         }
         self.tick_marks();
         if self.ticks.is_multiple_of(20) {
-            let me = self.player_entity_for("minecraft:location");
+            let me = self.player_entity_if_listened("minecraft:location");
             self.trigger("minecraft:location", |c, w| {
                 let ctx = adv::Entities {
                     this: Some(&me),
@@ -1821,7 +1884,6 @@ impl Game<'_> {
             adv::conditions(&c["player"], &ctx, w) && adv::block(c, pos, w)
         });
     }
-
     /// `TargetBlockTrigger`: signal and projectile conditions are evaluated in
     /// the shooter's context, including distance from the shooter.
     pub(super) fn trigger_target_hit(&mut self, projectile: &EntityView, strength: i32) {
@@ -1843,7 +1905,6 @@ impl Game<'_> {
                 && adv::conditions(&c["projectile"], &target, w)
         });
     }
-
     /// `ItemUsedOnLocationTrigger` (placed_block, item_used_on_block).
     pub(super) fn trigger_block(&mut self, name: &str, pos: [i32; 3], stack: &ItemStack) {
         let me = self.player_entity_for(name);
@@ -2213,6 +2274,7 @@ impl Game<'_> {
         let x = batch.width - 160.0 * t.slide.portion;
         let fully_for = t.slide.fully_for;
         let (title, frame, icon) = (t.title.clone(), t.frame, t.icon.clone());
+        let mod_label = t.label.clone();
         let recipe = t
             .is_recipe()
             .then(|| t.recipes[t.displayed_recipe(fully_for, multiplier)].clone());
@@ -2239,7 +2301,7 @@ impl Game<'_> {
         // the frame's label; a longer one is wrapped at 125, the label fading
         // out first (to 1.5 s) and the lines fading in after it over 0.3 s.
         let lines = atlas.font.split(&title.resolve_legacy(), 125.0);
-        let label = Text::translate(key, &[]);
+        let label = mod_label.unwrap_or_else(|| Text::translate(key, &[]));
         let rgb = color & 0x00FF_FFFF;
         if let [line] = lines.as_slice() {
             batch.text_styled(atlas, &label, x + 30.0, y + 7.0, color, false);
@@ -2468,6 +2530,7 @@ impl Game<'_> {
                     icon: d.icon.clone(),
                     frame: d.frame,
                     title: text_of(&d.title),
+                    label: None,
                     slide: Slide::default(),
                     slot: None,
                     recipes: Vec::new(),
@@ -2482,6 +2545,40 @@ impl Game<'_> {
 /// with its siblings and styles, as a plugin's `{"text":"","extra":[...]}` needs.
 pub(super) fn text_of(v: &Value) -> Text {
     horizon_client::scoreboard::comp_text(v)
+}
+/// An advancement's display as a server mod reads it: its title and
+/// description as text (the components as the datapack wrote them), its
+/// frame (`task`, `goal` or `challenge`), and whether it is announced in
+/// chat and hidden until earned.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AdvancementDisplay {
+    pub title: Text,
+    pub description: Text,
+    pub frame: String,
+    pub announce_to_chat: bool,
+    pub hidden: bool,
+}
+
+impl Game<'_> {
+    /// The display of the advancement `id` in the loaded tree; None for an
+    /// id the tree does not have, or one with no display. API @API:advancement_display@.
+    pub(super) fn native_advancement_display(&mut self, id: &str) -> Option<AdvancementDisplay> {
+        let tree = self.advancement_tree();
+        let advancement = &tree.list[*tree.by_id.get(id)?];
+        let display = advancement.display.as_ref()?;
+        Some(AdvancementDisplay {
+            title: text_of(&display.title),
+            description: text_of(&display.description),
+            frame: match &display.frame {
+                Frame::Task => "task",
+                Frame::Goal => "goal",
+                Frame::Challenge => "challenge",
+            }
+            .to_owned(),
+            announce_to_chat: display.announce,
+            hidden: display.hidden,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -3288,4 +3385,130 @@ mod custom_data_equipment_tests {
             "actual mob-equipment custom_data mismatch: {failures:?}"
         );
     }
+}
+
+#[cfg(test)]
+mod movement_predicate_tests {
+    use super::super::native_machines::tests::server_game;
+    use horizon_core::geometry::Vec3;
+    use horizon_core::position::BlockPos;
+    use serde_json::json;
+
+    #[test]
+    #[ignore = "requires prepared resources and scratch cwd/homes"]
+    fn actual_registered_movement_predicate_uses_admitted_mob() {
+        let mut game = server_game();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.block_ticks
+            .add_empty_chunk(BlockPos::new(0, 0, 0).chunk())
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+        assert!(game.world.loaded(4, 4));
+        let root = std::env::current_dir().unwrap().join("movement-world");
+        let pack = root.join("datapacks/movement");
+        let folder = pack.join("data/motion/predicate");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(pack.join("pack.mcmeta"), r#"{"pack":{"description":"Movement fixture","min_format":[121,0],"max_format":[121,0]}}"#).unwrap();
+        let entity =
+            |p| json!({"type":"minecraft:entity_properties","entity":"this","predicate":p});
+        let movement =
+            |p| entity(json!({"minecraft:entity_type":"minecraft:pig","minecraft:movement":p}));
+        let high = movement(json!({"x":{"min":100}}));
+        let zero = movement(json!({"x":{"min":0,"max":0}}));
+        let probes = [
+            ("high", high.clone(), false),
+            ("zero", zero.clone(), true),
+            ("empty", movement(json!({})), true),
+            (
+                "not_high",
+                json!({"type":"minecraft:inverted","term":high}),
+                true,
+            ),
+            (
+                "not_zero",
+                json!({"type":"minecraft:inverted","term":zero}),
+                false,
+            ),
+        ];
+        for (name, p, _) in &probes {
+            std::fs::write(folder.join(format!("{name}.json")), p.to_string()).unwrap();
+        }
+        std::fs::write(
+            folder.join("identity.json"),
+            entity(json!({"minecraft:entity_type":"minecraft:pig"})).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("always.json"),
+            r#"{"type":"minecraft:all_of","terms":[]}"#,
+        )
+        .unwrap();
+        game.world_root = root;
+        game.reload_datapacks(false);
+        assert!(game.run_command("scoreboard objectives add motion dummy"));
+        assert!(game.run_command("execute if predicate motion:always"));
+        let clock = game.world.game_time;
+        let actor = "000002a1-0000-0000-0000-000000000001";
+        assert!(game.run_command("summon pig 4.5 200 4.5 {UUID:[I;673,0,0,1],NoAI:1b,NoGravity:1b,Health:10f,Motion:[0d,0d,0d]}"));
+        assert!(game.run_command(&format!("execute as {actor} if entity @s[type=pig,nbt={{UUID:[I;673,0,0,1],Health:10f,Pos:[4.5d,200d,4.5d],Motion:[0d,0d,0d],NoAI:1b,NoGravity:1b}}]")));
+        assert!(game.run_command(&format!("execute as {actor} if predicate motion:identity")));
+        let id = *game
+            .persist
+            .uuids
+            .iter()
+            .find(|(_, u)| **u == [673, 0, 0, 1])
+            .unwrap()
+            .0;
+        let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(mob.velocity, Vec3::ZERO);
+        assert_eq!(mob.fall_distance, 0.0);
+        assert!(mob.no_ai && mob.no_gravity);
+        assert!(mob.extra.mount.is_none());
+        let view = game.entity_view_of(super::super::commands::Target::Mob(id));
+        assert_eq!(view.kind, "minecraft:pig");
+        let mut failures = Vec::new();
+        for (name, p, want) in probes {
+            assert!(
+                game.fns
+                    .store
+                    .predicates
+                    .contains_key(&format!("motion:{name}"))
+            );
+            let direct = game.conditions_hold(&p, Some(&view), [4.5, 200.0, 4.5]);
+            if direct != want {
+                failures.push(format!("direct {name}: {direct} != {want}"));
+            }
+            assert!(game.run_command("scoreboard players set result motion 91"));
+            assert!(game.run_command("scoreboard players set success motion 17"));
+            game.run_command(&format!("execute store result score result motion store success score success motion as {actor} if predicate motion:{name}"));
+            for key in ["result", "success"] {
+                let value = game.score.board.score(key, "motion").unwrap().value;
+                if value != i32::from(want) {
+                    failures.push(format!("registered {name} {key}: {value}"));
+                }
+            }
+        }
+        assert_eq!(game.world.game_time, clock, "zero observation ticks");
+        assert!(
+            failures.is_empty(),
+            "actual movement predicate mismatches: {failures:?}"
+        );
+    }
+}
+
+/// A player's 41 slots in `Inventory` numbering, for
+/// `native_player_inventory_changed`: the main inventory (0..36), the armour
+/// feet to head (36..40; `armor` holds it head first), the off hand (40).
+pub(super) fn inventory_slots(
+    inventory: &[Option<ItemStack>],
+    armor: &[Option<ItemStack>; 4],
+    offhand: &Option<ItemStack>,
+) -> Vec<Option<ItemStack>> {
+    let mut slots: Vec<Option<ItemStack>> = inventory.iter().take(36).cloned().collect();
+    slots.resize(36, None);
+    slots.extend(armor.iter().rev().cloned());
+    slots.push(offhand.clone());
+    slots
 }
