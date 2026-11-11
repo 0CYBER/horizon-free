@@ -90,6 +90,22 @@ pub(super) struct DialogState {
     warning: bool,
 }
 
+impl DialogState {
+    /// `Minecraft.pause` over these screens: `DialogScreen.isPauseScreen` is
+    /// the dialog's own `pause` (`CommonDialogData.pause`, true by default),
+    /// `WaitingForResponseScreen` overrides it false, and the warning above
+    /// the dialog is a `ConfirmScreen`, which inherits `Screen`'s true.
+    pub(super) fn pauses_world(&self) -> bool {
+        if self.warning {
+            return true;
+        }
+        if self.waiting.is_some() {
+            return false;
+        }
+        self.open.as_ref().is_some_and(|open| open.dialog.pause)
+    }
+}
+
 /// `CycleButton.cycleValue`: the next option (`delta` 1) or the one before
 /// it, wrapping.
 fn cycle(open: &mut Open, input: usize, delta: i32) {
@@ -433,11 +449,7 @@ impl Game<'_> {
         let (w, h) = (batch.width, batch.height);
         let cursor = self.cursor;
         let atlas = &self.gui.atlas;
-        if self.player.is_none() {
-            // In place of the connecting screen, on its background.
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
-        }
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.player.is_some());
+        draw_background(batch, atlas, self.player.is_some());
         if self.dialogs.warning {
             let (title, message, [disconnect, back]) = warning_texts();
             // DialogScreen.WarningScreen, a ConfirmScreen: its title and its
@@ -561,17 +573,19 @@ impl Game<'_> {
                     batch.text_styled(atlas, &text, x, y, u32::MAX, true);
                     // AbstractStringWidget: only the styled glyph under the
                     // pointer requests a hand, not the whole message widget.
-                    if (!clipped || in_area(cursor.1))
-                        && let Some(style) = horizon_client::dialog_screen::line_style_at(
+                    let under = |wanted: fn(&horizon_client::text::Style) -> bool| {
+                        horizon_client::dialog_screen::line_style_at(
                             &atlas.font,
                             &text,
                             x,
                             y,
                             cursor,
+                            wanted,
                         )
-                    {
-                        widgets::widget_cursor(style.click.is_some(), true);
-                        if let Some(hover) = style.hover {
+                    };
+                    if !clipped || in_area(cursor.1) {
+                        widgets::widget_cursor(under(|s| s.click.is_some()).is_some(), true);
+                        if let Some(hover) = under(|s| s.hover.is_some()).and_then(|s| s.hover) {
                             tooltip = Some(*hover);
                         }
                     }
@@ -902,6 +916,7 @@ impl Game<'_> {
                         x,
                         y,
                         cursor,
+                        |style| style.click.is_some(),
                     )
                     .and_then(|style| style.click);
                 }
@@ -1195,5 +1210,120 @@ impl Game<'_> {
             open.dialog.json(&values)
         });
         serde_json::json!({ "open": open, "screen": screen })
+    }
+}
+
+fn draw_background(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, in_world: bool) {
+    let (w, h) = (batch.width, batch.height);
+    // Screen.extractBackground draws the panorama and blur before this menu overlay.
+    // The frame renderer already supplies them while a server is configuring.
+    ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use horizon_client::hud::{HudAtlas, Rect};
+
+    #[test]
+    fn a_configuration_dialog_keeps_the_panorama_visible() {
+        let mut atlas = HudAtlas::build(std::path::Path::new(
+            "/nonexistent-horizon-dialog-background-test",
+        ))
+        .unwrap();
+        atlas.sprites.remove("gui/menu_background");
+        let mut batch = HudBatch::new([640, 480]);
+        draw_background(&mut batch, &atlas, false);
+        assert_eq!(
+            batch.vertices.len(),
+            6,
+            "only the menu overlay covers the panorama"
+        );
+        assert!(batch.vertices.iter().all(|v| v.color >> 24 == 160));
+    }
+
+    #[test]
+    fn dialogs_keep_the_menu_and_in_world_pack_backgrounds() {
+        let mut atlas = HudAtlas::build(std::path::Path::new(
+            "/nonexistent-horizon-dialog-background-test",
+        ))
+        .unwrap();
+        for (name, u) in [
+            ("gui/menu_background", 0.1),
+            ("gui/inworld_menu_background", 0.6),
+        ] {
+            atlas.sprites.insert(
+                name.into(),
+                Rect {
+                    u0: u,
+                    v0: 0.2,
+                    u1: u + 0.1,
+                    v1: 0.3,
+                    w: 32,
+                    h: 32,
+                },
+            );
+        }
+        for (in_world, u) in [(false, 0.1), (true, 0.6)] {
+            let mut batch = HudBatch::new([640, 480]);
+            draw_background(&mut batch, &atlas, in_world);
+            assert!(!batch.vertices.is_empty());
+            assert!(
+                batch
+                    .vertices
+                    .iter()
+                    .all(|v| v.uv[0] >= u && v.uv[0] <= u + 0.1)
+            );
+            assert!(batch.vertices.iter().all(|v| v.color == u32::MAX));
+        }
+    }
+}
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    fn dialog(pause: bool) -> Dialog {
+        let s = |value: &str| Tag::String(value.into());
+        Dialog::parse(&Tag::compound([
+            ("type", s("notice")),
+            ("title", s("Hi")),
+            ("pause", Tag::Byte(i8::from(pause))),
+        ]))
+        .unwrap()
+    }
+
+    fn state(pause: bool) -> DialogState {
+        DialogState {
+            open: Some(Open {
+                dialog: dialog(pause),
+                values: Vec::new(),
+                fields: Vec::new(),
+                focus: None,
+                scroll: ui::Scroll::default(),
+                dragging: None,
+                selecting: None,
+            }),
+            waiting: None,
+            warning: false,
+        }
+    }
+
+    /// `DialogScreen.isPauseScreen` is `dialog.common().pause()`, true by
+    /// default, so a server's dialog stops a single-player world unless it
+    /// asks otherwise. The waiting screen and the warning override it.
+    #[test]
+    fn a_dialog_pauses_the_world_only_while_its_pause_says_so() {
+        assert!(state(true).pauses_world());
+        assert!(!state(false).pauses_world());
+        // No dialog screen at all.
+        assert!(!DialogState::default().pauses_world());
+        // DialogScreen.WarningScreen extends ConfirmScreen: true.
+        let mut warning = state(false);
+        warning.warning = true;
+        assert!(warning.pauses_world());
+        // WaitingForResponseScreen.isPauseScreen is false.
+        let mut waiting = state(true);
+        waiting.waiting = Some(Instant::now());
+        assert!(!waiting.pauses_world());
     }
 }

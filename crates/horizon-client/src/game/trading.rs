@@ -15,6 +15,7 @@ use horizon_client::{
     hud::HudBatch,
     items::ItemStack,
     merchant::{self, MerchantOffer, TradeContext},
+    widgets::{Cursor, request_cursor},
 };
 
 /// The merchant screen is 100 px wider than the 176-px menus it shares an origin with.
@@ -321,7 +322,6 @@ impl Game<'_> {
         for (id, r) in std::mem::take(&mut session.sequences) {
             self.rand_sequences.give_back(id, r);
         }
-        let traded = std::mem::take(&mut session.last_traded);
         let Some(id) = state.mob else { return };
         let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
             return;
@@ -335,9 +335,6 @@ impl Game<'_> {
         let trade = m.extra.trade.get_or_insert_default();
         trade.xp = session.xp;
         trade.offers = session.offers.clone();
-        if traded && session.villager {
-            self.villager_traded(id);
-        }
     }
     /// Opens a merchant menu without a mob (horizon-ctl `trade`).
     pub(super) fn open_merchant(&mut self, profession: &str, variant: &str, level: i32) {
@@ -480,6 +477,13 @@ impl Game<'_> {
     /// `villager_trade` trigger, then the mods' `native_trade_with_villager`
     /// for a server's player (when the trader is still in the level).
     pub(super) fn merchant_traded(&mut self, mob: Option<u32>, offers: &[MerchantOffer]) {
+        if !offers.is_empty()
+            && let Some(id) = mob
+        {
+            // Record while the accepted trade is still in its real player's
+            // turn. The villager, not the menu's lifetime, owns the pending event.
+            self.villager_trade_pending(id);
+        }
         for offer in offers {
             self.award_custom_stat("traded_with_villager", 1);
             let merchant = mob.and_then(|id| self.mobs.iter().find(|m| m.id == id));
@@ -610,7 +614,7 @@ impl Game<'_> {
             return false;
         };
         let (progress, custom) = (m.progress(), m.name.clone());
-        let (profession, level, xp, scroll, shop, future, focused) = (
+        let (profession, level, xp, scroll, shop, future, focused, dragging) = (
             m.session
                 .profession
                 .trim_start_matches("minecraft:")
@@ -621,6 +625,7 @@ impl Game<'_> {
             m.session.selection_hint,
             m.session.future_xp,
             m.focused,
+            m.dragging,
         );
         let offers = m.session.offers.clone();
         let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.items())).collect();
@@ -721,21 +726,17 @@ impl Game<'_> {
                 }
             }
         }
-        // Scroller.
-        let steps = offers.len() as i32 + 1 - 7;
-        if steps > 1 {
-            let left = 139 - (27 + (steps - 1) * 139 / steps);
-            let step = 1 + left / steps + 139 / steps;
-            let mut y = (scroll as i32 * step).min(113);
-            if scroll as i32 == steps - 1 {
-                y = 113;
-            }
+        // Scroller (`extractScroller`): its thumb, or the disabled sprite.
+        if let Some([x, y, w, h]) = scroller_rect(offers.len(), scroll) {
             batch.sprite(
                 atlas,
                 "gui/sprites/container/villager/scroller",
-                ox + SHIFT + 94.0,
-                oy + 18.0 + y as f32,
+                ox + x,
+                oy + y,
             );
+            if let Some(cursor) = scroller_cursor(local, [x, y, w, h], dragging) {
+                request_cursor(cursor);
+            }
         } else {
             batch.sprite(
                 atlas,
@@ -882,6 +883,31 @@ fn on_scroller(local: (f32, f32), offers: usize) -> bool {
         && local.1 > 18.0
         && local.1 <= 18.0 + 139.0 + 1.0
 }
+/// `MerchantScreen.extractScroller`: the thumb's rectangle (GUI origin
+/// relative) while the offers overflow; the track's 139 px, the thumb's 27.
+fn scroller_rect(offers: usize, scroll: usize) -> Option<[f32; 4]> {
+    let steps = offers as i32 + 1 - 7;
+    if steps <= 1 {
+        return None;
+    }
+    let left = 139 - (27 + (steps - 1) * 139 / steps);
+    let step = 1 + left / steps + 139 / steps;
+    let mut y = (scroll as i32 * step).min(113);
+    if scroll as i32 == steps - 1 {
+        y = 113;
+    }
+    Some([SHIFT + 94.0, 18.0 + y as f32, 6.0, 27.0])
+}
+/// `MerchantScreen.extractScroller`'s cursor: only the thumb asks, a hand
+/// until it is dragged and the vertical resize while it is held.
+fn scroller_cursor(local: (f32, f32), rect: [f32; 4], dragging: bool) -> Option<Cursor> {
+    let [x, y, w, h] = rect;
+    (local.0 >= x && local.0 < x + w && local.1 >= y && local.1 <= y + h).then_some(if dragging {
+        Cursor::ResizeNs
+    } else {
+        Cursor::PointingHand
+    })
+}
 /// The first shown offer for the scroller dragged to `y` (GUI origin
 /// relative): the 139-px track starts at 18 and the scroller is 27 px tall.
 fn drag_scroll(y: f32, offers: usize) -> usize {
@@ -934,5 +960,22 @@ mod tests {
         assert_eq!(drag_scroll(31.5 + 112.0 / 2.0, 10), 2);
         assert_eq!(drag_scroll(31.5 + 112.0, 10), 3);
         assert_eq!(drag_scroll(500.0, 10), 3);
+    }
+
+    /// `MerchantScreen.extractScroller`: the thumb, not the whole track, takes
+    /// the cursor; the vertical resize while it is dragged.
+    #[test]
+    fn the_scroller_thumb_asks_for_its_cursor() {
+        // 8 offers: steps 2, the thumb at the track's top, 139 px tall.
+        let rect = scroller_rect(8, 0).unwrap();
+        assert_eq!(rect, [44.0, 18.0, 6.0, 27.0]);
+        let at = |x: f32, y: f32, dragging: bool| scroller_cursor((x, y), rect, dragging);
+        assert_eq!(at(45.0, 19.0, false), Some(Cursor::PointingHand));
+        assert_eq!(at(45.0, 19.0, true), Some(Cursor::ResizeNs));
+        assert_eq!(at(43.0, 19.0, false), None);
+        assert_eq!(at(45.0, 46.0, false), None);
+        assert_eq!(at(45.0, 45.0, false), Some(Cursor::PointingHand));
+        // 7 offers: the disabled scroller takes no cursor.
+        assert!(scroller_rect(7, 0).is_none());
     }
 }

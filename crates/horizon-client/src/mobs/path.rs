@@ -317,6 +317,43 @@ struct Target {
     pos: [i32; 3],
 }
 
+/// Reusable allocation buffers for pathfinding queries.
+#[derive(Default)]
+pub struct FinderBuffers {
+    pub nodes: Vec<Node>,
+    pub index: FxHashMap<(i32, i32, i32), u32>,
+    pub heap: Vec<u32>,
+    pub types: FxHashMap<(i32, i32, i32), PathType>,
+    pub statics: std::cell::RefCell<FxHashMap<(i32, i32, i32), PathType>>,
+    pub collisions: FxHashMap<[u64; 6], bool>,
+}
+
+impl FinderBuffers {
+    pub fn new() -> Self {
+        Self {
+            nodes: Vec::with_capacity(256),
+            index: FxHashMap::default(),
+            heap: Vec::with_capacity(256),
+            types: FxHashMap::default(),
+            statics: std::cell::RefCell::new(FxHashMap::default()),
+            collisions: FxHashMap::default(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.index.clear();
+        self.heap.clear();
+        self.types.clear();
+        self.statics.borrow_mut().clear();
+        self.collisions.clear();
+    }
+}
+
+thread_local! {
+    static TLS_BUFFERS: std::cell::RefCell<FinderBuffers> = std::cell::RefCell::new(FinderBuffers::new());
+}
+
 /// One pathfinding query: the node arena, open set and per-query caches.
 pub struct Finder<'a, 'w> {
     w: &'a MobWorld<'w>,
@@ -335,18 +372,79 @@ pub struct Finder<'a, 'w> {
     entity_depth: i32,
 }
 
+impl<'a, 'w> Drop for Finder<'a, 'w> {
+    fn drop(&mut self) {
+        TLS_BUFFERS.with(|cell| {
+            if let Ok(mut buf) = cell.try_borrow_mut() {
+                self.nodes.clear();
+                self.index.clear();
+                self.heap.clear();
+                self.types.clear();
+                self.statics.borrow_mut().clear();
+                self.collisions.clear();
+                buf.nodes = std::mem::take(&mut self.nodes);
+                buf.index = std::mem::take(&mut self.index);
+                buf.heap = std::mem::take(&mut self.heap);
+                buf.types = std::mem::take(&mut self.types);
+                buf.statics = std::mem::take(&mut self.statics);
+                buf.collisions = std::mem::take(&mut self.collisions);
+            }
+        });
+    }
+}
+
+/// Classify one swim cell without reading the block below when it already
+/// contains water. The below-block lookup is only needed for a breach.
+#[inline]
+fn swim_cell_type(
+    fluid: Fluid,
+    below_water: impl FnOnce() -> bool,
+    is_air: impl FnOnce() -> bool,
+) -> Option<PathType> {
+    if fluid == Fluid::Water {
+        return None;
+    }
+    if fluid == Fluid::None && below_water() && is_air() {
+        Some(PathType::Breach)
+    } else {
+        Some(PathType::Blocked)
+    }
+}
+
 impl<'a, 'w> Finder<'a, 'w> {
     pub fn new(w: &'a MobWorld<'w>, mob: &'a PathMob, eval: Evaluator) -> Self {
+        let (nodes, index, heap, types, statics, collisions) = TLS_BUFFERS.with(|cell| {
+            if let Ok(mut buf) = cell.try_borrow_mut() {
+                buf.clear();
+                (
+                    std::mem::take(&mut buf.nodes),
+                    std::mem::take(&mut buf.index),
+                    std::mem::take(&mut buf.heap),
+                    std::mem::take(&mut buf.types),
+                    std::mem::take(&mut buf.statics),
+                    std::mem::take(&mut buf.collisions),
+                )
+            } else {
+                (
+                    Vec::with_capacity(128),
+                    FxHashMap::default(),
+                    Vec::with_capacity(128),
+                    FxHashMap::default(),
+                    std::cell::RefCell::new(FxHashMap::default()),
+                    FxHashMap::default(),
+                )
+            }
+        });
         Self {
             w,
             mob,
             eval,
-            nodes: Vec::new(),
-            index: FxHashMap::default(),
-            heap: Vec::new(),
-            types: FxHashMap::default(),
-            statics: Default::default(),
-            collisions: FxHashMap::default(),
+            nodes,
+            index,
+            heap,
+            types,
+            statics,
+            collisions,
             entity_width: (mob.width + 1.0).floor() as i32,
             entity_height: (mob.height + 1.0).floor() as i32,
             entity_depth: (mob.width + 1.0).floor() as i32,
@@ -554,15 +652,12 @@ impl<'a, 'w> Finder<'a, 'w> {
             for yy in y..y + self.entity_height {
                 for zz in z..z + self.entity_depth {
                     let fluid = self.fluid(xx, yy, zz);
-                    let below = self.state(xx, yy - 1, zz);
-                    if fluid == Fluid::None
-                        && below.flags & data::WATER != 0
-                        && self.is_air(xx, yy, zz)
-                    {
-                        return PathType::Breach;
-                    }
-                    if fluid != Fluid::Water {
-                        return PathType::Blocked;
+                    if let Some(t) = swim_cell_type(
+                        fluid,
+                        || self.state(xx, yy - 1, zz).flags & data::WATER != 0,
+                        || self.is_air(xx, yy, zz),
+                    ) {
+                        return t;
                     }
                     last = (xx, yy, zz);
                 }
@@ -1422,6 +1517,39 @@ impl<'a, 'w> Finder<'a, 'w> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swim_cells_only_check_below_for_missing_fluid() {
+        use std::cell::Cell;
+
+        let below_reads = Cell::new(0);
+        let below_water = || {
+            below_reads.set(below_reads.get() + 1);
+            true
+        };
+        assert_eq!(swim_cell_type(Fluid::Water, below_water, || false), None);
+        assert_eq!(below_reads.get(), 0);
+
+        assert_eq!(
+            swim_cell_type(Fluid::None, below_water, || true),
+            Some(PathType::Breach)
+        );
+        assert_eq!(below_reads.get(), 1);
+
+        assert_eq!(
+            swim_cell_type(Fluid::None, || false, || panic!("not queried")),
+            Some(PathType::Blocked)
+        );
+        assert_eq!(
+            swim_cell_type(
+                Fluid::Lava,
+                || panic!("not queried"),
+                || panic!("not queried")
+            ),
+            Some(PathType::Blocked)
+        );
+        assert_eq!(below_reads.get(), 1);
+    }
 
     fn node(x: i32, y: i32, z: i32) -> PathNode {
         PathNode {

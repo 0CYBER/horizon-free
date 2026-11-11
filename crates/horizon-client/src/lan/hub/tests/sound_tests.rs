@@ -25,10 +25,12 @@ fn a_trident_joining_after_tracking_is_paired_before_its_throw_sound() {
     let border = crate::worldborder::WorldBorder::default();
     let mut next_entity = 38;
     let mut ctx = TickCtx {
+        sea_level: 63,
         world: &mut world,
         entities: &[],
         next_entity: &mut next_entity,
         spawn: [0.5, 64.0, 0.5],
+        spawn_angle: [0.0; 2],
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -117,10 +119,12 @@ fn a_captured_sound_reaches_the_client_before_its_emitter_is_removed() {
     let border = crate::worldborder::WorldBorder::default();
     let mut next_entity = 38;
     let mut ctx = TickCtx {
+        sea_level: 63,
         world: &mut world,
         entities: std::slice::from_ref(&mooshroom),
         next_entity: &mut next_entity,
         spawn: mooshroom.position,
+        spawn_angle: [0.0; 2],
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -208,10 +212,12 @@ fn a_new_pair_does_not_reorder_sounds_or_remove_an_old_emitter_early() {
             let previous = [old.clone(), other];
             let current = [fresh];
             let mut ctx = TickCtx {
+                sea_level: 63,
                 world: &mut world,
                 entities: &previous,
                 next_entity: &mut next_entity,
                 spawn: old.position,
+                spawn_angle: [0.0; 2],
                 difficulty: 2,
                 difficulty_locked: false,
                 clock_rate: 1.0,

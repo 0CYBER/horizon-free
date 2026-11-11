@@ -89,6 +89,24 @@ fn name_at(w: &MobWorld, p: [i32; 3]) -> String {
         .name
         .to_string()
 }
+/// `ChestBlock.getOpenChestSound` / `getCloseChestSound` of a chest block:
+/// a copper chest's comes from `CopperChestBlock.getHingeSound`, by its
+/// weather state (a waxed chest's is its state's).
+pub fn chest_hinge_sound(block: &str, open: bool) -> &'static str {
+    let base = block
+        .trim_start_matches("minecraft:")
+        .trim_start_matches("waxed_");
+    match (base.ends_with("copper_chest"), base.split('_').next(), open) {
+        (false, _, true) => "minecraft:block.chest.open",
+        (false, _, false) => "minecraft:block.chest.close",
+        (true, Some("weathered"), true) => "minecraft:block.copper_chest_weathered.open",
+        (true, Some("weathered"), false) => "minecraft:block.copper_chest_weathered.close",
+        (true, Some("oxidized"), true) => "minecraft:block.copper_chest_oxidized.open",
+        (true, Some("oxidized"), false) => "minecraft:block.copper_chest_oxidized.close",
+        (true, _, true) => "minecraft:block.copper_chest.open",
+        (true, _, false) => "minecraft:block.copper_chest.close",
+    }
+}
 fn is_chest_block(name: &str) -> bool {
     matches!(name, "minecraft:chest" | "minecraft:trapped_chest") || name.ends_with("copper_chest")
 }
@@ -307,7 +325,7 @@ fn opener_area(w: &MobWorld, p: [i32; 3]) -> Aabb {
 /// 3): the opener count changes and the first opener or the last closer
 /// plays the chest's sound (`ChestBlockEntity.playSound`, at the middle of
 /// a double chest from its right half, none from its left).
-fn open_or_close(cx: &mut Bx, p: [i32; 3], open: bool) {
+fn open_or_close(cx: &mut Bx, p: [i32; 3], open: bool, mob: u32) {
     let w = cx.w;
     let count = w
         .world
@@ -330,24 +348,15 @@ fn open_or_close(cx: &mut Bx, p: [i32; 3], open: bool) {
             at[0] += f64::from(o[0] - p[0]) * 0.5;
             at[2] += f64::from(o[2] - p[2]) * 0.5;
         }
-        let name = name_at(w, p);
-        let base = name
-            .trim_start_matches("minecraft:")
-            .trim_start_matches("waxed_");
-        let sound = match (base.ends_with("copper_chest"), base.split('_').next(), open) {
-            (false, _, true) => "block.chest.open",
-            (false, _, false) => "block.chest.close",
-            (true, Some("weathered"), true) => "block.copper_chest_weathered.open",
-            (true, Some("weathered"), false) => "block.copper_chest_weathered.close",
-            (true, Some("oxidized"), true) => "block.copper_chest_oxidized.open",
-            (true, Some("oxidized"), false) => "block.copper_chest_oxidized.close",
-            (true, _, true) => "block.copper_chest.open",
-            (true, _, false) => "block.copper_chest.close",
-        };
+        let sound = chest_hinge_sound(&name_at(w, p), open).trim_start_matches("minecraft:");
         let pitch = cx.lr.next_float() * 0.1 + 0.9;
         cx.events.push(MobEvent::Sound(sound, at, 0.5, pitch));
     }
-    cx.events.push(MobEvent::ChestOpen { chest: p, open });
+    cx.events.push(MobEvent::ChestOpen {
+        chest: p,
+        open,
+        mob,
+    });
 }
 
 impl Transport {
@@ -582,7 +591,7 @@ impl Transport {
             if self.ticks == 1 {
                 // container.startOpen, before setOpenedChestPos.
                 for h in &t.halves {
-                    open_or_close(cx, *h, true);
+                    open_or_close(cx, *h, true, m.id);
                 }
                 m.extra.opened_chest = Some(t.pos);
                 m.extra.variant3 = state;
@@ -597,7 +606,7 @@ impl Transport {
                 // keeps Container's empty list, so a double chest is left
                 // to the openers recheck).
                 if t.halves.len() == 1 && has_open(cx.w, m, t.pos) {
-                    open_or_close(cx, t.pos, false);
+                    open_or_close(cx, t.pos, false, m.id);
                 }
                 m.extra.opened_chest = None;
             }

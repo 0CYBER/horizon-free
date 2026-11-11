@@ -115,7 +115,9 @@ pub fn register(m: &mut Mob) {
     };
     let g = &mut m.ai.goals;
     g.add(0, Float);
-    g.add(1, Panic::new(1.25));
+    // `FrogAi.initCoreActivity`: `AnimalPanic(2.0)` — the panic speed
+    // multiplier is 2.0, not the 1.25 its temptation uses.
+    g.add(1, Panic::new(2.0));
     // `FrogAi.initIdleActivity`: `AnimalMakeLove` first, then `FollowTemptation(1.25)`.
     g.add(2, Breed::new(1.0));
     g.add(3, Unless(is_pregnant, Tempt::new(1.25, food, false)));
@@ -397,6 +399,16 @@ impl LaySpawn {
             if open_top && supports && Self::is_air(cx.w, spawn) {
                 if let Some(state) = cx.w.registry.default_state("minecraft:frogspawn") {
                     cx.events.push(MobEvent::SetBlock { pos: spawn, state });
+                    cx.events.push(MobEvent::GameEvent {
+                        event: "minecraft:block_place",
+                        at: [
+                            f64::from(spawn[0]) + 0.5,
+                            f64::from(spawn[1]) + 0.5,
+                            f64::from(spawn[2]) + 0.5,
+                        ],
+                        source: m.id,
+                        state,
+                    });
                 }
                 cx.events.push(MobEvent::entity_sound(
                     m,
@@ -837,7 +849,7 @@ fn candidates([x, y, z]: [i32; 3], width: i32, height: i32) -> Vec<Candidate> {
 /// first arc that reaches the target clear of blocks. `Collections.shuffle`
 /// without a random draws from an unseeded one, not the mob's or the level's.
 fn optimal_jump_vector(m: &Mob, w: &MobWorld, target: Vec3) -> Option<Vec3> {
-    let mut random = crate::sound_engine::SoundEngine::unseeded();
+    let mut random = crate::random_source::create();
     let mut angles = ALLOWED_ANGLES;
     for i in (2..=angles.len()).rev() {
         let j = random.next_int_bound(i as i32).unwrap_or(0) as usize;
@@ -1139,5 +1151,152 @@ mod tests {
         set_jump_cooldown(&mut m, None);
         assert_eq!(jump_cooldown(&m), None);
         assert!(!m.extra.memories.iter().any(|x| x.0 == LONG_JUMP_COOLDOWN));
+    }
+
+    /// `FrogAi.initCoreActivity`: `AnimalPanic(2.0)`. A hurt frog starts the
+    /// panic goal with vanilla's 2.0 speed multiplier, which `PathNavigation`
+    /// stores for `SmoothSwimmingMoveControl` (`speedModifier * movement
+    /// speed`, so 0.2 on land and 0.04 in water). The brain's temptation and
+    /// long jump run at 1.25 and 1.0; 1.25 here would make a fleeing frog 60%
+    /// slower than vanilla's.
+    #[test]
+    fn a_hurt_frog_panics_at_vanillas_two_times_speed() {
+        let ran = crate::mobs::world::with_built_test_world(
+            &[],
+            |world, registry| {
+                for x in -2..=1 {
+                    for z in -2..=1 {
+                        world.chunks.insert(
+                            (x, z),
+                            std::sync::Arc::new(crate::chunk::Chunk::empty(x, z)),
+                        );
+                    }
+                }
+                let stone = registry.default_state("minecraft:stone").unwrap();
+                for x in -8..=8 {
+                    for z in -8..=8 {
+                        world.set(x, 63, z, stone).unwrap();
+                    }
+                }
+            },
+            |w, types| {
+                let kind = std::sync::Arc::new(types.types["minecraft:frog"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                register(&mut m);
+                m.on_ground = true;
+                // An environmental hit inside the 40 tick panic window
+                // (`DamageTypeTags.PANIC_CAUSES`).
+                m.last_damage = Some((
+                    super::super::Damage::of(super::super::DamageKind::Freeze),
+                    i64::from(m.age),
+                ));
+                let mut events = Vec::new();
+                let mut lr = LegacyRandom::new(0);
+                let mut cx = Cx {
+                    w,
+                    lr: &mut lr,
+                    events: &mut events,
+                };
+                let mut goals = std::mem::take(&mut m.ai.goals);
+                goals.tick(&mut m, &mut cx);
+                assert!(goals.is_running("Panic"), "the hurt frog should flee");
+                m.ai.goals = goals;
+                assert!(m.ai.panicking);
+                assert_eq!(m.ai.nav.speed_modifier, 2.0);
+            },
+        );
+        let _ = ran;
+    }
+
+    /// `Frog` keeps its pregnancy as the `IS_PREGNANT` brain memory, and
+    /// `Brain.Packed` saves every memory: `mob_to_nbt`/`mob_from_nbt` are the
+    /// pair `Game::mob_tree_nbt` and `Game::load_mob` go through. Horizon read
+    /// the memory back but wrote no `Brain` for a frog, so a frog made
+    /// pregnant in play that unloaded with its chunk came back unpregnant and
+    /// never laid its frogspawn.
+    #[test]
+    fn a_pregnant_frog_keeps_its_pregnancy_through_a_save() {
+        use crate::entity_nbt::{mob_from_nbt, mob_to_nbt};
+        use horizon_world::nbt::Tag;
+        let memory = |tag: &Tag| {
+            tag.get("Brain")
+                .and_then(|b| b.get("memories"))
+                .and_then(|b| b.get("minecraft:is_pregnant"))
+                .cloned()
+        };
+        let mut m = frog();
+        set_pregnant(&mut m, true);
+        let saved = mob_to_nbt(&m, [1, 2, 3, 4], None, None, |_| None);
+        assert_eq!(
+            memory(&saved),
+            Some(Tag::compound([(
+                "value",
+                Tag::Compound(Default::default())
+            )])),
+            "the save names the pregnancy"
+        );
+        let types = std::collections::HashMap::from([(m.kind.id.clone(), m.kind.clone())]);
+        let back = mob_from_nbt(&saved, &types, 2, None).unwrap();
+        assert!(is_pregnant(&back), "the reloaded frog is pregnant");
+        // A frog that laid its spawn saves no memory, even over a compound
+        // that still names one.
+        set_pregnant(&mut m, false);
+        let saved = mob_to_nbt(&m, [1, 2, 3, 4], Some(&saved), None, |_| None);
+        assert_eq!(memory(&saved), None, "a laid frog saves no pregnancy");
+        let back = mob_from_nbt(&saved, &types, 3, None).unwrap();
+        assert!(!is_pregnant(&back), "and does not come back pregnant");
+    }
+
+    /// `TryLaySpawnOnFluidNearLand`: the frogspawn is set, then
+    /// `block_place` is posted from the frog at the new block, then the lay
+    /// sound, and the pregnancy is erased.
+    #[test]
+    fn laying_frogspawn_posts_block_place_from_the_frog() {
+        let ran = crate::mobs::world::with_built_test_world(
+            &[],
+            |world, registry| {
+                world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+                );
+                let water = registry.default_state("minecraft:water").unwrap();
+                world.set(8, 63, 7, water).unwrap();
+            },
+            |w, _| {
+                let mut m = frog();
+                m.position = Vec3::new(8.5, 64.0, 8.5);
+                m.on_ground = true;
+                set_pregnant(&mut m, true);
+                let mut lr = LegacyRandom::new(3);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    lr: &mut lr,
+                    events: &mut events,
+                };
+                LaySpawn::lay(&mut m, &mut cx);
+                let spawn = w.registry.default_state("minecraft:frogspawn").unwrap();
+                assert!(
+                    events
+                        .iter()
+                        .any(|e| matches!(e, MobEvent::SetBlock { pos: [8, 64, 7], state } if *state == spawn)),
+                    "the frogspawn is set: {events:?}"
+                );
+                assert!(
+                    events.iter().any(|e| matches!(
+                        e,
+                        MobEvent::GameEvent {
+                            event: "minecraft:block_place",
+                            at: [8.5, 64.5, 7.5],
+                            source: 1,
+                            state,
+                        } if *state == spawn
+                    )),
+                    "the new frogspawn posts block_place from the frog: {events:?}"
+                );
+                assert!(!is_pregnant(&m), "laying erases the pregnancy");
+            },
+        );
+        let _ = ran;
     }
 }

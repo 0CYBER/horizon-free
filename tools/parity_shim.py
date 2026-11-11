@@ -34,11 +34,31 @@ CACHE = Path(os.environ.get("PARITY_SHIM_CACHE", ".local/parity-runner/oracle-ca
 PATH_OPTIONS = {"-cp", "-classpath", "--class-path", "-sourcepath", "--source-path", "-p", "--module-path"}
 
 
+# How deep the shim may run inside itself before it stops: it never needs to, since the real program
+# gets PARITY_SHIM_REAL_PATH as its PATH, but a wrapper that puts the shim back would start one
+# process after another until the machine runs out of memory.
+MAX_DEPTH = 4
+
+
 def real(name):
-    found = shutil.which(name, path=os.environ.get("PARITY_SHIM_REAL_PATH", ""))
-    if not found:
-        sys.exit(f"parity shim: no real {name} on PARITY_SHIM_REAL_PATH")
-    return found
+    """The first `name` on PARITY_SHIM_REAL_PATH that is not this script (a nested run's PATH holds the shim)."""
+    me = Path(__file__).resolve()
+    for folder in os.environ.get("PARITY_SHIM_REAL_PATH", "").split(os.pathsep):
+        found = folder and shutil.which(name, path=folder)
+        if found and Path(found).resolve() != me:
+            return found
+    sys.exit(f"parity shim: no real {name} on PARITY_SHIM_REAL_PATH")
+
+
+def enter():
+    """Count this run and give what it starts the real PATH, so a wrapper looking `java` up on PATH
+    (a JDK selector, a build wrapper) finds the real one and not the shim again."""
+    depth = int(os.environ.get("PARITY_SHIM_DEPTH") or 0)
+    if depth >= MAX_DEPTH:
+        sys.exit(f"parity shim: started inside itself {depth} times: what {os.path.basename(sys.argv[0])} runs "
+                 "leads back to the shim (a wrapper that puts it back on PATH?)")
+    os.environ["PARITY_SHIM_DEPTH"] = str(depth + 1)
+    os.environ["PATH"] = os.environ.get("PARITY_SHIM_REAL_PATH", "")
 
 
 class Hashes:
@@ -76,6 +96,9 @@ def named_paths(arguments):
             paths += [entry for entry in argument.split(os.pathsep) if entry]
         elif argument.startswith("-D") and "=" in argument:
             paths.append(argument.split("=", 1)[1])
+        elif argument.startswith("-javaagent:"):
+            # The jar is an input; its options, after "=", are in the command line already.
+            paths.append(argument.removeprefix("-javaagent:").split("=", 1)[0])
         elif not argument.startswith("-"):
             paths.append(argument)
     return [os.path.abspath(path) for path in paths if path]
@@ -167,6 +190,7 @@ def main():
     name = os.path.basename(sys.argv[0])
     arguments = sys.argv[1:]
     program = real(name)
+    enter()
     if os.environ.get("PARITY_JAVA_CACHE") == "0" or "-version" in arguments or "--version" in arguments:
         os.execv(program, [program, *arguments])
     hashes = Hashes()

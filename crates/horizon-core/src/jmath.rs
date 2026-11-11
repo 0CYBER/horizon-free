@@ -10,31 +10,35 @@
 //! - On x86-64, `sin`, `cos`, `tan`, `exp`, `log`, `log10` and `pow` are
 //!   Intel's libm stubs, which round like glibc for nearly every argument;
 //!   there they use the platform libm, as before. Windows' libm (Microsoft's)
-//!   rounds `sin` and `cos` differently for about 3% of arguments, so there
-//!   they are correctly rounded instead ([`exact`]), as Intel's stubs are for
-//!   all but about 0.1%.
-//! - On AArch64 only `sin` and `cos` are intrinsics: fdlibm's kernels
-//!   evaluated with fused multiply-adds (`macroAssembler_aarch64_trig.cpp`).
-//!   Everything else is `StrictMath`.
+//!   rounds `sin` and `cos` differently for about 3% of arguments, and `log`
+//!   for about 0.15%, so there they are correctly rounded instead
+//!   ([`exact`]), as Intel's stubs are for all but about 0.1% of `sin` and
+//!   `cos` and about 0.002% of `log`.
+//! - On AArch64 only `sin` and `cos` are intrinsics, which compute fdlibm's
+//!   `sin` and `cos` with fused multiply-adds ([`aarch64`]). Everything else
+//!   is `StrictMath`, which the Java SE API defines as fdlibm 5.3's results
+//!   ([`fdlibm`]).
 //!
 //! So these functions return what vanilla returns on the same machine, on
 //! Linux and on an Apple silicon Mac alike.
 
-/// `Math.round(float)`, bit for bit: exact (no `x + 0.5` in `f32`), ties toward
-/// positive infinity, saturating to the `int` range, NaN to 0.
+pub mod fdlibm;
+
+/// `Math.sin` and `Math.cos` as HotSpot computes them on AArch64: fdlibm's
+/// algorithm with fused multiply-adds, on every platform.
+pub mod aarch64 {
+    pub use super::fdlibm::{cos_fma as cos, sin_fma as sin};
+}
+
+/// `Math.round(float)`: the `int` closest to `a`, ties toward positive
+/// infinity (so `-2.5` is `-2`); `NaN` is 0, and values beyond the `int`
+/// range give `i32::MIN` or `i32::MAX`.
 pub fn round_f32(a: f32) -> i32 {
-    let bits = a.to_bits() as i32;
-    let biased_exp = (bits & 0x7F80_0000) >> 23;
-    let shift = (22 + 127) - biased_exp;
-    if shift & -32 == 0 {
-        let mut r = bits & 0x007F_FFFF | 0x0080_0000;
-        if bits < 0 {
-            r = -r;
-        }
-        ((r >> shift) + 1) >> 1
-    } else {
-        a as i32
-    }
+    // floor(a + 1/2). The sum is exact in an f64 for 2^-30 <= |a| < 2^31.
+    // Below that it rounds to within 2^-30 of 1/2, whose floor is 0 as the
+    // exact sum's is; above it the cast saturates either way. The cast also
+    // maps NaN to 0.
+    (f64::from(a) + 0.5).floor() as i32
 }
 
 /// `Math.sin`.
@@ -81,6 +85,8 @@ pub fn exp(x: f64) -> f64 {
 pub fn log(x: f64) -> f64 {
     if cfg!(target_arch = "aarch64") {
         fdlibm::log(x)
+    } else if cfg!(windows) {
+        exact::log(x)
     } else {
         x.ln()
     }
@@ -97,6 +103,11 @@ pub fn log10(x: f64) -> f64 {
 
 /// `Math.pow`.
 pub fn pow(x: f64, y: f64) -> f64 {
+    // Java differs from C here: a NaN exponent, or |x| == 1 with an infinite
+    // exponent, yields NaN (C returns 1.0). A zero exponent stays 1.0 for any x.
+    if y.is_nan() || (x.abs() == 1.0 && y.is_infinite()) {
+        return f64::NAN;
+    }
     if cfg!(target_arch = "aarch64") {
         libm::pow(x, y)
     } else {
@@ -145,423 +156,17 @@ pub fn round(x: f64) -> i64 {
     (if x - f >= 0.5 { f + 1.0 } else { f }) as i64
 }
 
-fn hi(x: f64) -> i32 {
-    (x.to_bits() >> 32) as i32
-}
-
-fn with_hi(x: f64, high: i32) -> f64 {
-    f64::from_bits((x.to_bits() & 0xffff_ffff) | (u64::from(high as u32) << 32))
-}
-
-/// `java.lang.FdLibm` ports (`StrictMath`) of what the `libm` crate computes
-/// differently.
-// fdlibm's constants and NaN, verbatim.
-#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::eq_op)]
-pub mod fdlibm {
-    use super::{hi, with_hi};
-
-    const TWO54: f64 = 1.80143985094819840000e+16;
-
-    /// `FdLibm.Log`.
-    pub fn log(mut x: f64) -> f64 {
-        const LN2_HI: f64 = 6.93147180369123816490e-01;
-        const LN2_LO: f64 = 1.90821492927058770002e-10;
-        const LG1: f64 = 6.666666666666735130e-01;
-        const LG2: f64 = 3.999999999940941908e-01;
-        const LG3: f64 = 2.857142874366239149e-01;
-        const LG4: f64 = 2.222219843214978396e-01;
-        const LG5: f64 = 1.818357216161805012e-01;
-        const LG6: f64 = 1.531383769920937332e-01;
-        const LG7: f64 = 1.479819860511658591e-01;
-        let mut hx = hi(x);
-        let lx = x.to_bits() as u32;
-        let mut k = 0;
-        if hx < 0x0010_0000 {
-            if ((hx & 0x7fff_ffff) as u32 | lx) == 0 {
-                return -TWO54 / 0.0;
-            }
-            if hx < 0 {
-                return (x - x) / 0.0;
-            }
-            k -= 54;
-            x *= TWO54;
-            hx = hi(x);
-        }
-        if hx >= 0x7ff0_0000 {
-            return x + x;
-        }
-        k += (hx >> 20) - 1023;
-        hx &= 0x000f_ffff;
-        let i = (hx + 0x9_5f64) & 0x10_0000;
-        x = with_hi(x, hx | (i ^ 0x3ff0_0000));
-        k += i >> 20;
-        let f = x - 1.0;
-        if (0x000f_ffff & (2 + hx)) < 3 {
-            if f == 0.0 {
-                if k == 0 {
-                    return 0.0;
-                }
-                let dk = f64::from(k);
-                return dk * LN2_HI + dk * LN2_LO;
-            }
-            let r = f * f * (0.5 - 0.33333333333333333 * f);
-            if k == 0 {
-                return f - r;
-            }
-            let dk = f64::from(k);
-            return dk * LN2_HI - ((r - dk * LN2_LO) - f);
-        }
-        let s = f / (2.0 + f);
-        let dk = f64::from(k);
-        let z = s * s;
-        let mut i = hx - 0x6_147a;
-        let w = z * z;
-        let j = 0x6b851 - hx;
-        let t1 = w * (LG2 + w * (LG4 + w * LG6));
-        let t2 = z * (LG1 + w * (LG3 + w * (LG5 + w * LG7)));
-        i |= j;
-        let r = t2 + t1;
-        if i > 0 {
-            let hfsq = 0.5 * f * f;
-            if k == 0 {
-                f - (hfsq - s * (hfsq + r))
-            } else {
-                dk * LN2_HI - ((hfsq - (s * (hfsq + r) + dk * LN2_LO)) - f)
-            }
-        } else if k == 0 {
-            f - s * (f - r)
-        } else {
-            dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f)
-        }
-    }
-
-    /// `FdLibm.Log10`.
-    pub fn log10(mut x: f64) -> f64 {
-        const IVLN10: f64 = 4.34294481903251816668e-01;
-        const LOG10_2HI: f64 = 3.01029995663611771306e-01;
-        const LOG10_2LO: f64 = 3.69423907715893078616e-13;
-        let mut hx = hi(x);
-        let lx = x.to_bits() as u32;
-        let mut k = 0;
-        if hx < 0x0010_0000 {
-            if ((hx & 0x7fff_ffff) as u32 | lx) == 0 {
-                return -TWO54 / 0.0;
-            }
-            if hx < 0 {
-                return (x - x) / 0.0;
-            }
-            k -= 54;
-            x *= TWO54;
-            hx = hi(x);
-        }
-        if hx >= 0x7ff0_0000 {
-            return x + x;
-        }
-        k += (hx >> 20) - 1023;
-        let i = ((k as u32) >> 31) as i32;
-        hx = (hx & 0x000f_ffff) | ((0x3ff - i) << 20);
-        let y = f64::from(k + i);
-        x = with_hi(x, hx);
-        let z = y * LOG10_2LO + IVLN10 * log(x);
-        z + y * LOG10_2HI
-    }
-
-    /// `FdLibm.Cbrt`.
-    pub fn cbrt(mut x: f64) -> f64 {
-        const B1: i32 = 715094163;
-        const B2: i32 = 696219795;
-        const C: f64 = 5.42857142857142815906e-01;
-        const D: f64 = -7.05306122448979611050e-01;
-        const E: f64 = 1.41428571428571436819e+00;
-        const F: f64 = 1.60714285714285720630e+00;
-        const G: f64 = 3.57142857142857150787e-01;
-        if x == 0.0 || !x.is_finite() {
-            return x;
-        }
-        let sign = if x < 0.0 { -1.0 } else { 1.0 };
-        x = x.abs();
-        let mut t = 0.0f64;
-        if x < f64::MIN_POSITIVE {
-            t = 18014398509481984.0; // 2^54
-            t *= x;
-            t = with_hi(t, hi(t) / 3 + B2);
-        } else {
-            t = with_hi(t, hi(x) / 3 + B1);
-        }
-        let mut r = t * t / x;
-        let mut s = C + r * t;
-        t *= G + F / (s + E + D / s);
-        t = f64::from_bits(t.to_bits() & 0xffff_ffff_0000_0000);
-        t = with_hi(t, hi(t) + 1);
-        s = t * t;
-        r = x / s;
-        let w = t + t;
-        r = (r - t) / (w + r);
-        t += t * r;
-        sign * t
-    }
-
-    /// `FdLibm.Hypot`.
-    pub fn hypot(x: f64, y: f64) -> f64 {
-        let mut a = x.abs();
-        let mut b = y.abs();
-        if !a.is_finite() || !b.is_finite() {
-            if a == f64::INFINITY || b == f64::INFINITY {
-                return f64::INFINITY;
-            }
-            return a + b;
-        }
-        if b > a {
-            std::mem::swap(&mut a, &mut b);
-        }
-        let mut ha = hi(a);
-        let mut hb = hi(b);
-        if ha - hb > 0x3c0_0000 {
-            return a + b;
-        }
-        let mut k = 0;
-        if a > f64::from_bits(0x5f30_0000_ffff_ffff) {
-            ha -= 0x2580_0000;
-            hb -= 0x2580_0000;
-            a *= f64::from_bits(0x1a70_0000_0000_0000); // 2^-600
-            b *= f64::from_bits(0x1a70_0000_0000_0000);
-            k += 600;
-        }
-        if b < f64::from_bits(0x20b0_0000_0000_0000) {
-            // 2^-500
-            if b < f64::MIN_POSITIVE {
-                if b == 0.0 {
-                    return a;
-                }
-                let t1 = f64::from_bits(0x7fd0_0000_0000_0000); // 2^1022
-                b *= t1;
-                a *= t1;
-                k -= 1022;
-            } else {
-                ha += 0x2580_0000;
-                hb += 0x2580_0000;
-                a *= f64::from_bits(0x6570_0000_0000_0000); // 2^600
-                b *= f64::from_bits(0x6570_0000_0000_0000);
-                k -= 600;
-            }
-        }
-        let mut w = a - b;
-        if w > b {
-            let t1 = with_hi(0.0, ha);
-            let t2 = a - t1;
-            w = (t1 * t1 - (b * (-b) - t2 * (a + t1))).sqrt();
-        } else {
-            a += a;
-            let y1 = with_hi(0.0, hb);
-            let y2 = b - y1;
-            let t1 = with_hi(0.0, ha + 0x0010_0000);
-            let t2 = a - t1;
-            w = (t1 * y1 - (w * (-w) - (t1 * y2 + t2 * b))).sqrt();
-        }
-        if k != 0 {
-            f64::from_bits(((1023 + k) as u64) << 52) * w
-        } else {
-            w
-        }
-    }
-}
-
-/// HotSpot's AArch64 `Math.sin` / `Math.cos` stubs
-/// (`MacroAssembler::generate_dsin_dcos`): fdlibm with fused multiply-adds.
-/// Exposed on every architecture so they can be tested anywhere.
-// HotSpot's tables, verbatim.
-#[allow(
-    clippy::excessive_precision,
-    clippy::approx_constant,
-    clippy::unreadable_literal
-)]
-pub mod aarch64 {
-    use super::hi;
-
-    const S: [f64; 6] = [
-        -1.66666666666666324348e-01,
-        8.33333333332248946124e-03,
-        -1.98412698298579493134e-04,
-        2.75573137070700676789e-06,
-        -2.50507602534068634195e-08,
-        1.58969099521155010221e-10,
-    ];
-    const C: [f64; 6] = [
-        4.16666666666666019037e-02,
-        -1.38888888888741095749e-03,
-        2.48015872894767294178e-05,
-        -2.75573143513906633035e-07,
-        2.08757232129817482790e-09,
-        -1.13596475577881948265e-11,
-    ];
-    const INVPIO2: f64 = 6.36619772367581382433e-01;
-    const PIO2_1: f64 = 1.57079632673412561417e+00;
-    const PIO2_1T: f64 = 6.07710050650619224932e-11;
-    const PIO2_2: f64 = 6.07710050630396597660e-11;
-    const PIO2_2T: f64 = 2.02226624879595063154e-21;
-    const PIO2_3: f64 = 2.02226624871116645580e-21;
-    const PIO2_3T: f64 = 8.47842766036889956997e-32;
-    const NPIO2_HW: [i32; 32] = [
-        0x3FF921FB, 0x400921FB, 0x4012D97C, 0x401921FB, 0x401F6A7A, 0x4022D97C, 0x4025FDBB,
-        0x402921FB, 0x402C463A, 0x402F6A7A, 0x4031475C, 0x4032D97C, 0x40346B9C, 0x4035FDBB,
-        0x40378FDB, 0x403921FB, 0x403AB41B, 0x403C463A, 0x403DD85A, 0x403F6A7A, 0x40407E4C,
-        0x4041475C, 0x4042106C, 0x4042D97C, 0x4043A28C, 0x40446B9C, 0x404534AC, 0x4045FDBB,
-        0x4046C6CB, 0x40478FDB, 0x404858EB, 0x404921FB,
-    ];
-
-    /// `generate_kernel_sin`.
-    fn kernel_sin(x: f64, y: f64, iy: bool) -> f64 {
-        let z = x * x;
-        let v = z * x;
-        let mut r = z.mul_add(S[5], S[4]);
-        r = z.mul_add(r, S[3]);
-        r = z.mul_add(r, S[2]);
-        r = z.mul_add(r, S[1]);
-        if !iy {
-            v.mul_add(z.mul_add(r, S[0]), x)
-        } else {
-            let t = (-v).mul_add(r, 0.5 * y);
-            let t = (-z).mul_add(t, y);
-            x + v.mul_add(S[0], t)
-        }
-    }
-
-    /// `generate_kernel_cos`. `ix` is the high word of the *original*
-    /// argument: the stub reuses the register, so a reduced argument always
-    /// takes the `qx = 0.28125` branch.
-    fn kernel_cos(x: f64, y: f64, ix: i32) -> f64 {
-        let z = x * x;
-        let mut r = z.mul_add(C[5], C[4]);
-        r = z.mul_add(r, C[3]);
-        let xy = x * y;
-        r = z.mul_add(r, C[2]);
-        r = z.mul_add(r, C[1]);
-        let zz = z * z;
-        r = z.mul_add(r, C[0]);
-        if ix <= 0x3FD33333 {
-            let v = (-zz).mul_add(r, xy);
-            1.0 - 0.5f64.mul_add(z, v)
-        } else {
-            let qx = if ix > 0x3fe90000 {
-                0.28125
-            } else {
-                f64::from_bits(u64::from((ix - 0x0020_0000) as u32) << 32)
-            };
-            let zr_xy = zz.mul_add(r, -xy);
-            let h = 0.5f64.mul_add(z, -qx);
-            let a = 1.0 - qx;
-            a - (h - zr_xy)
-        }
-    }
-
-    /// `generate__ieee754_rem_pio2` for |x| <= 2^19·π/2; `None` beyond.
-    fn rem_pio2(x: f64, ix: i32) -> Option<(i32, f64, f64)> {
-        if ix < 0x4002d97c {
-            return Some(if x.to_bits() as i64 >= 0 {
-                let z = x - PIO2_1;
-                if ix != 0x3ff921fb {
-                    let y0 = z - PIO2_1T;
-                    (1, y0, (z - y0) - PIO2_1T)
-                } else {
-                    let z = z - PIO2_2;
-                    let y0 = z - PIO2_2T;
-                    (1, y0, (z - y0) - PIO2_2T)
-                }
-            } else {
-                let z = x + PIO2_1;
-                if ix != 0x3ff921fb {
-                    let y0 = z + PIO2_1T;
-                    (-1, y0, (z - y0) + PIO2_1T)
-                } else {
-                    let z = z + PIO2_2;
-                    let y0 = z + PIO2_2T;
-                    (-1, y0, (z - y0) + PIO2_2T)
-                }
-            });
-        }
-        if ix > 0x413921fb {
-            return None;
-        }
-        let t = x.abs();
-        let fnv = t.mul_add(INVPIO2, 0.5).trunc();
-        let n = fnv as i32;
-        let mut r = (-fnv).mul_add(PIO2_1, t);
-        let mut w = fnv * PIO2_1T;
-        let mut y0 = r - w;
-        if n > 32 || ix == NPIO2_HW[(n - 1) as usize] {
-            let j = ix >> 20;
-            let exponent = |y: f64| ((y.to_bits() << 1) >> 53) as i32;
-            if j - exponent(y0) > 16 {
-                let t = r;
-                let w2 = fnv * PIO2_2;
-                r = t - w2;
-                w = fnv.mul_add(PIO2_2T, w2 - (t - r));
-                y0 = r - w;
-                if j - exponent(y0) > 49 {
-                    let t = r;
-                    let w3 = fnv * PIO2_3;
-                    r = t - w3;
-                    w = fnv.mul_add(PIO2_3T, w3 - (t - r));
-                    y0 = r - w;
-                }
-            }
-        }
-        let y1 = (r - y0) - w;
-        Some(if x > 0.0 { (n, y0, y1) } else { (-n, -y0, -y1) })
-    }
-
-    fn sin_cos(x: f64, is_cos: bool) -> f64 {
-        let ix = hi(x) & 0x7fff_ffff;
-        if ix < 0x3e400000 {
-            return if is_cos { 1.0 } else { x };
-        }
-        if ix <= 0x3fe921fb {
-            return if is_cos {
-                kernel_cos(x, 0.0, ix)
-            } else {
-                kernel_sin(x, 0.0, false)
-            };
-        }
-        if ix >= 0x7ff00000 {
-            return f64::from_bits(0x7ff0_0000_0000_0001);
-        }
-        // Beyond 2^19·π/2 the stub's Payne–Hanek reduction isn't ported:
-        // StrictMath's is used instead.
-        let Some((n, y0, y1)) = rem_pio2(x, ix) else {
-            return if is_cos { libm::cos(x) } else { libm::sin(x) };
-        };
-        let (value, negate) = if (n & 1 == 1) != is_cos {
-            (
-                kernel_cos(y0, y1, ix),
-                if is_cos { (n ^ (n >> 1)) & 1 } else { n & 2 },
-            )
-        } else {
-            (
-                kernel_sin(y0, y1, true),
-                if is_cos { (n ^ (n >> 1)) & 1 } else { n & 2 },
-            )
-        };
-        if negate != 0 { -value } else { value }
-    }
-
-    /// `Math.sin` on AArch64 HotSpot.
-    pub fn sin(x: f64) -> f64 {
-        sin_cos(x, false)
-    }
-
-    /// `Math.cos` on AArch64 HotSpot.
-    pub fn cos(x: f64) -> f64 {
-        sin_cos(x, true)
-    }
-}
-
-/// `sin` and `cos` correctly rounded, for Windows, whose libm rounds them
-/// unlike Java's x86-64 intrinsics. Double-double arithmetic (two `f64`s per
-/// value): `x` reduced by a four-part pi/2, a short series checked against an
-/// error bound, and where the bound leaves the rounding open, the full series
-/// with its terms summed exactly. Checked against 400-bit results on 1.3 million
-/// arguments, small ones and ones next to multiples of pi/2 among them; not a
-/// proof.
+/// `sin`, `cos` and `log` correctly rounded, for Windows, whose libm rounds
+/// them unlike Java's x86-64 intrinsics. Double-double arithmetic (two `f64`s
+/// per value): `x` reduced by a four-part pi/2 (`log`: split into a power of
+/// two and a mantissa near 1), a short series checked against an error bound,
+/// and where the bound leaves the rounding open, the full series with its
+/// terms summed exactly. Checked against 400-bit results on 1.3 million
+/// arguments (`sin`, `cos`), small ones and ones next to multiples of pi/2
+/// among them, and `log` against 70-digit results on 374,000 arguments (none
+/// wrong; every power of two, subnormals and the arguments near 1 among them);
+/// not a proof. A result left open by the series' 2^-100 is rounded as the
+/// series gives it.
 pub mod exact {
     /// A value `hi + lo` with |lo| <= ulp(hi) / 2.
     #[derive(Clone, Copy)]
@@ -790,10 +395,162 @@ pub mod exact {
         let (r, q) = reduce(x);
         eval(r, q, true)
     }
+
+    /// ln 2 = L1 + L2 + L3 to 2^-136: the first two have 40 significant bits, so `k * Ln` is exact
+    /// for |k| < 2^13 (a double's exponent is below 2^11).
+    const L1: f64 = f64::from_bits(0x3FE6_2E42_FEFA_2000);
+    const L2: f64 = f64::from_bits(0x3D69_EF35_793C_6000);
+    const L3: f64 = f64::from_bits(0x3AE6_7300_7E5E_D5E8);
+
+    /// `k * ln 2` as a double-double.
+    fn k_ln2(k: f64) -> Dd {
+        Dd(k * L1, 0.0).add(Dd(k * L2, 0.0)).add(two_prod(k, L3))
+    }
+
+    /// The series' last term is s^43 / 43, below 2^-110 of s for |s| <= 0.1716.
+    const LOG_TERMS: u32 = 22;
+
+    /// 1/7, 1/9, ... 1/43 for the f64 tail of atanh.
+    const LOG_TAIL: [f64; 19] = [
+        1.0 / 7.0,
+        1.0 / 9.0,
+        1.0 / 11.0,
+        1.0 / 13.0,
+        1.0 / 15.0,
+        1.0 / 17.0,
+        1.0 / 19.0,
+        1.0 / 21.0,
+        1.0 / 23.0,
+        1.0 / 25.0,
+        1.0 / 27.0,
+        1.0 / 29.0,
+        1.0 / 31.0,
+        1.0 / 33.0,
+        1.0 / 35.0,
+        1.0 / 37.0,
+        1.0 / 39.0,
+        1.0 / 41.0,
+        1.0 / 43.0,
+    ];
+
+    impl Dd {
+        /// `self / b`: three quotient digits, each from the remainder of the last.
+        fn div_dd(self, b: Dd) -> Dd {
+            let q1 = self.0 / b.0;
+            let r = self.add(Dd(q1, 0.0).mul(b).neg());
+            let q2 = r.0 / b.0;
+            let r = r.add(Dd(q2, 0.0).mul(b).neg());
+            let q3 = r.0 / b.0;
+            fast_two_sum(q1, q2).add(Dd(q3, 0.0))
+        }
+    }
+
+    /// `x = m * 2^k` with m in [sqrt(1/2), sqrt(2)), for a positive finite `x`.
+    fn split(x: f64) -> (f64, f64) {
+        // A subnormal is scaled into the normal range first (an exact power of two).
+        let (x, shift) = if x < f64::MIN_POSITIVE {
+            (x * f64::from_bits(0x4350_0000_0000_0000), -54.0) // 2^54
+        } else {
+            (x, 0.0)
+        };
+        let bits = x.to_bits();
+        let k = f64::from(((bits >> 52) & 0x7FF) as i32 - 1023) + shift;
+        let m = f64::from_bits((bits & 0x000F_FFFF_FFFF_FFFF) | 0x3FF0_0000_0000_0000);
+        if m > std::f64::consts::SQRT_2 {
+            (m / 2.0, k + 1.0)
+        } else {
+            (m, k)
+        }
+    }
+
+    /// atanh's argument for `m`: s = (m - 1) / (m + 1), so ln m = 2 atanh s. `m - 1` is exact for m in
+    /// [1/2, 2] and `m + 1` is a two-term sum.
+    fn atanh_arg(m: f64) -> Dd {
+        Dd(m - 1.0, 0.0).div_dd(two_sum(m, 1.0))
+    }
+
+    /// ln(x) to about 2^-64: ln 2 times the power of two, then 2 atanh s with the first terms in
+    /// double-double and the small rest in f64.
+    fn log_fast(s: Dd, k: f64) -> Dd {
+        let s2 = s.mul(s);
+        let s3 = s2.mul(s);
+        let s5 = s3.mul(s2);
+        let head = s.add(s3.div(3.0)).add(s5.div(5.0));
+        let x2 = s2.0;
+        let tail = s.0 * x2 * x2 * x2 * horner(&LOG_TAIL, x2);
+        let a = head.add(Dd(tail, 0.0));
+        k_ln2(k).add(Dd(2.0 * a.0, 2.0 * a.1))
+    }
+
+    /// ln(x) correctly rounded where `log_fast` can't tell: every term of the series to 2^-110 as a
+    /// double-double, with `k ln 2`, summed exactly.
+    fn log_series(s: Dd, k: f64) -> f64 {
+        let s2 = s.mul(s);
+        let mut parts = [0.0f64; 4 + 2 * LOG_TERMS as usize];
+        let c = two_prod(k, L3);
+        parts[..4].copy_from_slice(&[k * L1, k * L2, c.0, c.1]);
+        let mut power = s;
+        for n in 0..LOG_TERMS {
+            let t = power.div(f64::from(2 * n + 1));
+            parts[4 + 2 * n as usize] = 2.0 * t.0;
+            parts[5 + 2 * n as usize] = 2.0 * t.1;
+            power = power.mul(s2);
+        }
+        exact_sum(&parts)
+    }
+
+    /// Both paths of `log` for a positive finite `x`: what the quick one decides (`None` when its
+    /// bound leaves the rounding open) and the full series' result.
+    #[cfg(test)]
+    pub(super) fn log_paths(x: f64) -> (Option<f64>, f64) {
+        let (m, k) = split(x);
+        let s = if m == 1.0 { Dd(0.0, 0.0) } else { atanh_arg(m) };
+        let quick = if m == 1.0 {
+            rounded(k_ln2(k))
+        } else {
+            rounded(log_fast(s, k))
+        };
+        (quick, log_series(s, k))
+    }
+
+    /// `log(x)` rounded to nearest, as Java's `Math.log` with the platform's libm out of it: NaN
+    /// for NaN and negative `x`, -infinity for 0, infinity for infinity.
+    pub fn log(x: f64) -> f64 {
+        if x.is_nan() || x < 0.0 {
+            return f64::NAN;
+        }
+        if x == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if x == f64::INFINITY {
+            return x;
+        }
+        let (m, k) = split(x);
+        if m == 1.0 {
+            // m == 1 only for a power of two; ln x is k ln 2 (and +0 for x = 1).
+            return rounded(k_ln2(k)).unwrap_or_else(|| log_series(Dd(0.0, 0.0), k));
+        }
+        let s = atanh_arg(m);
+        rounded(log_fast(s, k)).unwrap_or_else(|| log_series(s, k))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pow_matches_java_special_cases() {
+        let inf = f64::INFINITY;
+        assert!(super::pow(1.0, inf).is_nan());
+        assert!(super::pow(1.0, -inf).is_nan());
+        assert!(super::pow(-1.0, inf).is_nan());
+        assert!(super::pow(-1.0, -inf).is_nan());
+        assert!(super::pow(1.0, f64::NAN).is_nan());
+        assert!(super::pow(2.0, f64::NAN).is_nan());
+        assert_eq!(super::pow(f64::NAN, 0.0), 1.0);
+        assert_eq!(super::pow(f64::NAN, -0.0), 1.0);
+        assert_eq!(super::pow(2.0, 3.0), 8.0);
+        assert_eq!(super::pow(2.0, inf), inf);
+    }
     use super::{aarch64, exact, fdlibm, round_f32};
 
     #[test]
@@ -808,6 +565,23 @@ mod tests {
             (-1e10, i32::MIN),
             (f32::NAN, 0),
             (8_388_609.0, 8_388_609),
+        ] {
+            assert_eq!(round_f32(x), expected, "{x}");
+        }
+    }
+
+    #[test]
+    fn round_f32_at_the_edges_of_the_int_range() {
+        for (x, expected) in [
+            (2_147_483_520.0, 2_147_483_520), // the largest float below 2^31
+            (2_147_483_648.0, i32::MAX),
+            (f32::INFINITY, i32::MAX),
+            (-2_147_483_648.0, i32::MIN),
+            (-2_147_483_904.0, i32::MIN),
+            (f32::NEG_INFINITY, i32::MIN),
+            (8_388_607.5, 8_388_608), // the largest floats with a fraction
+            (-8_388_607.5, -8_388_607),
+            (-f32::from_bits(1), 0),
         ] {
             assert_eq!(round_f32(x), expected, "{x}");
         }
@@ -870,6 +644,143 @@ mod tests {
         assert_eq!(exact::sin(std::f64::consts::FRAC_PI_2), 1.0);
         assert_eq!(exact::cos(std::f64::consts::PI), -1.0);
         assert_eq!(exact::sin(3.0e6), 3.0e6f64.sin());
+    }
+
+    /// Java 25's `Math.log` on x86-64 HotSpot, for arguments where Windows' libm rounds the other way.
+    #[test]
+    fn exact_log_rounds_like_javas_x86_intrinsic() {
+        for case in [
+            (0x3fc0b54b0f805bf8, 0xc00049ff997752f7),
+            (0x3fe5fc1b645b70b0, 0xbfd8064e759ed413),
+            (0x3fed51d47877b266, 0xbfb664f5a8926a06),
+            (0x3fee6d6750850a06, 0xbfa9cd367b827495),
+            (0x3fef36e69c369e4e, 0xbf99737a0b9f7bc3),
+            (0x3ff067263f2b4825, 0x3f9977ced5d8d5a3),
+            (0x3ff0d0afbaf78b76, 0x3fa9716a3d908db9),
+            (0x3ff1159c9e7111ec, 0x3fb0c9bcebcf476b),
+            (0x3ff245ab6c5b81a0, 0x3fc0ff3c2942bd99),
+            (0x3ff4e7278a462123, 0x3fd11b777b0a57d5),
+        ] {
+            check1(exact::log, case);
+        }
+    }
+
+    /// Where HotSpot's stub is one ulp off the correctly rounded value (about 0.002% of arguments:
+    /// 7 in 374,000 tried, a set that over-samples arguments near 1): `exact::log` is the correctly
+    /// rounded one, checked against the logarithm at 70 digits, so it differs from Java on these.
+    #[test]
+    fn exact_log_is_correctly_rounded_where_the_hotspot_stub_is_not() {
+        let cases: [(u64, u64, u64); 7] = [
+            (0x3feadbbb5fc7b29a, 0xbfc66ba44eb3a35b, 0xbfc66ba44eb3a35c),
+            (0x3fefdd43040fc60f, 0xbf7167f24d39a107, 0xbf7167f24d39a106),
+            (0x3fefe0369e739efb, 0xbf6fd93598c3afaf, 0xbf6fd93598c3afae),
+            (0x3fefe170e61a4416, 0xbf6e9dba9ec8dd96, 0xbf6e9dba9ec8dd95),
+            (0x3fefe17c22914fef, 0xbf6e92736481daa0, 0xbf6e92736481da9f),
+            (0x3ff00193bf8e3b48, 0x3f393aba964a825d, 0x3f393aba964a825e),
+            (0x3ffeec224043f7a4, 0x3fe515a4c3362a57, 0x3fe515a4c3362a58),
+        ];
+        for (x, correct, java) in cases {
+            check1(exact::log, (x, correct));
+            assert_eq!((correct as i64 - java as i64).abs(), 1, "{x:x}");
+        }
+    }
+
+    /// Arguments whose logarithm lies within 2^-65 of a half-way point between two doubles (the
+    /// nearest of about 1.6 million tried, against an 80-digit reference, some taken where the
+    /// reduced argument is largest): a result good to 2^-60 would round these either way, so only
+    /// the full series settles them.
+    #[test]
+    fn exact_log_near_a_half_way_point() {
+        let cases: [(u64, u64); 28] = [
+            (0x400ea6c9c15473c0, 0x3ff57de9d6444efb),
+            (0x3540d395cbb12275, 0xc05d9e944bf0eafb),
+            (0x3fe0c4b3724da5fd, 0xbfe4ae0392d6539d),
+            (0x3715347773c09881, 0xc058894bd6b37b85),
+            (0x6705dd33826cbaab, 0x407b1877c830c420),
+            (0x401083ea6bbf754b, 0x3ff6b019035375a2),
+            (0x4294faad08d7e127, 0x403d621471e8d52e),
+            (0x400e0cf8237e2418, 0x3ff52cd2b2e60bd8),
+            (0x5a69379ba43f3c00, 0x40725a7fc70ec9bf),
+            (0x0df65f8ebc1d4744, 0xc0815175b0d03992),
+            (0x3b35b2505194e4ed, 0xc04a2ff39ade0d68),
+            (0x1aa83a64505a779e, 0xc079d64d96d77675),
+            (0x3fc65b752af3ef33, 0xbffbeb0692d9b9fd),
+            (0x3fc5ad34f062142e, 0xbffc69aa91705d26),
+            (0x3fe686a172328200, 0xbfd677eebafc8ef7),
+            (0x3fd69091a29739ab, 0xbff0ae0f9d7de732),
+            (0x4016b4f3719e1215, 0x3ffbc82dd27ea12d),
+            (0x4016a2ba00937756, 0x3ffbbb513b53b162),
+            (0x4016bb154e484d16, 0x3ffbcc7f6aa1772e),
+            (0x40268fd88805e702, 0x4003628a4eb18cb1),
+            (0x40168e2ed9c45cd9, 0x3ffbacc532910968),
+            (0x3fd67d8a388e3af0, 0xbff0bb937f69f939),
+            (0x3fc6c43be6c0a543, 0xbffba0b86fd311b7),
+            (0x4016a5de7ed19e63, 0x3ffbbd89bbb55f79),
+            (0x400696e038424b87, 0x3ff09bcd1c311724),
+            (0x3fd6af8fc9ab0dc4, 0xbff09824c5c75526),
+            (0x4006a9fc873e071b, 0x3ff0a9509c1e714b),
+            (0x4006a792fa3825af, 0x3ff0a79c8cc08d8e),
+        ];
+        for case in cases {
+            check1(exact::log, case);
+            let x = f64::from_bits(case.0);
+            assert_eq!(exact::log_paths(x).1.to_bits(), case.1, "{:x}", case.0);
+        }
+    }
+
+    /// The special values, the powers of two, the subnormals and the ends of the range, as Java 25
+    /// returns them.
+    #[test]
+    fn exact_log_edges() {
+        assert!(exact::log(f64::NAN).is_nan() && exact::log(-1.0).is_nan());
+        assert!(exact::log(f64::NEG_INFINITY).is_nan());
+        assert_eq!(exact::log(0.0), f64::NEG_INFINITY);
+        assert_eq!(exact::log(-0.0), f64::NEG_INFINITY);
+        assert_eq!(exact::log(f64::INFINITY), f64::INFINITY);
+        assert_eq!(exact::log(1.0).to_bits(), 0);
+        for case in [
+            (f64::MAX.to_bits(), 0x40862e42fefa39ef),
+            (f64::MIN_POSITIVE.to_bits(), 0xc086232bdd7abcd2),
+            (0x000f_ffff_ffff_ffff, 0xc086232bdd7abcd2),
+            (1, 0xc0874385446d71c3),
+            (2.0f64.to_bits(), 0x3fe62e42fefa39ef),
+            (0.5f64.to_bits(), 0xbfe62e42fefa39ef),
+            (std::f64::consts::E.to_bits(), 1.0f64.to_bits()),
+            (10.0f64.to_bits(), 0x40026bb1bbb55516),
+            (0.1f64.to_bits(), 0xc0026bb1bbb55515),
+        ] {
+            check1(exact::log, case);
+        }
+    }
+
+    /// The quick path settles the rounding for most arguments, and the full series, which settles
+    /// the rest, gives the same result wherever the quick one decides.
+    #[test]
+    fn exact_log_quick_and_full_series_agree() {
+        let (mut state, mut open) = (0x9E37_79B9_7F4A_7C15u64, 0);
+        for i in 0..20_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            // Mantissas anywhere, exponents over the whole range, every tenth one near 1.
+            let x = if i % 10 == 0 {
+                1.0 + f64::from((state >> 40) as i32 - (1 << 23)) * 2.0f64.powi(-40)
+            } else {
+                f64::from_bits((state >> 1) & 0x7FEF_FFFF_FFFF_FFFF)
+            };
+            if !(x > 0.0 && x.is_finite()) {
+                continue;
+            }
+            let (quick, full) = exact::log_paths(x);
+            match quick {
+                Some(q) => assert_eq!(q.to_bits(), full.to_bits(), "{:x}", x.to_bits()),
+                None => open += 1,
+            }
+        }
+        assert!(
+            open > 0,
+            "no argument left the rounding open: the full series is not exercised"
+        );
     }
 
     fn check1(f: fn(f64) -> f64, (x, expected): (u64, u64)) {

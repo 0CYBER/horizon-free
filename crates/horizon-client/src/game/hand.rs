@@ -12,6 +12,13 @@ use horizon_client::{
 };
 use horizon_core::geometry::{Aabb, Vec3};
 
+/// The point a `ServerboundInteractPacket` carries: `EntityHitResult.getLocation()
+/// - entity.position()`, measured from the entity's feet, as
+/// `MultiPlayerGameMode.interact` computes it.
+pub(super) fn interact_location(point: Vec3, feet: Vec3) -> [f64; 3] {
+    [point.x - feet.x, point.y - feet.y, point.z - feet.z]
+}
+
 /// The off hand's place in `visible_hands` (the main hand uses its hotbar slot).
 const OFFHAND: usize = usize::MAX;
 
@@ -130,7 +137,7 @@ impl Game<'_> {
             self.pack
                 .item_renderer
                 .models
-                .components(&horizon_client::item_render::stack_view(stack))
+                .components_view(&horizon_client::item_render::stack_view(stack))
                 .get("minecraft:attack_range")
                 .cloned()
         });
@@ -259,7 +266,7 @@ impl Game<'_> {
             self.pack
                 .item_renderer
                 .models
-                .components(&horizon_client::item_render::stack_view(stack))
+                .components_view(&horizon_client::item_render::stack_view(stack))
                 .get("minecraft:attack_range")
                 .cloned()
         });
@@ -275,7 +282,7 @@ impl Game<'_> {
         self.pack
             .item_renderer
             .models
-            .components(&horizon_client::item_render::stack_view(active))
+            .components_view(&horizon_client::item_render::stack_view(active))
             .get("minecraft:attack_range")
             .cloned()
     }
@@ -313,7 +320,7 @@ impl Game<'_> {
                 (
                     i,
                     eye.distance_squared(at).sqrt(),
-                    super::interact_location(at, feet),
+                    interact_location(at, feet),
                 )
             })
             .reduce(|a, b| if b.1 < a.1 { b } else { a });
@@ -395,6 +402,7 @@ impl Game<'_> {
         self.mining = d.active.then_some(Mining {
             pos: d.pos,
             progress: d.progress,
+            per_tick: 0.0,
             ticks: d.ticks as u32,
         });
         if let Some(mining) = &self.mining {
@@ -421,18 +429,7 @@ impl Game<'_> {
         let harvest = !facts.requires_tool || self.items().correct_for_drops(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
         speed *= block_break_speed;
-        if let Some(eye) = self.eye_position()
-            && self
-                .res
-                .facts()
-                .get(self.world.block(
-                    eye[0].floor() as i32,
-                    eye[1].floor() as i32,
-                    eye[2].floor() as i32,
-                ))
-                .fluid
-                == horizon_client::blocks::Fluid::Water
-        {
+        if self.mining_eyes_in_water() {
             speed *= self.submerged_mining_speed();
         }
         if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
@@ -441,6 +438,31 @@ impl Game<'_> {
         // NeoForge's PlayerEvent.BreakSpeed, where Player.getDestroySpeed ends.
         self.native_break_speed(pos, state, speed, &mut speed);
         speed / hardness / if harvest { 30.0 } else { 100.0 }
+    }
+    /// `EntityFluidInteraction`: compare the eyes with the camera fluid surface.
+    fn mining_eyes_in_water(&self) -> bool {
+        use horizon_client::blocks::Fluid;
+        let Some(eye) = self.eye_position() else {
+            return false;
+        };
+        let [x, y, z] = eye.map(|v| v.floor() as i32);
+        let facts = self.res.facts();
+        let inside = |y| {
+            let fluid = facts.get(self.world.block(x, y, z));
+            if fluid.fluid != Fluid::Water {
+                return false;
+            }
+            let above = facts.get(self.world.block(x, y + 1, z));
+            let source = fluid.fluid_level == 8 && !fluid.fluid_falling;
+            let height = if above.fluid == fluid.fluid || (source && above.sturdy_full & 1 != 0) {
+                1.0
+            } else {
+                f64::from(f32::from(fluid.fluid_level) / 9.0)
+            };
+            eye[1] <= f64::from(y) + height
+        };
+        // The scan also includes a capped source below eyes exactly on a cell boundary.
+        inside(y) || (eye[1] == f64::from(y) && inside(y - 1))
     }
     /// A key for the main-hand stack (`destroyingItem`): its item and components.
     pub(super) fn main_hand_key(&self) -> String {
@@ -514,13 +536,19 @@ impl Game<'_> {
         }
         self.swing.tick();
         let main = self.inventory[self.selected].clone();
-        // Player.tick: a different item resets the attack strength, and
-        // detectEquipmentUpdates gives the player its modifiers.
-        if self.hand_strength.tick(main.as_ref().map(|s| HeldStack {
+        // Player.tick: a different item resets the attack strength; any change
+        // of the stack (`!ItemStack.matches`, e.g. another Efficiency level on
+        // the same tool) is what detectEquipmentUpdates gives the player its
+        // modifiers for.
+        let held = main.as_ref().map(|s| HeldStack {
             item: s.item.to_string(),
             rest: format!("{} {} {:?}", s.count, s.damage, s.extra),
-        })) {
+        });
+        let changed = self.hand_strength.main_hand_changed(&held);
+        if self.hand_strength.tick(held) {
             self.attack_ticks = 0;
+        }
+        if changed {
             self.apply_equipment();
         }
         self.attack_item = main.as_ref().map(|s| s.item.clone());
@@ -586,7 +614,7 @@ impl Game<'_> {
             self.pack
                 .item_renderer
                 .models
-                .components(&horizon_client::item_render::stack_view(stack))
+                .components_view(&horizon_client::item_render::stack_view(stack))
                 .get("minecraft:attack_range")
                 .cloned()
         });
@@ -712,18 +740,24 @@ impl Game<'_> {
     /// Haste and Mining Fatigue modifiers (`ADD_MULTIPLIED_TOTAL`), clamped to
     /// the attribute's range.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
-        // The base comes from the player's attribute map so `/attribute ... base set` applies.
+        if let Some(player) = &self.player
+            && let Ok(speed) = player
+                .attributes
+                .computed_value_of("minecraft:attack_speed")
+            && (self.remote.is_some()
+                || !self.applied_modifiers.is_empty()
+                || !self.potions.applied.is_empty())
+        {
+            return speed.clamp(0.0, 1024.0);
+        }
         let base = self
             .player
             .as_ref()
             .and_then(|player| {
-                let key = player.attributes.key("minecraft:attack_speed")?;
-                let handle = player.attributes.lookup(Some(&key))?;
                 player
                     .attributes
-                    .instance(&handle)
+                    .computed_value_of("minecraft:attack_speed")
                     .ok()
-                    .map(|value| value.base_value())
             })
             .unwrap_or(horizon_client::attack_strength::BASE_ATTACK_SPEED);
         let value = base

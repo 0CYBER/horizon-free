@@ -13,8 +13,9 @@
 //! - word 1: each corner's grey level before the tint;
 //! - word 2: the UV rectangle in 1/32 of the sprite (u0, u1, v0, v1, 6 bits each) and, per
 //!   corner, which edge of it its u and v take;
-//! - word 3: the layer, and corner 0's light (sky and block light over 4, 6 bits each);
-//! - word 4: corners 1 and 2's light;
+//! - word 3: the layer, corner 0's light (sky and block light over 4, 6 bits each), and
+//!   corner 1's alpha code (`ALPHA_STEP` times it; 0: word 0's alpha);
+//! - word 4: corners 1 and 2's light, and corners 2 and 3's alpha codes;
 //! - word 5: corner 3's light, the face (block x, y, z, the axis it faces along, which side
 //!   of the block, and where and which way its corners go round), and `FULL` clear.
 use super::TerrainVertex;
@@ -27,6 +28,8 @@ pub const WHITE: u32 = 0xFF_FFFF;
 /// Word 5's bit of a quad kept as four vertices; word 0 is then the slots from the record
 /// to its first vertex.
 pub const FULL: u32 = 1 << 31;
+/// The step of a corner's own alpha (words 3 and 4's codes): 255 / 5.
+pub const ALPHA_STEP: u32 = 51;
 /// The draws' base vertex of a compact mesh: `PACKED_BASE + 4 * slot + corner` is a corner of
 /// the quad whose record is at `slot`; below it, vertex indices name vertices.
 pub const PACKED_BASE: u32 = 1 << 28;
@@ -133,12 +136,24 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
     for (i, v) in quad.iter().enumerate() {
         grays |= gray_of(v.color, tint)? << (8 * i);
     }
+    // Corners 1 to 3's alpha (a shader pack's `separateAo`: each corner's ambient occlusion,
+    // multiples of 51 on a whole face): `ALPHA_STEP` times the code, 0 for corner 0's.
+    let mut codes = [0u32; 3];
+    for (code, v) in codes.iter_mut().zip(&quad[1..]) {
+        let a = v.color >> 24;
+        if v.color & 0xFF00_0000 != alpha {
+            if a == 0 || a % ALPHA_STEP != 0 {
+                return None;
+            }
+            *code = a / ALPHA_STEP;
+        }
+    }
     let words = [
         tint | alpha,
         grays,
         rect | select << 24,
-        u32::from(quad[0].layer) | light[0] << 16,
-        light[1] | light[2] << 12,
+        u32::from(quad[0].layer) | light[0] << 16 | codes[0] << 28,
+        light[1] | light[2] << 12 | codes[1] << 24 | codes[2] << 27,
         light[3] | orient << 12,
     ];
     let exact = (0..4).all(|c| {
@@ -190,36 +205,77 @@ pub fn packed_vertex(words: &[u32; 6], corner: usize) -> TerrainVertex {
     let light = ((light & 63) << 2 | (light >> 6 & 63) << 10) as u16;
     let g = w1 >> (8 * i) & 255;
     let [r, gr, b] = channels(w0).map(|t| g * t / 255);
+    let code = [0, w3 >> 28 & 7, w4 >> 24 & 7, w4 >> 27 & 7][corner];
+    let alpha = if code == 0 {
+        w0 & 0xFF00_0000
+    } else {
+        (code * ALPHA_STEP) << 24
+    };
     TerrainVertex {
         pos: pos.map(|c| c as f32),
         uv,
         layer: (w3 & 0xFFFF) as u16,
         light,
-        color: r | gr << 8 | b << 16 | (w0 & 0xFF00_0000),
+        color: r | gr << 8 | b << 16 | alpha,
     }
+}
+
+thread_local! {
+    static RECORDS_SCRATCH: std::cell::RefCell<Vec<Option<[u32; 6]>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The compact layout of sorted solid quads with their tints (`SectionMesh::packed`), or
 /// nothing when it would be no smaller than their vertices.
 pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
+    let mut out = Vec::new();
+    layout_into(solid, tints, &mut out);
+    out
+}
+
+/// Writes the compact layout of sorted solid quads with their tints into `out`,
+/// reusing `out`'s allocation and a thread-local record scratch buffer.
+pub fn layout_into(solid: &[TerrainVertex], tints: &[u32], out: &mut Vec<[u32; 6]>) {
     let quads = solid.as_chunks::<4>().0;
-    let records: Vec<Option<[u32; 6]>> = quads
-        .iter()
-        .zip(tints)
-        .map(|(q, &t)| pack_quad(q, t))
-        .collect();
+    RECORDS_SCRATCH.with(|cell| {
+        let mut records = cell.borrow_mut();
+        records.clear();
+        records.extend(quads.iter().zip(tints).map(|(q, &t)| pack_quad(q, t)));
+        place_into(&records, quads, out);
+    });
+}
+
+/// A mesh's solid range from a record per quad, `None` where no record fits:
+/// the records in mesh order, padded to a multiple of 4 slots, then the four
+/// vertices of each quad without one, whose record holds the distance to them
+/// (`FULL`). Empty where that would not be smaller than the vertices, which is
+/// what makes the layout never a loss.
+///
+/// Shared with `lod::packed`, whose records hold a far tile's quads instead but
+/// spill and pad the same way.
+pub fn place(records: &[Option<[u32; 6]>], quads: &[[TerrainVertex; 4]]) -> Vec<[u32; 6]> {
+    let mut out = Vec::new();
+    place_into(records, quads, &mut out);
+    out
+}
+
+pub fn place_into(
+    records: &[Option<[u32; 6]>],
+    quads: &[[TerrainVertex; 4]],
+    out: &mut Vec<[u32; 6]>,
+) {
+    out.clear();
     let n = quads.len();
     let packed = records.iter().filter(|r| r.is_some()).count();
     let full = n - packed;
-    let pad = if full > 0 {
-        n.next_multiple_of(4) - n
-    } else {
-        0
-    };
+    // Whole quads of slots: what follows (a quad's own vertices, the translucent ones after
+    // the solid range) then starts a quad, as a shader pack's vertex stage reads its quad's
+    // corners from the vertex index (`pack_atlas::PULL_FLAT`).
+    let pad = n.next_multiple_of(4) - n;
     if n + pad + 4 * full >= 4 * n {
-        return Vec::new();
+        return;
     }
-    let mut out = Vec::with_capacity(n + pad + 4 * full);
+    out.reserve(n + pad + 4 * full);
     let mut next = n + pad;
     for (i, record) in records.iter().enumerate() {
         out.push(record.unwrap_or_else(|| {
@@ -229,7 +285,7 @@ pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
         }));
     }
     out.resize(n + pad, [0; 6]);
-    for (q, record) in quads.iter().zip(&records) {
+    for (q, record) in quads.iter().zip(records) {
         if record.is_none() {
             out.extend(
                 q.iter()
@@ -237,7 +293,6 @@ pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
             );
         }
     }
-    out
 }
 
 /// Quads `layout` gave a record of their own.
@@ -300,6 +355,22 @@ mod tests {
     }
 
     #[test]
+    fn each_corners_ambient_occlusion_alpha_packs_on_its_steps() {
+        // A shader pack's `separateAo`: the alpha byte is each corner's occlusion.
+        let mut quad = top([0, 1, 2, 3]);
+        for (v, a) in quad.iter_mut().zip([153u32, 255, 51, 204]) {
+            v.color = v.color & 0x00FF_FFFF | a << 24;
+        }
+        let words = pack_quad(&quad, TINT).expect("occlusion on the 51 steps packs");
+        for (corner, v) in quad.iter().enumerate() {
+            assert!(same(&packed_vertex(&words, corner), v), "corner {corner}");
+        }
+        // A partial face's blended occlusion falls between the steps.
+        quad[2].color = quad[2].color & 0x00FF_FFFF | 140 << 24;
+        assert!(pack_quad(&quad, TINT).is_none());
+    }
+
+    #[test]
     fn quads_off_the_grid_or_the_steps_keep_their_vertices() {
         // Half a block up: a slab's top.
         let mut slab = top([0, 1, 2, 3]);
@@ -339,5 +410,14 @@ mod tests {
         }
         // Nothing smaller to gain: no layout at all.
         assert!(layout(&odd, &[TINT]).is_empty());
+    }
+
+    #[test]
+    fn the_records_end_on_a_whole_quad_of_slots() {
+        // Five whole faces, every one a record: the translucent vertices after them start a quad.
+        let solid: Vec<TerrainVertex> = (0..5).flat_map(|_| top([0, 1, 2, 3])).collect();
+        let out = layout(&solid, &[TINT; 5]);
+        assert_eq!(packed_quads(&out, 5), 5);
+        assert_eq!(out.len(), 8);
     }
 }

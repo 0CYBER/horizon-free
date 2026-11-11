@@ -341,14 +341,12 @@ impl Game<'_> {
             let rocket = &*ammo.item == FIREWORK_ROCKET;
             if rocket {
                 let at = Vec3::new(eye[0], eye[1] - f64::from(0.15f32), eye[2]);
-                let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
-                shot.shoot(
-                    &mut super::dispenser::entity_random(),
-                    dir.to_array(),
-                    power,
-                    1.0,
-                );
-                self.launch_angled_rocket(at, shot.velocity, ammo, Some(Who::Player));
+                // Its first tick posts the shot (Projectile.tick).
+                self.launch_angled_rocket(at, ammo, Some(Who::Player), |own| {
+                    let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
+                    shot.shoot(own, dir.to_array(), power, 1.0);
+                    shot.velocity
+                });
             }
             if !rocket {
                 let effect = super::dispenser::tipped_effect(ammo).or_else(|| {
@@ -373,7 +371,7 @@ impl Game<'_> {
                 }
                 // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).
                 self.ignite_spawned_arrow(&weapon, &mut arrow);
-                arrow.shoot(&mut self.world.random, dir.to_array(), power, 1.0);
+                arrow.shoot_own(dir.to_array(), power, 1.0);
                 self.add_projectile(arrow);
                 let (player, name, projectile) = (
                     horizon_client::lan::playerdata::ints_uuid(self.acting_player_uuid()),
@@ -382,7 +380,7 @@ impl Game<'_> {
                 );
                 self.native_entity_shoot_bow(player, &name, projectile, power as f32);
             }
-            self.player_projectile_shot();
+            // Ordinary arrows post from ArrowState on their first tick.
             let pitch = if index == 0 {
                 1.0
             } else {

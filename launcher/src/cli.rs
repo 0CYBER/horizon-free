@@ -126,33 +126,8 @@ enum AccountCmd {
         /// Its name or UUID
         who: String,
     },
-    /// Play as this account, or as one of your offline names
+    /// Play as this account
     Select { who: String },
-    /// Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game:
-    /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
-    /// made up
-    Offline { name: Option<String> },
-    /// Forget one of your offline names; its skin and cape go with it
-    ForgetOffline { name: String },
-    /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
-    /// PNG, the model. Kept by the launcher and given to the game when that name plays
-    Skin {
-        name: String,
-        /// The skin's PNG
-        file: Option<PathBuf>,
-        /// classic or slim arms
-        #[arg(long)]
-        model: Option<String>,
-        /// The cape's PNG
-        #[arg(long)]
-        cape: Option<PathBuf>,
-        /// Back to the default skin
-        #[arg(long)]
-        no_skin: bool,
-        /// Take the cape off
-        #[arg(long)]
-        no_cape: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -365,7 +340,8 @@ enum InstanceCmd {
     /// List the instances other launchers keep (Prism Launcher, MultiMC, the official
     /// launcher, the CurseForge app, the Modrinth App), read without changing anything there
     Others {
-        /// Look in this folder instead: a launcher's folder, its instances/ or one instance
+        /// Look in this folder instead: a launcher's folder, a folder of instances (its
+        /// instances/, the CurseForge app's Instances) or one instance
         #[arg(long)]
         folder: Option<PathBuf>,
     },
@@ -374,7 +350,8 @@ enum InstanceCmd {
     CopyFrom {
         /// Its name, as `instance others` lists it
         name: String,
-        /// Look in this folder instead: a launcher's folder, its instances/ or one instance
+        /// Look in this folder instead: a launcher's folder, a folder of instances (its
+        /// instances/, the CurseForge app's Instances) or one instance
         #[arg(long)]
         folder: Option<PathBuf>,
         /// The new instance's name (default: the same)
@@ -1171,7 +1148,7 @@ pub fn run() -> Option<i32> {
     let cli = Cli::from_arg_matches(&definition.get_matches()).unwrap_or_else(|e| e.exit());
     let command = cli.command?;
     let result = match command {
-        Cmd::Mcp | Cmd::AgentConfig { .. } if no_ai => Err(horizon_core::no_ai::REFUSAL.into()),
+        Cmd::Mcp | Cmd::AgentConfig { .. } if no_ai => Err(horizon_platform::no_ai::REFUSAL.into()),
         Cmd::Mcp => crate::mcp::serve(),
         command => {
             let result = execute(command, cli.json);
@@ -1392,21 +1369,39 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 Some(folder) => folder,
                 None => native_mods::installed_mods(&target.home)?,
             };
-            let built = native_mods::build(
-                &base,
-                &folder,
-                &target,
-                allow_version_mismatch,
-                ignore_pins,
-                profile,
-                steps,
-            )
-            .map_err(|e| match e.starts_with(native_mods::MISMATCH) {
-                true => {
-                    format!("{e} They often still build: pass --allow-version-mismatch to try.")
+            for line in horizon_launcher::browser::horizon::fit_versions(&target) {
+                println!("{line}");
+            }
+            let build = || {
+                native_mods::build(
+                    &base,
+                    &folder,
+                    &target,
+                    allow_version_mismatch,
+                    ignore_pins,
+                    profile,
+                    steps,
+                )
+                .map_err(|e| match e.starts_with(native_mods::MISMATCH) {
+                    true => {
+                        format!("{e} They often still build: pass --allow-version-mismatch to try.")
+                    }
+                    false => e,
+                })
+            };
+            let mut built = build()?;
+            // A mod the build left out though its version said it builds here: its next older
+            // version that says so, and one more build.
+            let left: Vec<String> = native_mods::about(&built)
+                .map(|about| about.left_out.into_iter().map(|l| l.id).collect())
+                .unwrap_or_default();
+            let older = horizon_launcher::browser::horizon::try_older(&target, &left);
+            if !older.is_empty() {
+                for line in &older {
+                    println!("{line}");
                 }
-                false => e,
-            })?;
+                built = build()?;
+            }
             println!(
                 "{built} built and selected for its instance ({:.0} s).",
                 started.elapsed().as_secs_f64()
@@ -1504,26 +1499,23 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 after_exit(&instance, &vars);
                 return played;
             }
-            // Who plays this launch; the accounts below choose it in memory only, for its
-            // `--name` and look.
-            let mut accounts = Accounts::load();
+            // Who plays this launch only.
             let who = match account {
-                Some(who) => Some(account::Player::Microsoft(
-                    accounts
+                Some(who) => Some(
+                    Accounts::load()
                         .find(&who)
                         .ok_or_else(|| {
                             format!("No signed-in account {who}. See `horizon-launcher account`.")
                         })?
                         .uuid
                         .clone(),
-                )),
+                ),
                 None => None,
             };
-            if let Some(who) = &who {
-                accounts.play_as(account::store(), who.clone())?;
-            }
-            let mut cmd =
-                backend::client_as(&instance.resolve_version(version.as_deref())?, who.as_ref())?;
+            let mut cmd = backend::client_as(
+                &instance.resolve_version(version.as_deref())?,
+                who.as_deref(),
+            )?;
             instances::apply(&mut cmd, &instance)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
@@ -1541,10 +1533,6 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             cmd.args(arg);
             let started = std::time::Instant::now();
-            if let Some(name) = accounts.name_arg() {
-                cmd.arg("--name").arg(name);
-            }
-            cmd.envs(accounts.look_env());
             let vars = instance.vars(cmd.get_program());
             cmd.envs(vars.iter().map(|(k, v)| (k, v)));
             let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
@@ -1921,14 +1909,10 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                         "authentication": account::session::status(account::store(), &a.uuid),
                     })).collect::<Vec<_>>(),
-                    "offline": accounts.offline.iter().map(|n| serde_json::json!({
-                        "name": n,
-                        "selected": accounts.player() == account::Player::Offline(n.clone()),
-                    })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
                     "owner": accounts.has_owner(account::store()),
                 }));
-            } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
+            } else if accounts.accounts.is_empty() {
                 println!(
                     "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
                      Edition: horizon-launcher account sign-in"
@@ -1941,19 +1925,19 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         " "
                     };
                     let status = account::session::status(account::store(), &a.uuid);
-                    println!("{mark} {}  {}  {}", a.name, a.uuid, status.label());
-                }
-                for n in &accounts.offline {
-                    let on = accounts.player() == account::Player::Offline(n.clone());
-                    println!("{} {n}  offline", if on { "*" } else { " " });
-                }
-                if accounts.player() == account::Player::GameName {
-                    println!(
-                        "Playing offline as the game's own name (`account select NAME` to switch)."
-                    );
+                    // Why it couldn't be checked (a keyring that didn't answer, #12179).
+                    let why = match status.state {
+                        account::session::State::Retry => format!(": {}", status.message),
+                        _ => String::new(),
+                    };
+                    println!("{mark} {}  {}  {}{why}", a.name, a.uuid, status.label());
                 }
                 if !accounts.has_owner(account::store()) {
-                    println!("{} {}", account::NoOwner, tr(backend::SIGN_IN_HINT));
+                    println!(
+                        "{} {}",
+                        account::NoOwner::default(),
+                        tr(backend::SIGN_IN_HINT)
+                    );
                 }
             }
         }
@@ -2031,94 +2015,10 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            let offline = accounts
-                .offline
-                .iter()
-                .find(|n| n.eq_ignore_ascii_case(&who))
-                .cloned();
-            let (player, name) = match (accounts.find(&who).cloned(), offline) {
-                (Some(a), _) => (account::Player::Microsoft(a.uuid), a.name),
-                (None, Some(n)) => (
-                    account::Player::Offline(n.clone()),
-                    format!("{n} (offline)"),
-                ),
-                (None, None) => return Err(find(&accounts, &who).unwrap_err()),
-            };
-            accounts.play_as(account::store(), player)?;
+            let a = find(&accounts, &who)?;
+            accounts.play_as(&a.uuid)?;
             accounts.save()?;
-            println!("The game plays as {name}.");
-        }
-        AccountCmd::Offline { name } => {
-            let player = match name {
-                Some(n) => account::Player::Offline(n),
-                None => account::Player::GameName,
-            };
-            accounts.play_as(account::store(), player)?;
-            accounts.save()?;
-            match accounts.name_arg() {
-                Some(n) => println!("The game plays offline as {n}."),
-                None => println!("The game plays offline, as the name it made up."),
-            }
-        }
-        AccountCmd::Skin {
-            name,
-            file,
-            model,
-            cape,
-            no_skin,
-            no_cape,
-        } => {
-            use horizon_launcher::skins::{self, Model};
-            let name = accounts
-                .offline
-                .iter()
-                .find(|n| n.eq_ignore_ascii_case(&name))
-                .cloned()
-                .ok_or_else(|| {
-                    format!("No offline name {name}: add it with `account offline {name}`.")
-                })?;
-            let model = match model.as_deref() {
-                None => None,
-                Some("classic") => Some(Model::Classic),
-                Some("slim") => Some(Model::Slim),
-                Some(m) => return Err(format!("{m}: say classic or slim")),
-            };
-            let mut look = accounts.look(&name);
-            if let Some(file) = &file {
-                skins::keep(&skins::dir(), &name, file, false)?;
-                look.skin = true;
-            }
-            if let Some(file) = &cape {
-                skins::keep(&skins::dir(), &name, file, true)?;
-                look.cape = true;
-            }
-            if let Some(m) = model {
-                look.model = m;
-            }
-            look.skin &= !no_skin;
-            look.cape &= !no_cape;
-            accounts
-                .looks
-                .insert(name.to_ascii_lowercase(), look.clone());
-            accounts.save()?;
-            if as_json {
-                json(serde_json::json!({
-                    "name": name, "skin": look.skin, "cape": look.cape, "model": look.model.name(),
-                }));
-            } else {
-                let say = |on: bool, what: &str| if on { what.to_string() } else { "none".into() };
-                println!(
-                    "{name}: skin {} ({} arms), cape {}",
-                    say(look.skin, "kept"),
-                    look.model.name(),
-                    say(look.cape, "kept")
-                );
-            }
-        }
-        AccountCmd::ForgetOffline { name } => {
-            accounts.remove_offline(&name, &horizon_launcher::skins::dir())?;
-            accounts.save()?;
-            println!("Forgot the offline name {name}.");
+            println!("The game plays as {}.", a.name);
         }
     }
     Ok(())
@@ -2488,7 +2388,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 }).collect());
             } else {
                 if datapack && !found.is_empty() {
-                    println!("{}\n", horizon_launcher::browser::DATAPACK_SUPPORT);
+                    println!("{}\n", horizon_launcher::browser::datapack_support());
                 }
                 for p in &found {
                     let support = p.support();
@@ -2680,7 +2580,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 };
                 let newer = match &java {
                     Some(target) => java_instance::update_for(&*source, target, e)?,
-                    None => installed::update_for(&*source, e)?,
+                    None => installed::update_for(&*source, e, &home)?,
                 };
                 match newer {
                     None => println!("{} {}: up to date.", e.title, e.number),
@@ -2813,6 +2713,32 @@ fn other_instances(folder: Option<&Path>) -> Result<Vec<other_launchers::Found>,
             other_launchers::scan(Os::current(), &folders)
         }
     })
+}
+
+/// Where `instance others` looked when it found nothing, and what it looks for.
+fn no_other_instances(folder: Option<&Path>) -> String {
+    use horizon_launcher::sources::{Folders, Os};
+    match folder {
+        Some(dir) => format!(
+            "No other launcher's instance found in {}. Name a launcher's own folder (the \
+             official launcher's .minecraft, Prism Launcher, MultiMC, ATLauncher, the Modrinth \
+             App, the CurseForge app's minecraft folder), a folder of instances (instances, or \
+             the CurseForge app's Instances), or one instance's folder.",
+            dir.display()
+        ),
+        None => {
+            let looked: String = Folders::current()
+                .map(|f| other_launchers::scanned_folders(Os::current(), &f))
+                .unwrap_or_default()
+                .iter()
+                .map(|d| format!("\n    {}", d.display()))
+                .collect();
+            format!(
+                "No other launcher's instance found. Looked in:{looked}\nKeep yours somewhere \
+                 else? Name that folder with --folder."
+            )
+        }
+    }
 }
 
 fn other_plays(f: &other_launchers::Found) -> String {
@@ -3168,7 +3094,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(found.iter().map(other_json).collect());
             } else if found.is_empty() {
-                println!("No other launcher's instance found.");
+                println!("{}", no_other_instances(folder.as_deref()));
             }
             for f in found.iter().filter(|_| !as_json) {
                 println!(
@@ -3659,7 +3585,12 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
                 p.summary(),
                 counts.join(", ")
             );
-            println!("  {} portable, {} carried over", p.portable, p.mods.len());
+            println!(
+                "  {} portable, {} carried over, {} data packs for new worlds",
+                p.portable,
+                p.mods.len(),
+                p.datapacks
+            );
             if let Some(jars) = p.jars() {
                 println!("  {jars}");
             }

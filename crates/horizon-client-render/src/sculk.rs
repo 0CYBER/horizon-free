@@ -155,13 +155,17 @@ pub struct Context {
     pub source: Option<Who>,
     /// The projectile's owner, when the source is a projectile.
     pub owner: Option<Who>,
+    /// The saved UUIDs of `source` and `owner` (`VibrationInfo`'s `uuid` and
+    /// `projectileOwnerUuid`), when the game knows them for that entity.
+    pub source_uuid: Option<[i32; 4]>,
+    pub owner_uuid: Option<[i32; 4]>,
     /// `affectedState` is in `dampens_vibrations`.
     pub dampening_state: bool,
     /// The source is a spectator.
     pub spectator: bool,
     /// `isSteppingCarefully` (sneaking).
     pub stepping_carefully: bool,
-    /// `dampensVibrations` (a warden).
+    /// `dampensVibrations` (a warden or a wool item).
     pub dampens: bool,
     /// The source is a living entity wardens may target.
     pub targetable: bool,
@@ -183,11 +187,10 @@ pub fn valid_vibration(listens: bool, event: &str, ctx: &Context) -> bool {
         if ctx.stepping_carefully && ignored_when_sneaking(event) {
             return false;
         }
-        if ctx.dampens {
-            return false;
-        }
     }
-    !ctx.dampening_state
+    // Nonliving sources have no Who handle, but ItemEntity still carries its
+    // stack's dampensVibrations flag (including after Entity.kill removes it).
+    !ctx.dampens && !ctx.dampening_state
 }
 
 impl Selector {
@@ -229,6 +232,8 @@ impl Selector {
 pub struct Tick {
     /// A vibration was chosen: its travel time (the particle starts).
     pub started: Option<(Info, i32)>,
+    /// A vibration was reloaded from save: particle resumes from interpolated pos.
+    pub resumed: Option<(Info, i32)>,
     /// A vibration arrived.
     pub received: Option<Info>,
     /// `onDataChanged`.
@@ -258,6 +263,10 @@ impl Data {
             self.selector.start_over();
         }
         if let Some(info) = self.current {
+            if self.reload_particle {
+                self.reload_particle = false;
+                out.resumed = Some((info, self.travel));
+            }
             let mut changed = self.travel > 0;
             self.travel = (self.travel - 1).max(0);
             if self.travel <= 0 {
@@ -290,8 +299,11 @@ impl Data {
         Tag::compound(entries)
     }
     pub fn from_nbt(tag: &Tag) -> Self {
+        let current = tag.get("event").and_then(info_from_nbt);
+        let reload_particle = current.is_some();
         let mut data = Self {
-            current: tag.get("event").and_then(info_from_nbt),
+            current,
+            reload_particle,
             ..Self::default()
         };
         if let Some(Tag::Int(t)) = tag.get("event_delay") {
@@ -309,14 +321,29 @@ impl Data {
     }
 }
 fn info_to_nbt(info: &Info) -> Tag {
-    Tag::compound(vec![
+    let mut fields = vec![
         ("game_event", Tag::String(info.event.into())),
         ("distance", Tag::Float(info.distance.to_bits())),
         (
             "pos",
             Tag::List(info.pos.iter().map(|v| Tag::Double(v.to_bits())).collect()),
         ),
-    ])
+    ];
+    // `VibrationInfo.CODEC`: each UUID an int array of four, absent for none.
+    if let Some(u) = info.source_uuid {
+        fields.push(("source", Tag::IntArray(u.to_vec())));
+    }
+    if let Some(u) = info.owner_uuid {
+        fields.push(("projectile_owner", Tag::IntArray(u.to_vec())));
+    }
+    Tag::compound(fields)
+}
+/// A UUID in its saved int array form; anything else is no UUID.
+fn uuid_field(tag: &Tag, key: &str) -> Option<[i32; 4]> {
+    match tag.get(key) {
+        Some(Tag::IntArray(v)) => <[i32; 4]>::try_from(v.as_slice()).ok(),
+        _ => None,
+    }
 }
 fn info_from_nbt(tag: &Tag) -> Option<Info> {
     let event = intern(&horizon_client_core::nbt_value::text(
@@ -342,8 +369,12 @@ fn info_from_nbt(tag: &Tag) -> Option<Info> {
         event,
         distance,
         pos,
+        // The live entities are found again by UUID only when needed; a
+        // loaded vibration names none of them.
         source: None,
         owner: None,
+        source_uuid: uuid_field(tag, "source"),
+        owner_uuid: uuid_field(tag, "projectile_owner"),
     })
 }
 
@@ -623,6 +654,8 @@ mod tests {
             pos: [0.0; 3],
             source: None,
             owner: None,
+            source_uuid: None,
+            owner_uuid: None,
         }
     }
 
@@ -748,6 +781,106 @@ mod tests {
         assert_eq!(back.selector.current.map(|(_, t)| t), Some(41));
     }
 
+    fn identified(event: &'static str, distance: f32) -> Info {
+        Info {
+            source: Some(Who::Mob(7)),
+            owner: Some(Who::Mob(8)),
+            source_uuid: Some([100, 0, 0, 1]),
+            owner_uuid: Some([100, 0, 0, 2]),
+            ..info(event, distance)
+        }
+    }
+
+    #[test]
+    fn vibration_uuids_save_as_source_and_projectile_owner() {
+        let tag = info_to_nbt(&identified("minecraft:step", 3.0));
+        assert_eq!(tag.get("source"), Some(&Tag::IntArray(vec![100, 0, 0, 1])));
+        assert_eq!(
+            tag.get("projectile_owner"),
+            Some(&Tag::IntArray(vec![100, 0, 0, 2]))
+        );
+        // Read back, the identities stay; the live entities do not.
+        let back = info_from_nbt(&tag).unwrap();
+        assert_eq!(back.source_uuid, Some([100, 0, 0, 1]));
+        assert_eq!(back.owner_uuid, Some([100, 0, 0, 2]));
+        assert_eq!((back.source, back.owner), (None, None));
+        // A live entity with no saved identity writes nothing for it.
+        let unnamed = Info {
+            source: Some(Who::Mob(7)),
+            ..info("minecraft:step", 3.0)
+        };
+        let tag = info_to_nbt(&unnamed);
+        assert!(tag.get("source").is_none() && tag.get("projectile_owner").is_none());
+    }
+
+    #[test]
+    fn a_loaded_vibration_keeps_only_well_formed_uuids() {
+        let base = |extra: Vec<(&'static str, Tag)>| {
+            let mut fields = vec![
+                ("game_event", Tag::String("minecraft:step".into())),
+                ("distance", Tag::Float(3.0f32.to_bits())),
+                ("pos", Tag::List(vec![Tag::Double(0f64.to_bits()); 3])),
+            ];
+            fields.extend(extra);
+            info_from_nbt(&Tag::compound(fields)).unwrap()
+        };
+        let absent = base(vec![]);
+        assert_eq!((absent.source_uuid, absent.owner_uuid), (None, None));
+        let malformed = base(vec![
+            ("source", Tag::IntArray(vec![1, 2, 3])),
+            (
+                "projectile_owner",
+                Tag::String("00000064-0000-0000-0000-000000000002".into()),
+            ),
+        ]);
+        assert_eq!((malformed.source_uuid, malformed.owner_uuid), (None, None));
+        // Only the codec's fields are kept: an unknown key is not saved again.
+        let extra = base(vec![("horizon:raw", Tag::Int(1))]);
+        assert!(info_to_nbt(&extra).get("horizon:raw").is_none());
+    }
+
+    #[test]
+    fn a_reloaded_listener_drops_stale_uuids() {
+        let mut d = Data::default();
+        d.schedule(identified("minecraft:step", 2.0), 40);
+        d.tick(41, true, true, |_| 5);
+        assert_eq!(d.current.and_then(|i| i.source_uuid), Some([100, 0, 0, 1]));
+        // A listener saved with no identity replaces the old one, not merges.
+        d = Data::from_nbt(
+            &Data {
+                current: Some(info("minecraft:step", 2.0)),
+                ..Data::default()
+            }
+            .to_nbt(),
+        );
+        assert_eq!(
+            d.current.map(|i| (i.source_uuid, i.owner_uuid)),
+            Some((None, None))
+        );
+    }
+
+    #[test]
+    fn the_chosen_candidate_carries_its_uuids_into_the_travelling_vibration() {
+        let mut d = Data::default();
+        d.schedule(identified("minecraft:step", 2.0), 40);
+        let saved = Data::from_nbt(&d.to_nbt());
+        assert_eq!(
+            saved.selector.current.map(|(i, _)| i.source_uuid),
+            Some(Some([100, 0, 0, 1]))
+        );
+        // The candidate read back is the one that starts travelling.
+        let mut d = saved;
+        let t = d.tick(41, true, true, |_| 5);
+        let travelling = t.started.map(|(i, _)| i).unwrap();
+        assert_eq!(travelling.source_uuid, Some([100, 0, 0, 1]));
+        assert_eq!(travelling.owner_uuid, Some([100, 0, 0, 2]));
+        let saved = Data::from_nbt(&d.to_nbt()).current.unwrap();
+        assert_eq!(
+            (saved.source_uuid, saved.owner_uuid),
+            (Some([100, 0, 0, 1]), Some([100, 0, 0, 2]))
+        );
+    }
+
     #[test]
     fn wool_on_the_line_occludes() {
         let origin = [0.5, 0.5, 0.5];
@@ -854,5 +987,31 @@ mod tests {
         assert_eq!(back.spreader, e.spreader);
         assert_eq!(back.spreader.cursors[0].charge, 1000);
         assert_eq!(back.spreader.cursors[1].charge, 500);
+    }
+
+    #[test]
+    fn vibration_reloads_particle() {
+        let tag = Tag::compound([
+            (
+                "event",
+                Tag::compound([
+                    ("game_event", Tag::String("minecraft:step".into())),
+                    ("distance", Tag::Float(4.0f32.to_bits())),
+                    (
+                        "pos",
+                        Tag::List(vec![
+                            Tag::Double(1.0f64.to_bits()),
+                            Tag::Double(0),
+                            Tag::Double(0),
+                        ]),
+                    ),
+                ]),
+            ),
+            ("event_delay", Tag::Int(3)),
+        ]);
+        let mut d = Data::from_nbt(&tag);
+        assert!(d.reload_particle && d.current.is_some());
+        let tick = d.tick(10, true, true, |dist| dist as i32);
+        assert!(tick.resumed.is_some() && !d.reload_particle);
     }
 }

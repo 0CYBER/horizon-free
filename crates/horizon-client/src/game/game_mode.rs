@@ -28,7 +28,79 @@ pub(super) fn mode_from_id(id: i32) -> GameMode {
 pub(super) fn loads_chunks(spectators_generate_chunks: bool, spectator: bool) -> bool {
     !spectator || spectators_generate_chunks
 }
+
+/// Fail closed at the new projectile caller when the existing matcher cannot
+/// evaluate an entire conjunct. This does not change held-item interpretation.
+pub(super) fn projectile_predicate_supported(tag: &horizon_world::nbt::Tag) -> bool {
+    use horizon_world::nbt::Tag;
+    let supported = |p: &Tag| {
+        matches!(p, Tag::Compound(_))
+            && ["nbt", "components", "predicates"]
+                .iter()
+                .all(|key| p.get(key).is_none())
+            && match p.get("blocks") {
+                None | Some(Tag::String(_)) => true,
+                Some(Tag::List(ids)) => ids.iter().all(|id| matches!(id, Tag::String(_))),
+                _ => false,
+            }
+            && match p.get("state") {
+                None => true,
+                Some(Tag::Compound(properties)) => properties.values().all(|value| match value {
+                    Tag::String(_) => true,
+                    Tag::Compound(_) => ["min", "max"].iter().all(|key| {
+                        value
+                            .get(key)
+                            .is_none_or(|bound| matches!(bound, Tag::String(_)))
+                    }),
+                    _ => false,
+                }),
+                _ => false,
+            }
+    };
+    match tag {
+        Tag::Compound(_) => supported(tag),
+        Tag::List(predicates) => !predicates.is_empty() && predicates.iter().all(supported),
+        _ => false,
+    }
+}
+/// `InventoryScreen.containerTick`: a survival inventory left open when the
+/// player gains infinite materials becomes the creative one, so the player
+/// stays in a menu. A spectator's inventory is closed (`Playing`), which is
+/// what Horizon did for every mode before; vanilla has no spectator branch
+/// and leaves it open.
+fn inventory_after_mode(screen: Screen, creative: bool, spectator: bool) -> Screen {
+    if screen != Screen::Inventory {
+        return screen;
+    }
+    if creative {
+        Screen::Creative
+    } else if spectator {
+        Screen::Playing
+    } else {
+        screen
+    }
+}
+
 impl Game<'_> {
+    /// `InventoryScreen.containerTick` on a mode change: the inventory the player has
+    /// open follows the mode. (`CreativeModeInventoryScreen.containerTick`, the way back
+    /// to survival, is not ported yet.)
+    fn mode_changed_under_inventory(&mut self) {
+        match inventory_after_mode(self.screen, self.creative, self.spectator()) {
+            Screen::Creative => {
+                if let Some(c) = self.carried.take() {
+                    let _ = self.give(c);
+                }
+                self.screen = Screen::Creative;
+                self.refresh_creative_tabs();
+                self.creative_screen.reopen();
+                self.refresh_saved_hotbars();
+            }
+            next if next != self.screen => self.screen = next,
+            _ => {}
+        }
+    }
+
     pub(super) fn spectator(&self) -> bool {
         self.mode == GameMode::Spectator
     }
@@ -99,19 +171,21 @@ impl Game<'_> {
                 p.flying = false;
             }
         }
-        if mode == GameMode::Spectator && self.screen == Screen::Inventory {
-            self.screen = Screen::Playing;
-        }
+        // InventoryScreen.containerTick: the open inventory follows the mode. Here, not in
+        // the command, so the window hears it too: it changes mode through the server's
+        // game event (`set_mode_id`), never through `set_game_mode`.
+        self.mode_changed_under_inventory();
     }
 }
 impl Game<'_> {
     /// `ItemStack.canBreakBlockInAdventureMode` / `canPlaceOnBlockInAdventureMode`
     /// for the main-hand stack: some predicate of its `can_break` or
     /// `can_place_on` component (`AdventureModePredicate`: one block predicate
-    /// or a list) matches the block at `pos`. Predicates with `nbt` or
-    /// `components` need the block entity's data and never match.
+    /// or a list) matches the block at `pos`, as `BlockPredicate.matches(BlockInWorld)`
+    /// tests it: the state, then `nbt` against the block entity's
+    /// `saveWithFullMetadata` (no block entity fails). `components` is not
+    /// looked at on this path.
     fn adventure_predicate(&self, component: &str, pos: [i32; 3]) -> bool {
-        use horizon_world::nbt::Tag;
         let Some(tag) = self
             .held()
             .and_then(|s| s.data())
@@ -119,6 +193,16 @@ impl Game<'_> {
         else {
             return false;
         };
+        self.adventure_predicate_at(tag, pos)
+    }
+    /// The existing supported block/state portion of `AdventureModePredicate.test`.
+    /// The held-item wrapper and the projectile caller supply their own live value.
+    pub(super) fn adventure_predicate_at(
+        &self,
+        tag: &horizon_world::nbt::Tag,
+        pos: [i32; 3],
+    ) -> bool {
+        use horizon_world::nbt::Tag;
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let name = &self.res.facts().get(state).name;
         let properties = self
@@ -128,9 +212,6 @@ impl Game<'_> {
             .state(state)
             .map(|s| &s.properties);
         let matches = |p: &Tag| {
-            if p.get("nbt").is_some() || p.get("components").is_some() {
-                return false;
-            }
             let block_ok = match p.get("blocks") {
                 None => true,
                 Some(Tag::String(id)) => self.block_in_holder_set(&id.to_string_lossy(), name),
@@ -169,7 +250,24 @@ impl Game<'_> {
                 }),
                 Some(_) => false,
             };
-            block_ok && state_ok
+            // NbtPredicate (TagParser.LENIENT_CODEC: SNBT or a compound),
+            // NbtUtils.compareNbt(pattern, data, true).
+            let nbt_ok = || match p.get("nbt") {
+                None => true,
+                Some(Tag::String(snbt)) => horizon_world::nbt::parse_snbt(&snbt.to_string_lossy())
+                    .is_ok_and(|(pattern, _)| {
+                        horizon_client::nbt_path::compare_nbt(
+                            &pattern,
+                            self.block_entity_nbt(pos).as_ref(),
+                        )
+                    }),
+                Some(pattern @ Tag::Compound(_)) => horizon_client::nbt_path::compare_nbt(
+                    pattern,
+                    self.block_entity_nbt(pos).as_ref(),
+                ),
+                Some(_) => false,
+            };
+            block_ok && state_ok && nbt_ok()
         };
         match tag {
             Tag::List(list) => list.iter().any(matches),
@@ -221,7 +319,55 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::loads_chunks;
+    use super::{Screen, inventory_after_mode, loads_chunks, projectile_predicate_supported};
+
+    // Added after the frozen old Game proof: unsupported conjuncts must not
+    // become permission from their otherwise matching blocks portion.
+    #[test]
+    fn projectile_predicates_require_a_complete_supported_match() {
+        for extra in [
+            "nbt:{marker:1}",
+            "components:{}",
+            "predicates:{}",
+            "state:{age:{min:1}}",
+        ] {
+            let text = format!("{{blocks:\"minecraft:chorus_flower\",{extra}}}");
+            let (tag, _) = horizon_world::nbt::parse_snbt(&text).unwrap();
+            assert!(!projectile_predicate_supported(&tag), "{text}");
+        }
+        for text in ["7", "[]", "{blocks:[7]}"] {
+            let (tag, _) = horizon_world::nbt::parse_snbt(text).unwrap();
+            assert!(!projectile_predicate_supported(&tag), "{text}");
+        }
+        let (tag, _) = horizon_world::nbt::parse_snbt(
+            "{blocks:\"minecraft:chorus_flower\",state:{age:{min:\"0\",max:\"5\"}}}",
+        )
+        .unwrap();
+        assert!(projectile_predicate_supported(&tag));
+    }
+
+    /// `InventoryScreen.containerTick`: the survival inventory becomes the
+    /// creative one when the player gets infinite materials, and any other
+    /// screen is left where it is.
+    #[test]
+    fn a_survival_inventory_becomes_the_creative_one() {
+        assert!(inventory_after_mode(Screen::Inventory, true, false) == Screen::Creative);
+        let stays = inventory_after_mode(Screen::Inventory, false, false);
+        assert!(stays == Screen::Inventory, "survival keeps its inventory");
+        // A spectator's inventory is closed, which is what Horizon did for
+        // both before; vanilla has no spectator branch and leaves it open.
+        let closed = inventory_after_mode(Screen::Inventory, false, true);
+        assert!(closed == Screen::Playing);
+        for screen in [
+            Screen::Playing,
+            Screen::Creative,
+            Screen::Paused,
+            Screen::Stats,
+            Screen::Advancements,
+        ] {
+            assert!(inventory_after_mode(screen, true, false) == screen);
+        }
+    }
 
     /// `ChunkMap.skipPlayer`: only a spectator with `spectators_generate_chunks`
     /// off stops loading chunks around itself.

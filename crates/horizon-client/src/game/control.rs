@@ -441,6 +441,15 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
             }
+            "section-layout" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                let compact = match words.get(1).copied() {
+                    Some("compact") => r.set_packed_layout(true),
+                    Some("wide") => r.set_packed_layout(false),
+                    _ => return Err("section-layout compact|wide".into()),
+                };
+                Ok(Some(json!({ "ok": true, "compact": compact })))
+            }
             "section-cull" => {
                 let r = self.renderer.as_mut().ok_or("no renderer")?;
                 match words.get(1).copied() {
@@ -542,16 +551,30 @@ impl Game<'_> {
                 let r = self.renderer.as_mut().ok_or("no renderer")?;
                 match words.get(1).copied() {
                     None => {}
-                    Some(mode @ ("on" | "off")) => {
+                    Some(mode @ ("on" | "off" | "auto")) => {
                         // Refused, with the reason, where it isn't offered.
+                        if let Some(why) = r.gpu_culling_offer().reason() {
+                            return Err(why.into());
+                        }
+                        // Auto starts from off and decides from the frames that follow.
+                        self.gpu_culling_auto.reset();
                         r.set_gpu_culling(mode == "on")?;
                         // The setting, as its switch sets it; not saved here (as
                         // `lod-distance`): settings changes and new renderers keep it.
-                        self.settings.horizon.gpu_culling = mode == "on";
+                        self.settings.horizon.gpu_culling = match mode {
+                            "on" => horizon_client::graphics::GpuCullingMode::On,
+                            "auto" => horizon_client::graphics::GpuCullingMode::Auto,
+                            _ => horizon_client::graphics::GpuCullingMode::Off,
+                        };
                     }
                     Some(other) => return Err(format!("unknown GPU culling mode {other}").into()),
                 }
-                Ok(Some(json!({ "ok": true, "gpu_culling": r.gpu_culling() })))
+                Ok(Some(json!({
+                    "ok": true,
+                    "gpu_culling": r.gpu_culling(),
+                    "mode": self.settings.horizon.gpu_culling.name(),
+                    "auto": self.gpu_culling_auto.state(),
+                })))
             }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "hello" => Ok(Some(hello())),
@@ -567,6 +590,27 @@ impl Game<'_> {
             }
             "simulation" => {
                 self.require_world()?;
+                // `simulation blocks X1 Y1 Z1 X2 Y2 Z2`: the server's own blocks in a box. `blocks` reads this
+                // window's copy, which the server's changes reach in the next tick's broadcast.
+                if words.get(1) == Some(&"blocks") {
+                    let mut c = [0i32; 6];
+                    for (i, v) in c.iter_mut().enumerate() {
+                        *v = arg(i + 2)?.parse()?;
+                    }
+                    let lo = [0, 1, 2].map(|i| c[i].min(c[i + 3]));
+                    let hi = [0, 1, 2].map(|i| c[i].max(c[i + 3]));
+                    let volume: i64 = (0..3).map(|i| i64::from(hi[i] - lo[i] + 1)).product();
+                    if volume > 32768 {
+                        return Err(format!("{volume} blocks; at most 32768 per request").into());
+                    }
+                    return Ok(Some(if let Some(server) = &self.integrated {
+                        server
+                            .call(move |g| g.in_owner_level(move |g| g.blocks_json(lo, hi)))
+                            .ok_or(super::integrated::NO_ANSWER)?
+                    } else {
+                        self.blocks_json(lo, hi)
+                    }));
+                }
                 let value = if let Some(server) = &self.integrated {
                     server
                         .call(|g| {
@@ -598,6 +642,26 @@ impl Game<'_> {
                 }
                 ok()
             }
+            // The real event, so focus loss reaches all that a window's does (the radial menu
+            // cancels, held keys go).
+            "pad" if words.get(1) == Some(&"focus") => {
+                let focused = match arg(2)? {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("pad focus true|false".into()),
+                };
+                let id = self
+                    .window
+                    .as_ref()
+                    .map_or_else(winit::window::WindowId::dummy, |w| w.id());
+                self.handle_window_event(
+                    event_loop,
+                    id,
+                    winit::event::WindowEvent::Focused(focused),
+                    super::input_trace::InputOrigin::Agent,
+                );
+                ok()
+            }
             "pad" => Ok(Some(self.pad_command(&words)?)),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
@@ -609,7 +673,9 @@ impl Game<'_> {
                     .into());
                 }
                 if arg(2)? != "up" {
-                    self.pad.keyboard_took_over = true;
+                    self.input_keyboard_used();
+                    // As a window's key press: the radial menu closes, and the key goes on.
+                    self.pad_radial_cancel();
                 }
                 // The command confirmation takes the keys; none go past it.
                 if self.command_prompt.is_some() {
@@ -765,7 +831,7 @@ impl Game<'_> {
                 // controller still holding one keeps it.
                 let options = [self.settings.toggle_crouch, self.settings.toggle_sprint];
                 for (slot, name) in [(0, "key.sneak"), (1, "key.sprint")] {
-                    if !self.pad.holds_action(&self.settings.controller, name) {
+                    if !self.input_holds(name) {
                         self.toggles.key(
                             slot,
                             horizon_client::keymapping::KeyAction::Release,
@@ -793,6 +859,10 @@ impl Game<'_> {
                         self.screen_name()
                     )
                     .into());
+                }
+                // As a window's click: the radial menu closes, and the click goes on.
+                if arg(2)? != "up" {
+                    self.pad_radial_cancel();
                 }
                 match arg(2)? {
                     "down" => {
@@ -1004,6 +1074,7 @@ impl Game<'_> {
                     path: path.trim().into(),
                     size: None,
                     scaled: false,
+                    background: false,
                 });
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
@@ -1067,6 +1138,7 @@ impl Game<'_> {
                     "keybinds" => Page::KeyBinds,
                     "controller" => Page::Controller,
                     "controller-binds" => Page::PadBinds,
+                    "controller-radial" => Page::ControllerRadial,
                     "mouse" => Page::Mouse,
                     "chat" => Page::Chat,
                     "accessibility" => Page::Accessibility,
@@ -1127,6 +1199,10 @@ impl Game<'_> {
             }
             "bench" => {
                 let seconds: f64 = arg(1)?.parse()?;
+                // `Duration::from_secs_f64` panics on a negative, NaN or huge number.
+                if !(seconds.is_finite() && (0.0..=86_400.0).contains(&seconds)) {
+                    return Err("bench takes 0 to 86400 seconds".into());
+                }
                 if self.pending_bench.is_some() {
                     return Err("a benchmark is already running".into());
                 }
@@ -1342,6 +1418,7 @@ impl Game<'_> {
             Screen::DebugOptions => "debug-options",
             Screen::Mod => "mod",
             Screen::HudEditor => "hud-editor",
+            Screen::Studio => "studio",
         }
     }
 
@@ -1436,6 +1513,8 @@ impl Game<'_> {
                 "section_draw_calls": r.section_draw_calls,
                 "culled_sections": r.culled_sections(),
                 "gpu_culling": r.gpu_culling(),
+                "gpu_culling_mode": self.settings.horizon.gpu_culling.name(),
+                "gpu_culling_auto": self.gpu_culling_auto.state(),
                 "gpu_frame": r.gpu_frame(),
                 "gpu_fading": r.gpu_fading(),
                 "gpu_culling_offer": format!("{:?}", r.gpu_culling_offer()),
@@ -1445,6 +1524,8 @@ impl Game<'_> {
                 "resident_sections": r.resident_sections(),
                 "arena_bytes": arena_bytes,
                 "section_vertex_bytes": section_vertex_bytes,
+                "packed_layout": r.packed_layout(),
+                "vertex_bytes_split": r.vertex_bytes_split(),
                 "gpu_allocated_bytes": memory.as_ref().map(|m| m.total_allocated_bytes),
                 "gpu_reserved_bytes": memory.as_ref().map(|m| m.total_reserved_bytes),
             })
@@ -1523,11 +1604,11 @@ impl Game<'_> {
             "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),
             "dirty_light": self.world.dirty_light.len(),
             "renderer": renderer,
-            "display": self.window.as_deref().and_then(horizon_client::telemetry::monitor).map(|m| json!({
-                "width": m.size().width,
-                "height": m.size().height,
-                "scale": m.scale_factor(),
-                "refresh_hz": m.refresh_rate_millihertz().map(|r| r.div_ceil(1000)),
+            "display": self.window.as_deref().and_then(horizon_client::window::display).map(|d| json!({
+                "width": d.width,
+                "height": d.height,
+                "scale": d.scale,
+                "refresh_hz": d.refresh_hz,
             })),
             "uptime_seconds": self.started.elapsed().as_secs_f64(),
             "server": self.remote_status(),
@@ -1540,6 +1621,9 @@ impl Game<'_> {
         let (target, sampled) = self.lod.as_ref().map_or((0, 0), |lod| lod.progress());
         status["lod"]["target_tiles"] = target.into();
         status["lod"]["sampled_target_tiles"] = sampled.into();
+        let (kept, kept_bytes) = self.lod.as_ref().map_or((0, 0), |lod| lod.kept());
+        status["lod"]["kept_tiles"] = kept.into();
+        status["lod"]["kept_mb"] = (kept_bytes >> 20).into();
         let (wanted, refined) = self
             .lod
             .as_ref()

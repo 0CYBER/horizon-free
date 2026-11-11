@@ -2,6 +2,35 @@
 //! across screens, the hotbar's wheel and bumper steps, and mouse buttons while playing.
 use super::*;
 
+fn studio_replay_shortcut(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::Escape
+            | KeyCode::KeyP
+            | KeyCode::KeyF
+            | KeyCode::KeyT
+            | KeyCode::KeyM
+            | KeyCode::Home
+            | KeyCode::KeyL
+            | KeyCode::KeyK
+            | KeyCode::Delete
+    )
+}
+
+fn studio_freecam_movement_key(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::KeyW
+            | KeyCode::KeyA
+            | KeyCode::KeyS
+            | KeyCode::KeyD
+            | KeyCode::KeyE
+            | KeyCode::KeyQ
+            | KeyCode::Space
+            | KeyCode::ControlRight
+    )
+}
+
 impl Game<'_> {
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
     /// `KeyMapping.resetToggleKeys`: every toggle mapping up, and the latched sneak and sprint
@@ -28,6 +57,22 @@ impl Game<'_> {
         } else {
             self.keys.remove(&key);
         }
+    }
+    pub(super) fn update_modifiers(&mut self, state: winit::keyboard::ModifiersState) {
+        self.modifiers = state;
+        horizon_client_input::modifiers::reconcile(
+            self.modifiers,
+            &mut self.physical_keys,
+            &self.settings.keys,
+            &mut self.toggles,
+            [self.settings.toggle_crouch, self.settings.toggle_sprint],
+            [
+                self.pad.holds_action("key.sneak"),
+                self.pad.holds_action("key.sprint"),
+            ],
+        );
+        self.sync_toggle(SNEAK);
+        self.sync_toggle(SPRINT);
     }
     /// Let a held sneak, sprint or modifier key go when the keyboard reports
     /// its modifier up. A release does not always reach the mapping: a screen
@@ -61,6 +106,16 @@ impl Game<'_> {
                 self.physical_keys.remove(&key);
             }
         }
+        if !self.modifiers.alt_key() {
+            for key in [KeyCode::AltLeft, KeyCode::AltRight] {
+                self.physical_keys.remove(&key);
+            }
+        }
+        if !self.modifiers.super_key() {
+            for key in [KeyCode::SuperLeft, KeyCode::SuperRight] {
+                self.physical_keys.remove(&key);
+            }
+        }
         for (slot, mapping, needs_toggle) in [
             (0, "key.sneak", self.settings.toggle_crouch),
             (1, "key.sprint", self.settings.toggle_sprint),
@@ -72,7 +127,7 @@ impl Game<'_> {
             };
             // A controller's stick click acts as the key without setting the modifier: it is held
             // while the pad holds it (or its release waits for a tick), not when the keyboard says.
-            let pad = self.pad.holds_action(&self.settings.controller, mapping);
+            let pad = self.input_holds(mapping);
             if !held && !pad {
                 self.toggles.0[slot].set_down(false, needs_toggle);
                 self.sync_toggle(slot);
@@ -85,9 +140,7 @@ impl Game<'_> {
             // A pad's toggle-sneak isn't holding it: it has no release that would end it.
             Source::Keyboard => {
                 !(slot == SNEAK && self.settings.controller.toggle_sneak)
-                    && self
-                        .pad
-                        .holds_action(&self.settings.controller, ["key.sneak", "key.sprint"][slot])
+                    && self.pad.holds_action(["key.sneak", "key.sprint"][slot])
             }
             Source::Pad => self.physical_keys.iter().any(|physical| {
                 self.settings
@@ -151,6 +204,21 @@ impl Game<'_> {
         raw: KeyCode,
         source: Source,
     ) -> Result<()> {
+        if self.screen == Screen::Playing && self.replay.playing() {
+            if !pressed {
+                self.keys.release(&key, source);
+                return Ok(());
+            }
+            if studio_replay_shortcut(key) {
+                if !repeat {
+                    self.key_pressed(key, raw)?;
+                }
+                return Ok(());
+            }
+            if !studio_freecam_movement_key(key) || !self.studio.flying() {
+                return Ok(());
+            }
+        }
         // Sneak and sprint are ToggleKeyMappings: a press (or a key
         // repeat) flips them when toggling; only releases reach them
         // behind a screen (KeyboardHandler.keyPress).
@@ -308,9 +376,7 @@ impl Game<'_> {
             _ => return false,
         };
         match source {
-            Source::Keyboard | Source::Agent => {
-                self.pad.holds_action(&self.settings.controller, mapping)
-            }
+            Source::Keyboard | Source::Agent => self.input_holds(mapping),
             Source::Pad => {
                 let keys = &self.settings.keys;
                 self.physical_buttons
@@ -403,5 +469,113 @@ impl Game<'_> {
             _ => {}
         }
         Ok(())
+    }
+}
+
+/// The input source (docs/layers.md, "Controllers, splitscreen, replays and UI pages"): what
+/// gameplay asks of a device beyond the keyboard and mouse, and tells it. Gameplay calls these,
+/// never the controller modules; today `pad` answers.
+impl Game<'_> {
+    /// The analog move vector (`[left, forward]`, -1..1) while a device moves the player.
+    pub(super) fn input_move(&self) -> Option<[f32; 2]> {
+        self.pad_move()
+    }
+
+    /// Whether a device holds the key mapping named `mapping` (`key.use`).
+    pub(super) fn input_holds(&self, mapping: &str) -> bool {
+        self.pad.holds_action(mapping)
+    }
+
+    /// Turns the view by what the devices give this frame (`Entity.turn`).
+    pub(super) fn input_look(&mut self, seconds: f32) {
+        self.pad_look(seconds);
+    }
+
+    /// The keyboard or mouse acted in play (a key or button pressed): it has control again, though
+    /// only moving the mouse takes a pad out of use.
+    pub(super) fn input_keyboard_used(&mut self) {
+        self.pad.keyboard_took_over = true;
+    }
+
+    /// Whether the pointer event being handled is one a device made (a pad's menu cursor
+    /// clicking), not the mouse's.
+    pub(super) fn input_made_pointer_event(&self) -> bool {
+        self.pad.menu.synthetic
+    }
+
+    /// A new player entity took over (spawn, respawn, a server joined, a dimension change).
+    pub(super) fn input_player_replaced(&mut self) {
+        self.pad_player_replaced();
+    }
+
+    /// Whether the drop about to happen is a device's whole-stack drop (it has no Control key to
+    /// hold). Asking answers once.
+    pub(super) fn input_takes_stack_drop(&mut self) -> bool {
+        std::mem::take(&mut self.pad.drop_stack)
+    }
+
+    /// The HUD starts a frame: what a device drew on the last one is gone.
+    pub(super) fn input_hud_begin(&mut self) {
+        self.pad.guide_shown.clear();
+    }
+
+    /// Something happened to the player that a device may let them feel.
+    pub(super) fn input_feedback(&mut self, event: horizon_client::input_source::Feedback) {
+        self.pad_rumble(event.into());
+    }
+
+    /// Whether `key` is held, a movement key by the analog move vector too: as the keys it holds
+    /// (`eight_direction_keys`), whatever moves the player. For readers of the keys that aren't
+    /// the movement itself.
+    pub(super) fn movement_key_held(&self, key: KeyCode) -> bool {
+        if self.keys.raw(&key) {
+            return true;
+        }
+        let Some(stick) = self.input_move() else {
+            return false;
+        };
+        let [forward, backward, left, right] = horizon_client::gamepad::eight_direction_keys(stick);
+        match key {
+            KeyCode::KeyW => forward,
+            KeyCode::KeyS => backward,
+            KeyCode::KeyA => left,
+            KeyCode::KeyD => right,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{studio_freecam_movement_key, studio_replay_shortcut};
+    use winit::keyboard::KeyCode;
+
+    #[test]
+    fn replay_shortcuts_are_distinct_from_freecam_movement() {
+        for key in [
+            KeyCode::Escape,
+            KeyCode::KeyP,
+            KeyCode::KeyF,
+            KeyCode::KeyT,
+            KeyCode::KeyM,
+            KeyCode::Home,
+            KeyCode::KeyL,
+            KeyCode::KeyK,
+            KeyCode::Delete,
+        ] {
+            assert!(studio_replay_shortcut(key));
+        }
+        for key in [
+            KeyCode::KeyW,
+            KeyCode::KeyA,
+            KeyCode::KeyS,
+            KeyCode::KeyD,
+            KeyCode::KeyE,
+            KeyCode::KeyQ,
+        ] {
+            assert!(studio_freecam_movement_key(key));
+            assert!(!studio_replay_shortcut(key));
+        }
+        assert!(!studio_freecam_movement_key(KeyCode::KeyI));
     }
 }

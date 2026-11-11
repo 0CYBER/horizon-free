@@ -30,12 +30,212 @@ pub struct TargetInfo {
     /// `isPassenger`.
     pub passenger: bool,
 }
+thread_local! {
+    static NEAR_BUF_POOL: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub struct NearIter<'a> {
+    others: &'a [Seen],
+    indices: Option<Vec<u32>>,
+    pos: usize,
+    fallback: Option<std::slice::Iter<'a, Seen>>,
+}
+
+impl<'a> Iterator for NearIter<'a> {
+    type Item = &'a Seen;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(indices) = &self.indices
+            && self.pos < indices.len()
+        {
+            let idx = indices[self.pos];
+            self.pos += 1;
+            return Some(&self.others[idx as usize]);
+        }
+        if let Some(all) = &mut self.fallback {
+            return all.next();
+        }
+        None
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if let Some(indices) = &self.indices {
+            let rem = indices.len().saturating_sub(self.pos);
+            (rem, Some(rem))
+        } else if let Some(all) = &self.fallback {
+            all.size_hint()
+        } else {
+            (0, Some(0))
+        }
+    }
+}
+
+impl Drop for NearIter<'_> {
+    fn drop(&mut self) {
+        if let Some(mut buf) = self.indices.take() {
+            buf.clear();
+            NEAR_BUF_POOL.with(|pool| {
+                if let Ok(mut pool) = pool.try_borrow_mut()
+                    && pool.len() < 8
+                {
+                    pool.push(buf);
+                }
+            });
+        }
+    }
+}
+
+/// Chunk and section cache for raycast block traversals.
+/// Caches the current section to avoid section index checks and hashmap lookups
+/// for consecutive voxels in the same 16x16x16 section.
+#[derive(Default)]
+struct RaycastBlockCache<'b> {
+    chunks: [Option<((i32, i32), Option<&'b crate::chunk::Chunk>)>; 4],
+    section_key: (i32, i32, i32),
+    section: Option<&'b crate::chunk::Section>,
+    section_uniform_air: bool,
+}
+
+impl<'a> MobWorld<'a> {
+    /// Creates a lightweight view for creature despawn evaluation without entity collections.
+    pub fn despawn_view(&self) -> MobWorld<'a> {
+        MobWorld {
+            others: &[],
+            others_grid: None,
+            others_index: None,
+            others_villagers: None,
+            others_solid: None,
+            player: None,
+            teams: std::sync::Arc::clone(&self.teams),
+            ..self.clone()
+        }
+    }
+}
+
+/// Single non-spectator player position helper for creature ticking despawn checks.
+pub fn single_player_pos(players: impl IntoIterator<Item = (Vec3, bool)>) -> Option<Option<Vec3>> {
+    let mut non_spec = players.into_iter().filter(|(_, spec)| !*spec);
+    match (non_spec.next(), non_spec.next()) {
+        (Some((pos, _)), None) => Some(Some(pos)),
+        (None, _) => Some(None),
+        _ => None,
+    }
+}
+
+impl<'b> RaycastBlockCache<'b> {
+    #[inline]
+    fn new() -> Self {
+        Self {
+            chunks: [None, None, None, None],
+            section_key: (i32::MIN, i32::MIN, i32::MIN),
+            section: None,
+            section_uniform_air: false,
+        }
+    }
+
+    #[inline]
+    fn block(&mut self, world: &'b crate::world::World, x: i32, y: i32, z: i32) -> BlockStateId {
+        let (cx, cy, cz) = (x >> 4, y >> 4, z >> 4);
+        if (cx, cy, cz) == self.section_key {
+            if self.section_uniform_air {
+                return world.air;
+            }
+            if let Some(sec) = self.section {
+                return BlockStateId(sec.get(crate::chunk::index(x & 15, y, z & 15)));
+            }
+            return world.air;
+        }
+
+        self.section_key = (cx, cy, cz);
+        let slot = ((cx as usize).wrapping_mul(5) ^ (cz as usize)) & 3;
+        let chunk = match self.chunks[slot] {
+            Some(((ccx, ccz), c)) if ccx == cx && ccz == cz => c,
+            _ => {
+                let c = world.chunks.get(&(cx, cz)).map(|c| c.as_ref());
+                self.chunks[slot] = Some(((cx, cz), c));
+                c
+            }
+        };
+
+        match chunk {
+            Some(c) => match c.section_index(y) {
+                Some(s) => {
+                    let sec = c.sections[s].as_ref();
+                    self.section = Some(sec);
+                    self.section_uniform_air = sec.is_uniform(world.air.0);
+                    if self.section_uniform_air {
+                        world.air
+                    } else {
+                        BlockStateId(sec.get(crate::chunk::index(x & 15, y, z & 15)))
+                    }
+                }
+                None => {
+                    self.section = None;
+                    self.section_uniform_air = true;
+                    world.air
+                }
+            },
+            None => {
+                self.section = None;
+                self.section_uniform_air = true;
+                world.air
+            }
+        }
+    }
+}
+
 impl MobWorld<'_> {
     /// `Level.getEntity(uuid)`: the entity a UUID a mob stored names, while it
     /// is in the level. Nothing when this world keeps no entity UUIDs, or when
     /// nothing loaded answers to it.
     pub fn who_by_uuid(&self, uuid: [i32; 4]) -> Option<Who> {
         self.who_lookup?.who_by_uuid(uuid)
+    }
+    /// `LivingEntity.setPosToBed` / `AbstractBedBlock.getSleepHeight`: the
+    /// same part selection and outline-height math as Game's bed route.
+    pub(super) fn sleeping_position(&self, head: [i32; 3]) -> Option<Vec3> {
+        use crate::bed_geometry::{SleepOn, pos_to_bed, shape_top, slept_on};
+        let state = self.world.block(head[0], head[1], head[2]);
+        let facts = self.facts.get(state);
+        if !facts.has_class("AbstractBedBlock") {
+            return None;
+        }
+        let part = self.prop(head[0], head[1], head[2], "part")?;
+        if !matches!(part, "head" | "foot") {
+            return None;
+        }
+        let facing = self.prop(head[0], head[1], head[2], "facing")?;
+        if !matches!(facing, "north" | "south" | "east" | "west") {
+            return None;
+        }
+        let forward = crate::stand_up::bed_forward(Some(facing));
+        let foot = [head[0] - forward[0], head[1], head[2] - forward[2]];
+        let on = slept_on(
+            &facts.name,
+            Some(part),
+            Some((
+                self.block_name(foot[0], foot[1], foot[2]),
+                self.prop(foot[0], foot[1], foot[2], "part"),
+            )),
+        )?;
+        let at = match on {
+            SleepOn::Head => head,
+            SleepOn::Foot => foot,
+        };
+        let outline = self.facts.get(self.world.block(at[0], at[1], at[2]));
+        // Bed outlines are static. Without an offset context, do not invent
+        // a position for a custom outline that requires one.
+        if outline.outline_offset {
+            return None;
+        }
+        let boxes: Vec<[f64; 6]> = outline
+            .outline
+            .iter()
+            .map(|b| std::array::from_fn(|i| f64::from(at[i % 3]) + b[i]))
+            .collect();
+        shape_top(&boxes, f64::from(at[1])).map(|height| pos_to_bed(head, height))
     }
     /// The biome's base temperature at a position.
     pub fn temperature(&self, x: i32, y: i32, z: i32) -> f32 {
@@ -142,13 +342,25 @@ impl MobWorld<'_> {
             binding: self.collision,
             subject: None,
         };
+        let mut cache = RaycastBlockCache::new();
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
-            let state = self.world.block(p.x, p.y, p.z);
+            let state = cache.block(self.world, p.x, p.y, p.z);
             if fluids_block && self.facts.get(state).fluid != Fluid::None {
                 return Some(());
             }
-            if self.facts.is_air(state) {
+            if cache.section_uniform_air || self.facts.is_air(state) {
                 return None;
+            }
+            if !self.collision.may_collide(state) {
+                return None;
+            }
+            // Scaffolding, liquids (a strider stands on lava) and powder snow
+            // take the entity's context; every other state has its cached shape.
+            let is_contextual = context.is_some() && self.collision.has_context_rule(state);
+            if !is_contextual
+                && let Ok(Some(shape)) = self.collision.cached_shapes().cached_shape(state)
+            {
+                return shape.clip(from, to, p).map(|_| ());
             }
             let shape = match &context {
                 Some(context) => self
@@ -178,7 +390,8 @@ impl MobWorld<'_> {
             binding: self.collision,
             subject: None,
         };
-        let state = |x, y, z| self.world.block(x, y, z);
+        let cache = std::cell::RefCell::new(RaycastBlockCache::new());
+        let state = |x, y, z| cache.borrow_mut().block(self.world, x, y, z);
         visual_clip(self.facts, self.collision, &mut scene, &state, from, to)
     }
     /// Level.clip with COLLIDER shapes and no fluids: where the segment
@@ -189,10 +402,17 @@ impl MobWorld<'_> {
             binding: self.collision,
             subject: None,
         };
+        let mut cache = RaycastBlockCache::new();
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
-            let state = self.world.block(p.x, p.y, p.z);
-            if self.facts.is_air(state) {
+            let state = cache.block(self.world, p.x, p.y, p.z);
+            if cache.section_uniform_air || self.facts.is_air(state) {
                 return None;
+            }
+            if !self.collision.may_collide(state) {
+                return None;
+            }
+            if let Ok(Some(shape)) = self.collision.cached_shapes().cached_shape(state) {
+                return shape.clip(from, to, p).map(|hit| hit.location);
             }
             let shape = self
                 .collision
@@ -210,10 +430,17 @@ impl MobWorld<'_> {
             binding: self.collision,
             subject: None,
         };
+        let mut cache = RaycastBlockCache::new();
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
-            let state = self.world.block(p.x, p.y, p.z);
-            if self.facts.is_air(state) {
+            let state = cache.block(self.world, p.x, p.y, p.z);
+            if cache.section_uniform_air || self.facts.is_air(state) {
                 return None;
+            }
+            if !self.collision.may_collide(state) {
+                return None;
+            }
+            if let Ok(Some(shape)) = self.collision.cached_shapes().cached_shape(state) {
+                return shape.clip(from, to, p).map(|_| [p.x, p.y, p.z]);
             }
             let shape = self
                 .collision
@@ -258,7 +485,7 @@ impl MobWorld<'_> {
     }
     /// Level.canSeeSky: sky light 15 at the position (no roof above).
     pub fn can_see_sky(&self, x: i32, y: i32, z: i32) -> bool {
-        if self.nether {
+        if !self.dimension_type.height.has_skylight {
             return false;
         }
         self.world.light(x, y, z) >> 4 == 15
@@ -291,7 +518,12 @@ impl MobWorld<'_> {
         // DimensionType.getBrightness with ambient light 0 (overworld) / 0.1 (nether).
         let f = level / 15.0;
         let base = f / (4.0 - 3.0 * f);
-        if self.nether { 0.1 + base * 0.9 } else { base }
+        // The End's ambient light (0.25) is not applied here, as before.
+        if self.level == horizon_core::LevelKey::NETHER {
+            0.1 + base * 0.9
+        } else {
+            base
+        }
     }
     pub fn sky_darken(&self) -> i32 {
         if self.daylight { 0 } else { 11 }
@@ -337,15 +569,39 @@ impl MobWorld<'_> {
     }
     /// The other mobs whose boxes may meet `area` (callers test the boxes),
     /// in snapshot order: through the grid when there is one, else all.
-    pub fn others_near(&self, area: Aabb) -> impl Iterator<Item = &Seen> {
-        let mut near = Vec::new();
+    pub fn others_near(&self, area: Aabb) -> NearIter<'_> {
+        let mut buf = NEAR_BUF_POOL.with(|pool| {
+            pool.try_borrow_mut()
+                .ok()
+                .and_then(|mut p| p.pop())
+                .unwrap_or_default()
+        });
         let indexed = self
             .others_grid
-            .is_some_and(|grid| grid.candidates(area, &mut near));
-        let all = (!indexed).then(|| self.others.iter());
-        near.into_iter()
-            .map(|i| &self.others[i as usize])
-            .chain(all.into_iter().flatten())
+            .is_some_and(|grid| grid.candidates(area, &mut buf));
+        if indexed {
+            NearIter {
+                others: self.others,
+                indices: Some(buf),
+                pos: 0,
+                fallback: None,
+            }
+        } else {
+            buf.clear();
+            NEAR_BUF_POOL.with(|pool| {
+                if let Ok(mut pool) = pool.try_borrow_mut()
+                    && pool.len() < 8
+                {
+                    pool.push(buf);
+                }
+            });
+            NearIter {
+                others: self.others,
+                indices: None,
+                pos: 0,
+                fallback: Some(self.others.iter()),
+            }
+        }
     }
     pub fn seen(&self, id: u32) -> Option<&Seen> {
         match self.others_index {
@@ -370,7 +626,7 @@ impl MobWorld<'_> {
             Vec3::new(from.x - r, from.y - r, from.z - r),
             Vec3::new(from.x + r, from.y + r, from.z + r),
         );
-        let mut v: Vec<&Seen> = self
+        let mut v: Vec<(f64, &Seen)> = self
             .others_near(area)
             .filter(|s| {
                 s.alive
@@ -379,17 +635,15 @@ impl MobWorld<'_> {
                     && (s.position.z - from.z).abs() <= range
             })
             .filter(move |s| pred(s))
+            .map(|s| {
+                let d = (s.position.x - from.x).powi(2)
+                    + (s.position.y - from.y).powi(2)
+                    + (s.position.z - from.z).powi(2);
+                (d, s)
+            })
             .collect();
-        v.sort_by(|a, b| {
-            let da = (a.position.x - from.x).powi(2)
-                + (a.position.y - from.y).powi(2)
-                + (a.position.z - from.z).powi(2);
-            let db = (b.position.x - from.x).powi(2)
-                + (b.position.y - from.y).powi(2)
-                + (b.position.z - from.z).powi(2);
-            da.total_cmp(&db)
-        });
-        v.into_iter()
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.into_iter().map(|(_, s)| s)
     }
 }
 
@@ -425,6 +679,9 @@ pub fn visual_clip<W: DynamicCollisionWorld>(
                 .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
                 .clip(from, to)
                 .map(|_| [p.x, p.y, p.z]);
+        }
+        if let Ok(Some(shape)) = collision.cached_shapes().cached_shape(id) {
+            return shape.clip(from, to, p).map(|_| [p.x, p.y, p.z]);
         }
         let shape = collision.collision_shape(scene, id, [p.x, p.y, p.z]).ok()?;
         shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
@@ -526,7 +783,7 @@ pub(crate) fn with_resource_test_world(
         day_time: 18000,
         raining: false,
         thundering: false,
-        nether: false,
+        level: horizon_core::LevelKey::OVERWORLD,
         block_tags: &items.block_tags,
         landing: &motion.landing,
         biomes: &biomes,
@@ -535,7 +792,7 @@ pub(crate) fn with_resource_test_world(
         mob_drops,
         max_entity_cramming: 24,
         difficulty: super::spawning::LocalDifficulty::new(2, 18000, 0, 0.0),
-        end: false,
+        dimension_type: horizon_world::dimension_type::DimensionFacts::overworld(),
         world_seed: 0,
         sea_level: 63,
         items: Some(&items),

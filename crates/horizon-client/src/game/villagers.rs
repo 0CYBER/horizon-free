@@ -56,9 +56,11 @@ impl Game<'_> {
     /// `BehaviorUtils.throwItem`: toss a stack from a villager's hand toward
     /// a point.
     fn villager_throw(&mut self, from: Vec3, eye: f64, to: Vec3, stack: ItemStack) {
-        let at = [from.x, eye - 0.3, from.z];
+        // The hand drop and the velocity are the float 0.3F, widened.
+        let k = f64::from(0.3_f32);
+        let at = [from.x, eye - k, from.z];
         let d = Vec3::new(to.x - from.x, to.y - from.y, to.z - from.z).normalize();
-        self.spawn_item(stack, at, [d.x * 0.3, d.y * 0.3, d.z * 0.3], 10);
+        self.spawn_item(stack, at, [d.x * k, d.y * k, d.z * k], 10);
     }
 
     /// `TradeWithVillager.tick` for one pair: gossip (at most once in 1200
@@ -162,8 +164,7 @@ impl Game<'_> {
             spawning::villager_type(&facts)
         });
         self.mobs[ib].extra.age = 6000;
-        let Some(id) =
-            self.spawn_mob_for("minecraft:villager", [from.x, from.y, from.z], true, true)
+        let Some(id) = self.spawn_mob_raw("minecraft:villager", [from.x, from.y, from.z], true)
         else {
             return;
         };
@@ -274,6 +275,11 @@ impl Game<'_> {
         if due.is_empty() {
             return;
         }
+        // Reuse the existing item-cell index only for large, spread-out item
+        // sets with many due sensors. Small and clustered scenes retain the
+        // original full scan without building an index.
+        let mut nearby = super::item_areas::ItemAreas::worthwhile(&self.dropped, due.len())
+            .then(super::item_areas::ItemAreas::default);
         let w = self.mob_world_base(&[]);
         let mut found = Vec::new();
         for i in due {
@@ -282,7 +288,18 @@ impl Game<'_> {
             let requested = villager::requested_items(m);
             let eye = Vec3::new(m.position.x, m.eye_y(), m.position.z);
             let mut best: Option<(f64, Vec3)> = None;
-            for e in &self.dropped {
+            let mut scan = nearby
+                .as_mut()
+                .map(|index| index.scan(&self.dropped, self.next_entity, area));
+            let mut j = 0;
+            loop {
+                if let Some(indexed) = &mut scan {
+                    j = indexed.next_from(j, self.dropped.len());
+                }
+                let Some(e) = self.dropped.get(j) else {
+                    break;
+                };
+                j += 1;
                 let d = e.position.distance_squared(m.position);
                 if best.is_some_and(|(b, _)| d >= b)
                     || !e.bounds().intersects(area)
@@ -454,37 +471,30 @@ impl Game<'_> {
         let Some(uuid) = self.player_uuid_of(killer) else {
             return;
         };
-        let eye = Vec3::new(victim.position.x, victim.eye_y(), victim.position.z);
-        let witnesses: Vec<usize> = {
-            let w = self.mob_world_base(&[]);
-            self.mobs
-                .iter()
-                .enumerate()
-                .filter(|(_, m)| {
-                    m.id != victim.id
-                        && m.species() == Species::Villager
-                        && m.alive()
-                        && (m.position.x - victim.position.x).abs() <= 16.0
-                        && (m.position.y - victim.position.y).abs() <= 16.0
-                        && (m.position.z - victim.position.z).abs() <= 16.0
-                        && w.line_of_sight(eye, Vec3::new(m.position.x, m.eye_y(), m.position.z))
-                })
-                .map(|(i, _)| i)
-                .collect()
-        };
-        for i in witnesses {
-            villager::ext_mut(&mut self.mobs[i]).gossips.add(
+        let snapshot: Vec<_> = self.mobs.iter().map(|m| m.seen(None)).collect();
+        let witnesses =
+            villager_brain::murder_witnesses(&mut victim.clone(), &self.mob_world_base(&snapshot));
+        for id in witnesses {
+            let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
+                continue;
+            };
+            villager::ext_mut(m).gossips.add(
                 uuid,
                 GossipType::MajorNegative,
                 gossip::REPUTATION_CHANGE_PER_EVENT,
             );
         }
     }
-    /// `ReputationEventType.TRADE`: each trade earns a little trust.
-    pub(super) fn villager_traded(&mut self, id: u32) {
-        if let Some(uuid) = self.level.player_uuid {
-            self.villager_traded_by(id, uuid);
-        }
+    /// Retain the accepted trade's actual player until the eligible mob AI
+    /// phase, including across menu close. XP and rewards stay in the session.
+    pub(super) fn villager_trade_pending(&mut self, id: u32) {
+        let Some(player) = self.player_uuid_of(self.lan_acting) else {
+            return;
+        };
+        let Some(i) = self.villager_index(id) else {
+            return;
+        };
+        villager::ext_mut(&mut self.mobs[i]).last_traded_player = Some(player);
     }
     /// The TRADE reputation event from the player `uuid` (a guest's too).
     pub(super) fn villager_traded_by(&mut self, id: u32, uuid: [i32; 4]) {
@@ -498,6 +508,27 @@ impl Game<'_> {
         );
         // Villager.customServerAiStep after a trade: entity event 14.
         self.mob_event_particles(id, 14);
+        // onReputationEventFrom refreshes the current trading player's prices.
+        if self
+            .station
+            .as_ref()
+            .and_then(|s| s.merchant.as_ref())
+            .is_some_and(|m| m.mob == Some(id))
+        {
+            let reputation = self.villager_reputation(id);
+            self.menu_session(|menu, env, _| {
+                if let Some(session) = menu.merchant.as_mut() {
+                    session.reputation = reputation;
+                    session.update_special_prices();
+                }
+                menu.merchant_update(env);
+                Some(true)
+            });
+        }
+        if let Some(mut host) = self.lan.take() {
+            self.lan_merchant_reputation(&mut host, id);
+            self.lan = Some(host);
+        }
     }
     /// `Villager.getPlayerReputation` of the local player.
     pub(super) fn villager_reputation(&self, id: u32) -> i32 {
@@ -564,3 +595,7 @@ mod entity_event_particle_tests {
         assert_eq!(kind("villager", 2), None);
     }
 }
+
+#[cfg(test)]
+#[path = "villager_witness_tests.rs"]
+mod witness_tests;

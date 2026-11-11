@@ -6,11 +6,7 @@ use horizon_client::{
     chunk::Chunk,
     mobs::{Mob, MobEvent},
 };
-use horizon_core::{
-    geometry::Vec3,
-    position::ChunkPos,
-    random::{LegacyRandom, RandomSource},
-};
+use horizon_core::{geometry::Vec3, position::ChunkPos, random::LegacyRandom};
 use std::sync::Arc;
 
 /// A game over 5x5 empty chunks around (0, 0) with a stone floor at y = 3:
@@ -134,16 +130,27 @@ fn an_infested_endermans_silverfish_come_out_where_it_was_hurt() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let mut game = floored_game(&root);
     let at = Vec3::new(8.5, 4.0, 8.5);
-    // A seed whose first draw passes the effect's 1-in-10 chance (`nextFloat() <= 0.1`).
-    let seed = (0..)
-        .find(|&s| LegacyRandom::new(s).next_float() <= 0.1)
-        .unwrap();
-    let mut mob = enderman(&game, 600, at, seed);
-    mob.add_effect("minecraft:infested", 200, 0);
-    // What `Mob::damage` leaves for a projectile's hit: the effect's spawn and
-    // `repeatedlyTryToTeleport`.
-    mob.outbox.push(MobEvent::Infested { mob: 600 });
-    mob.extra.counter2 = 64;
+    // A hurt with nothing living behind it, from a seed whose draws after the
+    // hurt sound pass the effect's 1-in-10 chance and then `nextInt(10) != 0`:
+    // `Mob::damage` leaves the silverfish and one `teleport()`.
+    let hurt = |seed| {
+        let mut mob = enderman(&game, 600, at, seed);
+        mob.add_effect("minecraft:infested", 200, 0);
+        mob.damage(
+            1.0,
+            horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
+        );
+        mob
+    };
+    let mob = (0..10_000)
+        .map(hurt)
+        .find(|m| {
+            m.extra.counter2 == 1
+                && m.outbox
+                    .iter()
+                    .any(|e| matches!(e, MobEvent::Infested { .. }))
+        })
+        .expect("no seed spawns silverfish and teleports");
     game.mobs.push(mob);
     game.settle_hurt_teleports().unwrap();
     let ender = game.mobs.iter().find(|m| m.id == 600).unwrap();
@@ -161,4 +168,226 @@ fn an_infested_endermans_silverfish_come_out_where_it_was_hurt() {
     for p in silverfish {
         assert!(p.distance(at) < 3.0, "silverfish at {p:?}, hurt at {at:?}");
     }
+}
+
+fn shulker(game: &Game, id: u32, at: Vec3, seed: i64) -> Mob {
+    let kind = game
+        .res
+        .mob_types()
+        .get("minecraft:shulker")
+        .unwrap()
+        .clone();
+    let mut mob = Mob::new(id, kind, at, 0.0);
+    mob.random = LegacyRandom::new(seed);
+    mob.persistent = true;
+    mob
+}
+
+/// `ShulkerBullet.onHitEntity` -> `Shulker.hurtServer`: an open shulker a
+/// bullet hurts runs `hitByShulkerBullet` (its teleport) inside the hurt, so
+/// it has moved when the hit returns, and the levitation still lands on it.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn a_shulker_bullets_hit_teleports_an_open_shulker_before_it_returns() {
+    use horizon_client::projectiles::{Hit, Projectile, ProjectileKind};
+    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    let mut game = floored_game(&root);
+    let at = Vec3::new(8.5, 4.0, 8.5);
+    let mut moved = 0;
+    // On a flat floor one try in 17 finds a block to cling to: some seeds teleport.
+    for seed in 0..40 {
+        let id = 700 + seed as u32;
+        let mut mob = shulker(&game, id, at, seed);
+        // Open: hitByShulkerBullet is for an open shell only.
+        mob.extra.counter = 100;
+        game.mobs.push(mob);
+        let bullet = Projectile::new(
+            ProjectileKind::ShulkerBullet {
+                target: None,
+                dir: None,
+                steps: 0,
+                delta: [0.0, 0.0, 0.0],
+                seed: 0,
+            },
+            Vec3::new(at.x, at.y + 0.5, at.z - 1.0),
+            None,
+        );
+        game.projectile_hit(
+            &bullet,
+            Hit::Entity {
+                who: horizon_client::mobs::Who::Mob(id),
+                at: Vec3::new(at.x, at.y + 0.5, at.z),
+            },
+        )
+        .unwrap();
+        let m = game.mobs.iter().find(|m| m.id == id).unwrap();
+        assert!(
+            !m.extra.flag && !m.extra.flag2,
+            "seed {seed}: a teleport left for the AI step"
+        );
+        assert!(
+            m.has_effect("minecraft:levitation"),
+            "seed {seed}: no levitation"
+        );
+        if m.position.distance(at) > 0.5 {
+            moved += 1;
+        }
+        game.mobs.clear();
+    }
+    assert!(moved > 0, "no shulker teleported");
+}
+
+/// `Shulker.teleportSomewhere` -> `Entity.unRide`: a mob riding the shulker
+/// gets off where the shulker stood (`ejectPassengers`) instead of being
+/// carried to where it teleports.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn a_teleporting_shulker_leaves_its_rider_behind() {
+    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    let mut game = floored_game(&root);
+    let at = Vec3::new(8.5, 4.0, 8.5);
+    let mut teleported = 0;
+    for seed in 0..40 {
+        let (id, rider) = (800 + 2 * seed as u32, 801 + 2 * seed as u32);
+        let mut mob = shulker(&game, id, at, seed);
+        // What `after_hurt` leaves after a low-health roll.
+        mob.extra.flag = true;
+        game.mobs.push(mob);
+        let mut zombie = enderman(&game, rider, at, 0);
+        zombie.kind = game
+            .res
+            .mob_types()
+            .get("minecraft:zombie")
+            .unwrap()
+            .clone();
+        game.mobs.push(zombie);
+        horizon_client::mobs::riders::link(&mut game.mobs, rider, id);
+        game.settle_hurt_teleports().unwrap();
+        let s = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let z = game.mobs.iter().find(|m| m.id == rider).unwrap();
+        if s.position.distance(at) > 0.5 {
+            teleported += 1;
+            assert_eq!(z.extra.mount, None, "seed {seed}: still riding");
+            assert_eq!(s.extra.rider, None, "seed {seed}: still carrying");
+            assert!(
+                z.position.distance(at) < 2.0,
+                "seed {seed}: rider at {:?}, shulker left {at:?}",
+                z.position
+            );
+        } else {
+            assert_eq!(
+                z.extra.mount,
+                Some(id),
+                "seed {seed}: thrown off without a teleport"
+            );
+        }
+        game.mobs.clear();
+    }
+    assert!(teleported > 0, "no shulker teleported");
+}
+
+/// `Shulker.teleportSomewhere`: the teleport posts `GameEvent.TELEPORT` at
+/// the block it left, between its sound and level event 2016, so a sculk
+/// sensor where it stood hears the shulker arrive.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn a_teleporting_shulker_posts_teleport_where_it_stood() {
+    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    let mut game = floored_game(&root);
+    game.build_registries();
+    game.set_allow_commands(true);
+    // A sensor just above the shulker hears the vibration where it stands.
+    game.sculk_prepare();
+    assert!(game.run_command("setblock 8 5 8 sculk_sensor"));
+    game.sculk_sync_index();
+    let at = Vec3::new(8.5, 4.0, 8.5);
+    let old = [at.x, at.y, at.z];
+    // `LevelAccessor.gameEvent(Holder, BlockPos, ..)` centers the block.
+    let old_center = [at.x, at.y + 0.5, at.z];
+    let mut teleported = false;
+    for seed in 0..40 {
+        let id = 900 + seed as u32;
+        let mut mob = shulker(&game, id, at, seed);
+        // What `after_hurt` leaves for a low-health teleport.
+        mob.extra.flag = true;
+        let uuid = game.level.player_uuid;
+        let others: Vec<_> = game
+            .mobs
+            .iter()
+            .map(|m| super::creatures::seen(m, uuid))
+            .collect();
+        let mut level_random = game.world.random.clone();
+        let mut events = Vec::new();
+        {
+            let world = game.mob_world_base(&others);
+            horizon_client::mobs::shulker::run_pending_teleports(
+                &mut mob,
+                &world,
+                &mut level_random,
+                &mut events,
+            );
+        }
+        if mob.position.distance(at) <= 0.5 {
+            continue;
+        }
+        teleported = true;
+        let sound = events.iter().position(|e| {
+            matches!(e, MobEvent::Sound(name, p, ..) if *name == "entity.shulker.teleport" && *p == old)
+        });
+        let teleport = events.iter().position(|e| {
+            matches!(
+                e,
+                MobEvent::GameEvent { event, at: p, source, .. }
+                    if *event == "minecraft:teleport" && *p == old_center && *source == id
+            )
+        });
+        let level = events.iter().position(
+            |e| matches!(e, MobEvent::LevelEvent { id: 2016, pos, .. } if *pos == [8, 4, 8]),
+        );
+        assert!(
+            sound.is_some(),
+            "seed {seed}: no teleport sound: {events:?}"
+        );
+        assert!(
+            teleport.is_some(),
+            "seed {seed}: no minecraft:teleport game event: {events:?}"
+        );
+        assert!(
+            level.is_some(),
+            "seed {seed}: no level event 2016: {events:?}"
+        );
+        assert!(
+            sound < teleport && teleport < level,
+            "seed {seed}: the game event is not between the sound and level event: {events:?}"
+        );
+        game.mobs.push(mob);
+        super::sculk::TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
+        game.handle_mob_events(events).unwrap();
+        let posted: Vec<_> = super::sculk::TEST_POSTED_EVENTS.with(|events| {
+            events
+                .borrow_mut()
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(event, _, _)| *event == "minecraft:teleport")
+                .map(|(_, pos, source)| (pos, source))
+                .collect()
+        });
+        assert_eq!(
+            posted,
+            [(old_center, Some(horizon_client::mobs::Who::Mob(id)))],
+            "seed {seed}: the teleport event is posted from the shulker at its old position"
+        );
+        // The sensor above the old block holds that vibration.
+        game.chat_capture = Some(Vec::new());
+        assert!(game.run_command("data get block 8 5 8 listener.selector.event"));
+        let said = game.chat_capture.take().unwrap_or_default();
+        let said: String = said.iter().map(horizon_client::text::Text::plain).collect();
+        assert!(
+            said.contains("minecraft:teleport") && said.contains("[8.5d, 4.5d, 8.5d]"),
+            "seed {seed}: the sensor did not hear the teleport: {said}"
+        );
+        break;
+    }
+    assert!(teleported, "no shulker teleported");
 }

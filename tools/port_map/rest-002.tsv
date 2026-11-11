@@ -28,7 +28,7 @@ StatePropertiesPredicate.Builder.hasProperty	skip:java		builder
 StatePropertiesPredicate.ExactMatcher.match	inline	crates/horizon-client/src/advancements.rs::block	exact value compare of the state map
 StatePropertiesPredicate.PropertyMatcher.match	inline	crates/horizon-client/src/advancements.rs::block	present property compared by block()
 StatePropertiesPredicate.PropertyMatcher.checkState	skip:data		load-time check that the property exists
-StatePropertiesPredicate.RangedMatcher.match	inline	crates/horizon-client/src/advancements.rs::block	gap: minor: ranges compare numeric property values only
+StatePropertiesPredicate.RangedMatcher.match	inline	crates/horizon-client/src/advancements.rs::block	registered legal-domain parsing and inclusive typed comparison; pinned vanilla Boolean/Integer/Direction/remaining enums; unavailable registry fails closed
 TagPredicate.codec	skip:java		codec
 TagPredicate.is	skip:java		builder
 TagPredicate.isNot	skip:java		builder
@@ -59,7 +59,7 @@ LightningBoltPredicate.matches	inline	crates/horizon-client/src/advancements.rs:
 MovementAffectedByPredicate.matches	missing		minor: movement_affected_by key is not read; no vanilla advancement uses it
 MovementPredicate.matches	missing		minor: movement key (speed, fall distance) is not read; no vanilla advancement uses it
 PassengerPredicate.matches	inline	crates/horizon-client/src/advancements.rs::entity	the `passenger` key: any passenger of the vehicle matches the nested predicate
-PlayerPredicate.matches	inline	crates/horizon-client/src/advancements.rs::entity	gap: minor: only gamemode and looking_at are read; level, food, stats, recipes, advancements and input are not
+PlayerPredicate.matches	inline	crates/horizon-client/src/advancements.rs::entity	gamemode, looking_at and input in entity(), the rest in player_facts; gap: minor: input reads only sneak
 PlayerPredicate.AdvancementCriterionsPredicate.test	missing		minor: the advancements key of a player predicate is not read; no vanilla advancement uses it
 PlayerPredicate.Builder.addStat	skip:java		builder
 PlayerPredicate.Builder.checkAdvancementDone	skip:java		builder

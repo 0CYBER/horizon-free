@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// `server.toml`'s `[transfer]`, as horizon-server passes it: `--transfers
-/// expect_seconds=10,max_expect_seconds=60,max_expected=64,max_freeze_seconds=30,max_hold_seconds=60`.
+/// expect_seconds=10,max_expect_seconds=60,max_expected=64,max_freeze_seconds=30,max_hold_seconds=60,stop_wait_seconds=10`.
 /// A key left out keeps its default.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -42,6 +42,8 @@ pub struct Settings {
     /// Server ticks a held player may wait for its hand-over before the server
     /// drops it.
     pub max_hold_ticks: u64,
+    /// How long a stop waits for a proxy to move the players out ([`StopWait`]); zero stops at once.
+    pub stop_wait: Duration,
 }
 
 impl Default for Settings {
@@ -52,13 +54,14 @@ impl Default for Settings {
             max_expected: 64,
             max_freeze_ticks: 20 * 30,
             max_hold_ticks: 20 * 60,
+            stop_wait: Duration::from_secs(10),
         }
     }
 }
 
 impl Settings {
     /// Reads `--transfers`' value: `key=value` pairs separated by commas, each a
-    /// whole number above zero.
+    /// whole number above zero, but `stop_wait_seconds`, which is zero to [`MAX_STOP_WAIT`].
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut s = Self::default();
         for pair in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
@@ -70,9 +73,16 @@ impl Settings {
                 .trim()
                 .parse()
                 .ok()
-                .filter(|n| *n > 0)
+                .filter(|n| *n > 0 || key == "stop_wait_seconds")
                 .ok_or_else(|| format!("{key} must be a whole number above zero"))?;
             match key {
+                "stop_wait_seconds" if n > MAX_STOP_WAIT.as_secs() => {
+                    return Err(format!(
+                        "stop_wait_seconds is above {}",
+                        MAX_STOP_WAIT.as_secs()
+                    ));
+                }
+                "stop_wait_seconds" => s.stop_wait = Duration::from_secs(n),
                 "expect_seconds" => s.expect = Duration::from_secs(n),
                 "max_expect_seconds" => s.max_expect = Duration::from_secs(n),
                 "max_expected" => {
@@ -91,6 +101,15 @@ impl Settings {
         if s.expect > s.max_expect {
             return Err("expect_seconds is above max_expect_seconds".into());
         }
+        // A stop's wait is cut at STOP_WAIT_LIMIT: past it, no hand-over could start during the wait.
+        if !s.stop_wait.is_zero()
+            && s.stop_wait.as_secs() + s.max_freeze_ticks / 20 > STOP_WAIT_LIMIT.as_secs()
+        {
+            return Err(format!(
+                "stop_wait_seconds and max_freeze_seconds add up to more than {}",
+                STOP_WAIT_LIMIT.as_secs()
+            ));
+        }
         Ok(s)
     }
 }
@@ -106,6 +125,8 @@ pub struct Transfers {
     /// taken back): no player is expected, imported or placed any more, but the players here can
     /// still be exported and released, which is their way out.
     pub stopping: bool,
+    /// The wait of that stop, while it lasts.
+    pub stop_wait: Option<StopWait>,
 }
 
 impl Transfers {
@@ -118,6 +139,7 @@ impl Transfers {
             settings,
             expected,
             stopping: false,
+            stop_wait: None,
         }
     }
 
@@ -126,6 +148,95 @@ impl Transfers {
     pub fn table(&self) -> std::sync::MutexGuard<'_, Expectations> {
         self.expected.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// The longest `stop_wait_seconds` may be.
+pub const MAX_STOP_WAIT: Duration = Duration::from_secs(60);
+
+/// The longest a stop waits, a hand-over's freeze included: horizon-server kills a game that has not
+/// stopped within 120 s (its `STOP_TIMEOUT`), and the saves need the rest.
+pub const STOP_WAIT_LIMIT: Duration = Duration::from_secs(90);
+
+/// A stop with `[transfer]` on and players here waits, so a proxy told the server is stopping
+/// (`server/stopping`) can move them out first: no login comes in, the server ticks on and answers the
+/// proxy's requests. The wait ends as soon as no player is left, at `until` when no hand-over is frozen,
+/// and at `limit` whatever is under way: `until` and a freeze's longest time, so a hand-over started in
+/// time can finish, within [`STOP_WAIT_LIMIT`]. No freeze starts that the limit would cut: a player whose
+/// source saved it after the target placed it would be on both servers.
+///
+/// A freeze lasts `max_freeze_ticks` ticks, not seconds: its length in time is reckoned at the tick
+/// length the server has now (`period`, [`tick_period`]), which the game sets again at every tick, so a
+/// slow server or `/tick rate 10` refuses a freeze sooner. A server that slows down after a freeze began
+/// can still reach the limit with it: that is the warning of the stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StopWait {
+    pub until: Instant,
+    pub limit: Instant,
+    freeze_ticks: u64,
+    /// The length of a tick now.
+    pub period: Duration,
+}
+
+impl StopWait {
+    /// The wait of a stop at `now`, if the settings make one, with ticks of `period`.
+    pub fn start(settings: &Settings, now: Instant, period: Duration) -> Option<Self> {
+        let freeze = freeze_time(settings.max_freeze_ticks, period);
+        (!settings.stop_wait.is_zero()).then(|| Self {
+            until: now + settings.stop_wait,
+            limit: now
+                + settings
+                    .stop_wait
+                    .saturating_add(freeze)
+                    .min(STOP_WAIT_LIMIT),
+            freeze_ticks: settings.max_freeze_ticks,
+            period,
+        })
+    }
+
+    /// Whether the stop goes on now, with these players placed and frozen here.
+    pub fn over(&self, now: Instant, placed: usize, frozen: usize) -> bool {
+        placed == 0 || (now >= self.until && frozen == 0) || now >= self.limit
+    }
+
+    /// Whether a hand-over that starts now would end before the limit, at the tick length of now.
+    pub fn may_freeze(&self, now: Instant) -> bool {
+        now.checked_add(freeze_time(self.freeze_ticks, self.period))
+            .is_some_and(|end| end <= self.limit)
+    }
+}
+
+/// How long `ticks` ticks of `period` take.
+fn freeze_time(ticks: u64, period: Duration) -> Duration {
+    period.saturating_mul(u32::try_from(ticks).unwrap_or(u32::MAX))
+}
+
+/// The length of a tick: the rate's (`target`, which `/tick rate` sets), or longer when the server
+/// is slower than that (`tps`, the ticks it made a second lately; 0 when unknown).
+pub fn tick_period(target: Duration, tps: f64) -> Duration {
+    let measured = if tps > 0.0 {
+        Duration::try_from_secs_f64(1.0 / tps).unwrap_or(Duration::MAX)
+    } else {
+        Duration::ZERO
+    };
+    measured.max(target)
+}
+
+/// The players placed here (a player a `moved` release took out is not counted) and those of them
+/// frozen for a hand-over.
+pub fn placed_and_frozen(hub: &Hub) -> (usize, usize) {
+    let here = || hub.guests.iter().filter(|g| g.placed && !g.released);
+    (
+        here().count(),
+        here().filter(|g| g.handover.is_some()).count(),
+    )
+}
+
+/// The log line of a stop that waits.
+pub fn stop_wait_line(wait: Duration) -> String {
+    format!(
+        "Stopping in {} s: a proxy may move the players out first",
+        wait.as_secs()
+    )
 }
 
 /// Why an expectation could not be recorded.
@@ -288,6 +399,16 @@ pub fn held_too_long(since: u64, now: u64, max: u64) -> bool {
 /// `now`, for a freeze of at most `max` ticks.
 pub fn frozen_too_long(since: u64, now: u64, max: u64) -> bool {
     now.saturating_sub(since) >= max
+}
+
+/// `player-export <uuid> freeze` during a stop's wait: refused once a hand-over that starts now could
+/// not finish before the stop's limit ([`StopWait`]). A player already frozen is answered as before.
+pub fn check_freeze(hub: &Hub, i: usize, now: Instant) -> Result<(), &'static str> {
+    let wait = hub.transfers.as_ref().and_then(|t| t.stop_wait);
+    if hub.guests[i].handover.is_none() && wait.is_some_and(|w| !w.may_freeze(now)) {
+        return Err("the server is stopping: no hand-over starts this late");
+    }
+    Ok(())
 }
 
 /// Why the connected player `uuid` cannot be exported now, or the index of its
@@ -597,15 +718,14 @@ pub fn status_request(hub: &Hub, now: Instant) -> serde_json::Value {
     let Some(transfers) = &hub.transfers else {
         return error(OFF);
     };
-    let count =
-        |keep: fn(&super::guest::Guest) -> bool| hub.guests.iter().filter(|g| keep(g)).count();
     let (online, max_players) = (hub.lan.shared.online(), hub.lan.shared.max_players());
+    let (placed, frozen) = placed_and_frozen(hub);
     serde_json::json!({
         "ok": true,
-        "players": count(|g| g.placed && !g.released),
-        "held": count(|g| g.held),
+        "players": placed,
+        "held": hub.guests.iter().filter(|g| g.held).count(),
         "expected": transfers.table().alive(now),
-        "frozen": count(|g| g.handover.is_some() && !g.released),
+        "frozen": frozen,
         "online": online,
         "max_players": max_players,
         "full": online >= max_players,
@@ -726,179 +846,8 @@ pub fn release_request(hub: &mut Hub, args: &str) -> serde_json::Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const A: u128 = 0xA;
-    const B: u128 = 0xB;
-
-    fn secs(n: u64) -> Duration {
-        Duration::from_secs(n)
-    }
-
-    #[test]
-    fn an_expected_player_is_taken_once_before_the_deadline() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        assert_eq!(e.expect(A, secs(10), t0), Ok(false));
-        assert!(e.take(A, t0 + secs(9)));
-        // The login consumed it: a second login of the same player is ordinary.
-        assert!(!e.take(A, t0 + secs(9)));
-        assert!(e.is_empty());
-    }
-
-    #[test]
-    fn an_expectation_is_dead_at_its_deadline() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        e.expect(A, secs(10), t0).unwrap();
-        // Exactly at the deadline is already too late.
-        assert!(!e.take(A, t0 + secs(10)));
-        assert!(e.is_empty());
-    }
-
-    #[test]
-    fn a_player_nobody_expected_has_no_expectation() {
-        let mut e = Expectations::default();
-        assert!(!e.take(B, Instant::now()));
-    }
-
-    #[test]
-    fn asking_again_moves_the_deadline_and_says_so() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        e.expect(A, secs(5), t0).unwrap();
-        assert_eq!(e.expect(A, secs(30), t0 + secs(4)), Ok(true));
-        assert!(e.take(A, t0 + secs(20)));
-    }
-
-    #[test]
-    fn a_held_player_waits_one_minute_of_ticks() {
-        let max = Settings::default().max_hold_ticks;
-        assert_eq!(max, 1200);
-        assert!(!held_too_long(100, 100 + 1199, max));
-        assert!(held_too_long(100, 100 + 1200, max));
-        // A clock that went backwards never drops anyone.
-        assert!(!held_too_long(500, 100, max));
-    }
-
-    #[test]
-    fn forgetting_removes_only_that_player() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        e.expect(A, secs(10), t0).unwrap();
-        e.expect(B, secs(10), t0).unwrap();
-        assert!(e.forget(A));
-        assert!(!e.forget(A));
-        assert!(e.take(B, t0));
-    }
-
-    #[test]
-    fn a_long_wait_is_cut_to_the_maximum() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        e.expect(A, secs(3600), t0).unwrap();
-        assert!(!e.take(A, t0 + Settings::default().max_expect));
-    }
-
-    #[test]
-    fn expiry_returns_the_players_that_never_came_and_keeps_the_others() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        e.expect(A, secs(5), t0).unwrap();
-        e.expect(B, secs(30), t0).unwrap();
-        assert_eq!(e.expire(t0 + secs(6)), vec![A]);
-        assert_eq!(e.len(), 1);
-        assert!(e.take(B, t0 + secs(7)));
-    }
-
-    #[test]
-    fn the_table_refuses_new_players_when_full_but_expired_ones_make_room() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        for n in 0..Settings::default().max_expected as u128 {
-            e.expect(100 + n, secs(10), t0).unwrap();
-        }
-        assert_eq!(e.expect(A, secs(10), t0), Err(ExpectError::Full));
-        // A player already in the table can still be renewed when it is full.
-        assert_eq!(e.expect(100, secs(10), t0), Ok(true));
-        // Once the old ones are past their time, there is room again.
-        assert_eq!(e.expect(A, secs(10), t0 + secs(11)), Ok(false));
-        assert_eq!(e.len(), 1);
-    }
-
-    #[test]
-    fn the_settings_are_read_from_the_supervisors_line() {
-        assert_eq!(Settings::parse(""), Ok(Settings::default()));
-        let s = Settings::parse(
-            "expect_seconds=5,max_expect_seconds=20,max_expected=3,max_freeze_seconds=12",
-        )
-        .unwrap();
-        assert_eq!(s.expect, secs(5));
-        assert_eq!(s.max_expect, secs(20));
-        assert_eq!(s.max_expected, 3);
-        assert_eq!(s.max_freeze_ticks, 240);
-        // One key alone keeps the others' defaults.
-        assert_eq!(
-            Settings::parse("max_expected=8").unwrap(),
-            Settings {
-                max_expected: 8,
-                ..Settings::default()
-            }
-        );
-        for bad in [
-            "expect_seconds=0",
-            "expect_seconds=-1",
-            "expect_seconds",
-            "colour=blue",
-            "expect_seconds=90",
-        ] {
-            assert!(Settings::parse(bad).is_err(), "{bad:?} was taken");
-        }
-    }
-
-    #[test]
-    fn the_table_follows_the_settings() {
-        let t0 = Instant::now();
-        let mut e = Expectations::new(2, secs(5));
-        e.expect(A, secs(60), t0).unwrap();
-        assert!(!e.take(A, t0 + secs(5)), "cut to five seconds");
-        e.expect(A, secs(1), t0).unwrap();
-        e.expect(B, secs(1), t0).unwrap();
-        assert_eq!(e.expect(3, secs(1), t0), Err(ExpectError::Full));
-    }
-
-    /// A login that does not reach play gives its expectation back, with its
-    /// own deadline, so the proxy's next attempt is still expected.
-    #[test]
-    fn an_expectation_a_failed_login_used_is_put_back_with_its_deadline() {
-        let t0 = Instant::now();
-        let mut e = Expectations::default();
-        e.expect(A, secs(10), t0).unwrap();
-        let deadline = e.take_until(A, t0 + secs(2)).unwrap();
-        assert!(e.is_empty());
-        e.put_back(A, deadline, t0 + secs(4));
-        assert!(e.take(A, t0 + secs(9)), "the same deadline, not a new one");
-        // Not once its time has passed.
-        e.put_back(A, deadline, t0 + secs(10));
-        assert!(e.is_empty());
-        // Not over a newer expectation of the same player.
-        e.expect(A, secs(30), t0 + secs(5)).unwrap();
-        e.put_back(A, deadline, t0 + secs(6));
-        assert!(e.take(A, t0 + secs(20)), "the newer deadline stands");
-    }
-
-    #[test]
-    fn a_hand_over_id_is_32_hexadecimal_digits() {
-        let id = 0x0123_4567_89ab_cdef_0011_2233_4455_6677;
-        assert_eq!(handover_text(id), "0123456789abcdef0011223344556677");
-        assert_eq!(parse_handover(&handover_text(id)), Some(id));
-        assert_eq!(parse_handover("0123456789ABCDEF0011223344556677"), Some(id));
-        assert_eq!(parse_handover("0123456789abcdef001122334455667"), None);
-        assert_eq!(parse_handover("01234567-89ab-cdef-0011-223344556677"), None);
-        assert_ne!(new_handover_id().unwrap(), new_handover_id().unwrap());
-    }
-}
+#[path = "arrivals_tests.rs"]
+mod tests;
 
 /// The hub's side: the requests, the record and the freeze.
 #[cfg(test)]
@@ -1022,10 +971,12 @@ mod hub_tests {
         let border = crate::worldborder::WorldBorder::default();
         let mut next = 100;
         let mut ctx = TickCtx {
+            sea_level: 63,
             world: &mut world,
             entities: &[],
             next_entity: &mut next,
             spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -1045,10 +996,12 @@ mod hub_tests {
         next: &'a mut u32,
     ) -> TickCtx<'a> {
         TickCtx {
+            sea_level: 63,
             world,
             entities: &[],
             next_entity: next,
             spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -1576,6 +1529,25 @@ mod hub_tests {
         assert!(hub.guests[1].held && !hub.guests[1].placed);
         assert_eq!(super::drop_request(&mut hub, UUID)["held"], true);
         assert_eq!(ids(&seen), Vec::<i32>::new());
+    }
+
+    /// During a stop's wait a player is exported, and frozen while a hand-over can still finish in
+    /// time; later only an export already frozen is answered.
+    #[test]
+    fn a_stop_lets_a_hand_over_start_only_while_it_can_finish() {
+        let (mut hub, _seen, _mine, _h) = frozen_with_a_watcher();
+        let now = Instant::now();
+        let transfers = hub.transfers.as_mut().unwrap();
+        transfers.stop_wait =
+            super::StopWait::start(&transfers.settings, now, Duration::from_millis(50));
+        assert_eq!(super::placed_and_frozen(&hub), (2, 1));
+        assert_eq!(
+            super::check_freeze(&hub, 0, now + Duration::from_secs(10)),
+            Ok(())
+        );
+        let late = now + Duration::from_secs(11);
+        assert!(super::check_freeze(&hub, 0, late).is_err());
+        assert_eq!(super::check_freeze(&hub, 1, late), Ok(()), "already frozen");
     }
 
     /// After the commit, a retry finds the player placed from that hand-over whatever came since:

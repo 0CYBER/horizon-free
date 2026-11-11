@@ -1,6 +1,13 @@
 //! The player's `CombatTracker`: the damage taken lately, who dealt it and
 //! where the player fell from, turned into the vanilla death message.
 use super::{Game, commands::Target};
+
+// The test names `super::commands`, as it did when game.rs held it.
+#[cfg(test)]
+use super::commands;
+#[cfg(test)]
+#[path = "revenge_home_tests.rs"]
+mod revenge_home_tests;
 use horizon_client::{
     health::HealthEvent,
     mobs::{Mob, Species},
@@ -107,6 +114,10 @@ pub(super) struct CombatTracker {
     /// The hit on the player now runs its post-attack effects (thorns) only
     /// if the player lives through it (`WitherSkull.onHitEntity`).
     pub(super) post_attack_if_alive: bool,
+    /// The mob whose swing is being applied, when the caller knows it. Without
+    /// it the attacker is the mob nearest to where the hit came from, which
+    /// walks every mob.
+    pub(super) melee_mob: Option<u32>,
     /// A firework rocket's burst is hurting the player now: the rocket is
     /// the direct entity (`rocket_hurt_player`).
     pub(super) rocket_hit: bool,
@@ -161,6 +172,17 @@ pub(super) struct CombatTracker {
     fall_before: f64,
 }
 impl CombatTracker {
+    /// The newest damage of this fight for `events`: when it landed (game
+    /// time), its damage type, the amount and the name of what dealt it.
+    pub(super) fn last_hit(&self) -> Option<(i64, String, Option<f32>, Option<String>)> {
+        let e = self.entries.last()?;
+        let by = e
+            .attacker
+            .as_ref()
+            .map(|(_, t)| t.plain())
+            .or_else(|| e.direct.as_ref().map(Text::plain));
+        Some((self.last_damage, e.damage_type.clone(), Some(e.damage), by))
+    }
     /// The last blow taken: its damage type and the causing entity's id (0
     /// for none), for `LivingDeathEvent`.
     pub(super) fn last_blow(&self) -> Option<(&str, u32)> {
@@ -370,14 +392,10 @@ impl Game<'_> {
                 .get(self.world.block(c.x, c.y, c.z))
                 .name
                 .clone();
-            Some(match &*name {
-                "minecraft:ladder" => "ladder",
-                "minecraft:vine" => "vines",
-                "minecraft:weeping_vines" | "minecraft:weeping_vines_plant" => "weeping_vines",
-                "minecraft:twisting_vines" | "minecraft:twisting_vines_plant" => "twisting_vines",
-                "minecraft:scaffolding" => "scaffolding",
-                _ => "other_climbable",
-            })
+            let trapdoor = (self.res.items().block_tags)
+                .get("minecraft:trapdoors")
+                .is_some_and(|tag| tag.contains(&*name));
+            Some(fall_location_of(&name, trapdoor))
         } else {
             let f = self.res.facts().get(self.world.block(
                 p.position.x.floor() as i32,
@@ -586,7 +604,13 @@ impl Game<'_> {
         if !host && !guest {
             return;
         }
-        let message = self.mob_death_message(m, killer);
+        let mut built = Some(self.mob_death_message(m, killer));
+        let kind = super::native_hooks::mob_kind(m);
+        horizon_client::living_death::native_living_death_message(m.id, &kind, &mut built);
+        // A native mod may have changed the message, or set it to None to tell the owner nothing.
+        let Some(message) = built else {
+            return;
+        };
         if host {
             self.system_message(message);
         } else if let Some(lan) = &self.lan {
@@ -709,6 +733,94 @@ fn damage_taken_award(amount: f32) -> Option<i32> {
     (amount < 3.402_823_5e37).then(|| horizon_core::jmath::round_f32(amount * 10.0))
 }
 
+/// `FallLocation.blockToFallLocation`: what a climbable block stands for in a fall's death message.
+/// `trapdoor` is whether the block is in `#minecraft:trapdoors`, which counts as a ladder.
+fn fall_location_of(name: &str, trapdoor: bool) -> &'static str {
+    match name {
+        _ if trapdoor => "ladder",
+        "minecraft:ladder" => "ladder",
+        "minecraft:vine" => "vines",
+        "minecraft:weeping_vines" | "minecraft:weeping_vines_plant" => "weeping_vines",
+        "minecraft:twisting_vines" | "minecraft:twisting_vines_plant" => "twisting_vines",
+        "minecraft:scaffolding" => "scaffolding",
+        _ => "other_climbable",
+    }
+}
+
+#[cfg(test)]
+mod fall_location_tests {
+    use super::fall_location_of;
+
+    /// The branches of `blockToFallLocation`: a ladder or a block of `#minecraft:trapdoors` is
+    /// `ladder`, then vine, the weeping and twisting vines (heads and plants), scaffolding, and any
+    /// other climbable (cave vines, here) is `other_climbable`.
+    #[test]
+    fn a_trapdoor_counts_as_a_ladder_and_the_other_climbables_keep_their_own_place() {
+        for (name, trapdoor, want) in [
+            ("minecraft:ladder", false, "ladder"),
+            ("minecraft:oak_trapdoor", true, "ladder"),
+            ("minecraft:iron_trapdoor", true, "ladder"),
+            ("minecraft:vine", false, "vines"),
+            ("minecraft:weeping_vines", false, "weeping_vines"),
+            ("minecraft:weeping_vines_plant", false, "weeping_vines"),
+            ("minecraft:twisting_vines", false, "twisting_vines"),
+            ("minecraft:twisting_vines_plant", false, "twisting_vines"),
+            ("minecraft:scaffolding", false, "scaffolding"),
+            ("minecraft:cave_vines", false, "other_climbable"),
+        ] {
+            assert_eq!(fall_location_of(name, trapdoor), want, "{name}");
+        }
+    }
+}
+
+/// Hits one mob's tick deals another, handled after the mob loop.
+impl Game<'_> {
+    /// A melee hit on another mob, then `postAttack`; whether it landed.
+    pub(super) fn mob_attacks_mob(
+        &mut self,
+        target: u32,
+        amount: f32,
+        source: horizon_client::mobs::Damage,
+    ) -> bool {
+        let hurt = self.mob_hits_mob(target, amount, source);
+        if hurt {
+            self.mob_post_attack(
+                target,
+                source.attacker,
+                None,
+                Some(super::creatures::damage_type(source.kind, false)),
+            );
+        }
+        hurt
+    }
+    /// Whether a hit from a mob's tick on `target`, handled after the mob
+    /// loop, comes after a tick of the target that vanilla runs after the hit:
+    /// `ServerLevel.tick` ticks entities in list order and the attacker deals
+    /// the hit in its own tick, so a target later in the list counts its
+    /// `HurtTime` and invulnerability down once more that tick. PARTIAL: the
+    /// rest of that tick (its movement, its own goals) still ran before the hit.
+    /// The caller compensates only newly reset timers: a stronger hit during
+    /// cooldown leaves timers that already counted down this tick unchanged.
+    pub(super) fn catch_up_countdowns(
+        &self,
+        attacker: Option<horizon_client::mobs::Who>,
+        target: u32,
+    ) -> bool {
+        let Some(horizon_client::mobs::Who::Mob(attacker)) = attacker else {
+            return false;
+        };
+        let ticked = &self.creatures.ticked;
+        if !self.creatures.deferred_hits || !ticked.contains(&attacker) || !ticked.contains(&target)
+        {
+            return false;
+        }
+        // The mobs added during the tick come first in `self.mobs`; the
+        // ticked ones keep their tick order after them.
+        let at = |id: u32| self.mobs.iter().position(|m| m.id == id);
+        matches!((at(attacker), at(target)), (Some(a), Some(t)) if a < t)
+    }
+}
+
 #[cfg(test)]
 mod damage_taken_tests {
     use super::damage_taken_award;
@@ -824,5 +936,53 @@ mod stuck_tests {
         // Both timers run 580 ticks.
         assert!(s.tick());
         assert_eq!((s.arrows, s.stingers), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod guest_hit_tests {
+    use horizon_client::mobs::{Mob, MobEvent};
+    use horizon_client::motion::PlayerMotion;
+    use horizon_core::geometry::Vec3;
+
+    /// A bystander stands exactly under the mob that bites, listed first: the
+    /// search by position ignores height and would have named the bystander.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn an_effect_hit_on_a_guest_credits_the_mob_that_swung() {
+        let mut game = super::super::native_machines::tests::server_game();
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap());
+        for (id, kind, y) in [
+            (4, "minecraft:zombie", 90.0),
+            (5, "minecraft:cave_spider", 100.0),
+        ] {
+            let kind = game.res.mob_types().get(kind).cloned().unwrap();
+            game.mobs
+                .push(Mob::new(id, kind, Vec3::new(1.5, y, 0.5), 0.0));
+        }
+        let from = [1.5, 100.0, 0.5];
+        let hits = [
+            MobEvent::AttackPlayerWithEffect {
+                amount: 2.0,
+                from,
+                effect: "minecraft:poison",
+                ticks: 140,
+                amplifier: 0,
+            },
+            MobEvent::StingPlayer {
+                amount: 2.0,
+                from,
+                poison_ticks: 200,
+            },
+        ];
+        for hit in hits {
+            game.combat.pending.clear();
+            game.guest_mob_event(5, hit);
+            let noted: Vec<u32> = (game.combat.pending.iter())
+                .map(|(_, (id, _), _)| *id)
+                .collect();
+            assert_eq!(noted, [5]);
+            assert_eq!(game.combat.melee_mob, None, "the hit used it up");
+        }
     }
 }

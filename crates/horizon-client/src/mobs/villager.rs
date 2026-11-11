@@ -109,12 +109,15 @@ pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld, events: &mut Vec<M
         occupied: true,
     });
     m.velocity = horizon_core::geometry::Vec3::ZERO;
-    m.position = horizon_core::geometry::Vec3::new(
-        f64::from(p[0]) + 0.5,
-        f64::from(p[1]) + 0.6875,
-        f64::from(p[2]) + 0.5,
-    );
+    m.position = crate::bed_geometry::pos_to_bed(p, 0.5625);
     true
+}
+/// `LivingEntity.baseTick`: first-tick `setPosToBed` for a loaded sleeper.
+/// Reuse normal sleep positioning without its motion, memory or bed events.
+pub(super) fn refresh_sleeping_position(m: &mut Mob, w: &MobWorld) {
+    if let Some(position) = sleeping_pos(m).and_then(|p| w.sleeping_position(p)) {
+        m.position = position;
+    }
 }
 /// `LivingEntity.stopSleeping`: the bed is no longer `occupied`, and the
 /// sleeper stands at `AbstractBedBlock.findStandUpPosition` for its yaw,
@@ -193,17 +196,18 @@ pub fn sleep_pose(m: &Mob) -> Option<(f32, [f32; 2])> {
         _ => return None,
     })
 }
-/// `Villager.tick`: the unhappy counter and the gossip decay; a hurt
-/// sleeper wakes up (`LivingEntity.hurtServer`; the `checkBedExists` wake
-/// runs earlier in `LivingEntity.tick`, for AI-less mobs too), and lies the
-/// way its bed faces (`getBedOrientation`). The brain does the rest.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+/// `Villager.tick` after `super.tick()`, with or without AI: the unhappy
+/// counter counts down and the gossip decays once a day.
+pub fn tick(m: &mut Mob, now: i64) {
     if m.extra.ints[0] > 0 {
         m.extra.ints[0] -= 1;
     }
-    if m.species() == Species::Villager {
-        ext_mut(m).maybe_decay(w.game_time);
-    }
+    ext_mut(m).maybe_decay(now);
+}
+/// A hurt sleeper wakes up (`LivingEntity.hurtServer`; the `checkBedExists`
+/// wake runs earlier in `LivingEntity.tick`, for AI-less mobs too), and lies
+/// the way its bed faces (`getBedOrientation`). The brain does the rest.
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if sleeping(m) {
         let bed = sleeping_pos(m).filter(|p| w.block_name(p[0], p[1], p[2]).ends_with("_bed"));
         if let Some(p) = bed {
@@ -271,6 +275,9 @@ pub struct Ext {
     pub raid_wave: bool,
     /// What the villager remembers of players (`gossips`).
     pub gossips: crate::gossip::Gossips,
+    /// `Villager.lastTradedPlayer`: the most recent trader, consumed by the
+    /// next customServerAiStep. This is runtime state, not saved gossip.
+    pub last_traded_player: Option<[i32; 4]>,
     pub last_gossip_time: i64,
     pub last_gossip_decay: i64,
     /// `foodLevel`: eaten but not yet digested, in food points.
@@ -288,6 +295,9 @@ pub struct Ext {
     pub hurt_seen: i32,
     /// A zombie villager's cure under way.
     pub cure: Option<super::zombie_villager::Cure>,
+    /// `ZombieVillager.villagerDataFinalized`: only a save with
+    /// `VillagerDataFinalized` or `VillagerData` sets it.
+    pub data_finalized: bool,
     /// The villager's brain, built at its first tick.
     pub brain: Option<Box<super::villager_brain::Brain>>,
     /// Saved memories awaiting the first brain initialization.
@@ -428,6 +438,49 @@ pub fn is_farmer(m: &Mob) -> bool {
 /// `SimpleContainer(8)`: stacks the villager carries.
 const INVENTORY_SLOTS: usize = 8;
 
+/// `SimpleContainer.addItem` on a container of `slots` slots held as its
+/// occupied stacks in slot order: fill the stacks of the same item and
+/// components below `max_stack`, then free slots; the part that did not fit
+/// is returned.
+pub(crate) fn add_to_container(
+    inventory: &mut Vec<ItemStack>,
+    mut stack: ItemStack,
+    max_stack: u32,
+    slots: usize,
+) -> Option<ItemStack> {
+    for s in inventory.iter_mut() {
+        if stack.count > 0 && s.same_item_same_components(&stack) && s.count < max_stack {
+            let n = (max_stack - s.count).min(stack.count);
+            s.count += n;
+            stack.count -= n;
+        }
+    }
+    while stack.count > 0 && inventory.len() < slots {
+        let n = stack.count.min(max_stack);
+        inventory.push(ItemStack {
+            count: n,
+            ..stack.clone()
+        });
+        stack.count -= n;
+    }
+    (stack.count > 0).then_some(stack)
+}
+
+/// `SimpleContainer.fromItemList`: clear, then `addItem` each saved stack
+/// at the type's limit for it; what does not fit is dropped.
+pub(crate) fn load_container(
+    m: &Mob,
+    items: &[horizon_world::nbt::Tag],
+    slots: usize,
+) -> Vec<ItemStack> {
+    let mut inventory = Vec::new();
+    for stack in items.iter().filter_map(crate::save::item_from_nbt) {
+        let max = m.kind.inventory_stack_limit(&stack);
+        let _ = add_to_container(&mut inventory, stack, max, slots);
+    }
+    inventory
+}
+
 impl Ext {
     /// `countFoodPointsInInventory`.
     pub fn food_in_inventory(&self) -> i32 {
@@ -477,23 +530,8 @@ impl Ext {
     }
     /// `SimpleContainer.addItem`: merge into stacks, then free slots; the
     /// part that did not fit is returned.
-    pub fn add_item(&mut self, mut stack: ItemStack, max_stack: u32) -> Option<ItemStack> {
-        for s in &mut self.inventory {
-            if stack.count > 0 && s.same_item_same_components(&stack) && s.count < max_stack {
-                let n = (max_stack - s.count).min(stack.count);
-                s.count += n;
-                stack.count -= n;
-            }
-        }
-        while stack.count > 0 && self.inventory.len() < INVENTORY_SLOTS {
-            let n = stack.count.min(max_stack);
-            self.inventory.push(ItemStack {
-                count: n,
-                ..stack.clone()
-            });
-            stack.count -= n;
-        }
-        (stack.count > 0).then_some(stack)
+    pub fn add_item(&mut self, stack: ItemStack, max_stack: u32) -> Option<ItemStack> {
+        add_to_container(&mut self.inventory, stack, max_stack, INVENTORY_SLOTS)
     }
     /// `SimpleContainer.removeItemType`: take up to `count` of the item from
     /// the first stacks that hold it.
@@ -571,6 +609,10 @@ impl Ext {
 /// reads the other villager itself).
 #[derive(Clone, Debug, Default)]
 pub struct Seen {
+    /// Visibility inputs for another villager's noncombat sensor.
+    pub invisible: bool,
+    pub crouching: bool,
+    pub armor: [Option<std::sync::Arc<str>>; 4],
     pub gossips: crate::gossip::Gossips,
     pub last_gossip_time: i64,
     /// `countFoodPointsInInventory`.
@@ -584,6 +626,28 @@ pub struct Seen {
     pub golem_detected: bool,
 }
 impl Seen {
+    /// `LivingEntity.getVisibilityPercent`, for a targeting villager.
+    pub fn visibility(&self, items: Option<&crate::items::Items>) -> f64 {
+        let mut value = if self.crouching { 0.8 } else { 1.0 };
+        if self.invisible {
+            let cover = self.armor.iter().filter(|i| i.is_some()).count() as f32 / 4.0;
+            value *= 0.7 * f64::from(cover).max(0.1);
+        }
+        if let Some(items) = items {
+            for (slot, item) in ["feet", "legs", "chest", "head"]
+                .into_iter()
+                .zip(&self.armor)
+            {
+                if let Some(factor) = item
+                    .as_deref()
+                    .and_then(|i| items.worn_visibility(i, slot, "minecraft:villager"))
+                {
+                    value *= f64::from(factor);
+                }
+            }
+        }
+        if value < 0.0 { 0.0 } else { value.min(10.0) }
+    }
     /// `Villager.wantsToSpawnGolem`.
     pub fn wants_golem(&self, now: i64) -> bool {
         self.last_slept.is_some_and(|t| now - t < 24000) && !self.golem_detected
@@ -598,6 +662,26 @@ pub fn seen(m: &Mob) -> Seen {
     let (interaction_target, path_nodes, golem_detected, last_slept) =
         super::villager_brain::seen_memories(m);
     Seen {
+        invisible: m.is_invisible(),
+        crouching: m.extra.crouching,
+        armor: [
+            m.extra
+                .feet
+                .clone()
+                .or_else(|| m.extra.armor[3].as_ref().map(|s| s.item.clone())),
+            m.extra
+                .legs
+                .clone()
+                .or_else(|| m.extra.armor[2].as_ref().map(|s| s.item.clone())),
+            m.extra
+                .chest
+                .clone()
+                .or_else(|| m.extra.armor[1].as_ref().map(|s| s.item.clone())),
+            m.extra
+                .head
+                .clone()
+                .or_else(|| m.extra.armor[0].as_ref().map(|s| s.item.clone())),
+        ],
         gossips: e.map(|e| e.gossips.clone()).unwrap_or_default(),
         last_gossip_time: e.map_or(0, |e| e.last_gossip_time),
         food_points: e.map_or(0, Ext::food_in_inventory),
@@ -968,7 +1052,8 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
         |v| int(Some(v)),
     );
     let e = ext_mut(m);
-    e.food_level = int(tag.get("FoodLevel")).unwrap_or(0) as i32;
+    // `getByteOr("FoodLevel", 0)`: any number, narrowed to a byte.
+    e.food_level = i32::from(int(tag.get("FoodLevel")).unwrap_or(0) as i8);
     e.gossips = tag
         .get("Gossips")
         .map(crate::gossip::Gossips::from_nbt)
@@ -984,12 +1069,10 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
         _ => None,
     };
     let asleep = e.sleeping_pos.is_some();
+    // InventoryCarrier.readInventoryFromTag -> SimpleContainer.fromItemList.
     if let Some(Tag::List(items)) = tag.get("Inventory") {
-        e.inventory = items
-            .iter()
-            .filter_map(crate::save::item_from_nbt)
-            .take(INVENTORY_SLOTS)
-            .collect();
+        let inventory = load_container(m, items, INVENTORY_SLOTS);
+        ext_mut(m).inventory = inventory;
     }
     if asleep {
         m.extra.ints[1] = bed_facing_code(None);
@@ -999,6 +1082,79 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Added after the H138 baseline: `add_item` delegates to
+    /// `add_to_container` with the eight villager slots, with the same
+    /// inventories and remainders in the same order.
+    #[test]
+    fn add_item_is_add_to_container_with_eight_slots() {
+        let st = |id: &str, n: u32| ItemStack::new(id, n);
+        let sequences: [&[(&str, u32, u32)]; 3] = [
+            &[
+                ("minecraft:stone", 40, 64),
+                ("minecraft:stone", 40, 64),
+                ("minecraft:dirt", 1, 64),
+            ],
+            &[
+                ("minecraft:ender_pearl", 10, 16),
+                ("minecraft:ender_pearl", 10, 16),
+            ],
+            &[("minecraft:stone", 64, 64); 10],
+        ];
+        for seq in sequences {
+            let mut ext = Ext::default();
+            let mut vec = Vec::new();
+            for &(id, n, max) in seq {
+                let a = ext
+                    .add_item(st(id, n), max)
+                    .map(|s| (s.item.to_string(), s.count));
+                let b = add_to_container(&mut vec, st(id, n), max, INVENTORY_SLOTS)
+                    .map(|s| (s.item.to_string(), s.count));
+                assert_eq!(a, b);
+                let counts = |v: &[ItemStack]| {
+                    v.iter()
+                        .map(|s| (s.item.to_string(), s.count))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(counts(&ext.inventory), counts(&vec));
+            }
+        }
+    }
+
+    /// Added after the H138 baseline: eight kinds fill the eight slots; a
+    /// later stack of a kind already held still fills its stack, and a
+    /// ninth kind does not fit (fromItemList drops it).
+    #[test]
+    fn a_later_stack_still_merges_into_a_full_set_of_slots() {
+        let kinds = [
+            "stone",
+            "dirt",
+            "cobblestone",
+            "oak_planks",
+            "sand",
+            "gravel",
+            "oak_log",
+            "glass",
+        ];
+        let mut vec = Vec::new();
+        for k in kinds {
+            assert!(
+                add_to_container(
+                    &mut vec,
+                    ItemStack::new(&format!("minecraft:{k}"), 1),
+                    64,
+                    8
+                )
+                .is_none()
+            );
+        }
+        assert!(add_to_container(&mut vec, ItemStack::new("minecraft:stone", 5), 64, 8).is_none());
+        assert_eq!(vec.len(), 8);
+        assert_eq!((vec[0].item.as_ref(), vec[0].count), ("minecraft:stone", 6));
+        let rest = add_to_container(&mut vec, ItemStack::new("minecraft:clay", 1), 64, 8);
+        assert_eq!(rest.map(|s| s.count), Some(1));
+        assert_eq!(vec.len(), 8);
+    }
 
     fn memory_fixture() -> Mob {
         let mut m = villager();
@@ -1047,6 +1203,22 @@ mod tests {
             ),
         ]);
         assert_eq!(actual, expected);
+    }
+
+    /// `Villager.readAdditionalSaveData` reads `FoodLevel` with `getByteOr`:
+    /// an int is narrowed (`(byte)(value & 255)`), so 300 is 44 and 200 -56.
+    #[test]
+    fn a_villagers_food_level_is_narrowed_to_a_byte() {
+        use horizon_world::nbt::Tag;
+        for (saved, expected) in [
+            (Tag::Int(300), 44),
+            (Tag::Int(200), -56),
+            (Tag::Byte(12), 12),
+        ] {
+            let mut loaded = villager();
+            read_nbt(&mut loaded, &Tag::compound([("FoodLevel", saved)]));
+            assert_eq!(ext(&loaded).unwrap().food_level, expected);
+        }
     }
 
     #[test]

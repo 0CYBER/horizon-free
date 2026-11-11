@@ -11,6 +11,8 @@
 pub mod code;
 pub mod crypto;
 pub mod direct;
+#[cfg(feature = "game")]
+pub mod game;
 pub mod guest;
 pub mod host;
 pub mod invite;
@@ -115,13 +117,11 @@ pub fn resolve_relay(url: &str) -> io::Result<Vec<SocketAddr>> {
 /// teardown) are detected by the OS instead of holding threads indefinitely.
 pub fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
     let sock = socket2::SockRef::from(stream);
-    let mut keepalive = socket2::TcpKeepalive::new()
+    let keepalive = socket2::TcpKeepalive::new()
         .with_time(Duration::from_secs(10))
         .with_interval(Duration::from_secs(3));
     #[cfg(not(any(target_os = "windows", target_os = "openbsd")))]
-    {
-        keepalive = keepalive.with_retries(3);
-    }
+    let keepalive = keepalive.with_retries(3);
     sock.set_tcp_keepalive(&keepalive)
 }
 
