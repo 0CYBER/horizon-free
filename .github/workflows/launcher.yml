@@ -138,9 +138,18 @@ jobs:
       - name: Linux libraries GPUI links to
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
-            libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev patchelf
+          # The runner's mirror sometimes fails to resolve (azure.archive.ubuntu.com); retry
+          # before giving up so one flaky minute doesn't cost the whole release.
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get update &&
+               sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+                 libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev patchelf; then
+              exit 0
+            fi
+            echo "::warning::apt failed (attempt $attempt); retrying in 20s"
+            sleep 20
+          done
+          exit 1
       - name: Metal shaders compiled now, or at run time without the Metal toolchain
         if: runner.os == 'macOS'
         run: |
