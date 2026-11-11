@@ -48,19 +48,39 @@ pub fn open_path(path: &Path) -> io::Result<()> {
         #[cfg(windows)]
         Opener::Shell(uri) => open::that_detached(uri),
         #[cfg(not(windows))]
-        Opener::Program(program, path) => {
-            let mut child = std::process::Command::new(program)
-                .arg(path)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()?;
-            // Reap the desktop opener without blocking the UI thread.
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-            Ok(())
-        }
+        Opener::Program(program, path) => spawn(program, path.as_os_str()),
     }
+}
+
+/// `Blaze3D.openUri`: the desktop's handler for a link, which is handed over as it is (no path
+/// is resolved). On Windows ShellExecute keeps it one Unicode value, without passing its query
+/// string through a command interpreter.
+pub fn open_uri(uri: &str) -> io::Result<()> {
+    #[cfg(windows)]
+    return open::that_detached(uri);
+    #[cfg(not(windows))]
+    spawn(
+        if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        },
+        std::ffi::OsStr::new(uri),
+    )
+}
+
+/// Starts the desktop opener on `arg` and reaps it without blocking the UI thread.
+#[cfg(not(windows))]
+fn spawn(program: &str, arg: &std::ffi::OsStr) -> io::Result<()> {
+    let mut child = std::process::Command::new(program)
+        .arg(arg)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// `Path.toUri` of an absolute Windows path: `file:///C:/a%20b/` (a share is
@@ -68,7 +88,15 @@ pub fn open_path(path: &Path) -> io::Result<()> {
 /// hold are escaped; other characters, non-ASCII ones too, stay as they are.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn file_uri(path: &Path, directory: bool) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
+    // dunce leaves a share (a mapped drive canonicalizes to one), a path past MAX_PATH or one
+    // with a reserved name verbatim: `\\?\UNC\server\share` is `\\server\share`, `\\?\C:\` is `C:\`.
+    let text = path.to_string_lossy();
+    let text = if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{share}")
+    } else {
+        text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+    };
+    let text = text.replace('\\', "/");
     let mut uri = String::from(if text.starts_with("//") {
         "file:"
     } else {
@@ -131,6 +159,20 @@ mod tests {
         assert_eq!(
             file_uri(Path::new(r"\\server\share\packs"), true),
             "file://server/share/packs/"
+        );
+    }
+
+    /// What dunce leaves verbatim (a share or mapped drive, a path past MAX_PATH) names the
+    /// same location as its plain form: the share's host, the drive's path.
+    #[test]
+    fn a_verbatim_path_gives_the_uri_of_its_plain_form() {
+        assert_eq!(
+            file_uri(Path::new(r"\\?\UNC\server\share\packs"), true),
+            "file://server/share/packs/"
+        );
+        assert_eq!(
+            file_uri(Path::new(r"\\?\C:\games\resourcepacks"), true),
+            "file:///C:/games/resourcepacks/"
         );
     }
 
