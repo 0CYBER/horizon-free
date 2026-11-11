@@ -84,6 +84,10 @@ pub struct ClientSession {
     held: AtomicU8,
     /// Pinned biome ids -> the client's, once its biome registry lost entries its release lacks (biomes.rs).
     biomes: Mutex<Option<biomes::BiomeMap>>,
+    /// Where the client said it is in its last `accept_teleportation`, until its next packet: an older
+    /// client follows the accept with a `move_player_pos_rot` to the same place, which 26.3's accept
+    /// (it carries the place) made redundant, and which counts as the tick's move on the server.
+    accepted: Mutex<Option<Place>>,
 }
 
 /// A position, yaw and pitch.
@@ -173,6 +177,7 @@ impl ClientSession {
             entities: Mutex::new(HashMap::new()),
             held: AtomicU8::new(0),
             biomes: Mutex::new(None),
+            accepted: Mutex::new(None),
         }
     }
     fn hold(&self, slot: i32) {
@@ -248,13 +253,28 @@ impl ClientSession {
             return Ok(None);
         };
         use packet_ids::play::serverbound as sb;
+        let accepted = self
+            .accepted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if (state, pinned) == (State::Play, sb::MOVE_PLAYER_POS_ROT)
+            && accepted.is_some_and(|at| same_place(&payload, at))
+        {
+            return Ok(None);
+        }
         let payload = match (state, pinned) {
             (State::Configuration, packet_ids::configuration::serverbound::SELECT_KNOWN_PACKS)
                 if biomes::own_core_pack(self.version) =>
             {
                 biomes::core_pack_up(self.version, &payload)?
             }
-            (State::Play, sb::ACCEPT_TELEPORTATION) => self.accept_teleport(&payload)?,
+            (State::Play, sb::ACCEPT_TELEPORTATION) => {
+                let accept = self.accept_teleport(&payload)?;
+                *self.accepted.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(*self.place.lock().unwrap_or_else(|e| e.into_inner()));
+                accept
+            }
             // 26.3 inserted CHANGE_DESTROY_DIRECTION at 1: 26.2's actions past 0 are one up.
             (State::Play, sb::PLAYER_ACTION) => {
                 let mut r = Reader::new(&payload);
@@ -745,6 +765,21 @@ impl ClientSession {
     }
 }
 
+/// Whether a `move_player_pos_rot` payload names `at` (the place an accepted teleport put the client).
+fn same_place(payload: &[u8], at: Place) -> bool {
+    let mut r = Reader::new(payload);
+    let (Ok(x), Ok(y), Ok(z), Ok(yaw), Ok(pitch)) = (r.f64(), r.f64(), r.f64(), r.f32(), r.f32())
+    else {
+        return false;
+    };
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    close(x, at.position[0])
+        && close(y, at.position[1])
+        && close(z, at.position[2])
+        && (yaw - at.yaw).abs() < 1e-3
+        && (pitch - at.pitch).abs() < 1e-3
+}
+
 /// What becomes of a clientbound payload on its way to an older client.
 enum Sent {
     AsIs,
@@ -1222,6 +1257,40 @@ mod tests {
         assert_eq!(action(1), 2); // abort: 1 in 26.2, 2 in 26.3
         assert_eq!(action(2), 3); // stop destroying
         assert_eq!(action(6), 7); // swap held items
+    }
+
+    /// An older client follows each accepted teleport with a move to the same place; 26.3 doesn't (its
+    /// accept carries the place), and two moves in one client tick are kicked as invalid movement.
+    #[test]
+    fn the_move_an_older_client_sends_after_accepting_a_teleport_is_not_passed_on() {
+        let s = in_play();
+        let p = play::Clientbound::PlayerPosition(play::PlayerPosition {
+            teleport: 1,
+            position: [100.5, 46.0, 100.5],
+            delta: [0.0; 3],
+            yaw: 180.0,
+            pitch: 0.0,
+            relatives: 0,
+        });
+        s.clientbound(&p.encode()).unwrap().unwrap();
+        let mut w = Writer::new();
+        w.varint(1);
+        s.serverbound(0, w.data).unwrap().unwrap();
+        let pos_rot = |x: f64| {
+            let mut w = Writer::new();
+            for v in [x, 46.0, 100.5] {
+                w.f64(v);
+            }
+            w.f32(180.0);
+            w.f32(0.0);
+            w.u8(1);
+            w.data
+        };
+        // move_player_pos_rot: 31 in both. The echo of the accepted place is not sent on...
+        assert!(s.serverbound(31, pos_rot(100.5)).unwrap().is_none());
+        // ...but the client's next real move is.
+        assert!(s.serverbound(31, pos_rot(100.5)).unwrap().is_some());
+        assert!(s.serverbound(31, pos_rot(101.0)).unwrap().is_some());
     }
 
     #[test]
