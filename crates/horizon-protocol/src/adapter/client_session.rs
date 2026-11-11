@@ -15,12 +15,11 @@ use std::{
     cell::Cell,
     collections::{HashMap, VecDeque},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU8, Ordering},
     },
 };
 
-mod biomes;
 mod step_1_20_6;
 mod step_1_21_1;
 mod step_1_21_10;
@@ -30,6 +29,8 @@ mod step_1_21_5;
 mod step_1_21_6;
 mod step_1_21_8;
 mod step_26_1;
+mod sync_registries;
+mod synced;
 mod world;
 
 use super::{
@@ -82,12 +83,15 @@ pub struct ClientSession {
     entities: Mutex<HashMap<i32, (i32, u128)>>,
     /// The hotbar slot the client holds (0..=8), for the swap a 1.21.3 client's `pick_item` becomes.
     held: AtomicU8,
-    /// Pinned biome ids -> the client's, once its biome registry lost entries its release lacks (biomes.rs).
-    biomes: Mutex<Option<biomes::BiomeMap>>,
+    /// Pinned ids -> the client's of the synchronised registries that lost entries its release lacks
+    /// (synced.rs).
+    synced: Mutex<Arc<synced::IdMaps>>,
     /// Where the client said it is in its last `accept_teleportation`, until its next packet: an older
     /// client follows the accept with a `move_player_pos_rot` to the same place, which 26.3's accept
     /// (it carries the place) made redundant, and which counts as the tick's move on the server.
     accepted: Mutex<Option<Place>>,
+    /// A packet to pass on after the one just translated ([`Self::next_serverbound`]).
+    pending: Mutex<Option<(i32, Vec<u8>)>>,
 }
 
 /// A position, yaw and pitch.
@@ -176,9 +180,28 @@ impl ClientSession {
             teleports: Mutex::new(VecDeque::new()),
             entities: Mutex::new(HashMap::new()),
             held: AtomicU8::new(0),
-            biomes: Mutex::new(None),
+            synced: Mutex::new(Arc::default()),
             accepted: Mutex::new(None),
+            pending: Mutex::new(None),
         }
+    }
+
+    /// A client before 1.21.2 has no `client_tick_end`; it sends at most one movement per tick, so the end of
+    /// its tick follows each movement (the server allows one movement per client tick).
+    fn tick_ended(&self, pinned: i32) {
+        if self.version.at_most(ServerVersion::V1_21_1) {
+            let _ = pinned;
+            *self.pending.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((packet_ids::play::serverbound::CLIENT_TICK_END, Vec::new()));
+        }
+    }
+
+    /// A packet the translation of the last one added after it: the server reads it next.
+    pub fn next_serverbound(&self) -> Option<(i32, Vec<u8>)> {
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
     fn hold(&self, slot: i32) {
         if let Ok(slot @ 0..=8) = u8::try_from(slot) {
@@ -265,9 +288,9 @@ impl ClientSession {
         }
         let payload = match (state, pinned) {
             (State::Configuration, packet_ids::configuration::serverbound::SELECT_KNOWN_PACKS)
-                if biomes::own_core_pack(self.version) =>
+                if synced::own_core_pack(self.version) =>
             {
-                biomes::core_pack_up(self.version, &payload)?
+                synced::core_pack_up(self.version, &payload)?
             }
             (State::Play, sb::ACCEPT_TELEPORTATION) => {
                 let accept = self.accept_teleport(&payload)?;
@@ -290,6 +313,11 @@ impl ClientSession {
             }
             (State::Play, sb::MOVE_PLAYER_POS | sb::MOVE_PLAYER_POS_ROT | sb::MOVE_PLAYER_ROT) => {
                 self.moved(pinned, &payload)?;
+                self.tick_ended(pinned);
+                payload
+            }
+            (State::Play, sb::MOVE_PLAYER_STATUS_ONLY) => {
+                self.tick_ended(pinned);
                 payload
             }
             _ => payload,
@@ -315,6 +343,16 @@ impl ClientSession {
     /// has no such packet, or nothing it could show for what the packet names, so nothing is sent.
     pub fn clientbound(&self, body: &[u8]) -> Result<Option<Vec<u8>>> {
         let state = self.writing();
+        self.clientbound_in(state, body).map_err(|e| {
+            let id = Reader::new(body).varint().unwrap_or(-1);
+            crate::Error(format!(
+                "{e} (packet {id} in {state:?} for a {} client)",
+                self.version.name()
+            ))
+        })
+    }
+
+    fn clientbound_in(&self, state: State, body: &[u8]) -> Result<Option<Vec<u8>>> {
         let mut r = Reader::new(body);
         let id = r.varint()?;
         let payload = r.rest();
@@ -329,7 +367,14 @@ impl ClientSession {
         };
         self.writing.store(to_u8(next), Ordering::Release);
         let rebiomed;
-        let payload = match self.biomes_down(state, id, payload)? {
+        // Items and entity data written below take the client's synchronised registry ids.
+        let maps: Arc<synced::IdMaps> = self
+            .synced
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let _synced = (!maps.is_empty()).then(|| ids::synced(maps));
+        let payload = match self.synced_down(state, id, payload)? {
             // A registry the client's release doesn't synchronise is not sent.
             Some(p) if p.is_empty() => return Ok(None),
             Some(p) => {
@@ -647,63 +692,67 @@ fn layout_then_ids(
 }
 
 impl ClientSession {
-    /// The client's own core pack offered, its biome registry without what its release lacks, and the
-    /// biome ids after it renumbered (biomes.rs, #15138). `None`: the pinned payload goes on as it is.
-    fn biomes_down(&self, state: State, id: i32, payload: &[u8]) -> Result<Option<Vec<u8>>> {
+    /// The client's own core pack offered, the registries its release lacks left out, its registries without
+    /// the entries it lacks, and the ids into those renumbered (synced.rs, #15138). `None`: the pinned payload
+    /// goes on as it is; empty: nothing is sent.
+    fn synced_down(&self, state: State, id: i32, payload: &[u8]) -> Result<Option<Vec<u8>>> {
         use packet_ids::{configuration::clientbound as cfg, play::clientbound as cb};
-        if !biomes::own_core_pack(self.version) {
+        if !synced::own_core_pack(self.version) {
             return Ok(None);
         }
-        let map = || {
-            self.biomes
+        let maps = || {
+            self.synced
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
         };
         Ok(match (state, id) {
             (State::Configuration, cfg::REGISTRY_DATA)
-                if biomes::absent_registry(self.version, payload)? =>
+                if synced::absent_registry(self.version, payload)? =>
             {
                 return Ok(Some(Vec::new()));
             }
             (State::Configuration, cfg::SELECT_KNOWN_PACKS) => {
-                Some(biomes::core_pack_down(self.version, payload)?)
+                Some(synced::core_pack_down(self.version, payload)?)
             }
             (State::Configuration, cfg::REGISTRY_DATA) => {
-                match biomes::registry_data(self.version, payload)? {
-                    Some((p, m)) => {
-                        *self.biomes.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
+                match synced::registry_data(self.version, payload)? {
+                    Some((p, registry, m)) => {
+                        let mut guard = self.synced.lock().unwrap_or_else(|e| e.into_inner());
+                        Arc::make_mut(&mut guard).insert(registry, m);
                         Some(p)
                     }
                     None => None,
                 }
             }
-            (State::Configuration, cfg::UPDATE_TAGS) => match map() {
-                Some(m) => {
-                    let mut p = configuration::Clientbound::decode(id, payload)?;
-                    if let configuration::Clientbound::UpdateTags(t) = &mut p {
-                        biomes::tags(&m, &mut t.registries);
-                    }
-                    Some(strip_id(p.encode()))
+            (State::Configuration, cfg::UPDATE_TAGS) => {
+                let mut p = configuration::Clientbound::decode(id, payload)?;
+                if let configuration::Clientbound::UpdateTags(t) = &mut p {
+                    synced::tags(self.version, &maps(), &mut t.registries);
                 }
+                Some(strip_id(p.encode()))
+            }
+            (State::Play, cb::UPDATE_TAGS) => {
+                let mut p = play::Clientbound::decode(id, payload)?;
+                if let play::Clientbound::UpdateTags(t) = &mut p {
+                    synced::tags(self.version, &maps(), &mut t.registries);
+                }
+                Some(strip_id(p.encode()))
+            }
+            (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => {
+                match (maps().get(synced::BIOMES), self.version.ids()) {
+                    (Some(m), Some(ids)) => {
+                        Some(synced::level_chunk(m, ids.state_bits().1, payload)?)
+                    }
+                    _ => None,
+                }
+            }
+            (State::Play, cb::CHUNKS_BIOMES) => match maps().get(synced::BIOMES) {
+                Some(m) => Some(synced::chunks_biomes(m, payload)?),
                 None => None,
             },
-            (State::Play, cb::UPDATE_TAGS) => match map() {
-                Some(m) => {
-                    let mut p = play::Clientbound::decode(id, payload)?;
-                    if let play::Clientbound::UpdateTags(t) = &mut p {
-                        biomes::tags(&m, &mut t.registries);
-                    }
-                    Some(strip_id(p.encode()))
-                }
-                None => None,
-            },
-            (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => match (map(), self.version.ids()) {
-                (Some(m), Some(ids)) => Some(biomes::level_chunk(&m, ids.state_bits().1, payload)?),
-                _ => None,
-            },
-            (State::Play, cb::CHUNKS_BIOMES) => match map() {
-                Some(m) => Some(biomes::chunks_biomes(&m, payload)?),
+            (State::Play, cb::DAMAGE_EVENT) => match maps().get(synced::DAMAGE_TYPE) {
+                Some(m) => Some(synced::damage_event(m, payload)?),
                 None => None,
             },
             _ => None,
@@ -977,6 +1026,11 @@ fn entity_value(ids: &Ids, kind: i32, value: &mut Value) -> bool {
             ) =>
         {
             *id = state_down(ids, *id);
+            true
+        }
+        // A painting variant the client lacks is its stand-in (a holder: the id plus one).
+        Value::Id(holder) if kind == serializer::PAINTING_VARIANT && *holder >= 1 => {
+            *holder = ids::synced_down_or_first(synced::PAINTING_VARIANT, *holder - 1) + 1;
             true
         }
         Value::Particle(p) => particle(p),

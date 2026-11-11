@@ -239,6 +239,35 @@ thread_local! {
     static TRIM_PATTERNS: RefCell<HashMap<i32,i32>> = RefCell::new(HashMap::new());
     static LEGACY_REGISTRIES: RefCell<Option<Arc<LegacyRegistries>>> = const { RefCell::new(None) };
     static LEGACY_ITEMS: RefCell<Option<Arc<Mutex<crate::item::v1_20_3::Cache>>>> = const { RefCell::new(None) };
+    static SYNCED: RefCell<Option<Arc<dyn SyncedIds>>> = const { RefCell::new(None) };
+}
+
+/// A connection's renumbering of synchronised registries that lost entries for its older client.
+pub(crate) trait SyncedIds: Send + Sync {
+    /// The client's id of the pinned `id` in `registry`: `None` when it was removed without a stand-in.
+    fn down(&self, registry: &str, id: i32) -> Option<i32>;
+}
+
+/// Writers on this thread renumber synchronised registry ids through `ids` until the guard drops.
+pub(crate) fn synced(ids: Arc<dyn SyncedIds>) -> SyncedGuard {
+    SyncedGuard(SYNCED.replace(Some(ids)))
+}
+pub(crate) struct SyncedGuard(Option<Arc<dyn SyncedIds>>);
+impl Drop for SyncedGuard {
+    fn drop(&mut self) {
+        SYNCED.replace(self.0.take());
+    }
+}
+/// A synchronised registry id as written on this thread: `None` when the client lacks it (left out).
+pub(crate) fn synced_down(registry: &str, id: i32) -> Option<i32> {
+    SYNCED.with_borrow(|s| match s {
+        Some(s) => s.down(registry, id),
+        None => Some(id),
+    })
+}
+/// The same, the first entry where one id must be written.
+pub(crate) fn synced_down_or_first(registry: &str, id: i32) -> i32 {
+    synced_down(registry, id).unwrap_or(0)
 }
 
 pub(crate) fn legacy_items(cache: Arc<Mutex<crate::item::v1_20_3::Cache>>) -> LegacyItemGuard {

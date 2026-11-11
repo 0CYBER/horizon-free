@@ -477,6 +477,13 @@ impl ConnReader {
         if let Some(packet) = self.adapter.as_ref().and_then(|a| a.next_incoming()) {
             return Ok(packet);
         }
+        if let Some(packet) = self
+            .older_client
+            .as_ref()
+            .and_then(|c| c.next_serverbound())
+        {
+            return Ok(packet);
+        }
         loop {
             match self.next()? {
                 Next::Packet((id, payload)) if self.older_client.is_some() => {
@@ -505,6 +512,13 @@ impl ConnReader {
     /// more: for a detached reader, after [`Self::read_from`]. Only an older
     /// client's renumbering applies (a server's connection has no other).
     pub fn buffered(&mut self) -> Result<Option<(i32, Vec<u8>)>> {
+        if let Some(packet) = self
+            .older_client
+            .as_ref()
+            .and_then(|c| c.next_serverbound())
+        {
+            return Ok(Some(packet));
+        }
         loop {
             match self.next()? {
                 Next::Packet((id, payload)) if self.older_client.is_some() => {
