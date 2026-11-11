@@ -39,6 +39,12 @@ again.
   that owns the game.
 - `Settings::load()` and `client_as()` force `dev_offline` / `session_for_game(.., true)`.
 - CLI `account offline NAME`, `account select NAME` and `play` bypass the owner gate.
+- Offline names: upstream removed them in `1e789800af` ("launcher: remove offline names"), so
+  every sync restores that commit (`git revert -n 1e789800af`) and resolves the conflicts in
+  `backend.rs`, `cli.rs`, `frame.rs`, `glass_account.rs`, `main.rs` and the one lang file whose
+  translations drifted. Keep `OFFLINE_PLAY` doing the job `dev_offline` did upstream: the chips
+  in Settings > Account, the top bar's quick switch, `account offline|select|forget-offline|skin`
+  and the `--name`/`HORIZON_OFFLINE_SKIN*` the game gets for them.
 - Signature check disabled for fork releases (`signed_digest` returns nothing, `download()`
   skips the check when the digest is empty). `fill_stage` then stores the archive's own SHA-256,
   so `place_checked` still refuses bytes that changed after the download; keep that.
