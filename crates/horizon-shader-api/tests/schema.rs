@@ -946,3 +946,38 @@ fn ordinary_float_options_and_invalid_non_finite_values_keep_their_contract() {
         }
     }
 }
+
+/// The entity stage has the shadow maps and the coloured lights, so a pack with no other stage
+/// may ask for them; without a stage that reads them they are still refused.
+#[test]
+fn an_entity_only_pack_may_ask_for_its_shadow_and_lights() {
+    let head = "schema = 1
+id = \"p\"
+name = \"P\"
+version = \"1\"
+api = \"0.2\"
+";
+    let asks = "[shadow]
+[[lights]]
+blocks = [\"minecraft:torch\"]
+color = [1.0, 0.5, 0.2]
+                [[particle_lights]]
+particles = [\"firefly\"]
+color = [1.0, 1.0, 0.5]
+reach = 4.0
+";
+    let entity = format!(
+        "{head}[entity]
+file = \"e.wgsl\"
+{asks}"
+    );
+    let m = Manifest::parse(&entity).unwrap();
+    assert!(m.shadow.is_some() && m.lights.len() == 1 && m.particle_lights.len() == 1);
+    let sky = format!(
+        "{head}[sky]
+file = \"s.wgsl\"
+{asks}"
+    );
+    let why = Manifest::parse(&sky).unwrap_err().to_string();
+    assert!(why.contains("a [material] or an [entity]"), "{why}");
+}

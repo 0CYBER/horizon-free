@@ -67,7 +67,7 @@ file = "vertex.wgsl"
 [weather]                  # the colour of rain and snow streaks
 file = "weather.wgsl"
 
-[shadow]                   # optional, needs [material] or [[post]]: a shadow map from the sun (the moon by night)
+[shadow]                   # optional, needs [material] or [[post]] (0.2: or [entity]): a shadow map from the sun (the moon by night)
 resolution = 2048          # its side in texels, 256 to 8192
 distance = 128.0           # half the side of the square it covers, in blocks, 32 to 512
 solid_materials = [10]     # optional: [[materials]] ids drawn into the map whole, cutouts ignored
@@ -245,7 +245,8 @@ draws them itself (the material stage covers terrain only). The first-person han
 - 2026-11-10: API 0.2 (additions, experimental): the `[entity]` stage, `fn entity(input: EntityInput) -> Surface`,
   for entities, block entities, items and particles, with the material stage's shadow maps and coloured lights. The
   reference gives vanilla's own as the stage's function. `horizon-shader check` takes it; the game refuses a pack
-  that has it until it draws the stage. A pack without `[entity]` is unchanged, and so is API 0.1.
+  that has it until it draws the stage. `[shadow]`, `[[lights]]` and `[[particle_lights]]` take `[entity]` as the
+  stage that reads them. A pack without `[entity]` is unchanged, and so is API 0.1.
 - 2026-11-10: API 0.2 (additions, experimental): `[frame] primaries`, `"bt709"` (the default) or `"bt2020"`, and
   `Frame.primaries` and `luminance` after `black_level`. `horizon-shader check` takes `"bt2020"` with
   `blend = "linear"` only, and the game refuses it for now. The reference's "Room to grow" gains the rule for new

@@ -879,15 +879,19 @@ impl Manifest {
                 repeat,
             });
         }
-        if !raw.lights.is_empty() && raw.material.is_none() {
-            return Err(err(
-                "lights are read by the material stage: give it a [material]".into(),
-            ));
+        // 0.2's entity stage reads the coloured lights and the shadow map as the material's does.
+        let unlit = raw.material.is_none() && raw.entity.is_none();
+        let lit = match api {
+            Api::V0_1 => "a [material]",
+            Api::V0_2 => "a [material] or an [entity]",
+        };
+        if !raw.lights.is_empty() && unlit {
+            return Err(err(format!("no stage reads the lights: give it {lit}")));
         }
-        if !raw.particle_lights.is_empty() && raw.material.is_none() {
-            return Err(err(
-                "particle lights are read by the material stage: give it a [material]".into(),
-            ));
+        if !raw.particle_lights.is_empty() && unlit {
+            return Err(err(format!(
+                "no stage reads the particle lights: give it {lit}"
+            )));
         }
         if raw.particle_lights.len() > MAX_PARTICLE_LIGHTS {
             return Err(err(format!(
@@ -954,8 +958,12 @@ impl Manifest {
             }
         }
         if let Some(s) = &raw.shadow {
-            if raw.material.is_none() && raw.post.is_empty() {
-                return Err(err("[shadow] needs [material] or [[post]]".into()));
+            if unlit && raw.post.is_empty() {
+                return Err(err(match api {
+                    Api::V0_1 => "[shadow] needs [material] or [[post]]",
+                    Api::V0_2 => "[shadow] needs [material], [entity] or [[post]]",
+                }
+                .into()));
             }
             if !SHADOW_RESOLUTIONS.contains(&s.resolution) {
                 return Err(err(format!(
