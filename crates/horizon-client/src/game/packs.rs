@@ -31,11 +31,9 @@ pub fn packs_dir() -> PathBuf {
         .unwrap_or_default()
         .join("resourcepacks")
 }
-mod folder;
-
-/// `Util.getPlatform().openPath`: the system file manager on the folder.
+/// `Blaze3D.openPath`: the desktop's handler on the folder (the default file manager).
 pub fn open_folder(dir: &Path) {
-    if let Err(e) = folder::command(dir).and_then(|mut command| command.spawn()) {
+    if let Err(e) = horizon_client::desktop::open_path(dir) {
         log::warn!("Horizon: could not open {}: {e}", dir.display());
     }
 }

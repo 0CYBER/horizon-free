@@ -115,25 +115,10 @@ pub fn backups_path(saves: &Path) -> PathBuf {
     saves.parent().unwrap_or(saves).join("backups")
 }
 
+/// `Blaze3D.openPath` on the world's (or the backups') folder, made first if it is missing.
 pub(super) fn open_folder(path: &Path) -> crate::Result<()> {
     fs::create_dir_all(path)?;
-    let path = fs::canonicalize(path)?;
-    let program = if cfg!(target_os = "windows") {
-        "explorer"
-    } else if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    // Reap the desktop opener without blocking the UI thread.
-    let mut child = std::process::Command::new(program)
-        .arg(path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    crate::desktop::open_path(path)?;
     Ok(())
 }
 
