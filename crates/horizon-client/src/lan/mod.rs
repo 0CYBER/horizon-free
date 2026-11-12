@@ -21,6 +21,7 @@ pub mod conn;
 pub mod containers;
 pub mod data;
 pub mod discovery;
+mod effect_meta;
 pub mod entity;
 pub mod equipment_cache;
 pub mod far;

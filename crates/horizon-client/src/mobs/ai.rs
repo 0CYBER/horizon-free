@@ -726,7 +726,7 @@ pub fn tick(
         // Mob.aiStep still runs without AI: undead burn, endermites age.
         burn_undead(m, w, events);
         if m.species() == Species::Endermite {
-            endermite_lifetime(m);
+            super::hostile::endermite_lifetime(m);
         }
         // AbstractHorse.aiStep (it overrides LivingEntity.aiStep, which NoAI
         // doesn't skip) and AbstractHorse.tick: a NoAI horse still swishes
@@ -821,6 +821,8 @@ pub fn tick(
         Species::Allay => super::allay::tick(m, w, events),
         Species::Panda => super::panda::tick(m, w, events),
         Species::Villager => super::villager::tick(m, w.game_time),
+        // Vex.tick: gravity off on every tick, AI or not.
+        Species::Vex => m.no_gravity = true,
         _ => {}
     }
     aquatic::school_tick(m, w, level_random);
@@ -2055,16 +2057,6 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         _ => {}
     }
 }
-/// Endermite.aiStep: `counter` is the life; an endermite not required to
-/// persist is discarded at 2400.
-fn endermite_lifetime(m: &mut Mob) {
-    if !m.persistent {
-        m.extra.counter += 1;
-    }
-    if m.extra.counter >= 2400 {
-        m.removed = true;
-    }
-}
 fn species_ai_step(
     m: &mut Mob,
     w: &MobWorld,
@@ -2078,7 +2070,7 @@ fn species_ai_step(
         Species::Enderman => super::enderman::ai_step(m, w, events),
         // Endermite.aiStep: `counter` is the life; an endermite not required
         // to persist is discarded at 2400.
-        Species::Endermite => endermite_lifetime(m),
+        Species::Endermite => super::hostile::endermite_lifetime(m),
         Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Cat => super::tame::cat_ai_step(m, events),
         Species::IronGolem => super::golem::iron_ai_step(m, w),
@@ -5238,7 +5230,9 @@ mod allay_healing_tests {
                     mob.persistent = true;
                     mob.health = initial;
                     mob.extra.ints[2] = 37;
-                    mob.extra.ints[3] = 41;
+                    // ITEM_PICKUP_COOLDOWN_TICKS lives in the allay's own state now.
+                    mob.extra.allay.get_or_insert_with(Default::default);
+                    crate::mobs::allay::set_pickup_cooldown(&mut mob, Some(41));
                     mob.extra.egg_time = 30;
                     assert_eq!(mob.attrs.max_health, 20.0);
                     assert_eq!(mob.age, 0);
@@ -5255,7 +5249,10 @@ mod allay_healing_tests {
                         assert_eq!(mob.extra.egg_time, 30 - elapsed as i32);
                         let skipped = if no_ai { 0 } else { elapsed as i32 };
                         assert_eq!(mob.extra.ints[2], 37 - skipped);
-                        assert_eq!(mob.extra.ints[3], 41 - skipped);
+                        assert_eq!(
+                            crate::mobs::allay::pickup_cooldown(&mob),
+                            Some(41 - skipped)
+                        );
                     }
                 }
             }

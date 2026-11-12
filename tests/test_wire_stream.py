@@ -100,6 +100,20 @@ class WireStreamTest(unittest.TestCase):
         late = [tick('punch'), tick('punch'), tick('abort', 'punch'), tick(), tick('pos')]
         self.assertEqual([d[0] for d in wire_stream.compare_answered(vanilla, late, 4, 1, 2)], [3, 4])
 
+    def test_a_late_answer_on_the_position_reminder_s_tick_keeps_the_reminder_on_the_script_s_clock(self):
+        tick = lambda *names: {'packets': [(n, {}) for n in names], 'frame': [], 'misplaced': []}  # noqa
+        # #14807: the reminder (sendPosition every 20 ticks) falls in tick 2 for both clients; the answer reaches
+        # vanilla in tick 1 and Horizon in tick 2, the reminder's tick.
+        vanilla = [tick('punch'), tick('abort', 'punch'), tick('move_player_pos'), tick()]
+        horizon = [tick('punch'), tick('punch'), tick('abort', 'punch', 'move_player_pos'), tick()]
+        self.assertEqual(wire_stream.compare_answered(vanilla, horizon, 3, 1, 2), [])
+        # A reminder a tick early is still a difference, in either answer tick.
+        early = [tick('punch'), tick('punch', 'move_player_pos'), tick('abort', 'punch'), tick()]
+        self.assertEqual([d[0] for d in wire_stream.compare_answered(vanilla, early, 3, 1, 2)], [1, 2])
+        # So is a move the answer brings that vanilla's doesn't, outside the reminder's tick.
+        moved = [tick('punch'), tick('punch'), tick('abort', 'punch', 'move_player_pos'), tick('move_player_pos')]
+        self.assertEqual([d[0] for d in wire_stream.compare_answered(vanilla, moved, 3, 1, 2)], [3])
+
     def test_compare_reports_the_first_field_that_differs(self):
         tick = lambda y: {'packets': [('move_player_pos', {'x': 0.5, 'y': y})], 'frame': [], 'misplaced': []}  # noqa
         diffs = wire_stream.compare([tick(-60.0)], [tick(-60.0000001)], 0)

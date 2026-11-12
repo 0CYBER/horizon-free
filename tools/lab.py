@@ -55,6 +55,14 @@ def cargo_target():
     return ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
 
 
+def binary(folder, name):
+    """A built program in folder: name.exe on Windows (Cargo's name there), name elsewhere."""
+    path = Path(folder) / name
+    if os.name == "nt" and not path.exists():
+        return path.with_name(name + ".exe")
+    return path
+
+
 _SCRATCH_DIRS = []
 
 

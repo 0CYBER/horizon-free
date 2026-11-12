@@ -645,6 +645,22 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 };
                 predicate
             }
+            // `Tool`: the stack's own mining rules, which this client's mining
+            // prediction reads as the server does (#14641).
+            Component::Raw(bytes) if *kind == component::TOOL => {
+                let Some(tool) = tool_tag(bytes, builtin) else {
+                    continue;
+                };
+                tool
+            }
+            // `ItemAttributeModifiers`: the stack's own modifiers, for its
+            // tooltip (#14641).
+            Component::Raw(bytes) if *kind == component::ATTRIBUTE_MODIFIERS => {
+                let Some(modifiers) = attribute_modifiers_tag(bytes, builtin) else {
+                    continue;
+                };
+                modifiers
+            }
             Component::TrimDirect { material, pattern } => {
                 use horizon_protocol::item::TrimHolder;
                 let material = match material {
@@ -1010,6 +1026,94 @@ fn adventure_predicate_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
     } else {
         Some(Tag::List(predicates))
     }
+}
+
+/// `Tool.STREAM_CODEC` as `Tool.CODEC` saves it: the rules, each with its
+/// `blocks` and the optional `speed` and `correct_for_drops`, then the fields
+/// left out at their codec defaults.
+fn tool_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let n = r.count(r.remaining()).ok()?;
+    let mut rules = Vec::with_capacity(n.min(64));
+    for _ in 0..n {
+        let mut rule = vec![(
+            "blocks",
+            holder_set_tag(&mut r, "minecraft:block", builtin)?,
+        )];
+        if r.bool().ok()? {
+            rule.push(("speed", Tag::Float(r.f32().ok()?.to_bits())));
+        }
+        if r.bool().ok()? {
+            rule.push(("correct_for_drops", Tag::Byte(i8::from(r.bool().ok()?))));
+        }
+        rules.push(Tag::compound(rule));
+    }
+    let mut tool = vec![("rules", Tag::List(rules))];
+    let speed = r.f32().ok()?;
+    if speed != 1.0 {
+        tool.push(("default_mining_speed", Tag::Float(speed.to_bits())));
+    }
+    let wear = r.varint().ok()?;
+    if wear != 1 {
+        tool.push(("damage_per_block", Tag::Int(wear)));
+    }
+    if !r.bool().ok()? {
+        tool.push(("can_destroy_blocks_in_creative", Tag::Byte(0)));
+    }
+    (r.remaining() == 0).then_some(())?;
+    Some(Tag::compound(tool))
+}
+
+/// `ItemAttributeModifiers.STREAM_CODEC` as its codec saves it: a list of
+/// entries, each with its attribute (`type`), modifier `id`, `amount` and
+/// `operation`, its `slot` group and its `display`, those two left out at
+/// their defaults (`any`, `default`).
+fn attribute_modifiers_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
+    const OPERATIONS: [&str; 3] = ["add_value", "add_multiplied_base", "add_multiplied_total"];
+    const SLOTS: [&str; 11] = [
+        "any", "mainhand", "offhand", "hand", "feet", "legs", "chest", "head", "armor", "body",
+        "saddle",
+    ];
+    let attributes = builtin.get("minecraft:attribute")?;
+    let mut r = Reader::new(bytes);
+    let n = r.count(r.remaining()).ok()?;
+    let mut entries = Vec::with_capacity(n.min(64));
+    for _ in 0..n {
+        let attribute = attributes.name(r.varint().ok()?)?;
+        let id = r.string(32767).ok()?;
+        let amount = r.f64().ok()?;
+        // ByteBufCodecs.idMapper over ByIdMap.continuous(..., ZERO): an
+        // unknown id reads as the first value.
+        let index = |id: i32, len: usize| usize::try_from(id).ok().filter(|i| *i < len);
+        let operation = OPERATIONS[index(r.varint().ok()?, 3).unwrap_or(0)];
+        let slot = SLOTS[index(r.varint().ok()?, 11).unwrap_or(0)];
+        let mut entry = vec![
+            ("type", Tag::String(attribute.into())),
+            ("id", Tag::String(id.as_str().into())),
+            ("amount", Tag::Double(amount.to_bits())),
+            ("operation", Tag::String(operation.into())),
+        ];
+        if slot != "any" {
+            entry.push(("slot", Tag::String(slot.into())));
+        }
+        match r.varint().ok()? {
+            1 => entry.push((
+                "display",
+                Tag::compound([("type", Tag::String("hidden".into()))]),
+            )),
+            2 => entry.push((
+                "display",
+                Tag::compound([
+                    ("type", Tag::String("override".into())),
+                    ("value", r.nbt().ok()?),
+                ]),
+            )),
+            _ => {}
+        }
+        entries.push(Tag::compound(entry));
+    }
+    (r.remaining() == 0).then_some(())?;
+    Some(Tag::List(entries))
 }
 
 /// `SignText.STREAM_CODEC` as `SignText.CODEC` saves it: the four messages,
@@ -1981,6 +2085,209 @@ mod tests {
                 unbreakable.then_some(&marker)
             );
         }
+    }
+
+    /// A stack's own `tool` and `attribute_modifiers` reach the client in
+    /// vanilla's stream layout (`Tool.STREAM_CODEC`,
+    /// `ItemAttributeModifiers.STREAM_CODEC`) and come back as their codecs
+    /// save them, so the client predicts mining and shows the tooltip from
+    /// the stack, not from its item (#14641). A removed one stays removed.
+    #[test]
+    fn a_stacks_tool_and_attribute_modifiers_cross_the_wire() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); component::TOOL as usize + 1];
+        components[component::ATTRIBUTE_MODIFIERS as usize] =
+            "minecraft:attribute_modifiers".into();
+        components[component::TOOL as usize] = "minecraft:tool".into();
+        let names = |n: &[&str]| Ids::from_names(n.iter().map(|s| s.to_string()).collect());
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".into(),
+                    names(&["minecraft:air", "minecraft:iron_pickaxe"]),
+                ),
+                (
+                    "minecraft:block".into(),
+                    names(&["minecraft:air", "minecraft:stone"]),
+                ),
+                // 26.3's first attribute ids: armor 1, attack_damage 3.
+                (
+                    "minecraft:attribute".into(),
+                    names(&[
+                        "minecraft:air_drag_modifier",
+                        "minecraft:armor",
+                        "minecraft:armor_toughness",
+                        "minecraft:attack_damage",
+                    ]),
+                ),
+                (
+                    "minecraft:data_component_type".into(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let ids = |registry: &str, name: &str| builtin.get(registry)?.id(name);
+        let s = |v: &str| Tag::String(v.into());
+        let f = |v: f32| Tag::Float(v.to_bits());
+        let d = |v: f64| Tag::Double(v.to_bits());
+        let mut pickaxe = ItemStack::new("minecraft:iron_pickaxe", 1);
+        // As `/give` parses it: doubles, a short block id.
+        pickaxe.data_mut().set_other(
+            "minecraft:tool",
+            Some(Tag::compound([
+                (
+                    "rules",
+                    Tag::List(vec![
+                        Tag::compound([
+                            ("blocks", s("#minecraft:mineable/pickaxe")),
+                            ("speed", d(50.0)),
+                            ("correct_for_drops", Tag::Byte(1)),
+                        ]),
+                        Tag::compound([
+                            ("blocks", Tag::List(vec![s("stone")])),
+                            ("correct_for_drops", Tag::Byte(0)),
+                        ]),
+                    ]),
+                ),
+                ("default_mining_speed", d(2.5)),
+                ("can_destroy_blocks_in_creative", Tag::Byte(0)),
+            ])),
+        );
+        pickaxe.data_mut().set_other(
+            "minecraft:attribute_modifiers",
+            Some(Tag::List(vec![
+                Tag::compound([
+                    ("type", s("attack_damage")),
+                    ("id", s("base_attack_damage")),
+                    ("amount", d(20.0)),
+                    ("operation", s("add_value")),
+                    ("slot", s("mainhand")),
+                ]),
+                Tag::compound([
+                    ("type", s("minecraft:armor")),
+                    ("id", s("minecraft:x")),
+                    ("amount", Tag::Int(2)),
+                    ("operation", s("add_multiplied_total")),
+                    ("display", Tag::compound([("type", s("hidden"))])),
+                ]),
+            ])),
+        );
+        let sent = crate::lan::guest::stack_to_network(|_| 1, ids, &Some(pickaxe.clone()));
+        let mut w = Writer::new();
+        Slot::write(&sent, &mut w);
+        let mut r = Reader::new(&w.data);
+        let received = Slot::read(&mut r).unwrap().unwrap();
+        assert_eq!(r.remaining(), 0);
+        // Tool.STREAM_CODEC: two rules (a tag; one direct block), then the
+        // default speed, the wear per block (1 by default) and creative breaking.
+        let mut tool = Writer::new();
+        tool.varint(2);
+        tool.varint(0);
+        tool.string("minecraft:mineable/pickaxe");
+        tool.bool(true);
+        tool.f32(50.0);
+        tool.bool(true);
+        tool.bool(true);
+        tool.varint(2);
+        tool.varint(1);
+        tool.bool(false);
+        tool.bool(true);
+        tool.bool(false);
+        tool.f32(2.5);
+        tool.varint(1);
+        tool.bool(false);
+        assert_eq!(
+            received.component(component::TOOL),
+            Some(&Component::Raw(tool.data))
+        );
+        // Entry.STREAM_CODEC: attribute id, modifier id, amount, operation
+        // (add_value 0, add_multiplied_total 2), slot group (any 0, mainhand
+        // 1), display (default 0, hidden 1).
+        let mut modifiers = Writer::new();
+        modifiers.varint(2);
+        for (attribute, id, amount, operation, slot, display) in [
+            (3, "minecraft:base_attack_damage", 20.0, 0, 1, 0),
+            (1, "minecraft:x", 2.0, 2, 0, 1),
+        ] {
+            modifiers.varint(attribute);
+            modifiers.string(id);
+            modifiers.f64(amount);
+            modifiers.varint(operation);
+            modifiers.varint(slot);
+            modifiers.varint(display);
+        }
+        assert_eq!(
+            received.component(component::ATTRIBUTE_MODIFIERS),
+            Some(&Component::Raw(modifiers.data))
+        );
+        let back = from_network(&received, &builtin, &Dynamic::default());
+        let other = |key: &str| back.data().and_then(|d| d.other(key)).cloned();
+        // The host applies the stack's strings as they are, and an attribute it
+        // cannot find is skipped: the bare `attack_damage` the stack was given
+        // must already be `minecraft:attack_damage` there (`Identifier.CODEC`
+        // reads a bare name as `minecraft:`'s), as it is on the wire.
+        let items = horizon_items::items::Items::for_tests(Default::default());
+        let host = items.attribute_modifiers(&pickaxe);
+        assert_eq!(
+            host.iter()
+                .map(|m| (m.0.as_str(), m.1.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("minecraft:attack_damage", "minecraft:base_attack_damage"),
+                ("minecraft:armor", "minecraft:x"),
+            ]
+        );
+        assert_eq!(host, items.attribute_modifiers(&back));
+        assert_eq!(
+            other("minecraft:tool"),
+            Some(Tag::compound([
+                (
+                    "rules",
+                    Tag::List(vec![
+                        Tag::compound([
+                            ("blocks", s("#minecraft:mineable/pickaxe")),
+                            ("speed", f(50.0)),
+                            ("correct_for_drops", Tag::Byte(1)),
+                        ]),
+                        Tag::compound([
+                            ("blocks", s("minecraft:stone")),
+                            ("correct_for_drops", Tag::Byte(0)),
+                        ]),
+                    ]),
+                ),
+                ("default_mining_speed", f(2.5)),
+                ("can_destroy_blocks_in_creative", Tag::Byte(0)),
+            ]))
+        );
+        assert_eq!(
+            other("minecraft:attribute_modifiers"),
+            Some(Tag::List(vec![
+                Tag::compound([
+                    ("type", s("minecraft:attack_damage")),
+                    ("id", s("minecraft:base_attack_damage")),
+                    ("amount", d(20.0)),
+                    ("operation", s("add_value")),
+                    ("slot", s("mainhand")),
+                ]),
+                Tag::compound([
+                    ("type", s("minecraft:armor")),
+                    ("id", s("minecraft:x")),
+                    ("amount", d(2.0)),
+                    ("operation", s("add_multiplied_total")),
+                    ("display", Tag::compound([("type", s("hidden"))])),
+                ]),
+            ]))
+        );
+
+        let mut plain = ItemStack::new("minecraft:iron_pickaxe", 1);
+        plain
+            .data_mut()
+            .set_other("!minecraft:tool", Some(Tag::Compound(Default::default())));
+        let sent = crate::lan::guest::stack_to_network(|_| 1, ids, &Some(plain)).unwrap();
+        assert_eq!(sent.removed, [component::TOOL]);
+        assert!(sent.added.is_empty());
     }
 
     /// An ominous bottle's `ominous_bottle_amplifier` reaches the client
