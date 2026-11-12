@@ -29,7 +29,7 @@ Nobody merges automatically. A Team member:
    force-push a contributor's branch (merge main into it instead).
 
 Risky pull requests (saves, the network or server thread, world generation, the launcher's installs and updates,
-the harnesses, anything over ~500 lines) get `needs-proof` and wait until someone has played the change: both
+the harnesses, anything over ~500 lines of code) get `needs-proof` and wait until someone has played the change: both
 single-player paths, a LAN guest, a screenshot for anything visible. The list is in
 [release-flow.md](release-flow.md#merging).
 
