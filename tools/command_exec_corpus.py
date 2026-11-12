@@ -4203,6 +4203,23 @@ def creeper_custom_fuse():
     return ops + setup('/gamerule mob_griefing true')
 
 
+def raw_entity_flags():
+    """#13853: `Entity.load` reads the flags with `getBooleanOr` and `saveWithoutId` writes each back as `1b` only
+    when true: a leash knot's or a marker's raw save normalizes them too."""
+    x0, y0, z0 = 4096 - 256, 260, 3584
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]}]
+    subjects = [('leash_knot', 'NoGravity:-1b'), ('leash_knot', 'NoGravity:0b,Silent:3b'),
+                ('marker', 'Glowing:-1b,NoGravity:2b,data:{a:1}'), ('marker', 'Silent:0b')]
+    for n, (kind, fields) in enumerate(subjects, 1):
+        uuid = f'000037e8-0000-0000-0000-{n:04x}00000001'
+        ops += [cmd(f'/summon {kind} {x0 + 3 * n}.5 {y0}.5 {z0 + 8}.5 {{UUID:[I;14312,0,{n},1],{fields}}}',
+                    expect_result=1)]
+        for key in ('NoGravity', 'Silent', 'Glowing'):
+            ops.append(cmd(f'/data get entity {uuid} {key}'))
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/forceload remove {x0} {z0}')
+
+
 def marker_data_mutation():
     """Marker data write-back preserves identity and modeled-entity controls (#8929)."""
     marker = '00000000-0000-0000-0000-000000000001'
@@ -8234,6 +8251,7 @@ def groups():
         ('nautilus saved Sitting', nautilus_saved_sitting()),
         ('axolotl hunting memory', axolotl_hunting_memory()),
         ('marker data mutation', marker_data_mutation()),
+        ('raw entity flags', raw_entity_flags()),
         ('mob effect update result', mob_effect_update_result()),
         ('axolotl integer memory TTL', axolotl_integer_memory_ttl()),
         ('parrot saved Age', parrot_saved_age()),
