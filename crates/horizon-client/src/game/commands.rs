@@ -452,9 +452,7 @@ impl Game<'_> {
         // the server's own source, "Server".
         let who = match self.command_source.and_then(|s| s.entity) {
             Some(entity) => self.target_name(entity),
-            None if self.console_broadcast.is_some() => {
-                Text::literal(if self.rcon_source { "Rcon" } else { "Server" }.to_owned())
-            }
+            None if self.console_broadcast.is_some() => self.server_name(),
             None => self.player_display_name(),
         };
         let line = Text::translate("chat.type.admin", &[who, message])
@@ -4298,7 +4296,7 @@ impl Game<'_> {
                                 .map(|cart| cart.command.name())
                         })
                     })
-                    .unwrap_or_else(|| Text::literal("Server")),
+                    .unwrap_or_else(|| self.server_name()),
             },
             None => self.player_display_name(),
         };
