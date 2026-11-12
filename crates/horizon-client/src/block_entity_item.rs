@@ -123,18 +123,32 @@ pub fn spawn_egg_entity_data<'a>(
 
 /// `EntityType.appendDefaultStackConfig` for a hanging entity or armor stand an
 /// item places: `Entity.applyImplicitComponents` stores the item's
-/// `minecraft:custom_data` as the entity's `data`, then `updateCustomEntityTag`
+/// `minecraft:custom_name` as the entity's `CustomName` and its
+/// `minecraft:custom_data` as its `data`, then `updateCustomEntityTag`
 /// (`TypedEntityData.loadInto`) merges the item's `minecraft:entity_data` over
 /// the entity's saved tag `own` when its type is `kind`.
 pub fn stack_configured_entity(stack: &crate::items::ItemStack, kind: &str, own: &Tag) -> Tag {
+    stack_configured_entity_by(stack, kind, own, false)
+}
+
+/// [`stack_configured_entity`], `op` saying whether the user may load the
+/// data of an op-only entity type (`EntityType.onlyOpCanSetNbt`).
+pub fn stack_configured_entity_by(
+    stack: &crate::items::ItemStack,
+    kind: &str,
+    own: &Tag,
+    op: bool,
+) -> Tag {
     let mut tag = own.clone();
-    if let (Tag::Compound(map), Some(custom)) = (
-        &mut tag,
-        stack.data().and_then(|d| d.other("minecraft:custom_data")),
-    ) {
-        map.insert("data".into(), custom.clone());
+    if let Tag::Compound(map) = &mut tag {
+        if let Some(name) = stack.data().and_then(|d| d.custom_name.clone()) {
+            map.insert("CustomName".into(), name);
+        }
+        if let Some(custom) = stack.data().and_then(|d| d.other("minecraft:custom_data")) {
+            map.insert("data".into(), custom.clone());
+        }
     }
-    match spawn_egg_entity_data(stack, kind, false) {
+    match spawn_egg_entity_data(stack, kind, op) {
         Some(data) => crate::data_cmd::merged(&tag, data),
         None => tag,
     }

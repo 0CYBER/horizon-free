@@ -1,5 +1,7 @@
 # Native mods
 
+`native_explosion_entities(dimension, center, entities)` (server) runs after `native_explosion_detonate`, before an explosion at `center` hurts and pushes anything: `entities` holds the ids of the entities in its reach (`ServerExplosion.hurtEntities`), players aside, which `native_living_incoming_damage` hears. Take out the ids to spare: they are neither hurt nor pushed, as NeoForge's `ExplosionEvent.Detonate` does with its entity list. Bundles need "hooks": @API:explosion_entities@.
+
 `native_chat_suggestion_applied(original, start, end, suggestion, input)` reports a suggestion accepted in the open chat by Tab or a mouse click, after the text and caret have changed. `original` is the suggestion list's input before any completion; `start` and `end` are the replaced range in that string, in Java UTF-16 units (end exclusive). They keep referring to `original` when Tab cycles through the list. `suggestion` is the selected replacement text, and `input` is the actual resulting field value, including any length-limit truncation. This is a read-only notification: previews, list navigation, server replies, ordinary typing and command-block editors do not fire it. Trait mods implement `Hooks::chat_suggestion_applied`; mixin bundles use `chat_suggestion_applied`, hook version 1. Bundles need "hooks": @API:chat_suggestion_applied@ (assigned at merge).
 
 API 362 adds `native_compute_fov_modifier(player, base, modifier)` on the client each tick for the local player's FOV scale, after vanilla effects and before zoom and camera easing. `player` contains the calculation inputs and `base` is the original scale. Non-finite modifiers or values outside 0.01..=10 fall back to `base`. It does not affect a spectator camera on a mob. Bundles need "hooks": 362.
@@ -3799,7 +3801,8 @@ Changing loot a mod didn't make, as NeoForge's `LootTableLoadEvent` and global l
   a client too, so make the same change each time; a `/reload` may keep the tables already loaded. It is a free function in
   `crates/horizon-world/src/loot.rs`, so a helper injected there compiles inside `horizon-world`, without `crate::game`.
 - **`native_loot_drops(context, drops)`**: the items a broken block or a dead mob is about to drop, after its tables rolled (a
-  mob's worn, held and carried items and inventory too, not an enderman's carried block or a copper golem's preserved equipment).
+  mob's worn, held and carried items and inventory too, not an enderman's carried block, the nether star a wither leaves or a
+  copper golem's preserved equipment).
   Add, change or take out stacks; empty ones don't drop. `NativeLootDrops` says what dropped them: its own loot table (empty when
   none rolled), the dimension, the origin, the block's position and state or the mob's id and type, the player who broke or killed
   it (a mob names one only while it remembers the player's hit, 100 ticks), the tool and an explosion's radius. It hears blocks

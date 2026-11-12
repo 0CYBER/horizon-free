@@ -5,7 +5,7 @@ servers: --offlineDeveloperMode) and optionally join a server straight away
 
   vscreen start python3 tools/vanilla_client.py --name Guest --join localhost:25565
 
-On Linux (x86_64) and on macOS (Apple silicon, from the logged-in screen session), from the files
+On Linux (x86_64), Windows and macOS (Apple silicon, from the logged-in screen session), from the files
 tools/lab.py prepared on that machine. On macOS vsync is off: with it on, a window nobody can see (a
 locked session, or covered) blocks in SDL_GL_SwapWindow and the client stops before it joins.
 
@@ -14,12 +14,13 @@ that skips the first-run screens, keeps the game running unfocused and
 renders few chunks, so a harness can drive it with vscreen keys.
 """
 import argparse
+from functools import cache
 import json
 import os
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 try:
     from . import lab
@@ -29,8 +30,24 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 GAME = lab.GAME
 MAC = sys.platform == "darwin"
-# The natives of this machine's platform, and the shared libraries in them.
-NATIVES, LIBRARY_SUFFIX = ("natives-macos-arm64.jar", ".dylib") if MAC else ("natives-linux.jar", ".so")
+LIBRARY_SUFFIXES = {"linux": ".so", "osx": ".dylib", "windows": ".dll"}
+
+
+def natives_for(manifest, system=None, architecture=None):
+    """The natives jar suffix (natives-windows.jar, natives-macos-arm64.jar...) and shared library suffix the
+    official launcher's rules pick for this OS and architecture, read from the version JSON's LWJGL natives."""
+    system = lab.rule_system(system)
+    for artifact in lab.client_library_artifacts(manifest, system, architecture):
+        name = PurePosixPath(artifact["path"]).name
+        if name.startswith("lwjgl-") and "-natives-" in name:
+            return name[name.index("-natives-") + 1:], LIBRARY_SUFFIXES[system]
+    raise ValueError(f"the version JSON has no LWJGL natives for {system}")
+
+
+@cache
+def host():
+    """This machine's natives jar suffix and shared library suffix."""
+    return natives_for(json.loads((GAME / "manifest.json").read_text()))
 
 OPTIONS = {
     "onboardAccessibility": "false",
@@ -57,7 +74,7 @@ if sys.platform == "darwin":
 def host_library(path):
     name = Path(path).name
     if "natives-" in name:
-        return name.endswith(NATIVES)
+        return name.endswith(host()[0])
     if MAC:
         return "netty-transport-native" not in name or "linux" not in name
     if "netty-transport-native" in name and ("osx" in name or "aarch_64" in name):
@@ -68,10 +85,10 @@ def host_library(path):
 def host_natives(path):
     """A natives jar for this machine in place of another platform's: a prepared.json made on one machine
     and shared with others (a shared .local) lists that machine's natives only; the jars sit side by side."""
-    name = Path(path).name
-    if "-natives-" not in name or name.endswith(NATIVES):
+    name, natives = Path(path).name, host()[0]
+    if "-natives-" not in name or name.endswith(natives):
         return path
-    mine = Path(path).with_name(name[:name.index("-natives-") + 1] + NATIVES)
+    mine = Path(path).with_name(name[:name.index("-natives-") + 1] + natives)
     return str(mine) if (ROOT / mine).exists() else path
 
 
@@ -82,13 +99,15 @@ def classpath():
 
 
 def extract_natives(jars, target):
+    natives, suffix = host()
+    arm = "arm64" in natives
     target.mkdir(parents=True, exist_ok=True)
     for jar in jars:
-        if not jar.name.endswith(NATIVES):
+        if not jar.name.endswith(natives):
             continue
         with zipfile.ZipFile(jar) as archive:
             for name in archive.namelist():
-                if name.endswith(LIBRARY_SUFFIX) and (MAC or ("arm" not in name and "aarch" not in name)):
+                if name.endswith(suffix) and (arm or MAC or ("arm" not in name and "aarch" not in name)):
                     out = target / Path(name).name
                     if not out.exists():
                         out.write_bytes(archive.read(name))
@@ -122,7 +141,9 @@ def command(args):
     extract_natives(jars, natives)
     assets = args.assets or (args.game_dir / "assets")
     (assets / "indexes").mkdir(parents=True, exist_ok=True)
+    # UTF-8 output whatever the console's code page (cp1252 or cp850 on a French Windows): see spawn.
     cmd = ["java", f"-Xmx{args.heap}", *(["-XstartOnFirstThread"] if MAC else []), "-XX:StackShadowPages=32",
+           "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
            "--enable-native-access=ALL-UNNAMED",
            "--add-exports", "java.base/jdk.internal.misc=ALL-UNNAMED",
            f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
@@ -146,6 +167,13 @@ def command(args):
     if args.backend:
         cmd += ["--graphicsBackend", args.backend]
     return cmd
+
+
+def spawn(command, cwd, env):
+    """The client with its output piped as text lines: UTF-8 (the command asks the JVM for it), and a stray
+    byte in another encoding (a native library writing straight to the console) never stops the reader."""
+    return subprocess.Popen(command, cwd=cwd, env=env, encoding="utf-8", errors="replace",
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 
 def main():
