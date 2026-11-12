@@ -1387,10 +1387,9 @@ mod tests {
                     &super::TEXTURE_URIS,
                 );
                 assert_eq!(textures.slim, slim && !url.contains("evil"));
-                // Textures are judged per URL (vanilla's SkinManager): the
-                // cape's URL is always allowed here, so it is kept even when
-                // the skin's URL is not.
-                assert!(textures.cape.is_some());
+                // Authlib rejects the whole payload if any URL is invalid,
+                // including the allowed cape when the skin is disallowed.
+                assert_eq!(textures.cape.is_some(), !url.contains("evil"));
                 assert_eq!(parsed.skin.is_some(), !url.contains("evil"));
                 assert!(std::sync::Arc::ptr_eq(&parsed, &cache.get(&profile)));
             }
