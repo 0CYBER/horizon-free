@@ -4,7 +4,7 @@ BellBlockEntity.makeRaidersGlow	port	crates/horizon-client/src/game/block_entity
 BellBlockEntity.showBellParticles	port	crates/horizon-client-render/src/block_entity_anim.rs::Bell::tick	particle positions and colours computed here; emitted in Game::tick_bell
 BellBlockEntity.isRaiderWithinRange	inline	crates/horizon-client-render/src/block_entity_anim.rs::Bell::tick	raider_in closure (48 blocks)
 BlockEntity.validateBlockState	skip:other		guard that throws on a wrong block state; no player behaviour
-BlockEntity.getPosFromTag	missing		`save::decode_block_entity` keeps the saved x/y/z and `game.rs:1762` inserts the block entity at that key; a block entity saved in the wrong chunk keeps its saved x/z
+BlockEntity.getPosFromTag	port	crates/horizon-world/src/chunk.rs::block_entity_pos	the saved x/y/z, with x and z moved into the chunk that saved the entity when the tag names another one (vanilla warns and keeps each coordinate's low four bits); the chunk decoder applies it to every saved block entity
 BlockEntity.saveCustomOnly	port	crates/horizon-client/src/block_entity_item.rs::custom_only	saved NBT without id, position and components
 BlockEntity.loadStatic	port	crates/horizon-client/src/save.rs::decode_block_entity	creates the block entity from its saved tag
 BlockEntity.fillCrashReportCategory	skip:debug		crash report detail
