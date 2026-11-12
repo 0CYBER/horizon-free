@@ -7098,6 +7098,52 @@ def primed_tnt_fall():
     return ops
 
 
+def end_crystal_saved_fall():
+    """#14671: `Entity.load` reads `OnGround` (`getBooleanOr`) and `fall_distance`, and `saveWithoutId` writes them
+    back; `EndCrystal.tick` never moves the crystal nor runs `baseTick`, so both keep what was loaded, through a save
+    and a reload of the chunk too. Its `applyEffectsFromBlocks` still runs: a cobweb in its box makes it stuck
+    (`makeStuckInBlock`), which resets the fall distance; so does powder snow, whose inside shape is 0.9 tall for a
+    fall over 2.5. A crystal summoned where a loaded one was killed starts from nothing, and `/tp` grounds one."""
+    # Entities tick once the forced chunk's 2-column neighbourhood is loaded (ChunkMap.prepareEntityTickingChunk).
+    x0, y0, z0 = 4096 - 160, 260, 3584
+    ring = [[(x0 >> 4) + i, (z0 >> 4) + k] for i in range(-2, 3) for k in range(-2, 3)]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': ring}]
+    subjects = ['fall_distance:-2.5d', 'OnGround:1b', 'OnGround:3b,fall_distance:4.0d', 'ShowBottom:0b']
+    for n, fields in enumerate(subjects, 1):
+        ops.append(cmd(f'/summon end_crystal {x0 + 3 * n}.5 {y0} {z0 + 8}.5 {{UUID:[I;14671,0,{n},1],{fields}}}',
+                       expect_result=1))
+    ops += [cmd(f'/setblock {x0 + 8} {y0 + 1} {z0 + 12} cobweb', expect_result=1),
+            cmd(f'/summon end_crystal {x0 + 8}.5 {y0} {z0 + 12}.5 {{UUID:[I;14671,0,5,1],fall_distance:4.0d}}',
+                expect_result=1)]
+    # Powder snow under a crystal at y + 0.95: above the 0.9 shape a 4.0 fall keeps, a 2.0 fall is in the block.
+    for n, x, fall in ((7, x0 + 3, '4.0d'), (8, x0 + 11, '2.0d')):
+        ops += [cmd(f'/setblock {x} {y0} {z0 + 4} powder_snow', expect_result=1),
+                cmd(f'/summon end_crystal {x}.5 {y0}.95 {z0 + 4}.5 {{UUID:[I;14671,0,{n},1],fall_distance:{fall}}}',
+                    expect_result=1)]
+
+    def reads(ids=(1, 2, 3, 4, 5, 7, 8)):
+        for n in ids:
+            for key in ('OnGround', 'fall_distance'):
+                ops.append(cmd(f'/data get entity 0000394f-0000-0000-0000-{n:04x}00000001 {key}'))
+
+    reads()
+    ops.append({'op': 'tick', 'n': 2})
+    reads()
+    # The chunk saves and drops its entities, then loads them back.
+    ops += [cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+            {**cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1), 'guard': True},
+            cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': ring}]
+    reads()
+    # A new crystal where the third (OnGround:3b, fall_distance:4.0d) was.
+    ops += [cmd('/kill 0000394f-0000-0000-0000-000300000001', False),
+            cmd(f'/summon end_crystal {x0 + 9}.5 {y0} {z0 + 8}.5 {{UUID:[I;14671,0,6,1]}}', expect_result=1)]
+    ops.append(cmd(f'/tp 0000394f-0000-0000-0000-000100000001 {x0 + 3}.5 {y0 + 1} {z0 + 8}.5', False))
+    reads((1, 6))
+    return ops + setup(f'/kill @e[type=end_crystal,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/setblock {x0 + 8} {y0 + 1} {z0 + 12} air', f'/setblock {x0 + 3} {y0} {z0 + 4} air',
+                       f'/setblock {x0 + 11} {y0} {z0 + 4} air', f'/forceload remove {x0} {z0}')
+
+
 def item_fall_distance():
     """#13203: a dropped item is an `Entity`: `checkFallDamage` adds each step down,
     narrowed to a float, to its double `fall_distance` outside water, the ground and water
@@ -8307,6 +8353,7 @@ def groups():
         ('piston mob bounce', piston_mob_bounce()),
         ('primed tnt box', primed_tnt_box()),
         ('primed tnt fall', primed_tnt_fall()),
+        ('end crystal saved fall', end_crystal_saved_fall()),
         ('dispensed item escape', dispensed_item_escape()),
         ('command block last output', command_block_last_output()),
         ('explosion player experience', explosion_player_experience()),
