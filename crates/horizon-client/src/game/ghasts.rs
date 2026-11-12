@@ -273,6 +273,7 @@ mod item_collision_tests {
         game.block_ticks
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
+        game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("summon minecart 4.5 200 4.5"));
         assert!(game.run_command("summon oak_boat 10.5 200 10.5"));

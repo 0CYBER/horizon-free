@@ -45,6 +45,12 @@ def mob_contacts(durations=False):
         fish = f'00000139-0000-0000-0000-{fish_id:012x}'
         target = f'00000139-0000-0000-0000-{target_id:012x}'
         fish_flags = ',NoAI:1b' if noai else ''
+        # The ordinary-AI fish rolls FishSwimGoal (nextInt(20) on each of its two goal ticks)
+        # on its own random, which both engines seed from the clock without this step: about
+        # one run in ten it set off swimming in one engine only (docs/parity-workflow.md,
+        # "Randoms that repeat").
+        out.append({'op': 'sync_randoms', 'uniquifier': 31300 + i,
+                    'entity_id': 3_130_000 + 1000 * i, 'level_seed': 313 + i})
         run(f'/summon pufferfish 10.5 201 10.5 {{UUID:[I;313,0,0,{fish_id}],'
             f'Tags:["h313_subject","h313_{name}_fish"],PuffState:{puff},'
             f'NoGravity:1b,Silent:1b,PersistenceRequired:1b{fish_flags}}}', 1)
