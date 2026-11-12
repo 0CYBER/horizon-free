@@ -62,6 +62,8 @@ The GLSL frontend also resets the common type for each comma-separated declarato
 variable's array specifier does not change later variables.
 It also reads a struct member outside a constant expression through a pointer to the member,
 not out of a loaded copy of the whole struct, so a member an atomic function uses can be read.
+The shared interpolation defaults also compile with `glsl-in` alone, without needing the
+SPIR-V or WGSL frontend to enable them.
 
 ## DirectX Shader Compiler
 

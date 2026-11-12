@@ -132,6 +132,14 @@ impl Game<'_> {
                     .unwrap_or_default();
                 nautilus_takes(nautilus::is_food(m, item, &taming), m.extra.tame, baby)
             }
+            // Dolphin.mobInteract: a #minecraft:fishes item is SUCCESS on both
+            // sides (the server feeds it), so the client swings and keeps the fish.
+            Species::Dolphin => self
+                .res
+                .items()
+                .item_tags
+                .get("minecraft:fishes")
+                .is_some_and(|t| t.contains(item)),
             // IronGolem.mobInteract.
             Species::IronGolem => iron_golem_takes(item, m.health, m.attrs.max_health),
             // CopperGolem.mobInteract.
@@ -254,7 +262,15 @@ fn copper_golem_takes(item: &str, holding: bool, shearable: bool) -> bool {
 /// `handleEating` gates both on `isBaby() && !isAgeLocked()` — a locked baby
 /// does not grow, and the particle goes with the growth.
 pub(super) fn ages_on_food(m: &Mob, item: &str) -> bool {
-    if !m.is_baby() || m.extra.age_locked || item.is_empty() {
+    if m.extra.age_locked || item.is_empty() {
+        return false;
+    }
+    // Tadpole.feed draws the same particle on both sides; a tadpole is never
+    // `isBaby`, its age counts up to the frog.
+    if m.species() == Species::Tadpole {
+        return m.kind.food.iter().any(|f| f.as_str() == item);
+    }
+    if !m.is_baby() {
         return false;
     }
     match m.species() {
@@ -493,5 +509,19 @@ mod tests {
             camel.extra.age_locked = true;
             assert!(!ages_on_food(&camel, "minecraft:cactus"), "locked camel");
         }
+    }
+
+    /// `Tadpole.feed` draws its particle on the client too, though a tadpole
+    /// is never a baby; an age-locked one is not fed (#8554).
+    #[test]
+    fn a_tadpole_fed_a_slime_ball_draws_happy_villager() {
+        let Some(mut tadpole) = mob("minecraft:tadpole") else {
+            return;
+        };
+        assert!(!tadpole.is_baby());
+        assert!(ages_on_food(&tadpole, "minecraft:slime_ball"));
+        assert!(!ages_on_food(&tadpole, "minecraft:wheat"), "not frog food");
+        tadpole.extra.age_locked = true;
+        assert!(!ages_on_food(&tadpole, "minecraft:slime_ball"), "locked");
     }
 }

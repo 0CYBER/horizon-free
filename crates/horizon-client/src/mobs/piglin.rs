@@ -858,11 +858,12 @@ pub fn receive_attack_target(
     }
     take
 }
-/// `PiglinAi.stopHoldingOffHandItem` without bartering (`wasHurtBy`): a gold
-/// ingot is not bartered and is gone; anything else ends its admiring next
-/// tick, as if the time ran out, and the game side puts it away.
+/// `PiglinAi.stopHoldingOffHandItem` without bartering (`wasHurtBy`): an
+/// adult's gold ingot is not bartered and is gone; anything else (a baby's
+/// ingot too, which it holds in its main hand) ends its admiring next tick,
+/// as if the time ran out, and the game side puts it away.
 pub fn stop_admiring(m: &mut Mob) {
-    if m.extra.off_hand.as_deref() == Some("minecraft:gold_ingot") {
+    if m.extra.off_hand.as_deref() == Some("minecraft:gold_ingot") && !m.is_baby() {
         m.extra.off_hand = None;
         m.extra.using_item = 0;
     } else {

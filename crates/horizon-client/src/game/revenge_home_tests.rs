@@ -57,6 +57,9 @@ fn game() -> Game<'static> {
             .add_empty_chunk(ChunkPos::new(x, 0))
             .unwrap();
     }
+    for x in 0..9 {
+        game.load_ticking_neighbourhood(x, 0);
+    }
     for command in [
         "forceload add 0 0 143 15",
         "tick freeze",

@@ -4,9 +4,12 @@
 //! Each hook does nothing while its extra is off and no mod uses it.
 //!
 //! Each Horizon extra's game glue is a child module here, so it leaves the engine in one move
-//! (docs/layers.md, plan M5): `reconnect` (auto-reconnect), `pvp` (the PvP & HUD options).
+//! (docs/layers.md, plan M5): `reconnect` (auto-reconnect), `pvp` (the PvP & HUD options),
+//! `mouse_tweaks` and `sorting` (the inventory extras).
+pub(in crate::game) mod mouse_tweaks;
 pub(in crate::game) mod pvp;
 mod reconnect;
+mod sorting;
 
 use super::{Dim, Game, Screen, native_hooks::NativeMinimap};
 use horizon_client::{
