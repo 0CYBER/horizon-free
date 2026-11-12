@@ -4491,6 +4491,13 @@ pieces.
   read as air (its tints as 0). `below + above` must be 1 to the level's height, and the read at most 1,048,576 blocks.
   The tints are the biome's own at the column's top, not blended over the biome blend radius as the game draws them, so
   near a biome border they can differ from what players see by a few blocks.
+- `native_terrain_surface(dimension, columns)` answers what the level's generator makes at each column *before its
+  features are placed*, loaded or not, and creates no chunk: `NativeTerrainColumn` holds the `height` (one above the
+  highest solid block, as `native_surface_heights` counts), the top `block`, the `water` surface (one above the
+  highest fluid block over the surface, `None` where the surface is dry) and the `biome`. It is the question a random
+  teleport asks of many candidate columns before it holds a chunk for the one it picks: trees, lava pools and cacti
+  are decorated later, so read the chunk once it is loaded to check them. At most 4,096 columns a call, `None` for a
+  column the generator cannot sample, and `Err` on a client or for another dimension. API @API:terrain_surface@.
 
 ### Client world snapshots
 

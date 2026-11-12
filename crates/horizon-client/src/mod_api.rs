@@ -42,7 +42,8 @@ pub use crate::game::{
     NativeCriterion, NativeDataMapType, NativeExperienceOrb, NativeFalling, NativeHeightmap,
     NativeHeldItem, NativeHit, NativeItemEntity, NativeMapDecoration, NativeMapInfo,
     NativeMobRender, NativeModEvent, NativePlayer, NativePlayerRender, NativeReloadListener,
-    NativeShake, NativeStructureBlock, NativeStructureTemplate, NativeWorldDraw,
+    NativeShake, NativeStructureBlock, NativeStructureTemplate, NativeTerrainColumn,
+    NativeWorldDraw,
 };
 pub use crate::gamerules::Value as GameRuleValue;
 /// What a mod asks of the terrain's picture each frame (`native_world_hold`). API 414.

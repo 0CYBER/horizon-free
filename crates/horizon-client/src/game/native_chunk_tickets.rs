@@ -8,7 +8,7 @@ use super::{Dim, Game};
 use crate::mod_api::NativeChunkLoad;
 
 #[cfg(test)]
-mod native_chunk_load_tests;
+pub(super) mod native_chunk_load_tests;
 
 // Native mods use these; nothing in Horizon does.
 impl Game<'_> {
