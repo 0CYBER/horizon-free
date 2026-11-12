@@ -6603,18 +6603,11 @@ impl Game<'_> {
                 // (LocalPlayer.playSound); the server's copy skips this player
                 // (Player.playSound).
                 horizon_client::motion::MotionEvent::Fall(
-                    horizon_client::landing::FallEvent::Sound {
-                        sound,
-                        volume,
-                        pitch,
-                        ..
-                    },
+                    event @ (horizon_client::landing::FallEvent::Sound { .. }
+                    | horizon_client::landing::FallEvent::BlockFallSound { .. }),
                 ) => {
-                    if let Some(name) = sound
-                        .player_fall_sound()
-                        .or_else(|| sound.honey_landing_sound())
-                    {
-                        self.audio.play(name, Some(feet), volume, pitch);
+                    if let Some((name, volume, pitch)) = event.heard_fall_sound(self.res.facts()) {
+                        self.audio.play(&name, Some(feet), volume, pitch);
                     }
                 }
                 _ => {}
