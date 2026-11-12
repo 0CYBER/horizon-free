@@ -41,8 +41,8 @@ static HOOKS: OnceLock<NativeClientHooks> = OnceLock::new();
 
 /// A hook a mob's turn reached while the mob phase runs in groups on several threads (#14457),
 /// told on the server thread once the groups are joined, in the serial loop's order. Only hooks
-/// that hand nothing back are kept: a group runs only while every mod has said it hooks none of
-/// the others (`native_mob_phase_quiet`), so those are skipped there.
+/// that hand nothing back are kept: a group runs only while the build found no mod hooking the
+/// others (`horizon_mod_api_gen::mob_turn`), so those are skipped there.
 pub enum Deferred {
     LivingJump {
         entity: u32,

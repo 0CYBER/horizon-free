@@ -9078,27 +9078,6 @@ impl Game<'_> {
     pub(super) fn native_entity_tick_listened(&mut self, listened: &mut bool) {
         mod_api::dispatch_entity_tick_listened(self, mod_api::mods(), listened);
     }
-    /// Whether this mod stays out of the mobs' turns, so that the server may tick the mobs of
-    /// one level in groups on several threads (`HORIZON_PARALLEL_TICK`, off by default). Set
-    /// `quiet` (HEAD, `*quiet = true`) only when the mod hooks none of what runs in a mob's turn:
-    /// `native_living_change_target`, `native_living_heal`, `native_living_breathe`,
-    /// `native_living_drown`, `native_living_fall`, `native_living_death_message`,
-    /// `native_register_goals` (its goals run in the turns), `native_living_incoming_damage` (all
-    /// versions), `native_living_damage_pre`, `native_living_knockback`, `native_trample`, the
-    /// `native_block_*` contacts, a content mod effect's ticks, and no mixin into those. `native_living_jump` and `native_living_damage_post` may
-    /// stay hooked: in a grouped tick they are told on the server thread once the mobs have
-    /// ticked, in the order the mobs ticked. Each mod is asked on its own, in order, once a tick while
-    /// the option is on; one that doesn't set it keeps the tick on the server thread, as before. The
-    /// game reads `quiet` as every mod's answer together. Server-side. API @API:mob_phase_quiet@.
-    pub(super) fn native_mob_phase_quiet(&mut self, quiet: &mut bool) {
-        // Each mod alone: no mod answers for another. True without mods.
-        let mods = mod_api::mods();
-        *quiet = (0..mods.len()).all(|k| {
-            let mut said = false;
-            mod_api::dispatch_mob_phase_quiet(self, &mods[k..=k], &mut said);
-            said
-        });
-    }
     /// An entity of type `kind` (`minecraft:zombie`, `minecraft:item`) with ID `entity` is
     /// about to tick in the server level `dimension` (NeoForge's `EntityTickEvent.Pre`, posted
     /// around `Entity.commonTick` and `tick` in `ServerLevel.tickNonPassenger`). Set `canceled`

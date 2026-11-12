@@ -377,7 +377,7 @@ impl<M: MobSlot> Group<M> {
                 shared.guest_ids,
                 self.player.as_ref(),
             );
-            // A grouped turn runs while no mod hooks the change (`native_mob_phase_quiet`).
+            // A grouped turn runs while no mod hooks the change (`horizon_mod_api_gen::mob_turn`).
             if let Some((player, mob)) = named
                 && !horizon_client::native_client_hooks::deferring()
             {

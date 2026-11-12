@@ -118,17 +118,18 @@ groups (`LoopLookup`).
 ## Native mods and the profiler
 
 What a mod can run in a mob's turn: `native_living_change_target`, `native_living_heal`,
-`native_living_breathe`, `native_living_drown`, `native_living_fall`,
-`native_living_death_message`, `native_register_goals` (its goals), the incoming damage hooks,
-`native_living_damage_pre`, `native_living_knockback`, `native_trample` (a mob falling on
-farmland), `native_block_step_on`, `native_block_entity_inside` and `native_block_fall_on` (a
-content mod's blocks), a content mod effect's ticks, `native_living_jump` and `native_living_damage_post`, and mixins into them. A trait mod's
-overridden methods can't be seen, so each mod declares it with `native_mob_phase_quiet`; one
-that doesn't keeps the loop serial. While every mod is quiet, grouped turns skip the hooks that
+`native_living_breathe`, `native_living_drown`, `native_living_fall`, `native_living_death_message`,
+`native_register_goals` (its goals), the incoming damage hooks, `native_living_damage_pre`,
+`native_living_knockback`, `native_trample` (a mob falling on farmland), `native_block_step_on`,
+`native_block_entity_inside` and `native_block_fall_on` (a content mod's blocks), a content mod
+effect's ticks, `native_living_jump` and `native_living_damage_post`, and mixins into them. The
+build finds which (`horizon_mod_api_gen::mob_turn`, `HORIZON_MOB_TURN`): the loop stays serial
+when a mixin injects into one of those or into anything but a `native_*` hook point, or a trait
+package defines a function named for a hook the turn waits on (all but the last two). A game built
+without that finding, with trait mods, stays serial too. While no mod hooks, grouped turns skip the hooks that
 hand something back (no mod listens) and keep the two notifications, which the server thread tells
-at the join, ordered by turn. A mob carrying a content mod's effect keeps the tick serial while
-mods are loaded. The entity tick Pre's cancellations are heard before the loop and passed to
-every group.
+at the join, ordered by turn. A mob carrying a content mod's effect keeps the tick serial while mods
+are loaded. The entity tick Pre's cancellations are heard before the loop and passed to every group.
 
 The tick profiler samples on whichever thread runs a mob: each helper samples for whoever samples
 on the server thread, into its own sums, which join the server thread's when it ends. A sampled
