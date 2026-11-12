@@ -97,6 +97,7 @@ pub struct Fluids {
     pub in_water: bool,
     pub in_lava: bool,
     pub eye_in_water: bool,
+    pub eye_in_lava: bool,
     /// The mod fluid the mob is deepest in (`isInFluidType`): not water to the
     /// game, but the mob moves in it as in water, with its numbers.
     pub modded: Option<ModFluidImmersion>,
@@ -236,7 +237,7 @@ impl MobWorld<'_> {
         // for the camera.
         for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
             let (fluid, h) = self.fluid_height(ex, y, ez);
-            if fluid != Fluid::Water || f64::from(y) + h < lo.y || eye_y < f64::from(y) {
+            if fluid == Fluid::None || f64::from(y) + h < lo.y || eye_y < f64::from(y) {
                 continue;
             }
             let state = self.world.block(ex, y, ez);
@@ -252,7 +253,11 @@ impl MobWorld<'_> {
                 h
             };
             if eye_y <= f64::from(y) + camera {
-                out.eye_in_water = true;
+                match fluid {
+                    Fluid::Water => out.eye_in_water = true,
+                    Fluid::Lava => out.eye_in_lava = true,
+                    Fluid::None => {}
+                }
             }
         }
         out
