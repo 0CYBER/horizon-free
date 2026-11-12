@@ -1383,15 +1383,15 @@ impl Loader<'_> {
         ) {
             return None;
         }
-        if self.pack.exists(&path("gsh")) {
-            let Some(inputs) = self.geometry.clone() else {
+        let tessellated = self.pack.exists(&path("tcs")) || self.pack.exists(&path("tes"));
+        if tessellated || self.pack.exists(&path("gsh")) {
+            let Some(inputs) = self.geometry.clone().filter(|_| !tessellated) else {
                 self.post.notes.push(format!(
-                    "{name}: uses a geometry stage (supported for the shadow pass's terrain and entities only); skipped"
+                    "{name}: uses a tessellation stage (unsupported) or a geometry stage (supported for the shadow pass's terrain and entities only); skipped"
                 ));
                 return None;
             };
-            let (vsh, gsh) = (path("vsh"), path("gsh"));
-            return self.load_geometry(name, group, &vsh, &gsh, &fsh, &inputs);
+            return self.load_geometry(name.clone(), group, &vsh, &path("gsh"), &fsh, &inputs);
         }
         let vertex = self.preprocess(&vsh);
         let fragment = self.preprocess(&fsh);
