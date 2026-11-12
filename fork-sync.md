@@ -74,6 +74,9 @@ again.
   kept under, so "New name" doesn't lose it. `Accounts::look_key`/`look_env` give the game the skin,
   the game-name chip in `glass_account.rs` has the pencil, and `switch_page.rs` its "Skin:" button
   (issue #14).
+- `crates/horizon-threads/src/allocator_stats.rs` casts mimalloc's JSON pointer to `c_char`
+  (`raw.cast::<std::ffi::c_char>()`): `libmimalloc-sys` returns `*mut c_char`, and `c_char` is `u8` on
+  aarch64, so the Windows ARM64 launcher job failed to compile the engine crate with E0308.
 
 `launcher/tests/owner_gate.rs` is upstream's: it asserts that `play` and the MCP server refuse
 without an owner, which the fork removes on purpose, so `cargo test` fails those two and nothing
