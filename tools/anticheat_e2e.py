@@ -28,6 +28,9 @@ Checks:
          twice a second and swinging each time, as vanilla's client does, is never flagged and its hits
          land; one that doesn't swing, and one that attacks two players in the same tick, are flagged,
          their attacks dropped, and kicked.
+- combat-restart: a player's kicks are kept across a restart (`anticheat-strikes.json`): a bot attacking
+         without swinging is kicked once (1 of 2 before a ban), the server stops and starts again on the same
+         folder, and the same bot, back and cheating again, is banned.
 - prediction-vanilla (only with --check): the same with the real vanilla 26.3 client (tools/vanilla_client.py, from the owner's
          own files; on macOS from the logged-in screen session, even a locked one), its keys pressed by
          VanillaMover (mods/horizon/src/test/java): it walks, sprint-jumps, strafes and sneaks, with Speed
@@ -92,7 +95,8 @@ class Failed(Exception):
 
 
 def start(bins, folder, anticheat, out, name, **extra):
-    folder.mkdir(parents=True)
+    # A folder already there is a server started again (combat-restart): its world and files stay.
+    folder.mkdir(parents=True, exist_ok=True)
     port = lab.free_port()
     props = dict(PROPERTIES, **extra, **{'server-port': str(port)})
     (folder / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
@@ -844,6 +848,47 @@ def check_combat(bins, scratch, out, seconds):
           f'flagged; health left: {health}')
 
 
+def check_combat_restart(bins, scratch, out, seconds):
+    """docs/anticheat.md: a check's kicks are counted "across sessions and restarts". The first kick of a
+    no-swing bot is saved in `anticheat-strikes.json`; after a restart on the same folder, the next one bans."""
+    folder = scratch / 'combat-restart'
+    rounds = []
+    for run in ('first', 'second'):
+        server, port = start(bins, folder, None, out, f'combat-restart-{run}', gamemode='survival',
+                             difficulty='peaceful')
+        try:
+            server.console('gamerule respawn_radius 0')
+            with ThreadPoolExecutor(2) as pool:
+                target = pool.submit(bots, bins, port, out, 'RTarget', 1, 'stand', seconds + 10)
+                server.wait_for('RTarget0 joined the game', 120)
+                cheater = bots(bins, port, out, 'RNoSwing', 1, 'stand', seconds, '--attack',
+                               'RTarget0', '--no-swing')['per_bot'][0]
+                target.result()
+        finally:
+            server.stop()
+        strikes = folder / 'anticheat-strikes.json'
+        rounds.append((cheater, json.loads(strikes.read_text()) if strikes.exists() else None))
+    log = (folder / 'logs/anticheat.log').read_text()
+    (first, after_first), (second, after_second) = rounds
+    if 'disconnected' not in (first['error'] or ''):
+        raise Failed(f'combat-restart: the no-swing bot was not kicked the first time ({first["error"]})')
+    if not after_first or [counts.get('combat') for counts in after_first.values()] != [1]:
+        raise Failed(f'combat-restart: the first kick was not saved as one strike: {after_first}')
+    if 'RNoSwing0 failed combat' not in log or 'kicked (1 of 2 before a ban)' not in log:
+        raise Failed(f'combat-restart: no first kick with its ban count in the log:\n{log}')
+    bans = json.loads((folder / 'banned-players.json').read_text())
+    ban = next((b for b in bans if b['name'] == 'RNoSwing0'), None)
+    if not ban or ban.get('reason') != 'Horizon anticheat: combat':
+        raise Failed(f'combat-restart: back after the restart, the bot cheated again and was not banned: {bans}')
+    if 'disconnected' not in (second['error'] or ''):
+        raise Failed(f'combat-restart: the banned bot was not sent away ({second["error"]})')
+    # The ban starts the count again (docs/anticheat.md).
+    if [counts.get('combat') for counts in after_second.values()] != [0]:
+        raise Failed(f'combat-restart: the ban did not start the count again: {after_second}')
+    print('combat-restart: kicked once (1 strike saved), the server restarted on the same folder, and the same '
+          'bot, cheating again, was banned (its count back at 0)')
+
+
 def check_prediction_water(bins, scratch, out, seconds):
     check_prediction(bins, scratch, out, seconds, 'prediction-water', water_play)
 
@@ -855,9 +900,9 @@ def check_prediction_items(bins, scratch, out, seconds):
 CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction,
           'prediction-water': check_prediction_water, 'prediction-items': check_prediction_items,
           'prediction-vanilla': check_prediction_vanilla,
-          'combat': check_combat}
+          'combat': check_combat, 'combat-restart': check_combat_restart}
 # Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
-DEFAULT = ['combat', 'ground', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
+DEFAULT = ['combat', 'combat-restart', 'ground', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
 
 
 def main():
