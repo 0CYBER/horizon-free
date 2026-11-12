@@ -93,8 +93,8 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[impl AsRef<str>])
         signed: signature == Signature::Signed,
         ..empty.clone()
     };
-    // MinecraftServicesSessionService.unpackTextures validates every URL before
-    // returning any textures. An invalid cape or elytra rejects the payload too.
+    // Authlib's MinecraftServicesSessionService validates every URL in
+    // unpackTextures before returning any textures. A bad cape rejects the skin too.
     for (kind, texture) in textures {
         let Some(url) = texture.get("url").and_then(|u| u.as_str()) else {
             return empty;
@@ -1543,8 +1543,8 @@ mod tests {
         assert!(t.slim);
         assert!(!unpack(wide, Signature::Signed, &TEXTURE_URIS).slim);
     }
-    /// `MinecraftServicesSessionService.unpackTextures` rejects the whole
-    /// profile when any texture URL is outside the allowed origins.
+    /// Authlib's `MinecraftServicesSessionService` rejects the whole profile in
+    /// `unpackTextures` when any texture URL is outside the allowed origins.
     #[test]
     fn unpack_rejects_the_skin_when_another_texture_is_rejected() {
         use super::{Signature, TEXTURE_URIS, unpack};
