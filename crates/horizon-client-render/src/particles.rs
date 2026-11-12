@@ -5195,6 +5195,25 @@ mod tests {
     }
 
     #[test]
+    fn a_particle_is_tested_at_its_position_this_tick_not_an_interpolated_one() {
+        use crate::gfx::{Frustum, world_projection};
+        let view = Frustum::from_view_projection(world_projection(70.0, 16.0 / 9.0, 512.0));
+        // The frame is drawn half way (0.5) between `previous` and `position`.
+        // Ahead now, far behind a tick ago (half way: 12.5 behind, outside): kept.
+        let mut coming = smoke_at(&[[0.0, 0.0, -5.0]]);
+        coming.particles[0].previous = [0.0, 0.0, 30.0];
+        assert!(quad_vertices(&coming, None) > 0);
+        assert_eq!(
+            quad_vertices(&coming, Some(&view)),
+            quad_vertices(&coming, None)
+        );
+        // Behind now, ahead a tick ago (half way: 5 ahead, inside): dropped.
+        let mut going = smoke_at(&[[0.0, 0.0, 10.0]]);
+        going.particles[0].previous = [0.0, 0.0, -20.0];
+        assert_eq!(quad_vertices(&going, Some(&view)), 0);
+    }
+
+    #[test]
     fn quads_face_the_rotation_they_are_given() {
         let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
         let sprite = "test:smoke".to_owned();
