@@ -422,6 +422,10 @@ impl Game<'_> {
                 let p = self.mobs[index].position;
                 self.spawn_at_location(p, 1.5, a);
             }
+            // mobInteract: gameEvent(SHEAR, player) after the shear, before the
+            // tool's damage.
+            let ctx = self.who_context(Some(horizon_client::mobs::Who::Player), None);
+            self.post_game_event("minecraft:shear", at, ctx);
             self.damage_held_tool();
             return true;
         }
