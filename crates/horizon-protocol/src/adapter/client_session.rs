@@ -15,24 +15,21 @@ use std::{
     cell::Cell,
     collections::{HashMap, VecDeque},
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicU8, Ordering},
     },
 };
 
-mod stand_in;
+mod biomes;
 mod step_1_20_6;
 mod step_1_21_1;
 mod step_1_21_10;
 mod step_1_21_11;
-mod step_1_21_3;
 mod step_1_21_4;
 mod step_1_21_5;
 mod step_1_21_6;
 mod step_1_21_8;
 mod step_26_1;
-mod sync_registries;
-mod synced;
 mod world;
 
 use super::{
@@ -43,7 +40,7 @@ use super::{
 };
 use crate::{
     Result, State,
-    buf::{Codec, Reader, Writer},
+    buf::{Reader, Writer},
     entity_data::{ParticleData, Value, serializer},
     ids as packet_ids,
     packets::{configuration, play},
@@ -85,20 +82,8 @@ pub struct ClientSession {
     entities: Mutex<HashMap<i32, (i32, u128)>>,
     /// The hotbar slot the client holds (0..=8), for the swap a 1.21.3 client's `pick_item` becomes.
     held: AtomicU8,
-    /// Pinned ids -> the client's of the synchronised registries that lost entries its release lacks
-    /// (synced.rs).
-    synced: Mutex<Arc<synced::IdMaps>>,
-    /// Where the client said it is in its last `accept_teleportation`, until its next packet: an older
-    /// client follows the accept with a `move_player_pos_rot` to the same place, which 26.3's accept
-    /// (it carries the place) made redundant, and which counts as the tick's move on the server.
-    accepted: Mutex<Option<Place>>,
-    /// The mannequins shown to a client through 1.21.8 as players (stand_in.rs).
-    mannequins: Mutex<stand_in::Mannequins>,
-    /// A packet to pass on after the one just translated ([`Self::next_serverbound`]).
-    pending: Mutex<VecDeque<(i32, Vec<u8>)>>,
-    /// A client before 1.21.4 has no `player_loaded`: one is due once it takes the first teleport after a login
-    /// or respawn (it is in the level then).
-    load_due: std::sync::atomic::AtomicBool,
+    /// Pinned biome ids -> the client's, once its biome registry lost entries its release lacks (biomes.rs).
+    biomes: Mutex<Option<biomes::BiomeMap>>,
 }
 
 /// A position, yaw and pitch.
@@ -187,32 +172,8 @@ impl ClientSession {
             teleports: Mutex::new(VecDeque::new()),
             entities: Mutex::new(HashMap::new()),
             held: AtomicU8::new(0),
-            synced: Mutex::new(Arc::default()),
-            accepted: Mutex::new(None),
-            pending: Mutex::new(VecDeque::new()),
-            load_due: std::sync::atomic::AtomicBool::new(false),
-            mannequins: Mutex::new(stand_in::Mannequins::default()),
+            biomes: Mutex::new(None),
         }
-    }
-
-    /// A client before 1.21.2 has no `client_tick_end`; it sends at most one movement per tick, so the end of
-    /// its tick follows each movement (the server allows one movement per client tick).
-    fn tick_ended(&self, pinned: i32) {
-        if self.version.at_most(ServerVersion::V1_21_1) {
-            let _ = pinned;
-            self.pending
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push_back((packet_ids::play::serverbound::CLIENT_TICK_END, Vec::new()));
-        }
-    }
-
-    /// A packet the translation of the last one added after it: the server reads it next.
-    pub fn next_serverbound(&self) -> Option<(i32, Vec<u8>)> {
-        self.pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop_front()
     }
     fn hold(&self, slot: i32) {
         if let Ok(slot @ 0..=8) = u8::try_from(slot) {
@@ -287,34 +248,13 @@ impl ClientSession {
             return Ok(None);
         };
         use packet_ids::play::serverbound as sb;
-        let accepted = self
-            .accepted
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        if (state, pinned) == (State::Play, sb::MOVE_PLAYER_POS_ROT)
-            && accepted.is_some_and(|at| same_place(&payload, at))
-        {
-            return Ok(None);
-        }
         let payload = match (state, pinned) {
             (State::Configuration, packet_ids::configuration::serverbound::SELECT_KNOWN_PACKS)
-                if synced::own_core_pack(self.version) =>
+                if biomes::own_core_pack(self.version) =>
             {
-                synced::core_pack_up(self.version, &payload)?
+                biomes::core_pack_up(self.version, &payload)?
             }
-            (State::Play, sb::ACCEPT_TELEPORTATION) => {
-                let accept = self.accept_teleport(&payload)?;
-                if self.load_due.swap(false, Ordering::AcqRel) {
-                    self.pending
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push_back((sb::PLAYER_LOADED, Vec::new()));
-                }
-                *self.accepted.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(*self.place.lock().unwrap_or_else(|e| e.into_inner()));
-                accept
-            }
+            (State::Play, sb::ACCEPT_TELEPORTATION) => self.accept_teleport(&payload)?,
             // 26.3 inserted CHANGE_DESTROY_DIRECTION at 1: 26.2's actions past 0 are one up.
             (State::Play, sb::PLAYER_ACTION) => {
                 let mut r = Reader::new(&payload);
@@ -330,11 +270,6 @@ impl ClientSession {
             }
             (State::Play, sb::MOVE_PLAYER_POS | sb::MOVE_PLAYER_POS_ROT | sb::MOVE_PLAYER_ROT) => {
                 self.moved(pinned, &payload)?;
-                self.tick_ended(pinned);
-                payload
-            }
-            (State::Play, sb::MOVE_PLAYER_STATUS_ONLY) => {
-                self.tick_ended(pinned);
                 payload
             }
             _ => payload,
@@ -358,122 +293,8 @@ impl ClientSession {
 
     /// A packet body (VarInt id + payload) the server sends, as the client numbers it. `None`: the client
     /// has no such packet, or nothing it could show for what the packet names, so nothing is sent.
-    /// Every packet body the client is sent for the server's `body`, in order: [`Self::clientbound`]'s, and
-    /// for a client through 1.21.8 a mannequin is shown as a player (stand_in.rs), which takes several.
-    pub fn clientbound_all(&self, body: &[u8]) -> Result<Vec<Vec<u8>>> {
-        use packet_ids::play::clientbound as cb;
-        let state = self.writing();
-        if state != State::Play || !self.version.at_most(ServerVersion::V1_21_8) {
-            return Ok(self.clientbound(body)?.into_iter().collect());
-        }
-        let mut r = Reader::new(body);
-        let id = r.varint()?;
-        let payload = r.rest();
-        let mut out = Vec::new();
-        let send = |p: play::Clientbound, out: &mut Vec<Vec<u8>>| -> Result<()> {
-            out.extend(self.clientbound(&p.encode())?);
-            Ok(())
-        };
-        match id {
-            cb::ADD_ENTITY => {
-                let e = play::AddEntity::read(&mut Reader::new(payload))?;
-                if e.kind == stand_in::MANNEQUIN {
-                    self.flush_mannequins(&mut out)?;
-                    let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
-                    m.0.insert(e.id, (e.uuid, Some(e)));
-                    return Ok(out);
-                }
-            }
-            cb::SET_ENTITY_DATA => {
-                let d = play::SetEntityData::read(&mut Reader::new(payload))?;
-                let known = {
-                    let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
-                    m.0.get_mut(&d.id).map(|(_, add)| add.take())
-                };
-                match known {
-                    Some(Some(add)) => {
-                        self.flush_mannequins(&mut out)?;
-                        for p in stand_in::spawn(&add, Some(&d)) {
-                            send(p, &mut out)?;
-                        }
-                        return Ok(out);
-                    }
-                    Some(None) => {
-                        self.flush_mannequins(&mut out)?;
-                        let values = stand_in::kept(&d.values);
-                        send(
-                            play::Clientbound::SetEntityData(play::SetEntityData {
-                                id: d.id,
-                                values,
-                            }),
-                            &mut out,
-                        )?;
-                        return Ok(out);
-                    }
-                    None => {}
-                }
-            }
-            cb::REMOVE_ENTITIES => {
-                let rm = play::RemoveEntities::read(&mut Reader::new(payload))?;
-                let uuids: Vec<u128> = {
-                    let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
-                    rm.ids
-                        .iter()
-                        .filter_map(|id| m.0.remove(id))
-                        // one never shown has no player info to remove
-                        .filter_map(|(uuid, add)| add.is_none().then_some(uuid))
-                        .collect()
-                };
-                self.flush_mannequins(&mut out)?;
-                out.extend(self.clientbound(body)?);
-                if !uuids.is_empty() {
-                    send(
-                        play::Clientbound::PlayerInfoRemove(play::PlayerInfoRemove { uuids }),
-                        &mut out,
-                    )?;
-                }
-                return Ok(out);
-            }
-            _ => {}
-        }
-        self.flush_mannequins(&mut out)?;
-        out.extend(self.clientbound(body)?);
-        Ok(out)
-    }
-
-    /// Mannequins still waiting for their entity data are shown now, without a skin: something else is sent
-    /// first (their equipment, say, needs the entity).
-    fn flush_mannequins(&self, out: &mut Vec<Vec<u8>>) -> Result<()> {
-        let waiting: Vec<play::AddEntity> = {
-            let mut m = self.mannequins.lock().unwrap_or_else(|e| e.into_inner());
-            m.0.values_mut().filter_map(|(_, add)| add.take()).collect()
-        };
-        for add in waiting {
-            for p in stand_in::spawn(&add, None) {
-                out.extend(self.clientbound(&p.encode())?);
-            }
-        }
-        Ok(())
-    }
-
     pub fn clientbound(&self, body: &[u8]) -> Result<Option<Vec<u8>>> {
         let state = self.writing();
-        self.clientbound_in(state, body).map_err(|e| {
-            let id = Reader::new(body).varint().unwrap_or(-1);
-            crate::Error(format!(
-                "{e} (packet {id} in {state:?} for a {} client)",
-                self.version.name()
-            ))
-        })
-    }
-
-    fn clientbound_in(&self, state: State, body: &[u8]) -> Result<Option<Vec<u8>>> {
-        if state == State::Play && self.version.at_most(ServerVersion::V1_21_3) {
-            use packet_ids::play::clientbound as cb;
-            if matches!(Reader::new(body).varint(), Ok(cb::LOGIN | cb::RESPAWN)) {
-                self.load_due.store(true, Ordering::Release);
-            }
-        }
         let mut r = Reader::new(body);
         let id = r.varint()?;
         let payload = r.rest();
@@ -488,14 +309,7 @@ impl ClientSession {
         };
         self.writing.store(to_u8(next), Ordering::Release);
         let rebiomed;
-        // Items and entity data written below take the client's synchronised registry ids.
-        let maps: Arc<synced::IdMaps> = self
-            .synced
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let _synced = (!maps.is_empty()).then(|| ids::synced(maps));
-        let payload = match self.synced_down(state, id, payload)? {
+        let payload = match self.biomes_down(state, id, payload)? {
             // A registry the client's release doesn't synchronise is not sent.
             Some(p) if p.is_empty() => return Ok(None),
             Some(p) => {
@@ -692,12 +506,6 @@ impl ClientSession {
         {
             payload = next;
         }
-        // 1.21.2 and 1.21.3 (one protocol): 1.21.4's two additions go.
-        if v == ServerVersion::V1_21_3
-            && let Some(next) = step_1_21_3::clientbound(state, id, &payload)?
-        {
-            payload = next;
-        }
         // 1.21.1 is older than 1.21.2 and than 1.21.4: its packets are brought down after those, and before 1.20.6's.
         if v.at_most(ServerVersion::V1_21_1)
             && let Some(next) = step_1_21_1::clientbound(state, id, &payload)?
@@ -819,67 +627,63 @@ fn layout_then_ids(
 }
 
 impl ClientSession {
-    /// The client's own core pack offered, the registries its release lacks left out, its registries without
-    /// the entries it lacks, and the ids into those renumbered (synced.rs, #15138). `None`: the pinned payload
-    /// goes on as it is; empty: nothing is sent.
-    fn synced_down(&self, state: State, id: i32, payload: &[u8]) -> Result<Option<Vec<u8>>> {
+    /// The client's own core pack offered, its biome registry without what its release lacks, and the
+    /// biome ids after it renumbered (biomes.rs, #15138). `None`: the pinned payload goes on as it is.
+    fn biomes_down(&self, state: State, id: i32, payload: &[u8]) -> Result<Option<Vec<u8>>> {
         use packet_ids::{configuration::clientbound as cfg, play::clientbound as cb};
-        if !synced::own_core_pack(self.version) {
+        if !biomes::own_core_pack(self.version) {
             return Ok(None);
         }
-        let maps = || {
-            self.synced
+        let map = || {
+            self.biomes
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
         };
         Ok(match (state, id) {
             (State::Configuration, cfg::REGISTRY_DATA)
-                if synced::absent_registry(self.version, payload)? =>
+                if biomes::absent_registry(self.version, payload)? =>
             {
                 return Ok(Some(Vec::new()));
             }
             (State::Configuration, cfg::SELECT_KNOWN_PACKS) => {
-                Some(synced::core_pack_down(self.version, payload)?)
+                Some(biomes::core_pack_down(self.version, payload)?)
             }
             (State::Configuration, cfg::REGISTRY_DATA) => {
-                match synced::registry_data(self.version, payload)? {
-                    Some((p, registry, m)) => {
-                        let mut guard = self.synced.lock().unwrap_or_else(|e| e.into_inner());
-                        Arc::make_mut(&mut guard).insert(registry, m);
+                match biomes::registry_data(self.version, payload)? {
+                    Some((p, m)) => {
+                        *self.biomes.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
                         Some(p)
                     }
                     None => None,
                 }
             }
-            (State::Configuration, cfg::UPDATE_TAGS) => {
-                let mut p = configuration::Clientbound::decode(id, payload)?;
-                if let configuration::Clientbound::UpdateTags(t) = &mut p {
-                    synced::tags(self.version, &maps(), &mut t.registries);
-                }
-                Some(strip_id(p.encode()))
-            }
-            (State::Play, cb::UPDATE_TAGS) => {
-                let mut p = play::Clientbound::decode(id, payload)?;
-                if let play::Clientbound::UpdateTags(t) = &mut p {
-                    synced::tags(self.version, &maps(), &mut t.registries);
-                }
-                Some(strip_id(p.encode()))
-            }
-            (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => {
-                match (maps().get(synced::BIOMES), self.version.ids()) {
-                    (Some(m), Some(ids)) => {
-                        Some(synced::level_chunk(m, ids.state_bits().1, payload)?)
+            (State::Configuration, cfg::UPDATE_TAGS) => match map() {
+                Some(m) => {
+                    let mut p = configuration::Clientbound::decode(id, payload)?;
+                    if let configuration::Clientbound::UpdateTags(t) = &mut p {
+                        biomes::tags(&m, &mut t.registries);
                     }
-                    _ => None,
+                    Some(strip_id(p.encode()))
                 }
-            }
-            (State::Play, cb::CHUNKS_BIOMES) => match maps().get(synced::BIOMES) {
-                Some(m) => Some(synced::chunks_biomes(m, payload)?),
                 None => None,
             },
-            (State::Play, cb::DAMAGE_EVENT) => match maps().get(synced::DAMAGE_TYPE) {
-                Some(m) => Some(synced::damage_event(m, payload)?),
+            (State::Play, cb::UPDATE_TAGS) => match map() {
+                Some(m) => {
+                    let mut p = play::Clientbound::decode(id, payload)?;
+                    if let play::Clientbound::UpdateTags(t) = &mut p {
+                        biomes::tags(&m, &mut t.registries);
+                    }
+                    Some(strip_id(p.encode()))
+                }
+                None => None,
+            },
+            (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => match (map(), self.version.ids()) {
+                (Some(m), Some(ids)) => Some(biomes::level_chunk(&m, ids.state_bits().1, payload)?),
+                _ => None,
+            },
+            (State::Play, cb::CHUNKS_BIOMES) => match map() {
+                Some(m) => Some(biomes::chunks_biomes(&m, payload)?),
                 None => None,
             },
             _ => None,
@@ -939,21 +743,6 @@ impl ClientSession {
         w.f32(place.pitch);
         Ok(w.data)
     }
-}
-
-/// Whether a `move_player_pos_rot` payload names `at` (the place an accepted teleport put the client).
-fn same_place(payload: &[u8], at: Place) -> bool {
-    let mut r = Reader::new(payload);
-    let (Ok(x), Ok(y), Ok(z), Ok(yaw), Ok(pitch)) = (r.f64(), r.f64(), r.f64(), r.f32(), r.f32())
-    else {
-        return false;
-    };
-    let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
-    close(x, at.position[0])
-        && close(y, at.position[1])
-        && close(z, at.position[2])
-        && (yaw - at.yaw).abs() < 1e-3
-        && (pitch - at.pitch).abs() < 1e-3
 }
 
 /// What becomes of a clientbound payload on its way to an older client.
@@ -1153,11 +942,6 @@ fn entity_value(ids: &Ids, kind: i32, value: &mut Value) -> bool {
             ) =>
         {
             *id = state_down(ids, *id);
-            true
-        }
-        // A painting variant the client lacks is its stand-in (a holder: the id plus one).
-        Value::Id(holder) if kind == serializer::PAINTING_VARIANT && *holder >= 1 => {
-            *holder = ids::synced_down_or_first(synced::PAINTING_VARIANT, *holder - 1) + 1;
             true
         }
         Value::Particle(p) => particle(p),
@@ -1440,40 +1224,6 @@ mod tests {
         assert_eq!(action(6), 7); // swap held items
     }
 
-    /// An older client follows each accepted teleport with a move to the same place; 26.3 doesn't (its
-    /// accept carries the place), and two moves in one client tick are kicked as invalid movement.
-    #[test]
-    fn the_move_an_older_client_sends_after_accepting_a_teleport_is_not_passed_on() {
-        let s = in_play();
-        let p = play::Clientbound::PlayerPosition(play::PlayerPosition {
-            teleport: 1,
-            position: [100.5, 46.0, 100.5],
-            delta: [0.0; 3],
-            yaw: 180.0,
-            pitch: 0.0,
-            relatives: 0,
-        });
-        s.clientbound(&p.encode()).unwrap().unwrap();
-        let mut w = Writer::new();
-        w.varint(1);
-        s.serverbound(0, w.data).unwrap().unwrap();
-        let pos_rot = |x: f64| {
-            let mut w = Writer::new();
-            for v in [x, 46.0, 100.5] {
-                w.f64(v);
-            }
-            w.f32(180.0);
-            w.f32(0.0);
-            w.u8(1);
-            w.data
-        };
-        // move_player_pos_rot: 31 in both. The echo of the accepted place is not sent on...
-        assert!(s.serverbound(31, pos_rot(100.5)).unwrap().is_none());
-        // ...but the client's next real move is.
-        assert!(s.serverbound(31, pos_rot(100.5)).unwrap().is_some());
-        assert!(s.serverbound(31, pos_rot(101.0)).unwrap().is_some());
-    }
-
     #[test]
     fn a_26_2_teleport_confirmation_states_where_the_teleport_put_the_client() {
         use play::relative as rel;
@@ -1570,161 +1320,6 @@ mod tests {
         assert_eq!(slot(72), 65);
         // ocean_monument_map (1239, new in 26.3) is a filled map: filled_map (1238 in 26.3, 1133 in 26.2).
         assert_eq!(slot(1239), 1133);
-    }
-
-    /// Every client through 1.21.6 was disconnected by the first equipment with a component ("NBT at byte 1"):
-    /// 1.21.6's step read the stacks, already in the client's ids, as pinned ones.
-    #[test]
-    fn equipment_with_components_reaches_every_older_client() {
-        use crate::item::{Component, Stack, component};
-        use horizon_world::nbt::Tag;
-        let mut hat = Stack::new(1012, 1);
-        hat.added.push((
-            component::CUSTOM_NAME,
-            Component::Text(Tag::String("Santa Hat".into())),
-        ));
-        hat.added
-            .push((component::ENCHANTMENT_GLINT_OVERRIDE, Component::Bool(true)));
-        let p = play::Clientbound::SetEquipment(play::SetEquipment {
-            id: 4,
-            slots: vec![(0, Some(hat.clone())), (5, Some(hat))],
-        });
-        for v in ServerVersion::ALL {
-            if v == ServerVersion::Current || v.at_most(ServerVersion::V1_20_3) {
-                continue;
-            }
-            let s = ClientSession::new(v);
-            s.reading.store(to_u8(State::Play), Ordering::Release);
-            s.writing.store(to_u8(State::Play), Ordering::Release);
-            let sent = s.clientbound(&p.encode());
-            assert!(matches!(sent, Ok(Some(_))), "{v:?}: {sent:?}");
-        }
-    }
-
-    /// A 1.21.8 client has no mannequins: it is shown a player with the mannequin's id, UUID and skin, whose
-    /// player info goes with it. A 1.21.9 client gets the mannequin as it is.
-    #[test]
-    fn a_mannequin_is_a_player_for_a_client_through_1_21_8() {
-        use crate::entity_data::Profile;
-        use crate::packets::login::Property;
-        let add = play::Clientbound::AddEntity(play::AddEntity {
-            id: 7,
-            uuid: 99,
-            kind: stand_in::MANNEQUIN,
-            position: [1.0, 2.0, 3.0],
-            velocity: [0.0; 3],
-            pitch: 0,
-            yaw: 0,
-            head_yaw: 0,
-            data: 0,
-        });
-        let data = play::Clientbound::SetEntityData(play::SetEntityData {
-            id: 7,
-            values: vec![(
-                17,
-                serializer::RESOLVABLE_PROFILE,
-                Value::Profile(Profile {
-                    name: Some("x".into()),
-                    uuid: Some(1),
-                    properties: vec![Property {
-                        name: "textures".into(),
-                        value: "v".into(),
-                        signature: None,
-                    }],
-                    ..Default::default()
-                }),
-            )],
-        });
-        let remove = play::Clientbound::RemoveEntities(play::RemoveEntities { ids: vec![7] });
-        let session = |v| {
-            let s = ClientSession::new(v);
-            s.reading.store(to_u8(State::Play), Ordering::Release);
-            s.writing.store(to_u8(State::Play), Ordering::Release);
-            s
-        };
-        let ids = |v: ServerVersion, bodies: &[Vec<u8>]| -> Vec<i32> {
-            bodies
-                .iter()
-                .map(|b| {
-                    let id = Reader::new(b).varint().unwrap();
-                    (0..200)
-                        .find(|&p| v.clientbound_id_down(State::Play, p) == Some(id))
-                        .unwrap()
-                })
-                .collect()
-        };
-        use packet_ids::play::clientbound as cb;
-        let s = session(ServerVersion::V1_21_8);
-        assert!(
-            s.clientbound_all(&add.encode()).unwrap().is_empty(),
-            "held until its data"
-        );
-        let shown = s.clientbound_all(&data.encode()).unwrap();
-        assert_eq!(
-            ids(ServerVersion::V1_21_8, &shown),
-            [cb::PLAYER_INFO_UPDATE, cb::ADD_ENTITY, cb::SET_ENTITY_DATA]
-        );
-        let gone = s.clientbound_all(&remove.encode()).unwrap();
-        assert_eq!(
-            ids(ServerVersion::V1_21_8, &gone),
-            [cb::REMOVE_ENTITIES, cb::PLAYER_INFO_REMOVE]
-        );
-        // a mannequin with no data before something else: shown without a skin first
-        let s = session(ServerVersion::V1_20_6);
-        assert!(s.clientbound_all(&add.encode()).unwrap().is_empty());
-        let other = play::Clientbound::RemoveEntities(play::RemoveEntities { ids: vec![3] });
-        let out = s.clientbound_all(&other.encode()).unwrap();
-        assert_eq!(
-            ids(ServerVersion::V1_20_6, &out),
-            [
-                cb::PLAYER_INFO_UPDATE,
-                cb::ADD_ENTITY,
-                cb::SET_ENTITY_DATA,
-                cb::REMOVE_ENTITIES
-            ]
-        );
-        // 1.21.9 knows mannequins
-        let s = session(ServerVersion::V1_21_10);
-        assert_eq!(s.clientbound_all(&add.encode()).unwrap().len(), 1);
-    }
-
-    /// A client before 1.21.4 never says it loaded the level: once it takes the first teleport after its
-    /// login (and after each respawn) the server is told so, after the accept itself.
-    #[test]
-    fn a_client_before_1_21_4_is_loaded_after_its_first_teleport() {
-        use packet_ids::play::{clientbound as cb, serverbound as sb};
-        for (v, expect) in [
-            (ServerVersion::V1_21_3, true),
-            (ServerVersion::V1_20_6, true),
-            (ServerVersion::V1_21_4, false),
-        ] {
-            let s = ClientSession::new(v);
-            s.reading.store(to_u8(State::Play), Ordering::Release);
-            s.writing.store(to_u8(State::Play), Ordering::Release);
-            let mut login = Writer::new();
-            login.varint(cb::LOGIN);
-            let _ = s.clientbound_in(State::Play, &login.data);
-            let accept_id = (0..80)
-                .find(|&o| v.serverbound_id_up(State::Play, o) == Some(sb::ACCEPT_TELEPORTATION))
-                .unwrap();
-            let mut w = Writer::new();
-            w.varint(1);
-            let _ = s.serverbound(accept_id, w.data.clone());
-            let mut queued = Vec::new();
-            while let Some((id, _)) = s.next_serverbound() {
-                queued.push(id);
-            }
-            assert_eq!(
-                queued.contains(&sb::PLAYER_LOADED),
-                expect,
-                "{v:?}: {queued:?}"
-            );
-            // once only
-            let _ = s.serverbound(accept_id, w.data);
-            assert!(
-                !std::iter::from_fn(|| s.next_serverbound()).any(|(id, _)| id == sb::PLAYER_LOADED)
-            );
-        }
     }
 
     #[test]

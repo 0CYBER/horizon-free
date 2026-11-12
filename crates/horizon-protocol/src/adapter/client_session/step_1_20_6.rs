@@ -1,5 +1,5 @@
 //! 1.21's packets in 1.20.6's layout for a 1.20.6 client (and 1.20.5): the mirror of `translate`'s `v1_20_6`
-//! (1.20.6 to 1.21). Clientbound: explode's holder sound becomes
+//! (1.20.6 to 1.21). Clientbound: level_particles puts the particle before its flags, explode's holder sound becomes
 //! an inline sound event (the holder id goes), projectile_power sends a zero vector (1.21 sends only the power), and
 //! merchant_offers' trade items become 1.20.6 stacks, an empty stack for a missing second cost. Serverbound, a 1.20.6
 //! client's use_item gets the head's yaw and pitch, which 1.21 reads and 1.20.6 does not send.
@@ -10,7 +10,7 @@ use crate::{
     Result, State,
     adapter::{
         ids::{self, Ids, Way},
-        translate::client_layout_v1_20_6::slot,
+        translate::client_layout_v1_20_6::{LEVEL_PARTICLES_HEAD, slot},
     },
     buf::{Codec, Reader, Writer},
     ids as packet_ids,
@@ -30,35 +30,12 @@ pub(super) fn clientbound(
         return Ok(None);
     }
     Ok(match id {
+        cb::LEVEL_PARTICLES => Some(level_particles(payload)?),
         cb::EXPLODE => Some(explode(payload)?),
         cb::PROJECTILE_POWER => Some(projectile_power(payload)?),
         cb::MERCHANT_OFFERS => Some(merchant_offers(payload, ids)?),
-        cb::UPDATE_ATTRIBUTES => Some(update_attributes(payload)?),
         _ => None,
     })
-}
-
-/// 1.21's update_attributes as 1.20.6's: a modifier is named by a UUID, not an identifier (vanilla's own
-/// modifiers keep their old UUIDs, any other gets `UUID.nameUUIDFromBytes` of its identifier).
-fn update_attributes(payload: &[u8]) -> Result<Vec<u8>> {
-    let mut r = Reader::new(payload);
-    let mut w = Writer::new();
-    w.varint(r.varint()?);
-    let n = r.count(r.remaining())?;
-    w.varint(n as i32);
-    for _ in 0..n {
-        w.varint(r.varint()?);
-        w.f64(r.f64()?);
-        let m = r.count(r.remaining())?;
-        w.varint(m as i32);
-        for _ in 0..m {
-            let id = r.string(32767)?;
-            w.uuid(crate::item::v1_20_5::modifier_uuid(&id));
-            w.f64(r.f64()?);
-            w.varint(r.varint()?);
-        }
-    }
-    Ok(w.data)
 }
 
 /// The serverbound `use_item` the 1.20.6 client sent (`payload`, under the pinned id `id`) with the head's yaw and
@@ -83,6 +60,18 @@ pub(super) fn serverbound(
     w.f32(yaw);
     w.f32(pitch);
     Ok(Some(w.data))
+}
+
+/// level_particles: 1.21's count is followed by the particle; 1.20.6 has the particle first.
+fn level_particles(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut r = Reader::new(payload);
+    let head = r.bytes(LEVEL_PARTICLES_HEAD)?;
+    let particle = r.varint()?;
+    let mut w = Writer::new();
+    w.varint(particle);
+    w.bytes(head);
+    w.bytes(r.rest());
+    Ok(w.data)
 }
 
 /// explode: 1.21's sound holder (a VarInt, 0 for an inline sound event) goes; the inline sound follows as it is.
@@ -180,52 +169,13 @@ fn trade_item(payload: &[u8], r: &mut Reader, ids: &'static Ids) -> Result<Vec<u
 }
 
 #[cfg(test)]
-mod attribute_tests {
-    use super::*;
-
-    /// A 1.20.6 client reads a modifier as UUID, amount, operation (wiki and minecraft-data 1.20.6 agree).
-    #[test]
-    fn a_1_20_6_client_gets_modifier_uuids() {
-        let mut w = Writer::new();
-        w.varint(9); // entity
-        w.varint(1);
-        w.varint(0); // armor
-        w.f64(0.0);
-        w.varint(1);
-        w.string("minecraft:armor.boots");
-        w.f64(3.0);
-        w.varint(0);
-        let out = update_attributes(&w.data).unwrap();
-        let mut r = Reader::new(&out);
-        assert_eq!(
-            (
-                r.varint().unwrap(),
-                r.varint().unwrap(),
-                r.varint().unwrap()
-            ),
-            (9, 1, 0)
-        );
-        assert_eq!(r.f64().unwrap(), 0.0);
-        assert_eq!(r.varint().unwrap(), 1);
-        assert_eq!(
-            r.uuid().unwrap(),
-            crate::item::v1_20_5::modifier_uuid("minecraft:armor.boots")
-        );
-        assert_eq!((r.f64().unwrap(), r.varint().unwrap()), (3.0, 0));
-        assert_eq!(r.remaining(), 0);
-    }
-}
-
-#[cfg(test)]
 mod tests {
     //! Each change written here is read back with `translate`'s 1.20.6 reader: the mirror, both ways.
     use super::*;
     use crate::adapter::{ServerVersion, session::Session, translate};
 
-    /// 1.20.6's level_particles is 1.21's: the flag, the position, the spread, the speed, the count, then the
-    /// particle (the 1.20.6 client jar's ClientboundLevelParticlesPacket reads them in that order).
-    #[test]
-    fn level_particles_are_laid_out_as_1_21s() {
+    /// A 1.21 `level_particles` for a particle with no data, as 1.21 sends it.
+    fn level_particles_1_21() -> Vec<u8> {
         let mut w = Writer::new();
         w.bool(false);
         for v in [1.5, 64.0, -2.25] {
@@ -236,9 +186,27 @@ mod tests {
         }
         w.i32(3);
         w.varint(7); // the particle
+        w.data
+    }
+
+    #[test]
+    fn a_particle_comes_before_its_flags_in_1_20_6() {
+        let session = Session::new(ServerVersion::V1_20_6);
+        let original = level_particles_1_21();
         let id = packet_ids::play::clientbound::LEVEL_PARTICLES;
-        let ids = ServerVersion::V1_20_6.ids().unwrap();
-        assert_eq!(clientbound(State::Play, id, &w.data, ids).unwrap(), None);
+        let down = clientbound(
+            State::Play,
+            id,
+            &original,
+            ServerVersion::V1_20_6.ids().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(Reader::new(&down).varint().unwrap(), 7);
+        let up = translate::client_layout_v1_20_6::clientbound(&session, State::Play, id, &down)
+            .unwrap()
+            .unwrap();
+        assert_eq!(up, original);
     }
 
     #[test]

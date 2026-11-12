@@ -491,13 +491,6 @@ impl ConnReader {
         if let Some(packet) = self.adapter.as_ref().and_then(|a| a.next_incoming()) {
             return Ok(packet);
         }
-        if let Some(packet) = self
-            .older_client
-            .as_ref()
-            .and_then(|c| c.next_serverbound())
-        {
-            return Ok(packet);
-        }
         loop {
             match self.next()? {
                 Next::Packet((id, payload)) if self.older_client.is_some() => {
@@ -526,13 +519,6 @@ impl ConnReader {
     /// more: for a detached reader, after [`Self::read_from`]. Only an older
     /// client's renumbering applies (a server's connection has no other).
     pub fn buffered(&mut self) -> Result<Option<(i32, Vec<u8>)>> {
-        if let Some(packet) = self
-            .older_client
-            .as_ref()
-            .and_then(|c| c.next_serverbound())
-        {
-            return Ok(Some(packet));
-        }
         loop {
             match self.next()? {
                 Next::Packet((id, payload)) if self.older_client.is_some() => {
@@ -690,23 +676,19 @@ impl ConnWriter {
     }
     /// A packet body as this connection's client takes it: renumbered for a client of an older release
     /// ([`Connection::serve_older`]), `None` when it has no such packet; as it is otherwise.
-    pub fn for_client<'a>(&self, body: &'a [u8]) -> Result<Vec<std::borrow::Cow<'a, [u8]>>> {
+    pub fn for_client<'a>(&self, body: &'a [u8]) -> Result<Option<std::borrow::Cow<'a, [u8]>>> {
         match &self.older_client {
-            None => Ok(vec![std::borrow::Cow::Borrowed(body)]),
-            Some(client) => Ok(client
-                .clientbound_all(body)?
-                .into_iter()
-                .map(std::borrow::Cow::Owned)
-                .collect()),
+            None => Ok(Some(std::borrow::Cow::Borrowed(body))),
+            Some(client) => Ok(client.clientbound(body)?.map(std::borrow::Cow::Owned)),
         }
     }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         if self.older_client.is_some() {
-            for body in self.for_client(body)? {
-                self.send_contents(&frame::contents(&body, self.threshold)?)?;
-            }
-            return Ok(());
+            return match self.for_client(body)? {
+                Some(body) => self.send_contents(&frame::contents(&body, self.threshold)?),
+                None => Ok(()),
+            };
         }
         if let Some(a) = self.adapter.clone() {
             if let Some(body) = a.serverbound(body)? {

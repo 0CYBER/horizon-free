@@ -607,31 +607,22 @@ impl Component {
                 w.bytes(legacy.as_deref().unwrap_or(bytes));
             }
             Self::BannerPatterns(layers) => {
-                // A pattern an older client lacks is left out (ids::synced_down).
-                let layers: Vec<(i32, i32)> = layers
-                    .iter()
-                    .filter_map(|(p, c)| {
-                        ids::synced_down("minecraft:banner_pattern", *p).map(|p| (p, *c))
-                    })
-                    .collect();
                 w.varint(layers.len() as i32);
                 for (pattern, color) in layers {
                     w.varint(pattern + 1);
-                    w.varint(color);
+                    w.varint(*color);
                 }
             }
             Self::Trim { material, pattern } => {
-                w.varint(ids::synced_down_or_first("minecraft:trim_material", *material) + 1);
-                w.varint(ids::synced_down_or_first("minecraft:trim_pattern", *pattern) + 1);
+                w.varint(material + 1);
+                w.varint(pattern + 1);
             }
             Self::TrimDirect { material, pattern } => {
                 material.write(w, TrimMaterial::write);
                 pattern.write(w, TrimPattern::write);
             }
             Self::Instrument(id) => w.varint(id + 1),
-            Self::PaintingVariant(id) => {
-                w.varint(ids::synced_down_or_first("minecraft:painting_variant", *id) + 1)
-            }
+            Self::PaintingVariant(id) => w.varint(id + 1),
             Self::Int(v) if kind == component::DYED_COLOR => w.i32(*v),
             Self::Int(v) => w.varint(*v),
             Self::Unit => {}
@@ -641,25 +632,6 @@ impl Component {
             Self::Lore(lines) => {
                 w.varint(lines.len() as i32);
                 lines.iter().for_each(|l| w.nbt(l));
-            }
-            Self::Enchantments(list)
-                if matches!(
-                    kind,
-                    component::ENCHANTMENTS | component::STORED_ENCHANTMENTS
-                ) =>
-            {
-                // An enchantment an older client lacks is left out (ids::synced_down).
-                let list: Vec<(i32, i32)> = list
-                    .iter()
-                    .filter_map(|(e, l)| {
-                        ids::synced_down("minecraft:enchantment", *e).map(|e| (e, *l))
-                    })
-                    .collect();
-                w.varint(list.len() as i32);
-                for (e, level) in list {
-                    w.varint(e);
-                    w.varint(level);
-                }
             }
             Self::Enchantments(list) | Self::StewEffects(list) => {
                 w.varint(list.len() as i32);
