@@ -3409,20 +3409,7 @@ impl Game<'_> {
                 self.capture(true);
             }
             C::PlayerPosition(p) => self.remote_teleport(&p)?,
-            C::PlayerRotation(p) => {
-                self.yaw = if p.relative_yaw {
-                    self.yaw + p.yaw
-                } else {
-                    p.yaw
-                };
-                self.pitch = (if p.relative_pitch {
-                    self.pitch + p.pitch
-                } else {
-                    p.pitch
-                })
-                .clamp(-90.0, 90.0);
-                self.snap_player_model_pitch();
-            }
+            C::PlayerRotation(p) => self.remote_rotation(&p),
             C::PlayerLookAt(p) => self.remote_look_at(&p),
             // ClientCommonPacketListenerImpl.handlePostEffects.
             C::PostEffects(p) => self.post_effects = p.effects,
