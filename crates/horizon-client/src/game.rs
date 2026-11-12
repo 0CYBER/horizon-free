@@ -4488,6 +4488,8 @@ impl Game<'_> {
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
                         1043 => Some(("minecraft:item.book.page_turn", 1.0)),
+                        // LevelEvent.SOUND_PHANTOM_BITE: a phantom's bite.
+                        1039 => Some(("minecraft:entity.phantom.bite", 0.3)),
                         // LevelEvent.SOUND_SPLASH_POTION and its instant twin.
                         1053 | 1054 => Some(("minecraft:entity.splash_potion.break", 1.0)),
                         _ => None,
@@ -4505,12 +4507,9 @@ impl Game<'_> {
                                 let r = self.particles.level_random();
                                 2.6 + (r.next_float() - r.next_float()) * 0.8
                             }
-                            1045 | 1046 | 1047 | 1052 => {
-                                self.particles.level_random().next_float() * 0.1 + 0.9
-                            }
-                            1053 | 1054 => {
-                                // LevelEventHandler's client random: impact audio
-                                // must not change the server's bottle XP stream.
+                            1039 | 1045 | 1046 | 1047 | 1052 | 1053 | 1054 => {
+                                // LevelEventHandler draws these from the client
+                                // level's random, not the server's.
                                 self.particles.level_random().next_float() * 0.1 + 0.9
                             }
                             1029 | 1030 | 1042 | 1043 | 1044 => {
@@ -4534,6 +4533,7 @@ impl Game<'_> {
                                 | 1027
                                 | 1029
                                 | 1030
+                                | 1039
                                 | 1045
                                 | 1052
                                 | 1053
