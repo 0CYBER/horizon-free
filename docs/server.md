@@ -676,7 +676,8 @@ runtime or new dependency. Server-sent events can replace the polling later if a
 - **Backups.** The supervisor runs `save-off`, then `save-all flush`, then zips the world plus the vanilla
   files and `server.toml` into `backups/<UTC time>-<name>.zip`, then runs `save-on`. Players stay online. Zip
   works for everyone, Windows included. It runs on the `every` schedule, on demand and before an
-  update. It keeps the last `keep` automatic backups and never deletes one made by hand. A backup is written
+  update. It keeps the last `keep` automatic backups and never deletes one made by hand (`auto` is the automatic
+  backups' own name: a hand backup cannot take it). A backup is written
   to a temporary name and renamed when complete, so a crash never leaves a half-written backup that looks
   finished. A stopped server is backed up straight from its files.
 - **Restore.** `restore NAME` takes a file name, a unique prefix, or the name given to `backup` (the newest

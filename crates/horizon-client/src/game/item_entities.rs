@@ -26,6 +26,7 @@ impl Game<'_> {
             }
         }
         self.tick_dropped_items(&mut round);
+        horizon_threads::work::clear_work();
         self.native_tick_post_batch(round);
     }
     /// An item that joined during this tick's entity pass: it first ticks on
@@ -41,6 +42,8 @@ impl Game<'_> {
         let mut cells = horizon_client::entities::ItemCells::new(&items);
         // A LAN or server guest only shows the host's items.
         let merging = self.remote.is_none();
+        // `Entity.checkBelowWorld`: below `Level.getMinY() - 64`.
+        let void = f64::from(self.level_min_y() - 64);
         let mut obstacles =
             horizon_client::entities::ObstacleGrid::new(self.item_entity_collisions());
         let mut nearby = Vec::new();
@@ -55,7 +58,9 @@ impl Game<'_> {
         // `ItemUtils.onContainerDestroyed`: what a destroyed item held, and
         // where it lay, for adding to the level once its own tick is done.
         let mut destroyed: Vec<(ItemStack, Vec3)> = Vec::new();
+        let item_type = horizon_threads::work::entity_id("minecraft:item");
         for i in 0..items.len() {
+            horizon_threads::work::set_entity(item_type);
             if removed[i] {
                 // Merged into an earlier item before its own tick: it never ticked.
                 round.not_ticked(items[i].id);
@@ -144,7 +149,7 @@ impl Game<'_> {
                 2
             };
             if merging
-                && (alive || item.age == 6000 && item.position.y > -128.0)
+                && (alive || item.age == 6000 && item.position.y >= void)
                 && item.ticks.is_multiple_of(rate)
             {
                 let max_stack = |stack: &ItemStack| self.stack_max_size(stack).max(1);
@@ -157,8 +162,8 @@ impl Game<'_> {
                 );
             }
             let item = &mut items[i];
-            let mut alive = alive || (item.age < 6000 && item.position.y > -128.0);
-            if merging && !removed[i] && item.age >= 6000 && item.position.y > -128.0 {
+            let mut alive = alive || (item.age < 6000 && item.position.y >= void);
+            if merging && !removed[i] && item.age >= 6000 && item.position.y >= void {
                 let mut extra_life = 0;
                 self.native_item_expire(item.id, &item.stack, &mut extra_life);
                 if extra_life > 0 {
@@ -497,6 +502,7 @@ impl Game<'_> {
         }
         self.next_entity += 1;
         self.orbs.push(ExperienceOrb {
+            fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -688,7 +694,7 @@ impl Game<'_> {
         position: [f64; 3],
         velocity: [f64; 3],
     ) {
-        self.add_item_entity_drawn(stack, position, Some(velocity), true, 0);
+        self.add_item_entity_drawn(stack, position, Some(velocity), true, 0, 0);
     }
 
     pub(super) fn add_item_entity(
@@ -698,7 +704,21 @@ impl Game<'_> {
         velocity: Option<[f64; 3]>,
         pickup_delay: u32,
     ) -> [f64; 3] {
-        self.add_item_entity_drawn(stack, position, velocity, velocity.is_none(), pickup_delay)
+        self.add_item_entity_drawn(
+            stack,
+            position,
+            velocity,
+            velocity.is_none(),
+            pickup_delay,
+            0,
+        )
+    }
+
+    /// `spawnAtLocation` for a drop that then calls
+    /// `ItemEntity.setExtendedLifetime`: the item joins the world at `age`
+    /// instead of 0, so the wither's nether star lives 12000 ticks, not 6000.
+    pub(super) fn spawn_item_aged(&mut self, stack: ItemStack, position: [f64; 3], age: i32) {
+        self.add_item_entity_drawn(stack, position, None, true, 10, age);
     }
 
     /// `add_item_entity`; `constructor_motion` draws the five-argument
@@ -710,6 +730,7 @@ impl Game<'_> {
         velocity: Option<[f64; 3]>,
         constructor_motion: bool,
         pickup_delay: u32,
+        age: i32,
     ) -> [f64; 3] {
         let (item, count) = (stack.item.clone(), stack.count as i32);
         self.next_entity += 1;
@@ -732,6 +753,7 @@ impl Game<'_> {
             rotation: [yaw, 0.0],
             pickup_delay: i64::from(pickup_delay),
             random: own,
+            age,
             ..ItemEntity::new(
                 self.next_entity,
                 stack,
@@ -791,6 +813,20 @@ impl Game<'_> {
             return;
         };
         self.player_drop(thrown);
+    }
+
+    /// `ServerPlayer.drop(boolean)` for the guest `conn` (`gi` in the hub): the
+    /// drop key's throw, then `setRemoteSlot` on the selected slot so a pickup
+    /// that refills the stack is sent to the client that predicted the drop.
+    pub(super) fn guest_drop_held(
+        &mut self,
+        host: &mut super::lan::LanHost,
+        gi: usize,
+        conn: u32,
+        all: bool,
+    ) {
+        self.as_guest(host, conn, |g| g.drop_held(all));
+        host.hub.guests[gi].told_selected();
     }
 
     /// `Player.createItemStackToDrop`: an item entity thrown from the eyes
@@ -997,14 +1033,10 @@ mod escape_tests {
         let mut game = server_game();
         let feet = horizon_core::geometry::Vec3::new(8.5, 70.0, 8.5);
         game.player = Some(horizon_client::motion::PlayerMotion::new(game.motion, feet).unwrap());
-        // Entity-ticking chunks also need the surrounding loaded chunks.
-        for x in -2..=2 {
-            for z in -2..=2 {
-                game.world
-                    .chunks
-                    .insert((x, z), Arc::new(Chunk::empty(x, z)));
-            }
-        }
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.load_ticking_neighbourhood(0, 0);
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(8, 8));
         let stone = game
@@ -1032,3 +1064,10 @@ mod escape_tests {
         assert_eq!(game.world.random.next_float(), level.next_float());
     }
 }
+
+#[cfg(test)]
+#[path = "item_void_tests.rs"]
+mod item_void_tests;
+#[cfg(test)]
+#[path = "wither_star_tests.rs"]
+mod wither_star_tests;

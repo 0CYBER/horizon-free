@@ -597,6 +597,18 @@ impl Config {
         Ok(written)
     }
 
+    /// The level `op` gives a new operator: `op-permission-level` as the game reads it at its next start,
+    /// that is `server.properties` with this configuration's keys written over it (as
+    /// [`Config::write_properties`] does). 4, vanilla's default, when the keys cannot be read.
+    pub fn op_permission_level(&self, dir: &Path) -> i32 {
+        let mut properties = read_properties(&dir.join(PROPERTIES)).unwrap_or_default();
+        for (key, value) in self.vanilla() {
+            properties.put(&key, value);
+        }
+        ServerProperties::new(properties, &mut SystemEntropy::default())
+            .map_or(4, |p| p.op_permission_level)
+    }
+
     /// A configuration from a vanilla `server.properties`: typed settings from their keys, and every other
     /// key the file sets to something other than vanilla's default under `[properties]`.
     pub fn import(source: &Properties) -> Result<Self, String> {

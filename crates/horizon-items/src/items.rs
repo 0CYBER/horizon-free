@@ -1347,8 +1347,8 @@ impl Items {
         }
         self.get(&stack.item)?.weapon_damage
     }
-    /// `ItemAttributeModifiers` from the stack's component, else the item's
-    /// prototype: (attribute, id, amount, operation, slot group).
+    /// `ItemAttributeModifiers` from the stack's component (`Identifier`s, so a bare
+    /// name is `minecraft:`'s), else the item's: (attribute, id, amount, op, group).
     pub fn attribute_modifiers(
         &self,
         stack: &ItemStack,
@@ -1371,8 +1371,8 @@ impl Items {
                         _ => None,
                     };
                     Some((
-                        string("type")?,
-                        string("id")?,
+                        horizon_world::datafix::dynamic::namespaced(&string("type")?),
+                        horizon_world::datafix::dynamic::namespaced(&string("id")?),
                         horizon_world::datafix::dynamic::as_number(entry.get("amount")?)?
                             .double_value(),
                         string("operation").unwrap_or_else(|| "add_value".into()),
@@ -2378,7 +2378,8 @@ impl LootContext<'_> {
                     } else {
                         0
                     };
-                    stack.count = (base + n).max(0) as u32;
+                    let total = base.saturating_add(n).max(0);
+                    stack.count = total as u32;
                 }
                 // SetItemDamageFunction.run: check damageability before the
                 // float provider, so ineligible stacks do not draw randomness.
@@ -2423,7 +2424,8 @@ impl LootContext<'_> {
                         }
                         "minecraft:uniform_bonus_count" => {
                             let multiplier = params["bonusMultiplier"].as_i64().unwrap_or(1) as i32;
-                            count + random.next_int_bound(multiplier * level + 1).unwrap_or(0)
+                            let bound = multiplier.saturating_mul(level).saturating_add(1).max(1);
+                            count.saturating_add(random.next_int_bound(bound).unwrap_or(0))
                         }
                         "minecraft:binomial_with_bonus_count" => {
                             let (extra, p) = (
@@ -2447,7 +2449,10 @@ impl LootContext<'_> {
                     let level = self.enchantment_level(f["enchantment"].as_str().unwrap_or(""));
                     if level > 0 && self.killed_by_player && self.block.is_empty() {
                         let add = level as f32 * Self::number(&f["count"], random);
-                        stack.count = (stack.count as i32 + add.round() as i32).max(0) as u32;
+                        let total = (stack.count as i32)
+                            .saturating_add(add.round() as i32)
+                            .max(0);
+                        stack.count = total as u32;
                         if let Some(limit) = f["limit"].as_i64().filter(|l| *l > 0) {
                             stack.count = stack.count.min(limit as u32);
                         }
@@ -2499,7 +2504,7 @@ impl LootContext<'_> {
                     let cost = Self::int_number(&f["levels"], random);
                     let e = &self.items.enchantments;
                     let pool = Self::enchant_pool(e, &f["options"]);
-                    let chosen = e.select(self.items, random, &stack.item, cost, &pool);
+                    let chosen = e.select_of(self.items, random, stack, cost, &pool);
                     // EnchantmentHelper.enchantItem: a book becomes one
                     // enchanted book (the fresh stack's count).
                     if &*stack.item == "minecraft:book" {

@@ -2364,7 +2364,7 @@ impl Game<'_> {
         if display.shows("minecraft:attribute_modifiers") {
             // The item's own modifiers, then its enchantments' for each slot
             // group (`ItemStack.forEachModifier`).
-            let mut modifiers = item_info.map(|i| i.modifiers.clone()).unwrap_or_default();
+            let mut modifiers = self.items().attribute_modifiers(stack);
             modifiers.extend(e.modifier_rows(stack));
             let base = |name: &str, default| {
                 self.player
