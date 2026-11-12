@@ -307,6 +307,17 @@ fn overload_warning(behind: Duration, tick: Duration) -> String {
     )
 }
 
+/// `ServerGamePacketListenerImpl.tick`'s idle kick: a player whose last action is more than
+/// `minutes` (`player-idle-timeout`, none when 0 or less) behind, counted here in ticks, is kicked,
+/// unless the End poem is showing (`ServerPlayer.wonGame`): its client sends no action until it
+/// asks to respawn.
+fn idles_out(idle_ticks: u64, minutes: i32, won_game: bool) -> bool {
+    let Ok(minutes @ 1..) = u64::try_from(minutes) else {
+        return false;
+    };
+    !won_game && idle_ticks > minutes * 1200
+}
+
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
     log_from("Server thread", level, message);
@@ -1522,12 +1533,15 @@ impl Game<'_> {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
-        let limit = u64::try_from(minutes).unwrap_or(0) * 1200;
         let idle: Vec<u32> = host
             .hub
             .guests
             .iter()
-            .filter(|g| host.hub.ticks.saturating_sub(g.last_action_tick) > limit)
+            .filter(|g| {
+                let idle_ticks = host.hub.ticks.saturating_sub(g.last_action_tick);
+                let won_game = host.play.get(&g.conn).is_some_and(|play| play.won_game);
+                idles_out(idle_ticks, minutes, won_game)
+            })
             .map(|g| g.conn)
             .collect();
         for conn in idle {
@@ -2532,6 +2546,23 @@ mod tests {
             "a short prefix would match nearly everyone"
         );
         assert!(parse_whitelist_bypass("not-a-uuid-at-all").is_err());
+    }
+
+    /// ServerGamePacketListenerImpl.tick: a player idle past `player-idle-timeout` minutes is kicked,
+    /// unless the End poem is showing (`ServerPlayer.wonGame`), which sends no action.
+    #[test]
+    fn a_player_watching_the_end_credits_is_not_kicked_for_idling() {
+        use super::idles_out;
+        // 5 minutes: 6000 ticks. One more is over the limit.
+        assert!(!idles_out(6000, 5, false));
+        assert!(idles_out(6001, 5, false));
+        assert!(!idles_out(6001, 5, true));
+        assert!(!idles_out(1_000_000, 5, true));
+        // The credits are over (won_game false again): the same idle time kicks.
+        assert!(idles_out(1_000_000, 5, false));
+        // 0 or less: no timeout.
+        assert!(!idles_out(1_000_000, 0, false));
+        assert!(!idles_out(1_000_000, -3, false));
     }
 
     /// `SaveAllCommand.saveAll`: a save that throws is the `ERROR_FAILED` the
