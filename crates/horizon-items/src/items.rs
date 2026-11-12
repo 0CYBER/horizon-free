@@ -2504,7 +2504,7 @@ impl LootContext<'_> {
                     let cost = Self::int_number(&f["levels"], random);
                     let e = &self.items.enchantments;
                     let pool = Self::enchant_pool(e, &f["options"]);
-                    let chosen = e.select(self.items, random, &stack.item, cost, &pool);
+                    let chosen = e.select_of(self.items, random, stack, cost, &pool);
                     // EnchantmentHelper.enchantItem: a book becomes one
                     // enchanted book (the fresh stack's count).
                     if &*stack.item == "minecraft:book" {
