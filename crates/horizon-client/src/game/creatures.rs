@@ -1878,10 +1878,9 @@ impl Game<'_> {
         for item in stacks {
             // Every death drop is its own ItemEntity, and the drop entity's
             // own random (not the level's) gives it the constructor's
-            // horizontal push (its motion otherwise stays [0, 0.2, 0] and
-            // the drops land stacked at the mob's centre, without disturbing
-            // the level random that the orbs' merge ids and block ticks read
-            // next).
+            // horizontal push (its motion otherwise stays [0, 0.2, 0] and the
+            // drops land stacked at the mob's centre, without disturbing the
+            // level random that the orbs' merge ids and block ticks read next).
             self.spawn_item_own(item, pos, 10);
         }
         // LivingEntity.dropExperience: a mod may change the mob's experience
@@ -1921,8 +1920,9 @@ impl Game<'_> {
                         self.spawn_item_own(item, pos, 10);
                     }
                 }
+                drops::Drop::Aged(s, age) => self.spawn_item_aged(from_loot(&s), pos, age),
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
-                drops::Drop::Item(_) | drops::Drop::Stack(_) | drops::Drop::Orb(_) => {}
+                _ => {}
             }
         }
     }
