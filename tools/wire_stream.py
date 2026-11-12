@@ -207,13 +207,32 @@ def compare_answered(vanilla, horizon, ticks, av, ah):
     """compare, for a scenario the server answers once (a teleport): the tick each client received the answer
     in (`av`, `ah`) compares with the other client's, every other tick with the same tick, on the script's
     clock. A loaded server answers a few ticks later in one run than in the other, while the script's own
-    packets (a button released, the position resent every 20 ticks) keep its clock. Numbers are vanilla's."""
+    packets (a button released, the position resent every 20 ticks) keep its clock. Numbers are vanilla's.
+
+    The moves of the two answer ticks (LocalPlayer.sendPosition, at the end of the player's tick) keep the
+    script's clock too: an answer that doesn't move the player (`tp @s ~ ~ ~`) leaves them to the 20-tick
+    position reminder, which a later answer can land on in one run and not in the other."""
     out = [d for d in compare(vanilla, horizon, ticks) if d[0] not in (av, ah)]
-    v = vanilla[av]['packets'] if av < len(vanilla) else None
-    h = horizon[ah]['packets'] if ah < len(horizon) else None
-    if v != h:
+    packets = lambda run, i: run[i]['packets'] if i < len(run) else None  # noqa: E731
+    v, h = packets(vanilla, av), packets(horizon, ah)
+    if strip_moves(v) != strip_moves(h):
         out.append((av, v, h))
+    for i in sorted({av, ah}):
+        vi, hi = packets(vanilla, i), packets(horizon, i)
+        if moves(vi) != moves(hi) and all(d[0] != i for d in out):
+            out.append((i, vi, hi))
     return sorted(out, key=lambda d: d[0])
+
+
+MOVES = {'move_player_pos', 'move_player_pos_rot', 'move_player_rot', 'move_player_status_only'}
+
+
+def moves(packets):
+    return None if packets is None else [p for p in packets if p[0] in MOVES]
+
+
+def strip_moves(packets):
+    return None if packets is None else [p for p in packets if p[0] not in MOVES]
 
 
 def describe(packets):
