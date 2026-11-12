@@ -5536,6 +5536,34 @@ mod tests {
         }
     }
 
+    /// `Goat` reads `HasLeftHorn` and `HasRightHorn` with `getBooleanOr(key,
+    /// true)`: a number is true when its byte value is not 0, so an int 256
+    /// (byte 0) is a lost horn, as `0b` is.
+    #[test]
+    fn a_goats_horn_flags_are_read_as_bytes() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:goat".into();
+        ty.species = crate::mobs::Species::Goat;
+        let types = [("minecraft:goat".into(), kind)].into();
+        let lost = |left: Option<Tag>| {
+            let mut fields = vec![
+                ("id", string("minecraft:goat")),
+                ("Pos", doubles(&[4.5, 220.0, 4.5])),
+            ];
+            fields.extend(left.map(|v| ("HasLeftHorn", v)));
+            mob_from_nbt(&Tag::compound(fields), &types, 1, None)
+                .unwrap()
+                .extra
+                .lost_horns
+        };
+        assert_eq!(lost(None), [false, false]);
+        assert_eq!(lost(Some(Tag::Byte(1))), [false, false]);
+        assert_eq!(lost(Some(Tag::Byte(0))), [true, false]);
+        assert_eq!(lost(Some(Tag::Int(256))), [true, false]);
+        assert_eq!(lost(Some(Tag::Int(257))), [false, false]);
+    }
+
     #[test]
     fn non_mob_saves_drop_mob_flags_without_losing_entity_fields() {
         let uuid = [104, 0, 0, 1];
