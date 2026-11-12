@@ -1692,9 +1692,17 @@ impl Game<'_> {
     /// bound to the overworld, whichever level the last server tick left in
     /// place (the last one ticked, often the nether). Its commands run there
     /// and the level in place is put back afterwards.
+    /// The source is the server's own: no entity, at the world spawn, its feedback heard
+    /// (the console's and an RCON client's always is).
     fn as_console_in_overworld<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         let back = console_level(self.dim).and_then(|dim| self.enter_command_level(dim));
+        let source = super::commands::execute::Source {
+            silent: false,
+            ..self.server_source()
+        };
+        let outer = self.command_source.replace(source);
         let out = self.as_console(f);
+        self.command_source = outer;
         if let Some(back) = back {
             self.enter_command_level(back);
         }
@@ -2794,5 +2802,87 @@ mod tests {
         assert!(lists.bans.remove(&steve));
         assert!(lists.can_login(address, &steve).is_none());
         fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod console_source_tests {
+    use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
+    use horizon_client::chunk::Chunk;
+    use horizon_core::position::ChunkPos;
+    use std::sync::Arc;
+
+    /// Runs `command` as the console does and returns whether it worked and every message it printed.
+    fn console(game: &mut Game<'_>, command: &str) -> (bool, String) {
+        game.chat_capture = Some(Vec::new());
+        let ok = game.as_console_in_overworld(|g| g.run_command(command));
+        let said = game.chat_capture.take().unwrap_or_default();
+        let said = said
+            .iter()
+            .map(|t| t.component().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (ok, said)
+    }
+
+    /// `MinecraftServer.createCommandSourceStack`: the console's source has no entity and is named "Server"
+    /// (an RCON client's, `RconConsoleSource`, "Rcon"): `/me` says so, and `teammsg`, which needs an entity,
+    /// refuses it (`permissions.requires.entity`) instead of running as the player in place.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    fn the_console_runs_as_the_server_not_the_player_in_place() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
+        );
+        let settings = Settings::default();
+        let loaded = load_resources(
+            root.clone(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            true,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&root),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        let (ok, said) = console(&mut game, "me waves");
+        assert!(
+            ok && said.contains("chat.type.emote") && said.contains("\"Server\""),
+            "{said}"
+        );
+        game.rcon_source = true;
+        let (ok, said) = console(&mut game, "me waves");
+        assert!(ok && said.contains("\"Rcon\""), "{said}");
+        game.rcon_source = false;
+        let (ok, said) = console(&mut game, "teammsg hi");
+        assert!(
+            !ok && said.contains("permissions.requires.entity"),
+            "{said}"
+        );
+        // The console's source is put back after each line.
+        assert!(game.command_source.is_none());
     }
 }
