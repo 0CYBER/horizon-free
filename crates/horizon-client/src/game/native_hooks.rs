@@ -992,6 +992,7 @@
 use super::native_data_maps::NativeDataMapType;
 use super::native_guards::{box_meets, finite, finite_params, mod_image_fits};
 use super::native_item_energy::ItemEnergyBuffer;
+use super::native_menus::viewer_changes;
 use super::native_world_edit::{property_change, with_property};
 use super::{
     Game, GameLevel, LevelDimension, Screen,
@@ -8504,6 +8505,18 @@ impl Game<'_> {
             blocks,
         );
     }
+    /// An explosion at `center` in `dimension` is about to hurt and push `entities`, the ids of
+    /// the entities in its reach (players aside: `native_living_incoming_damage` hears them),
+    /// after `native_explosion_detonate`: `ServerExplosion.hurtEntities`. Take out the ids to
+    /// spare: they are neither hurt nor pushed. Server-side. API @API:explosion_entities@.
+    pub(super) fn native_explosion_entities(
+        &mut self,
+        dimension: &str,
+        center: [f64; 3],
+        entities: &mut Vec<u32>,
+    ) {
+        mod_api::dispatch_explosion_entities(self, mod_api::mods(), dimension, center, entities);
+    }
     /// An explosion at `center` in `dimension`, about to break `blocks`, pushes
     /// `entity` (None for a player, whom `native_acting_player` names):
     /// `ServerExplosion.hurtEntities`, after the knockback is calculated. Change `knockback_velocity` to change
@@ -10068,34 +10081,6 @@ fn sound_id(id: &str) -> bool {
         && !path.is_empty()
         && namespace.chars().all(|c| allowed(c, false))
         && path.chars().all(|c| allowed(c, true))
-}
-
-/// Sets the viewer counts `known` holds for `dim` to `now` and returns the
-/// changes as `(pos, previous, viewers)`, in position order. A container that
-/// is no longer counted goes to 0 and leaves `known`.
-pub(super) fn viewer_changes(
-    known: &mut HashMap<(&'static str, (i32, i32, i32)), u32>,
-    dim: &'static str,
-    mut now: HashMap<(i32, i32, i32), u32>,
-) -> Vec<((i32, i32, i32), u32, u32)> {
-    let mut changes = Vec::new();
-    known.retain(|&(d, pos), previous| {
-        if d != dim {
-            return true;
-        }
-        let viewers = now.remove(&pos).unwrap_or(0);
-        if viewers != *previous {
-            changes.push((pos, *previous, viewers));
-            *previous = viewers;
-        }
-        viewers > 0
-    });
-    for (pos, viewers) in now {
-        known.insert((dim, pos), viewers);
-        changes.push((pos, 0, viewers));
-    }
-    changes.sort_unstable();
-    changes
 }
 
 pub(super) fn dimension_id(dimension: LevelDimension) -> &'static str {

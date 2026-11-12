@@ -1161,7 +1161,7 @@ impl Game<'_> {
         let scale = 1i32 << m.scale;
         let start_x = m.center[0] / scale - 64;
         let start_z = m.center[1] / scale - 64;
-        let sea_level = 63;
+        let sea_level = horizon_world::level::sea_level_of(self.level_key());
         let quarts: Vec<[i32; 3]> = (0..128)
             .flat_map(|row| {
                 (0..128).map(move |column| {
