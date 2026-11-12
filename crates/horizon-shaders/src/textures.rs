@@ -348,8 +348,24 @@ fn raw(bytes: &[u8], words: &[&str]) -> Result<Texture, String> {
         }
     }
     let texels = match format.kind {
-        Kind::Int => Texels::Int(values.iter().map(|v| v.int()).collect()),
-        Kind::Uint => Texels::Uint(values.iter().map(|v| v.int() as u32).collect()),
+        Kind::Int => {
+            let max = (1i64 << (format.bits - 1)) - 1;
+            Texels::Int(
+                values
+                    .iter()
+                    .map(|v| v.int().clamp(-max - 1, max) as i32)
+                    .collect(),
+            )
+        }
+        Kind::Uint => {
+            let max = (1i64 << format.bits) - 1;
+            Texels::Uint(
+                values
+                    .iter()
+                    .map(|v| v.int().clamp(0, max) as u32)
+                    .collect(),
+            )
+        }
         // Integer data fills normalized and float formats normalized, as GL unpacks it.
         _ => Texels::Float(values.iter().map(|v| v.float(!integer)).collect()),
     };
@@ -382,11 +398,11 @@ impl Value {
         }
     }
 
-    fn int(self) -> i32 {
+    fn int(self) -> i64 {
         match self {
-            Value::U(v, _) => v as i32,
-            Value::I(v, _) => v,
-            Value::F(v) => v as i32,
+            Value::U(v, _) => i64::from(v),
+            Value::I(v, _) => i64::from(v),
+            Value::F(v) => v as i64,
         }
     }
 }
@@ -479,6 +495,77 @@ mod tests {
             .flat_map(|i| [i as f32 / 255.0, (255 - i) as f32 / 255.0, 7.0 / 255.0, 1.0])
             .collect();
         assert_eq!(clouds.texels, Texels::Float(expected));
+    }
+
+    #[test]
+    fn raw_integer_values_saturate_to_the_internal_format() {
+        // Independent GL integer texture conversion checkpoints, including unsigned data
+        // above i32::MAX: narrowing and changes of signedness clamp rather than wrap.
+        let signed: Vec<u8> = [-32769i32, -129, 0, 128, 32768]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect();
+        let unsigned: Vec<u8> = [0u32, 256, 65536, 2147483648, u32::MAX]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        for (format, pixel_type, data, expected) in [
+            (
+                "R8I",
+                "INT",
+                &signed,
+                Texels::Int(vec![-128, -128, 0, 127, 127]),
+            ),
+            (
+                "R16I",
+                "INT",
+                &signed,
+                Texels::Int(vec![-32768, -129, 0, 128, 32767]),
+            ),
+            (
+                "R32I",
+                "UNSIGNED_INT",
+                &unsigned,
+                Texels::Int(vec![0, 256, 65536, 2147483647, 2147483647]),
+            ),
+            (
+                "R8UI",
+                "INT",
+                &signed,
+                Texels::Uint(vec![0, 0, 0, 128, 255]),
+            ),
+            (
+                "R8UI",
+                "UNSIGNED_INT",
+                &unsigned,
+                Texels::Uint(vec![0, 255, 255, 255, 255]),
+            ),
+            (
+                "R16UI",
+                "INT",
+                &signed,
+                Texels::Uint(vec![0, 0, 0, 128, 32768]),
+            ),
+            (
+                "R16UI",
+                "UNSIGNED_INT",
+                &unsigned,
+                Texels::Uint(vec![0, 256, 65535, 65535, 65535]),
+            ),
+            (
+                "R32UI",
+                "UNSIGNED_INT",
+                &unsigned,
+                Texels::Uint(vec![0, 256, 65536, 2147483648, 4294967295]),
+            ),
+        ] {
+            let texture = raw(
+                data,
+                &["TEXTURE_1D", format, "5", "RED_INTEGER", pixel_type],
+            )
+            .unwrap();
+            assert_eq!(texture.texels, expected, "{format} from {pixel_type}");
+        }
     }
 
     #[test]
