@@ -652,11 +652,18 @@ fn serve_host(
             while let Ok(Some(_)) = wire::read_line(&mut reader) {}
             let _ = tx.send(Out::Closed);
         })?;
+    // A ping every `ping_every`, whatever else is sent meanwhile: the host only speaks to answer a ping, so
+    // pings held off by a stream of joins would let `host_timeout` end a host that is alive.
+    let mut next_ping = Instant::now() + state.config.ping_every;
     while !state.stop.load(Ordering::Relaxed) {
-        match rx.recv_timeout(state.config.ping_every) {
+        match rx.recv_timeout(next_ping.saturating_duration_since(Instant::now())) {
             Ok(Out::Line(m)) => wire::send(stream, &m)?,
             Ok(Out::Closed) | Err(RecvTimeoutError::Disconnected) => break,
-            Err(RecvTimeoutError::Timeout) => wire::send(stream, &FromRelay::Ping)?,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if Instant::now() >= next_ping {
+            wire::send(stream, &FromRelay::Ping)?;
+            next_ping = Instant::now() + state.config.ping_every;
         }
     }
     Ok(())

@@ -79,6 +79,19 @@ fn system_user(sudo_user: Option<String>, user: Option<String>) -> Result<String
     })
 }
 
+/// Refuses a path systemd would read differently from how it is written in a unit: `%` starts a
+/// specifier, a line break starts a new directive, and `"` or `\` change ExecStart's quoting.
+fn unit_safe(path: &Path) -> Result<(), String> {
+    match path.to_str() {
+        Some(text) if !text.contains(['%', '\n', '\r', '"', '\\']) => Ok(()),
+        _ => Err(format!(
+            "{} can't go in a systemd unit as it is (a %, quote, backslash, line break or \
+             non-UTF-8 name): move the server or the program to a plainer path",
+            path.display()
+        )),
+    }
+}
+
 /// A systemd unit: a user unit, or with `user` a system unit running as that user.
 pub fn systemd_unit(program: &Path, dir: &Path, user: Option<&str>) -> String {
     let (run_as, wanted_by) = match user {
@@ -290,6 +303,8 @@ fn definition(dir: &Path, system: bool) -> Result<(PathBuf, String), String> {
                 .into(),
         )
     } else {
+        unit_safe(dir)?;
+        unit_safe(&program)?;
         let user = if system {
             Some(system_user(
                 std::env::var("SUDO_USER").ok(),
@@ -480,6 +495,19 @@ mod tests {
             "horizon-server-my-server"
         );
         assert_eq!(name(Path::new("/")), "horizon-server-server");
+    }
+
+    #[test]
+    fn paths_systemd_would_misread_are_refused() {
+        for bad in [
+            "/srv/50%off",
+            "/srv/a\nExecStartPre=/bin/sh",
+            "/srv/a\"b",
+            "/srv/a\\b",
+        ] {
+            assert!(unit_safe(Path::new(bad)).is_err(), "{bad:?}");
+        }
+        assert!(unit_safe(Path::new("/srv/my server/Ünïcode")).is_ok());
     }
 
     #[test]

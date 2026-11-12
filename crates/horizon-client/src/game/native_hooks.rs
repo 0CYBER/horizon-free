@@ -992,6 +992,8 @@
 use super::native_data_maps::NativeDataMapType;
 use super::native_guards::{box_meets, finite, finite_params, mod_image_fits};
 use super::native_item_energy::ItemEnergyBuffer;
+use super::native_level_effects::{mod_particles_ok, mod_sound_ok, sound_id};
+use super::native_menus::viewer_changes;
 use super::native_world_edit::{property_change, with_property};
 use super::{
     Game, GameLevel, LevelDimension, Screen,
@@ -8026,7 +8028,7 @@ impl Game<'_> {
         mod_api::dispatch_server_packets(self, mod_api::mods(), player, packets, outbound);
     }
     /// After each pass of the server tick (paused ones too) while its spans
-    /// are recorded: always on a dedicated server, whose slow-tick log keeps
+    /// are recorded: always on a dedicated server, whose slow ring keeps
     /// them on, elsewhere while `native_spans(true)`, `HORIZON_SPIKES` or a
     /// performance report asks for them. `wall_ms` is the pass's wall time,
     /// `cpu_ms` the server thread's CPU time in it (None where the system
@@ -8503,6 +8505,18 @@ impl Game<'_> {
             source,
             blocks,
         );
+    }
+    /// An explosion at `center` in `dimension` is about to hurt and push `entities`, the ids of
+    /// the entities in its reach (players aside: `native_living_incoming_damage` hears them),
+    /// after `native_explosion_detonate`: `ServerExplosion.hurtEntities`. Take out the ids to
+    /// spare: they are neither hurt nor pushed. Server-side. API @API:explosion_entities@.
+    pub(super) fn native_explosion_entities(
+        &mut self,
+        dimension: &str,
+        center: [f64; 3],
+        entities: &mut Vec<u32>,
+    ) {
+        mod_api::dispatch_explosion_entities(self, mod_api::mods(), dimension, center, entities);
     }
     /// An explosion at `center` in `dimension`, about to break `blocks`, pushes
     /// `entity` (None for a player, whom `native_acting_player` names):
@@ -9063,6 +9077,27 @@ impl Game<'_> {
     /// each family (mobs, items, minecarts, boats) each tick. Server-side. API 146.
     pub(super) fn native_entity_tick_listened(&mut self, listened: &mut bool) {
         mod_api::dispatch_entity_tick_listened(self, mod_api::mods(), listened);
+    }
+    /// Whether this mod stays out of the mobs' turns, so that the server may tick the mobs of
+    /// one level in groups on several threads (`HORIZON_PARALLEL_TICK`, off by default). Set
+    /// `quiet` (HEAD, `*quiet = true`) only when the mod hooks none of what runs in a mob's turn:
+    /// `native_living_change_target`, `native_living_heal`, `native_living_breathe`,
+    /// `native_living_drown`, `native_living_fall`, `native_living_death_message`,
+    /// `native_register_goals` (its goals run in the turns), `native_living_incoming_damage` (all
+    /// versions), `native_living_damage_pre`, `native_living_knockback`, `native_trample`, the
+    /// `native_block_*` contacts, a content mod effect's ticks, and no mixin into those. `native_living_jump` and `native_living_damage_post` may
+    /// stay hooked: in a grouped tick they are told on the server thread once the mobs have
+    /// ticked, in the order the mobs ticked. Each mod is asked on its own, in order, once a tick while
+    /// the option is on; one that doesn't set it keeps the tick on the server thread, as before. The
+    /// game reads `quiet` as every mod's answer together. Server-side. API @API:mob_phase_quiet@.
+    pub(super) fn native_mob_phase_quiet(&mut self, quiet: &mut bool) {
+        // Each mod alone: no mod answers for another. True without mods.
+        let mods = mod_api::mods();
+        *quiet = (0..mods.len()).all(|k| {
+            let mut said = false;
+            mod_api::dispatch_mob_phase_quiet(self, &mods[k..=k], &mut said);
+            said
+        });
     }
     /// An entity of type `kind` (`minecraft:zombie`, `minecraft:item`) with ID `entity` is
     /// about to tick in the server level `dimension` (NeoForge's `EntityTickEvent.Pre`, posted
@@ -9989,113 +10024,6 @@ fn mob_source(damage: &Damage) -> HurtSource<'static> {
         causing,
         direct: if melee { causing } else { 0 },
     }
-}
-
-/// Whether `id` is a sound event's id, `namespace:path` as `Identifier`
-/// allows: the namespace of `[a-z0-9_.-]`, the path also with `/`.
-/// Whether a native mod's sound can be sent: a namespaced event, a sound
-/// source, a position inside the world's range and a finite, non-negative
-/// volume and pitch.
-pub(super) fn mod_sound_ok(
-    sound: &str,
-    at: [f64; 3],
-    source: usize,
-    volume: f32,
-    pitch: f32,
-) -> bool {
-    let position_ok = at
-        .into_iter()
-        .all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX) / 8.0);
-    let gain_ok = volume.is_finite() && volume >= 0.0 && pitch.is_finite() && pitch >= 0.0;
-    sound_id(sound)
-        && source < horizon_client::settings::SOUND_SOURCES.len()
-        && position_ok
-        && gain_ok
-}
-
-/// Whether a native mod's particles can be sent. Block particle types need
-/// a known state (`state_ok`); item, trail and vibration particles aren't
-/// supported by the network dispatch; a mod's own type must be namespaced.
-pub(super) fn mod_particles_ok(
-    options: &ParticleOptions,
-    state: Option<BlockStateId>,
-    state_ok: impl Fn(BlockStateId) -> bool,
-    at: [f64; 3],
-    spread: [f64; 3],
-    speed: f64,
-) -> bool {
-    use ParticleType as T;
-    // A native mod's own type: the name has to be namespaced, and a client
-    // draws it only when its pack has the sprite set.
-    if let Some(name) = &options.mod_particle {
-        let namespaced = name
-            .split_once(':')
-            .is_some_and(|(ns, path)| !ns.is_empty() && !path.is_empty());
-        if !namespaced {
-            return false;
-        }
-    }
-    let supported = match options.ty {
-        T::Block | T::BlockMarker | T::FallingDust | T::DustPillar | T::BlockCrumble => {
-            state.is_some_and(state_ok)
-        }
-        T::Item | T::Trail | T::Vibration => false,
-        T::Geyser | T::GeyserPlume | T::GeyserBase | T::GeyserPoof => options
-            .geyser
-            .is_some_and(|(_, impulse)| impulse.is_finite()),
-        _ => true,
-    };
-    supported
-        && at.into_iter().all(f64::is_finite)
-        && spread
-            .into_iter()
-            .all(|v| v.is_finite() && v.abs() <= f32::MAX as f64)
-        && speed.is_finite()
-        && speed.abs() <= f32::MAX as f64
-        && options.color.into_iter().all(f32::is_finite)
-        && options.to_color.into_iter().all(f32::is_finite)
-        && options.scale.is_finite()
-}
-
-fn sound_id(id: &str) -> bool {
-    let Some((namespace, path)) = id.split_once(':') else {
-        return false;
-    };
-    let allowed = |c: char, slash: bool| {
-        c.is_ascii_lowercase() || c.is_ascii_digit() || "_.-".contains(c) || (slash && c == '/')
-    };
-    !namespace.is_empty()
-        && !path.is_empty()
-        && namespace.chars().all(|c| allowed(c, false))
-        && path.chars().all(|c| allowed(c, true))
-}
-
-/// Sets the viewer counts `known` holds for `dim` to `now` and returns the
-/// changes as `(pos, previous, viewers)`, in position order. A container that
-/// is no longer counted goes to 0 and leaves `known`.
-pub(super) fn viewer_changes(
-    known: &mut HashMap<(&'static str, (i32, i32, i32)), u32>,
-    dim: &'static str,
-    mut now: HashMap<(i32, i32, i32), u32>,
-) -> Vec<((i32, i32, i32), u32, u32)> {
-    let mut changes = Vec::new();
-    known.retain(|&(d, pos), previous| {
-        if d != dim {
-            return true;
-        }
-        let viewers = now.remove(&pos).unwrap_or(0);
-        if viewers != *previous {
-            changes.push((pos, *previous, viewers));
-            *previous = viewers;
-        }
-        viewers > 0
-    });
-    for (pos, viewers) in now {
-        known.insert((dim, pos), viewers);
-        changes.push((pos, 0, viewers));
-    }
-    changes.sort_unstable();
-    changes
 }
 
 pub(super) fn dimension_id(dimension: LevelDimension) -> &'static str {
