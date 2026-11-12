@@ -77,6 +77,10 @@ again.
 - `crates/horizon-threads/src/allocator_stats.rs` casts mimalloc's JSON pointer to `c_char`
   (`raw.cast::<std::ffi::c_char>()`): `libmimalloc-sys` returns `*mut c_char`, and `c_char` is `u8` on
   aarch64, so the Windows ARM64 launcher job failed to compile the engine crate with E0308.
+- `wardrobe_shown()` (`wardrobe_page.rs`) also asks for a signed-in Microsoft account when
+  `OFFLINE_PLAY` is set: cosmetics belong to an account on Horizon's service, and the fork has no
+  sign-in, so without one the Wardrobe and Shop tabs only led to a "Sign in with Microsoft" button
+  that went nowhere.
 
 `launcher/tests/owner_gate.rs` is upstream's: it asserts that `play` and the MCP server refuse
 without an owner, which the fork removes on purpose, so `cargo test` fails those two and nothing

@@ -475,6 +475,13 @@ impl Launcher {
     /// answer, or the selected account's own (a preview for it, a claim), from this visit or kept
     /// on disk.
     pub(super) fn wardrobe_shown(&self) -> bool {
+        // Horizon-free: cosmetics belong to a Microsoft account on Horizon's service, and this build
+        // has no Microsoft sign-in (`backend::OFFLINE_PLAY`), so without one the page could only
+        // offer a sign-in that goes nowhere. Out of the top bar, the Shop with it; a signed-in
+        // account keeps upstream's rule below.
+        if backend::OFFLINE_PLAY && self.wardrobe_account().is_none() {
+            return false;
+        }
         let own = (self.wardrobe.as_ref())
             .and_then(|w| w.saved.me.as_ref())
             .map(|m| &m.claim)
