@@ -4304,9 +4304,10 @@ impl Mob {
             self.position.z,
         ]
     }
+    /// `Entity.playSound(event, 1.0, 1.0)`: at the feet, and nothing while silent.
     pub fn sound(&self, event: &'static str, events: &mut Vec<MobEvent>) {
-        let at = [self.position.x, self.eye_y(), self.position.z];
-        events.push(MobEvent::Sound(event, at, 1.0, 1.0));
+        let at = [self.position.x, self.position.y, self.position.z];
+        events.extend((!self.silent).then_some(MobEvent::Sound(event, at, 1.0, 1.0)));
     }
     /// `Mob.getAmbientSoundInterval`; `HappyGhast` waits six times as long
     /// while it carries a passenger.
@@ -4345,9 +4346,8 @@ impl Mob {
     }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
-        // Java evaluates the arguments of `playSound(event, getSoundVolume(),
-        // getVoicePitch())` before the call, so the pitch is drawn even for a
-        // silent entity, whose `Entity.playSound` then plays nothing.
+        // Java draws the pitch before `Entity.playSound` looks at isSilent, so a
+        // silent entity draws it and then plays nothing.
         let pitch = self.voice_pitch();
         if self.silent {
             return;
