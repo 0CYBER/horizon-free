@@ -1285,7 +1285,7 @@ impl Entities {
                 &self.is_moved,
                 &self.moved,
             );
-            horizon_threads::par_chunks_mut(&mut players, 16, |players| {
+            crate::parallel::par_chunks_mut(&mut players, 16, |players| {
                 for (v, flags, starts) in players {
                     flags.clear();
                     let mut held = vec![0; chunks.len()];
