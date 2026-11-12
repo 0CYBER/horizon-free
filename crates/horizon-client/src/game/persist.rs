@@ -6141,7 +6141,9 @@ mod camel_pose_saved_tests {
             .into_iter()
             .flat_map(|(_, tags)| tags)
             .collect();
-        game.world.loaded_entities.push(((0, 0), written));
+        game.world
+            .loaded_entities
+            .push(((0, 0), written.into_iter().map(Into::into).collect()));
         game.spawn_loaded_entities();
         for step in 0..8 {
             for number in 1..=cases.len() as i32 {
