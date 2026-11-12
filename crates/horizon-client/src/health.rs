@@ -58,6 +58,10 @@ pub enum Hurting<'a> {
 pub static HURT_SERVER: OnceLock<fn(Hurting<'_>, &mut f32) -> bool> = OnceLock::new();
 /// Whether [`HURT_SERVER`] canceled the hit (never while it is unset).
 pub fn hurt_server_canceled(hurting: Hurting<'_>, amount: &mut f32) -> bool {
+    // A grouped mob turn: no mod hooks it (`native_client_hooks::Deferred`).
+    if crate::native_client_hooks::deferring() {
+        return false;
+    }
     HURT_SERVER.get().is_some_and(|hook| hook(hurting, amount))
 }
 /// The game's `LivingDamageEvent.Pre` hook (`native_living_damage_pre`), set
@@ -75,6 +79,9 @@ pub fn damage_pre(hurting: Hurting<'_>, amount: &mut f32) {
     let Some(hook) = DAMAGE_PRE.get() else {
         return;
     };
+    if crate::native_client_hooks::deferring() {
+        return;
+    }
     let before = amount.to_bits();
     hook(hurting, amount);
     if amount.to_bits() != before {
@@ -87,9 +94,22 @@ pub fn damage_pre(hurting: Hurting<'_>, amount: &mut f32) {
 }
 /// [`DAMAGE_POST`] with what came off the health (nothing while it is unset).
 pub fn damage_post(hurting: Hurting<'_>, amount: f32) {
-    if let Some(hook) = DAMAGE_POST.get() {
-        hook(hurting, amount);
+    let Some(hook) = DAMAGE_POST.get() else {
+        return;
+    };
+    // A grouped mob turn keeps it for the join. Only mobs are hurt in the mob phase (players
+    // through its events, after it), so another kind is told at once.
+    if let Hurting::Mob(mob, damage) = &hurting
+        && crate::native_client_hooks::deferring()
+    {
+        crate::native_client_hooks::defer(crate::native_client_hooks::Deferred::DamagePost {
+            mob: Box::new((*mob).clone()),
+            damage: **damage,
+            amount,
+        });
+        return;
     }
+    hook(hurting, amount);
 }
 /// A knockback's strength and direction, as `LivingEntity.knockback` has them
 /// before knockback resistance is applied. The entity is pushed away from
@@ -149,6 +169,9 @@ pub fn knockback_canceled(pushed: Hurting<'_>, knock: &mut Knock) -> bool {
     let Some(hook) = KNOCKBACK.get() else {
         return false;
     };
+    if crate::native_client_hooks::deferring() {
+        return false;
+    }
     let before = *knock;
     let canceled = hook(pushed, knock);
     for (now, was) in [
