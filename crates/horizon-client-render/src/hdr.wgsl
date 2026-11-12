@@ -20,15 +20,20 @@ struct Params {
     black: f32,
     // The HUD and menus' brightness as a share of paper white.
     ui: f32,
-    // HDR lighting: what the strongest light multiplies a surface by, 1 for none.
+    // The compatibility frame's lift (`lit`; the float frame's writers have theirs from
+    // Hdr::draw_params). HDR lighting: what the strongest light multiplies a surface by, 1 for
+    // none.
     scene: f32,
-    // Per tier, low to very bright (hdr.rs `Tier`): the share of the headroom
+    // Per tier, low to very bright (hdr.rs `COMPAT_SHARES`): the share of the headroom
     // its fully lifted pixels get.
     share: vec4<f32>,
     // HDR calibration (hdr_calibration.rs): x its step (0 none, 1 black level,
     // 2 peak, 3 paper white), y the slider in nits, z where its controls start,
     // a share of the height.
     calibration: vec4<f32>,
+    // The scene's peak in units of paper white where Horizon lifts the world (hdr.rs
+    // `SCENE_PEAK`), else 0: what the tone curve maps onto the display's peak (`tone_scale`).
+    scene_peak: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 // Horizon's logo, 1 inside, 0 outside, for calibration's test pictures.
@@ -155,7 +160,7 @@ fn calibration_nits(p: vec2<f32>, size: vec2<f32>) -> f32 {
 }
 
 fn lit(f: vec3<f32>, a: f32, shows: bool, eased: bool) -> Lit {
-    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, params.scene, params.world, params.debug), params.share);
+    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, params.scene, params.world, params.debug), (params.peak - 1.0) * params.share);
 }
 
 // Calibration: above its controls the test picture, straight in nits, past
@@ -173,13 +178,52 @@ fn calibration_picture(pos: vec4<f32>) -> vec4<f32> {
     return vec4(nits / 80.0, 1.0);
 }
 
-// Light in units of paper white, as the swapchain takes it: HDR10 or scRGB, the black level
-// lifted.
-fn display(light: vec3<f32>) -> vec4<f32> {
+// On for the HDR10 swapchain alone (Hdr::new): its 10 bits get dither. A screenshot's HDR10 copy
+// (Hdr::capture) keeps the exact codes, and scRGB's floats need none.
+override pq_dither: bool = false;
+
+// Three even random values in [0, 1) for `at`: PCG's 3D hash (Jarzynski and Olano, "Hash Functions
+// for GPU Rendering", JCGT 2020). Integers only, so it is the same on every GPU and at every
+// resolution, where hashes built on `fract(sin())` repeat or streak at 4K's coordinates.
+// Copyright 2020 Mark Jarzynski & Marc Olano, MIT (github.com/markjarzynski/PCG3D; the license is in
+// THIRD_PARTY_NOTICES.md).
+fn hash3(at: vec3<u32>) -> vec3<f32> {
+    var v = at * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> vec3(16u);
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return vec3<f32>(v >> vec3(8u)) / 16777216.0;
+}
+
+// The PQ signal `e` with dither for its 10 bits: triangular noise of one code either way, each
+// channel's own, so a slow gradient (a clear sky is a few codes tall) shows as grain a code deep
+// instead of bands, and its mean is the light meant. The noise is the pixel's alone: no frame
+// counter, so a still picture stays still. Within a code of black or of the top it shrinks to
+// what fits: the signal never leaves 0..1, and black stays exactly black (an OLED's pixel off).
+// The price is in that last code alone: the smaller noise keeps the signal's mean but not the
+// rounded one, which leans to the end (a third of a code from it shows as an eighth). Under
+// 0.00004 nits at black, that is the accepted cost of a true 0.
+fn dithered(e: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    let at = vec2<u32>(pixel);
+    let noise = hash3(vec3(at, 0u)) + hash3(vec3(at, 1u)) - 1.0;
+    return e + noise * min(min(e, 1.0 - e), vec3(1.0 / 1023.0));
+}
+
+// Light in units of paper white at the pixel `pos`, as the swapchain takes it: HDR10 or scRGB,
+// the black level lifted.
+fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
     let scrgb = light * params.paper;
     if params.pq > 0.5 {
         let e = pq(BT709_TO_BT2020 * scrgb * 80.0);
-        return vec4(select(e, lift_black(e), params.black > 0.0), 1.0);
+        let lifted = select(e, lift_black(e), params.black > 0.0);
+        if pq_dither {
+            return vec4(dithered(lifted, pos.xy), 1.0);
+        }
+        return vec4(lifted, 1.0);
     }
     if params.black > 0.0 {
         return vec4(pq_nits(lift_black(pq(scrgb * 80.0))) / 80.0, 1.0);
@@ -206,38 +250,58 @@ fn display(light: vec3<f32>) -> vec4<f32> {
     let shows = params.world > 0.5 && params.peak > 1.0
         && (hand || (!covered && shows_world(f.rgb, w.rgb)));
     var light = lit(f.rgb, w.a, shows, true).light;
-    // The HUD and menus at their own brightness, by how much they cover.
-    light *= mix(1.0, params.ui, ui);
-    return display(light);
+    // The HUD and menus at their own brightness, by how much they cover, no brighter than the
+    // peak (as `fs_hdr_layered`): UI Brightness can pass paper white.
+    light = min(light * mix(1.0, params.ui, ui), vec3(params.peak));
+    return display(light, pos);
 }
 
-// The tone curve's knee: up to it light stays as it is. Where HDR lighting eased into the peak
-// before the curve (`lit`), 60% of it, so bright textures keep their detail; at least paper white.
+// Where the scene's peak is unknown (`tone_scale`), the curve's knee: up to it light stays as it
+// is. Where HDR lighting eased into the peak before the curve (`lit`), 60% of it, so bright
+// textures keep their detail; at least paper white.
 fn tone_knee(headroom: f32) -> f32 {
     return max(0.6 * headroom, 1.0);
 }
 
-// The tone curve on light whose brightest channel is `top`, in units of paper white `paper`
-// nits: what to scale the light by, so it ends at most `headroom` (above 1). ITU-R BT.2390's
-// EETF in PQ, without the black level lift (`display` does that): the same up to its knee, then
-// a Hermite spline that reaches the peak level, at the source's peak. That peak is where the knee
-// lands at `tone_knee`, PQ's 10 000 nits at most; light past it shows at the peak. The brightest
-// channel sets the scale for all three, so light keeps its hue as it eases (lava stays orange)
-// and no channel passes the peak.
-fn tone_scale(top: f32, headroom: f32, paper: f32) -> f32 {
-    if top <= tone_knee(headroom) {
-        return 1.0;
-    }
+// The tone curve on light whose brightest channel is `top`, in units of paper white `paper` nits:
+// what to scale the light by, so it ends at most `headroom` (T). ITU-R BT.2390's EETF in PQ,
+// without the black level lift (`display` does that): the same up to its knee, then a Hermite
+// spline reaching T at the source's peak, past which light shows at T. The brightest channel sets
+// the scale for all three, so light keeps its hue (lava stays orange) and no channel passes T.
+//
+// The source is the scene's peak S where Horizon lifts the world (`scene_peak`, hdr.rs
+// `SCENE_PEAK`): the world's light is the same on every display, light past S is held at S, and
+// where T reaches S that is all, so a display above S shows the world as one at S. Where the
+// scene's range is unknown (`scene_peak` 0: a 0.2 pack's own light, HDR Lighting off), the
+// source follows the display, as the 0.2 contract has it: the peak that puts the EETF's knee at
+// `tone_knee`, PQ's 10 000 nits at most.
+fn tone_scale(top: f32, scene_peak: f32, headroom: f32, paper: f32) -> f32 {
     let peak = pq(vec3(headroom * paper)).x;
-    let source = min(3.0 * peak - 2.0 * pq(vec3(tone_knee(headroom) * paper)).x, 1.0);
-    let e = pq(vec3(top * paper)).x / source;
+    var source: f32;
+    var e: f32;
+    var held = 1.0;
+    if scene_peak > 0.0 {
+        held = min(1.0, scene_peak / max(top, 1e-6));
+        if scene_peak <= headroom {
+            return held;
+        }
+        source = pq(vec3(scene_peak * paper)).x;
+        e = pq(vec3(min(top, scene_peak) * paper)).x / source;
+    } else {
+        if top <= tone_knee(headroom) {
+            return 1.0;
+        }
+        source = min(3.0 * peak - 2.0 * pq(vec3(tone_knee(headroom) * paper)).x, 1.0);
+        e = pq(vec3(top * paper)).x / source;
+    }
     let max_lum = peak / source;
-    let ks = 1.5 * max_lum - 0.5;
+    // At least 0: past 3 to 1 in PQ the knee would leave the source's range.
+    let ks = max(1.5 * max_lum - 0.5, 0.0);
     if e >= 1.0 {
         return headroom / top;
     }
     if e <= ks {
-        return 1.0;
+        return held;
     }
     let t = (e - ks) / (1.0 - ks);
     let t2 = t * t;
@@ -247,16 +311,16 @@ fn tone_scale(top: f32, headroom: f32, paper: f32) -> f32 {
 }
 
 // Hdr::tonemap, after the post effects and before the camera overlays (docs/design/
-// hdr-linear-light.md, `[tonemap]`): the light (`world` holds the frame) eased into the peak, in
-// gamma, where scaling the light by s scales the stored colour by s^(1/2.2). Light up to the
-// knee stays exactly as stored. With no headroom, a clip at white.
+// hdr-linear-light.md, `[tonemap]`): the light (`world` holds the frame) fitted to the display, in
+// gamma, where scaling the light by s scales the stored colour by s^(1/2.2). Light the curve
+// leaves alone stays exactly as stored. With no headroom and no scene peak, a clip at white.
 @fragment fn fs_tonemap(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let g = textureLoad(world, vec2<i32>(pos.xy), 0).rgb;
-    if params.peak <= 1.0 {
+    if params.scene_peak == 0.0 && params.peak <= 1.0 {
         return vec4(min(g, vec3(1.0)), 1.0);
     }
     let top = pow(max(max(g.r, max(g.g, g.b)), 0.0), 2.2);
-    let s = tone_scale(top, params.peak, params.paper * 80.0);
+    let s = tone_scale(top, params.scene_peak, params.peak, params.paper * 80.0);
     return vec4(select(g * pow(s, 1.0 / 2.2), g, s == 1.0), 1.0);
 }
 
@@ -275,8 +339,8 @@ fn backdrop(w: vec3<f32>) -> vec3<f32> {
 
 // The HUD over the world in gamma, the space the HUD blends in: its own part, what its backdrop
 // B doesn't explain (H = P - (1 - c) B, exact for the layering blends), at UI Brightness, over
-// (1 - c) of the world, light above white included. Where the world is at or below white, at
-// 100%, that is the HUD's picture as drawn.
+// (1 - c) of the world, light above white included. Where the world is at or below white, with
+// UI Brightness at paper white, that is the HUD's picture as drawn.
 fn layered(at: vec2<i32>) -> vec3<f32> {
     let w = max(textureLoad(frame, at, 0).rgb, vec3(0.0));
     let p = textureLoad(hud, at, 0).rgb;
@@ -291,7 +355,7 @@ fn layered(at: vec2<i32>) -> vec3<f32> {
 }
 
 // Screenshots keep midtones at their drawn brightness, with a shoulder starting at 0.6
-// paper white in linear light. Unlike the display curve (whose knee is at least white),
+// paper white in linear light. Unlike the display curve (which ends at the display's peak),
 // this has an unbounded source range: k + (1-k)*(top-k)/(top+1-2*k) approaches SDR
 // white smoothly, with slope 1 at k. One scale keeps the world's linear RGB ratios.
 fn screenshot_world(w: vec3<f32>) -> vec3<f32> {
@@ -327,5 +391,5 @@ override screenshot_shoulder: bool = true;
     if calibrating(pos) {
         return calibration_picture(pos);
     }
-    return display(min(pow(layered(vec2<i32>(pos.xy)), vec3(2.2)), vec3(params.peak)));
+    return display(min(pow(layered(vec2<i32>(pos.xy)), vec3(2.2)), vec3(params.peak)), pos);
 }

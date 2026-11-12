@@ -110,6 +110,19 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
     })
 }
 
+/// `ShulkerBullet.tick` on a server's client: only the server steers it, so
+/// the client moves it by its motion and applies the effects of the blocks it
+/// went through (`applyEffectsFromBlocks`): a bubble column pushes it. The
+/// surface's particles are the server's to send (`sendBubbleColumnParticles`).
+fn remote_bullet_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
+    p.set_old_pos_and_rot();
+    p.age += 1;
+    let from = p.position;
+    p.position = p.position.add_vector(p.velocity);
+    p.bubble_columns_along(w, from);
+    p.bubble_surfaces.clear();
+}
+
 /// A server's client ticks a projectile itself: it flies on between the
 /// tracker's updates (10 to 20 ticks apart) with its own gravity and drag,
 /// and a block stops it there; only the server decides what it hits.
@@ -312,6 +325,7 @@ impl Game<'_> {
         match kind {
             "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
@@ -387,14 +401,8 @@ impl Game<'_> {
                     .next_int_bound(100_000)
                     .unwrap_or(0);
                 let time = super::dragon::Crystal::start_time(at, drawn, self.clock.still());
-                self.crystals.push(super::dragon::Crystal {
-                    id,
-                    position: at,
-                    show_bottom: true,
-                    time,
-                    beam: None,
-                    invulnerable: false,
-                });
+                self.crystals
+                    .push(super::dragon::Crystal::new(id, at, true, time));
             }
             _ => {
                 let Some(k) = projectile_kind(kind) else {
@@ -716,12 +724,7 @@ impl Game<'_> {
                             );
                         }
                     }
-                    // ShulkerBullet.tick: only the server steers it.
-                    ProjectileKind::ShulkerBullet { .. } => {
-                        p.set_old_pos_and_rot();
-                        p.age += 1;
-                        p.position = p.position.add_vector(p.velocity);
-                    }
+                    ProjectileKind::ShulkerBullet { .. } => remote_bullet_tick(p, &world),
                     _ => remote_projectile_tick(p, &world),
                 }
             }
@@ -793,13 +796,17 @@ impl Game<'_> {
     }
 
     pub(super) fn remove_remote_projectile(&mut self, id: u32) {
-        self.fangs.list.retain(|f| f.id != id);
         self.tnts.retain(|t| t.id != id);
         self.falling.retain(|f| f.id != id);
+        self.crystals.retain(|c| c.id != id);
+        self.remove_remote_small_projectiles(id);
+    }
+
+    pub(super) fn remove_remote_small_projectiles(&mut self, id: u32) {
+        self.fangs.list.retain(|f| f.id != id);
         self.creatures.projectiles.retain(|p| p.id != id);
         self.tridents.retain(|t| t.id != id);
         self.rockets.retain(|r| r.id != id);
-        self.crystals.retain(|c| c.id != id);
         self.potions.remove_remote_thrown(id);
         self.potions.clouds.retain(|c| c.id != id);
         self.end.remove_remote_eye(id);
@@ -890,6 +897,47 @@ mod tests {
         fn targets(&self) -> &[(Who, Aabb)] {
             &[]
         }
+    }
+
+    /// An upward bubble column at (0, 100, 0) with water over it.
+    struct Column;
+    impl ProjectileWorld for Column {
+        fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            None
+        }
+        fn in_water(&self, _: Aabb) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &[]
+        }
+        fn bubble_column(&self, p: [i32; 3]) -> Option<(bool, bool)> {
+            (p == [0, 100, 0]).then_some((false, false))
+        }
+    }
+
+    /// `ShulkerBullet.tick` applies the blocks' effects on the client too
+    /// (`applyEffectsFromBlocks` after its move), so a bullet in a bubble
+    /// column gets `Projectile.onInsideBubbleColumn`'s 0.06 up and its fall
+    /// reset there, between the server's updates.
+    #[test]
+    fn a_client_shulker_bullet_in_a_bubble_column_is_pushed_up() {
+        let mut p = Projectile::new(
+            ProjectileKind::ShulkerBullet {
+                target: Some(Who::Player),
+                dir: None,
+                steps: 0,
+                delta: [0.0; 3],
+                seed: 0,
+            },
+            Vec3::new(0.5, 100.1, 0.5),
+            None,
+        );
+        p.fall_distance = 5.0;
+        remote_bullet_tick(&mut p, &Column);
+        assert_eq!(p.velocity, Vec3::new(0.0, 0.06, 0.0));
+        assert_eq!(p.fall_distance, 0.0);
+        assert!(p.bubble_surfaces.is_empty());
     }
 
     /// A thrown item, as a server's client tracks it: the spawn position and
