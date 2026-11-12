@@ -177,7 +177,11 @@ pub fn encode(view: &View, options: &ExportOptions) -> Result<Vec<u8>, ExportErr
         .map(|m| m.started_unix_ms)
         .min()
         .unwrap_or(0);
-    varint_field(&mut out, 9, u64::try_from(started).unwrap_or(0) * 1_000_000);
+    let time_nanos = started
+        .checked_mul(1_000_000)
+        .ok_or(ExportError::StartTimeOutOfRange(started))?;
+    // Protobuf int64 uses a two's-complement varint, not zig-zag encoding.
+    varint_field(&mut out, 9, time_nanos as u64);
     let seconds = sides
         .iter()
         .map(|s| view.end(s.side))

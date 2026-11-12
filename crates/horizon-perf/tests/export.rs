@@ -87,7 +87,7 @@ struct Pprof {
     samples: Vec<Sample>,
     function_names: HashMap<u64, u64>,
     location_function: HashMap<u64, u64>,
-    time_nanos: u64,
+    time_nanos: i64,
     duration_nanos: u64,
     period_type: (String, String),
     period: u64,
@@ -151,7 +151,7 @@ fn decode(gz: &[u8]) -> Pprof {
                 let line = fields(f.iter().find(|x| x.0 == 4).unwrap().2);
                 p.location_function.insert(f[0].1, line[0].1);
             }
-            9 => p.time_nanos = value,
+            9 => p.time_nanos = value as i64,
             10 => p.duration_nanos = value,
             11 => p.period_type = value_type(body),
             12 => p.period = value,
@@ -213,6 +213,53 @@ fn pprof_decodes_and_its_totals_are_the_captures() {
     assert_eq!(p.period, 10_000_000);
     assert_eq!(p.time_nanos, 1_794_580_324_000 * 1_000_000);
     assert_eq!(p.duration_nanos, 10_000_000_000);
+}
+
+#[test]
+fn pprof_preserves_signed_start_times_and_rejects_out_of_range_nanoseconds() {
+    let dir = TempDir::new("pprof-time");
+    let at_time = |started_unix_ms| {
+        let mut fields = waypoints(1, 50).fields();
+        for field in &mut fields {
+            if let Field::Start(start) = field {
+                start.started_unix_ms = started_unix_ms;
+            }
+        }
+        save(&dir, "time.hzperf", &fields)
+    };
+    for (started, expected) in [
+        (-1, -1_000_000),
+        (0, 0),
+        (1, 1_000_000),
+        (-9_223_372_036_854, -9_223_372_036_854_000_000),
+        (9_223_372_036_854, 9_223_372_036_854_000_000),
+    ] {
+        let path = at_time(started);
+        let p = decode(&export(&[&path, "--pprof"]).unwrap());
+        assert_eq!(p.time_nanos, expected, "start time {started} ms");
+    }
+
+    let target = dir.path().join("invalid.pprof");
+    let target_name = target.to_string_lossy();
+    for started in [
+        -9_223_372_036_855,
+        9_223_372_036_855,
+        20_000_000_000_000,
+        i64::MIN,
+        i64::MAX,
+    ] {
+        let path = at_time(started);
+        let args = ["export", &path, "--pprof", "--out", &target_name].map(str::to_string);
+        let mut out = Vec::new();
+        let result = run(&args, &env(), &mut out);
+        let Err(CliError::Failed(message)) = result else {
+            panic!("unexpected export result for {started} ms: {result:?}");
+        };
+        assert!(message.contains("signed nanosecond range"), "{message}");
+        assert!(message.contains(&started.to_string()), "{message}");
+        assert!(out.is_empty(), "an unsuccessful export writes no stdout");
+        assert!(!target.exists(), "an unsuccessful export creates no file");
+    }
 }
 
 #[test]
