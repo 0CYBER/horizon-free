@@ -67,6 +67,10 @@ impl Watched {
 /// signal trampoline's, the one frame the system puts between the handler and the interrupted
 /// code (named `__restore_rt`, `_sigtramp`, or after whatever symbol precedes it). Unchanged when
 /// the handler's frame isn't found.
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "linux", target_os = "android")),
+    allow(dead_code)
+)]
 fn after_handler(text: &str) -> String {
     fn frame_name(line: &str) -> Option<&str> {
         let (n, name) = line.trim().split_once(": ")?;
@@ -157,12 +161,16 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The busy thread below serves the test that reads another thread's stack, which only the
+    // systems with a signal path run.
+    #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     };
 
+    #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
     #[inline(never)]
     fn spin(mut n: u64) -> u64 {
         for _ in 0..1_000_000 {
@@ -173,9 +181,11 @@ mod tests {
 
     /// Its time goes to a call: Apple's arm64 unwinder loses the frame the signal interrupted
     /// (it resumes from the return address), while every caller's frame stays.
+    #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
     #[inline(never)]
-    fn busy_in_a_named_frame(stop: &AtomicBool) {
+    fn busy_in_a_named_frame(stop: &AtomicBool, inside: &AtomicBool) {
         let mut n = 0u64;
+        inside.store(true, Ordering::Release);
         while !stop.load(Ordering::Relaxed) {
             n = std::hint::black_box(spin)(n);
         }
@@ -185,15 +195,21 @@ mod tests {
     #[test]
     fn reads_the_stack_of_a_busy_thread_from_another() {
         let stop = Arc::new(AtomicBool::new(false));
+        let inside = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let worker = {
-            let stop = stop.clone();
+            let (stop, inside) = (stop.clone(), inside.clone());
             std::thread::spawn(move || {
                 tx.send(Watched::current()).unwrap();
-                busy_in_a_named_frame(&stop);
+                busy_in_a_named_frame(&stop, &inside);
             })
         };
         let watched = rx.recv().unwrap();
+        // The worker may still be waking this thread from inside `send`: ask only once it is in
+        // the frame the test looks for.
+        while !inside.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
         let stack = watched.stack(Duration::from_secs(10));
         stop.store(true, Ordering::Relaxed);
         worker.join().unwrap();
