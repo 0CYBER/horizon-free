@@ -2360,8 +2360,8 @@ pub fn mob_from_nbt_with_random(
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
         m.extra.tame = m.extra.owner.is_some();
         crate::mobs::tame::restore_sitting(&mut m, flag(tag, "Sitting"));
-        m.extra.color =
-            number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
+        let legacy = |c: i64| u8::try_from(c as i8).ok().filter(|c| *c < 16).unwrap_or(0);
+        m.extra.color = number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, legacy);
     }
     if m.species() == crate::mobs::Species::Panda {
         let gene = |key| text(tag.get(key)).map_or(0, |n| crate::mobs::panda::gene_from_name(&n));
@@ -2386,8 +2386,8 @@ pub fn mob_from_nbt_with_random(
             .and_then(crate::save::item_from_nbt);
         m.extra.body_damage = armor.as_ref().map_or(0, |s| s.damage as i32);
         m.extra.body_extra = armor.and_then(|s| s.extra);
-        m.extra.color =
-            number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
+        let legacy = |c: i64| u8::try_from(c as i8).ok().filter(|c| *c < 16).unwrap_or(0);
+        m.extra.color = number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, legacy);
     }
     if matches!(
         m.species(),
@@ -2640,7 +2640,7 @@ pub fn mob_from_nbt_with_random(
         m.extra.counter = number(tag.get("still_timeout")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Shulker {
-        m.extra.variant3 = (number(tag.get("AttachFace")).unwrap_or(0) % 6).unsigned_abs() as u8;
+        m.extra.variant3 = (number(tag.get("AttachFace")).unwrap_or(0) as i8 % 6).unsigned_abs();
         m.extra.counter = number(tag.get("Peek")).map_or(0, |v| v as i8 as i32);
         m.extra.color = number(tag.get("Color")).map_or(16, |v| v as i8 as u8);
         m.anim.v[0] = m.extra.counter as f32 * 0.01;
@@ -2867,7 +2867,7 @@ pub fn evoker_fangs_to_nbt(
         motion: raw.map(motion).unwrap_or(Vec3::ZERO),
         rotation: [yaw, raw.map(rotation).unwrap_or([0.0; 2])[1]],
         on_ground: raw.is_some_and(|t| flag(t, "OnGround")),
-        fall_distance: 0.0,
+        fall_distance: raw.map_or(0.0, |t| ground_from_nbt(t).1),
     }
     .tag(raw);
     put(&mut tag, "Warmup", Tag::Int(warmup));
@@ -2901,7 +2901,7 @@ pub fn entity_base_tag(
         motion,
         rotation,
         on_ground: raw.is_some_and(|t| flag(t, "OnGround")),
-        fall_distance: 0.0,
+        fall_distance: raw.map_or(0.0, |t| ground_from_nbt(t).1),
     }
     .tag(raw)
 }
@@ -3037,6 +3037,7 @@ pub fn arrow_to_nbt(
     }
     for (key, value) in [
         ("Fire", Tag::Short(a.fire_ticks as i16)),
+        ("Air", Tag::Short(p.air_supply as i16)),
         ("life", Tag::Short(a.life as i16)),
         ("shake", Tag::Byte(a.shake as i8)),
         ("inGround", Tag::Byte(i8::from(a.in_ground))),
@@ -3115,6 +3116,7 @@ pub fn arrow_from_nbt(
     p.owner_uuid = owner;
     p.no_gravity = flag(tag, "NoGravity");
     p.on_ground = flag(tag, "OnGround");
+    projectile_fields::load_arrow_entity_fields(&mut p, tag);
     let a = p.arrow.as_mut()?;
     a.life = number(tag.get("life")).unwrap_or(0) as i16 as i32;
     a.shake = (number(tag.get("shake")).unwrap_or(0) as i8 as u8).into();
@@ -3134,8 +3136,6 @@ pub fn arrow_from_nbt(
             _ => false,
         })
         .cloned();
-    a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i16 as i32;
-    a.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
     a.spectral = spectral;
     // `SpectralArrow.readAdditionalSaveData`: absent Duration defaults to 200.
     if spectral {
@@ -4162,6 +4162,52 @@ mod tests {
                 .is_none()
         );
     }
+
+    /// `EvokerFangs` extends `Entity` and never moves: `Entity.saveWithoutId`
+    /// writes the `fall_distance` it loaded, and 0 for fangs a spell made.
+    #[test]
+    fn evoker_fangs_keep_their_loaded_fall_distance() {
+        let raw = horizon_world::nbt::parse_snbt(
+            "{id:\"minecraft:evoker_fangs\",Pos:[1d,200d,1d],fall_distance:5.0d,Warmup:100}",
+        )
+        .unwrap()
+        .0;
+        let at = super::Vec3::new(1.0, 200.0, 1.0);
+        let fall = |raw: Option<&super::Tag>| match super::evoker_fangs_to_nbt(
+            at, 0.0, 99, None, [1; 4], raw,
+        )
+        .get("fall_distance")
+        {
+            Some(super::Tag::Double(bits)) => f64::from_bits(*bits),
+            other => panic!("no fall_distance: {other:?}"),
+        };
+        assert_eq!(fall(Some(&raw)), 5.0);
+        assert_eq!(fall(None), 0.0);
+    }
+
+    /// `Shulker` reads `AttachFace` as a byte before
+    /// `Direction.from3DDataValue` (`abs(data % 6)`): an int is narrowed
+    /// first, so 258 is byte 2, not 258 % 6 = 0, and 250 is byte -6, face 0.
+    #[test]
+    fn a_shulkers_attach_face_is_narrowed_to_a_byte_first() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:shulker".into();
+        ty.species = crate::mobs::Species::Shulker;
+        let types = [("minecraft:shulker".into(), kind)].into();
+        let face = |saved: Tag| {
+            let raw = Tag::compound([
+                ("id", string("minecraft:shulker")),
+                ("Pos", doubles(&[4.5, 220.0, 4.5])),
+                ("AttachFace", saved),
+            ]);
+            mob_from_nbt(&raw, &types, 1, None).unwrap().extra.variant3
+        };
+        assert_eq!(face(Tag::Byte(3)), 3);
+        assert_eq!(face(Tag::Byte(-2)), 2);
+        assert_eq!(face(Tag::Int(258)), 2);
+        assert_eq!(face(Tag::Int(250)), 0);
+    }
     use super::*;
     use crate::items::ItemStack;
 
@@ -4207,6 +4253,33 @@ mod tests {
         );
         // The entity's own UUID is not the player's.
         assert_eq!(tag.get("UUID"), Some(&Tag::IntArray(vec![9, 9, 9, 9])));
+    }
+
+    /// An entity that never moves (an `AreaEffectCloud`) saves the
+    /// `fall_distance` `Entity.load` read, and 0 when it was made in play.
+    #[test]
+    fn a_base_tag_keeps_the_loaded_fall_distance() {
+        let raw = horizon_world::nbt::parse_snbt(
+            "{id:\"minecraft:area_effect_cloud\",Pos:[1d,200d,1d],fall_distance:5.0d}",
+        )
+        .unwrap()
+        .0;
+        let fall = |raw: Option<&super::Tag>| {
+            let tag = super::entity_base_tag(
+                "minecraft:area_effect_cloud",
+                super::Vec3::new(1.0, 200.0, 1.0),
+                super::Vec3::ZERO,
+                [0.0, 0.0],
+                [1; 4],
+                raw,
+            );
+            match tag.get("fall_distance") {
+                Some(super::Tag::Double(bits)) => f64::from_bits(*bits),
+                other => panic!("no fall_distance: {other:?}"),
+            }
+        };
+        assert_eq!(fall(Some(&raw)), 5.0);
+        assert_eq!(fall(None), 0.0);
     }
 
     #[test]
@@ -4539,6 +4612,35 @@ mod tests {
         assert_eq!(m.extra.head.as_deref(), Some("minecraft:iron_helmet"));
     }
 
+    /// `Wolf` and `Cat` read `CollarColor` with `DyeColor.LEGACY_ID_CODEC`: a
+    /// byte through `DyeColor.byId`, whose out-of-range answer is the first
+    /// colour, white (`OutOfBoundsStrategy.ZERO`). Nothing wraps.
+    #[test]
+    fn a_collar_colour_outside_the_sixteen_reads_white() {
+        for (species, id) in [
+            (crate::mobs::Species::Wolf, "minecraft:wolf"),
+            (crate::mobs::Species::Cat, "minecraft:cat"),
+        ] {
+            let mut kind = crate::mobs::sensor_scan_tests::kind();
+            let ty = Arc::make_mut(&mut kind);
+            ty.id = id.into();
+            ty.species = species;
+            let types = [(id.into(), kind)].into();
+            let colour = |saved: Option<Tag>| {
+                let mut fields = vec![("id", string(id)), ("Pos", doubles(&[4.5, 220.0, 4.5]))];
+                fields.extend(saved.map(|c| ("CollarColor", c)));
+                let m = mob_from_nbt(&Tag::compound(fields), &types, 1, None).unwrap();
+                m.extra.color
+            };
+            assert_eq!(colour(Some(Tag::Byte(11))), 11, "{id}");
+            assert_eq!(colour(Some(Tag::Byte(17))), 0, "{id}: not 17 & 15");
+            assert_eq!(colour(Some(Tag::Byte(-1))), 0, "{id}: not 15");
+            // Codec.BYTE narrows an int first: 259 is byte 3.
+            assert_eq!(colour(Some(Tag::Int(259))), 3, "{id}");
+            assert_eq!(colour(None), crate::mobs::tame::RED, "{id}");
+        }
+    }
+
     fn fused_creeper(fuse: Option<i16>) -> (Mob, Tag) {
         let mut kind = crate::mobs::sensor_scan_tests::kind();
         let ty = Arc::make_mut(&mut kind);
@@ -4782,6 +4884,7 @@ mod tests {
                 no_gravity: true,
                 on_ground: true,
                 fire_ticks: 0,
+                fall_distance: 0.0,
                 sound_event: TRIDENT_HIT_GROUND,
                 item: &trident,
             },
@@ -5433,6 +5536,34 @@ mod tests {
         }
     }
 
+    /// `Goat` reads `HasLeftHorn` and `HasRightHorn` with `getBooleanOr(key,
+    /// true)`: a number is true when its byte value is not 0, so an int 256
+    /// (byte 0) is a lost horn, as `0b` is.
+    #[test]
+    fn a_goats_horn_flags_are_read_as_bytes() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:goat".into();
+        ty.species = crate::mobs::Species::Goat;
+        let types = [("minecraft:goat".into(), kind)].into();
+        let lost = |left: Option<Tag>| {
+            let mut fields = vec![
+                ("id", string("minecraft:goat")),
+                ("Pos", doubles(&[4.5, 220.0, 4.5])),
+            ];
+            fields.extend(left.map(|v| ("HasLeftHorn", v)));
+            mob_from_nbt(&Tag::compound(fields), &types, 1, None)
+                .unwrap()
+                .extra
+                .lost_horns
+        };
+        assert_eq!(lost(None), [false, false]);
+        assert_eq!(lost(Some(Tag::Byte(1))), [false, false]);
+        assert_eq!(lost(Some(Tag::Byte(0))), [true, false]);
+        assert_eq!(lost(Some(Tag::Int(256))), [true, false]);
+        assert_eq!(lost(Some(Tag::Int(257))), [false, false]);
+    }
+
     #[test]
     fn non_mob_saves_drop_mob_flags_without_losing_entity_fields() {
         let uuid = [104, 0, 0, 1];
@@ -5787,6 +5918,7 @@ mod tests {
                 no_gravity: false,
                 on_ground: false,
                 fire_ticks: 0,
+                fall_distance: 0.0,
                 sound_event: TRIDENT_HIT_GROUND,
                 item: &trident,
             },
@@ -7921,6 +8053,14 @@ mod fireball_nbt_tests {
             ("Facing", Tag::Byte(1)),
         ]);
         assert_eq!(item_frame_from_nbt(&frame, 1).unwrap().pos, [-1, 80, 6]);
+        // BlockAttachedEntity.readAdditionalSaveData: a block_pos 16 blocks or
+        // more from the Pos block is refused for that block.
+        let mut far = painting.clone();
+        put(&mut far, "block_pos", Tag::IntArray(vec![28, 80, 22]));
+        assert_eq!(painting_from_nbt(&far).map(|p| p.0), Some([28, 80, 6]));
+        let mut near = painting.clone();
+        put(&mut near, "block_pos", Tag::IntArray(vec![28, 80, 21]));
+        assert_eq!(painting_from_nbt(&near).map(|p| p.0), Some([28, 80, 21]));
     }
 
     #[test]
