@@ -49,6 +49,7 @@ fn game() -> Game<'static> {
     game.block_ticks
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
+    game.load_ticking_neighbourhood(0, 0);
     for command in [
         "forceload add 0 0",
         "fill 0 99 0 15 99 15 stone",

@@ -206,7 +206,7 @@ impl Config {
         Ok(file.anticheat)
     }
 
-    /// Thresholds can't be negative.
+    /// Thresholds can't be negative, and neither can the timer's milliseconds.
     pub fn check(&self) -> Result<(), String> {
         for &c in Check::ALL {
             let a = self.actions(c);
@@ -219,6 +219,18 @@ impl Config {
                     c.name()
                 ));
             }
+        }
+        // A negative tolerance flags a client on time every tick, and so does a cap below minus the
+        // tolerance (the balance rests at the cap); NaN never flags, or never caps the balance. No
+        // negative number of milliseconds means anything, so all are refused.
+        if [self.timer.tolerance_ms, self.timer.max_lag_ms]
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0)
+        {
+            return Err(
+                "anticheat.timer: tolerance_ms and max_lag_ms are numbers of milliseconds from 0 up"
+                    .into(),
+            );
         }
         let tolerance = self.prediction.tolerance;
         if !tolerance.is_finite() || tolerance <= 0.0 {
@@ -359,6 +371,26 @@ mod tests {
     fn refuses_unknown_keys_and_negative_levels() {
         assert!(Config::from_server_toml("[anticheat]\nenable = true\n").is_err());
         assert!(Config::from_server_toml("[anticheat.timer]\nkick = -1\n").is_err());
+    }
+
+    /// A negative `tolerance_ms` flags a client on time every tick, and so does a `max_lag_ms` below
+    /// `-tolerance_ms` (the balance rests at the cap); a NaN turns the check (or its cap) off without a
+    /// word. Every negative or non-finite value is refused, as a negative threshold is.
+    #[test]
+    fn refuses_timer_settings_that_are_not_milliseconds_from_0_up() {
+        for bad in [
+            "tolerance_ms = -1",
+            "tolerance_ms = nan",
+            "tolerance_ms = inf",
+            "max_lag_ms = -1",
+            "max_lag_ms = nan",
+        ] {
+            let text = format!("[anticheat.timer]\n{bad}\n");
+            let e = Config::from_server_toml(&text).expect_err(bad);
+            assert!(e.starts_with("anticheat.timer:"), "{bad}: {e}");
+        }
+        let edge = "[anticheat.timer]\ntolerance_ms = 0\nmax_lag_ms = 0\n";
+        assert!(Config::from_server_toml(edge).is_ok());
     }
 
     #[test]
