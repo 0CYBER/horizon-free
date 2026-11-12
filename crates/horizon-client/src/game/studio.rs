@@ -660,10 +660,7 @@ impl Game<'_> {
                 }
             }
         }
-        if self.screen == Screen::Playing && self.replay.driver.is_some() {
-            return true;
-        }
-        false
+        self.screen == Screen::Playing && self.replay.driver.is_some()
     }
 
     /// The free camera flies by the movement keys, once per frame.

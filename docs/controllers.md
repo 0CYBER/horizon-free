@@ -388,7 +388,7 @@ the crafting result, armour to the player's grid.
   faster while held). A or B lets go and keeps the value, and up or down lets go
   and moves on. Until then left and right move the focus, so passing over a
   slider doesn't change it.
-- **Choices on the settings shell** (Extras, Graphics: a value between `<` `>`): left and right step the
+- **Choices on the settings shell** (Extras, Graphics, Pack Options: a value between `<` `>`): left and right step the
   focused one back and on at once, as its arrows show, and A steps it on. They are a press and a Shift press
   (`Screen::press` with `back`), so Undo and saving follow as for a click. Up and down leave the row, and LB
   and RB go to the page list (the previous or next page, focused); a choice declares itself with

@@ -1765,7 +1765,7 @@ def graphics_shell(args, name):
     return check.failures
 
 
-PRESET = 'Preset'
+PRESET = 'Horizon Preset'
 
 
 def shell_choice_step(args, name):
@@ -1942,6 +1942,7 @@ PACK_LANG = {
 # A card's options button (pack_screen's OPTIONS_SIZE), and the D-pad hops allowed to reach it.
 PACK_OPTIONS_SIZE = 16
 PACK_HOPS = 8
+RAIN = 'Rain style'
 
 
 def seed_pack_options(game_home):
@@ -1977,6 +1978,20 @@ def on_pack_options_button(game, hops=PACK_HOPS):
     return False
 
 
+def open_pack_options(game):
+    """From the title to the Configurable pack's Pack Options, by its card's button and A."""
+    game.press_through('west')
+    game.ctl('options', 'packs')
+    time.sleep(SETTLE)
+    game.wait_targets()
+    if not on_pack_options_button(game):
+        raise RuntimeError(f'the D-pad never reached the options button: {game.rects()}, {game.menu()["pointer"]}')
+    game.pad('south')
+    game.wait_targets()
+    if label_of(game, 'Presets') is None:
+        raise RuntimeError(f'A on the options button did not open Pack Options: {labels(game)}')
+
+
 def pack_card_options(args, name):
     """A pad player reaches a pack card's options button as a control, and A opens its Pack Options."""
     game = Game(args, name, seed=seed_pack_options)
@@ -1996,6 +2011,63 @@ def pack_card_options(args, name):
         game.pad('east')
         game.wait_targets()
         check(pack_options_button(game) is not None, f'B did not come back to the pack screen: {labels(game)}')
+    finally:
+        game.quit()
+    return check.failures
+
+
+def pack_choices(game):
+    found = list(game.home.rglob('polytone-configs.json'))
+    return json.loads(found[0].read_text()) if found else {}
+
+
+def pack_options(args, name):
+    game = Game(args, name, seed=seed_pack_options)
+    check = Check()
+    try:
+        open_pack_options(game)
+        check(label_of(game, 'Presets') is not None, f'no Presets row on the first page: {labels(game)}')
+        check(declared(game).get('Done') is True, f'Pack Options declares {declared(game)}')
+        check('Apply' not in declared(game), f'Undo shows with nothing changed: {declared(game)}')
+        shot(game, 'pack_options_first_page')
+        # Down the page list to Sky, A opens it, and right into its rows: the focused entry's tooltip and
+        # performance impact are in the strip.
+        for _ in range(ROW_WALK):
+            if game.focused_label() == 'Sky':
+                break
+            game.pad('down')
+        game.pad('south')
+        game.pad('right')
+        for _ in range(ROW_WALK):
+            if (game.focused_label() or '').startswith('Fog density'):
+                break
+            game.pad('down')
+        check((game.focused_label() or '').startswith('Fog density'), f'never reached Fog density: {labels(game)}')
+        shot(game, 'pack_options_strip')
+        # RB to the Weather page, then down to Rain style; Right steps it, and Undo puts it back.
+        game.pad('rb')
+        check(open_tab(game) == 'Weather', f'RB opened {open_tab(game)}')
+        game.pad('right')
+        for _ in range(ROW_WALK):
+            if (game.focused_label() or '').startswith(RAIN):
+                break
+            game.pad('down')
+        label = game.focused_label() or ''
+        check(label.endswith('drops'), f'the D-pad never reached {RAIN}: {label}')
+        game.pad('right')
+        label = game.focused_label() or ''
+        check(label.endswith('streaks'), f'Right left {RAIN} as {label}')
+        check(declared(game).get('Apply') is True, f'Undo did not appear: {declared(game)}')
+        shot(game, 'pack_options_stepped')
+        game.pad('west')
+        check((label_of(game, RAIN) or {}).get('label', '').endswith('drops'), f'X did not undo: {labels(game)}')
+        # Left steps back, round to the last value, and leaving keeps it.
+        game.pad('left')
+        check((game.focused_label() or '').endswith('none'), f'Left left {RAIN} as {game.focused_label()}')
+        game.pad('east')
+        game.wait_targets()
+        check(label_of(game, RAIN) is None, f'B did not leave Pack Options: {labels(game)}')
+        check(pack_choices(game).get('demo:rain_style') == 'none', f'not saved: {pack_choices(game)}')
     finally:
         game.quit()
     return check.failures
@@ -4617,6 +4689,7 @@ CASES = {'idle_a': idle_a, 'idle_b': idle_b, 'idle_x': idle_x, 'release': releas
          'shell_choice_step': shell_choice_step,
          'shader_screens': shader_screens,
          'pack_card_options': pack_card_options,
+         'pack_options': pack_options,
          'glyph_art': glyph_art,
          'glyph_art_world': glyph_art_world,
          'nintendo_letters': nintendo_letters,

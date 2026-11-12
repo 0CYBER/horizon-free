@@ -134,6 +134,8 @@ pub struct SyncData {
     /// ClientboundUpdateRecipesPacket's payload.
     pub recipes: Vec<u8>,
     pub advancements: super::advancements::ServerAdvancements,
+    /// The registry ids of the particle types effects show, looked up once (`effect_meta`).
+    effect_particle_ids: std::sync::Mutex<super::effect_meta::ParticleTypeIds>,
 }
 
 use crate::crafting::qualified;
@@ -227,6 +229,7 @@ impl SyncData {
     /// No registries, tags or recipes: enough for tests of the login phase.
     pub fn empty() -> Self {
         Self {
+            effect_particle_ids: Default::default(),
             builtin: Builtin::default(),
             dynamic: Dynamic::default(),
             registries: Vec::new(),
@@ -452,6 +455,7 @@ impl SyncData {
             None
         };
         let mut sync = Self {
+            effect_particle_ids: Default::default(),
             content_identity,
             builtin,
             dynamic,
@@ -515,30 +519,21 @@ impl SyncData {
         &self,
         effects: impl IntoIterator<Item = (&'a str, bool)>,
     ) -> Vec<(u8, i32, entity_data::Value)> {
+        let mut ids = self
+            .effect_particle_ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut particles = Vec::new();
         let mut all_ambient = true;
         for (effect, ambient) in effects {
             let effect = effect.trim_start_matches("minecraft:");
-            // MobEffect.particleFactory: the omens have their own particles,
-            // the others an entity effect in their colour (faint if ambient).
-            let (name, data) = match effect {
-                "trial_omen" | "raid_omen" => (effect, None),
-                _ => {
-                    let Some(def) = crate::brewing::effect(effect) else {
-                        continue;
-                    };
-                    let alpha = if ambient { 38 } else { 255 };
-                    let argb = (alpha << 24) | def.shown_color() as i32;
-                    (
-                        "entity_effect",
-                        Some(entity_data::ParticleData::Color(argb)),
-                    )
-                }
-            };
-            let Some(id) = self.id("minecraft:particle_type", &format!("minecraft:{name}")) else {
+            let particle = super::effect_meta::particle_of(effect, ambient, |name| {
+                ids.get_or_insert_with(name, || self.id("minecraft:particle_type", name))
+            });
+            let Some(particle) = particle else {
                 continue;
             };
-            particles.push(entity_data::Particle { id, data });
+            particles.push(particle);
             all_ambient &= ambient;
         }
         if particles.is_empty() {
