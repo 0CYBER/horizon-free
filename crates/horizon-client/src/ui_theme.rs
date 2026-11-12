@@ -544,7 +544,7 @@ impl<'a> Ui<'a> {
                 let is_pack = !ch.is_whitespace()
                     && c.fonts
                         .as_ref()
-                        .map_or(false, |f| f.face(face).glyph_id(ch).0 == 0);
+                        .is_some_and(|f| f.face(face).glyph_id(ch).0 == 0);
                 let pack = is_pack
                     .then(|| atlas.font.glyph(ch))
                     // The pack lacks it too (its missing glyph): Geist's box, like vanilla's.
@@ -575,18 +575,18 @@ impl<'a> Ui<'a> {
                     (id, f.h_advance(id), prev.map_or(0.0, |p| f.kern(p, id)))
                 };
                 pen += kern;
-                if let Some(base) = baseline {
-                    if !ch.is_whitespace() {
-                        let g = c.glyph(atlas, face, id, px);
-                        if let Some(rect) = g.rect {
-                            emit(
-                                (pen + g.left).round(),
-                                base + g.top,
-                                rect.w as f32,
-                                rect.h as f32,
-                                rect,
-                            );
-                        }
+                if let Some(base) = baseline
+                    && !ch.is_whitespace()
+                {
+                    let g = c.glyph(atlas, face, id, px);
+                    if let Some(rect) = g.rect {
+                        emit(
+                            (pen + g.left).round(),
+                            base + g.top,
+                            rect.w as f32,
+                            rect.h as f32,
+                            rect,
+                        );
                     }
                 }
                 pen += advance;
