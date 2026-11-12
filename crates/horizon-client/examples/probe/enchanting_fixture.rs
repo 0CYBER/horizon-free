@@ -8,7 +8,8 @@ use horizon_client::{
     items::{ItemStack, Items},
     stations,
 };
-use std::{fmt::Write as _, fs, path::Path};
+use horizon_world::loot::PackOverlay;
+use std::{fmt::Write as _, fs, path::Path, sync::Arc};
 
 pub fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = crate::args().collect();
@@ -17,13 +18,26 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: enchanting_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::tags_only(root)?;
+    let items = Items::tags_only(root, &PackOverlay::NONE)?;
     let e = Enchantments::load(root);
     let mut out = String::new();
     for line in input.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let (seed, bookcases, item): (i32, i32, &str) = (f[0].parse()?, f[1].parse()?, f[2]);
-        let stack = ItemStack::new(item, 1);
+        let mut stack = ItemStack::new(item, 1);
+        if let Some(damage) = f.get(3) {
+            stack.damage = damage.parse()?;
+        }
+        if let Some(levels) = f.get(4).filter(|levels| **levels != "-") {
+            stack.data_mut().enchantments = levels
+                .split(',')
+                .map(|entry| {
+                    let (id, level) = entry.split_once('=')?;
+                    Some((Arc::from(id), level.parse().ok()?))
+                })
+                .collect::<Option<Vec<_>>>()
+                .ok_or("bad enchantments")?;
+        }
         let offers = stations::enchant_offers(&e, &items, seed, bookcases, Some(&stack));
         for i in 0..3 {
             let cost = offers.costs[i];
@@ -31,7 +45,7 @@ pub fn main() -> horizon_client::Result<()> {
                 .as_ref()
                 .map_or("-".to_owned(), |(id, l)| format!("{id}:{l}"));
             let applied = if cost > 0 {
-                let list = stations::enchantment_list(&e, &items, seed, i, cost, item);
+                let list = stations::enchantment_list(&e, &items, seed, i, cost, &stack);
                 if list.is_empty() {
                     "-".to_owned()
                 } else {

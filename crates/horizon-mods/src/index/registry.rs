@@ -7,7 +7,9 @@
 //! What an entry can't say for itself (a mod's API, side and capabilities,
 //! a modpack's mods, a file's size) is read from the file, never typed.
 pub use super::open;
-use super::{File, Index, Kind, Project, Revoked, SCHEMA, Version, hex64, inspect, valid_id};
+use super::{
+    File, Index, Kind, Project, Revoked, SCHEMA, Version, hex64, inspect, page as rules, valid_id,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -26,7 +28,16 @@ const MAX_ICON: u64 = 256 << 10;
 pub struct Entry {
     pub id: String,
     pub kind: Kind,
+    /// The project's GitHub repository, `owner/name`. Its releases are its versions
+    /// ([`cache`], `scripts/sync_releases.py` in the registry), and its
+    /// [`PAGE_FILE`] may fill the page fields the entry leaves out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    // The page fields below may be left out when `repo` is set and the repository's page file
+    // has them (the entry's own win, see [`Entry::resolved`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -34,16 +45,182 @@ pub struct Entry {
     pub authors: Vec<String>,
     /// GitHub logins allowed to publish updates.
     pub owners: Vec<String>,
+    /// The owners' numeric GitHub IDs, which decide who they are: GitHub hands a renamed or deleted
+    /// account's login to whoever claims it next, while an ID is never reused. The form records the
+    /// lister's; the registry's backfill fills in older entries. When it is empty, an update is matched
+    /// by login and always waits for a reviewer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner_ids: Vec<u64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub license: String,
+    /// Defaults to the repository's address.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
     /// `icons/<id>.png` in the registry repository, or an `https://` address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// 1 to 3 of the kind's categories ([`rules::categories`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+    /// Free-form, lowercase, at most 10.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// At most 8, in order: `screenshots/<id>/<name>.png|.jpg` in the registry repository, or
+    /// `https://` addresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub screenshots: Vec<String>,
     /// The author's minisign public key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// Newest first.
+    /// Hosted by the registry itself, newest first: the versions of before releases were read from
+    /// the repository (and of Horizon's own mods). Optional.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<EntryVersion>,
+}
+
+/// The page fields a project's repository may hold, in its [`PAGE_FILE`]. Only these: who owns the
+/// project, its key and its kind are decided when it is listed.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Page {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// What the registry keeps of a repository between runs (`versions/<id>.json`, on the registry's
+/// `versions` branch): the page last read, and every release version that passed its checks, as
+/// the index lists it. Written by `cargo horizon-mod registry release|page`, read by [`build`].
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Cache {
+    #[serde(default)]
+    pub page: Page,
+    /// Newest first.
+    #[serde(default)]
+    pub versions: Vec<Version>,
+}
+
+/// The folder of [`Cache`] files, in the registry checkout.
+pub const CACHE: &str = "versions";
+/// The page file at the root of a project's repository (TOML, [`Page`]'s fields).
+pub const PAGE_FILE: &str = "horizon-registry.toml";
+/// The longest changelog the index keeps of a release's notes.
+const MAX_CHANGELOG: usize = 6000;
+
+impl Cache {
+    /// `<registry>/versions/<id>.json`; empty when there is none.
+    pub fn read(registry: &Path, id: &str) -> Result<Cache, String> {
+        let path = registry.join(CACHE).join(format!("{id}.json"));
+        match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Cache::default()),
+            Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+}
+
+/// `owner/name` of a GitHub repository.
+pub fn valid_repo(repo: &str) -> bool {
+    let part = |p: &str, max: usize| {
+        !p.is_empty()
+            && p.len() <= max
+            && p != "."
+            && p != ".."
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    repo.split_once('/')
+        .is_some_and(|(owner, name)| part(owner, 39) && part(name, 100))
+}
+
+impl Entry {
+    /// The entry with the repository's page filling what it leaves out.
+    pub fn resolved(&self, page: &Page) -> Entry {
+        let mut e = self.clone();
+        let fill = |own: &mut String, other: &Option<String>| {
+            if own.trim().is_empty() {
+                *own = other.clone().unwrap_or_default().trim().to_owned();
+            }
+        };
+        fill(&mut e.name, &page.name);
+        fill(&mut e.summary, &page.summary);
+        fill(&mut e.description, &page.description);
+        fill(&mut e.license, &page.license);
+        if e.authors.is_empty() {
+            e.authors = page.authors.clone();
+        }
+        if e.source.is_empty()
+            && let Some(repo) = &self.repo
+        {
+            e.source = format!("https://github.com/{repo}");
+        }
+        e
+    }
+
+    /// Everything about the project but its versions, once the page is filled in.
+    pub fn check_fields(&self) -> Vec<String> {
+        let id = &self.id;
+        let mut errors = Vec::new();
+        if !valid_id(id) {
+            errors.push(format!("{id:?} is not [a-z0-9_]{{1,64}}"));
+        }
+        if RESERVED.contains(&id.as_str()) {
+            errors.push(format!("{id:?} is reserved: pick another id"));
+        }
+        if let Err(e) = open(&self.kind) {
+            errors.push(format!("{id}: {e}"));
+        }
+        if self.repo.as_deref().is_some_and(|r| !valid_repo(r)) {
+            errors.push(format!("{id}: repo must be owner/name on GitHub"));
+        }
+        if self.owners.is_empty() {
+            errors.push(format!("{id}: needs at least one owner (a GitHub login)"));
+        }
+        // Once an entry records IDs, only they make an owner: a login added to `owners` alone would
+        // silently not be one (and be refused while listed). Both lists name the same accounts.
+        if !self.owner_ids.is_empty() && self.owner_ids.len() != self.owners.len() {
+            errors.push(format!(
+                "{id}: owners lists {} login(s) but owner_ids {} ID(s): give each owner's numeric GitHub \
+                 ID in owner_ids, in the same order (`gh api users/<login> --jq .id`)",
+                self.owners.len(),
+                self.owner_ids.len()
+            ));
+        }
+        for (field, value) in [
+            ("name", &self.name),
+            ("summary", &self.summary),
+            ("license", &self.license),
+            ("source", &self.source),
+        ] {
+            if value.trim().is_empty() {
+                errors.push(format!(
+                    "{id}: has no {field} (in the entry, or in {PAGE_FILE} of its repo)"
+                ));
+            }
+        }
+        if self.summary.chars().count() > 160 {
+            errors.push(format!("{id}: the summary is over 160 characters"));
+        }
+        for e in rules::check(&self.kind, &self.description, &self.categories, &self.tags) {
+            errors.push(format!("{id}: {e}"));
+        }
+        if self.screenshots.len() > rules::MAX_SCREENSHOTS {
+            errors.push(format!(
+                "{id}: {} screenshots, at most {}",
+                self.screenshots.len(),
+                rules::MAX_SCREENSHOTS
+            ));
+        }
+        errors
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -161,63 +338,52 @@ fn plain_date(d: &str) -> bool {
             .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
+/// Whether the index lists the project: a project listed by its repository waits for its first
+/// release version before it appears.
+pub fn listed(entry: &Entry, src: &Sources) -> bool {
+    let cached = entry.repo.is_some()
+        && Cache::read(src.registry, &entry.id).is_ok_and(|c| !c.versions.is_empty());
+    !entry.versions.is_empty() || cached || entry.repo.is_none()
+}
+
 /// One project's entry and its files, as the index lists them.
 pub fn project(entry: &Entry, src: &Sources) -> Result<Project, Vec<String>> {
-    let mut errors = Vec::new();
-    let id = &entry.id;
-    if !valid_id(id) {
-        return Err(vec![format!("{id:?} is not [a-z0-9_]{{1,64}}")]);
-    }
-    if RESERVED.contains(&id.as_str()) {
-        return Err(vec![format!("{id:?} is reserved: pick another id")]);
-    }
-    open(&entry.kind).map_err(|e| vec![format!("{id}: {e}")])?;
-    if entry.owners.is_empty() {
-        errors.push(format!("{id}: needs at least one owner (a GitHub login)"));
-    }
-    if entry.summary.chars().count() > 160 {
-        errors.push(format!("{id}: the summary is over 160 characters"));
-    }
-    let icon = match entry.icon.as_deref() {
-        None => None,
-        Some(url) if url.starts_with("https://") => Some(url.to_owned()),
-        Some(path) => {
-            let ok = path
-                .strip_prefix("icons/")
-                .is_some_and(|name| super::plain_name(name) && name.ends_with(".png"));
-            let size = std::fs::metadata(src.registry.join(path)).map(|m| m.len());
-            match (ok, size) {
-                (true, Ok(n)) if n <= MAX_ICON => Some(format!("{}{path}", src.site)),
-                (true, Ok(_)) => {
-                    errors.push(format!("{id}: {path} is over {} KiB", MAX_ICON >> 10));
-                    None
-                }
-                (true, Err(e)) => {
-                    errors.push(format!("{id}: {path}: {e}"));
-                    None
-                }
-                (false, _) => {
-                    errors.push(format!(
-                        "{id}: icon {path:?} is neither icons/<name>.png nor https://"
-                    ));
-                    None
-                }
-            }
-        }
+    let cache = match &entry.repo {
+        Some(_) => Cache::read(src.registry, &entry.id).map_err(|e| vec![e])?,
+        None => Cache::default(),
     };
-    if entry.versions.is_empty() {
+    let entry = &entry.resolved(&cache.page);
+    let mut errors = entry.check_fields();
+    let id = &entry.id;
+    if !valid_id(id) || RESERVED.contains(&id.as_str()) {
+        return Err(errors);
+    }
+    let icon = entry
+        .icon
+        .as_deref()
+        .and_then(|icon| image(src, id, icon, "icons/", &mut errors));
+    let screenshots: Vec<String> = entry
+        .screenshots
+        .iter()
+        .filter_map(|s| image(src, id, s, &format!("screenshots/{id}/"), &mut errors))
+        .collect();
+    if entry.versions.is_empty() && cache.versions.is_empty() {
         errors.push(format!("{id}: has no version"));
     }
     let mut versions = Vec::new();
     for v in &entry.versions {
         match version(entry, v, src) {
             // A mod that turned native keeps its `.hmod` versions published, but the index offers
-            // only its native ones: a launcher never installs a `.hmod` as a native mod.
-            Ok(_) if file_kind(entry, v) != entry.kind => {}
+            // only its native ones: a launcher never installs a content-only `.hmod` as a native mod.
+            Ok(_) if file_kind(entry, v, &src.files.join(&v.sha256)) != entry.kind => {}
             Ok(v) => versions.push(v),
             Err(e) => errors.push(format!("{id} {}: {e}", v.version)),
         }
     }
+    // The versions read from the repository's releases passed their checks when they were read.
+    // Newest first, the registry's own before them on a tie.
+    versions.extend(cache.versions);
+    versions.sort_by(|a: &Version, b| b.published.cmp(&a.published));
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -232,22 +398,90 @@ pub fn project(entry: &Entry, src: &Sources) -> Result<Project, Vec<String>> {
         license: entry.license.clone(),
         source: entry.source.clone(),
         icon,
+        categories: entry.categories.clone(),
+        tags: entry.tags.clone(),
+        screenshots,
         key: entry.key.as_ref().map(|k| k.trim().to_owned()),
         versions,
         downloads: 0,
+        stars: 0,
     })
 }
 
-/// The kind of a version's file: the project's, but a `.hmod` of a mod that turned native
-/// (`review`) is a WebAssembly mod's.
-fn file_kind(entry: &Entry, v: &EntryVersion) -> Kind {
+/// An icon (`folder` = `icons/`) or a screenshot (`screenshots/<id>/`) as the index lists it: an
+/// `https://` address as it is, or a file in the registry repository checked and served from the
+/// registry's site. An icon's address ends in `?v=` and the start of its SHA-256, so a new icon
+/// is a new address: the launcher keeps images by address for a week, and would go on showing
+/// the old one.
+fn image(
+    src: &Sources,
+    id: &str,
+    path: &str,
+    folder: &str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    if path.starts_with("https://") {
+        return Some(path.to_owned());
+    }
+    let icon = folder == "icons/";
+    let name = path.strip_prefix(folder).filter(|n| super::plain_name(n));
+    let Some(name) = name else {
+        errors.push(format!(
+            "{id}: {path:?} is neither {folder}<name> nor https://"
+        ));
+        return None;
+    };
+    let max = if icon {
+        MAX_ICON
+    } else {
+        rules::MAX_SCREENSHOT
+    };
+    let checked = std::fs::metadata(src.registry.join(path))
+        .map_err(|e| format!("{path}: {e}"))
+        .and_then(|m| {
+            if m.len() > max {
+                return Err(format!("{path} is over {} KiB", max >> 10));
+            }
+            let bytes =
+                std::fs::read(src.registry.join(path)).map_err(|e| format!("{path}: {e}"))?;
+            if icon {
+                rules::check_icon(&bytes).map_err(|e| format!("{path}: {e}"))?;
+                Ok(format!("?v={}", &super::sha256(&bytes)[..12]))
+            } else {
+                rules::check_screenshot(name, &bytes).map(|()| String::new())
+            }
+        });
+    match checked {
+        Ok(version) => Some(format!("{}{path}{version}", src.site)),
+        Err(e) => {
+            errors.push(format!("{id}: {e}"));
+            None
+        }
+    }
+}
+
+/// The kind of a version's file at `path`: the project's, but a `.hmod` without native code of a
+/// mod that turned native (`review`) is from before it did.
+fn file_kind(entry: &Entry, v: &EntryVersion, path: &Path) -> Kind {
     match entry.kind {
-        Kind::NativeMod if v.file.ends_with(".hmod") => Kind::Mod,
+        Kind::NativeMod if v.file.ends_with(".hmod") && !super::native::holds(path) => Kind::Mod,
         _ => entry.kind.clone(),
     }
 }
 
 fn version(entry: &Entry, v: &EntryVersion, src: &Sources) -> Result<Version, String> {
+    hex64(&v.sha256)?;
+    let url = format!("{}{}/{}", src.release, tag(&entry.id, &v.version), v.file);
+    version_at(entry, v, &src.files.join(&v.sha256), url)
+}
+
+/// A version of `entry` whose file is at `path` and is downloaded from `url`.
+fn version_at(
+    entry: &Entry,
+    v: &EntryVersion,
+    path: &Path,
+    url: String,
+) -> Result<Version, String> {
     if !plain_version(&v.version) {
         return Err("a version is letters, digits, '.', '-' and '_'".into());
     }
@@ -255,20 +489,19 @@ fn version(entry: &Entry, v: &EntryVersion, src: &Sources) -> Result<Version, St
         return Err(format!("published {:?} is not YYYY-MM-DD", v.published));
     }
     hex64(&v.sha256)?;
-    let path = src.files.join(&v.sha256);
-    let size = std::fs::metadata(&path)
+    let size = std::fs::metadata(path)
         .map_err(|e| format!("its file {}: {e}", v.sha256))?
         .len();
-    if super::sha256_file(&path)? != v.sha256 {
+    if super::sha256_file(path)? != v.sha256 {
         return Err("the file isn't the one its sha256 names".into());
     }
     match (&entry.key, &v.signature) {
-        (Some(key), Some(sig)) => super::verify_signature(key, sig, &path)?,
+        (Some(key), Some(sig)) => super::verify_signature(key, sig, path)?,
         (Some(_), None) => return Err("the project has a key: sign the file with it".into()),
         (None, Some(_)) => return Err("signed, but the project has no key".into()),
         (None, None) => {}
     }
-    let facts = inspect(&file_kind(entry, v), &path)?;
+    let facts = inspect(&file_kind(entry, v, path), path)?;
     if facts.id.as_ref().is_some_and(|id| *id != entry.id) {
         return Err(format!(
             "the file's id is {:?}, not {:?}",
@@ -297,16 +530,103 @@ fn version(entry: &Entry, v: &EntryVersion, src: &Sources) -> Result<Version, St
         side: facts.side,
         capabilities: facts.capabilities,
         api_level: facts.api_level,
+        hooks: facts.hooks,
         game: v.game.clone(),
+        broken_on: Vec::new(),
         requires: facts.requires,
         file: File {
-            url: format!("{}{}/{}", src.release, tag(&entry.id, &v.version), v.file),
+            url,
             name: v.file.clone(),
             size,
             sha256: v.sha256.clone(),
             signature: v.signature.clone(),
         },
     })
+}
+
+/// A release of a project's repository whose asset was downloaded.
+pub struct Release<'a> {
+    /// The release's tag: the version when the file does not say one.
+    pub tag: &'a str,
+    /// `YYYY-MM-DD`, the release's date.
+    pub published: &'a str,
+    /// The release notes.
+    pub notes: &'a str,
+    /// The asset's name.
+    pub asset: &'a str,
+    /// The Minecraft version, when the file names none.
+    pub game: &'a str,
+    /// The asset's `.minisig` text.
+    pub signature: Option<&'a str>,
+}
+
+/// The version a release of `entry`'s repository is, once its asset at `path` passed the kind's
+/// checks: the file's own manifest decides id, version and game (the tag and the default game fill
+/// what it leaves out), the index lists the asset's address in the repository, and the SHA-256 is
+/// computed here, never read from the release.
+pub fn release_version(entry: &Entry, r: &Release, path: &Path) -> Result<Version, String> {
+    let repo = entry
+        .repo
+        .as_deref()
+        .filter(|r| valid_repo(r))
+        .ok_or("the entry names no GitHub repository")?;
+    let plain = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'+'))
+    };
+    if !plain(r.tag) || !super::plain_name(r.asset) {
+        return Err(format!(
+            "tag {:?} or file {:?} has characters the launcher cannot download: use letters, digits, '.', '-', '_' and '+'",
+            r.tag, r.asset
+        ));
+    }
+    let want = entry.kind.extension();
+    if want.is_some_and(|e| !r.asset.ends_with(&format!(".{e}"))) {
+        return Err(format!(
+            "{:?} is not a .{} file",
+            r.asset,
+            want.unwrap_or("")
+        ));
+    }
+    let facts = inspect(&entry.kind, path)?;
+    let version = facts
+        .version
+        .clone()
+        .unwrap_or_else(|| r.tag.trim_start_matches(['v', 'V']).to_owned());
+    let mut notes: String = r.notes.trim().chars().take(MAX_CHANGELOG).collect();
+    if r.notes.trim().chars().count() > MAX_CHANGELOG {
+        notes.push_str("\n\n(Cut: the full notes are on the release.)");
+    }
+    let v = EntryVersion {
+        game: facts.game.clone().unwrap_or_else(|| r.game.to_owned()),
+        file: r.asset.to_owned(),
+        sha256: super::sha256_file(path)?,
+        signature: r
+            .signature
+            .map(str::to_owned)
+            .filter(|s| !s.trim().is_empty()),
+        changelog: notes,
+        published: r.published.to_owned(),
+        version,
+    };
+    let url = format!(
+        "https://github.com/{repo}/releases/download/{}/{}",
+        r.tag, r.asset
+    );
+    version_at(entry, &v, path, url)
+}
+
+/// A project's page file as it would fill `entry` (which names the repository): refused when it
+/// has keys other than [`Page`]'s, or leaves the page incomplete.
+pub fn page(entry: &Entry, text: &str) -> Result<Page, String> {
+    let page: Page = toml::from_str(text).map_err(|e| format!("{PAGE_FILE}: {e}"))?;
+    let errors = entry.resolved(&page).check_fields();
+    if errors.is_empty() {
+        Ok(page)
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 impl Entry {
@@ -323,7 +643,26 @@ pub fn build(src: &Sources) -> Result<Index, Vec<String>> {
     entries.sort_by(|a, b| a.id.cmp(&b.id));
     let mut errors = Vec::new();
     let mut projects = Vec::new();
-    for entry in &entries {
+    for entry in entries.iter().filter(|e| listed(e, src)) {
+        // A listed project's page is complete (registry v2's rollout, step 4).
+        let page = match &entry.repo {
+            Some(_) => Cache::read(src.registry, &entry.id)
+                .map(|c| c.page)
+                .unwrap_or_default(),
+            None => Page::default(),
+        };
+        let e = entry.resolved(&page);
+        errors.extend(
+            rules::check_required(
+                &e.id,
+                &e.description,
+                &e.categories,
+                e.icon.as_deref(),
+                &e.screenshots,
+            )
+            .into_iter()
+            .map(|problem| format!("{}: {problem}", e.id)),
+        );
         match project(entry, src) {
             Ok(p) => projects.push(p),
             Err(e) => errors.extend(e),
@@ -356,9 +695,22 @@ pub struct Review {
 /// Compares the entries of a pull request (`head`) with `main`'s (`base`):
 /// a published file never changes and is never removed (take it down in
 /// `revoked.toml`), a project's kind never changes but for a mod turning
-/// native (its next versions are `.hnmod`s), and changes by someone who
+/// native (its next versions carry native code), and changes by someone who
 /// isn't an owner, or to owners and keys, are pointed out.
 pub fn review(base: &[Entry], head: &[Entry], author: &str) -> Review {
+    review_with_revoked(base, head, &[], author)
+}
+
+/// [`review`], where a version may leave its entry once `revoked` (the pull
+/// request's `revoked.toml`) takes its file down by hash: a project whose
+/// signing key was lost lists its next version under a new key and drops the
+/// versions the new key can't verify.
+pub fn review_with_revoked(
+    base: &[Entry],
+    head: &[Entry],
+    revoked: &[Revoked],
+    author: &str,
+) -> Review {
     let mut r = Review::default();
     for old in base {
         let Some(new) = head.iter().find(|e| e.id == old.id) else {
@@ -380,14 +732,23 @@ pub fn review(base: &[Entry], head: &[Entry], author: &str) -> Review {
         }
         if (&old.kind, &new.kind) == (&Kind::Mod, &Kind::NativeMod) {
             r.notes.push(format!(
-                "{}: turns native; its .hmod versions stay published, and launchers keep the installed copies",
+                "{}: turns native; its content-only .hmod versions stay published, and launchers keep the installed copies",
                 old.id
             ));
         } else if new.kind != old.kind {
             r.errors.push(format!("{}: its kind can't change", old.id));
         }
         for v in &old.versions {
+            let taken_down = || {
+                revoked
+                    .iter()
+                    .any(|t| t.id == old.id && t.sha256.as_deref() == Some(v.sha256.as_str()))
+            };
             match new.versions.iter().find(|w| w.version == v.version) {
+                None if taken_down() => r.notes.push(format!(
+                    "{} {}: leaves the entry, taken down in {REVOKED}",
+                    old.id, v.version
+                )),
                 None => r.errors.push(format!(
                     "{} {}: removed; take it down in {REVOKED} instead",
                     old.id, v.version
@@ -399,12 +760,36 @@ pub fn review(base: &[Entry], head: &[Entry], author: &str) -> Review {
                 Some(_) => {}
             }
         }
+        if new.repo != old.repo {
+            r.notes.push(format!(
+                "{}: its repository {} -> {}: new releases will come from the second; versions already read stay",
+                old.id,
+                old.repo.as_deref().unwrap_or("(none)"),
+                new.repo.as_deref().unwrap_or("(none)")
+            ));
+        }
         if new.owners != old.owners {
             r.notes.push(format!(
                 "{}: owners {} -> {}",
                 old.id,
                 old.owners.join(", "),
                 new.owners.join(", ")
+            ));
+        }
+        if new.owner_ids != old.owner_ids {
+            let ids = |ids: &[u64]| match ids {
+                [] => "(none)".to_owned(),
+                ids => ids
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
+            r.notes.push(format!(
+                "{}: owner IDs {} -> {}: check each is the account its login names",
+                old.id,
+                ids(&old.owner_ids),
+                ids(&new.owner_ids)
             ));
         }
         if new.key != old.key {
@@ -419,12 +804,23 @@ pub fn review(base: &[Entry], head: &[Entry], author: &str) -> Review {
         }
     }
     for new in head {
+        // Every version is a submission, checked and reviewed: the registry no longer follows a
+        // repository's releases (entries from before keep theirs until they are pinned).
+        if new.repo.is_some() && base.iter().all(|e| e.id != new.id || e.repo.is_none()) {
+            r.errors.push(format!(
+                "{}: the registry doesn't follow repositories any more: list each version's file (the form, or [[versions]])",
+                new.id
+            ));
+        }
         if !base.iter().any(|e| e.id == new.id) {
             r.notes.push(format!(
-                "{}: a new {} by {}",
+                "{}: a new {} by {}{}",
                 new.id,
                 new.kind.name(),
-                new.owners.join(", ")
+                new.owners.join(", "),
+                new.repo.as_deref().map_or(String::new(), |repo| format!(
+                    "; its releases come from https://github.com/{repo} with no further review: check the repository is the author\'s and read its source"
+                ))
             ));
         }
     }

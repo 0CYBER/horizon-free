@@ -1,6 +1,11 @@
+import json
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
 
 from tools import port_publish as publish
 
@@ -92,6 +97,26 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(urls["[26.4] Port to Minecraft 26.4"], "https://github.com/o/r/issues/104")
         self.assertIn("- [ ] #101 [26.4] Protocol", bodies["[26.4] Port to Minecraft 26.4"])
         self.assertFalse([c for c in calls if c[:2] == ("label", "create")])
+
+    def test_gh_and_kira_read_utf8_whatever_the_code_page(self):
+        # gh and node print UTF-8; without an encoding, Windows decodes it with the code page (cp1252 here).
+        def run(command, **kwargs):
+            out = json.dumps({"body": "a → b"}, ensure_ascii=False).encode("utf-8")
+            return mock.Mock(stdout=out.decode(kwargs.get("encoding") or "cp1252"))
+
+        with mock.patch.object(publish.subprocess, "run", side_effect=run):
+            self.assertEqual(json.loads(publish.gh("issue", "view"))["body"], "a → b")
+            self.assertEqual(publish.kira("board_list", {})["body"], "a → b")
+
+
+class UsedThroughVersionPortTests(unittest.TestCase):
+    """The module is used through `tools/version_port.py`; run on its own it says so."""
+
+    def test_it_says_how_it_is_used(self):
+        result = subprocess.run([sys.executable, str(ROOT / "tools/port_publish.py"), "--help"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("version_port.py", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

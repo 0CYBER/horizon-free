@@ -2,13 +2,11 @@
 //! `ServerGamePacketListenerImpl.handlePickItemFromEntity`): the client aims,
 //! the server answers with `Entity.getPickResult`.
 use super::Game;
-use horizon_client::items::ItemStack;
+use horizon_client::{items::ItemStack, save::uuid_text};
 
 impl Game<'_> {
-    /// The entity the crosshair hits before any block, as `Entity.getId`; an
-    /// entity with nothing to pick (a projectile, a player, the dragon) is
-    /// `Some(None)`. `None` when the view hits a block or nothing.
-    pub(super) fn pick_entity_hit(&self) -> Option<Option<i32>> {
+    /// `pick_entity_hit` with the distance along the view to the hit.
+    pub(super) fn pick_entity_hit_at(&self) -> Option<(f64, Option<i32>)> {
         let mut best: Option<(f64, Option<i32>)> = None;
         let mut offer = |distance: f64, id: Option<i32>| {
             if self.before_block(distance) && best.is_none_or(|b| distance < b.0) {
@@ -16,13 +14,12 @@ impl Game<'_> {
             }
         };
         if let Some(hit) = self.remote_object_hit(true) {
-            offer(hit.distance, Some(hit.id));
+            // Interaction.getPickResult is Entity's: nothing to pick.
+            let id = (!self.interactions.contains_key(&hit.id)).then_some(hit.id);
+            offer(hit.distance, id);
         }
-        if let Some((i, d)) = self.mob_hit() {
+        if let Some((i, d, _)) = self.mob_hit() {
             offer(d, Some(self.mobs[i].id as i32));
-        }
-        if let Some((_, d)) = self.guest_hit() {
-            offer(d, None);
         }
         if let Some((_, d)) = self.redirectable_hit() {
             offer(d, None);
@@ -30,7 +27,42 @@ impl Game<'_> {
         if let Some((_, d)) = self.dragon_hit() {
             offer(d, None);
         }
-        best.map(|b| b.1)
+        best
+    }
+
+    /// The entity the crosshair hits before any block, as `Entity.getId`; an
+    /// entity with nothing to pick (a projectile, a player, the dragon) is
+    /// `Some(None)`. `None` when the view hits a block or nothing.
+    pub(super) fn pick_entity_hit(&self) -> Option<Option<i32>> {
+        self.pick_entity_hit_at().map(|b| b.1)
+    }
+
+    /// `ClientSuggestionProvider.getSelectedEntities`: the UUID
+    /// (`Entity.getStringUUID`) of the entity the crosshair hits before any
+    /// block (`Minecraft.hitResult` an `EntityHitResult`).
+    pub(super) fn crosshair_entity_uuid(&self) -> Option<String> {
+        // The nearest entity wins, as in `pick_entity_hit`; one whose UUID
+        // the client doesn't know (the dragon's parts) suggests nothing.
+        let mut best: Option<(f64, Option<[i32; 4]>)> = None;
+        let mut offer = |distance: f64, uuid: Option<[i32; 4]>| {
+            if self.before_block(distance) && best.is_none_or(|b| distance < b.0) {
+                best = Some((distance, uuid));
+            }
+        };
+        let uuid_of = |id: u32| self.persist.uuids.get(&id).copied();
+        if let Some(hit) = self.remote_object_hit(true) {
+            offer(hit.distance, uuid_of(hit.id as u32));
+        }
+        if let Some((i, d, _)) = self.mob_hit() {
+            offer(d, uuid_of(self.mobs[i].id));
+        }
+        if let Some((i, d)) = self.redirectable_hit() {
+            offer(d, uuid_of(self.creatures.projectiles[i].id));
+        }
+        if let Some((_, d)) = self.dragon_hit() {
+            offer(d, None);
+        }
+        best.and_then(|b| b.1).map(uuid_text)
     }
 
     /// `Entity.getPickResult` of the entity `id`: a mob's spawn egg, the item
@@ -41,11 +73,11 @@ impl Game<'_> {
         let item = if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
             // Mob.getPickResult: SpawnEggItem.byId.
             let egg = format!("{}_spawn_egg", m.kind.id);
-            return self.res.items().get(&egg).map(|_| ItemStack::new(&egg, 1));
+            return self.items().get(&egg).map(|_| ItemStack::new(&egg, 1));
         } else if let Some(b) = self.boats.iter().find(|b| b.id == id) {
             b.entity_type()
         } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {
-            c.kind.id().to_owned()
+            c.kind.item().to_owned()
         } else if self.armor_stands.iter().any(|a| a.id == id) {
             "minecraft:armor_stand".to_owned()
         } else if let Some(c) = self.cushions.iter().find(|c| c.id == id) {
@@ -92,7 +124,7 @@ impl Game<'_> {
         let d2: f64 = (0..3)
             .map(|a| (eye[a] - eye[a].clamp(b.0[a], b.1[a])).powi(2))
             .sum();
-        let range = if self.creative { 5.0 } else { 3.0 } + 3.0;
+        let range = self.entity_reach + 3.0;
         d2 < range * range
     }
 }

@@ -71,7 +71,7 @@ def main():
                lab.ROOT/'tools/lab.py', lab.ROOT/'tools/prepare_native_client.py', oracle, *helpers,
                lab.ROOT/'Cargo.toml', lab.ROOT/'Cargo.lock',
                lab.ROOT/'crates/horizon-client/examples/probe/scene_collision_probe.rs']
-    for crate in ['horizon-core', 'horizon-world', 'horizon-assets', 'horizon-client']:
+    for crate in ['horizon-core', 'horizon-world', 'horizon-assets', 'horizon-client', 'horizon-client-render']:
         sources += [lab.ROOT/'crates'/crate/'Cargo.toml', *sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
     tested = base.source_hashes(sources)
     def run(command, name):
@@ -82,7 +82,7 @@ def main():
     dependencies = os.pathsep.join(map(str, libraries))
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp',
          str(jars['server'])+os.pathsep+dependencies, '-d', classes, oracle, *helpers], 'compile-java')
-    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '-p', 'horizon-client-lib', '--example', 'client_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
     executable = Path(metadata['target_directory'])/'debug/examples'/('client_probe.exe' if os.name=='nt' else 'client_probe')
     cases = []

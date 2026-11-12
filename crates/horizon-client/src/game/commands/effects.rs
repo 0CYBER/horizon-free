@@ -21,7 +21,7 @@ impl Tracker {
     }
 }
 fn effect_name(id: &str) -> Text {
-    Text::translate(&format!("effect.minecraft.{id}"), &[])
+    Text::translate(&brewing::description_id(id), &[])
 }
 impl Game<'_> {
     fn effect_arg(ctx: &Context) -> R<&'static brewing::EffectDef> {
@@ -65,20 +65,29 @@ impl Game<'_> {
         for t in self.living_targets(ctx)? {
             let changed = match t {
                 Target::Player | Target::Guest(_) => {
-                    let mut instance = EffectInstance::new(effect.id, duration, amplifier);
-                    instance.visible = particles;
+                    // `new MobEffectInstance(effect, duration, amplifier, false, particles)`.
+                    let instance = EffectInstance::new(effect.id, duration, amplifier)
+                        .with_flags(false, particles);
                     self.for_player(t, |g| g.add_player_effect(instance))
                         .unwrap_or(false)
                 }
                 Target::Mob(id) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         let name = namespaced(effect.id);
-                        m.add_effect(name, duration, amplifier);
-                        m.extra.hidden_effects.retain(|h| *h != name);
-                        if !particles {
-                            m.extra.hidden_effects.push(name);
+                        let new = !m.has_effect(name);
+                        // `new MobEffectInstance(effect, duration, amplifier, false, particles)`.
+                        let changed =
+                            m.add_effect_with(name, duration, amplifier, false, particles);
+                        // MobEffect.onEffectAdded: an omen's sound, at the mob's feet.
+                        if new
+                            && changed
+                            && let Some(sound) = super::super::potions::sound_on_added(name)
+                        {
+                            let at = [m.position.x, m.position.y, m.position.z];
+                            self.audio.play(sound, Some(at), 1.0, 1.0);
                         }
-                        true
+                        self.mod_effect_added(name, Some(id as i32), amplifier, new);
+                        changed
                     }
                     None => false,
                 },
@@ -137,12 +146,42 @@ impl Game<'_> {
                 (Target::Mob(id), e) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         let before = m.extra.effects.len();
+                        let absorbing = |m: &horizon_client::mobs::Mob| {
+                            m.extra
+                                .effects
+                                .iter()
+                                .any(|x| x.0 == "minecraft:absorption")
+                        };
+                        let had_absorption = absorbing(m);
+                        let boosted = |m: &horizon_client::mobs::Mob| {
+                            m.extra
+                                .effects
+                                .iter()
+                                .any(|x| x.0 == "minecraft:health_boost")
+                        };
+                        let had_boost = boosted(m);
                         m.extra
                             .effects
                             .retain(|x| e.is_some_and(|e| x.0 != namespaced(e.id)));
+                        // LivingEntity.onEffectsRemoved -> onAttributeUpdated(MAX_ABSORPTION).
+                        if had_absorption && !absorbing(m) {
+                            m.absorption = m
+                                .absorption
+                                .min(horizon_client::mobs::armor::max_absorption(m));
+                        }
+                        // LivingEntity.onEffectsRemoved -> refreshDirtyAttributes.
+                        if had_boost && !boosted(m) {
+                            horizon_client::mobs::finalize::health_boost_changed(m);
+                        }
                         let left = &m.extra.effects;
                         m.extra
+                            .effect_fallbacks
+                            .retain(|h| left.iter().any(|x| x.0 == h.id));
+                        m.extra
                             .hidden_effects
+                            .retain(|h| left.iter().any(|x| x.0 == *h));
+                        m.extra
+                            .ambient_effects
                             .retain(|h| left.iter().any(|x| x.0 == *h));
                         m.extra.effects.len() != before
                     }
@@ -182,7 +221,7 @@ impl Game<'_> {
             return Ok(0);
         };
         let level = Self::int(ctx, "level").unwrap_or(1);
-        let enchantments = &self.res.stations().enchantments;
+        let enchantments = &self.stations().enchantments;
         let Some(def) = enchantments.get(&id) else {
             return Err(err(
                 "argument.resource.not_found",
@@ -208,8 +247,8 @@ impl Game<'_> {
                         }
                         continue;
                     };
-                    let e = &self.res.stations().enchantments;
-                    let compatible = e.can_enchant(self.res.items(), &id, &stack.item)
+                    let e = &self.stations().enchantments;
+                    let compatible = e.can_enchant(self.items(), &id, &stack.item)
                         && stack
                             .crafting_enchantments()
                             .iter()
@@ -223,10 +262,9 @@ impl Game<'_> {
                         // getHoverName().getString(): the custom or item name, no brackets.
                         return Err(err(
                             "commands.enchant.failed.incompatible",
-                            &[&stack.custom_name().map_or_else(
-                                || self.pack.names.item(&stack.item).to_string(),
-                                str::to_owned,
-                            )],
+                            &[&stack
+                                .custom_name()
+                                .unwrap_or_else(|| self.pack.names.item(&stack.item).to_string())],
                         ));
                     }
                 }

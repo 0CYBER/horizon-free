@@ -1,7 +1,10 @@
 //! The `MobEffects` and `Potions` registries (code in vanilla, ported as
 //! tables): each effect's colour and category, each potion's effects, and the
 //! potion colour mix. horizon-client re-exports them from `brewing`.
-use std::{collections::HashMap, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    sync::{OnceLock, RwLock},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
@@ -9,13 +12,30 @@ pub enum Category {
     Harmful,
     Neutral,
 }
-/// A `MobEffect`: id (without namespace), colour, category, instantaneous.
+/// A `MobEffect`: id (vanilla's without namespace, a mod's `<ns>:<path>`),
+/// colour, category, instantaneous.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectDef {
     pub id: &'static str,
     pub color: u32,
     pub category: Category,
     pub instant: bool,
+}
+/// The colours resource packs give effects (Polytone's `effect.<id>`), by the table's id.
+static PACK_COLORS: RwLock<Option<HashMap<String, u32>>> = RwLock::new(None);
+/// Takes the packs' effect colours (none: vanilla's).
+pub fn set_pack_colors(colors: Vec<(String, u32)>) {
+    let colors = (!colors.is_empty()).then(|| colors.into_iter().collect());
+    *PACK_COLORS.write().unwrap_or_else(|e| e.into_inner()) = colors;
+}
+impl EffectDef {
+    /// `MobEffect.getColor` as the packs show it: potions, tipped arrows and effect particles.
+    pub fn shown_color(&self) -> u32 {
+        let pack = PACK_COLORS.read().unwrap_or_else(|e| e.into_inner());
+        pack.as_ref()
+            .and_then(|colors| colors.get(self.id))
+            .map_or(self.color, |c| c & 0xFF_FFFF)
+    }
 }
 const fn fx(id: &'static str, color: u32, category: Category) -> EffectDef {
     EffectDef {
@@ -84,13 +104,83 @@ pub const EFFECTS: &[EffectDef] = &[
     fx("infested", 9214860, H),
     fx("breath_of_the_nautilus", 65518, B),
 ];
-pub fn effect(id: &str) -> Option<&'static EffectDef> {
-    let id = id.trim_start_matches("minecraft:");
-    EFFECTS.iter().find(|e| e.id == id)
+/// The effects content mods declare, registered after vanilla's.
+static MOD_EFFECTS: OnceLock<Vec<EffectDef>> = OnceLock::new();
+/// Registers the content mods' effects, `<ns>:<path>` ids in registry order.
+/// The list is set once per process: false when it already was, and the
+/// effects stay those of the first call until the game restarts.
+pub fn register_mod_effects(effects: impl IntoIterator<Item = (String, u32, Category)>) -> bool {
+    if MOD_EFFECTS.get().is_some() {
+        return false;
+    }
+    let defs: Vec<EffectDef> = effects
+        .into_iter()
+        .map(|(id, color, category)| {
+            debug_assert!(id.contains(':'), "{id} has no namespace");
+            fx(Box::leak(id.into_boxed_str()), color, category)
+        })
+        .collect();
+    MOD_EFFECTS.set(defs).is_ok()
 }
-/// Namespaced effect ids for mob effect storage.
+/// The content mods' effects, in registry order.
+pub fn mod_effects() -> &'static [EffectDef] {
+    MOD_EFFECTS.get().map_or(&[], Vec::as_slice)
+}
+/// Every registered effect: vanilla's, then the content mods'.
+pub fn all_effects() -> impl Iterator<Item = &'static EffectDef> {
+    EFFECTS.iter().chain(mod_effects())
+}
+pub fn effect(id: &str) -> Option<&'static EffectDef> {
+    let short = id.trim_start_matches("minecraft:");
+    match EFFECTS.iter().find(|e| e.id == short) {
+        Some(e) => Some(e),
+        None => mod_effect(id),
+    }
+}
+/// A content mod's effect id (`<ns>:<path>`), not vanilla's with or
+/// without `minecraft:`.
+#[inline]
+pub fn is_mod_effect(id: &str) -> bool {
+    !id.starts_with("minecraft:") && id.bytes().any(|b| b == b':')
+}
+/// Out of line, so vanilla's lookups (every frame, every tick) stay as they were.
+#[cold]
+#[inline(never)]
+fn mod_effect(id: &str) -> Option<&'static EffectDef> {
+    mod_effects().iter().find(|e| e.id == id)
+}
+/// `MobEffect.getDescriptionId` (`Util.makeDescriptionId("effect", key)`):
+/// `effect.<namespace>.<path>`, `/` in the path as `.`.
+pub fn description_id(id: &str) -> String {
+    let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    format!("effect.{namespace}.{}", path.replace('/', "."))
+}
+/// The effect's sprite in the GUI atlas (`Hud.getMobEffectSprite`: the key
+/// with `mob_effect/` before its path): `mob_effect/<path>` for vanilla's,
+/// `<ns>:mob_effect/<path>` for a mod's.
+pub fn sprite(id: &str) -> String {
+    let mut out = String::new();
+    push_sprite(&mut out, id);
+    out
+}
+/// [`sprite`], appended to `out`.
+pub fn push_sprite(out: &mut String, id: &str) {
+    let path = match id.split_once(':') {
+        None => id,
+        Some(("minecraft", path)) => path,
+        Some((namespace, path)) => {
+            out.push_str(namespace);
+            out.push(':');
+            path
+        }
+    };
+    out.push_str("mob_effect/");
+    out.push_str(path);
+}
+/// Namespaced effect ids for mob effect storage; a mod's id already is.
 pub fn namespaced(id: &'static str) -> &'static str {
     static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    let key = id.strip_prefix("minecraft:").unwrap_or(id);
     IDS.get_or_init(|| {
         EFFECTS
             .iter()
@@ -102,7 +192,7 @@ pub fn namespaced(id: &'static str) -> &'static str {
             })
             .collect()
     })
-    .get(id)
+    .get(key)
     .copied()
     .unwrap_or(id)
 }
@@ -229,13 +319,19 @@ pub fn potion_color(id: Option<&str>) -> u32 {
     let Some(def) = id.and_then(potion) else {
         return BASE_POTION_COLOR;
     };
+    effects_color(def.effects.iter().map(|(id, _, amp)| (*id, *amp)))
+}
+/// `PotionContents.getColorOptional` of some effects, `(id, amplifier)`, all visible: the mix of
+/// their colours weighted by amplifier + 1, else the base potion colour.
+pub fn effects_color<'a>(effects: impl Iterator<Item = (&'a str, i32)>) -> u32 {
     let (mut r, mut g, mut b, mut total) = (0u32, 0u32, 0u32, 0u32);
-    for (e, _, amp) in def.effects {
+    for (e, amp) in effects {
         let Some(e) = effect(e) else { continue };
-        let w = *amp as u32 + 1;
-        r += w * (e.color >> 16 & 255);
-        g += w * (e.color >> 8 & 255);
-        b += w * (e.color & 255);
+        let w = amp as u32 + 1;
+        let color = e.shown_color();
+        r += w * (color >> 16 & 255);
+        g += w * (color >> 8 & 255);
+        b += w * (color & 255);
         total += w;
     }
     match (
@@ -245,5 +341,62 @@ pub fn potion_color(id: Option<&str>) -> u32 {
     ) {
         (Some(r), Some(g), Some(b)) => (r << 16) | (g << 8) | b,
         _ => BASE_POTION_COLOR,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn description_ids_and_sprites_keep_the_namespace() {
+        assert_eq!(description_id("speed"), "effect.minecraft.speed");
+        assert_eq!(description_id("minecraft:speed"), "effect.minecraft.speed");
+        assert_eq!(description_id("ruby:curse/dark"), "effect.ruby.curse.dark");
+        assert_eq!(sprite("speed"), "mob_effect/speed");
+        assert_eq!(sprite("minecraft:speed"), "mob_effect/speed");
+        assert_eq!(sprite("ruby:curse/dark"), "ruby:mob_effect/curse/dark");
+    }
+
+    /// `PotionContents.getColorOptional`: each visible effect's colour weighted by its
+    /// amplifier + 1, the channels averaged by integer division; none gives the base colour.
+    #[test]
+    fn effects_mix_their_colours_by_amplifier() {
+        let c = |id: &str| effect(id).unwrap().color;
+        assert_eq!(effects_color([("poison", 0)].into_iter()), c("poison"));
+        let (p, s) = (c("poison"), c("speed"));
+        let mix = |shift: u32| (((p >> shift & 255) + 3 * (s >> shift & 255)) / 4) << shift;
+        assert_eq!(
+            effects_color([("poison", 0), ("speed", 2)].into_iter()),
+            mix(16) | mix(8) | mix(0)
+        );
+        assert_eq!(effects_color(std::iter::empty()), BASE_POTION_COLOR);
+    }
+
+    /// The only test that registers: the registry is set once per process.
+    #[test]
+    fn mod_effects_follow_vanilla_once_registered() {
+        assert!(register_mod_effects([(
+            "ruby:glow".to_owned(),
+            0xFF0000,
+            Category::Neutral
+        )]));
+        assert!(!register_mod_effects([(
+            "ruby:late".to_owned(),
+            1,
+            Category::Harmful
+        )]));
+        let glow = effect("ruby:glow").unwrap();
+        assert_eq!(
+            (glow.color, glow.category, glow.instant),
+            (0xFF0000, Category::Neutral, false)
+        );
+        assert!(effect("glow").is_none() && effect("ruby:late").is_none());
+        assert!(is_mod_effect(glow.id) && !is_mod_effect("speed"));
+        assert!(!is_mod_effect(namespaced("speed")));
+        assert_eq!(namespaced(glow.id), "ruby:glow");
+        assert_eq!(effect("minecraft:speed").unwrap().id, "speed");
+        let ids: Vec<_> = all_effects().map(|e| e.id).collect();
+        assert_eq!(ids.len(), EFFECTS.len() + 1);
+        assert_eq!(ids.last(), Some(&"ruby:glow"));
     }
 }

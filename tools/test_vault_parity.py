@@ -174,8 +174,8 @@ def main():
     resources = lab.LOCAL / 'horizon-client/26.3'
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaNaturalSpawnOracle.java'
     sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/probe/natural_spawn_fixture.rs',
-               lab.ROOT / 'crates/horizon-client/src/vault.rs',
-               lab.ROOT / 'crates/horizon-client/src/chunk/block_entity.rs',
+               lab.ROOT / 'crates/horizon-client-render/src/vault.rs',
+               lab.ROOT / 'crates/horizon-client-render/src/chunk/block_entity.rs',
                lab.ROOT / 'crates/horizon-client-core/src/identifier.rs',
                lab.ROOT / 'crates/horizon-client-core/src/nbt_value.rs']
     tested = base.source_hashes(sources)
@@ -193,7 +193,7 @@ def main():
          '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx3G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]),
          'dev.horizonlab.parity.VanillaNaturalSpawnOracle', inputs, build / 'server.txt'], 'server')
-    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client-lib', '--example', 'client_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
     binary = Path(metadata['target_directory']) / 'fast/examples/client_probe'
     run([binary, 'natural_spawn_fixture', resources, inputs, build / 'rust.txt'], 'rust')

@@ -6,11 +6,10 @@ HORIZON_DISCORD_IPC_DIR) that answers the handshake with READY and records every
 The game goes title -> world -> Nether -> quit through horizon-ctl, and the activities must say
 "In the menus", "Singleplayer" in the Overworld, then the Nether, and be cleared on quit:
 
-    single     single player on its server thread (the default)
-    in-frame   single player ticked in the window's frame (--in-frame)
+    single     single player on its server thread
     lan        a host opens its world to LAN and a guest joins: the guest shows "Multiplayer",
-               the host "Hosting a world" with a party of 2 of 8 (lan-in-frame: the host in-frame)
-    setting    off in horizon-extras.txt: nothing reaches Discord; the Horizon Settings switch
+               the host "Hosting a world" with a party of 2 of 8
+    setting    off in horizon-extras.txt: nothing reaches Discord; the Extras switch
                turns it on (the activity appears) and off (it is cleared)
     late       Discord starts after the game: found within the 15 s retry
 
@@ -137,7 +136,7 @@ class Game:
             self.discord.start()
         extra = {'HORIZON_HOME': self.home, 'HORIZON_TELEMETRY_URL': 'off', 'HORIZON_DISCORD_IPC_DIR': self.discord.dir}
         self.env = lab.game_env(**extra)
-        self.ctl_run('launch', '--offscreen', '--game', str(bins / 'horizon-client'), '--resources',
+        self.ctl_run('launch', '--offscreen', '--game', str(bins / 'horizon-official'), '--resources',
                      str(lab.RESOURCES.resolve()), *args)
 
     def ctl_run(self, *words, timeout=600):
@@ -160,8 +159,8 @@ class Game:
         shutil.rmtree(self.home, ignore_errors=True)
 
 
-def single(bins, args=()):
-    game = Game(bins, 'single', args=args)
+def single(bins):
+    game = Game(bins, 'single')
     d = game.discord
     try:
         d.wait('title screen', shows('In the menus'))
@@ -182,8 +181,8 @@ def single(bins, args=()):
         game.close()
 
 
-def lan(bins, host_args=()):
-    host = Game(bins, 'host', args=host_args)
+def lan(bins):
+    host = Game(bins, 'host')
     guest = None
     try:
         host.ctl_run('open', 'Hosted', '5', 'creative')
@@ -208,8 +207,21 @@ def lan(bins, host_args=()):
                 g.close()
 
 
+def extras_row(game, label):
+    """The Extras page's row whose label starts with `label`, scrolling the list down to it: only
+    the rows on screen are widgets."""
+    first = game.ctl_run('ui')['widgets'][0]['bounds']
+    for _ in range(20):
+        found = [w for w in game.ctl_run('ui')['widgets'] if (w.get('label') or '').startswith(label)]
+        if found:
+            return found[0]
+        game.ctl_run('scroll-at', str(first[0] + 5), str(first[1] + 5), '-5')
+        time.sleep(0.3)
+    raise AssertionError(f'no {label!r} row on the Extras page')
+
+
 def setting(bins):
-    """Off in horizon-extras.txt: Discord never hears from the game. Turned on in Horizon Settings: the
+    """Off in horizon-extras.txt: Discord never hears from the game. Turned on in Extras: the
     activity appears; off again: it is cleared."""
     game = Game(bins, 'setting', extras='discordPresence:false\n')
     d = game.discord
@@ -217,8 +229,8 @@ def setting(bins):
         game.ctl_run('wait-for', 'screen', 'title')
         time.sleep(3)
         assert not d.handshakes and not d.activities, (d.handshakes, d.activities)
-        game.ctl_run('options', 'horizon')
-        switch = next(w for w in game.ctl_run('ui')['widgets'] if w.get('label', '').startswith('Discord Rich'))
+        game.ctl_run('options', 'extras')
+        switch = extras_row(game, 'Discord Rich')
         assert switch['label'] == 'Discord Rich Presence: Off', switch
         game.ctl_run('click', switch['id'])
         d.wait('turned on', shows('In the menus'))
@@ -246,22 +258,20 @@ def late(bins):
         game.close()
 
 
-CHECKS = {'single': single, 'in-frame': lambda b: single(b, ['--in-frame']), 'lan': lan,
-          'lan-in-frame': lambda b: lan(b, ['--in-frame']), 'setting': setting,
-          'late': late}
+CHECKS = {'single': single, 'lan': lan, 'setting': setting, 'late': late}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--check', choices=[*CHECKS, 'all'], default='all')
-    parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
+    parser.add_argument('--bin-dir', help='prebuilt horizon-official and horizon-ctl (default: build with the fast profile)')
     args = parser.parse_args()
     if sys.platform == 'win32':
         sys.exit('the fake Discord is a Unix socket: macOS or Linux only')
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '--bins'],
+        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-official', '-p', 'horizon-client-lib', '--bins'],
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)

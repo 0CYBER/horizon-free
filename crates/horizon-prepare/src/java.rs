@@ -3,6 +3,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -14,9 +15,26 @@ pub struct Jdk {
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Exporters and JDK probes write to pipes or log files: on Windows they open no terminal.
+/// Options for every JVM preparing starts (the exporters, the data generator, javac with `-J`).
+/// They are short batch jobs that run side by side: the C2 compiler's background work costs
+/// more CPU than it wins back, and the serial collector keeps their heaps small. Measured on the
+/// pinned jars, a fresh preparation took 105 s with the defaults and 63-66 s with these, same
+/// output; the serial collector was as fast as the parallel one and its JVMs together took
+/// 1.25 GB instead of 2 GB.
+pub(crate) const BATCH_OPTIONS: [&str; 2] = ["-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC"];
+
+/// The variables a JVM reads extra options from. A collector chosen there, such as a player's
+/// global `-XX:+UseZGC`, stops a JVM started with [`BATCH_OPTIONS`]: "Multiple garbage collectors
+/// selected" (#10067).
+const JVM_OPTION_VARS: [&str; 3] = ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS"];
+
+/// Exporters and JDK probes write to pipes or log files: on Windows they open no terminal. They
+/// run with [`BATCH_OPTIONS`] alone, whatever options the player's environment sets for Java.
 pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
-    let command = Command::new(program);
+    let mut command = Command::new(program);
+    for var in JVM_OPTION_VARS {
+        command.env_remove(var);
+    }
     #[cfg(windows)]
     let command = {
         use std::os::windows::process::CommandExt;
@@ -303,7 +321,14 @@ fn find_tools(major: i64, more: &[PathBuf], compiler: bool) -> Result<Jdk, Strin
                 }
             });
         match checked {
-            Ok(()) => return Ok(Jdk { javac, java }),
+            // Absolute: the exporters run in another working directory, where a relative
+            // `JAVA_HOME`, `--java-home` or `PATH` entry would name nothing.
+            Ok(()) => {
+                return Ok(Jdk {
+                    javac: std::path::absolute(&javac).unwrap_or(javac),
+                    java: std::path::absolute(&java).unwrap_or(java),
+                });
+            }
             Err(e) => problems.push(format!("{from}: {e}")),
         }
     }
@@ -312,6 +337,37 @@ fn find_tools(major: i64, more: &[PathBuf], compiler: bool) -> Result<Jdk, Strin
     } else {
         Err(format!("{need} Found: {}.", problems.join("; ")))
     }
+}
+
+/// Add a repair hint only for a failure the exporter actually reported.
+pub(crate) fn export_failure(error: String, java: &Path, log: &Path) -> String {
+    // An incomplete JDK can still pass `java -version`. Diagnose its actual failure,
+    // rather than requiring one vendor's runtime layout from every Java installation.
+    let mut bytes = Vec::new();
+    let read = fs::File::open(log).and_then(|file| file.take(64 * 1024).read_to_end(&mut bytes));
+    if read.is_ok()
+        && String::from_utf8_lossy(&bytes).lines().any(|line| {
+            let missing = [
+                "java.io.FileNotFoundException: ",
+                "java.nio.file.NoSuchFileException: ",
+            ]
+            .into_iter()
+            .find_map(|exception| line.split_once(exception).map(|(_, path)| path));
+            missing.is_some_and(|path| {
+                ["/lib/tzdb.dat", r"\lib\tzdb.dat"]
+                    .into_iter()
+                    .filter_map(|name| path.split_once(name).map(|(_, rest)| rest))
+                    .any(|rest| rest.is_empty() || rest.starts_with(" ("))
+            })
+        })
+    {
+        return format!(
+            "{error}\nJava at {} cannot load its timezone data (lib/tzdb.dat). \
+             Repair that Java installation or select another compatible Java runtime.",
+            java.display()
+        );
+    }
+    error
 }
 
 /// A classpath with the platform's separator.
@@ -339,6 +395,7 @@ impl Jdk {
     pub fn javac(&self, major: i64, args: &[String], log: &fs::File) -> Result<(), String> {
         let mut command = command(&self.javac);
         command
+            .args(BATCH_OPTIONS.map(|option| format!("-J{option}")))
             .args(["--release", &major.to_string(), "-proc:none"])
             .args(args);
         run(command, log)
@@ -346,7 +403,7 @@ impl Jdk {
 
     pub fn java(&self, args: &[String], cwd: Option<&Path>, log: &fs::File) -> Result<(), String> {
         let mut command = command(&self.java);
-        command.args(args);
+        command.args(BATCH_OPTIONS).args(args);
         if let Some(dir) = cwd {
             command.current_dir(dir);
         }
@@ -389,6 +446,66 @@ fn run(mut command: Command, log: &fs::File) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_timezone_data_explains_which_java_to_repair() {
+        let dir = std::env::temp_dir().join(format!("horizon-java-tzdb-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("export.log");
+        let java = Path::new("selected-runtime/bin/java");
+        for failure in [
+            r"Caused by: java.io.FileNotFoundException: C:\Java\jdk-25\lib\tzdb.dat (missing)",
+            "Caused by: java.nio.file.NoSuchFileException: /opt/java/lib/tzdb.dat",
+            "Caused by: java.nio.file.NoSuchFileException: /opt/java (25)/lib/tzdb.dat",
+        ] {
+            fs::write(&log, failure).unwrap();
+            let error = export_failure("java failed (-1)".into(), java, &log);
+            assert!(error.contains("java failed (-1)"), "{error}");
+            assert!(error.contains("selected-runtime"), "{error}");
+            assert!(error.contains("timezone data"), "{error}");
+            assert!(error.contains("Repair"), "{error}");
+        }
+        fs::remove_file(log).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn unrelated_export_failures_keep_their_original_diagnostic() {
+        let dir = std::env::temp_dir().join(format!("horizon-java-other-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("export.log");
+        for text in [
+            "Using tzdb.dat\njava.io.FileNotFoundException: missing-pack.json",
+            "java.lang.IllegalStateException: tzdb.dat was mentioned",
+            "java.io.FileNotFoundException: /opt/java/lib/not-tzdb.dat.backup",
+            "java.io.FileNotFoundException: /pack/tzdb.dat (missing)",
+        ] {
+            fs::write(&log, text).unwrap();
+            assert_eq!(
+                export_failure("java failed (-1)".into(), Path::new("java"), &log),
+                "java failed (-1)"
+            );
+        }
+        fs::remove_file(&log).unwrap();
+        assert_eq!(
+            export_failure("java failed (-1)".into(), Path::new("java"), &log),
+            "java failed (-1)"
+        );
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn jvms_ignore_the_players_global_options() {
+        let command = command("java");
+        for var in JVM_OPTION_VARS {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(name, value)| name == var && value.is_none()),
+                "{var} reaches the JVM"
+            );
+        }
+    }
 
     #[test]
     fn verbatim_drive_paths_lose_their_prefix() {

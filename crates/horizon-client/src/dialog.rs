@@ -37,9 +37,11 @@ pub enum Kind {
         columns: i32,
         button_width: i32,
     },
-    /// `DialogListDialog`: its dialogs as sent (ids, a tag or inline dialogs).
+    /// `DialogListDialog`: its dialogs as sent (ids, a tag or inline dialogs),
+    /// and one button per dialog they resolve to (`set_list`).
     DialogList {
         dialogs: Tag,
+        entries: Vec<Button>,
         exit: Option<Button>,
         columns: i32,
         button_width: i32,
@@ -225,7 +227,10 @@ impl Click {
     pub fn parse(t: &Tag, kind: &str) -> Option<Self> {
         let s = |key| string(t.get(key));
         Some(match path(kind) {
-            "open_url" => Self::OpenUrl(s("url")?),
+            // ClickEvent.OpenUrl's url is an ExtraCodecs.UNTRUSTED_URI.
+            "open_url" => {
+                Self::OpenUrl(s("url").filter(|url| crate::component::untrusted_http_url(url))?)
+            }
             "run_command" => Self::RunCommand(s("command")?),
             "suggest_command" => Self::SuggestCommand(s("command")?),
             "show_dialog" => Self::ShowDialog(t.get("dialog")?.clone()),
@@ -325,29 +330,36 @@ impl Control {
     fn parse(t: &Tag) -> Option<Self> {
         let label = || t.get("label").map(text);
         Some(match path(&string(t.get("type"))?) {
-            "text" => Self::Text {
-                width: int(t, "width", 200),
-                label: label()?,
-                label_visible: boolean(t, "label_visible", true),
-                initial: string(t.get("initial")).unwrap_or_default(),
-                max_length: int(t, "max_length", 32),
-                multiline: t.get("multiline").map(|m| {
-                    let get = |key| number(m.get(key)).map(|v| v as i32);
-                    (get("max_lines"), get("height"))
-                }),
-            },
+            "text" => {
+                let initial = string(t.get("initial")).unwrap_or_default();
+                let max_length = int(t, "max_length", 32);
+                // TextInput: the default text may not be longer than the length.
+                if initial.encode_utf16().count() > max_length.max(0) as usize {
+                    return None;
+                }
+                Self::Text {
+                    width: int(t, "width", 200),
+                    label: label()?,
+                    label_visible: boolean(t, "label_visible", true),
+                    initial,
+                    max_length,
+                    multiline: t.get("multiline").map(|m| {
+                        let get = |key| number(m.get(key)).map(|v| v as i32);
+                        (get("max_lines"), get("height"))
+                    }),
+                }
+            }
             "boolean" => Self::Boolean {
                 label: label()?,
                 initial: boolean(t, "initial", false),
                 on_true: string(t.get("on_true")).unwrap_or_else(|| "true".into()),
                 on_false: string(t.get("on_false")).unwrap_or_else(|| "false".into()),
             },
-            "single_option" => Self::SingleOption {
-                width: int(t, "width", 200),
+            "single_option" => {
                 // SingleOptionInput.Entry.CODEC: a full entry or just its id.
-                options: list(t.get("options"))
+                let options: Vec<_> = list(t.get("options"))
                     .iter()
-                    .filter_map(|o| match o {
+                    .map(|o| match o {
                         Tag::String(id) => Some((id.to_string_lossy(), None, false)),
                         o => Some((
                             string(o.get("id"))?,
@@ -355,10 +367,18 @@ impl Control {
                             boolean(o, "initial", false),
                         )),
                     })
-                    .collect(),
-                label: label()?,
-                label_visible: boolean(t, "label_visible", true),
-            },
+                    .collect::<Option<_>>()?;
+                // A non-empty list with at most one initial entry.
+                if options.is_empty() || options.iter().filter(|o| o.2).count() > 1 {
+                    return None;
+                }
+                Self::SingleOption {
+                    width: int(t, "width", 200),
+                    options,
+                    label: label()?,
+                    label_visible: boolean(t, "label_visible", true),
+                }
+            }
             "number_range" => {
                 let float = |key| number(t.get(key)).map(|v| v as f32);
                 Self::NumberRange {
@@ -393,6 +413,44 @@ impl Control {
                 *start,
                 *end,
             )),
+        }
+    }
+    /// The text on a cycle button or slider holding `value`
+    /// (`CycleButton.createFullName`, `NumberRangeInput.computeLabel`).
+    pub fn message(&self, value: &InputValue) -> Option<Text> {
+        match (self, value) {
+            (
+                Self::SingleOption {
+                    options,
+                    label,
+                    label_visible,
+                    ..
+                },
+                InputValue::Option(i),
+            ) => {
+                let (id, display, _) = options.get(*i)?;
+                let shown = display.clone().unwrap_or_else(|| Text::literal(id));
+                Some(if *label_visible {
+                    Text::translate("options.generic_value", &[label.clone(), shown])
+                } else {
+                    shown
+                })
+            }
+            (
+                Self::NumberRange {
+                    label,
+                    label_format,
+                    ..
+                },
+                InputValue::Slider(_),
+            ) => {
+                let shown = number_string(self.scaled(value)?);
+                Some(Text::translate(
+                    label_format,
+                    &[label.clone(), Text::literal(shown)],
+                ))
+            }
+            _ => None,
         }
     }
     /// `ValueGetter.asTemplateSubstitution`.
@@ -536,6 +594,7 @@ impl Dialog {
             },
             "dialog_list" => Kind::DialogList {
                 dialogs: t.get("dialogs")?.clone(),
+                entries: Vec::new(),
                 exit: button("exit_action"),
                 columns: int(t, "columns", 2),
                 button_width: int(t, "button_width", 150),
@@ -543,20 +602,21 @@ impl Dialog {
             _ => return None,
         };
         // DialogBody.COMPACT_LIST_CODEC: one body, or a list of them.
+        // A body or input it cannot read fails the whole dialog.
         let body = match t.get("body") {
-            Some(Tag::List(items)) => items.iter().filter_map(Body::parse).collect(),
-            Some(one) => Body::parse(one).into_iter().collect(),
+            Some(Tag::List(items)) => items.iter().map(Body::parse).collect::<Option<_>>()?,
+            Some(one) => vec![Body::parse(one)?],
             None => Vec::new(),
         };
         let inputs = list(t.get("inputs"))
             .iter()
-            .filter_map(|i| {
+            .map(|i| {
                 Some(Input {
                     key: string(i.get("key"))?,
                     control: Control::parse(i)?,
                 })
             })
-            .collect();
+            .collect::<Option<_>>()?;
         Some(Self {
             kind,
             title: text(t.get("title")?),
@@ -582,13 +642,70 @@ impl Dialog {
             | Kind::DialogList { exit, .. } => exit.as_ref().and_then(|b| b.action.as_ref()),
         }
     }
+    /// Which of [`Self::buttons`] does what Escape does, if Escape does anything.
+    pub fn escape_button(&self) -> Option<usize> {
+        if !self.can_close_with_escape {
+            return None;
+        }
+        let last = self.buttons().len().checked_sub(1);
+        match &self.kind {
+            Kind::Notice(_) | Kind::Confirmation { .. } => last,
+            Kind::MultiAction { exit, .. }
+            | Kind::ServerLinks { exit, .. }
+            | Kind::DialogList { exit, .. } => exit.as_ref().and(last),
+        }
+    }
     /// The buttons it draws, in order: the list, then the footer's.
     pub fn buttons(&self) -> Vec<&Button> {
         match &self.kind {
             Kind::Notice(b) => vec![b],
             Kind::Confirmation { yes, no } => vec![yes, no],
             Kind::MultiAction { actions, exit, .. } => actions.iter().chain(exit).collect(),
-            Kind::ServerLinks { exit, .. } | Kind::DialogList { exit, .. } => exit.iter().collect(),
+            Kind::ServerLinks { exit, .. } => exit.iter().collect(),
+            Kind::DialogList { entries, exit, .. } => entries.iter().chain(exit).collect(),
+        }
+    }
+    /// `DialogListDialogScreen.createListActions`: a button for each of `dialogs`
+    /// (what the list names), labelled by its external title, opening it.
+    pub fn set_list(&mut self, dialogs: &[Tag]) {
+        let Kind::DialogList {
+            entries,
+            button_width,
+            ..
+        } = &mut self.kind
+        else {
+            return;
+        };
+        *entries = dialogs
+            .iter()
+            .filter_map(|tag| {
+                let sub = Dialog::parse(tag)?;
+                Some(Button {
+                    label: sub.external_title.unwrap_or(sub.title),
+                    tooltip: None,
+                    width: *button_width,
+                    action: Some(Action::Static(Click::ShowDialog(tag.clone()))),
+                })
+            })
+            .collect();
+    }
+    /// The dialogs a `dialog_list`'s `dialogs` names: the entries of a `#tag`
+    /// (by `tag`), registry ids (by `registry`) and dialogs written inline.
+    pub fn list_entries(
+        dialogs: &Tag,
+        tag: &dyn Fn(&str) -> Vec<Tag>,
+        registry: &dyn Fn(&str) -> Option<Tag>,
+    ) -> Vec<Tag> {
+        let one = |t: &Tag| match t {
+            Tag::String(id) => registry(&id.to_string_lossy()),
+            inline => Some(inline.clone()),
+        };
+        match dialogs {
+            Tag::String(id) if id.to_string_lossy().starts_with('#') => {
+                tag(&id.to_string_lossy()[1..])
+            }
+            Tag::List(items) => items.iter().filter_map(one).collect(),
+            single => one(single).into_iter().collect(),
         }
     }
     /// What `status` reports of it.
@@ -729,6 +846,28 @@ mod tests {
     }
 
     #[test]
+    fn open_url_actions_take_only_web_links() {
+        let open = |url: &str| {
+            let action = Tag::compound([("type", s("minecraft:open_url")), ("url", s(url))]);
+            Action::parse(&action).and_then(|a| a.click(&[], &[]))
+        };
+        assert_eq!(
+            open("https://example.com/a"),
+            Some(Click::OpenUrl("https://example.com/a".into()))
+        );
+        assert!(open("HTTP://example.com").is_some());
+        for url in [
+            "file:///C:/Windows/System32/cmd.exe",
+            "\\\\attacker\\share\\x.exe",
+            "search-ms:query=x&crumb=location:\\\\attacker\\share",
+            "javascript:alert(1)",
+            "/usr/bin/xterm",
+        ] {
+            assert_eq!(open(url), None, "{url}");
+        }
+    }
+
+    #[test]
     fn actions_carry_the_input_values() {
         let d = Dialog::parse(&register()).unwrap();
         let values = [InputValue::Text("p\"w".into())];
@@ -754,6 +893,22 @@ mod tests {
             .unwrap()
             .click(&d.inputs, &values);
         assert_eq!(command, Some(Click::RunCommand("say p\\\"w !".into())));
+    }
+
+    #[test]
+    fn the_button_that_does_what_escape_does() {
+        let notice = |escape: i8| {
+            Dialog::parse(&Tag::compound([
+                ("type", s("notice")),
+                ("title", s("Hi")),
+                ("can_close_with_escape", Tag::Byte(escape)),
+            ]))
+            .unwrap()
+        };
+        assert_eq!(notice(1).escape_button(), Some(0));
+        assert_eq!(notice(0).escape_button(), None);
+        // Multi-action with no exit button: Escape has no button to be.
+        assert_eq!(Dialog::parse(&register()).unwrap().escape_button(), None);
     }
 
     #[test]

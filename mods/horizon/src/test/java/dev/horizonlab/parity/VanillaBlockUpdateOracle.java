@@ -144,6 +144,11 @@ public final class VanillaBlockUpdateOracle {
         // A real level always holds the block entity of an entity block; this
         // one creates it on first use and replaces it when the block changes.
         Map<BlockPos, BlockEntity> blockEntities;
+        @Override public void setBlockEntity(BlockEntity be) {
+            if (blockEntities == null) blockEntities = new HashMap<>();
+            be.setLevel(this);
+            blockEntities.put(be.getBlockPos().immutable(), be);
+        }
         @Override public BlockEntity getBlockEntity(BlockPos p) {
             return blockEntityFor(p, getBlockState(p));
         }
@@ -255,6 +260,12 @@ public final class VanillaBlockUpdateOracle {
                     if (out.size() >= max) return;
                 }
             }
+        }
+        /** Level.hasEntities (HangingEntity.canCoexist) over the level's entities. */
+        @Override public <T extends Entity> boolean hasEntities(net.minecraft.world.level.entity.EntityTypeTest<Entity, T> type, AABB box, java.util.function.Predicate<? super T> filter) {
+            List<T> out = new ArrayList<>();
+            getEntities(type, box, filter, out, 1);
+            return !out.isEmpty();
         }
         /** ServerLevel.getEntity(id) over the level's entities. */
         @Override public Entity getEntity(int id) {
@@ -619,10 +630,21 @@ public final class VanillaBlockUpdateOracle {
         @Override
         public void sendToTrackingPlayers(final net.minecraft.world.entity.Entity entity, final net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener> packet) {
         }
+
+        /** Entity events (an armor stand's wobble) go to the trackers and the entity itself; nobody is there. */
+        @Override
+        public void sendToTrackingPlayersAndSelf(final net.minecraft.world.entity.Entity entity, final net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener> packet) {
+        }
     }
 
     static World build(JsonObject f) throws Exception {
         World w = make(World.class);
+        if (f.has("border")) {
+            var b = f.getAsJsonArray("border");
+            w.border = new net.minecraft.world.level.border.WorldBorder();
+            w.border.setCenter(b.get(0).getAsDouble(), b.get(1).getAsDouble());
+            w.border.setSize(b.get(2).getAsDouble());
+        }
         // Saplings, grass and moss place features through the chunk source's generator.
         if (Chunks.generator == null) Chunks.generator = make(net.minecraft.world.level.levelgen.FlatLevelSource.class);
         set(net.minecraft.server.level.ServerLevel.class, w, "chunkSource", make(Chunks.class));
@@ -681,6 +703,7 @@ public final class VanillaBlockUpdateOracle {
                 FluidState fs = state.getFluidState();
                 if (fs.isRandomlyTicking()) fs.randomTick(w, p, w.rng);
             }
+            case "piston_event" -> state.triggerEvent(w, p, f.get("event").getAsInt(), f.get("dir").getAsInt());
             case "tick" -> state.tick(w, p, w.rng);
             case "ftick" -> state.getFluidState().tick(w, p, state);
             case "neighbor" -> {

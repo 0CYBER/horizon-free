@@ -3,20 +3,31 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import nightly_set as ns
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = "2026-10-28T12:00:00+00:00"
-TEAM = {"kacpherek", "rdbtcvs", "online5277", "levzzz5154"}
 PATTERNS = ns.guarded_patterns((ROOT / ".github/CODEOWNERS").read_text())
+# Fixture accounts: the decision is by numeric ID, so each test login has one. Ludovic's real ID may not be filled in
+# yet (tools/ci/resolve_reviewer_ids.py), so tests use their own unless it is.
+LUDOVIC_ID = ns.OWNER_ID or 1
+ns.OWNER_ID = LUDOVIC_ID
+IDS = {"ludovic111": LUDOVIC_ID, "kacpherek": 101, "rdbtcvs": 102, "levzzz5154": 104}
 
 
-def pr(n, head="h", state="open", files=("crates/horizon-world/src/lib.rs",), base="main", approved_by=("rdbtcvs",),
-       approved_at=None):
-    sha = f"{head}{n}"
-    return ns.PullRequest(n, state, sha, f"Fix {n}", f"dev{n}", base, list(files),
-                          {who: approved_at or sha for who in approved_by})
+def actor(login):
+    return ns.Actor(login, IDS.get(login.lower(), 9999))
+
+
+def listing(*lines):
+    """A reviewers file: `kacpherek` becomes `101 kacpherek`; other lines stay as written."""
+    return ns.read_reviewers("".join((f"{IDS[l.lower()]} {l}" if l.lower() in IDS else l) + "\n" for l in lines))
+
+
+def pr(n, head="h", state="open", files=("crates/horizon-world/src/lib.rs",), base="main"):
+    return ns.PullRequest(n, state, f"{head}{n}", f"Fix {n}", f"dev{n}", base, list(files))
 
 
 def lookup(*prs):
@@ -25,30 +36,54 @@ def lookup(*prs):
 
 
 def run(state, text, login="kacpherek", *prs):
-    return ns.apply(state, ns.parse(text), login, NOW, lookup(*prs), PATTERNS, TEAM)
+    return ns.apply(state, ns.parse(text), actor(login), NOW, lookup(*prs), PATTERNS)
 
 
-class ApprovalTests(unittest.TestCase):
-    """A Nightly reaches every player: only pull requests the Team or Ludovic's agents approved at that head."""
+class CommandTests(unittest.TestCase):
+    """command(), as nightly-command.yml runs it: the comment in the environment, the answer posted back."""
 
-    def test_an_unreviewed_pull_request_is_refused(self):
-        with self.assertRaisesRegex(ns.Refused, "no approving review"):
-            run({}, "/nightly add 1", "kacpherek", pr(1, approved_by=()))
+    def run_command(self, body, author=ns.OWNER):
+        answers = []
+        env = {"GITHUB_REPOSITORY": "horizon-rust/horizon", "ISSUE": "1", "AUTHOR": author,
+               "AUTHOR_ID": str(IDS.get(author.lower(), 9999)), "BODY": body, "COMMENT_URL": "", "GH_TOKEN": "token"}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(ns, "load_state", return_value=({"prs": [], "blocked": []}, "", None)), \
+                mock.patch.object(ns, "lookup", return_value=lookup()), \
+                mock.patch.object(ns, "answer", lambda repo, issue, text: answers.append(text)):
+            ns.command()
+        return answers
 
-    def test_the_authors_own_approval_and_outsiders_dont_count(self):
-        with self.assertRaisesRegex(ns.Refused, "no approving review"):
-            run({}, "/nightly add 1", "kacpherek", pr(1, approved_by=("dev1", "someone")))
+    def test_status_reaches_an_answer(self):
+        # Until 2026-11-05 command() passed apply() a seventh argument it no longer takes, so every /nightly,
+        # status included, ended in TypeError and nobody got an answer.
+        answers = self.run_command("/nightly status")
+        self.assertEqual(len(answers), 1)
+        self.assertEqual(answers, ["The set is empty: the Nightly is main alone."])
 
-    def test_ludovics_agents_and_the_team_count(self):
-        for who in ("ludovic111", "levzzz5154"):
-            self.assertEqual(run({}, "/nightly add 1", "kacpherek", pr(1, approved_by=(who,))).state["prs"][0]["number"], 1)
 
-    def test_an_approval_on_an_older_head_doesnt_count(self):
-        with self.assertRaisesRegex(ns.Refused, "no approving review"):
-            run({}, "/nightly add 1", "kacpherek", pr(1, approved_at="old1"))
+class NoReviewNeededTests(unittest.TestCase):
+    """Ludovic, 2026-10-30, at the Team's request: a Nightly takes any open pull request to main, reviewed or not."""
 
-    def test_a_dry_run_needs_no_approval(self):
-        self.assertTrue(run({}, "/nightly dry-run 1", "kacpherek", pr(1, approved_by=())).dry_run)
+    def test_an_unreviewed_pull_request_is_accepted(self):
+        for text in ("/nightly add 1", "/nightly 1", "/nightly dry-run 1"):
+            result = run({}, text, "kacpherek", pr(1))
+            self.assertTrue(result.build, text)
+        self.assertEqual(run({}, "/nightly add 1", "kacpherek", pr(1)).state["prs"][0]["head"], "h1")
+
+    def test_a_guarded_file_is_still_refused(self):
+        for text in ("/nightly add 1", "/nightly dry-run 1"):
+            with self.assertRaisesRegex(ns.Refused, "only Ludovic merges"):
+                run({}, text, "kacpherek", pr(1, files=["crates/horizon-world/src/lib.rs", ".github/CODEOWNERS"]))
+
+    def test_the_other_guards_stay(self):
+        with self.assertRaisesRegex(ns.Refused, "not main"):
+            run({}, "/nightly add 1", "kacpherek", pr(1, base="release"))
+        with self.assertRaisesRegex(ns.Refused, "is closed"):
+            run({}, "/nightly add 1", "kacpherek", pr(1, state="closed"))
+        with self.assertRaises(ns.Refused):  # who may ask is checked before the set changes (command())
+            ns.authorize(actor("someone"), listing("kacpherek"))
+        with self.assertRaises(ns.Refused):
+            ns.authorize(actor("kacpherek"), listing("kacpherek", "paused"))
 
 
 class ParseTests(unittest.TestCase):
@@ -80,28 +115,74 @@ class ParseTests(unittest.TestCase):
 
 
 class AllowTests(unittest.TestCase):
-    LIST = "# trusted\nkacpherek   # added by Ludovic\nrdbtCVS\n\nnot a login!\n"
+    LIST = "# trusted\n101 kacpherek   # added by Ludovic\n102 rdbtCVS\n\nnot a login!\n"
 
     def test_listed_reviewers_and_ludovic(self):
         reviewers = ns.read_reviewers(self.LIST)
-        ns.authorize("kacpherek", reviewers)
-        ns.authorize("RDBTcvs", reviewers)
-        ns.authorize("ludovic111", reviewers)
+        ns.authorize(actor("kacpherek"), reviewers)
+        ns.authorize(actor("RDBTcvs"), reviewers)
+        ns.authorize(actor("ludovic111"), reviewers)
         for login in ("levzzz5154", "someone", "not"):
             with self.assertRaises(ns.Refused):
-                ns.authorize(login, reviewers)
+                ns.authorize(actor(login), reviewers)
+
+    def test_the_id_decides_not_the_login(self):
+        reviewers = ns.read_reviewers(self.LIST)
+        # Someone who claimed a listed login after a rename: same name, another account.
+        with self.assertRaises(ns.Refused):
+            ns.authorize(ns.Actor("kacpherek", 555), reviewers)
+        with self.assertRaises(ns.Refused):
+            ns.authorize(ns.Actor("ludovic111", 556), reviewers)
+        # The listed account under a new name keeps its access.
+        ns.authorize(ns.Actor("kacper-renamed", 101), reviewers)
+        ns.authorize(ns.Actor("new-name", LUDOVIC_ID), reviewers)
+
+    def test_old_format_lines_grant_nothing(self):
+        reviewers = ns.read_reviewers("kacpherek\n101\n101 kacpherek extra\n0 zero\n")
+        self.assertEqual(reviewers.members, {})
+        self.assertEqual(len(reviewers.skipped), 4)
+        with self.assertRaises(ns.Refused):
+            ns.authorize(actor("kacpherek"), reviewers)
+
+    def test_no_owner_id_means_no_owner(self):
+        saved = ns.OWNER_ID
+        try:
+            ns.OWNER_ID = None
+            self.assertFalse(ns.is_owner(ns.Actor("ludovic111", LUDOVIC_ID)))
+            self.assertFalse(ns.is_owner_id(None))
+        finally:
+            ns.OWNER_ID = saved
 
     def test_paused_stops_reviewers_not_ludovic(self):
         reviewers = ns.read_reviewers(self.LIST + "paused  # Ludovic, 2026-10-29\n")
         self.assertTrue(reviewers.paused)
         with self.assertRaises(ns.Refused):
-            ns.authorize("kacpherek", reviewers)
-        ns.authorize("ludovic111", reviewers)
+            ns.authorize(actor("kacpherek"), reviewers)
+        ns.authorize(actor("ludovic111"), reviewers)
 
-    def test_the_repos_list_names_the_three_reviewers(self):
+    def test_the_author_id_comes_from_the_workflow(self):
+        self.assertEqual(ns.actor_from_env({"AUTHOR": "kacpherek", "AUTHOR_ID": "101"}), ns.Actor("kacpherek", 101))
+        for env in ({"AUTHOR": "kacpherek"}, {"AUTHOR": "kacpherek", "AUTHOR_ID": ""},
+                    {"AUTHOR": "kacpherek", "AUTHOR_ID": "kacpherek"}, {"AUTHOR": "x", "AUTHOR_ID": "-1"}):
+            with self.assertRaises(ns.Refused):
+                ns.actor_from_env(env)
+
+    def test_the_repos_list_names_its_reviewers_by_id(self):
+        """Fails until tools/ci/resolve_reviewer_ids.py has filled in the IDs: until then no reviewer has access."""
         reviewers = ns.read_reviewers((ROOT / ns.REVIEWERS).read_text())
+        self.assertEqual(reviewers.skipped, [])
         self.assertEqual(reviewers.logins, {"kacpherek", "rdbtcvs", "online5277", "levzzz5154"})
         self.assertFalse(reviewers.paused)
+        source = (ROOT / "tools/ci/nightly_set.py").read_text()
+        self.assertRegex(source, r"(?m)^OWNER_ID: int \| None = [1-9][0-9]*$")
+
+
+class WorkflowIdTests(unittest.TestCase):
+    def test_every_command_workflow_passes_the_authors_id(self):
+        for name in ("nightly-command.yml", "triage-command.yml", "claim-command.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            self.assertIn("AUTHOR_ID: ${{ github.event.comment.user.id }}", text, name)
+
 
 class RefusalTests(unittest.TestCase):
     def test_what_codeowners_guards_is_refused(self):

@@ -6,7 +6,7 @@
 //! (`MAIN_GENE_ID`, `HIDDEN_GENE_ID`); the rest is [`State`], whose `flags`,
 //! `unhappy`, `sneeze` and `eat` are the synched data a server sends.
 use super::{
-    DamageKind, Mob, MobEvent, MobWorld, Species, Who,
+    Mob, MobEvent, MobWorld, Species, Who,
     body_anim::Panda as Pose,
     finalize::{self, Attr},
     goals::{
@@ -182,7 +182,8 @@ pub fn is_sitting(m: &Mob) -> bool {
 fn is_rolling(m: &Mob) -> bool {
     flag(m, FLAG_ROLL)
 }
-fn is_on_back(m: &Mob) -> bool {
+/// `Panda.isOnBack`.
+pub fn is_on_back(m: &Mob) -> bool {
     flag(m, FLAG_ON_BACK)
 }
 fn is_eating(m: &Mob) -> bool {
@@ -707,14 +708,11 @@ impl Goal for PandaPanic {
         self.0.stop(m, cx)
     }
 }
-/// `DamageTypeTags.PANIC_ENVIRONMENTAL_CAUSES`, or burning.
+/// `DamageTypeTags.PANIC_ENVIRONMENTAL_CAUSES` (`armadillo::environmental`), or burning.
 fn environmental(m: &Mob) -> bool {
     m.fire_ticks > 0 && !m.kind.flags.fire_immune
         || m.last_damage.is_some_and(|(d, t)| {
-            matches!(
-                d.kind,
-                DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Cactus
-            ) && i64::from(m.age) - t <= 40
+            super::armadillo::environmental(d.kind) && i64::from(m.age) - t <= 40
         })
 }
 
@@ -860,6 +858,7 @@ impl Goal for PandaSit {
         if let Some(item) = m.extra.main_hand.clone() {
             let count = held_count(m);
             cx.events.push(MobEvent::DropItem {
+                mob: m.id,
                 item,
                 count,
                 at: [m.position.x, m.position.y, m.position.z],
@@ -1087,4 +1086,28 @@ pub fn register(m: &mut Mob) {
                 .alert_if(|s| s.species == Species::Panda && s.variant == AGGRESSIVE),
         ),
     );
+}
+
+#[cfg(test)]
+mod freeze_panic_tests {
+    use super::*;
+
+    /// `#panic_environmental_causes` holds freeze and sulfur_cube_hot too.
+    #[test]
+    fn freezing_and_a_hot_sulfur_cube_are_environmental() {
+        let kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        for cause in [
+            super::super::DamageKind::Freeze,
+            super::super::DamageKind::SulfurCubeHot,
+        ] {
+            let mut m = Mob::new(
+                1,
+                std::sync::Arc::new(kind.clone()),
+                horizon_core::geometry::Vec3::ZERO,
+                0.0,
+            );
+            m.last_damage = Some((super::super::Damage::of(cause), i64::from(m.age)));
+            assert!(environmental(&m), "{cause:?}");
+        }
+    }
 }

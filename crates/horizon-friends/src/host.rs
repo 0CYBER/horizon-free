@@ -30,6 +30,13 @@ use std::{
 
 /// Wrong short codes tried at the relay before the host retires it.
 pub const MAX_WRONG: u32 = 5;
+/// Wrong short codes over one sharing session before the host leaves the
+/// relay for good (the full code keeps working directly). Each short code
+/// has a fresh 20-bit secret, so this caps a relay's chance of guessing one
+/// at 50 / 2^20 per session.
+pub const MAX_WRONG_TOTAL: u32 = 50;
+/// The longest wait before registering again after a retired short code.
+const MAX_RETIRE_DELAY: Duration = Duration::from_secs(300);
 /// Sessions open at once (IntegratedServer.MAX_PLAYERS).
 pub const MAX_SESSIONS: usize = 8;
 /// The direct port asked for first, so a port forwarded by hand keeps
@@ -82,10 +89,92 @@ pub enum HostEvent {
     Disconnected {
         session: u64,
     },
-    /// Someone tried a wrong code.
+    /// Someone tried a wrong code (`count`: on this code so far).
     WrongCode {
         count: u32,
     },
+    /// Too many wrong short codes this session: the host left the relay, and
+    /// friends join with the full code only.
+    RelayStopped,
+}
+
+/// How long to wait before registering again after the `retired`th short
+/// code was retired for wrong secrets: 1 s, 2 s, 4 s ... up to 5 minutes.
+pub fn retire_delay(retired: u32) -> Duration {
+    let doubling = retired.saturating_sub(1).min(16);
+    Duration::from_secs(1 << doubling).min(MAX_RETIRE_DELAY)
+}
+
+/// Wrong short-code guesses through the relay. The count for the current
+/// code starts over with each registration; the total and the retired codes
+/// last for the whole sharing session, so registering again can't buy the
+/// relay (or whoever drives its joins) fresh guesses.
+#[derive(Debug, Default)]
+struct Guesses {
+    /// Wrong on the current short code.
+    code: u32,
+    total: u32,
+    /// Key exchanges in progress: each may be one more wrong guess.
+    pending: u32,
+    retired: u32,
+}
+
+/// What `run_relay` does once the control connection ended cleanly.
+#[derive(Debug, PartialEq)]
+enum Next {
+    /// Register again now.
+    Now,
+    /// The code was retired: wait, then register again.
+    Wait(Duration),
+    /// Too many wrong guesses this session: leave the relay.
+    Stop,
+}
+
+impl Guesses {
+    /// Reserve a guess for one relayed key exchange; false when a wrong
+    /// answer from every exchange in progress could pass a limit.
+    fn reserve(&mut self) -> bool {
+        let free =
+            self.code + self.pending < MAX_WRONG && self.total + self.pending < MAX_WRONG_TOTAL;
+        if free {
+            self.pending += 1;
+        }
+        free
+    }
+    fn release(&mut self) {
+        self.pending = self.pending.saturating_sub(1);
+    }
+    /// A wrong secret: the count on this code, and whether to retire it.
+    fn wrong(&mut self) -> (u32, bool) {
+        self.code += 1;
+        self.total += 1;
+        (self.code, self.retiring())
+    }
+    fn retiring(&self) -> bool {
+        self.code >= MAX_WRONG || self.total >= MAX_WRONG_TOTAL
+    }
+    fn registered(&mut self) {
+        self.code = 0;
+    }
+    fn next(&mut self) -> Next {
+        if self.total >= MAX_WRONG_TOTAL {
+            Next::Stop
+        } else if self.code >= MAX_WRONG {
+            self.retired += 1;
+            Next::Wait(retire_delay(self.retired))
+        } else {
+            Next::Now
+        }
+    }
+}
+
+/// A guess reserved in [`Guesses`], released when dropped (count the wrong
+/// answer first).
+struct Reserved(Arc<Shared>);
+impl Drop for Reserved {
+    fn drop(&mut self) {
+        self.0.guesses.lock().unwrap().release();
+    }
 }
 
 struct Shared {
@@ -102,7 +191,7 @@ struct Shared {
     sessions: AtomicUsize,
     handshakes: AtomicUsize,
     wrong: AtomicU32,
-    relay_wrong: AtomicU32,
+    guesses: Mutex<Guesses>,
     reach: Mutex<Option<Reach>>,
 }
 impl Shared {
@@ -164,7 +253,7 @@ impl Host {
             sessions: AtomicUsize::new(0),
             handshakes: AtomicUsize::new(0),
             wrong: AtomicU32::new(0),
-            relay_wrong: AtomicU32::new(0),
+            guesses: Mutex::new(Guesses::default()),
             reach: Mutex::new(None),
         });
         let mut threads = Vec::new();
@@ -207,7 +296,14 @@ impl Host {
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
-        if let Some(r) = self.shared.reach.lock().unwrap().as_mut() {
+        // A panic on a sharing thread must not crash the game at stop.
+        if let Some(r) = self
+            .shared
+            .reach
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
             r.release();
         }
     }
@@ -268,13 +364,27 @@ fn share(shared: Arc<Shared>, port: u16) {
     // Renew the router mapping at half-lease until stopped.
     while !shared.stopped() {
         std::thread::sleep(Duration::from_millis(100));
-        let mut reach = shared.reach.lock().unwrap();
-        if let Some(m) = reach.as_mut().and_then(|r| r.mapping.as_mut())
-            && m.due()
-            && m.renew().is_err()
-        {
-            // Try again in a minute rather than hammering the router.
-            m.renewed = Instant::now() - m.lifetime / 2 + Duration::from_secs(60);
+        // Renewed without the lock: the router may be slow, and stop() waits for this thread
+        // anyway before it releases the mapping, so it is always back by then.
+        let due = shared
+            .reach
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+            .and_then(|r| r.mapping.take_if(|m| m.due()));
+        if let Some(mut m) = due {
+            if m.renew().is_err() {
+                // Try again in a minute rather than hammering the router.
+                m.renewed = Instant::now() - m.lifetime / 2 + Duration::from_secs(60);
+            }
+            if let Some(r) = shared
+                .reach
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+            {
+                r.mapping = Some(m);
+            }
         }
     }
     if let Some(t) = relay {
@@ -293,19 +403,20 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
             if shared.handshakes.load(Ordering::Relaxed) >= MAX_HANDSHAKES {
                 continue;
             }
-            shared.handshakes.fetch_add(1, Ordering::Relaxed);
+            // Given back however the handshake ends, a failed spawn included: a slot lost each
+            // time would close the direct port after MAX_HANDSHAKES of them.
+            let slot = Handshake::take(&shared);
             let shared = shared.clone();
             let _ = std::thread::Builder::new()
                 .name("horizon-friends-inbound".into())
                 .spawn(move || {
                     let _ = s.set_nonblocking(false);
                     let Ok(deadline) = crate::deadline(&s, HANDSHAKE) else {
-                        shared.handshakes.fetch_sub(1, Ordering::Relaxed);
                         return;
                     };
                     match direct::read_hello(&mut s) {
                         Ok(direct::Hello::Relayed(session)) => {
-                            shared.handshakes.fetch_sub(1, Ordering::Relaxed);
+                            drop(slot);
                             let route = {
                                 let mut routes = shared.routes.lock().unwrap();
                                 routes.retain(|_, (_, until)| *until > Instant::now());
@@ -318,11 +429,9 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
                             }
                         }
                         Ok(direct::Hello::Code(session)) => {
-                            serve_code(&shared, s, session, deadline)
+                            serve_code(&shared, s, session, deadline, slot)
                         }
-                        Err(_) => {
-                            shared.handshakes.fetch_sub(1, Ordering::Relaxed);
-                        }
+                        Err(_) => {}
                     }
                 });
         }
@@ -335,7 +444,27 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
 /// A guest who dialled an endpoint from the code: agree on the key from
 /// the code's secret, then carry the session (`deadline` bounds the
 /// handshake, not the game).
-fn serve_code(shared: &Arc<Shared>, mut s: TcpStream, session: u64, deadline: crate::Deadline) {
+/// One of the [`MAX_HANDSHAKES`], given back when dropped.
+struct Handshake(Arc<Shared>);
+impl Handshake {
+    fn take(shared: &Arc<Shared>) -> Self {
+        shared.handshakes.fetch_add(1, Ordering::Relaxed);
+        Self(shared.clone())
+    }
+}
+impl Drop for Handshake {
+    fn drop(&mut self) {
+        self.0.handshakes.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn serve_code(
+    shared: &Arc<Shared>,
+    mut s: TcpStream,
+    session: u64,
+    deadline: crate::Deadline,
+    slot: Handshake,
+) {
     let secret = shared
         .invite
         .lock()
@@ -349,7 +478,7 @@ fn serve_code(shared: &Arc<Shared>, mut s: TcpStream, session: u64, deadline: cr
         session::secure(s, &key, Role::Host)
     })();
     drop(deadline);
-    shared.handshakes.fetch_sub(1, Ordering::Relaxed);
+    drop(slot);
     match secured {
         Ok(secure) => carry(shared, session, secure, true),
         Err(e) if crypto::is_wrong_code(&e) => {
@@ -383,9 +512,29 @@ fn carry(shared: &Arc<Shared>, session: u64, (r, w): session::Secure, direct: bo
 // ----- The relay (optional) ---------------------------------------------------------------------
 
 fn connect_relay(relay: &str, port: Option<u16>) -> io::Result<(TcpStream, SocketAddr)> {
+    let wait = Duration::from_secs(5);
     let mut last = io::Error::other("no address");
+    let mut timed_out = Vec::new();
     for address in resolve_relay(relay)? {
-        match direct::connect_from(port, address, Duration::from_secs(5)) {
+        match direct::connect_from(port, address, wait) {
+            Ok(s) => {
+                let _ = s.set_nodelay(true);
+                return Ok((s, address));
+            }
+            Err(e) => {
+                if port.is_some() && e.kind() == io::ErrorKind::TimedOut {
+                    timed_out.push(address);
+                }
+                last = e;
+            }
+        }
+    }
+    // A relay on Windows ignores a new connection from the address of one it
+    // closed less than its TIME_WAIT ago (the last guest's attach from the
+    // direct port), where Linux takes it: those get one more try from any
+    // port, once every address had its try from the direct port.
+    for address in timed_out {
+        match direct::connect_from(None, address, wait) {
             Ok(s) => {
                 let _ = s.set_nodelay(true);
                 return Ok((s, address));
@@ -405,6 +554,24 @@ fn run_relay(shared: Arc<Shared>, relay: String) {
             Ok(()) => {
                 backoff = Duration::from_secs(1);
                 shared.state.lock().unwrap().relay_problem = None;
+                let next = shared.guesses.lock().unwrap().next();
+                match next {
+                    Next::Now => {}
+                    Next::Wait(delay) => {
+                        // Retired for wrong secrets: a relay that keeps
+                        // guessing waits longer for every new code.
+                        shared.publish(None);
+                        let until = Instant::now() + delay;
+                        while Instant::now() < until && !shared.stopped() {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                    Next::Stop => {
+                        shared.publish(None);
+                        shared.emit(HostEvent::RelayStopped);
+                        break;
+                    }
+                }
             }
             Err(e) => {
                 if shared.stopped() {
@@ -454,16 +621,14 @@ fn register(shared: &Arc<Shared>, relay_url: &str) -> io::Result<()> {
         let _ = control.shutdown(Shutdown::Both);
         return Ok(());
     }
-    shared.relay_wrong.store(0, Ordering::Relaxed);
+    shared.guesses.lock().unwrap().registered();
     shared.publish(Some(code.clone()));
     loop {
         let message = match wire::recv_buffered::<_, FromRelay>(&mut reader) {
             Ok(m) => m,
             Err(e) => {
                 shared.control.lock().unwrap().take();
-                return if shared.stopped()
-                    || shared.relay_wrong.load(Ordering::Relaxed) >= MAX_WRONG
-                {
+                return if shared.stopped() || shared.guesses.lock().unwrap().retiring() {
                     Ok(())
                 } else {
                     Err(e)
@@ -473,9 +638,12 @@ fn register(shared: &Arc<Shared>, relay_url: &str) -> io::Result<()> {
         match message {
             FromRelay::Ping => wire::send(&mut control, &ToRelay::Pong)?,
             FromRelay::Join { session } => {
-                if shared.sessions.load(Ordering::Relaxed) >= MAX_SESSIONS {
+                if shared.sessions.load(Ordering::Relaxed) >= MAX_SESSIONS
+                    || !shared.guesses.lock().unwrap().reserve()
+                {
                     continue;
                 }
+                let reserved = Reserved(shared.clone());
                 let (shared, code, token, control, relay_url) = (
                     shared.clone(),
                     code.clone(),
@@ -487,7 +655,8 @@ fn register(shared: &Arc<Shared>, relay_url: &str) -> io::Result<()> {
                     .name("horizon-friends-session".into())
                     .spawn(move || {
                         serve_relayed(
-                            &shared, &relay_url, &code, &token, session, port, relay, &control,
+                            &shared, reserved, &relay_url, &code, &token, session, port, relay,
+                            &control,
                         )
                     });
             }
@@ -501,6 +670,7 @@ fn register(shared: &Arc<Shared>, relay_url: &str) -> io::Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn serve_relayed(
     shared: &Arc<Shared>,
+    reserved: Reserved,
     relay_url: &str,
     code: &Code,
     token: &str,
@@ -513,6 +683,9 @@ fn serve_relayed(
     let Ok((mut stream, _)) = connect_relay(relay_url, port) else {
         return;
     };
+    // What the relay sees of an attach from another port is no address of
+    // this host's: nothing listens there.
+    let from_port = stream.local_addr().ok().map(|a| a.port()) == port;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
     let attach = ToRelay::Attach {
         v: wire::VERSION,
@@ -523,25 +696,30 @@ fn serve_relayed(
         return;
     }
     let observed = match wire::recv::<_, FromRelay>(&mut stream) {
-        Ok(FromRelay::Bridged { observed, .. }) => {
-            observed.and_then(|o| o.parse::<SocketAddr>().ok())
-        }
+        Ok(FromRelay::Bridged { observed, .. }) => observed
+            .filter(|_| from_port)
+            .and_then(|o| o.parse::<SocketAddr>().ok()),
         _ => return,
     };
     let Ok(key) = crypto::exchange(&mut stream, &code.secret, &code.nameplate, session) else {
         return;
     };
     let relayed = match session::secure(stream, &key, Role::Host) {
-        Ok(s) => s,
-        Err(e) => {
-            if crypto::is_wrong_code(&e) {
-                let count = shared.relay_wrong.fetch_add(1, Ordering::Relaxed) + 1;
-                shared.emit(HostEvent::WrongCode { count });
-                if count >= MAX_WRONG {
-                    // Retire the short code: dropping the control connection
-                    // ends it at the relay, and `run_relay` registers anew.
-                    let _ = control.shutdown(Shutdown::Both);
-                }
+        Ok(s) => {
+            drop(reserved);
+            s
+        }
+        // Not only a wrong confirmation: the host sends its own before it
+        // reads the guest's, so a peer that checks it against its guess and
+        // hangs up has had its guess as well.
+        Err(_) => {
+            let (count, retire) = shared.guesses.lock().unwrap().wrong();
+            drop(reserved);
+            shared.emit(HostEvent::WrongCode { count });
+            if retire {
+                // Retire the short code: dropping the control connection
+                // ends it at the relay, and `run_relay` registers anew.
+                let _ = control.shutdown(Shutdown::Both);
             }
             return;
         }
@@ -567,5 +745,65 @@ fn serve_relayed(
     shared.routes.lock().unwrap().remove(&session);
     if let Ok(settled) = settled {
         carry(shared, session, settled.secure, settled.direct);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One relayed key exchange that ends without a confirmation.
+    fn guess_wrong(g: &mut Guesses) -> bool {
+        assert!(g.reserve());
+        let (_, retire) = g.wrong();
+        g.release();
+        retire
+    }
+
+    #[test]
+    fn wrong_guesses_add_up_across_registrations() {
+        let mut g = Guesses::default();
+        let mut waits = Vec::new();
+        loop {
+            g.registered();
+            let retired: Vec<bool> = (0..MAX_WRONG).map(|_| guess_wrong(&mut g)).collect();
+            // Only the fifth wrong secret on a code retires it.
+            assert_eq!(retired.iter().filter(|r| **r).count(), 1);
+            assert!(retired[MAX_WRONG as usize - 1]);
+            // No more guesses on a retired code.
+            assert!(!g.reserve());
+            match g.next() {
+                Next::Wait(d) => waits.push(d.as_secs()),
+                Next::Stop => break,
+                Next::Now => panic!("a retired code registers again at once"),
+            }
+        }
+        assert_eq!(g.total, MAX_WRONG_TOTAL);
+        // Every new code waits twice as long; then the host leaves the relay.
+        assert_eq!(waits, [1, 2, 4, 8, 16, 32, 64, 128, 256]);
+        g.registered();
+        assert!(!g.reserve(), "the total is spent");
+    }
+
+    #[test]
+    fn exchanges_in_progress_count_against_the_limit() {
+        let mut g = Guesses::default();
+        for _ in 0..MAX_WRONG {
+            assert!(g.reserve());
+        }
+        // A sixth at once could be a sixth wrong guess on this code.
+        assert!(!g.reserve());
+        // A friend who got in frees the guess.
+        g.release();
+        assert!(g.reserve());
+        // Nothing was wrong: no code retired, no wait.
+        assert_eq!(g.next(), Next::Now);
+    }
+
+    #[test]
+    fn the_wait_doubles_up_to_five_minutes() {
+        let secs: Vec<u64> = (1..=12).map(|n| retire_delay(n).as_secs()).collect();
+        assert_eq!(secs, [1, 2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300]);
+        assert_eq!(retire_delay(u32::MAX), MAX_RETIRE_DELAY);
     }
 }

@@ -3,6 +3,7 @@
 use super::*;
 use horizon_launcher::browser::horizon::pack as horizon_pack;
 use horizon_launcher::modpacks::{self, Imported};
+use horizon_launcher::other_launchers::Found;
 use horizon_port_pack::report::Status;
 use std::path::PathBuf;
 
@@ -41,7 +42,10 @@ impl Launcher {
             let log = move |line: String| {
                 let _ = lines.send(Msg::PackLine(line));
             };
-            let result = job(&log);
+            // A panic in a step (a pack the port didn't expect) still ends the job: the page
+            // would stay busy, refusing every later step, until the launcher restarts.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&log)))
+                .unwrap_or_else(|_| Err(tr("Something went wrong.").into()));
             let _ = tx.send(Msg::PackDone(result.map(Box::new)));
         });
     }
@@ -66,7 +70,7 @@ impl Launcher {
             files: !folder,
             directories: folder,
             multiple: false,
-            prompt: Some("Import".into()),
+            prompt: Some(tr("Import").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = paths.await {
@@ -98,7 +102,7 @@ impl Launcher {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Use these jars".into()),
+            prompt: Some(tr("Use these jars").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = paths.await {
@@ -125,16 +129,34 @@ impl Launcher {
         else {
             return;
         };
-        if self.client.is_some() || self.starting_client.is_some() {
+        if !self.can_start(&tag) {
             return;
         }
         self.starting_pack = Some(work);
         self.start_client(tag);
     }
 
-    /// Reads the imported packs, once (the sidebar and the Modpacks tab both show them).
+    /// Looks for other launchers' modpacks on a thread: their folders can be slow to read.
+    fn scan_found_packs(&mut self) {
+        if self.found_scanning {
+            return;
+        }
+        self.found_scanning = true;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            use horizon_launcher::sources::{Folders, Os};
+            let found = Folders::current()
+                .map(|f| modpacks::found_on_this_computer(Os::current(), &f))
+                .unwrap_or_default();
+            let _ = tx.send(Msg::FoundPacks(found));
+        });
+    }
+
+    /// Reads the imported packs, once (the sidebar and the Modpacks tab both show them), and
+    /// looks again for other launchers' modpacks.
     pub(super) fn load_packs(&mut self) {
         if self.packs_loaded.is_none() {
+            self.scan_found_packs();
             self.mods.report_list.reset();
             self.packs = modpacks::list();
             self.registry_packs = horizon_pack::list();
@@ -169,15 +191,16 @@ impl Launcher {
             .gap(px(8.))
             .child(pick("import-file", "Import a pack file…", false))
             .child(pick("import-folder", "Import an instance folder…", true))
-            .child(text(theme::CAPTION).w_full().text_color(t.muted).child(
+            .child(text(theme::CAPTION).w_full().text_color(t.muted).child(tr(
                 ".mrpack (Modrinth), .zip (CurseForge), or a Prism, MultiMC or CurseForge instance. \
                  Horizon ports what it can on this computer, from your own downloads, and plays \
                  the pack as its own profile. Nothing is uploaded or shared.",
-            ));
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
+            )));
+        let mut page = div().flex().flex_col().gap(px(16.));
+        if !self.found_packs.is_empty() {
+            page = page.child(self.found_pack_rows(cx));
+        }
+        page = page
             .child(section_title("Your modpacks", "archive", &t))
             .child(actions);
         if busy || !self.pack_log.is_empty() {
@@ -193,11 +216,9 @@ impl Launcher {
             return page;
         }
         if self.packs.is_empty() {
-            return page.child(
-                text(theme::CAPTION)
-                    .text_color(t.muted)
-                    .child("No modpack imported yet: import one, or find one below."),
-            );
+            return page.child(text(theme::CAPTION).text_color(t.muted).child(tr(
+                "No modpack imported yet: import one, or find one below.",
+            )));
         }
         if self.packs.len() > 1 {
             let mut list = div().flex().flex_col();
@@ -205,7 +226,7 @@ impl Launcher {
                 let open = self.pack_open.as_ref() == Some(&p.slug);
                 let slug = p.slug.clone();
                 let right = if open {
-                    caps("Open").text_color(t.accent).into_any_element()
+                    caps(tr("Open")).text_color(t.accent).into_any_element()
                 } else {
                     button(format!("open-{slug}"), "Open", Kind::Ghost, &t)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -229,6 +250,50 @@ impl Launcher {
             Some(detail) => page.child(detail),
             None => page,
         }
+    }
+
+    /// Other launchers' modpacks on this computer, each imported with one click the way "Import
+    /// an instance folder…" imports it, or opened once it is.
+    fn found_pack_rows(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut list = div().flex().flex_col();
+        for (i, found) in self.found_packs.iter().enumerate() {
+            let slug = modpacks::found_slug(found);
+            let id = format!("found-{i}");
+            let right = if self.packs.iter().any(|p| p.slug == slug) {
+                button(id, "Open", Kind::Ghost, &t).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        this.pack_open = Some(slug.clone());
+                        this.mods.report_list.reset();
+                        cx.notify();
+                    },
+                ))
+            } else if self.pack_busy {
+                disabled(button(id, "Import", Kind::Secondary, &t))
+            } else {
+                let folder = modpacks::found_folder(found);
+                button(id, "Import", Kind::Secondary, &t).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        let folder = folder.clone();
+                        this.pack_job(move |log| modpacks::import(&folder, log));
+                        cx.notify();
+                    },
+                ))
+            };
+            list = list.child(index_row(
+                i + 1,
+                found.name.clone(),
+                Some(found_detail(found, &t).into_any_element()),
+                Some(right.into_any_element()),
+                &t,
+            ));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(section_title("Found on this computer", "folder", &t))
+            .child(list)
     }
 
     /// The modpacks installed from Horizon's registry: each plays its own profile.
@@ -282,10 +347,9 @@ impl Launcher {
                         },
                     )),
                 );
-            let detail = format!(
-                "{} from Horizon's registry, its own profile: {}",
-                p.version,
-                p.mods.join(", ")
+            let detail = trf(
+                "{version} from Horizon's registry, its own profile: {mods}",
+                &[("version", &p.version), ("mods", &p.mods.join(", "))],
             );
             list = list.child(index_row(
                 i + 1,
@@ -311,7 +375,7 @@ impl Launcher {
             .gap(px(4.))
             .p(px(16.))
             .child(
-                caps(if self.pack_busy { "Working" } else { "Done" })
+                caps(tr(if self.pack_busy { "Working" } else { "Done" }))
                     .text_color(if self.pack_busy { t.accent } else { t.muted }),
             )
             .children(self.pack_log.iter().skip(start).map(|line| {
@@ -346,19 +410,22 @@ impl Launcher {
                             .text_color(color)
                             .child(p.count(status).to_string()),
                     )
-                    .child(caps(*label).text_color(t.muted)),
+                    .child(caps(tr(label)).text_color(t.muted)),
             );
         }
-        let can_play = self.selected().is_some_and(|tag| backend::is_prepared(tag));
-        let running = self.client.is_some() || self.starting_client.is_some();
+        // Prepared, nothing preparing or running (`play_pack` checks the same).
+        let can_play = self.can_start_selected();
         let mut buttons = div().flex().flex_wrap().items_center().gap(px(8.));
         let play_label = if p.mods.is_empty() {
-            "Play".to_string()
+            tr("Play").to_string()
         } else {
-            format!("Play with {} mods", p.mods.len())
+            trf(
+                "Play with {count} mods",
+                &[("count", &p.mods.len().to_string())],
+            )
         };
         let mut play = button("pack-play", play_label, Kind::Primary, &t);
-        if p.mods.is_empty() || !can_play || running || self.pack_busy {
+        if !p.can_play() || !can_play || self.pack_busy {
             play = disabled(play);
         } else {
             let work = p.work.clone();
@@ -367,10 +434,19 @@ impl Launcher {
                 cx.notify();
             }));
         }
-        let port_label = format!("Port {} mods", p.portable);
+        let port_label = if p.indexed_resources == 0 {
+            trf("Port {count} mods", &[("count", &p.portable.to_string())])
+        } else if p.portable == 0 {
+            format!("Get {} resource packs", p.indexed_resources)
+        } else {
+            format!(
+                "Port {} mods + {} resource packs",
+                p.portable, p.indexed_resources
+            )
+        };
         let mut port = button("pack-port", port_label, Kind::Secondary, &t);
         let mut from = button("pack-from", "Use jars from my instance…", Kind::Ghost, &t);
-        if self.pack_busy || p.portable == 0 {
+        if self.pack_busy || !p.can_port() {
             port = disabled(port);
             from = disabled(from);
         } else {
@@ -378,10 +454,14 @@ impl Launcher {
                 this.port_pack(false, cx);
                 cx.notify();
             }));
-            from = from.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.port_pack(true, cx);
-                cx.notify();
-            }));
+            if p.portable == 0 {
+                from = disabled(from);
+            } else {
+                from = from.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.port_pack(true, cx);
+                    cx.notify();
+                }));
+            }
         }
         let confirming = self.confirm_remove.as_deref() == Some(p.slug.as_str());
         let slug = p.slug.clone();
@@ -418,21 +498,27 @@ impl Launcher {
             cx.notify();
         }));
         buttons = buttons.child(play).child(port).child(from).child(remove);
-        let mut notes = vec![format!(
-            "Port gets the jars of the {} mods this computer can port today (content with data \
+        let mut notes = vec![trf(
+            "Port gets the jars of the {count} mods this computer can port today (content with data \
              and assets only) from the pack's own links, Modrinth, or your folder, and carries \
-             them over. The ports stay here, in {}.",
-            p.portable,
-            short(&p.work)
+             them over. The ports stay here, in {folder}.",
+            &[
+                ("count", &p.portable.to_string()),
+                ("folder", &short(&p.work)),
+            ],
         )];
+        notes.push(format!(
+            "{} resource packs available. Enable them in the game's Resource Packs screen.",
+            p.resourcepacks
+        ));
         if let Some(jars) = p.jars() {
             notes.push(jars);
         }
         for line in &p.left_off {
-            notes.push(format!("Left off: {line}."));
+            notes.push(trf("Left off: {line}.", &[("line", line)]));
         }
         if !can_play {
-            notes.push("Playing needs a prepared Horizon version (Play page).".into());
+            notes.push(tr("Playing needs a prepared Horizon version (Play page).").into());
         }
         let mut rows: Vec<&horizon_port_pack::report::Row> = p
             .rows
@@ -452,24 +538,37 @@ impl Launcher {
         });
         let row = |i: usize| {
             let r = rows[i];
-            let color = match r.status {
-                Status::Ported => t.success,
-                Status::Partial => t.accent,
-                Status::NotYet => t.ink_soft,
-                Status::NotNeeded => t.muted,
+            let (color, status_label) = match r.status {
+                Status::Ported => (t.success, tr("Ported")),
+                Status::Partial => (t.accent, tr("Partial")),
+                Status::NotYet => (t.ink_soft, tr("Not yet")),
+                Status::NotNeeded => (t.muted, tr("Not needed")),
             };
             let name = if r.name.is_empty() || r.name == r.key {
                 r.key.clone()
             } else {
                 format!("{}  ({})", r.name, r.key)
             };
-            let detail = format!("{} · {} · {}: {}", r.class, r.tier, r.license, r.reason);
+            // What it means in plain words, then the technical terms for modders. A report an
+            // older build wrote has no plain words.
+            let technical = format!("{} · {} · {}: {}", r.class, r.tier, r.license, r.reason);
+            let detail = if r.plain.is_empty() {
+                technical.into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(div().text_color(t.ink_soft).child(modpacks::row_plain(r)))
+                    .child(technical)
+                    .into_any_element()
+            };
             index_row(
                 i + 1,
                 name,
-                Some(detail.into_any_element()),
+                Some(detail),
                 Some(
-                    caps(r.status.label())
+                    caps(status_label)
                         .flex_none()
                         .text_color(color)
                         .into_any_element(),
@@ -477,6 +576,7 @@ impl Launcher {
                 &t,
             )
         };
+        let headline = p.headline();
         let list = self.mods.report_list.column(
             &self.content_scroll.handle,
             rows.len(),
@@ -501,6 +601,20 @@ impl Launcher {
                         )
                         .child(text(theme::UI).text_color(t.muted).child(p.summary())),
                 )
+                .children((!headline.is_empty()).then(|| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .max_w(px(720.))
+                        .children(headline.into_iter().enumerate().map(|(i, line)| {
+                            if i == 0 {
+                                text(theme::UI).text_color(t.ink).child(line)
+                            } else {
+                                text(theme::CAPTION).text_color(t.muted).child(line)
+                            }
+                        }))
+                }))
                 .child(counts)
                 .child(buttons)
                 .children(self.client_error.clone().map(|e| notice(e, &t)))
@@ -514,4 +628,11 @@ impl Launcher {
                 .child(list),
         )
     }
+}
+
+/// A found modpack's app, Minecraft version and loader, under its name.
+fn found_detail(found: &Found, t: &Theme) -> Div {
+    text(theme::CAPTION)
+        .text_color(t.muted)
+        .child(modpacks::found_summary(found))
 }

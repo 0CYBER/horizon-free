@@ -1,12 +1,16 @@
 //! The sign editing screen (`SignEditScreen` / `HangingSignEditScreen`):
 //! opened when a sign is placed, four lines limited to the sign's line
 //! width, Up/Down/Enter move between lines, Escape or Done closes.
-use super::{Game, lan::LanHost};
+use super::{
+    Game,
+    commands::{Target, execute::Source},
+    lan::LanHost,
+};
 use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
     items::ItemStack,
-    signs::{DYE_TEXT, wood_type},
+    signs::{ClickAction, DYE_TEXT, click_action, editor_sprite},
     ui::EditBox,
 };
 use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
@@ -34,6 +38,19 @@ fn sign_box() -> EditBox {
     edit
 }
 
+/// The Done button's text, `CommonComponents.GUI_DONE`, in the selected language.
+fn done_label() -> String {
+    super::screen_info::tr("gui.done", &[])
+}
+/// AbstractSignEditScreen.init's Done button: `width / 2 - 100`,
+/// `height / 4 + 144`, int GUI pixels.
+fn done_button(w: f32, h: f32) -> (f32, f32) {
+    (
+        (w.ceil() / 2.0).floor() - 100.0,
+        (h.ceil() / 4.0).floor() + 144.0,
+    )
+}
+
 impl Game<'_> {
     /// `SignBlockEntity.getSlotPlayerIsFacing`: whether the player stands in
     /// front of the sign's text (within 90 degrees of its facing).
@@ -41,14 +58,15 @@ impl Game<'_> {
         let Some(player) = self.player.as_ref() else {
             return true;
         };
-        let state = self.world.block(pos.0, pos.1, pos.2);
-        let Some(state) = self.pack.assets.registry.state(state) else {
+        let id = self.world.block(pos.0, pos.1, pos.2);
+        let Some(state) = self.pack.assets.registry.state(id) else {
             return true;
         };
+        let form = self.res.facts().get(id).sign_form();
         let prop = |key: &str| state.properties.get(key).map(String::as_str);
         // getYRotationDegrees: a wall sign's `Direction.toYRot`, a standing or
         // ceiling sign's rotation segment.
-        let y_rot = if state.name.contains("_wall_") {
+        let y_rot = if form.is_some_and(|f| f.wall) {
             match prop("facing") {
                 Some("west") => 90.0,
                 Some("north") => 180.0,
@@ -63,7 +81,7 @@ impl Game<'_> {
         };
         // getSignHitboxCenterPosition: only a wall sign's board is off-centre,
         // against the wall it hangs on.
-        let centre = if state.name.ends_with("_wall_sign") {
+        let centre = if form.is_some_and(|f| f.wall && !f.hanging) {
             match y_rot as i32 {
                 90 => (0.9375, 0.5),
                 180 => (0.5, 0.9375),
@@ -81,11 +99,183 @@ impl Game<'_> {
         let diff = if diff >= 180.0 { 360.0 - diff } else { diff };
         diff <= 90.0
     }
-    /// `SignBlock.useWithoutItem` (the block's `OpenMenu` effect): a waxed
-    /// sign plays the failed-interaction sound; otherwise a player who may
-    /// build edits the side they face.
+    /// `SignBlockEntity.canExecuteClickCommands` for the side the acting
+    /// player faces: a waxed sign with a `run_command` click event on it.
+    pub(super) fn sign_can_execute_click_commands(&self, pos: (i32, i32, i32)) -> bool {
+        // Only a waxed sign can; skip the facing maths for everything else.
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&pos) else {
+            return false;
+        };
+        sign.waxed && sign.can_execute_click_commands(self.facing_sign_front(pos))
+    }
+    /// `WallHangingSignBlock.shouldTryToChainAnotherHangingSign` and
+    /// `CeilingHangingSignBlock.shouldTryToChainAnotherHangingSign`: a hanging
+    /// sign item clicked on a hanging sign's free side chains another sign onto
+    /// it, unless the side the player faces carries click commands the click
+    /// runs instead (`canExecuteClickCommands`).
+    pub(super) fn chains_hanging_sign(
+        &self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        held: Option<&ItemStack>,
+    ) -> bool {
+        // `itemStack.getItem() instanceof HangingSignItem`, by the item's class
+        // and not its name.
+        let hanging_sign = held.is_some_and(|s| {
+            self.res
+                .behaviours()
+                .item_binding(&s.item)
+                .is_some_and(|i| i.kind == horizon_world::level::ItemKind::HangingSign)
+        });
+        let key = (pos[0], pos[1], pos[2]);
+        if !hanging_sign {
+            return false;
+        }
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(form) = self
+            .res
+            .facts()
+            .get(state)
+            .sign_form()
+            .filter(|f| f.hanging)
+        else {
+            return false;
+        };
+        let free_side = if form.wall {
+            // `isHittingEditableSide`: a wall hanging sign's board lies in its
+            // FACING's plane, so its two faces are the editable text and only
+            // its edges chain.
+            let Some(facing) = self
+                .pack
+                .assets
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("facing"))
+            else {
+                return false;
+            };
+            let axis = match &**facing {
+                "east" | "west" => 0,
+                "up" | "down" => 1,
+                _ => 2,
+            };
+            face.iter().position(|c| *c != 0) != Some(axis)
+        } else {
+            // `hitResult.getDirection().equals(Direction.DOWN)`.
+            face == [0, -1, 0]
+        };
+        free_side && !self.sign_can_execute_click_commands(key)
+    }
+    /// `SignBlockEntity.createCommandSourceStack`: the acting player runs the
+    /// command from the middle of the sign's block, rotation zero, at the
+    /// game master level, with `CommandSource.NULL` (no feedback, no failure
+    /// messages).
+    fn sign_command_source(&self, pos: [i32; 3]) -> Source {
+        Source {
+            entity: self.player.is_some().then_some(Target::Player),
+            pos: pos.map(|v| f64::from(v) + 0.5),
+            rot: [0.0, 0.0],
+            eyes: false,
+            silent: true,
+            store: None,
+            dimension: self.dim,
+            level: None,
+            block: None,
+            cart: None,
+        }
+    }
+    /// Run a sign's `run_command` line as the prefixed command vanilla runs
+    /// it as: a leading slash is allowed, errors are not reported (the NULL
+    /// source).
+    fn run_sign_command(&mut self, pos: [i32; 3], command: &str) {
+        let source = self.sign_command_source(pos);
+        let line = command.strip_prefix('/').unwrap_or(command);
+        self.exec = Default::default();
+        let permission = std::mem::replace(&mut self.ui.registries.permission, 2);
+        let _ = self.execute_line(line, source);
+        self.ui.registries.permission = permission;
+        // InventoryChangeTrigger fires as slots change, not on the next tick.
+        if self.player.is_some() {
+            self.check_inventory_trigger();
+        }
+    }
+    /// `SignBlockEntity.executeClickCommandsIfPresent`: every line of the
+    /// side whose style has a `run_command`, `show_dialog` or `custom` click
+    /// event runs it as the acting player when the sign allows op features;
+    /// otherwise the player is told click actions are disabled. Whether any
+    /// line had one.
+    fn execute_sign_click_commands(&mut self, pos: [i32; 3], front: bool) -> bool {
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
+            return false;
+        };
+        let allow_op_features = sign.allow_op_features;
+        let side = if front { &sign.front } else { &sign.back };
+        // The side as it was when the loop began: a command may change it.
+        let events: Vec<_> = side.click.iter().flatten().cloned().collect();
+        let mut any_click_command = false;
+        for event in &events {
+            match click_action(event) {
+                Some(ClickAction::RunCommand(command)) => {
+                    if allow_op_features {
+                        self.run_sign_command(pos, &command);
+                    }
+                    any_click_command = true;
+                }
+                Some(ClickAction::ShowDialog(dialog)) => {
+                    if allow_op_features {
+                        self.show_click_dialog(dialog);
+                    }
+                    any_click_command = true;
+                }
+                // MinecraftServer.handleCustomClickAction only logs it.
+                Some(ClickAction::Custom { id, payload }) => {
+                    if allow_op_features {
+                        log::debug!("Received custom click action {id} with payload {payload:?}");
+                    }
+                    any_click_command = true;
+                }
+                None => {}
+            }
+        }
+        if !allow_op_features && any_click_command {
+            self.sign_click_actions_disabled();
+        }
+        any_click_command
+    }
+    /// `Player.sendOverlayMessage(CLICK_ACTIONS_DISABLED)`: red text on the
+    /// action bar. A guest gets a packet, so its own client translates it.
+    fn sign_click_actions_disabled(&mut self) {
+        const KEY: &str = "sign.click_actions_disabled";
+        if self.lan_acting.is_some() {
+            let message = horizon_client::text::Text::translate(KEY, &[])
+                .with_color(horizon_client::text::RED);
+            self.guest_packets.push(C::SystemChat(play::SystemChat {
+                content: horizon_client::lan::data::component_nbt(&message.component()),
+                overlay: true,
+            }));
+        } else {
+            self.message = Some((
+                self.translate(KEY, "Click actions are disabled for this sign"),
+                std::time::Instant::now(),
+            ));
+        }
+    }
+    /// `SignBlock.useWithoutItem` (the block's `OpenMenu` effect): the side
+    /// the player faces runs its click commands first; then a waxed sign
+    /// plays the failed-interaction sound, a sign that ran one does nothing
+    /// more, and otherwise a player who may build edits the side they face.
     pub(super) fn use_sign_empty_hand(&mut self, pos: [i32; 3]) {
         let key = (pos[0], pos[1], pos[2]);
+        if !matches!(
+            self.world.block_entities.get(&key),
+            Some(BlockEntity::Sign(_))
+        ) {
+            return;
+        }
+        let front = self.facing_sign_front(key);
+        let executed = self.execute_sign_click_commands(pos, front);
+        // The commands may have changed the sign, or removed it.
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
             return;
         };
@@ -98,9 +288,12 @@ impl Game<'_> {
             };
             self.audio
                 .play(sound, Some(pos.map(|v| f64::from(v) + 0.5)), 1.0, 1.0);
-        } else if self.may_build() {
-            let front = self.facing_sign_front(key);
-            self.open_sign_editor(key, front);
+        } else if !executed
+            && !self.other_player_is_editing_sign(key)
+            && self.may_build()
+            && self.sign_side_has_editable_text(key, front)
+        {
+            self.open_text_edit(key, front);
         }
     }
     /// `SignBlock.useItemOn` with a `SignApplicator` in hand (dyes, ink sacs,
@@ -111,10 +304,11 @@ impl Game<'_> {
             return false;
         };
         let key = (pos[0], pos[1], pos[2]);
-        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
-            return false;
+        let waxed = match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Sign(sign)) => sign.waxed,
+            _ => return false,
         };
-        if sign.waxed || !self.may_build() {
+        if waxed || !self.may_build() {
             return false;
         }
         let item = &*stack.item;
@@ -132,6 +326,11 @@ impl Game<'_> {
             "minecraft:honeycomb" | "minecraft:glow_ink_sac" | "minecraft:ink_sac"
         ) && colour.is_none()
         {
+            return false;
+        }
+        // `SignBlock.useItemOn`: a sign another player's editor is on takes no
+        // dye, ink sac or honeycomb.
+        if self.other_player_is_editing_sign(key) {
             return false;
         }
         let front = self.facing_sign_front(key);
@@ -174,6 +373,7 @@ impl Game<'_> {
         }
         self.audio.play(sound, Some(centre), 1.0, 1.0);
         self.mark_block_entity_updated(key);
+        self.execute_sign_click_commands(pos, front);
         let state = self.world.block(pos[0], pos[1], pos[2]);
         self.post_block_game_event(
             "minecraft:block_change",
@@ -181,10 +381,79 @@ impl Game<'_> {
             self.sculk_actor(),
             Some(state),
         );
-        self.stats.add("used", &stack.item, 1);
+        self.award_stat("used", &stack.item, 1);
         self.consume_held();
         self.trigger_block("minecraft:item_used_on_block", pos, stack);
         true
+    }
+    /// `SignBlock.openTextEdit`: the sign is this player's to edit while its
+    /// editor is open (`setAllowedPlayerEditor`), and it opens.
+    pub(super) fn open_text_edit(&mut self, pos: (i32, i32, i32), front: bool) {
+        // `Minecraft.setScreen` drops the editor already open first, and that
+        // sign is nobody's again.
+        self.close_sign_editor();
+        let who = self.sign_editor_uuid();
+        self.world.block_entities.set_sign_editor(pos, Some(who));
+        self.open_sign_editor(pos, front);
+    }
+    /// `Player.getUUID` of the acting player: the one a sign remembers as its
+    /// editor.
+    fn sign_editor_uuid(&mut self) -> u128 {
+        horizon_client::lan::playerdata::ints_uuid(self.acting_player_uuid())
+    }
+    /// `SignBlock.otherPlayerIsEditingSign`: the sign at `key` belongs to
+    /// someone else's editor right now.
+    fn other_player_is_editing_sign(&mut self, key: (i32, i32, i32)) -> bool {
+        match self.world.block_entities.sign_editor(&key) {
+            Some(holder) => holder != self.sign_editor_uuid(),
+            None => false,
+        }
+    }
+    /// `SignText.hasEditableText` of the side the player faces: if every line is
+    /// plain text, the editor rewrites nothing a player would miss.
+    fn sign_side_has_editable_text(&self, key: (i32, i32, i32), front: bool) -> bool {
+        match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Sign(sign)) => {
+                let side = if front { &sign.front } else { &sign.back };
+                side.has_editable_text()
+            }
+            _ => false,
+        }
+    }
+    /// `SignBlockEntity.tick` (`clearInvalidPlayerWhoMayEdit`): a sign keeps its
+    /// editor only while that player is here and within the block interaction
+    /// range plus four blocks of it.
+    pub(super) fn tick_sign_editors(&mut self) {
+        let held: Vec<(i32, i32, i32)> =
+            self.world.block_entities.sign_editors().copied().collect();
+        for pos in held {
+            match self.world.block_entities.sign_editor(&pos) {
+                Some(who) if self.sign_editor_in_range(who, pos) => {}
+                Some(_) => self.world.block_entities.set_sign_editor(pos, None),
+                // A sign that is gone, or one no editor holds.
+                None => self.world.block_entities.forget_sign_editor(pos),
+            }
+        }
+    }
+    /// `SignBlockEntity.playerIsTooFarAwayToEdit`: a player who left is no
+    /// player at all (`Level.getPlayerByUUID` finds nobody).
+    fn sign_editor_in_range(&self, who: u128, pos: (i32, i32, i32)) -> bool {
+        let at = [pos.0, pos.1, pos.2];
+        let me = self
+            .level
+            .player_uuid
+            .map(horizon_client::lan::playerdata::ints_uuid);
+        if me == Some(who) && self.player.is_some() {
+            return self.eye_position().is_some_and(|eye| {
+                horizon_client::lan::guest::within_block_range(eye, self.reach() + 4.0, at)
+            });
+        }
+        self.lan.as_ref().is_some_and(|host| {
+            host.hub
+                .guests
+                .iter()
+                .any(|g| g.uuid == who && g.within_block_range(at, 4.0))
+        })
     }
     /// `SignBlock.openTextEdit` for the front side after placement.
     pub(super) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
@@ -206,6 +475,29 @@ impl Game<'_> {
         self.keys.clear();
         self.right = false;
         self.capture(false);
+        if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone()) {
+            self.native_player_open_sign(player, &name, [pos.0, pos.1, pos.2], front);
+        }
+    }
+    /// `AbstractSignEditScreen.tick`: the editor closes (and `removed` sends
+    /// the text) once its sign is removed or the player's eyes are further
+    /// than 4 blocks beyond the block interaction range
+    /// (`SignBlockEntity.playerIsTooFarAwayToEdit`).
+    pub(super) fn tick_sign_editor(&mut self) {
+        let Some(edit) = &self.sign_edit else {
+            return;
+        };
+        let (x, y, z) = edit.pos;
+        let near = self.eye_position().is_some_and(|eye| {
+            horizon_client::lan::guest::within_block_range(eye, self.reach() + 4.0, [x, y, z])
+        });
+        let sign = matches!(
+            self.world.block_entities.get(&edit.pos),
+            Some(BlockEntity::Sign(_))
+        );
+        if !sign || !near {
+            self.close_sign_editor();
+        }
     }
     /// `AbstractSignEditScreen.removed`: a server's client sends what it
     /// wrote (ServerboundSignUpdatePacket); the window's own world keeps it
@@ -221,11 +513,15 @@ impl Game<'_> {
             } else {
                 self.mark_block_entity_updated(edit.pos);
             }
+            // `SignBlockEntity.updateSignText`'s `setAllowedPlayerEditor(null)`:
+            // the editor that closes gives the sign up.
+            self.world.block_entities.set_sign_editor(edit.pos, None);
         }
         self.capture(true);
     }
     /// `ServerPlayer.openTextEdit` for the guest whose action opened a sign:
-    /// the block, then the editor, on its client, and the guest may write on it.
+    /// the block, then the editor, on its client. The sign already remembers
+    /// the guest as its editor (`SignBlock.openTextEdit`).
     pub(super) fn lan_open_sign_editor(&mut self, host: &mut LanHost, conn: u32, edit: SignEditor) {
         let pos = [edit.pos.0, edit.pos.1, edit.pos.2];
         let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
@@ -238,32 +534,81 @@ impl Game<'_> {
                 front: edit.front,
             }),
         );
-        host.play.entry(conn).or_default().sign_editing = Some(pos);
     }
     /// `ServerGamePacketListenerImpl.handleSignUpdate`: the lines, formatting
-    /// codes stripped, go on the sign the guest may write on unless it is
-    /// waxed (`SignBlockEntity.updateSignText`); a guest gone out of reach
-    /// may no longer write (`playerIsTooFarAwayToEdit`).
-    pub(super) fn lan_sign_update(&mut self, host: &mut LanHost, conn: u32, p: play::SignUpdate) {
+    /// codes stripped, go on the sign whose editor this player is and that is
+    /// not waxed (`SignBlockEntity.updateSignText`); the sign then releases
+    /// them.
+    pub(super) fn lan_sign_update(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        mut p: play::SignUpdate,
+    ) {
         let Some(g) = host.hub.guest(conn) else {
             return;
         };
-        let near = g.within_block_range(p.pos, 4.0);
-        let Some(play) = host.play.get_mut(&conn) else {
+        let (uuid, name) = (g.uuid, g.name.clone());
+        let key = (p.pos[0], p.pos[1], p.pos[2]);
+        let lines = p.lines.join(" ");
+        if !self.chat_filter_text(
+            host,
+            conn,
+            &[&lines],
+            horizon_client::lan::hub::chat_filter::Place::Sign,
+        ) {
+            // The sign stays as it was: the editor closes, as after a sign the server refused.
+            self.world.block_entities.set_sign_editor(key, None);
+            // The player's client shows the text it sent: the sign as it is, again.
+            self.mark_block_entity_updated(key);
+            return;
+        }
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
             return;
         };
-        if !near {
-            play.sign_editing = None;
-        }
-        if play.sign_editing != Some(p.pos) {
-            log::warn!("{} just tried to change non-editable sign", g.name);
+        if sign.waxed || sign.allowed_editor != Some(uuid) {
+            log::warn!("{name} just tried to change non-editable sign");
             return;
         }
-        let key = (p.pos[0], p.pos[1], p.pos[2]);
+        // Everything vanilla checks has passed: the mods hear what is about to
+        // go on the sign, with the player's state swapped in, and may rewrite
+        // or refuse it.
+        if let Some((uuid, name, dimension)) = host
+            .hub
+            .guest(conn)
+            .map(|g| (g.uuid, g.name.clone(), g.dimension.clone()))
+        {
+            let mut lines = p.lines.to_vec();
+            let mut cancel = false;
+            self.as_guest_messaged(host, conn, |game| {
+                game.native_sign_changed(
+                    uuid,
+                    &name,
+                    &dimension,
+                    p.pos,
+                    p.front,
+                    &mut lines,
+                    &mut cancel,
+                );
+            });
+            if cancel {
+                // The sign keeps its text: the editor closes, and the player's
+                // client, which shows what it sent, gets the sign as it is.
+                self.world.block_entities.set_sign_editor(key, None);
+                self.mark_block_entity_updated(key);
+                return;
+            }
+            lines.resize(4, String::new());
+            for (line, new) in p.lines.iter_mut().zip(lines) {
+                *line = new;
+            }
+        }
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) else {
             return;
         };
+        // A hook may have broken the sign.
         if sign.waxed {
+            self.world.block_entities.set_sign_editor(key, None);
             return;
         }
         let side = if p.front {
@@ -274,7 +619,8 @@ impl Game<'_> {
         for (line, new) in side.lines.iter_mut().zip(&p.lines) {
             *line = horizon_client::clipboard::strip_formatting(new);
         }
-        play.sign_editing = None;
+        // `SignBlockEntity.updateSignText` releases the sign, then sends it.
+        self.world.block_entities.set_sign_editor(key, None);
         self.mark_block_entity_updated(key);
     }
     /// `ClientPacketListener.handleOpenSignEditor`: the editor on a sign this
@@ -464,7 +810,7 @@ impl Game<'_> {
     /// or a click on a line (`EditBox.onClick`).
     pub(super) fn sign_edit_click(&mut self, size: [u32; 2]) {
         let b = HudBatch::new(size);
-        let (x, y) = (b.width / 2.0 - 100.0, b.height / 4.0 + 144.0);
+        let (x, y) = done_button(b.width, b.height);
         let (mx, my) = self.cursor;
         if mx >= x && mx < x + 200.0 && my >= y && my < y + 20.0 {
             self.audio.play_button_click();
@@ -525,31 +871,31 @@ impl Game<'_> {
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&edit.pos) else {
             return;
         };
+        self.render_transparent_background("sign_editor", batch);
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 16, 160));
         let (key, fallback) = if sign.hanging {
             ("hanging_sign.edit", "Edit Hanging Sign Message")
         } else {
             ("sign.edit", "Edit Sign Message")
         };
         let title = self.translate(key, fallback);
+        // SignEditScreen / HangingSignEditScreen: their title.
+        horizon_client::widgets::begin_screen(|| {
+            horizon_client::widgets::ScreenInfo::new("sign_edit", title.clone())
+        });
         let tw = HudBatch::text_width(atlas, &title);
         batch.text(atlas, &title, (w - tw) / 2.0, 40.0, u32::MAX, true);
-        let name = self
-            .res
-            .facts()
-            .get(self.world.block(edit.pos.0, edit.pos.1, edit.pos.2))
-            .name
-            .clone();
-        let wood = wood_type(&name);
+        let facts = self.res.facts();
+        let block = facts.get(self.world.block(edit.pos.0, edit.pos.1, edit.pos.2));
+        let wood = facts.wood_type(&block.name).unwrap_or("oak");
         let cx = w / 2.0;
         let y = if sign.hanging {
             // HangingSignEditScreen: 16x16 texture scaled 4.5 at (0, -13).
             let s = 4.5;
             batch.sprite_scaled(
                 atlas,
-                &format!("gui/hanging_signs/{wood}"),
+                &editor_sprite("hanging_signs", wood),
                 cx - 8.0 * s,
                 125.0 - 13.0 - 8.0 * s,
                 16.0 * s,
@@ -560,9 +906,9 @@ impl Game<'_> {
         } else {
             // SignEditScreen: 24x26 texture scaled 3.9 at (0, 27); wall signs show 12 rows.
             let s = 3.9;
-            let wall = name.contains("_wall_");
+            let wall = block.sign_form().is_some_and(|f| f.wall);
             let rows = if wall { 12.0 } else { 26.0 };
-            if let Some(mut r) = atlas.sprites.get(&format!("gui/signs/{wood}")).copied() {
+            if let Some(mut r) = atlas.sprites.get(&editor_sprite("signs", wood)).copied() {
                 r.v1 = r.v0 + (r.v1 - r.v0) * rows / 26.0;
                 batch.rect_uv(
                     cx - 12.0 * s,
@@ -616,19 +962,22 @@ impl Game<'_> {
                     true,
                 );
             }
+            let pre: String = value.chars().take(edit.edit.cursor).collect();
+            let caret_x = x + HudBatch::text_width(atlas, &pre);
             if edit.edit.cursor_visible() {
-                let pre: String = value.chars().take(edit.edit.cursor).collect();
-                batch.fill(
-                    atlas,
-                    x + HudBatch::text_width(atlas, &pre),
-                    ly,
-                    1.0,
-                    line_height,
-                    color,
-                );
+                batch.fill(atlas, caret_x, ly, 1.0, line_height, color);
             }
+            horizon_client::preedit::report_caret(caret_x, ly, line_height);
         }
-        let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 144.0);
+        let (bx, by) = done_button(w, h);
+        horizon_client::widgets::declare_action(
+            horizon_client::widgets::Action::Done,
+            [bx, by, 200.0, 20.0],
+            true,
+        );
+        horizon_client::widgets::narratable(|| {
+            horizon_client::widgets::Narratable::button(done_label(), [bx, by, 200.0, 20.0], true)
+        });
         batch.sprite_scaled(
             atlas,
             "gui/sprites/widget/button",
@@ -638,14 +987,52 @@ impl Game<'_> {
             20.0,
             u32::MAX,
         );
-        let tw = HudBatch::text_width(atlas, "Done");
+        let done = done_label();
+        let tw = HudBatch::text_width(atlas, &done);
         batch.text(
             atlas,
-            "Done",
-            bx + (200.0 - tw) / 2.0,
+            &done,
+            bx + 100.0 - (tw / 2.0).floor(),
             by + 6.0,
             u32::MAX,
             true,
         );
+    }
+}
+
+#[cfg(test)]
+#[path = "sign_edit_tests.rs"]
+mod sign_edit_tests;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn done_button_sits_on_whole_gui_pixels() {
+        // `width / 2 - 100, height / 4 + 144` in ints: 334 high is 83 + 144.
+        assert_eq!(super::done_button(427.0, 334.0), (113.0, 227.0));
+        assert_eq!(super::done_button(320.0, 240.0), (60.0, 204.0));
+    }
+
+    /// The Done button said "Done" in every language (#1927).
+    #[test]
+    fn done_button_reads_the_selected_language() {
+        use horizon_client::lang::{Language, ResourceSource, scoped};
+        struct Vanilla;
+        impl ResourceSource for Vanilla {
+            fn read(&self, path: &str) -> Option<Vec<u8>> {
+                match path {
+                    "assets/minecraft/lang/en_us.json" => Some(br#"{"gui.done": "Done"}"#.to_vec()),
+                    "assets/minecraft/lang/de_de.json" => {
+                        Some(br#"{"gui.done": "Fertig"}"#.to_vec())
+                    }
+                    _ => None,
+                }
+            }
+        }
+        for (code, want) in [("de_de", "Fertig"), ("en_us", "Done")] {
+            let (label, missed) = scoped(Language::load(&[&Vanilla], code), super::done_label);
+            assert_eq!(label, want, "{code}");
+            assert!(missed.is_empty(), "{code}: {missed:?}");
+        }
     }
 }

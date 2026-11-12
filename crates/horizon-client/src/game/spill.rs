@@ -3,7 +3,7 @@
 //! block drops (`Block.dropResources`), drawn from the level random at the
 //! moment vanilla draws them. The item entities they make are added to the
 //! world as soon as the behaviour returns, within the same tick.
-use super::{Game, GameLevel, Screen, dispenser::new_item_motion, storage::is_shulker_box};
+use super::{Game, GameLevel, Screen, storage::is_shulker_box};
 use horizon_client::{
     block_entity_item, block_entity_nbt,
     containers::{Banner, BlockEntity},
@@ -32,7 +32,7 @@ pub(super) struct Pending {
     pub(super) shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
     pub(super) banner: HashMap<[i32; 3], Banner>,
     /// The block's item and the custom name.
-    pub(super) names: HashMap<[i32; 3], (String, String)>,
+    pub(super) names: HashMap<[i32; 3], (String, Tag)>,
     /// A decorated pot's sherds (back, left, right, front).
     pub(super) pot: HashMap<[i32; 3], [Option<ItemStack>; 4]>,
     /// A head's profile, note block sound and name, or a hive's bees: the
@@ -40,25 +40,46 @@ pub(super) struct Pending {
     pub(super) copied: HashMap<[i32; 3], (String, Compound)>,
 }
 impl Pending {
-    /// Remember what the block entity at `pos` copies into the drops of `block`.
+    /// `record` for the block entity at `pos` while it is still in `world`:
+    /// its custom name and lock come from there.
+    pub(super) fn record_from(
+        &mut self,
+        world: &horizon_client::world::World,
+        pos: [i32; 3],
+        entity: &BlockEntity,
+        block: &str,
+    ) {
+        let key = (pos[0], pos[1], pos[2]);
+        let name = world.block_names.get(&key).cloned();
+        self.record(pos, entity, block, name, world.block_lock(key));
+    }
+    /// Remember what the block entity at `pos` copies into its own drop.
+    /// Name and lock live outside the model: snapshot the actual lock before
+    /// removal forgets its source. Only the supported shulker copy policy takes it.
     pub(super) fn record(
         &mut self,
         pos: [i32; 3],
         entity: &BlockEntity,
         block: &str,
-        name: Option<String>,
+        name: Option<Tag>,
+        lock: Option<&Tag>,
     ) {
         if let BlockEntity::Banner(banner) = entity {
             self.banner.insert(pos, banner.clone());
             return;
         }
-        if let Some(name) = name {
+        // The vanilla crafter loot table does not copy the block entity's name.
+        if let Some(name) = name
+            && !matches!(entity, BlockEntity::Crafter(_))
+        {
             self.names.insert(pos, (block.to_owned(), name));
         }
         // `copy_components` from the block entity: the head tables copy the
         // profile (player heads), note block sound and name, the hive tables
-        // the bees.
+        // the bees, and shulker tables the actual external lock. This is the
+        // supported vanilla class policy, not a selected-table include filter.
         let include: &[&str] = match entity {
+            BlockEntity::Chest(_) if is_shulker_box(block) => &["minecraft:lock"],
             BlockEntity::Skull(_) if block.starts_with("minecraft:player_") => &[
                 "minecraft:profile",
                 "minecraft:note_block_sound",
@@ -66,10 +87,17 @@ impl Pending {
             ],
             BlockEntity::Skull(_) => &["minecraft:custom_name"],
             BlockEntity::Beehive(_) => &["minecraft:bees"],
+            // The statue loot tables copy the custom name of the golem it was.
+            BlockEntity::CopperGolemStatue(_) => &["minecraft:custom_name"],
             _ => &[],
         };
         if !include.is_empty() {
-            let saved = save::encode_block_entity((pos[0], pos[1], pos[2]), entity, block);
+            let mut saved = save::encode_block_entity((pos[0], pos[1], pos[2]), entity, block);
+            if is_shulker_box(block)
+                && let (Some(lock), Tag::Compound(tag)) = (lock, &mut saved)
+            {
+                tag.insert("lock".into(), lock.clone());
+            }
             let mut patch = block_entity_nbt::canonical(&saved)
                 .map(|saved| block_entity_item::pick(&saved))
                 .unwrap_or_default();
@@ -221,6 +249,55 @@ pub(super) struct Spill {
     /// Block entities the behaviour removed, for the game's own follow-ups
     /// (open screens, playing songs).
     pub(super) removed: Vec<([i32; 3], BlockEntity)>,
+    /// Runs of `spawns` a player's use popped (a picked berry bush), for the
+    /// mods' `native_loot_drops`.
+    pub(super) used: Vec<UsedDrops>,
+}
+
+/// `spawns[start..end]` came from `table` at the block `pos` in `state`.
+pub(super) struct UsedDrops {
+    start: usize,
+    end: usize,
+    pos: [i32; 3],
+    state: BlockStateId,
+    table: &'static str,
+}
+
+impl Spill {
+    pub(super) fn is_empty(&self) -> bool {
+        self.spawns.is_empty()
+            && self.orbs.is_empty()
+            && self.removed.is_empty()
+            && self.used.is_empty()
+    }
+}
+
+/// Lets `say` change each use's run of `spawns`, newest first so the earlier
+/// ranges hold. A run's stacks keep their spots, and a stack `say` adds takes
+/// the run's last spot, else the block's top.
+fn retell_runs(
+    spawns: &mut Vec<Spawn>,
+    used: &[UsedDrops],
+    mut say: impl FnMut(&UsedDrops, [f64; 3], &mut Vec<ItemStack>),
+) {
+    for used in used.iter().rev() {
+        let run: Vec<Spawn> = spawns.drain(used.start..used.end).collect();
+        let mut drops: Vec<ItemStack> = run.iter().map(|s| s.stack.clone()).collect();
+        let origin = used.pos.map(|c| f64::from(c) + 0.5);
+        say(used, origin, &mut drops);
+        let top = [origin[0], origin[1] + 0.5, origin[2]];
+        let kept: Vec<Spawn> = drops
+            .into_iter()
+            .enumerate()
+            .map(|(i, stack)| Spawn {
+                stack,
+                pos: run.get(i).or(run.last()).map_or(top, |s| s.pos),
+                motion: run.get(i).and_then(|s| s.motion),
+                delay: run.get(i).map_or(10, |s| s.delay),
+            })
+            .collect();
+        spawns.splice(used.start..used.start, kept);
+    }
 }
 
 /// `Block.popResource`: a spot around the block's centre from the level random.
@@ -236,6 +313,58 @@ pub(super) fn pop_position(
         f64::from(pos[1]) + 0.5 + offset() - half_height,
         f64::from(pos[2]) + 0.5 + offset(),
     ]
+}
+
+/// `Block.popResourceFromFace`'s position and motion: an item on the clicked
+/// face, moved off that face and jittered across the other two axes.
+pub(super) fn pop_position_from_face(
+    random: &mut impl horizon_core::random::RandomSource,
+    pos: [i32; 3],
+    face: [i32; 3],
+) -> ([f64; 3], [f64; 3]) {
+    fn jitter<R: horizon_core::random::RandomSource>(random: &mut R, min: f64, max: f64) -> f64 {
+        min + random.next_double() * (max - min)
+    }
+    // EntityTypes.ITEM is 0.25 wide and 0.25 high.
+    let (half_width, half_height) = (0.125, 0.125);
+    let x = f64::from(pos[0])
+        + 0.5
+        + if face[0] == 0 {
+            jitter(random, -0.25, 0.25)
+        } else {
+            f64::from(face[0]) * (0.5 + half_width)
+        };
+    let y = f64::from(pos[1])
+        + 0.5
+        + if face[1] == 0 {
+            jitter(random, -0.25, 0.25)
+        } else {
+            f64::from(face[1]) * (0.5 + half_height)
+        }
+        - half_height;
+    let z = f64::from(pos[2])
+        + 0.5
+        + if face[2] == 0 {
+            jitter(random, -0.25, 0.25)
+        } else {
+            f64::from(face[2]) * (0.5 + half_width)
+        };
+    let dx = if face[0] == 0 {
+        jitter(random, -0.1, 0.1)
+    } else {
+        f64::from(face[0]) * 0.1
+    };
+    let dy = if face[1] == 0 {
+        jitter(random, 0.0, 0.1)
+    } else {
+        f64::from(face[1]) * 0.1 + 0.1
+    };
+    let dz = if face[2] == 0 {
+        jitter(random, -0.1, 0.1)
+    } else {
+        f64::from(face[2]) * 0.1
+    };
+    ([x, y, z], [dx, dy, dz])
 }
 
 /// The block entity at `pos` Horizon keeps as it was loaded, if any
@@ -317,7 +446,12 @@ impl GameLevel<'_> {
     }
     /// `Block.dropFromBlockInteractLootTable` with `Block.popResource` of
     /// every stack.
-    pub(super) fn drop_interact_loot(&mut self, pos: BlockPos, state: BlockStateId, table: &str) {
+    pub(super) fn drop_interact_loot(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        table: &'static str,
+    ) {
         let drops = self.items.interact_loot(
             table,
             self.registry,
@@ -326,53 +460,102 @@ impl GameLevel<'_> {
             self.rand_sequences,
             self.seed,
         );
+        let start = self.spill.spawns.len();
         for stack in drops {
             if &*stack.item != "minecraft:air" && stack.count > 0 {
                 self.pop_resource([pos.x, pos.y, pos.z], stack);
             }
         }
+        self.spill.used.push(UsedDrops {
+            start,
+            end: self.spill.spawns.len(),
+            pos: [pos.x, pos.y, pos.z],
+            state,
+            table,
+        });
     }
     /// `Block.dropResources(state, level, pos, blockEntity)`: the block's loot
     /// (from its random sequence, else the level random), with what its block
-    /// entity copies into it, popped at once.
+    /// entity copies into it, popped at once. While a mod's machine breaks
+    /// the block (`native_machine_destroy_block`), the loot is rolled with its
+    /// `drop_tool` (`dropResources(.., entity, tool)`) and, given `drop_into`,
+    /// kept there instead of popped.
     pub(super) fn drop_resources_now(&mut self, pos: BlockPos, state: BlockStateId) {
         let key = (pos.x, pos.y, pos.z);
         let at = [pos.x, pos.y, pos.z];
         if let Some(entity) = self.world.block_entities.get(&key) {
             let entity = entity.clone();
-            let name = self.world.block_names.get(&key).cloned();
             let block = self.facts.get(state).name.clone();
-            self.pending.record(at, &entity, &block, name);
+            self.pending.record_from(self.world, at, &entity, &block);
         } else if let Some(tag) = saved_entity(self.world, [pos.x, pos.y, pos.z]) {
             self.pending.record_saved(at, &tag);
         }
         let dynamic = self.pending.dynamic(at);
+        // Only the block a machine breaks: a neighbour that pops off with it
+        // drops as with no tool, and pops (`Level.destroyBlock` for it).
+        let machine = self
+            .drop_tool
+            .as_ref()
+            .is_some_and(|(target, _)| *target == key);
+        let tool = self
+            .drop_tool
+            .as_ref()
+            .filter(|_| machine)
+            .and_then(|(_, tool)| tool.as_ref());
+        let silk = tool.is_some_and(|t| t.enchantment_level("minecraft:silk_touch") > 0);
+        let breaker = self.drop_breaker_at == Some(pos);
         let drops = match self.items.block_loot_sequence(self.registry, state) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.seed);
-                self.items
-                    .block_drops_with(self.registry, state, None, &dynamic, random)
+                self.items.block_drops_exploded(
+                    self.registry,
+                    state,
+                    tool,
+                    &dynamic,
+                    random,
+                    None,
+                    None,
+                    breaker,
+                )
             }
-            None => self.items.block_drops_with(
+            None => self.items.block_drops_exploded(
                 self.registry,
                 state,
-                None,
+                tool,
                 &dynamic,
                 &mut self.world.random,
+                None,
+                None,
+                breaker,
             ),
         };
-        for stack in drops {
-            if &*stack.item != "minecraft:air" && stack.count > 0 {
-                self.pop_resource(at, stack);
+        for mut stack in drops {
+            if &*stack.item == "minecraft:air" || stack.count == 0 {
+                continue;
+            }
+            match self.drop_into.as_mut().filter(|_| machine) {
+                Some(kept) => {
+                    self.pending.attach(at, &mut stack);
+                    kept.push(stack);
+                }
+                None => self.pop_resource(at, stack),
             }
         }
         self.pending.clear(at);
-        // BlockBehaviour.spawnAfterBreak with no tool: ores, sculk and spawners
-        // award experience at the block's centre.
+        // BlockBehaviour.spawnAfterBreak: ores, sculk and spawners award
+        // experience at the block's centre, except to a machine's silk touch
+        // tool (`processBlockExperience`; a spawner keeps its own), as the
+        // player's break does.
         let name = self.facts.get(state).name.clone();
-        if let Some(xp) = removal::break_experience(&mut self.world.random, &name)
+        // `xpRange.sample` draws before silk touch zeroes it.
+        let xp = removal::break_experience(&mut self.world.random, &name)
+            .filter(|_| !silk || &*name == "minecraft:spawner");
+        if let Some(mut xp) = xp
             && self.rules.block_drops
         {
+            if self.native_authoritative {
+                self.native_block_exp(self.dimension, pos, &name, &mut xp);
+            }
             let centre = [
                 f64::from(pos.x) + 0.5,
                 f64::from(pos.y) + 0.5,
@@ -401,6 +584,11 @@ impl GameLevel<'_> {
         side_effects: bool,
     ) -> u8 {
         let key = (pos.x, pos.y, pos.z);
+        // A replacement is a new block entity, even at the same position.
+        // Headless servers cannot rely on renderer visibility to discard this state.
+        if &*self.facts.get(old).name == "minecraft:end_gateway" {
+            self.gateway_servers.remove(&[pos.x, pos.y, pos.z]);
+        }
         if self.remove_saved_entity(pos, old, side_effects) {
             return 0;
         }
@@ -413,8 +601,21 @@ impl GameLevel<'_> {
         }
         let entity = self.world.block_entities.remove(&key);
         self.world.block_names.remove(&key);
+        self.world.forget_block_entity_source(key);
         let name = self.facts.get(old).name.clone();
-        let kind = removal::pre_remove(&name);
+        let kind = match &entity {
+            // BaseContainerBlockEntity.preRemoveSideEffects: Containers.dropContents.
+            Some(BlockEntity::Mod(m))
+                if !m.items.is_empty()
+                    && self.world.block_entities.mod_container(old.0).is_some() =>
+            {
+                PreRemove::Contents {
+                    slots: m.items.len(),
+                    furnace: false,
+                }
+            }
+            _ => removal::pre_remove(&name),
+        };
         let mut neighbour_updates = 0;
         if side_effects {
             match kind {
@@ -456,7 +657,7 @@ impl GameLevel<'_> {
                     // events and a neighbour update), the record pops, and
                     // onSongChanged updates the neighbours again.
                     if let Some(BlockEntity::Jukebox(j)) = &entity
-                        && let Some(record) = j.record.clone()
+                        && let Some(record) = j.record().cloned()
                     {
                         if j.playing {
                             self.jukebox_stopped(pos, old);
@@ -595,6 +796,14 @@ impl GameLevel<'_> {
         }
         true
     }
+    /// `Containers.dropContents` for a mod block entity that left the world
+    /// during its own tick (the block broke itself): what it held spills as
+    /// vanilla's `preRemoveSideEffects` would, instead of vanishing with it.
+    pub(super) fn drop_lost_contents(&mut self, pos: BlockPos, items: Vec<Option<ItemStack>>) {
+        for stack in items {
+            self.drop_item_stack(pos, stack);
+        }
+    }
     /// `Containers.dropItemStack` of one slot (an empty one still draws its spot).
     fn drop_item_stack(&mut self, pos: BlockPos, stack: Option<ItemStack>) {
         let count = stack.as_ref().map_or(0, |s| s.count);
@@ -617,16 +826,18 @@ impl Game<'_> {
     /// Add the item entities the block behaviour spawned and follow up on the
     /// block entities it removed.
     pub(super) fn flush_spill(&mut self) {
-        if self.spill.spawns.is_empty()
-            && self.spill.removed.is_empty()
-            && self.spill.orbs.is_empty()
-        {
+        if self.spill.is_empty() {
             return;
         }
-        let spill = std::mem::take(&mut self.spill);
+        let mut spill = std::mem::take(&mut self.spill);
+        let used = std::mem::take(&mut spill.used);
+        let tool = self.held().cloned();
+        retell_runs(&mut spill.spawns, &used, |used, origin, drops| {
+            let block = Some((used.pos, used.state));
+            self.native_use_drops(used.table, origin, block, None, tool.as_ref(), drops);
+        });
         for s in spill.spawns {
-            let motion = s.motion.unwrap_or_else(new_item_motion);
-            self.spawn_item(s.stack, s.pos, motion, s.delay);
+            self.add_item_entity(s.stack, s.pos, s.motion, s.delay);
         }
         for (at, value, merge_id) in spill.orbs {
             self.award_orb(at, value, merge_id);
@@ -652,6 +863,46 @@ mod tests {
     use horizon_world::nbt::Tag;
 
     #[test]
+    fn a_used_run_is_retold_in_place() {
+        let spawn = |item: &str, x: f64| Spawn {
+            stack: ItemStack::new(item, 1),
+            pos: [x, 0.0, 0.0],
+            motion: None,
+            delay: 10,
+        };
+        let mut spawns = vec![
+            spawn("minecraft:stone", 0.0),
+            spawn("minecraft:sweet_berries", 1.0),
+            spawn("minecraft:sweet_berries", 2.0),
+            spawn("minecraft:dirt", 3.0),
+        ];
+        let used = [UsedDrops {
+            start: 1,
+            end: 3,
+            pos: [4, 64, 4],
+            state: BlockStateId(0),
+            table: "minecraft:harvest/sweet_berry_bush",
+        }];
+        retell_runs(&mut spawns, &used, |used, origin, drops| {
+            assert_eq!(used.table, "minecraft:harvest/sweet_berry_bush");
+            assert_eq!(origin, [4.5, 64.5, 4.5]);
+            assert_eq!(drops.len(), 2);
+            drops.remove(0);
+            drops.push(ItemStack::new("minecraft:diamond", 1));
+        });
+        let items: Vec<(&str, f64)> = spawns.iter().map(|s| (&*s.stack.item, s.pos[0])).collect();
+        assert_eq!(
+            items,
+            [
+                ("minecraft:stone", 0.0),
+                ("minecraft:sweet_berries", 1.0),
+                ("minecraft:diamond", 2.0),
+                ("minecraft:dirt", 3.0),
+            ]
+        );
+    }
+
+    #[test]
     fn ominous_banner_survives_placement_save_and_drop() {
         let original = raider::ominous_banner();
         let Tag::Compound(components) = item_data::encode_components(&original).unwrap() else {
@@ -670,7 +921,7 @@ mod tests {
             };
             assert_eq!(banner.layers.len(), item_data::OMINOUS_LAYERS.len());
             let mut pending = Pending::default();
-            pending.record([pos.0, pos.1, pos.2], &loaded, block, None);
+            pending.record([pos.0, pos.1, pos.2], &loaded, block, None, None);
             let mut dropped = ItemStack::new("minecraft:white_banner", 1);
             pending.attach([pos.0, pos.1, pos.2], &mut dropped);
             assert!(dropped.data().unwrap().ominous_banner);
@@ -688,5 +939,142 @@ mod tests {
                 Some(Tag::Compound(components.clone()))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod crafter_drop_name_tests {
+    use super::super::native_machines::tests::server_game;
+    use super::*;
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    fn actual_crafter_destruction_keeps_source_name_off_the_dropped_item() {
+        let mut game = server_game();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.block_ticks
+            .add_empty_chunk(BlockPos::new(0, 0, 0).chunk())
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+        assert!(game.ui.rules.bool("block_drops"));
+        let clock = game.world.game_time;
+        let mut unexpected = Vec::new();
+        // Positive name-copy and unnamed controls precede the assigned case.
+        for (x, z, kind, name) in [
+            (3, 11, "chest", Some("Box")),
+            (11, 11, "shulker_box", Some("Box")),
+            (11, 3, "crafter", None),
+            (3, 3, "crafter", Some("Rig")),
+        ] {
+            let extra = name.map_or(String::new(), |n| format!(",CustomName:\"{n}\""));
+            assert!(game.run_command(&format!(
+                "setblock {x} 200 {z} minecraft:{kind}{{Items:[{{Slot:0b,id:\"minecraft:diamond\",count:3,components:{{\"minecraft:custom_data\":{{h212:1}}}}}}]{extra}}} strict"
+            )));
+            let key = (x, 200, z);
+            let item_id = format!("minecraft:{kind}");
+            assert_eq!(
+                &*game.res.facts().get(game.world.block(x, 200, z)).name,
+                item_id
+            );
+            assert_eq!(
+                &*game.res.facts().get(game.world.block(x, 199, z)).name,
+                "minecraft:stone"
+            );
+            assert_eq!(
+                game.world.block_names.get(&key),
+                name.map(|n| Tag::String(n.into())).as_ref()
+            );
+            let entity = game
+                .world
+                .block_entities
+                .get(&key)
+                .expect("actual source block entity");
+            assert_eq!(matches!(entity, BlockEntity::Crafter(_)), kind == "crafter");
+            let diamond = entity.slots()[0].as_ref().expect("actual loaded inventory");
+            assert_eq!((&*diamond.item, diamond.count), ("minecraft:diamond", 3));
+            assert_eq!(
+                diamond
+                    .data()
+                    .and_then(|d| d.other("minecraft:custom_data"))
+                    .and_then(|t| t.get("h212")),
+                Some(&Tag::Int(1))
+            );
+            assert!(game.world.loaded(x, z), "actual destruction-level chunk");
+            assert!(game.run_command(&format!(
+                "execute if data block {x} 200 {z} {{id:\"minecraft:{kind}\",x:{x},y:200,z:{z}}}"
+            )));
+            if let Some(n) = name {
+                assert!(game.run_command(&format!(
+                    "execute if data block {x} 200 {z} {{CustomName:\"{n}\"}}"
+                )));
+            } else {
+                assert!(
+                    game.run_command(&format!("execute unless data block {x} 200 {z} CustomName"))
+                );
+            }
+            let start = game.dropped.len();
+            assert!(game.run_command(&format!("setblock {x} 200 {z} air destroy")));
+            game.flush_spill();
+            assert!(game.res.facts().is_air(game.world.block(x, 200, z)));
+            assert!(!game.world.block_entities.contains_key(&key));
+            assert!(!game.world.block_names.contains_key(&key));
+            let emitted = &game.dropped[start..];
+            let matching: Vec<_> = emitted
+                .iter()
+                .filter(|d| *d.stack.item == item_id)
+                .collect();
+            assert_eq!(matching.len(), 1, "one actual block item: {kind}");
+            let drop = matching[0];
+            assert_eq!(drop.stack.count, 1);
+            assert_eq!((drop.age, drop.pickup_delay), (0, 10));
+            let actual = drop.stack.data().and_then(|d| d.custom_name.as_ref());
+            if kind == "crafter" {
+                if actual.is_some() {
+                    unexpected.push((name, actual.cloned()));
+                }
+            } else {
+                assert_eq!(
+                    actual,
+                    Some(&Tag::String("Box".into())),
+                    "positive ordinary name-copy control"
+                );
+            }
+            if kind == "shulker_box" {
+                let contents = &drop.stack.data().unwrap().container;
+                assert_eq!(contents.len(), 1);
+                let kept = &contents[0].1;
+                assert_eq!((&*kept.item, kept.count), ("minecraft:diamond", 3));
+                assert_eq!(
+                    kept.data()
+                        .and_then(|d| d.other("minecraft:custom_data"))
+                        .and_then(|t| t.get("h212")),
+                    Some(&Tag::Int(1))
+                );
+                assert_eq!(emitted.len(), 1);
+            } else {
+                let contents: Vec<_> = emitted
+                    .iter()
+                    .filter(|d| &*d.stack.item == "minecraft:diamond")
+                    .collect();
+                assert_eq!(contents.len(), 1);
+                assert_eq!(contents[0].stack.count, 3);
+                assert_eq!(
+                    contents[0]
+                        .stack
+                        .data()
+                        .and_then(|d| d.other("minecraft:custom_data"))
+                        .and_then(|t| t.get("h212")),
+                    Some(&Tag::Int(1))
+                );
+                assert_eq!(emitted.len(), 2);
+            }
+            assert_eq!(game.world.game_time, clock, "zero observation ticks");
+        }
+        assert!(
+            unexpected.is_empty(),
+            "actual vanilla crafter drop retained source name: {unexpected:?}"
+        );
     }
 }

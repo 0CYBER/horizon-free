@@ -15,7 +15,8 @@ const LAUNCHER_HINT: &str =
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
 official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
 the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
-them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR.";
+them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR, or name the files with \
+--version-json, --client-jar, --libraries-dir and --assets-dir.";
 const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
 while {version} is the current release, otherwise the downloads.server.url in your launcher's \
 versions/{version}/{version}.json), then pass --server-jar PATH or set HORIZON_SERVER_JAR.";
@@ -137,13 +138,63 @@ pub struct GameFiles {
     pub folder: PathBuf,
     pub manifest: PathBuf,
     pub client: PathBuf,
+    /// Where the client's libraries are (`folder`'s `libraries`, or `--libraries-dir`).
+    pub libraries: PathBuf,
+    /// The asset store: `indexes/` and `objects/` (`folder`'s `assets`, or `--assets-dir`).
+    pub assets: PathBuf,
     /// Mojang's Java runtimes the launcher downloaded (java::minecraft_runtimes).
     pub runtimes: PathBuf,
+    /// The Prism Launcher (or MultiMC) root and instance these files came from, whose rewritten
+    /// version JSON and component metadata are merged into Mojang's layout on import.
+    pub prism: Option<PrismFiles>,
     /// The folders looked in, each with its launcher, when none held the version.
     searched: Vec<(&'static str, PathBuf)>,
 }
 
+/// A Prism Launcher or MultiMC root and the instance that has the pinned version. Their
+/// `minecraft` folder holds a rewritten version JSON, the client jar is a Maven artifact in the
+/// root's `libraries`, and the LWJGL libraries are a separate component (`meta/org.lwjgl3/...`).
+#[derive(Clone, Debug)]
+pub struct PrismFiles {
+    pub root: PathBuf,
+    pub instance: Option<PathBuf>,
+}
+
+/// Files named one by one (`--version-json`, `--client-jar`, `--libraries-dir`, `--assets-dir`),
+/// for launchers whose layout is not one `game_files` knows: each replaces what it names.
+/// `--prism-dir` names a Prism Launcher or MultiMC root (or an instance) to read as a whole.
+#[derive(Clone, Debug, Default)]
+pub struct Inputs {
+    pub version_json: Option<PathBuf>,
+    pub client_jar: Option<PathBuf>,
+    pub libraries_dir: Option<PathBuf>,
+    pub assets_dir: Option<PathBuf>,
+    pub prism_dir: Option<PathBuf>,
+}
+
 impl GameFiles {
+    /// These files with what `inputs` names instead.
+    pub fn with(mut self, inputs: &Inputs, version: &str) -> Self {
+        if let Some(prism) = inputs
+            .prism_dir
+            .as_ref()
+            .filter(|p| !p.as_os_str().is_empty())
+        {
+            if let Some(found) = prism_game_files(&expand_user(prism), version) {
+                self = found;
+            }
+        }
+        let pick = |given: &Option<PathBuf>, found: &mut PathBuf| {
+            if let Some(given) = given.as_ref().filter(|p| !p.as_os_str().is_empty()) {
+                *found = expand_user(given);
+            }
+        };
+        pick(&inputs.version_json, &mut self.manifest);
+        pick(&inputs.client_jar, &mut self.client);
+        pick(&inputs.libraries_dir, &mut self.libraries);
+        pick(&inputs.assets_dir, &mut self.assets);
+        self
+    }
     /// What to do when these files are missing, with the folders looked in.
     pub(crate) fn hint(&self, version: &str) -> String {
         let mut text = hint(LAUNCHER_HINT, version);
@@ -165,7 +216,10 @@ fn layouts(folder: &Path, version: &str) -> [GameFiles; 2] {
         folder: folder.to_path_buf(),
         manifest: folder.join(manifest),
         client: folder.join(client),
+        libraries: folder.join("libraries"),
+        assets: folder.join("assets"),
         runtimes: folder.join(runtimes),
+        prism: None,
         searched: Vec::new(),
     };
     let v = version;
@@ -244,21 +298,208 @@ pub fn game_files(chosen: Option<&Path>, version: &str) -> GameFiles {
         }
         None => launcher_folders(),
     };
-    // A folder with both files first: a version JSON left without its jar is used, for the
-    // error to name the jar, only when no folder has both.
+    // A folder with both files and every library first, then one with both files: a launcher
+    // folder whose libraries are incomplete (an official launcher that never finished the
+    // download, beside a complete CurseForge copy, #13872) is used, for the error to name the
+    // library, only when no folder has them all. A version JSON left without its jar comes
+    // last, for the error to name the jar. A Prism/MultiMC tree is read as a whole: its
+    // `minecraft` folder has the version JSON and its root has the client jar, libraries and
+    // assets (#1487).
     let complete = |files: &GameFiles| files.manifest.is_file() && files.client.is_file();
+    let libraries = |files: &GameFiles| complete(files) && has_libraries(files);
     let partial = |files: &GameFiles| files.manifest.is_file();
-    for found in [complete, partial] {
-        let mut all = folders
-            .iter()
-            .flat_map(|(_, folder)| layouts(folder, version));
-        if let Some(files) = all.find(found) {
+    let tiers: [&dyn Fn(&GameFiles) -> bool; 3] = [&libraries, &complete, &partial];
+    for found in tiers {
+        let mut all = Vec::new();
+        for (_, folder) in &folders {
+            all.extend(prism_game_files(folder, version));
+            all.extend(layouts(folder, version));
+        }
+        if let Some(files) = all.into_iter().find(found) {
             return files;
         }
     }
     let [mut files, _] = layouts(&folders[0].1, version);
     files.searched = folders;
     files
+}
+
+/// Whether every client library `files`' version JSON lists for this OS is in its libraries
+/// folder, as `import` looks for them (a Netty native transport the game runs without may be
+/// missing). Checksums are left to the import.
+fn has_libraries(files: &GameFiles) -> bool {
+    let Ok(manifest) = read_json(&files.manifest) else {
+        return false;
+    };
+    let Ok(artifacts) = client_library_artifacts(&manifest) else {
+        return false;
+    };
+    artifacts.into_iter().all(|(name, artifact)| {
+        runs_without(name)
+            || artifact_fields(artifact)
+                .ok()
+                .and_then(|(path, _)| safe_relative(path))
+                .is_some_and(|relative| library_in(&files.libraries, name, &relative).is_file())
+    })
+}
+
+/// A Maven name's path in a repository: `com.mojang:minecraft:26.3:client` is
+/// `com/mojang/minecraft/26.3/minecraft-26.3-client.jar`. Prism Launcher keeps a native's
+/// classifier in the artifact name (`org.lwjgl:lwjgl-freetype-natives-linux:3.4.3`), which this
+/// path finds as it is; a Mojang-style `group:artifact:version:classifier` also works.
+fn maven_relative(name: &str) -> Option<String> {
+    let parts: Vec<&str> = name.split(':').collect();
+    let (group, artifact, version, classifier) = match parts.as_slice() {
+        [group, artifact, version] => (*group, *artifact, *version, None),
+        [group, artifact, version, classifier] => (*group, *artifact, *version, Some(*classifier)),
+        _ => return None,
+    };
+    let unsafe_part = |p: &str| p.is_empty() || p.contains(['/', '\\']) || p.contains("..");
+    if [group, artifact, version].iter().any(|p| unsafe_part(p))
+        || classifier.is_some_and(unsafe_part)
+    {
+        return None;
+    }
+    let classifier = classifier.map(|c| format!("-{c}")).unwrap_or_default();
+    Some(format!(
+        "{}/{artifact}/{version}/{artifact}-{version}{classifier}.jar",
+        group.replace('.', "/")
+    ))
+}
+
+/// The version JSON Prism keeps in an instance or its launcher root.
+fn prism_manifest(root: &Path, instance: Option<&Path>, version: &str) -> Option<PathBuf> {
+    let candidates = instance
+        .into_iter()
+        .flat_map(|instance| {
+            [
+                instance.join("minecraft/versions").join(version),
+                instance.join(".minecraft/versions").join(version),
+                instance.join("versions").join(version),
+            ]
+        })
+        .chain([
+            root.join("versions").join(version),
+            root.join("meta/net.minecraft").join(version),
+        ]);
+    candidates
+        .map(|dir| dir.join(format!("{version}.json")))
+        // Prism Launcher's own layout: its Minecraft component is `meta/net.minecraft/<version>.json`.
+        .chain([root
+            .join("meta/net.minecraft")
+            .join(format!("{version}.json"))])
+        .find(|path| path.is_file())
+}
+
+/// The client jar Prism keeps: a Maven artifact named by the version JSON's `mainJar`.
+fn prism_client_jar(
+    root: &Path,
+    instance: Option<&Path>,
+    version: &str,
+    manifest: &Value,
+) -> Option<PathBuf> {
+    let named = manifest
+        .get("mainJar")
+        .and_then(|jar| jar.get("name"))
+        .and_then(Value::as_str)
+        .and_then(maven_relative)
+        .map(|path| root.join("libraries").join(path));
+    let candidates = named
+        .into_iter()
+        .chain([
+            root.join(format!(
+                "libraries/com/mojang/minecraft/{version}/minecraft-{version}-client.jar"
+            )),
+            root.join(format!("versions/{version}/{version}.jar")),
+        ])
+        .chain(instance.into_iter().flat_map(|instance| {
+            [
+                instance.join(format!("minecraft/versions/{version}/{version}.jar")),
+                instance.join(format!(".minecraft/versions/{version}/{version}.jar")),
+            ]
+        }));
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// The instance in `root` whose `mmc-pack.json` names `net.minecraft` at `version`.
+fn prism_instance(root: &Path, version: &str) -> Option<PathBuf> {
+    let mut instances: Vec<PathBuf> = fs::read_dir(root.join("instances"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("mmc-pack.json").is_file())
+        .collect();
+    instances.sort();
+    instances.into_iter().find(|instance| {
+        read_json(&instance.join("mmc-pack.json")).is_ok_and(|pack| {
+            pack.get("components")
+                .and_then(Value::as_array)
+                .is_some_and(|components| {
+                    components.iter().any(|component| {
+                        component.get("uid").and_then(Value::as_str) == Some("net.minecraft")
+                            && component.get("version").and_then(Value::as_str) == Some(version)
+                    })
+                })
+        })
+    })
+}
+
+/// A Prism Launcher or MultiMC tree holding the pinned version, read as a whole. `path` may be
+/// the launcher root, an `instances/<name>` folder, or the game folder inside one.
+pub fn prism_game_files(path: &Path, version: &str) -> Option<GameFiles> {
+    let mut instance = None;
+    let mut root = None;
+    for dir in path.ancestors().take(5) {
+        if dir.join("mmc-pack.json").is_file() {
+            instance = Some(dir.to_path_buf());
+            root = dir
+                .ancestors()
+                .find(|a| a.file_name().is_some_and(|n| n == "instances"))
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .or_else(|| dir.parent().map(Path::to_path_buf));
+            break;
+        }
+        if dir.join("instances").is_dir()
+            || dir.join("prismlauncher.cfg").is_file()
+            || dir.join("meta/net.minecraft").is_dir()
+        {
+            root = Some(dir.to_path_buf());
+            break;
+        }
+    }
+    if root
+        .as_ref()
+        .is_none_or(|root| !root.join("libraries").is_dir())
+    {
+        return None;
+    }
+    let root = root?;
+    if !root.join("assets").is_dir() {
+        return None;
+    }
+    if instance.is_none() {
+        instance = prism_instance(&root, version);
+    }
+    let manifest = prism_manifest(&root, instance.as_deref(), version)?;
+    let manifest_json = read_json(&manifest).ok()?;
+    let client = prism_client_jar(&root, instance.as_deref(), version, &manifest_json)?;
+    let folder = instance
+        .as_ref()
+        .map(|instance| instance.join("minecraft"))
+        .filter(|folder| folder.is_dir())
+        .unwrap_or_else(|| root.clone());
+    Some(GameFiles {
+        folder,
+        manifest,
+        client,
+        libraries: root.join("libraries"),
+        assets: root.join("assets"),
+        runtimes: root.join("java"),
+        prism: Some(PrismFiles { root, instance }),
+        searched: Vec::new(),
+    })
 }
 
 /// Copy one file from the player's install, checked like a download; an existing verified
@@ -283,6 +524,175 @@ pub(crate) fn import_copy(
         .commit()
 }
 
+/// Whether a version file is a Prism Launcher/MultiMC component rather than Mojang's JSON:
+/// it names the client jar as a Maven artifact (`mainJar`) and has no `downloads`.
+fn prism_metadata(manifest: &Value) -> bool {
+    manifest.get("mainJar").is_some()
+        || manifest.get("uid").is_some()
+        || manifest.get("formatVersion").is_some()
+}
+
+/// Whether a (possibly normalized) version file still describes the pinned release: its id,
+/// both jars' SHA-1s and its Java version. Every jar and library is checked against its own
+/// SHA-1 afterwards, so this is what lets a launcher's rewrite stand in for Mojang's JSON.
+fn manifest_pins_match(lock: &Lock, manifest: &Value) -> bool {
+    let download = |side: &str| {
+        manifest
+            .get("downloads")
+            .and_then(|downloads| downloads.get(side))
+            .and_then(|download| download.get("sha1"))
+            .and_then(Value::as_str)
+    };
+    manifest.get("id").and_then(Value::as_str) == Some(lock.version.as_str())
+        && download("client") == lock.pin("client_sha1").ok()
+        && download("server") == lock.pin("server_sha1").ok()
+        && manifest
+            .get("javaVersion")
+            .and_then(|java| java.get("majorVersion"))
+            .and_then(Value::as_i64)
+            == Some(lock.java_major)
+}
+
+/// Adds the Maven path to a library whose metadata only has a name and a download URL (Prism's
+/// component metadata). Prism stores a native's classifier in the artifact name, so the name's
+/// own path is where the launcher has the jar.
+fn fill_library_path(library: &mut Value) {
+    let Value::Object(fields) = library else {
+        return;
+    };
+    let name = fields
+        .iter()
+        .find(|(key, _)| key == "name")
+        .and_then(|(_, value)| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let Some((_, Value::Object(downloads))) = fields.iter_mut().find(|(key, _)| key == "downloads")
+    else {
+        return;
+    };
+    let Some((_, Value::Object(artifact))) =
+        downloads.iter_mut().find(|(key, _)| key == "artifact")
+    else {
+        return;
+    };
+    if artifact.iter().any(|(key, _)| key == "path") {
+        return;
+    }
+    if let Some(path) = maven_relative(&name) {
+        artifact.push(("path".into(), Value::Str(path)));
+    }
+}
+
+/// The component metadata a Prism instance needs beside `net.minecraft` (its LWJGL libraries),
+/// from the instance's `mmc-pack.json` or the version JSON's `requires`.
+fn component_libraries(prism: &PrismFiles, manifest: &Value, libraries: &mut Vec<Value>) {
+    let mut components: Vec<(String, String)> = Vec::new();
+    if let Some(instance) = &prism.instance {
+        if let Ok(pack) = read_json(&instance.join("mmc-pack.json")) {
+            for component in pack
+                .get("components")
+                .and_then(Value::as_array)
+                .unwrap_or(&[])
+            {
+                let uid = component.get("uid").and_then(Value::as_str);
+                let version = component.get("version").and_then(Value::as_str);
+                if let (Some(uid), Some(version)) = (uid, version) {
+                    if uid != "net.minecraft" {
+                        components.push((uid.to_string(), version.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    // `requires` also names the LWJGL component when an instance's `mmc-pack.json` does not.
+    for requires in manifest
+        .get("requires")
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+    {
+        let uid = requires.get("uid").and_then(Value::as_str);
+        let version = requires
+            .get("suggests")
+            .or_else(|| requires.get("equals"))
+            .or_else(|| requires.get("version"))
+            .and_then(Value::as_str);
+        if let (Some(uid), Some(version)) = (uid, version) {
+            if uid != "net.minecraft" && !components.iter().any(|(seen, _)| seen == uid) {
+                components.push((uid.to_string(), version.to_string()));
+            }
+        }
+    }
+    for (uid, version) in components {
+        // Vanilla's client libraries only: a mod loader's component brings its own.
+        if uid != "org.lwjgl3" && uid != "org.lwjgl" {
+            continue;
+        }
+        let Some(relative) = safe_relative(&format!("{uid}/{version}.json")) else {
+            continue;
+        };
+        let Ok(meta) = read_json(&prism.root.join("meta").join(relative)) else {
+            continue;
+        };
+        if let Some(extra) = meta.get("libraries").and_then(Value::as_array) {
+            libraries.extend(extra.iter().cloned());
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    libraries.retain(|library| {
+        let name = library.get("name").and_then(Value::as_str).unwrap_or("");
+        name.is_empty() || seen.insert(name.to_string())
+    });
+}
+
+/// A Prism Launcher/MultiMC version file in Mojang's shape: the id, both jars' SHA-1s and the
+/// Java version from research-lock.json, and the LWJGL component's libraries merged in.
+fn normalize_prism_manifest(lock: &Lock, files: &GameFiles, mut manifest: Value) -> Value {
+    manifest.insert("id", Value::str(&lock.version));
+    let mut downloads = manifest
+        .get("downloads")
+        .cloned()
+        .unwrap_or(Value::Object(Vec::new()));
+    let main = manifest
+        .get("mainJar")
+        .and_then(|jar| jar.get("downloads"))
+        .and_then(|downloads| downloads.get("artifact"))
+        .cloned();
+    let mut client = main.unwrap_or(Value::Object(Vec::new()));
+    if let Ok(sha1) = lock.pin("client_sha1") {
+        client.insert("sha1", Value::str(sha1));
+    }
+    downloads.insert("client", client);
+    let mut server = downloads
+        .get("server")
+        .cloned()
+        .unwrap_or(Value::Object(Vec::new()));
+    if let Ok(sha1) = lock.pin("server_sha1") {
+        server.insert("sha1", Value::str(sha1));
+    }
+    downloads.insert("server", server);
+    manifest.insert("downloads", downloads);
+    let mut java = manifest
+        .get("javaVersion")
+        .cloned()
+        .unwrap_or(Value::Object(Vec::new()));
+    java.insert("majorVersion", Value::Int(lock.java_major.to_string()));
+    manifest.insert("javaVersion", java);
+
+    let mut libraries: Vec<Value> = manifest
+        .get("libraries")
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+        .to_vec();
+    if let Some(prism) = &files.prism {
+        component_libraries(prism, &manifest, &mut libraries);
+    }
+    for library in &mut libraries {
+        fill_library_path(library);
+    }
+    manifest.insert("libraries", Value::Array(libraries));
+    manifest
+}
+
 /// The pinned version JSON from the launcher's install. The launcher's copy wins over the
 /// cached one so the manifest matches the asset index installed alongside it.
 pub(crate) fn import_manifest(lock: &Lock, files: &GameFiles) -> Result<Value, String> {
@@ -291,6 +701,22 @@ pub(crate) fn import_manifest(lock: &Lock, files: &GameFiles) -> Result<Value, S
     let source = &files.manifest;
     if source.is_file() {
         let manifest = read_json(source)?;
+        if files.prism.is_some() && prism_metadata(&manifest) {
+            let manifest = normalize_prism_manifest(lock, files, manifest);
+            if !manifest_pins_match(lock, &manifest) {
+                return Err(format!(
+                    "{} does not describe the pinned {version} release",
+                    source.display()
+                ));
+            }
+            if !(destination.exists()
+                && read_json(&destination).is_ok_and(|cached| cached == manifest))
+            {
+                fs::create_dir_all(&lock.directory).map_err(|e| e.to_string())?;
+                write_json(&destination, &manifest)?;
+            }
+            return read_json(&destination);
+        }
         let downloads = manifest.get("downloads");
         let sha1 = |side: &str| {
             downloads
@@ -346,7 +772,13 @@ pub(crate) fn import_manifest(lock: &Lock, files: &GameFiles) -> Result<Value, S
     Ok(manifest)
 }
 
-fn import_server(lock: &Lock, server_jar: Option<&Path>) -> Result<PathBuf, String> {
+/// The server jar, or `None` when a Prism install has none and the client jar stands in for it
+/// (the client jar contains every server class, so the exporters and data generator run on it).
+fn import_server(
+    lock: &Lock,
+    server_jar: Option<&Path>,
+    client_fallback: bool,
+) -> Result<Option<PathBuf>, String> {
     let version = &lock.version;
     let destination = lock.directory.join("jars/server.jar");
     let checksum = lock.pin("server_sha1")?;
@@ -356,11 +788,14 @@ fn import_server(lock: &Lock, server_jar: Option<&Path>) -> Result<PathBuf, Stri
         .or_else(|| std::env::var_os("HORIZON_SERVER_JAR").map(PathBuf::from));
     let Some(source) = source else {
         if destination.exists() && digest(&destination, "sha1")? == checksum {
-            return Ok(destination);
+            return Ok(Some(destination));
+        }
+        if client_fallback {
+            return Ok(None);
         }
         return Err(format!("No {version} server jar. {hint}"));
     };
-    import_copy(&expand_user(&source), &destination, checksum, "sha1", &hint)
+    import_copy(&expand_user(&source), &destination, checksum, "sha1", &hint).map(Some)
 }
 
 /// The launcher's `os.name` for this machine.
@@ -527,7 +962,11 @@ pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
 /// `com/mojang/jtracy-natives-windows/1.14.38/jtracy-natives-windows-1.14.38.jar`. The path the
 /// version JSON gives is returned when neither exists, for the error to name.
 pub fn launcher_library(minecraft: &Path, name: &str, relative: &Path) -> PathBuf {
-    let libraries = minecraft.join("libraries");
+    library_in(&minecraft.join("libraries"), name, relative)
+}
+
+/// `launcher_library` in a libraries folder of its own.
+fn library_in(libraries: &Path, name: &str, relative: &Path) -> PathBuf {
     let official = libraries.join(relative);
     if official.is_file() {
         return official;
@@ -557,7 +996,7 @@ fn artifact_fields(artifact: &Value) -> Result<(&str, &str), String> {
 
 /// `(sha256, identifier, path)` lines of a server bundle's versions.list or libraries.list.
 fn bundle_entries(
-    archive: &mut zip::ZipArchive<fs::File>,
+    archive: &mut crate::Jar,
     name: &str,
 ) -> Result<Vec<(String, String, PathBuf, String)>, String> {
     let text = crate::zip_text(archive, name)?;
@@ -584,7 +1023,7 @@ fn bundle_entries(
 }
 
 fn extract_verified(
-    archive: &mut zip::ZipArchive<fs::File>,
+    archive: &mut crate::Jar,
     member: &str,
     destination: &Path,
     checksum: &str,
@@ -619,17 +1058,17 @@ fn unpack_server(
         &game,
         checksum,
     )?;
-    let mut libraries = Vec::new();
-    for (checksum, _, path, relative) in bundle_entries(&mut archive, "META-INF/libraries.list")? {
+    let entries = bundle_entries(&mut archive, "META-INF/libraries.list")?;
+    let libraries = crate::pool::map(&entries, |(checksum, _, path, relative)| {
         let destination = directory.join("libraries/server").join(path);
         extract_verified(
-            &mut archive,
+            &mut archive.clone(),
             &format!("META-INF/libraries/{relative}"),
             &destination,
             checksum.as_str(),
         )?;
-        libraries.push(destination);
-    }
+        Ok(destination)
+    })?;
     Ok((game, libraries))
 }
 
@@ -640,11 +1079,11 @@ pub fn import(
     root: &Path,
     lock: &Lock,
     minecraft: Option<&Path>,
+    inputs: &Inputs,
     server_jar: Option<&Path>,
     log: Log,
 ) -> Result<(), String> {
-    let files = game_files(minecraft, &lock.version);
-    let minecraft = &files.folder;
+    let files = game_files(minecraft, &lock.version).with(inputs, &lock.version);
     let manifest = import_manifest(lock, &files)?;
     let client = import_copy(
         &files.client,
@@ -666,33 +1105,44 @@ pub fn import(
         .get("id")
         .and_then(Value::as_str)
         .ok_or("The version JSON has no id")?;
+    // The jar read, which --client-jar may have named outside the Minecraft folder.
     log(&format!(
         "Imported client {id} from {}",
-        minecraft.display()
+        files.client.display()
     ));
-    let server = import_server(lock, server_jar)?;
-    let (server, server_libraries) = unpack_server(server, &lock.directory, id)?;
-    let mut client_libraries = Vec::new();
+    let mut imports = Vec::new();
     for (name, artifact) in client_library_artifacts(&manifest)? {
         let (path, sha1) = artifact_fields(artifact)?;
         let relative = safe_relative(path).ok_or("Unsafe library path")?;
-        let source = launcher_library(minecraft, name, &relative);
+        let source = library_in(&files.libraries, name, &relative);
         let destination = lock.directory.join("libraries/client").join(&relative);
         if runs_without(name) && !source.is_file() && !destination.exists() {
             log(&format!(
                 "No {name} in {}: the game runs without it",
-                minecraft.display()
+                files.libraries.display()
             ));
             continue;
         }
-        client_libraries.push(import_copy(
-            &source,
-            &destination,
-            sha1,
-            "sha1",
-            &files.hint(&lock.version),
-        )?);
+        imports.push((source, destination, sha1));
     }
+    let hint = files.hint(&lock.version);
+    let client_libraries = crate::pool::map(&imports, |(source, destination, sha1)| {
+        import_copy(source, destination, sha1, "sha1", &hint)
+    })?;
+    // Prism Launcher never downloads the server jar. Its client jar contains every server class
+    // (and Prism's libraries are a superset of the server bundle's), so the client jar is the
+    // server side of exporters and the data generator instead.
+    let (server, server_libraries, server_from_client) =
+        match import_server(lock, server_jar, files.prism.is_some())? {
+            Some(server) => {
+                let (game, libraries) = unpack_server(server, &lock.directory, id)?;
+                (game, libraries, false)
+            }
+            None => {
+                log("Prism has no server jar: using its client jar for the server side");
+                (client.clone(), client_libraries.clone(), true)
+            }
+        };
     write_import_metadata(
         root,
         lock,
@@ -700,10 +1150,13 @@ pub fn import(
         &server,
         &client_libraries,
         &server_libraries,
+        files.prism.is_some(),
+        server_from_client,
         log,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_import_metadata(
     root: &Path,
     lock: &Lock,
@@ -711,10 +1164,13 @@ fn write_import_metadata(
     server: &Path,
     client_libraries: &[PathBuf],
     server_libraries: &[PathBuf],
+    manifest_from_prism: bool,
+    server_from_client: bool,
     log: Log,
 ) -> Result<(), String> {
-    for (side, jar) in [("client", client), ("server", server)] {
-        let data = crate::inventory::inventory(jar)?;
+    let sides = [("client", client), ("server", server)];
+    let inventories = crate::pool::map(&sides, |(_, jar)| crate::inventory::inventory(jar))?;
+    for ((side, _), data) in sides.into_iter().zip(inventories) {
         let count = |key| data.get(key).cloned().unwrap_or(Value::Null);
         write_json(
             &lock
@@ -739,6 +1195,18 @@ fn write_import_metadata(
         &lock.directory.join("prepared.json"),
         &Value::Object(vec![
             ("version".into(), Value::str(&lock.version)),
+            (
+                "manifest_source".into(),
+                Value::str(if manifest_from_prism {
+                    "prism"
+                } else {
+                    "mojang"
+                }),
+            ),
+            (
+                "server_source".into(),
+                Value::str(if server_from_client { "client" } else { "jar" }),
+            ),
             (
                 "jars".into(),
                 Value::Object(vec![
@@ -765,6 +1233,11 @@ pub struct Artifacts {
     pub manifest: Value,
     pub jars: HashMap<&'static str, PathBuf>,
     pub libraries: Vec<PathBuf>,
+    /// The version JSON came from Prism's rewritten metadata (`prepared.json`'s
+    /// `manifest_source`); its SHA-1 is not one Mojang published, so `verify` checks its pins.
+    pub manifest_from_prism: bool,
+    /// There was no server jar: the client jar is the server side (`server_source: "client"`).
+    pub server_from_client: bool,
 }
 
 /// Reuses checked imports from this root or another installed version beside it.
@@ -806,6 +1279,8 @@ pub(crate) fn reuse_verified(
                 &found.jars["server"],
                 &client_libraries,
                 &found.libraries,
+                found.manifest_from_prism,
+                found.server_from_client,
                 log,
             )?;
         }
@@ -830,13 +1305,14 @@ pub(crate) fn reuse_verified(
         };
         let mut files = vec![
             source.join("manifest.json"),
+            source.join("prepared.json"),
             source.join("jars/client.jar"),
             source.join("jars/server.jar"),
             found.jars["server"].clone(),
         ];
         files.extend(found.libraries);
         files.extend(client);
-        for file in files {
+        for file in files.into_iter().filter(|file| file.is_file()) {
             let relative = file.strip_prefix(&source).map_err(|e| e.to_string())?;
             import_copy(
                 &file,
@@ -855,6 +1331,8 @@ pub(crate) fn reuse_verified(
             &found.jars["server"],
             &client_libraries,
             &found.libraries,
+            found.manifest_from_prism,
+            found.server_from_client,
             log,
         )?;
         log(&format!(
@@ -875,33 +1353,64 @@ pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
             manifest_path.display()
         ));
     }
-    if !lock.manifest_accepted(&digest(&manifest_path, "sha1")?) {
+    let prepared = read_json(&lock.directory.join("prepared.json")).ok();
+    let source = |key: &str| {
+        prepared
+            .as_ref()
+            .and_then(|prepared| prepared.get(key))
+            .and_then(Value::as_str)
+    };
+    let manifest_from_prism = source("manifest_source") == Some("prism");
+    let server_from_client = source("server_source") == Some("client");
+    let accepted = lock.manifest_accepted(&digest(&manifest_path, "sha1")?);
+    let manifest = read_json(&manifest_path)?;
+    if !accepted && !(manifest_from_prism && manifest_pins_match(lock, &manifest)) {
         return Err("Manifest checksum changed; prepare again with --prepare".into());
     }
-    let manifest = read_json(&manifest_path)?;
     let id = manifest.get("id").and_then(Value::as_str).unwrap_or("");
     if id != lock.version {
         return Err("Manifest version differs from the lock".into());
     }
     let mut jars = HashMap::new();
-    for side in ["client", "server"] {
-        let jar = lock.directory.join(format!("jars/{side}.jar"));
-        let pinned = manifest
-            .get("downloads")
-            .and_then(|d| d.get(side))
-            .and_then(|d| d.get("sha1"))
-            .and_then(Value::as_str);
-        if pinned != Some(lock.pin(&format!("{side}_sha1"))?)
-            || !jar.exists()
-            || Some(digest(&jar, "sha1")?.as_str()) != pinned
-        {
-            return Err(format!(
-                "{side} artifact checksum changed; prepare again with --prepare"
-            ));
-        }
-        jars.insert(side, jar);
+    let client = lock.directory.join("jars/client.jar");
+    let pinned = manifest
+        .get("downloads")
+        .and_then(|downloads| downloads.get("client"))
+        .and_then(|download| download.get("sha1"))
+        .and_then(Value::as_str);
+    let good = pinned == Some(lock.pin("client_sha1")?)
+        && client.exists()
+        && Some(digest(&client, "sha1")?.as_str()) == pinned;
+    if !good {
+        return Err("client artifact checksum changed; prepare again with --prepare".into());
     }
-    let mut archive = crate::open_zip(&jars["server"])?;
+    jars.insert("client", client.clone());
+    if server_from_client {
+        // Prism keeps no server jar: the client jar is the server side (its classes are a
+        // superset of the bundled server's), and the client libraries are its classpath.
+        jars.insert("server", client);
+        let libraries = client_libraries(lock, &manifest)?;
+        return Ok(Artifacts {
+            manifest,
+            jars,
+            libraries,
+            manifest_from_prism,
+            server_from_client,
+        });
+    }
+    let server = lock.directory.join("jars/server.jar");
+    let pinned = manifest
+        .get("downloads")
+        .and_then(|downloads| downloads.get("server"))
+        .and_then(|download| download.get("sha1"))
+        .and_then(Value::as_str);
+    let good = pinned == Some(lock.pin("server_sha1")?)
+        && server.exists()
+        && Some(digest(&server, "sha1")?.as_str()) == pinned;
+    if !good {
+        return Err("server artifact checksum changed; prepare again with --prepare".into());
+    }
+    let mut archive = crate::open_zip(&server)?;
     let versions = bundle_entries(&mut archive, "META-INF/versions.list")?;
     if versions.len() != 1 || versions[0].1 != id {
         return Err("Unexpected server bundle".into());
@@ -911,18 +1420,20 @@ pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
         return Err("Inner server artifact checksum changed".into());
     }
     jars.insert("server", game);
-    let mut libraries = Vec::new();
-    for (checksum, _, path, relative) in bundle_entries(&mut archive, "META-INF/libraries.list")? {
+    let entries = bundle_entries(&mut archive, "META-INF/libraries.list")?;
+    let libraries = crate::pool::map(&entries, |(checksum, _, path, relative)| {
         let library = lock.directory.join("libraries/server").join(path);
-        if !library.exists() || digest(&library, "sha256")? != checksum {
+        if !library.exists() || digest(&library, "sha256")? != *checksum {
             return Err(format!("Dependency checksum changed: {relative}"));
         }
-        libraries.push(library);
-    }
+        Ok(library)
+    })?;
     Ok(Artifacts {
         manifest,
         jars,
         libraries,
+        manifest_from_prism,
+        server_from_client,
     })
 }
 
@@ -930,20 +1441,20 @@ pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
 /// `client_libraries`); the client-side exporters compile against them. A native transport the
 /// player's launcher did not have is left out.
 pub fn client_libraries(lock: &Lock, manifest: &Value) -> Result<Vec<PathBuf>, String> {
-    let mut libraries = Vec::new();
-    for (name, artifact) in client_library_artifacts(manifest)? {
+    let artifacts = client_library_artifacts(manifest)?;
+    let libraries = crate::pool::map(&artifacts, |(name, artifact)| {
         let (path, sha1) = artifact_fields(artifact)?;
         let relative = safe_relative(path).ok_or("Unsafe client library path")?;
         let library = lock.directory.join("libraries/client").join(&relative);
         if runs_without(name) && !library.exists() {
-            continue;
+            return Ok(None);
         }
         if !library.exists() || digest(&library, "sha1")? != sha1 {
             return Err(format!("Client dependency checksum changed: {path}"));
         }
-        libraries.push(library);
-    }
-    Ok(libraries)
+        Ok(Some(library))
+    })?;
+    Ok(libraries.into_iter().flatten().collect())
 }
 
 #[cfg(test)]
@@ -1263,6 +1774,39 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    /// Prism Launcher keeps its Minecraft component as `meta/net.minecraft/<version>.json`, not
+    /// in a folder of that version. Both are read; the folder's file wins when both exist.
+    #[test]
+    fn the_prism_version_file_is_found_flat_or_in_its_folder() {
+        let root = std::env::temp_dir().join(format!("horizon-prism-meta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let put = |path: &str, data: &[u8]| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let version_file =
+            br#"{"mainJar":{"name":"com.mojang:minecraft:9.9:client"},"uid":"net.minecraft"}"#;
+        put(
+            "libraries/com/mojang/minecraft/9.9/minecraft-9.9-client.jar",
+            b"client",
+        );
+        put("assets/indexes/1.json", b"{}");
+        let flat = root.join("meta/net.minecraft/9.9.json");
+        let nested = root.join("meta/net.minecraft/9.9/9.9.json");
+
+        put("meta/net.minecraft/9.9.json", version_file);
+        assert_eq!(prism_game_files(&root, "9.9").unwrap().manifest, flat);
+        assert_eq!(game_files(Some(&root), "9.9").manifest, flat);
+
+        put("meta/net.minecraft/9.9/9.9.json", version_file);
+        assert_eq!(prism_game_files(&root, "9.9").unwrap().manifest, nested);
+
+        fs::remove_file(&flat).unwrap();
+        assert_eq!(prism_game_files(&root, "9.9").unwrap().manifest, nested);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     /// scanfee's Prism Launcher 26.3 install on a Mac (#1487): Prism keeps natives under its own
     /// names and never downloads Netty's native transport, which the game runs without. Preparing
     /// still checks every other library, and the transport whenever the launcher has it.
@@ -1339,7 +1883,16 @@ mod tests {
         .unwrap();
         let lock = Lock::read(&fixture.target).unwrap();
         let server = old.join("jars/server.jar");
-        let prepare = || import(&fixture.target, &lock, Some(&prism), Some(&server), &|_| {});
+        let prepare = || {
+            import(
+                &fixture.target,
+                &lock,
+                Some(&prism),
+                &Inputs::default(),
+                Some(&server),
+                &|_| {},
+            )
+        };
         let imported = || {
             let manifest = verify(&lock).unwrap().manifest;
             client_libraries(&lock, &manifest).unwrap().len()
@@ -1374,6 +1927,149 @@ mod tests {
         assert!(prepare().unwrap_err().starts_with("Missing "));
     }
 
+    /// A Prism Launcher 26.3 install has no server jar and rewrites the version JSON. Its
+    /// `minecraft` folder, Maven libraries, assets and the LWJGL component are read as they are;
+    /// the client jar stands in for the server side, so nothing is downloaded.
+    #[test]
+    fn a_prism_install_prepares_without_a_server_jar() {
+        let fixture = Imports::new();
+        let old = fixture.imported(&fixture.source);
+        let prism = fixture.directory.join("PrismLauncher");
+        let put = |path: &str, data: &[u8]| {
+            let path = prism.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let sha1 = |data: &[u8]| {
+            let file = fixture.directory.join("sha1");
+            fs::write(&file, data).unwrap();
+            digest(&file, "sha1").unwrap()
+        };
+        let client = fs::read(old.join("jars/client.jar")).unwrap();
+        put(
+            "libraries/com/mojang/minecraft/9.9/minecraft-9.9-client.jar",
+            &client,
+        );
+        put(
+            "libraries/client/library/1/library-1.jar",
+            b"client library",
+        );
+        put(
+            "libraries/org/lwjgl/lwjgl-test/1.0/lwjgl-test-1.0.jar",
+            b"lwjgl library",
+        );
+        put("assets/indexes/1.json", b"{}");
+        let client_sha1 = digest(&old.join("jars/client.jar"), "sha1").unwrap();
+        let server_sha1 = digest(&old.join("jars/server.jar"), "sha1").unwrap();
+        let library = |name: &str, data: &[u8], url: &str| {
+            format!(
+                r#"{{"name":"{name}","downloads":{{"artifact":{{"sha1":"{}","size":{},"url":"{url}"}}}}}}"#,
+                sha1(data),
+                data.len()
+            )
+        };
+        put(
+            "instances/9.9/mmc-pack.json",
+            br#"{"components":[{"uid":"net.minecraft","version":"9.9"},{"uid":"org.lwjgl3","version":"1.0"}]}"#,
+        );
+        put(
+            "meta/org.lwjgl3/1.0.json",
+            format!(
+                r#"{{"libraries":[{}]}}"#,
+                library(
+                    "org.lwjgl:lwjgl-test:1.0",
+                    b"lwjgl library",
+                    "https://libraries.minecraft.net/org/lwjgl/lwjgl-test/1.0/lwjgl-test-1.0.jar"
+                )
+            )
+            .as_bytes(),
+        );
+        put(
+            "instances/9.9/minecraft/versions/9.9/9.9.json",
+            format!(
+                r#"{{"mainJar":{{"name":"com.mojang:minecraft:9.9:client","downloads":{{"artifact":{{"sha1":"{client_sha1}","size":{},"url":"https://example.invalid/client.jar"}}}}}},"assetIndex":{{"id":"1","sha1":"{}"}},"libraries":[{}]}}"#,
+                client.len(),
+                sha1(b"{}"),
+                library(
+                    "client:library:1",
+                    b"client library",
+                    "https://libraries.minecraft.net/client/library/1/library-1.jar"
+                )
+            )
+            .as_bytes(),
+        );
+        let lock = Lock::read(&fixture.target).unwrap();
+        let inputs = Inputs {
+            prism_dir: Some(prism.clone()),
+            ..Default::default()
+        };
+
+        let found = game_files(None, "9.9").with(&inputs, "9.9");
+        assert_eq!(found.prism.as_ref().map(|p| &p.root), Some(&prism));
+        assert_eq!(
+            found.manifest,
+            prism.join("instances/9.9/minecraft/versions/9.9/9.9.json")
+        );
+        assert_eq!(
+            found.client,
+            prism.join("libraries/com/mojang/minecraft/9.9/minecraft-9.9-client.jar")
+        );
+
+        import(&fixture.target, &lock, None, &inputs, None, &|_| {}).unwrap();
+        let found = verify(&lock).unwrap();
+        assert!(found.manifest_from_prism);
+        assert!(found.server_from_client);
+        assert_eq!(found.jars["server"], found.jars["client"]);
+        assert_eq!(client_libraries(&lock, &found.manifest).unwrap().len(), 2);
+
+        let manifest = read_json(&lock.directory.join("manifest.json")).unwrap();
+        fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+            value.get(key).and_then(Value::as_str)
+        }
+        assert_eq!(text(&manifest, "id"), Some("9.9"));
+        assert_eq!(
+            manifest
+                .get("downloads")
+                .and_then(|d| d.get("client"))
+                .and_then(|d| d.get("sha1"))
+                .and_then(Value::as_str),
+            Some(client_sha1.as_str())
+        );
+        assert_eq!(
+            manifest
+                .get("downloads")
+                .and_then(|d| d.get("server"))
+                .and_then(|d| d.get("sha1"))
+                .and_then(Value::as_str),
+            Some(server_sha1.as_str())
+        );
+        assert_eq!(
+            manifest
+                .get("javaVersion")
+                .and_then(|j| j.get("majorVersion"))
+                .and_then(Value::as_i64),
+            Some(25)
+        );
+        let lwjgl = manifest
+            .get("libraries")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|library| text(library, "name") == Some("org.lwjgl:lwjgl-test:1.0"))
+            .unwrap();
+        assert_eq!(
+            lwjgl
+                .get("downloads")
+                .and_then(|d| d.get("artifact"))
+                .and_then(|a| a.get("path"))
+                .and_then(Value::as_str),
+            Some("org/lwjgl/lwjgl-test/1.0/lwjgl-test-1.0.jar")
+        );
+        let prepared = read_json(&lock.directory.join("prepared.json")).unwrap();
+        assert_eq!(text(&prepared, "manifest_source"), Some("prism"));
+        assert_eq!(text(&prepared, "server_source"), Some("client"));
+    }
+
     /// ATLauncher keeps Mojang's version JSON in `configs/json/minecraft` and the client jar as
     /// a library; its folder, or one of its instances, prepares like the official launcher's,
     /// with the same pins.
@@ -1405,7 +2101,14 @@ mod tests {
         let server = old.join("jars/server.jar");
         let prepare = |dir: &Path| {
             let _ = fs::remove_dir_all(&lock.directory);
-            import(&fixture.target, &lock, Some(dir), Some(&server), &|_| {})
+            import(
+                &fixture.target,
+                &lock,
+                Some(dir),
+                &Inputs::default(),
+                Some(&server),
+                &|_| {},
+            )
         };
 
         for chosen in [atlauncher.clone(), atlauncher.join("instances/Minecraft99")] {
@@ -1438,6 +2141,69 @@ mod tests {
             .contains("may have rewritten it"));
     }
 
+    /// A launcher with a layout of its own names each file (`--version-json`, `--client-jar`,
+    /// `--libraries-dir`): they prepare with the same pins, from no Minecraft folder at all.
+    #[test]
+    fn named_inputs_prepare_without_a_minecraft_folder() {
+        let fixture = Imports::new();
+        let old = fixture.imported(&fixture.source);
+        let own = fixture.directory.join("OwnLauncher");
+        let put = |path: &str, data: &[u8]| {
+            let path = own.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let client = fs::read(old.join("jars/client.jar")).unwrap();
+        put("instance/minecraft.jar", &client);
+        put("shared/libs/client.jar", b"client library");
+        let manifest = fs::read_to_string(old.join("manifest.json")).unwrap();
+        let manifest = manifest.replacen('{', r#"{"javaVersion":{"majorVersion":25},"#, 1);
+        put("meta/9.9.json", manifest.as_bytes());
+        let pinned = digest(&own.join("meta/9.9.json"), "sha1").unwrap();
+        let lock_path = fixture.target.join("research-lock.json");
+        let text = fs::read_to_string(&lock_path).unwrap();
+        let old_sha1 = digest(&old.join("manifest.json"), "sha1").unwrap();
+        fs::write(&lock_path, text.replace(&old_sha1, &pinned)).unwrap();
+        let inputs = Inputs {
+            version_json: Some(own.join("meta/9.9.json")),
+            client_jar: Some(own.join("instance/minecraft.jar")),
+            libraries_dir: Some(own.join("shared/libs")),
+            assets_dir: None,
+            ..Default::default()
+        };
+        let lock = Lock::read(&fixture.target).unwrap();
+        let server = old.join("jars/server.jar");
+        let empty = fixture.directory.join("no-minecraft");
+        fs::create_dir_all(&empty).unwrap();
+        let prepare = |inputs: &Inputs| {
+            let _ = fs::remove_dir_all(&lock.directory);
+            import(
+                &fixture.target,
+                &lock,
+                Some(&empty),
+                inputs,
+                Some(&server),
+                &|_| {},
+            )
+        };
+
+        prepare(&inputs).unwrap();
+        let artifacts = verify(&lock).unwrap();
+        assert_eq!(fs::read(&artifacts.jars["client"]).unwrap(), client);
+        assert_eq!(
+            client_libraries(&lock, &artifacts.manifest).unwrap().len(),
+            1
+        );
+        // Without them the empty folder has nothing; a wrong jar fails its pin.
+        assert!(prepare(&Inputs::default())
+            .unwrap_err()
+            .starts_with("Missing "));
+        put("instance/minecraft.jar", b"other");
+        assert!(prepare(&inputs)
+            .unwrap_err()
+            .contains("is not the pinned file"));
+    }
+
     /// With no launcher's files in the chosen folder, the error names where Horizon looked and
     /// the launchers it reads.
     #[test]
@@ -1446,7 +2212,15 @@ mod tests {
         let empty = fixture.directory.join("instances/empty");
         fs::create_dir_all(&empty).unwrap();
         let lock = Lock::read(&fixture.target).unwrap();
-        let error = import(&fixture.target, &lock, Some(&empty), None, &|_| {}).unwrap_err();
+        let error = import(
+            &fixture.target,
+            &lock,
+            Some(&empty),
+            &Inputs::default(),
+            None,
+            &|_| {},
+        )
+        .unwrap_err();
         assert!(error.starts_with(&format!(
             "Missing {}",
             empty.join("versions/9.9/9.9.json").display()
@@ -1458,6 +2232,34 @@ mod tests {
             fixture.directory.display()
         )));
         assert!(error.contains("ATLauncher"));
+    }
+
+    /// A folder with the version JSON and jar but a library missing loses to a later folder that
+    /// has them all, and is still picked, for the error to name the library, when none has (#13872).
+    #[test]
+    fn a_folder_missing_a_library_loses_to_a_complete_one() {
+        let fixture = Imports::new();
+        let old = fixture.imported(&fixture.source);
+        let manifest = fs::read(old.join("manifest.json")).unwrap();
+        let client = fs::read(old.join("jars/client.jar")).unwrap();
+        let install = |folder: &Path, library: bool| {
+            let versions = folder.join("versions/9.9");
+            fs::create_dir_all(&versions).unwrap();
+            fs::write(versions.join("9.9.json"), &manifest).unwrap();
+            fs::write(versions.join("9.9.jar"), &client).unwrap();
+            if library {
+                fs::create_dir_all(folder.join("libraries")).unwrap();
+                fs::write(folder.join("libraries/client.jar"), b"client library").unwrap();
+            }
+        };
+        let launcher = fixture.directory.join("launcher");
+        let instance = launcher.join("instances/broken");
+        install(&instance, false);
+        install(&launcher, false);
+        assert_eq!(game_files(Some(&instance), "9.9").folder, instance);
+
+        install(&launcher, true);
+        assert_eq!(game_files(Some(&instance), "9.9").folder, launcher);
     }
 
     #[test]

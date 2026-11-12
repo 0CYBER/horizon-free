@@ -14,7 +14,10 @@ impl SupportType {
         shape: &VoxelShape,
         direction: Direction,
     ) -> Result<bool, ShapeError> {
-        let face = shape.face_shape(direction)?;
+        self.supported_by(&shape.face_shape(direction)?)
+    }
+    /// [`Self::is_supporting`] given the shape's face in that direction.
+    fn supported_by(self, face: &VoxelShape) -> Result<bool, ShapeError> {
         let (required, operation) = match self {
             Self::Full => (VoxelShape::block(), ShapeOp::XOR),
             Self::Center => {
@@ -92,13 +95,17 @@ impl<'r> CachedBlockSupportRegistry<'r> {
                 *flags
             } else {
                 let mut flags = [0; 3];
-                for (i, support) in [SupportType::Full, SupportType::Center, SupportType::Rigid]
-                    .into_iter()
-                    .enumerate()
-                {
-                    for direction in Direction::ALL {
+                for direction in Direction::ALL {
+                    // Not kept on the shape: only these flags are.
+                    let face = shape
+                        .face_shape_transient(direction)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    for (i, support) in [SupportType::Full, SupportType::Center, SupportType::Rigid]
+                        .into_iter()
+                        .enumerate()
+                    {
                         if support
-                            .is_supporting(shape, direction)
+                            .supported_by(&face)
                             .map_err(|e| invalid(e.to_string()))?
                         {
                             flags[i] |= 1 << direction as u8;
@@ -175,10 +182,10 @@ impl<'r> BlockSupportRegistry<'r> {
         let mut dynamic = HashMap::new();
         for id in 0..registry.len() {
             let id = BlockStateId(id as u32);
-            if cached.cached_shape(id)?.is_none() {
-                if let Some(behavior) = DynamicSupport::from_state(registry.state(id).unwrap())? {
-                    dynamic.insert(id, behavior);
-                }
+            if cached.cached_shape(id)?.is_none()
+                && let Some(behavior) = DynamicSupport::from_state(registry.state(id).unwrap())?
+            {
+                dynamic.insert(id, behavior);
             }
         }
         Ok(Self { cached, dynamic })

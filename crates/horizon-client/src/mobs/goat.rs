@@ -3,7 +3,8 @@
 //! the nearest living thing it can see, walks to a spot four to seven
 //! blocks away in a straight line and waits there 20 ticks with its head
 //! down; `RamTarget` then charges at it, knocks it back, or breaks a horn
-//! on a log, stone or ore. Both are one goal here.
+//! on a log, stone or ore. Both are one goal here. The long jump activity is
+//! the frog's goal (frog.rs) with the goat's numbers.
 use super::{
     Damage, Mob, MobEvent, MobWorld, Who,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone},
@@ -39,7 +40,7 @@ struct Candidate {
 }
 
 /// The lowered head and the ram behaviours' state. `RAM_COOLDOWN_TICKS` is a
-/// brain memory (`ram_cooldown`), saved with the others.
+/// brain memory (`ram_cooldown_ticks`), saved with the others.
 #[derive(Clone, Debug, Default)]
 pub struct State {
     lower_head_tick: i32,
@@ -51,10 +52,47 @@ pub struct State {
     ram_target: Option<Vec3>,
     ram_direction: Vec3,
     time: i32,
+    /// `LivingEntity.discardFriction`, set through the long jump.
+    pub discard_friction: bool,
 }
 
 pub fn register(m: &mut Mob) {
     m.ai.goals.add(2, Ram);
+    // `GoatAi.initLongJumpActivity`: the long jump activity comes after the
+    // ram activity and before the idle one.
+    m.ai.goals.add(2, super::frog::LongJump::default());
+}
+/// The goat's long jump activity is the one in use: `GoatAi` tries the ram
+/// activity first, so the ram cooldown runs, and the long jump activity wants
+/// no tempting player, no breed target and no walk target (the navigation is
+/// idle).
+pub(super) fn long_jump_activity(m: &Mob, w: &MobWorld) -> bool {
+    ram_cooldown(m) > 0 && m.ai.nav.is_done() && !tempted(m, w) && !breeding(m, w)
+}
+/// `TemptingSensor.forAnimal`: a player within 10 blocks holds goat food.
+fn tempted(m: &Mob, w: &MobWorld) -> bool {
+    let holds = |item: &Option<std::sync::Arc<str>>| {
+        item.as_deref()
+            .is_some_and(|i| m.kind.food.iter().any(|f| f.as_str() == i))
+    };
+    w.player.as_ref().is_some_and(|p| {
+        p.alive
+            && !p.spectator
+            && m.distance_sqr(p.position) <= 100.0
+            && (holds(&p.main_hand) || holds(&p.off_hand))
+            && m.rider.is_none()
+    })
+}
+/// `AnimalMakeLove.checkExtraStartConditions`: the goat is in love and an
+/// adult goat in love is near, so `BREED_TARGET` is set or about to be.
+fn breeding(m: &Mob, w: &MobWorld) -> bool {
+    let id = m.id;
+    m.extra.in_love > 0
+        && w.nearby(m.position, 8.0, move |s| {
+            s.id != id && s.species == super::Species::Goat && s.in_love && !s.baby
+        })
+        .next()
+        .is_some()
 }
 
 /// `Goat.handleEntityEvent`: 58 lowers the head, 59 raises it.
@@ -64,6 +102,15 @@ pub fn entity_event(m: &mut Mob, event: u8) {
         59 => m.extra.goat.lowering_head = false,
         _ => {}
     }
+}
+/// `Entity.setPose` and the `refreshDimensions` it triggers, for a goat of a
+/// server: the pose's box (`Goat.getDefaultDimensions` scales a long jump's
+/// by 0.7), and a box that grew (the goat lands) is moved to a free spot
+/// (`fudgePositionAfterSizeChange`).
+pub fn set_pose(m: &mut Mob, w: &MobWorld, id: u8) {
+    let (old_w, old_h, _) = m.dims();
+    m.extra.pose = id;
+    m.fudge_position_after_size_change(w, old_w, old_h);
 }
 /// `Goat.aiStep`'s `lowerHeadTick`; a client runs it too.
 pub fn tick(m: &mut Mob) {
@@ -76,6 +123,8 @@ pub fn tick(m: &mut Mob) {
     if cooldown > 0 {
         set_ram_cooldown(m, cooldown - 1);
     }
+    // `CountDownCooldownTicks(LONG_JUMP_COOLDOWN_TICKS)` of the core activity.
+    super::frog::count_down_cooldown(m);
 }
 /// `RAM_COOLDOWN_TICKS`: 0 when absent.
 pub fn ram_cooldown(m: &Mob) -> i32 {
@@ -96,7 +145,7 @@ fn set_ram_cooldown(m: &mut Mob, ticks: i32) {
         None => {}
     }
 }
-const RAM_COOLDOWN: &str = "ram_cooldown";
+const RAM_COOLDOWN: &str = "ram_cooldown_ticks";
 /// `Goat.getRammingXHeadRot`.
 pub fn ramming_x_head_rot(m: &Mob) -> f32 {
     let max = if m.is_baby() { 52.5_f32 } else { 30.0 };
@@ -130,10 +179,9 @@ fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
 }
 fn play(m: &Mob, events: &mut Vec<MobEvent>, sound: &'static str, pitch: f32) {
-    if !m.silent {
-        let at = [m.position.x, m.position.y, m.position.z];
-        events.push(MobEvent::Sound(sound, at, 1.0, pitch));
-    }
+    // PrepareRamNearestTarget / RamTarget use the level overload even when
+    // Silent is set; the receiving client's bound instance checks silence.
+    events.push(MobEvent::entity_sound(m, sound, 6, 1.0, pitch));
 }
 
 /// `PrepareRamNearestTarget.isWalkableBlock`.
@@ -225,17 +273,25 @@ impl Goal for Ram {
     fn flags(&self) -> u8 {
         MOVE | LOOK
     }
-    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
-        // The ram activity needs the cooldown to be over (it also waits for
-        // no tempting player and no breed target, which goats lack here).
-        ram_cooldown(m) <= 0
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // `GoatAi.initRamActivity`: the ram activity wants the cooldown over,
+        // no tempting player and no breed target, and `updateActivity` picks
+        // RAM before IDLE: a goat being fed or bred only follows.
+        ram_cooldown(m) <= 0 && !tempted(m, cx.w) && !breeding(m, cx.w)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let g = &m.extra.goat;
         match g.phase {
             Phase::Done => false,
             Phase::Prepare => {
-                g.time <= PREPARE_TIME_OUT
+                // `GoatAi.updateActivity` runs every tick: a player who starts
+                // feeding the goat, or a breed target that appears, switches the
+                // activity away and `PrepareRamNearestTarget.stop` starts the
+                // cooldown. (A charge under way keeps `RAM_TARGET`; only its own
+                // `canStillUse` ends that one.)
+                !tempted(m, cx.w)
+                    && !breeding(m, cx.w)
+                    && g.time <= PREPARE_TIME_OUT
                     && g.candidate
                         .is_some_and(|c| cx.w.target_info(c.target).is_some_and(|t| t.alive))
             }
@@ -379,13 +435,20 @@ fn ram_tick(m: &mut Mob, cx: &mut Cx) {
         };
         let boost = 0.25 * (level("minecraft:speed") - level("minecraft:slowness")) as f32;
         let factor = (m.ai.speed * 1.65).clamp(0.2, 3.0) + boost;
+        // `blockingFactor * speedFactor` stays a float, then the force (a
+        // double) scales it.
         let force = if m.is_baby() { 1.0 } else { 2.5 };
+        let power = f64::from(factor) * force;
         let d = m.extra.goat.ram_direction;
+        // The knockback's source is `mobAttack`, not the hurt's `noAggroMobAttack`,
+        // and `applyItemBlocking` runs again for it before the push.
         cx.events.push(MobEvent::Knockback {
             target,
-            power: f64::from(factor * force),
+            power,
             x: d.x,
             z: d.z,
+            source: Damage::mob(m.id, from),
+            apply_blocking: Some(amount),
         });
         finish_ram(m, cx.events);
         play(m, cx.events, impact, 1.0);
@@ -449,12 +512,38 @@ fn drop_horn(m: &mut Mob, events: &mut Vec<MobEvent>) -> bool {
         m.random.next_boolean()
     };
     m.extra.lost_horns[usize::from(!lose_left)] = true;
-    events.push(MobEvent::DropItem {
-        item: "minecraft:goat_horn".into(),
-        count: 1,
+    // `Mth.randomBetween(this.random, ..)` for the push, drawn after createHorn.
+    let mut between = |min: f32, max: f32| f64::from(m.random.next_float() * (max - min) + min);
+    let motion = [between(-0.2, 0.2), between(0.3, 0.7), between(-0.2, 0.2)];
+    events.push(MobEvent::DropGoatHorn {
+        mob: m.id,
+        screaming: m.extra.screaming,
         at: [m.position.x, m.position.y, m.position.z],
+        motion,
     });
     true
+}
+/// `Goat.createHorn`: the instrument is a random pick (by a random seeded
+/// with the goat's UUID hash) from `#regular_goat_horns` or, for a screaming
+/// goat, `#screaming_goat_horns`.
+pub fn create_horn(uuid: [i32; 4], screaming: bool) -> &'static str {
+    const REGULAR: [&str; 4] = [
+        "minecraft:ponder_goat_horn",
+        "minecraft:sing_goat_horn",
+        "minecraft:seek_goat_horn",
+        "minecraft:feel_goat_horn",
+    ];
+    const SCREAMING: [&str; 4] = [
+        "minecraft:admire_goat_horn",
+        "minecraft:call_goat_horn",
+        "minecraft:yearn_goat_horn",
+        "minecraft:dream_goat_horn",
+    ];
+    // The UUID's Java hash code: the two halves xored, then folded to an int.
+    let [a, b, c, d] = uuid;
+    let mut random = horizon_core::random::LegacyRandom::new(i64::from(a ^ b ^ c ^ d));
+    let list = if screaming { SCREAMING } else { REGULAR };
+    list[random.next_int_bound(list.len() as i32).unwrap_or(0) as usize]
 }
 /// `RamTarget.finishRam`.
 fn finish_ram(m: &mut Mob, events: &mut Vec<MobEvent>) {
@@ -464,4 +553,148 @@ fn finish_ram(m: &mut Mob, events: &mut Vec<MobEvent>) {
     set_ram_cooldown(m, cooldown);
     m.extra.goat.ram_target = None;
     m.extra.goat.phase = Phase::Done;
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    #[test]
+    fn ram_sound_keeps_a_silent_emitters_identity_and_does_not_draw_its_random() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.id = "minecraft:goat".into();
+        k.species = super::super::Species::Goat;
+        let mut goat = Mob::new(37, kind, Vec3::new(0.123456789, 64.0, -3.25), 0.0);
+        goat.silent = true;
+        let mut expected = goat.random.clone();
+        let mut events = Vec::new();
+        play(&goat, &mut events, "entity.goat.ram_impact", 1.0);
+        let [
+            MobEvent::EntitySound {
+                mob,
+                name,
+                at,
+                source,
+                volume,
+                pitch,
+            },
+        ] = &events[..]
+        else {
+            panic!("the level sound must survive Silent and retain its emitter");
+        };
+        assert_eq!((*mob, *name, *source), (37, "entity.goat.ram_impact", 6));
+        assert_eq!(*at, [0.123456789, 64.0, -3.25]);
+        assert_eq!((*volume, *pitch), (1.0, 1.0));
+        assert_eq!(goat.random.next_long(), expected.next_long());
+    }
+}
+
+#[cfg(test)]
+mod ram_tests {
+    use super::*;
+    use crate::mobs::world::{test_player, with_test_world};
+
+    fn fake_goat() -> std::sync::Arc<super::super::MobType> {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.species = super::super::Species::Goat;
+        k.food = std::sync::Arc::from(["minecraft:wheat".to_string()]);
+        kind
+    }
+
+    /// `GoatAi.initRamActivity` wants `TEMPTING_PLAYER` and `BREED_TARGET`
+    /// absent, and `GoatAi.updateActivity` picks RAM before IDLE: a goat being
+    /// fed or bred only follows.
+    #[test]
+    fn a_fed_or_bred_goat_starts_no_ram() {
+        let kind = fake_goat();
+        let mut partner = Mob::new(9, kind.clone(), Vec3::new(2.5, 64.0, 0.5), 0.0);
+        partner.extra.in_love = 600;
+        let others = [partner.seen(None)];
+        let ran = with_test_world(&others, |w, _| {
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut events = Vec::new();
+            let mut goat = Mob::new(7, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            let mut due = |goat: &mut Mob, w: &MobWorld| {
+                Ram.can_use(
+                    goat,
+                    &mut Cx {
+                        w,
+                        lr: &mut lr,
+                        events: &mut events,
+                    },
+                )
+            };
+            assert!(due(&mut goat, w), "a ram is due");
+            // `BREED_TARGET`: in love, with an adult goat in love nearby.
+            goat.extra.in_love = 600;
+            assert!(!due(&mut goat, w), "a goat being bred only follows");
+            goat.extra.in_love = 0;
+            // `TEMPTING_PLAYER`: a player within 10 blocks holding goat food.
+            let mut fed = w.clone();
+            let mut p = test_player(Vec3::new(0.5, 64.0, 3.5));
+            p.main_hand = Some("minecraft:wheat".into());
+            fed.player = Some(p);
+            assert!(!due(&mut goat, &fed), "a goat being fed only follows");
+            // Any other item is no temptation.
+            let mut stone = w.clone();
+            let mut p = test_player(Vec3::new(0.5, 64.0, 3.5));
+            p.main_hand = Some("minecraft:stone".into());
+            stone.player = Some(p);
+            assert!(due(&mut goat, &stone));
+        });
+        let _ = ran;
+    }
+
+    /// `RamTarget.tick` posts the hit (`noAggroMobAttack`) and then its push,
+    /// which names the damage the victim's `applyItemBlocking` runs again on.
+    #[test]
+    fn a_ram_posts_the_hits_damage_with_its_push() {
+        let kind = fake_goat();
+        let ran = with_test_world(&[], |w, _| {
+            let mut w = w.clone();
+            w.player = Some(test_player(Vec3::new(0.5, 64.0, 0.5)));
+            let mut goat = Mob::new(7, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            goat.attrs.attack_damage = 2.0;
+            goat.ai.speed = 3.0;
+            goat.extra.goat.ram_direction = Vec3::new(0.0, 0.0, 1.0);
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut events = Vec::new();
+            ram_tick(
+                &mut goat,
+                &mut Cx {
+                    w: &w,
+                    lr: &mut lr,
+                    events: &mut events,
+                },
+            );
+            assert!(matches!(
+                events[0],
+                MobEvent::DamagePlayer {
+                    amount: 2.0,
+                    kind: "minecraft:mob_attack_no_aggro",
+                    ..
+                }
+            ));
+            let push = events
+                .iter()
+                .find_map(|e| match e {
+                    MobEvent::Knockback {
+                        target: Who::Player,
+                        power,
+                        x,
+                        z,
+                        apply_blocking,
+                        ..
+                    } => Some((*power, *x, *z, *apply_blocking)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the ram posts no push: {events:?}"));
+            // clamp(3.0 * 1.65, 0.2, 3.0) * 2.5, and the hit's damage for the
+            // victim's second `applyItemBlocking`.
+            assert_eq!(push, (7.5, 0.0, 1.0, Some(2.0)));
+        });
+        let _ = ran;
+    }
 }

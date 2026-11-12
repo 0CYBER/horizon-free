@@ -501,7 +501,7 @@ impl Pick {
             [one] => *one,
             many => many[random.int(many.len() as i32) as usize],
         };
-        let mut nbt = outcome.nbt.clone().or(info.nbt);
+        let mut nbt = outcome.nbt.clone().map(Box::new).or(info.nbt);
         for list in &outcome.lists {
             let values = (0..list.count)
                 .map(|_| {
@@ -514,7 +514,7 @@ impl Pick {
                     Tag::String(v.as_str().into())
                 })
                 .collect();
-            nbt.get_or_insert_with(Compound::new)
+            nbt.get_or_insert_with(Default::default)
                 .insert(list.key.as_str().into(), Tag::List(values));
         }
         BlockInfo {
@@ -730,6 +730,15 @@ fn float(value: &Value, key: &'static str) -> Result<f32, DecodeError> {
         .map(|v| v as f32)
         .ok_or(DecodeError::Field(key))
 }
+/// A required float field vanilla reads through `Codec.floatRange`: a value
+/// outside the range, or a NaN, is refused at decode rather than clamped.
+fn float_range(value: &Value, key: &'static str, min: f32, max: f32) -> Result<f32, DecodeError> {
+    let v = float(value, key)?;
+    if !(min..=max).contains(&v) {
+        return Err(DecodeError::Field(key));
+    }
+    Ok(v)
+}
 impl Processor {
     fn decode(
         value: &Value,
@@ -760,7 +769,7 @@ impl Processor {
                     Some(v) => Some(holder_set(v, bindings)?),
                     None => None,
                 },
-                integrity: float(value, "integrity")?,
+                integrity: float_range(value, "integrity", 0., 1.)?,
             },
             "minecraft:gravity" => Self::Gravity {
                 heightmap: match value.get("heightmap").and_then(Value::as_str) {
@@ -777,10 +786,18 @@ impl Processor {
             "minecraft:block_age" => Self::BlockAge(float(value, "mossiness")?),
             "minecraft:lava_submerged_block" => Self::LavaSubmerged,
             "minecraft:blackstone_replace" => Self::BlackstoneReplace,
-            "minecraft:capped" => Self::Capped {
-                delegate: Box::new(Self::decode(&value["delegate"], resources, bindings)?),
-                limit: IntProvider::from_json(&value["limit"].to_string())?,
-            },
+            "minecraft:capped" => {
+                // CappedProcessor's limit is IntProviders.POSITIVE_CODEC: a
+                // provider that can draw 0 or less is refused at decode.
+                let limit = IntProvider::from_json(&value["limit"].to_string())?;
+                if limit.bounds()[0] < 1 {
+                    return Err(DecodeError::Field("capped limit"));
+                }
+                Self::Capped {
+                    delegate: Box::new(Self::decode(&value["delegate"], resources, bindings)?),
+                    limit,
+                }
+            }
             "minecraft:rule" => Self::Rule(
                 value["rules"]
                     .as_array()
@@ -1143,7 +1160,10 @@ fn process_block<W: PlacementContext>(
                 return Ok(Some(BlockInfo {
                     pos: info.pos,
                     state: rule.output,
-                    nbt: rule.modifier.apply(info.nbt.as_ref(), &mut random),
+                    nbt: rule
+                        .modifier
+                        .apply(info.nbt.as_deref(), &mut random)
+                        .map(Box::new),
                 }));
             }
             Some(info)
@@ -1209,7 +1229,10 @@ fn process_block<W: PlacementContext>(
                     .unwrap_or(state),
                 false => state,
             };
-            let nbt = set.modifier.apply(info.nbt.as_ref(), &mut random);
+            let nbt = set
+                .modifier
+                .apply(info.nbt.as_deref(), &mut random)
+                .map(Box::new);
             Some(BlockInfo { state, nbt, ..info })
         }
         Processor::Condition(c) => {
@@ -1271,7 +1294,7 @@ fn process_block<W: PlacementContext>(
             let entity = spawner.pick(|| settings.with_random(pos, |r| r.float()));
             Some(match entity {
                 Some(entity) => BlockInfo {
-                    nbt: Some(spawner.nbt(entity)),
+                    nbt: Some(Box::new(spawner.nbt(entity))),
                     ..info
                 },
                 None => BlockInfo {
@@ -1457,19 +1480,19 @@ fn process_infos<W: PlacementContext>(
                 before.clone(),
                 settings,
             )?;
-            if let Some(altered) = altered {
-                if altered != before {
-                    replaced += 1;
-                    processed[index] = altered;
-                }
+            if let Some(altered) = altered
+                && altered != before
+            {
+                replaced += 1;
+                processed[index] = altered;
             }
         }
     }
     Ok(processed)
 }
 
-/// StructureTemplate.placeInWorld without entities or neighbor shape updates.
-/// Returns false for empty templates.
+/// StructureTemplate.placeInWorld. Returns false for a template with no
+/// palette, with no blocks and no entities to place, or with a side below 1.
 #[allow(clippy::too_many_arguments)]
 pub fn place_in_world<W: FeatureWorld + PlacementContext>(
     world: &mut W,
@@ -1494,7 +1517,10 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
         .next_int_bound(template.palettes().len() as i32)
         .unwrap_or(0) as usize,
     };
-    if template.palettes()[palette].blocks().is_empty() || template.size.iter().any(|s| *s < 1) {
+    let has_entities = !settings.ignore_entities && !template.entities.is_empty();
+    if (template.palettes()[palette].blocks().is_empty() && !has_entities)
+        || template.size.iter().any(|s| *s < 1)
+    {
         return Ok(false);
     }
     let infos = process_infos(
@@ -1539,7 +1565,7 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
                 };
                 nbt.insert("LootTableSeed".into(), Tag::Long(seed));
             }
-            world.set_block_entity(info.pos, nbt)?;
+            world.set_block_entity(info.pos, *nbt)?;
         }
         if let Some(previous) = previous {
             if resources.source_fluid(state) {
@@ -2054,7 +2080,7 @@ mod tests {
         let glass = || BlockInfo {
             pos: [1, 2, 3],
             state: BlockStateId(0),
-            nbt: Some(Compound::new()),
+            nbt: Some(Box::default()),
         };
         let run = |f: f32, i: Vec<i32>| pick.apply(glass(), &mut Draws(vec![f], i));
         let sus = run(0.005, vec![]);
@@ -2065,7 +2091,7 @@ mod tests {
                 .contains_key(&JavaString::from("LootTable"))
         );
         assert_eq!(run(0.01, vec![]).state, BlockStateId(1));
-        assert_eq!(run(0.2999, vec![]).nbt, Some(Compound::new()));
+        assert_eq!(run(0.2999, vec![]).nbt, Some(Box::default()));
         assert_eq!(run(0.3, vec![]).state, BlockStateId(2));
         // The stairs' facing: Plane.HORIZONTAL[nextInt(4)] after the pick.
         assert_eq!(run(0.75, vec![2]).state, BlockStateId(12));

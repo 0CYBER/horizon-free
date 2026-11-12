@@ -114,12 +114,15 @@ fn start_failure(program: &Path, code: Option<i32>, stderr: &str) -> String {
     text
 }
 
+/// The Minecraft version this server is pinned to; prepared game files must be stamped with it.
+pub const GAME_VERSION: &str = horizon_platform::version::VERSION_ID;
+
 /// Where the prepared game files may be, in the order they are tried.
 pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) -> Vec<PathBuf> {
     if !config.engine.resources.is_empty() {
         return vec![dir.join(&config.engine.resources)];
     }
-    let version = "26.3";
+    let version = GAME_VERSION;
     let mut out = vec![dir.join("resources")];
     // A release folder or a checkout: .local/horizon-client/<version> beside the program or above it.
     if let Some(program) = program {
@@ -152,9 +155,112 @@ pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<
         })
 }
 
+/// The files `horizon-prepare` derives from the game and the engine reads at start (docs/hosting.md: a folder
+/// prepared before `registries.json` and `commands.json` were kept stops with "registries.json not found").
+const PREPARED_FILES: [&str; 4] = [
+    "facts.json",
+    "block-tags.json",
+    "registries.json",
+    "commands.json",
+];
+
+/// Folders of the client's own assets the engine loads fonts and textures from at start.
+const PREPARED_DIRS: [&str; 2] = ["assets/minecraft/font", "assets/minecraft/textures"];
+
+/// Checks a prepared folder before the engine starts on it, so a half-copied or stale folder is named
+/// instead of surfacing as the engine's `os error 2` at every restart. Checks what the manifest
+/// (`horizon-resources.json`, written last by `horizon-prepare`) records: the derived files are there and
+/// match the hashes it holds, and the asset folders the engine loads from aren't empty.
+pub fn check_prepared(resources: &Path) -> Result<(), String> {
+    let manifest = std::fs::read_to_string(resources.join("horizon-resources.json"))
+        .map_err(|e| format!("horizon-resources.json: {e}"))
+        .and_then(|text| {
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|e| format!("horizon-resources.json is not valid JSON ({e})"))
+        });
+    let mut problems = Vec::new();
+    for name in PREPARED_FILES {
+        if !resources.join(name).is_file() {
+            problems.push(format!("{name} is missing"));
+        }
+    }
+    match &manifest {
+        Ok(manifest) => {
+            for (name, key) in [
+                ("facts.json", "facts_sha256"),
+                ("block-tags.json", "block_tags_sha256"),
+            ] {
+                let Some(expected) = manifest.get(key).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if let Ok(actual) = sha256_file(&resources.join(name))
+                    && !actual.eq_ignore_ascii_case(expected)
+                {
+                    problems.push(format!(
+                        "{name} is not the file the preparation wrote (checksum differs)"
+                    ));
+                }
+            }
+        }
+        Err(e) => problems.push(e.clone()),
+    }
+    for dir in PREPARED_DIRS {
+        let empty = std::fs::read_dir(resources.join(dir))
+            .map_or(true, |mut entries| entries.next().is_none());
+        if empty {
+            problems.push(format!("{dir} is missing or empty"));
+        }
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "the prepared game files in {} are incomplete or damaged:\n  {}\nPrepare them again with \
+         `horizon-prepare --prepare --server-jar PATH` (or the launcher), or copy the whole prepared folder to \
+         the server again.",
+        resources.display(),
+        problems.join("\n  ")
+    ))
+}
+
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    std::io::copy(&mut file, &mut hash)?;
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Starts the engine in the server folder, with its console and log piped to the supervisor and its status
 /// on the control endpoint.
-pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Child> {
+pub fn spawn(
+    program: &Path,
+    resources: &Path,
+    dir: &Path,
+    low_memory: bool,
+    parallel_tick: bool,
+    transfers: Option<&str>,
+) -> std::io::Result<Child> {
+    command(
+        program,
+        resources,
+        dir,
+        low_memory,
+        parallel_tick,
+        transfers,
+    )?
+    .spawn()
+}
+
+/// The command `spawn` runs.
+fn command(
+    program: &Path,
+    resources: &Path,
+    dir: &Path,
+    low_memory: bool,
+    parallel_tick: bool,
+    transfers: Option<&str>,
+) -> std::io::Result<Command> {
     // The game runs in the server folder, so a folder given relative to ours (`--dir srv`) would put its
     // control endpoint in `srv/srv/.horizon`, which doesn't exist.
     let dir = std::path::absolute(dir)?;
@@ -164,7 +270,12 @@ pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Ch
         .arg("--resources")
         .arg(resources)
         .arg("--control-socket")
-        .arg(control_path(&dir))
+        .arg(control_path(&dir));
+    // `[transfer]` on: a proxy's hand-over requests on that endpoint (docs/server.md).
+    if let Some(transfers) = transfers {
+        command.arg("--transfers").arg(transfers);
+    }
+    command
         .args(["--dedicated", "--nogui"])
         .current_dir(&dir)
         .env("HORIZON_NO_AUDIO", "1")
@@ -180,13 +291,26 @@ pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Ch
         windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
             | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
     );
-    command.spawn()
+    // `[engine] low_memory`: mimalloc then keeps transparent huge pages off. Mostly empty huge pages cost
+    // 60 MB idle and 190 MB at 20 players, and save ~1 % of tick time (docs/hosting.md).
+    if low_memory {
+        command.env("MIMALLOC_ALLOW_THP", "0");
+    }
+    // `[engine] parallel_tick`: the game's switch, for a host that cannot set its environment. Off leaves
+    // the variable alone, so one the operator set still works.
+    if parallel_tick {
+        command.env("HORIZON_PARALLEL_TICK", "1");
+    }
+    Ok(command)
 }
 
 /// The game's control endpoint in a server folder (`--control-socket`): TCP on 127.0.0.1 with a token, on every OS.
 pub fn control_path(dir: &Path) -> PathBuf {
     dir.join(".horizon/engine.json")
 }
+
+/// How long a [`Control`] waits for each reply.
+pub const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A connection to the game's control endpoint: one JSON line asked, one answered.
 pub struct Control {
@@ -205,7 +329,7 @@ impl Control {
             .ok_or_else(bad)?;
         let token = v["token"].as_str().ok_or_else(bad)?;
         let writer = TcpStream::connect((Ipv4Addr::LOCALHOST, port))?;
-        writer.set_read_timeout(Some(Duration::from_secs(30)))?;
+        writer.set_read_timeout(Some(REPLY_TIMEOUT))?;
         let mut control = Self {
             reader: BufReader::new(writer.try_clone()?),
             writer,
@@ -220,7 +344,20 @@ impl Control {
         Ok(control)
     }
 
+    /// How long [`Self::ask`] waits for a reply; [`REPLY_TIMEOUT`] unless changed.
+    pub fn set_reply_timeout(&self, wait: Duration) -> std::io::Result<()> {
+        self.writer.set_read_timeout(Some(wait))
+    }
+
     pub fn ask(&mut self, line: &str) -> std::io::Result<serde_json::Value> {
+        // One request: the endpoint reads a line per request, so a line break would make the
+        // rest a request of its own. Refused before anything is sent.
+        if line.contains(['\n', '\r']) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a request is one line",
+            ));
+        }
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
         let mut reply = String::new();
@@ -235,6 +372,119 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_with_a_line_break_is_refused_unsent() {
+        let dir = std::env::temp_dir().join(format!("horizon-control-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".horizon")).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::fs::write(
+            control_path(&dir),
+            format!("{{\"port\": {port}, \"token\": \"t\"}}"),
+        )
+        .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                tx.send(line.trim().to_owned()).unwrap();
+                line.clear();
+                let _ = writer.write_all(b"{\"ok\":true}\n");
+            }
+        });
+        let mut control = Control::connect(&dir).unwrap();
+        for request in [
+            "console kick Kim0 x\nconsole op Mallory",
+            "console say a\rb",
+        ] {
+            let refused = control.ask(request).unwrap_err();
+            assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+        }
+        control.ask("console list").unwrap();
+        drop(control);
+        let heard: Vec<String> = rx.iter().collect();
+        assert_eq!(
+            heard,
+            ["auth t", "console list"],
+            "nothing of the refused requests was sent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn low_memory_turns_huge_pages_off_for_the_game() {
+        let thp = |low_memory| {
+            let dir = std::env::temp_dir();
+            let command = command(
+                Path::new("horizon-client"),
+                &dir,
+                &dir,
+                low_memory,
+                false,
+                None,
+            )
+            .unwrap();
+            command
+                .get_envs()
+                .find(|(k, _)| *k == "MIMALLOC_ALLOW_THP")
+                .and_then(|(_, v)| v.map(|v| v.to_owned()))
+        };
+        assert_eq!(thp(true).as_deref(), Some(std::ffi::OsStr::new("0")));
+        assert_eq!(thp(false), None);
+    }
+
+    #[test]
+    fn parallel_tick_reaches_the_game_only_when_it_is_on() {
+        let switch = |parallel_tick| {
+            let dir = std::env::temp_dir();
+            let command = command(
+                Path::new("horizon-client"),
+                &dir,
+                &dir,
+                false,
+                parallel_tick,
+                None,
+            )
+            .unwrap();
+            command
+                .get_envs()
+                .find(|(k, _)| *k == "HORIZON_PARALLEL_TICK")
+                .and_then(|(_, v)| v.map(|v| v.to_owned()))
+        };
+        assert_eq!(switch(true).as_deref(), Some(std::ffi::OsStr::new("1")));
+        assert_eq!(switch(false), None);
+    }
+
+    #[test]
+    fn transfers_reach_the_game_only_when_they_are_on() {
+        let args = |transfers: Option<&str>| {
+            let dir = std::env::temp_dir();
+            let command = command(
+                Path::new("horizon-client"),
+                &dir,
+                &dir,
+                false,
+                false,
+                transfers,
+            )
+            .unwrap();
+            command
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(!args(None).iter().any(|a| a == "--transfers"));
+        let on = args(Some("expect_seconds=10"));
+        let at = on.iter().position(|a| a == "--transfers").unwrap();
+        assert_eq!(on[at + 1], "expect_seconds=10");
+        // Before `--dedicated`: what follows it is vanilla's server arguments.
+        assert!(at < on.iter().position(|a| a == "--dedicated").unwrap());
+    }
 
     #[test]
     fn resources_are_searched_in_order() {
@@ -263,6 +513,85 @@ mod tests {
         // What `horizon-prepare` writes on every run; no asset index without `horizon-prepare sounds`.
         std::fs::write(prepared.join("horizon-resources.json"), "{}").unwrap();
         assert_eq!(resources(&config, &server, Some(&program)), Ok(prepared));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A folder as `horizon-prepare` leaves it, as far as `check_prepared` looks.
+    fn prepared_folder(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("horizon-server-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in PREPARED_DIRS {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join("file"), "x").unwrap();
+        }
+        for file in PREPARED_FILES {
+            std::fs::write(root.join(file), file).unwrap();
+        }
+        let manifest = serde_json::json!({
+            "facts_sha256": sha256_file(&root.join("facts.json")).unwrap(),
+            "block_tags_sha256": sha256_file(&root.join("block-tags.json")).unwrap(),
+        });
+        std::fs::write(root.join("horizon-resources.json"), manifest.to_string()).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_complete_prepared_folder_passes() {
+        let root = prepared_folder("complete");
+        assert_eq!(check_prepared(&root), Ok(()));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_files_and_folders_are_named() {
+        let root = prepared_folder("missing");
+        std::fs::remove_file(root.join("registries.json")).unwrap();
+        std::fs::remove_dir_all(root.join("assets/minecraft/font")).unwrap();
+        let text = check_prepared(&root).unwrap_err();
+        assert!(text.contains("registries.json is missing"), "{text}");
+        assert!(
+            text.contains("assets/minecraft/font is missing or empty"),
+            "{text}"
+        );
+        assert!(!text.contains("commands.json"), "{text}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_asset_folder_counts_as_missing() {
+        let root = prepared_folder("empty");
+        std::fs::remove_file(root.join("assets/minecraft/textures/file")).unwrap();
+        let text = check_prepared(&root).unwrap_err();
+        assert!(
+            text.contains("assets/minecraft/textures is missing or empty"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_changed_derived_file_is_reported() {
+        let root = prepared_folder("changed");
+        std::fs::write(root.join("facts.json"), "damaged").unwrap();
+        let text = check_prepared(&root).unwrap_err();
+        assert!(
+            text.contains("facts.json is not the file the preparation wrote"),
+            "{text}"
+        );
+        assert!(!text.contains("block-tags.json"), "{text}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_broken_manifest_is_reported() {
+        let root = prepared_folder("manifest");
+        std::fs::write(root.join("horizon-resources.json"), "{").unwrap();
+        let text = check_prepared(&root).unwrap_err();
+        assert!(
+            text.contains("horizon-resources.json is not valid JSON"),
+            "{text}"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -322,6 +651,9 @@ mod tests {
                 &std::path::absolute(&game).unwrap(),
                 &root.join("res"),
                 &server,
+                false,
+                false,
+                None,
             ) {
                 Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
                     tries += 1;

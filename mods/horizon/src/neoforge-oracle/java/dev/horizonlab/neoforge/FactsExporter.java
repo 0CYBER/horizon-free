@@ -1,6 +1,10 @@
 package dev.horizonlab.neoforge;
 
+import com.google.gson.JsonElement;
 import com.google.gson.stream.JsonWriter;
+import com.mojang.serialization.DataResult;
+import com.mojang.serialization.DynamicOps;
+import com.mojang.serialization.JsonOps;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +20,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.component.TypedDataComponent;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -23,10 +28,14 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ArmorItem;
+import net.minecraft.world.item.ArmorMaterial;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.TieredItem;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
@@ -34,7 +43,9 @@ import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.SoundType;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.storage.loot.LootParams;
@@ -73,7 +84,7 @@ public final class FactsExporter {
             new Export(server, namespaces, json).run();
         } catch (Throwable e) {
             e.printStackTrace();
-            System.exit(3);
+            Runtime.getRuntime().halt(3);
         }
         System.out.println("horizon-oracle: wrote " + out);
         server.halt(false);
@@ -217,15 +228,31 @@ public final class FactsExporter {
         }
 
         void drops(BlockState state) throws IOException {
+            BlockEntity be = null;
+            if (state.getBlock() instanceof EntityBlock eb) {
+                try {
+                    be = eb.newBlockEntity(FLOOR.above(), state);
+                } catch (RuntimeException e) {
+                    // Needs a placed block or extra setup: sample without it.
+                }
+            }
             json.name("drops");
             json.beginObject();
             for (int i = 0; i < tools.size(); i++) {
                 LootParams.Builder params =
                         new LootParams.Builder(level)
                                 .withParameter(LootContextParams.ORIGIN, Vec3.atCenterOf(FLOOR.above()))
-                                .withParameter(LootContextParams.TOOL, tools.get(i).copy());
+                                .withParameter(LootContextParams.TOOL, tools.get(i).copy())
+                                .withOptionalParameter(LootContextParams.BLOCK_ENTITY, be);
+                List<ItemStack> dropped;
+                try {
+                    dropped = state.getDrops(params);
+                } catch (RuntimeException e) {
+                    // Loot needs more than a fresh entity (a player, a capability...): leave unsampled.
+                    continue;
+                }
                 Map<String, Integer> counts = new TreeMap<>();
-                for (ItemStack s : state.getDrops(params)) {
+                for (ItemStack s : dropped) {
                     counts.merge(BuiltInRegistries.ITEM.getKey(s.getItem()).toString(), s.getCount(), Integer::sum);
                 }
                 json.name(toolNames.get(i));
@@ -346,9 +373,74 @@ public final class FactsExporter {
                     json.name("saturation").value(food.saturation());
                     json.endObject();
                 }
+                itemComponents(item, stack);
                 json.endObject();
             }
             json.endObject();
+        }
+
+        // The item's own numbers in 1.21.1's forms: its default components, and what it keeps outside them.
+        void itemComponents(Item item, ItemStack stack) throws IOException {
+            DynamicOps<JsonElement> ops = server.registryAccess().createSerializationContext(JsonOps.INSTANCE);
+            json.name("components");
+            json.beginObject();
+            for (TypedDataComponent<?> c : stack.getComponents()) {
+                try {
+                    var encoded = c.encodeValue(ops).result();
+                    if (encoded.isPresent()) {
+                        json.name(BuiltInRegistries.DATA_COMPONENT_TYPE.getKey(c.type()).toString());
+                        json.jsonValue(encoded.get().toString());
+                    }
+                } catch (RuntimeException e) {
+                    // A mod component codec that throws on its own default: leave it out.
+                }
+            }
+            json.endObject();
+            // Armor's come from ArmorItem.getDefaultAttributeModifiers, not a component.
+            raw("attribute_modifiers", ItemAttributeModifiers.CODEC.encodeStart(ops, stack.getAttributeModifiers()));
+            json.name("enchantment_value").value(item.getEnchantmentValue());
+            Ingredient repair = null;
+            if (item instanceof TieredItem tiered) {
+                repair = tiered.getTier().getRepairIngredient();
+            } else if (item instanceof ArmorItem armor) {
+                repair = armor.getMaterial().value().repairIngredient().get();
+            }
+            if (repair != null) {
+                json.name("repair_items");
+                json.beginArray();
+                for (ItemStack s : repair.getItems()) json.value(BuiltInRegistries.ITEM.getKey(s.getItem()).toString());
+                json.endArray();
+            }
+            if (item instanceof ArmorItem armor) {
+                ArmorMaterial material = armor.getMaterial().value();
+                json.name("armor");
+                json.beginObject();
+                json.name("slot").value(armor.getEquipmentSlot().getName());
+                json.name("material").value(armor.getMaterial().unwrapKey().map(k -> k.location().toString()).orElse(""));
+                json.name("defense").value(armor.getDefense());
+                json.name("toughness").value(armor.getToughness());
+                json.name("knockback_resistance").value(material.knockbackResistance());
+                json.name("equip_sound").value(BuiltInRegistries.SOUND_EVENT.getKey(material.equipSound().value()).toString());
+                json.name("layers");
+                json.beginArray();
+                for (ArmorMaterial.Layer layer : material.layers()) {
+                    json.beginObject();
+                    json.name("texture").value(layer.texture(false).toString());
+                    json.name("texture_legs").value(layer.texture(true).toString());
+                    json.name("dyeable").value(layer.dyeable());
+                    json.endObject();
+                }
+                json.endArray();
+                json.endObject();
+            }
+        }
+
+        void raw(String name, DataResult<JsonElement> encoded) throws IOException {
+            var value = encoded.result();
+            if (value.isPresent()) {
+                json.name(name);
+                json.jsonValue(value.get().toString());
+            }
         }
 
         void recipes() throws IOException {

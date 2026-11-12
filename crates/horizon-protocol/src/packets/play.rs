@@ -4,7 +4,7 @@ use crate::{
     buf::{
         Bool, Byte, BytesN, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt,
         Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong,
-        Vec3d, Writer,
+        VarVec3i, Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
@@ -21,6 +21,16 @@ use crate::{
     },
 };
 use horizon_world::nbt::Tag;
+
+mod advancements;
+mod commands;
+mod hud;
+pub use advancements::{Advancement, AdvancementDisplay, SeenAdvancements, UpdateAdvancements};
+pub use commands::{ARGUMENT_TYPES, ArgumentProperties, CommandNode, Commands};
+pub use hud::{
+    BossAction, BossEvent, NumberFormat, ResetScore, SetDisplayObjective, SetObjective,
+    SetPlayerTeam, SetScore, TeamParameters,
+};
 
 // ---- shared structures -------------------------------------------------
 
@@ -72,9 +82,18 @@ packet!(AddEntity {
 });
 packet!(Animate { id: i32 => VarInt, action: u8 => UByte });
 packet!(BlockChangedAck { sequence: i32 => VarInt });
+packet!(
+    /// ClientboundSelectAdvancementsTabPacket: the advancement tab the server keeps for the
+    /// player, or none. `ClientPacketListener.handleSelectAdvancementsTab` opens the screen on
+    /// that tab, and closes it for none.
+    SelectAdvancementsTab { tab: Option<String> => Opt<Ident> }
+);
 packet!(BlockDestruction { id: i32 => VarInt, pos: [i32; 3] => Pos, progress: u8 => UByte });
 packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => Nbt });
 packet!(BlockUpdate { pos: [i32; 3] => Pos, state: i32 => VarInt });
+// ClientboundAddTransientBlockPacket: a block the client shows for a moment
+// while its section mesh catches up (a falling block that landed).
+packet!(AddTransientBlock { pos: [i32; 3] => Pos, state: i32 => VarInt });
 packet!(ChangeDifficulty { difficulty: i32 => VarInt, locked: bool => Bool });
 // ResourceKey<GameRule<?>> is an identifier, followed by its string value.
 packet!(GameRuleEntry { name: String => Ident, value: String => Str });
@@ -211,6 +230,18 @@ packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i1
 // ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
 // its entry lasts (0 ends it).
 packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
+packet!(
+    /// ClientboundCustomChatCompletionsPacket: how the server changes the
+    /// extra chat completions (`custom_chat_action`) and the entries.
+    CustomChatCompletions { action: i32 => VarInt, entries: Vec<String> => List<Str> }
+);
+/// ClientboundCustomChatCompletionsPacket.Action, by id (`ByIdMap.continuous`
+/// with `OutOfBoundsStrategy.ZERO`: an unknown id is `ADD`).
+pub mod custom_chat_action {
+    pub const ADD: i32 = 0;
+    pub const REMOVE: i32 = 1;
+    pub const SET: i32 = 2;
+}
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -307,6 +338,39 @@ impl Codec<PositionPath> for PositionPath {
 }
 packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPath, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool });
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
+packet!(
+    /// ClientboundChunksBiomesPacket.ChunkBiomeData: a column and its
+    /// sections' biome containers, in order (`extractChunkData`).
+    ChunkBiomeData { pos: [i32; 2] => ChunkPos, buffer: Vec<u8> => BytesN<2097152> }
+);
+impl ChunkBiomeData {
+    /// `LevelChunk.replaceBiomes`' read: `count` sections' biome
+    /// containers, one after another.
+    pub fn biomes(&self, count: usize, biome_bits: u8) -> Result<Vec<crate::chunk::Paletted>> {
+        let mut r = Reader::new(&self.buffer);
+        (0..count)
+            .map(|_| {
+                crate::chunk::Paletted::read(&mut r, crate::chunk::Strategy::Biomes, biome_bits)
+            })
+            .collect()
+    }
+    /// `extractChunkData`: the sections' biome containers, in order.
+    pub fn from_biomes(pos: [i32; 2], biomes: &[crate::chunk::Paletted]) -> Self {
+        let mut w = Writer::new();
+        for b in biomes {
+            b.write(&mut w);
+        }
+        Self {
+            pos,
+            buffer: w.data,
+        }
+    }
+}
+packet!(
+    /// ClientboundChunksBiomesPacket: columns whose biomes changed
+    /// (`/fillbiome`, through `ChunkMap.resendBiomesForChunks`).
+    ChunksBiomes { chunks: Vec<ChunkBiomeData> => List<ChunkBiomeData> }
+);
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
 packet!(
@@ -413,7 +477,9 @@ impl VecDelta {
         let mut out = base;
         for i in 0..3 {
             if delta[i] != 0 {
-                out[i] = ((base[i] * 4096.0).round() as i64 + i64::from(delta[i])) as f64 / 4096.0;
+                out[i] = (horizon_core::jmath::round(base[i] * 4096.0) + i64::from(delta[i]))
+                    as f64
+                    / 4096.0;
             }
         }
         out
@@ -598,6 +664,11 @@ packet!(PlayerChat {
     filter: (i32, Vec<i64>) => FilterMask,
     chat_type: ChatTypeBound => ChatTypeBound,
 });
+packet!(
+    /// ClientboundDeleteChatPacket: the server deleted a player message,
+    /// named by its packed signature.
+    DeleteChat { signature: (i32, Option<Vec<u8>>) => PackedSignature }
+);
 packet!(PlayerCombatKill { id: i32 => VarInt, message: Tag => Nbt });
 packet!(PlayerInfoRemove { uuids: Vec<u128> => List<Uuid> });
 /// One ClientboundPlayerInfoUpdatePacket entry; fields are set for the
@@ -722,6 +793,25 @@ packet!(
     /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
     ProjectilePower { id: i32 => VarInt, power: f64 => Double }
 );
+packet!(
+    /// ClientboundPlayerLookAtPacket's entity target: its id and the anchor
+    /// (`EntityAnchorArgument.Anchor`: 0 feet, 1 eyes) to look at on it.
+    LookAtEntity { id: i32 => VarInt, anchor: i32 => VarInt }
+);
+packet!(
+    /// ClientboundPlayerLookAtPacket: turn this player's `from` anchor towards
+    /// a point, or towards an entity when the client knows it.
+    PlayerLookAt {
+        from: i32 => VarInt,
+        target: [f64; 3] => Vec3d,
+        entity: Option<LookAtEntity> => Opt<LookAtEntity>,
+    }
+);
+packet!(
+    /// ClientboundPostEffectsPacket: the `post_effect` chains (ids) the player's
+    /// screen runs, in order (`ServerPlayer.postEffects`).
+    PostEffects { effects: Vec<String> => List<Ident> }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -759,6 +849,24 @@ packet!(
     /// controls back where it was (PositionAndRotation: x, y, z, yRot, xRot).
     MoveVehicle { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float }
 );
+packet!(
+    /// NewMinecartBehavior.MinecartStep: where a minecart is at the end of one
+    /// of the server's steps along the track, its motion, its rotation (yRot,
+    /// xRot) and the step's weight in the 3 ticks they are played over.
+    MinecartStep {
+        position: [f64; 3] => Vec3d,
+        movement: [f64; 3] => Vec3d,
+        yaw: i8 => Byte,
+        pitch: i8 => Byte,
+        weight: f32 => Float,
+    }
+);
+packet!(
+    /// ClientboundMoveMinecartPacket: the steps a minecart took along the
+    /// track since the last one (the `minecart_improvements` experiment sends
+    /// these in place of move packets).
+    MoveMinecartAlongTrack { id: i32 => VarInt, steps: Vec<MinecartStep> => List<MinecartStep> }
+);
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
 impl Codec<Vec<(u8, Option<Stack>)>> for Equipment {
@@ -783,9 +891,20 @@ packet!(SetEquipment { id: i32 => VarInt, slots: Vec<(u8, Option<Stack>)> => Equ
 packet!(SetExperience { progress: f32 => Float, level: i32 => VarInt, total: i32 => VarInt });
 packet!(SetHealth { health: f32 => Float, food: i32 => VarInt, saturation: f32 => Float });
 packet!(SetHeldSlot { slot: i32 => VarInt });
+packet!(
+    /// ClientboundSetCameraPacket: the entity the view is attached to (the
+    /// player's own id puts it back on the player).
+    SetCamera { camera_id: i32 => VarInt }
+);
 packet!(SetPlayerInventory { slot: i32 => VarInt, item: Option<Stack> => Slot });
 packet!(
     /// ClockNetworkState for one world clock (registry id).
+    ///
+    /// `ClientboundSetTimePacket` keys its map by `Holder<WorldClock>`, but
+    /// `WorldClock.STREAM_CODEC` is `ByteBufCodecs.holderRegistry`, not
+    /// `holder`: the key is the plain registry id, with no inline form and no
+    /// off-by-one. The test below is a join packet captured from a vanilla
+    /// 26.3 server.
     ClockState { clock: i32 => VarInt, total_ticks: i64 => VarLong, partial_tick: f32 => Float, rate: f32 => Float }
 );
 packet!(SetTime { game_time: i64 => Long, clocks: Vec<ClockState> => List<ClockState> });
@@ -796,7 +915,7 @@ impl Codec<(i32, Option<(String, Option<f32>)>)> for SoundHolder {
     fn read(r: &mut Reader) -> Result<(i32, Option<(String, Option<f32>)>)> {
         let id = r.varint()?;
         if id != 0 {
-            return Ok((id - 1, None));
+            return Ok((crate::adapter::ids::sound_event(id - 1), None));
         }
         let location = r.string(32767)?;
         let range = if r.bool()? { Some(r.f32()?) } else { None };
@@ -824,6 +943,11 @@ packet!(Sound {
     seed: i64 => Long,
 });
 packet!(SystemChat { content: Tag => Nbt, overlay: bool => Bool });
+packet!(
+    /// ClientboundTagQueryPacket: the answer to a debug NBT query (F3+I), with
+    /// the transaction it answers; `Tag::End` when there was no block entity.
+    TagQuery { transaction: i32 => VarInt, tag: Tag => Nbt }
+);
 packet!(TakeItemEntity { item: i32 => VarInt, player: i32 => VarInt, amount: i32 => VarInt });
 packet!(TeleportEntity {
     id: i32 => VarInt,
@@ -870,98 +994,12 @@ packet!(
     /// ClientboundSetBorderWarningDistancePacket.
     SetBorderWarningDistance { blocks: i32 => VarInt }
 );
-packet!(
-    /// ClientboundSetDisplayObjectivePacket: `DisplaySlot` id (0 list,
-    /// 1 sidebar, 2 below name, 3.. team sidebars) and the objective ("" clears).
-    SetDisplayObjective { slot: i32 => VarInt, objective: String => Str }
-);
-packet!(
-    /// ClientboundResetScorePacket: one objective, or all of them when absent.
-    ResetScore { owner: String => Str, objective: Option<String> => Opt<Str> }
-);
-/// `NumberFormatTypes.STREAM_CODEC`, by `number_format_type` registry id.
-#[derive(Clone, Debug, PartialEq)]
-pub enum NumberFormat {
-    /// 0: `minecraft:blank`.
-    Blank,
-    /// 1: `minecraft:styled`, a style compound.
-    Styled(Tag),
-    /// 2: `minecraft:fixed`, a component.
-    Fixed(Tag),
-}
-impl Codec<NumberFormat> for NumberFormat {
-    fn read(r: &mut Reader) -> Result<Self> {
-        Ok(match r.varint()? {
-            0 => NumberFormat::Blank,
-            1 => NumberFormat::Styled(r.nbt()?),
-            2 => NumberFormat::Fixed(r.nbt()?),
-            other => return Err(crate::Error::new(format!("unknown number format {other}"))),
-        })
-    }
-    fn write(v: &Self, w: &mut Writer) {
-        match v {
-            NumberFormat::Blank => w.varint(0),
-            NumberFormat::Styled(t) => {
-                w.varint(1);
-                w.nbt(t);
-            }
-            NumberFormat::Fixed(t) => {
-                w.varint(2);
-                w.nbt(t);
-            }
-        }
-    }
-}
-packet!(
-    /// ClientboundSetScorePacket.
-    SetScore {
-        owner: String => Str,
-        objective: String => Str,
-        score: i32 => VarInt,
-        display: Option<Tag> => Opt<Nbt>,
-        number_format: Option<NumberFormat> => Opt<NumberFormat>,
-    }
-);
-/// ClientboundSetObjectivePacket: method 0 adds, 1 removes, 2 changes;
-/// adds and changes carry the display name, render type (0 integer,
-/// 1 hearts) and number format.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SetObjective {
-    pub name: String,
-    pub method: i8,
-    pub display: Option<(Tag, i32, Option<NumberFormat>)>,
-}
-impl Codec<SetObjective> for SetObjective {
-    fn read(r: &mut Reader) -> Result<Self> {
-        let name = r.string(32767)?;
-        let method = r.i8()?;
-        let display = if method == 0 || method == 2 {
-            Some((r.nbt()?, r.varint()?, <Opt<NumberFormat>>::read(r)?))
-        } else {
-            None
-        };
-        Ok(Self {
-            name,
-            method,
-            display,
-        })
-    }
-    fn write(v: &Self, w: &mut Writer) {
-        w.string(&v.name);
-        w.i8(v.method);
-        if v.method == 0 || v.method == 2 {
-            let (name, render, format) = v.display.clone().unwrap_or((Tag::End, 0, None));
-            w.nbt(&name);
-            w.varint(render);
-            <Opt<NumberFormat>>::write(&format, w);
-        }
-    }
-}
 /// ClientboundLevelParticlesPacket: a particle, whether it ignores the
 /// client's particle setting (`overrideLimiter`) and its distance limit
 /// (`alwaysShow`), where, the spread and the speed on each axis, how many
 /// (0: one, moving by speed times spread) and the randomization type
-/// (0 default: gaussian spread and speed).
+/// (0 default: gaussian spread and speed; 1 ALTERNATIVE: nextDouble times
+/// spread, the packet's max speed as velocity).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LevelParticles {
     pub particle: Particle,
@@ -1067,85 +1105,6 @@ impl Codec<Explode> for Explode {
         w.bool(v.play_sound);
     }
 }
-/// `ClientboundSetPlayerTeamPacket.Parameters`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TeamParameters {
-    pub display_name: Tag,
-    pub prefix: Tag,
-    pub suffix: Tag,
-    /// `Team.Visibility` id.
-    pub name_tag_visibility: i32,
-    /// `Team.CollisionRule` id.
-    pub collision_rule: i32,
-    /// `TeamColor` id (0 black .. 15 white), absent for no colour.
-    pub color: Option<i32>,
-    /// 1: friendly fire, 2: see friendly invisibles.
-    pub options: i8,
-}
-/// ClientboundSetPlayerTeamPacket: method 0 adds (parameters and players),
-/// 1 removes, 2 changes (parameters), 3 joins and 4 leaves (players).
-#[derive(Clone, Debug, PartialEq)]
-pub struct SetPlayerTeam {
-    pub name: String,
-    pub method: i8,
-    pub parameters: Option<TeamParameters>,
-    pub players: Vec<String>,
-}
-impl Codec<SetPlayerTeam> for SetPlayerTeam {
-    fn read(r: &mut Reader) -> Result<Self> {
-        let name = r.string(32767)?;
-        let method = r.i8()?;
-        let parameters = if method == 0 || method == 2 {
-            Some(TeamParameters {
-                display_name: r.nbt()?,
-                prefix: r.nbt()?,
-                suffix: r.nbt()?,
-                name_tag_visibility: r.varint()?,
-                collision_rule: r.varint()?,
-                color: <Opt<VarInt>>::read(r)?,
-                options: r.i8()?,
-            })
-        } else {
-            None
-        };
-        let players = if matches!(method, 0 | 3 | 4) {
-            <List<Str>>::read(r)?
-        } else {
-            Vec::new()
-        };
-        Ok(Self {
-            name,
-            method,
-            parameters,
-            players,
-        })
-    }
-    fn write(v: &Self, w: &mut Writer) {
-        w.string(&v.name);
-        w.i8(v.method);
-        if v.method == 0 || v.method == 2 {
-            let p = v.parameters.clone().unwrap_or(TeamParameters {
-                display_name: Tag::End,
-                prefix: Tag::End,
-                suffix: Tag::End,
-                name_tag_visibility: 0,
-                collision_rule: 0,
-                color: None,
-                options: 0,
-            });
-            w.nbt(&p.display_name);
-            w.nbt(&p.prefix);
-            w.nbt(&p.suffix);
-            w.varint(p.name_tag_visibility);
-            w.varint(p.collision_rule);
-            <Opt<VarInt>>::write(&p.color, w);
-            w.i8(p.options);
-        }
-        if matches!(v.method, 0 | 3 | 4) {
-            <List<Str>>::write(&v.players, w);
-        }
-    }
-}
 packet!(ServerData { motd: Tag => Nbt, icon: Option<Vec<u8>> => Opt<crate::buf::Bytes> });
 packet!(
     /// ClientboundUpdateMobEffectPacket; flags: 1 ambient, 2 visible, 4 icon, 8 blend.
@@ -1219,445 +1178,6 @@ impl Codec<StopSound> for StopSound {
         }
     }
 }
-/// One entry of ClientboundCommandsPacket: a literal or an argument node.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommandNode {
-    /// 0 root, 1 literal, 2 argument.
-    pub kind: u8,
-    pub executable: bool,
-    pub restricted: bool,
-    pub children: Vec<i32>,
-    pub redirect: Option<i32>,
-    pub name: String,
-    /// Argument parser registry id and its raw property bytes.
-    pub parser: Option<(i32, Vec<u8>)>,
-    /// Custom suggestion provider (`minecraft:ask_server`).
-    pub suggestions: Option<String>,
-}
-/// The `minecraft:command_argument_type` registry of 26.3 in id order
-/// (ArgumentTypeInfos.bootstrap).
-pub const ARGUMENT_TYPES: &[&str] = &[
-    "brigadier:bool",
-    "brigadier:float",
-    "brigadier:double",
-    "brigadier:integer",
-    "brigadier:long",
-    "brigadier:string",
-    "minecraft:entity",
-    "minecraft:game_profile",
-    "minecraft:block_pos",
-    "minecraft:column_pos",
-    "minecraft:vec3",
-    "minecraft:vec2",
-    "minecraft:block_state",
-    "minecraft:block_predicate",
-    "minecraft:item_stack",
-    "minecraft:item_predicate",
-    "minecraft:team_color",
-    "minecraft:hex_color",
-    "minecraft:component",
-    "minecraft:style",
-    "minecraft:message",
-    "minecraft:nbt_compound_tag",
-    "minecraft:nbt_tag",
-    "minecraft:nbt_path",
-    "minecraft:objective",
-    "minecraft:objective_criteria",
-    "minecraft:operation",
-    "minecraft:particle",
-    "minecraft:angle",
-    "minecraft:rotation",
-    "minecraft:scoreboard_slot",
-    "minecraft:score_holder",
-    "minecraft:swizzle",
-    "minecraft:team",
-    "minecraft:item_slot",
-    "minecraft:item_slots",
-    "minecraft:resource_location",
-    "minecraft:function",
-    "minecraft:entity_anchor",
-    "minecraft:int_range",
-    "minecraft:float_range",
-    "minecraft:dimension",
-    "minecraft:gamemode",
-    "minecraft:time",
-    "minecraft:resource_or_tag",
-    "minecraft:resource_or_tag_key",
-    "minecraft:resource",
-    "minecraft:resource_key",
-    "minecraft:resource_selector",
-    "minecraft:template_mirror",
-    "minecraft:template_rotation",
-    "minecraft:heightmap",
-    "minecraft:loot_table",
-    "minecraft:loot_predicate",
-    "minecraft:loot_modifier",
-    "minecraft:context_float_provider",
-    "minecraft:context_int_provider",
-    "minecraft:slot_source",
-    "minecraft:dialog",
-    "minecraft:feature",
-    "minecraft:swing_animation",
-    "minecraft:uuid",
-];
-
-/// The properties of an argument parser (`ArgumentTypeInfo.Template`) as
-/// one of the 26.3 parsers decoded from the network.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ArgumentProperties {
-    None,
-    Integer {
-        min: Option<i32>,
-        max: Option<i32>,
-    },
-    Long {
-        min: Option<i64>,
-        max: Option<i64>,
-    },
-    Float {
-        min: Option<f32>,
-        max: Option<f32>,
-    },
-    Double {
-        min: Option<f64>,
-        max: Option<f64>,
-    },
-    /// StringArgumentType.StringType: 0 word, 1 phrase, 2 greedy.
-    String(i32),
-    Entity {
-        single: bool,
-        players_only: bool,
-    },
-    ScoreHolder {
-        multiple: bool,
-    },
-    Time {
-        min: i32,
-    },
-    /// The resource arguments' registry.
-    Registry(String),
-}
-
-impl ArgumentProperties {
-    /// ArgumentTypeInfo.deserializeFromNetwork for parser `id`.
-    pub fn read(r: &mut Reader, id: i32) -> Result<Self> {
-        let name = usize::try_from(id)
-            .ok()
-            .and_then(|i| ARGUMENT_TYPES.get(i))
-            .ok_or_else(|| crate::Error::new(format!("unknown argument type {id}")))?;
-        let flagged = |r: &mut Reader| -> Result<(bool, bool)> {
-            let f = r.u8()?;
-            Ok((f & 1 != 0, f & 2 != 0))
-        };
-        Ok(match *name {
-            "brigadier:integer" => {
-                let (min, max) = flagged(r)?;
-                let min = if min { Some(r.i32()?) } else { None };
-                let max = if max { Some(r.i32()?) } else { None };
-                Self::Integer { min, max }
-            }
-            "brigadier:long" => {
-                let (min, max) = flagged(r)?;
-                let min = if min { Some(r.i64()?) } else { None };
-                let max = if max { Some(r.i64()?) } else { None };
-                Self::Long { min, max }
-            }
-            "brigadier:float" => {
-                let (min, max) = flagged(r)?;
-                let min = if min { Some(r.f32()?) } else { None };
-                let max = if max { Some(r.f32()?) } else { None };
-                Self::Float { min, max }
-            }
-            "brigadier:double" => {
-                let (min, max) = flagged(r)?;
-                let min = if min { Some(r.f64()?) } else { None };
-                let max = if max { Some(r.f64()?) } else { None };
-                Self::Double { min, max }
-            }
-            "brigadier:string" => Self::String(r.varint()?),
-            "minecraft:entity" => {
-                let f = r.u8()?;
-                Self::Entity {
-                    single: f & 1 != 0,
-                    players_only: f & 2 != 0,
-                }
-            }
-            "minecraft:score_holder" => Self::ScoreHolder {
-                multiple: r.u8()? & 1 != 0,
-            },
-            "minecraft:time" => Self::Time { min: r.i32()? },
-            "minecraft:resource"
-            | "minecraft:resource_key"
-            | "minecraft:resource_or_tag"
-            | "minecraft:resource_or_tag_key"
-            | "minecraft:resource_selector" => Self::Registry(r.string(32767)?),
-            _ => Self::None,
-        })
-    }
-    /// Decodes a node's raw `parser` bytes.
-    pub fn decode(id: i32, bytes: &[u8]) -> Result<Self> {
-        Self::read(&mut Reader::new(bytes), id)
-    }
-}
-
-/// Reads past an argument node's parser properties.
-fn read_argument_properties(r: &mut Reader, id: i32) -> Result<()> {
-    ArgumentProperties::read(r, id).map(|_| ())
-}
-
-/// The command tree: nodes and the index of the root.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Commands {
-    pub nodes: Vec<CommandNode>,
-    pub root: i32,
-}
-impl Codec<Commands> for Commands {
-    fn read(r: &mut Reader) -> Result<Self> {
-        let n = r.count(r.remaining())?;
-        let mut nodes = Vec::with_capacity(n.min(4096));
-        for _ in 0..n {
-            let flags = r.u8()?;
-            let count = r.count(r.remaining())?;
-            let children = (0..count).map(|_| r.varint()).collect::<Result<_>>()?;
-            let redirect = if flags & 8 != 0 {
-                Some(r.varint()?)
-            } else {
-                None
-            };
-            let kind = flags & 3;
-            let (mut name, mut parser, mut suggestions) = (String::new(), None, None);
-            if kind >= 1 {
-                name = r.string(32767)?;
-            }
-            if kind == 2 {
-                let id = r.varint()?;
-                let start = r.position();
-                read_argument_properties(r, id)?;
-                parser = Some((id, r.since(start).to_vec()));
-                if flags & 16 != 0 {
-                    suggestions = Some(r.string(32767)?);
-                }
-            }
-            nodes.push(CommandNode {
-                kind,
-                executable: flags & 4 != 0,
-                restricted: flags & 32 != 0,
-                children,
-                redirect,
-                name,
-                parser,
-                suggestions,
-            });
-        }
-        Ok(Self {
-            nodes,
-            root: r.varint()?,
-        })
-    }
-    fn write(v: &Self, w: &mut Writer) {
-        w.varint(v.nodes.len() as i32);
-        for n in &v.nodes {
-            let mut flags = n.kind & 3;
-            if n.executable {
-                flags |= 4;
-            }
-            if n.redirect.is_some() {
-                flags |= 8;
-            }
-            if n.suggestions.is_some() {
-                flags |= 16;
-            }
-            if n.restricted {
-                flags |= 32;
-            }
-            w.u8(flags);
-            w.varint(n.children.len() as i32);
-            n.children.iter().for_each(|c| w.varint(*c));
-            if let Some(r) = n.redirect {
-                w.varint(r);
-            }
-            if n.kind >= 1 {
-                w.string(&n.name);
-            }
-            if n.kind == 2 {
-                let (id, props) = n.parser.clone().unwrap_or((5, Vec::new()));
-                w.varint(id);
-                w.bytes(&props);
-                if let Some(s) = &n.suggestions {
-                    w.string(s);
-                }
-            }
-        }
-        w.varint(v.root);
-    }
-}
-
-/// `DisplayInfo` of an advancement as sent.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AdvancementDisplay {
-    pub title: Tag,
-    pub description: Tag,
-    pub icon: crate::item::Stack,
-    /// `AdvancementType` ordinal: task, challenge, goal.
-    pub frame: i32,
-    pub show_toast: bool,
-    pub hidden: bool,
-    pub background: Option<String>,
-}
-/// `ClientboundUpdateAdvancementsPacket.PositionedAdvancement`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Advancement {
-    pub id: String,
-    pub parent: Option<String>,
-    pub display: Option<AdvancementDisplay>,
-    pub requirements: Vec<Vec<String>>,
-    pub telemetry: bool,
-    pub x: f32,
-    pub y: f32,
-}
-/// `ClientboundUpdateAdvancementsPacket`: whether it replaces what the
-/// client has, the advancements added and removed, the progress of each
-/// changed one (criterion, when obtained in epoch milliseconds), and whether
-/// to show toasts.
-#[derive(Clone, Debug, PartialEq)]
-pub struct UpdateAdvancements {
-    pub reset: bool,
-    pub added: Vec<Advancement>,
-    pub removed: Vec<String>,
-    pub progress: Vec<(String, Vec<(String, Option<i64>)>)>,
-    pub show: bool,
-}
-impl Codec<UpdateAdvancements> for UpdateAdvancements {
-    fn read(r: &mut Reader) -> Result<Self> {
-        let reset = r.bool()?;
-        let n = r.count(r.remaining())?;
-        let mut added = Vec::with_capacity(n.min(1024));
-        for _ in 0..n {
-            let id = r.string(32767)?;
-            let parent = if r.bool()? {
-                Some(r.string(32767)?)
-            } else {
-                None
-            };
-            let display = if r.bool()? {
-                let title = r.nbt()?;
-                let description = r.nbt()?;
-                let icon = crate::item::Template::read(r)?;
-                let frame = r.varint()?;
-                let flags = r.i32()?;
-                let background = if flags & 1 != 0 {
-                    Some(r.string(32767)?)
-                } else {
-                    None
-                };
-                Some(AdvancementDisplay {
-                    title,
-                    description,
-                    icon,
-                    frame,
-                    show_toast: flags & 2 != 0,
-                    hidden: flags & 4 != 0,
-                    background,
-                })
-            } else {
-                None
-            };
-            let groups = r.count(r.remaining())?;
-            let mut requirements = Vec::with_capacity(groups.min(256));
-            for _ in 0..groups {
-                let k = r.count(r.remaining())?;
-                requirements.push((0..k).map(|_| r.string(32767)).collect::<Result<_>>()?);
-            }
-            let telemetry = r.bool()?;
-            let (x, y) = (r.f32()?, r.f32()?);
-            added.push(Advancement {
-                id,
-                parent,
-                display,
-                requirements,
-                telemetry,
-                x,
-                y,
-            });
-        }
-        let n = r.count(r.remaining())?;
-        let removed = (0..n).map(|_| r.string(32767)).collect::<Result<_>>()?;
-        let n = r.count(r.remaining())?;
-        let mut progress = Vec::with_capacity(n.min(1024));
-        for _ in 0..n {
-            let id = r.string(32767)?;
-            let k = r.count(r.remaining())?;
-            let mut criteria = Vec::with_capacity(k.min(256));
-            for _ in 0..k {
-                let name = r.string(32767)?;
-                let at = if r.bool()? { Some(r.i64()?) } else { None };
-                criteria.push((name, at));
-            }
-            progress.push((id, criteria));
-        }
-        let show = r.bool()?;
-        Ok(Self {
-            reset,
-            added,
-            removed,
-            progress,
-            show,
-        })
-    }
-    fn write(v: &Self, w: &mut Writer) {
-        w.bool(v.reset);
-        w.varint(v.added.len() as i32);
-        for a in &v.added {
-            w.string(&a.id);
-            w.bool(a.parent.is_some());
-            if let Some(p) = &a.parent {
-                w.string(p);
-            }
-            w.bool(a.display.is_some());
-            if let Some(d) = &a.display {
-                w.nbt(&d.title);
-                w.nbt(&d.description);
-                crate::item::Template::write(&d.icon, w);
-                w.varint(d.frame);
-                w.i32(
-                    i32::from(d.background.is_some())
-                        | i32::from(d.show_toast) << 1
-                        | i32::from(d.hidden) << 2,
-                );
-                if let Some(b) = &d.background {
-                    w.string(b);
-                }
-            }
-            w.varint(a.requirements.len() as i32);
-            for g in &a.requirements {
-                w.varint(g.len() as i32);
-                for c in g {
-                    w.string(c);
-                }
-            }
-            w.bool(a.telemetry);
-            w.f32(a.x);
-            w.f32(a.y);
-        }
-        w.varint(v.removed.len() as i32);
-        for id in &v.removed {
-            w.string(id);
-        }
-        w.varint(v.progress.len() as i32);
-        for (id, criteria) in &v.progress {
-            w.string(id);
-            w.varint(criteria.len() as i32);
-            for (name, at) in criteria {
-                w.string(name);
-                w.bool(at.is_some());
-                if let Some(at) = at {
-                    w.i64(*at);
-                }
-            }
-        }
-        w.bool(v.show);
-    }
-}
 packet!(
     /// ClientboundAwardStatsPacket: (stat type, value, count) by network id.
     AwardStats { stats: Vec<(i32, i32, i32)> => StatList }
@@ -1681,125 +1201,6 @@ impl Codec<Vec<(i32, i32, i32)>> for StatList {
     }
 }
 
-/// `ClientboundBossEventPacket` (`boss_event`).
-#[derive(Clone, Debug, PartialEq)]
-pub enum BossAction {
-    Add {
-        name: Tag,
-        progress: f32,
-        /// `BossBarColor` ordinal.
-        color: i32,
-        /// `BossBarOverlay` ordinal.
-        overlay: i32,
-        darken: bool,
-        music: bool,
-        fog: bool,
-    },
-    Remove,
-    UpdateProgress {
-        progress: f32,
-    },
-    UpdateName {
-        name: Tag,
-    },
-    UpdateStyle {
-        color: i32,
-        overlay: i32,
-    },
-    UpdateProperties {
-        darken: bool,
-        music: bool,
-        fog: bool,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct BossEvent {
-    pub id: u128,
-    pub action: BossAction,
-}
-fn boss_flags(darken: bool, music: bool, fog: bool) -> u8 {
-    u8::from(darken) | (u8::from(music) << 1) | (u8::from(fog) << 2)
-}
-fn split_flags(flags: u8) -> (bool, bool, bool) {
-    (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0)
-}
-impl Codec<BossEvent> for BossEvent {
-    fn read(r: &mut Reader) -> Result<BossEvent> {
-        let id = r.uuid()?;
-        let action = match r.varint()? {
-            0 => {
-                let name = r.nbt()?;
-                let progress = r.f32()?;
-                let color = r.varint()?;
-                let overlay = r.varint()?;
-                let (darken, music, fog) = split_flags(r.u8()?);
-                BossAction::Add {
-                    name,
-                    progress,
-                    color,
-                    overlay,
-                    darken,
-                    music,
-                    fog,
-                }
-            }
-            1 => BossAction::Remove,
-            2 => BossAction::UpdateProgress { progress: r.f32()? },
-            3 => BossAction::UpdateName { name: r.nbt()? },
-            4 => BossAction::UpdateStyle {
-                color: r.varint()?,
-                overlay: r.varint()?,
-            },
-            5 => {
-                let (darken, music, fog) = split_flags(r.u8()?);
-                BossAction::UpdateProperties { darken, music, fog }
-            }
-            op => return Err(Error::new(format!("unknown boss event operation {op}"))),
-        };
-        Ok(BossEvent { id, action })
-    }
-    fn write(v: &BossEvent, w: &mut Writer) {
-        w.uuid(v.id);
-        match &v.action {
-            BossAction::Add {
-                name,
-                progress,
-                color,
-                overlay,
-                darken,
-                music,
-                fog,
-            } => {
-                w.varint(0);
-                w.nbt(name);
-                w.f32(*progress);
-                w.varint(*color);
-                w.varint(*overlay);
-                w.u8(boss_flags(*darken, *music, *fog));
-            }
-            BossAction::Remove => w.varint(1),
-            BossAction::UpdateProgress { progress } => {
-                w.varint(2);
-                w.f32(*progress);
-            }
-            BossAction::UpdateName { name } => {
-                w.varint(3);
-                w.nbt(name);
-            }
-            BossAction::UpdateStyle { color, overlay } => {
-                w.varint(4);
-                w.varint(*color);
-                w.varint(*overlay);
-            }
-            BossAction::UpdateProperties { darken, music, fog } => {
-                w.varint(5);
-                w.u8(boss_flags(*darken, *music, *fog));
-            }
-        }
-    }
-}
-
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
@@ -1815,6 +1216,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
     ClearTitles(Bool1) = CLEAR_TITLES,
+    LowDiskSpaceWarning(Empty) = LOW_DISK_SPACE_WARNING,
     Commands(Commands) = COMMANDS,
     RecipeBookAdd(super::recipes::RecipeBookAdd) = RECIPE_BOOK_ADD,
     RecipeBookRemove(super::recipes::RecipeBookRemove) = RECIPE_BOOK_REMOVE,
@@ -1826,13 +1228,17 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
     Cooldown(Cooldown) = COOLDOWN,
+    CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
+    DeleteChat(DeleteChat) = DELETE_CHAT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
     EntityEvent(EntityEvent) = ENTITY_EVENT,
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
+    ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
+    GameTestHighlightPos(GameTestHighlightPos) = GAME_TEST_HIGHLIGHT_POS,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     DamageEvent(DamageEvent) = DAMAGE_EVENT,
@@ -1858,8 +1264,10 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerCombatKill(PlayerCombatKill) = PLAYER_COMBAT_KILL,
     PlayerInfoRemove(PlayerInfoRemove) = PLAYER_INFO_REMOVE,
     PlayerInfoUpdate(PlayerInfoUpdate) = PLAYER_INFO_UPDATE,
+    PlayerLookAt(PlayerLookAt) = PLAYER_LOOK_AT,
     PlayerPosition(PlayerPosition) = PLAYER_POSITION,
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
+    PostEffects(PostEffects) = POST_EFFECTS,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
     RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
     ResetScore(ResetScore) = RESET_SCORE,
@@ -1876,6 +1284,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetBorderWarningDelay(SetBorderWarningDelay) = SET_BORDER_WARNING_DELAY,
     SetBorderWarningDistance(SetBorderWarningDistance) = SET_BORDER_WARNING_DISTANCE,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
+    SetCamera(SetCamera) = SET_CAMERA,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
     SetCursorItem(SetCursorItem) = SET_CURSOR_ITEM,
     SetDefaultSpawnPosition(SetDefaultSpawnPosition) = SET_DEFAULT_SPAWN_POSITION,
@@ -1890,6 +1299,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPassengers(SetPassengers) = SET_PASSENGERS,
     MoveVehicle(MoveVehicle) = MOVE_VEHICLE,
+    MoveMinecartAlongTrack(MoveMinecartAlongTrack) = MOVE_MINECART_ALONG_TRACK,
     ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
@@ -1907,11 +1317,14 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     // A common packet: the same `configuration::ServerLinks` the
     // configuration phase sends.
     ServerLinks(ServerLinks) = SERVER_LINKS,
+    SelectAdvancementsTab(SelectAdvancementsTab) = SELECT_ADVANCEMENTS_TAB,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
+    TagQuery(TagQuery) = TAG_QUERY,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
+    TestInstanceBlockStatus(TestInstanceBlockStatus) = TEST_INSTANCE_BLOCK_STATUS,
     TickingState(TickingState) = TICKING_STATE,
     TickingStep(TickingStep) = TICKING_STEP,
     Transfer(Transfer) = TRANSFER,
@@ -1919,6 +1332,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
     LevelParticles(LevelParticles) = LEVEL_PARTICLES,
     Explode(Explode) = EXPLODE,
+    AddTransientBlock(AddTransientBlock) = ADD_TRANSIENT_BLOCK,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -2049,6 +1463,11 @@ packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Dou
 packet!(Attack { id: i32 => VarInt });
 packet!(TeleportToEntity { uuid: u128 => Uuid });
 packet!(
+    /// ServerboundSpectatorActionPacket: the entity a spectator clicked, or
+    /// none for a click on nothing.
+    SpectatorAction { target: Option<i32> => OptVarInt }
+);
+packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
 );
@@ -2148,6 +1567,16 @@ packet!(
 );
 packet!(SelectTrade { item: i32 => VarInt });
 packet!(
+    /// ServerboundBlockEntityTagQueryPacket: an operator's F3+I asks for the
+    /// block entity's data at a position.
+    BlockEntityTagQuery { transaction: i32 => VarInt, pos: [i32; 3] => Pos }
+);
+packet!(
+    /// ServerboundEntityTagQueryPacket: an operator's F3+I asks for an
+    /// entity's data, by its network id.
+    EntityTagQuery { transaction: i32 => VarInt, entity: i32 => VarInt }
+);
+packet!(
     /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
     /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
     ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
@@ -2166,11 +1595,165 @@ packet!(
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
 packet!(
+    /// ServerboundSetJigsawBlockPacket: the jigsaw block's edit screen. The
+    /// joint is `JointType.getSerializedName`; an unknown one reads as aligned.
+    SetJigsawBlock {
+        pos: [i32; 3] => Pos,
+        name: String => Ident,
+        target: String => Ident,
+        pool: String => Ident,
+        final_state: String => Str,
+        joint: String => Str,
+        selection_priority: i32 => VarInt,
+        placement_priority: i32 => VarInt
+    }
+);
+packet!(
+    /// ServerboundSetTestBlockPacket: the test block's edit screen; `mode` is
+    /// a `TestBlockMode` id.
+    SetTestBlock { pos: [i32; 3] => Pos, mode: i32 => VarInt, message: String => Str }
+);
+packet!(
+    /// `TestInstanceBlockEntity.Data.STREAM_CODEC`: the test, size, rotation
+    /// (ordinal), ignore-entities flag, status (index) and error message.
+    TestInstanceData {
+        test: Option<String> => Opt<Ident>,
+        size: [i32; 3] => VarVec3i,
+        rotation: i32 => VarInt,
+        ignore_entities: bool => Bool,
+        status: i32 => VarInt,
+        error_message: Option<Tag> => Opt<Nbt>
+    }
+);
+packet!(
+    /// ServerboundTestInstanceBlockActionPacket: `action` is the `Action` id
+    /// (INIT 0, QUERY 1, SET 2, RESET 3, SAVE 4, EXPORT 5, RUN 6).
+    TestInstanceBlockAction { pos: [i32; 3] => Pos, action: i32 => VarInt, data: TestInstanceData => TestInstanceData }
+);
+packet!(
+    /// ClientboundGameTestHighlightPosPacket: the absolute position and the
+    /// position relative to the test's origin.
+    GameTestHighlightPos { absolute: [i32; 3] => Pos, relative: [i32; 3] => Pos }
+);
+packet!(
+    /// ClientboundTestInstanceBlockStatus: the test's description and, for a
+    /// query, the size of its structure.
+    TestInstanceBlockStatus { status: Tag => Nbt, size: Option<[i32; 3]> => Opt<VarVec3i> }
+);
+packet!(
+    /// ServerboundJigsawGeneratePacket: the jigsaw block's Generate button.
+    JigsawGenerate { pos: [i32; 3] => Pos, levels: i32 => VarInt, keep_jigsaws: bool => Bool }
+);
+packet!(
     /// ServerboundSetCommandBlockPacket: the command block's command, its
     /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
     /// conditional (2) and automatic (4) flags.
     SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
 );
+packet!(
+    /// ServerboundSetCommandMinecartPacket: the command minecart's entity id,
+    /// its command and whether it tracks output.
+    SetCommandMinecart { entity: i32 => VarInt, command: String => Str, track_output: bool => Bool }
+);
+/// ServerboundSetStructureBlockPacket: the structure block's edit screen.
+/// `update_type` and `mode` are `StructureBlockEntity.UpdateType` and
+/// `StructureMode` ordinals, `mirror` and `rotation` the enums' ordinals.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetStructureBlock {
+    pub pos: [i32; 3],
+    pub update_type: i32,
+    pub mode: i32,
+    pub name: String,
+    pub offset: [i32; 3],
+    pub size: [i32; 3],
+    pub mirror: i32,
+    pub rotation: i32,
+    pub data: String,
+    pub ignore_entities: bool,
+    pub strict: bool,
+    pub show_air: bool,
+    pub show_bounding_box: bool,
+    pub integrity: f32,
+    pub seed: i64,
+}
+impl SetStructureBlock {
+    const FLAG_IGNORE_ENTITIES: i8 = 1;
+    const FLAG_SHOW_AIR: i8 = 2;
+    const FLAG_SHOW_BOUNDING_BOX: i8 = 4;
+    const FLAG_STRICT: i8 = 8;
+}
+impl Codec<SetStructureBlock> for SetStructureBlock {
+    /// `ServerboundSetStructureBlockPacket(FriendlyByteBuf)`: the offsets,
+    /// sizes and integrity are clamped as they are read.
+    fn read(r: &mut Reader) -> Result<Self> {
+        let pos = Pos::read(r)?;
+        let update_type = r.varint()?;
+        let mode = r.varint()?;
+        let name = r.string(32767)?;
+        let mut offset = [0; 3];
+        for v in &mut offset {
+            *v = i32::from(r.i8()?).clamp(-48, 48);
+        }
+        let mut size = [0; 3];
+        for v in &mut size {
+            *v = i32::from(r.i8()?).clamp(0, 48);
+        }
+        let mirror = r.varint()?;
+        let rotation = r.varint()?;
+        let data = r.string(128)?;
+        let integrity = r.f32()?.clamp(0.0, 1.0);
+        let seed = r.varlong()?;
+        let flags = r.i8()?;
+        Ok(Self {
+            pos,
+            update_type,
+            mode,
+            name,
+            offset,
+            size,
+            mirror,
+            rotation,
+            data,
+            ignore_entities: flags & Self::FLAG_IGNORE_ENTITIES != 0,
+            strict: flags & Self::FLAG_STRICT != 0,
+            show_air: flags & Self::FLAG_SHOW_AIR != 0,
+            show_bounding_box: flags & Self::FLAG_SHOW_BOUNDING_BOX != 0,
+            integrity,
+            seed,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        Pos::write(&v.pos, w);
+        w.varint(v.update_type);
+        w.varint(v.mode);
+        w.string(&v.name);
+        for o in v.offset {
+            w.i8(o as i8);
+        }
+        for s in v.size {
+            w.i8(s as i8);
+        }
+        w.varint(v.mirror);
+        w.varint(v.rotation);
+        w.string(&v.data);
+        w.f32(v.integrity);
+        w.varlong(v.seed);
+        let mut flags = 0;
+        if v.ignore_entities {
+            flags |= Self::FLAG_IGNORE_ENTITIES;
+        }
+        if v.show_air {
+            flags |= Self::FLAG_SHOW_AIR;
+        }
+        if v.show_bounding_box {
+            flags |= Self::FLAG_SHOW_BOUNDING_BOX;
+        }
+        if v.strict {
+            flags |= Self::FLAG_STRICT;
+        }
+        w.i8(flags);
+    }
+}
 packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
     /// the off hand), its pages and, to sign it, its title.
@@ -2295,7 +1878,10 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    BlockEntityTagQuery(BlockEntityTagQuery) = BLOCK_ENTITY_TAG_QUERY,
+    EntityTagQuery(EntityTagQuery) = ENTITY_TAG_QUERY,
     TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
+    SpectatorAction(SpectatorAction) = SPECTATOR_ACTION,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -2304,6 +1890,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
     RecipeBookChangeSettings(super::recipes::RecipeBookChangeSettings) = RECIPE_BOOK_CHANGE_SETTINGS,
+    RecipeBookSeenRecipe(super::recipes::RecipeBookSeenRecipe) = RECIPE_BOOK_SEEN_RECIPE,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
@@ -2334,896 +1921,26 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     PlayerLoaded(Empty) = PLAYER_LOADED,
     Pong(Ping) = PONG,
     RenameItem(RenameItem) = RENAME_ITEM,
+    SeenAdvancements(SeenAdvancements) = SEEN_ADVANCEMENTS,
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
+    JigsawGenerate(JigsawGenerate) = JIGSAW_GENERATE,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
+    SetCommandMinecart(SetCommandMinecart) = SET_COMMAND_MINECART,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SetJigsawBlock(SetJigsawBlock) = SET_JIGSAW_BLOCK,
+    SetTestBlock(SetTestBlock) = SET_TEST_BLOCK,
+    TestInstanceBlockAction(TestInstanceBlockAction) = TEST_INSTANCE_BLOCK_ACTION,
+    SetStructureBlock(SetStructureBlock) = SET_STRUCTURE_BLOCK,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
     UseItemOn(UseItemOn) = USE_ITEM_ON,
 });
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
-
-    #[test]
-    fn merchant_cost_predicate_is_a_typed_list_without_patch_counts() {
-        // ItemCost.STREAM_CODEC: item=7, count=1, one typed component,
-        // potion_contents=53, potion present (water=0), no color/effects/name.
-        // Result: count=1, item=8, empty component patch. Secondary cost:
-        // item=9, count=2, empty predicate, followed by the offer fields.
-        let mut bytes = vec![1, 7, 1, 1, 53, 1, 0, 0, 0, 0, 1, 8, 0, 0, 1, 9, 2, 0, 0];
-        bytes.extend_from_slice(&[0; 4]); // uses
-        bytes.extend_from_slice(&2i32.to_be_bytes()); // max uses
-        bytes.extend_from_slice(&[0; 16]); // xp, special price, multiplier, demand
-        let mut r = Reader::new(&bytes);
-        let offers = Offers::read(&mut r).unwrap();
-        assert_eq!(r.remaining(), 0);
-        assert_eq!(
-            offers[0].cost_a.components,
-            vec![(
-                53,
-                Component::Potion {
-                    potion: Some(0),
-                    color: None,
-                    rest: Vec::new()
-                }
-            )]
-        );
-        assert!(offers[0].cost_b.as_ref().unwrap().components.is_empty());
-        let mut w = Writer::new();
-        Offers::write(&offers, &mut w);
-        assert_eq!(w.data, bytes);
-        for len in 0..bytes.len() {
-            assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
-        }
-    }
-
-    #[test]
-    fn serverbound_abilities_carry_only_flying() {
-        // ServerboundPlayerAbilitiesPacket.write: one byte, 2 when flying.
-        let flying = Serverbound::PlayerAbilities(PlayerAbilitiesRequest { flags: 2 });
-        assert_eq!(
-            flying.encode(),
-            [crate::ids::play::serverbound::PLAYER_ABILITIES as u8, 2]
-        );
-        round_trip(flying, Serverbound::encode, Serverbound::decode);
-    }
-
-    #[test]
-    fn world_options_packets_match_vanilla_stream_codecs() {
-        // mcsrc.dev 26.3: difficulty is a VarInt, locking is a Boolean,
-        // rule entries are ResourceKey identifiers followed by UTF-8 values.
-        let difficulty = Serverbound::ChangeDifficulty(ChangeDifficultyRequest { difficulty: 3 });
-        assert_eq!(&difficulty.encode()[1..], &[3]);
-        round_trip(difficulty, Serverbound::encode, Serverbound::decode);
-        let lock = Serverbound::LockDifficulty(LockDifficulty { locked: true });
-        assert_eq!(&lock.encode()[1..], &[1]);
-        round_trip(lock, Serverbound::encode, Serverbound::decode);
-        let payload = b"\x01\x18minecraft:keep_inventory\x04true";
-        let entry = GameRuleEntry {
-            name: "minecraft:keep_inventory".into(),
-            value: "true".into(),
-        };
-        let set = Serverbound::SetGameRule(SetGameRule {
-            entries: vec![entry.clone()],
-        });
-        assert_eq!(&set.encode()[1..], payload);
-        assert_eq!(
-            Serverbound::decode(crate::ids::play::serverbound::SET_GAME_RULE, payload).unwrap(),
-            set
-        );
-        let values = Clientbound::GameRuleValues(GameRuleValues {
-            entries: vec![entry],
-        });
-        assert_eq!(&values.encode()[1..], payload);
-        assert_eq!(
-            Clientbound::decode(crate::ids::play::clientbound::GAME_RULE_VALUES, payload).unwrap(),
-            values
-        );
-        assert!(
-            Serverbound::decode(
-                crate::ids::play::serverbound::SET_GAME_RULE,
-                &payload[..payload.len() - 1]
-            )
-            .is_err()
-        );
-    }
-
-    fn spawn() -> SpawnInfo {
-        SpawnInfo {
-            dimension_type: 0,
-            dimension: "minecraft:overworld".into(),
-            seed: -123,
-            game_type: 0,
-            previous_game_type: None,
-            debug: false,
-            flat: false,
-            last_death: Some(GlobalPos {
-                dimension: "minecraft:the_nether".into(),
-                pos: [1, 2, 3],
-            }),
-            portal_cooldown: 0,
-            sea_level: 63,
-        }
-    }
-
-    #[test]
-    fn tracked_waypoint_bytes() {
-        // TRACK, a UUID, the default style, red (#FF5555), a block position.
-        let track = Clientbound::TrackedWaypoint(TrackedWaypoint {
-            operation: waypoint_operation::TRACK,
-            id: WaypointId::Uuid(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
-            style: "minecraft:default".into(),
-            color: Some(0xFFFF_5555_u32 as i32),
-            target: WaypointTarget::Block([1, -2, 300]),
-        });
-        let mut expected = vec![141, 1, 0, 1];
-        expected.extend(1..=16u8);
-        expected.push(17);
-        expected.extend(b"minecraft:default");
-        expected.extend([
-            1, 0xFF, 0x55, 0x55, 1, 1, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0xAC, 0x02,
-        ]);
-        assert_eq!(track.encode(), expected);
-        assert_eq!(Clientbound::decode(141, &expected[2..]).unwrap(), track);
-        for target in [
-            WaypointTarget::Empty,
-            WaypointTarget::Chunk([-3, 4]),
-            WaypointTarget::Azimuth(-1.25),
-        ] {
-            let packet = Clientbound::TrackedWaypoint(TrackedWaypoint {
-                operation: waypoint_operation::UPDATE,
-                id: WaypointId::Name("spawn".into()),
-                style: "minecraft:bowtie".into(),
-                color: None,
-                target,
-            });
-            let bytes = packet.encode();
-            assert_eq!(Clientbound::decode(141, &bytes[2..]).unwrap(), packet);
-        }
-    }
-
-    #[test]
-    fn clientbound_round_trips() {
-        let packets = vec![
-            Clientbound::BundleDelimiter(Empty),
-            Clientbound::PongResponse(crate::packets::status::Ping { time: 1_234_567 }),
-            Clientbound::SetBorderCenter(SetBorderCenter { x: 1.5, z: -2.0 }),
-            Clientbound::SetBorderLerpSize(SetBorderLerpSize {
-                old_size: 10.0,
-                new_size: 200.0,
-                lerp_time: 1200,
-            }),
-            Clientbound::SetBorderSize(SetBorderSize { size: 30.0 }),
-            Clientbound::SetBorderWarningDelay(SetBorderWarningDelay { delay: 300 }),
-            Clientbound::SetBorderWarningDistance(SetBorderWarningDistance { blocks: 5 }),
-            Clientbound::SetDisplayObjective(SetDisplayObjective {
-                slot: 0,
-                objective: "kills".into(),
-            }),
-            Clientbound::ResetScore(ResetScore {
-                owner: "Steve".into(),
-                objective: Some("kills".into()),
-            }),
-            Clientbound::SetScore(SetScore {
-                owner: "Steve".into(),
-                objective: "kills".into(),
-                score: -3,
-                display: Some(Tag::String("S".into())),
-                number_format: Some(NumberFormat::Styled(Tag::compound([(
-                    "color",
-                    Tag::String("red".into()),
-                )]))),
-            }),
-            Clientbound::SetObjective(SetObjective {
-                name: "kills".into(),
-                method: 0,
-                display: Some((Tag::String("Kills".into()), 1, Some(NumberFormat::Blank))),
-            }),
-            Clientbound::SetObjective(SetObjective {
-                name: "kills".into(),
-                method: 1,
-                display: None,
-            }),
-            Clientbound::SetPlayerTeam(SetPlayerTeam {
-                name: "red".into(),
-                method: 0,
-                parameters: Some(TeamParameters {
-                    display_name: Tag::String("Red".into()),
-                    prefix: Tag::String("[R] ".into()),
-                    suffix: Tag::String("".into()),
-                    name_tag_visibility: 0,
-                    collision_rule: 0,
-                    color: Some(12),
-                    options: 3,
-                }),
-                players: vec!["Steve".into(), "Alex".into()],
-            }),
-            Clientbound::SetPlayerTeam(SetPlayerTeam {
-                name: "red".into(),
-                method: 4,
-                parameters: None,
-                players: vec!["Alex".into()],
-            }),
-            Clientbound::AddEntity(AddEntity {
-                id: 5,
-                uuid: 9,
-                kind: 100,
-                position: [1.5, 64.0, -3.25],
-                velocity: [0.0; 3],
-                pitch: 0,
-                yaw: 64,
-                head_yaw: 64,
-                data: 0,
-            }),
-            Clientbound::BlockUpdate(BlockUpdate {
-                pos: [-5, -60, 7],
-                state: 1,
-            }),
-            Clientbound::ContainerSetContent(ContainerSetContent {
-                container: 0,
-                state: 3,
-                items: vec![None, Some(Stack::new(1, 64))],
-                carried: None,
-            }),
-            Clientbound::ContainerSetSlot(ContainerSetSlot {
-                container: 0,
-                state: 4,
-                slot: 36,
-                item: Some(Stack::new(2, 1)),
-            }),
-            Clientbound::Disconnect(Disconnect {
-                reason: literal("kicked"),
-            }),
-            Clientbound::EntityPositionSync(EntityPositionSync {
-                id: 1,
-                path: PositionPath::Stepped(vec![([1.0, 2.0, 3.0], 0), ([1.5, 2.0, 3.0], 2)]),
-                yaw: 1.0,
-                pitch: 2.0,
-                on_ground: true,
-            }),
-            Clientbound::ForgetLevelChunk(ForgetLevelChunk { pos: [-1, 2] }),
-            Clientbound::GameEvent(GameEvent {
-                event: 13,
-                param: 0.0,
-            }),
-            Clientbound::LevelChunkWithLight(LevelChunkWithLight {
-                x: 3,
-                z: -4,
-                chunk: ChunkData {
-                    heightmaps: vec![(4, vec![0; 37])],
-                    buffer: vec![0, 0, 0, 0, 0, 0, 0, 0],
-                    block_entities: vec![BlockEntityInfo {
-                        packed_xz: 1,
-                        y: 70,
-                        kind: 3,
-                        tag: Tag::End,
-                    }],
-                },
-                light: LightData {
-                    sky_mask: vec![1],
-                    block_mask: vec![],
-                    empty_sky_mask: vec![],
-                    empty_block_mask: vec![2],
-                    sky: vec![vec![0xFF; 2048]],
-                    block: vec![],
-                },
-            }),
-            Clientbound::Login(Login {
-                player_id: 42,
-                hardcore: false,
-                levels: vec!["minecraft:overworld".into(), "minecraft:the_nether".into()],
-                max_players: 20,
-                chunk_radius: 10,
-                simulation_distance: 10,
-                reduced_debug_info: false,
-                show_death_screen: true,
-                limited_crafting: false,
-                spawn: spawn(),
-                online_mode: false,
-                enforces_secure_chat: false,
-            }),
-            Clientbound::MoveEntityPos(MoveEntityPos(MoveEntity {
-                id: 3,
-                delta: Some(VecDelta::Linear([4096, 0, -4096])),
-                rotation: None,
-                on_ground: true,
-            })),
-            Clientbound::MoveEntityPosRot(MoveEntityPosRot(MoveEntity {
-                id: 3,
-                delta: Some(VecDelta::Stepped(vec![([1, 2, 3], 1), ([0, 0, 1], 2)])),
-                rotation: Some((10, -10)),
-                on_ground: false,
-            })),
-            Clientbound::MoveEntityRot(MoveEntityRot(MoveEntity {
-                id: 3,
-                delta: None,
-                rotation: Some((1, 2)),
-                on_ground: true,
-            })),
-            Clientbound::OpenScreen(OpenScreen {
-                container: 1,
-                menu: 2,
-                title: literal("Chest"),
-            }),
-            Clientbound::MountScreenOpen(MountScreenOpen {
-                container: 4,
-                columns: 5,
-                entity: 300,
-            }),
-            Clientbound::MerchantOffers(MerchantOffers {
-                container: 3,
-                offers: vec![NetOffer {
-                    cost_a: Stack::new(5, 24).into(),
-                    result: Stack::new(7, 1),
-                    cost_b: Some(Stack::new(9, 1).into()),
-                    out_of_stock: false,
-                    uses: 2,
-                    max_uses: 16,
-                    xp: 2,
-                    special_price: -3,
-                    price_multiplier: 0.05,
-                    demand: 4,
-                }],
-                level: 2,
-                xp: 12,
-                show_progress: true,
-                can_restock: true,
-            }),
-            Clientbound::PlayerChat(PlayerChat {
-                global_index: 0,
-                sender: 5,
-                index: 0,
-                signature: None,
-                content: "hello".into(),
-                timestamp: 1,
-                salt: 2,
-                last_seen: vec![(3, None), (-1, Some(vec![7; 256]))],
-                unsigned_content: None,
-                filter: (0, vec![]),
-                chat_type: ChatTypeBound {
-                    chat_type: 0,
-                    name: literal("Steve"),
-                    target: None,
-                },
-            }),
-            Clientbound::PlayerInfoUpdate(PlayerInfoUpdate {
-                actions: 0b0001_1101,
-                entries: vec![PlayerInfo {
-                    uuid: 1,
-                    name: Some("Steve".into()),
-                    game_mode: Some(1),
-                    listed: Some(true),
-                    latency: Some(12),
-                    ..PlayerInfo::default()
-                }],
-            }),
-            Clientbound::PlayerPosition(PlayerPosition {
-                teleport: 1,
-                position: [0.5, 70.0, 0.5],
-                delta: [0.0; 3],
-                yaw: 90.0,
-                pitch: 0.0,
-                relatives: relative::DELTA_X,
-            }),
-            Clientbound::Respawn(Respawn {
-                spawn: spawn(),
-                keep: 3,
-            }),
-            Clientbound::SectionBlocksUpdate(SectionBlocksUpdate {
-                section: [1, -4, 2],
-                changes: vec![(9 << 12) | 0x123],
-            }),
-            Clientbound::SetEntityData(SetEntityData {
-                id: 2,
-                values: vec![(8, 7, Value::Item(Some(Stack::new(5, 3))))],
-            }),
-            Clientbound::SetEntityMotion(SetEntityMotion {
-                id: 2,
-                velocity: [0.0; 3],
-            }),
-            Clientbound::SetPassengers(SetPassengers {
-                vehicle: 2,
-                passengers: vec![3, 300],
-            }),
-            Clientbound::SetEntityLink(SetEntityLink { source: 2, dest: 0 }),
-            Clientbound::LevelParticles(LevelParticles {
-                particle: Particle {
-                    id: 21,
-                    data: Some(crate::entity_data::ParticleData::ColorScale(0xFF0000, 1.5)),
-                },
-                override_limiter: true,
-                always_show: false,
-                pos: [0.5, 101.0, 3.0],
-                dist: [0.2, 0.0, 0.2],
-                max_speed: [0.0; 3],
-                count: 60,
-                randomization: 0,
-            }),
-            Clientbound::Explode(Explode {
-                center: [1.0, 2.0, 3.0],
-                radius: 4.0,
-                block_count: 12,
-                knockback: Some([0.5, 0.1, 0.0]),
-                particle: Particle { id: 29, data: None },
-                sound: (-1, Some(("minecraft:entity.generic.explode".into(), None))),
-                block_particles: vec![ExplosionParticle {
-                    particle: Particle { id: 69, data: None },
-                    scaling: 0.5,
-                    speed: 1.0,
-                    weight: 1,
-                }],
-                play_sound: true,
-            }),
-            Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
-            Clientbound::SetEquipment(SetEquipment {
-                id: 2,
-                slots: vec![(0, None), (5, Some(Stack::new(1, 1)))],
-            }),
-            Clientbound::UpdateAttributes(UpdateAttributes {
-                id: 2,
-                values: vec![AttributeSnapshot {
-                    attribute: 26,
-                    base: 0.23,
-                    modifiers: vec![AttributeModifier {
-                        id: "minecraft:baby".into(),
-                        amount: 0.5,
-                        operation: 1,
-                    }],
-                }],
-            }),
-            Clientbound::DamageEvent(DamageEvent {
-                id: 7,
-                source_type: 31,
-                cause: Some(0),
-                direct: None,
-                position: Some([1.5, -2.0, 3.25]),
-            }),
-            Clientbound::SetHealth(SetHealth {
-                health: 17.5,
-                food: 18,
-                saturation: 3.0,
-            }),
-            Clientbound::SetTime(SetTime {
-                game_time: 100,
-                clocks: vec![ClockState {
-                    clock: 0,
-                    total_ticks: 6000,
-                    partial_tick: 0.0,
-                    rate: 1.0,
-                }],
-            }),
-            Clientbound::Sound(Sound {
-                sound: (12, None),
-                source: 4,
-                x: 8,
-                y: 9,
-                z: 10,
-                volume: 1.0,
-                pitch: 1.0,
-                seed: 3,
-            }),
-            Clientbound::Sound(Sound {
-                sound: (-1, Some(("minecraft:x".into(), Some(16.0)))),
-                source: 0,
-                x: 0,
-                y: 0,
-                z: 0,
-                volume: 1.0,
-                pitch: 1.0,
-                seed: 0,
-            }),
-            Clientbound::SystemChat(SystemChat {
-                content: literal("hi"),
-                overlay: false,
-            }),
-            Clientbound::TeleportEntity(TeleportEntity {
-                id: 1,
-                position: [1.0; 3],
-                delta: [0.0; 3],
-                yaw: 0.0,
-                pitch: 0.0,
-                relatives: 0,
-                on_ground: true,
-            }),
-            Clientbound::TickingState(TickingState {
-                rate: 40.0,
-                frozen: true,
-            }),
-            Clientbound::TickingStep(TickingStep { steps: 7 }),
-            Clientbound::AwardStats(AwardStats {
-                stats: vec![(8, 3, 120), (0, 1, 2)],
-            }),
-            Clientbound::UpdateAdvancements(UpdateAdvancements {
-                reset: true,
-                added: vec![Advancement {
-                    id: "minecraft:story/root".into(),
-                    parent: None,
-                    display: Some(AdvancementDisplay {
-                        title: literal("Minecraft"),
-                        description: literal("The heart and story of the game"),
-                        icon: crate::item::Stack::new(42, 1),
-                        frame: 0,
-                        show_toast: false,
-                        hidden: false,
-                        background: Some("minecraft:block/stone".into()),
-                    }),
-                    requirements: vec![vec!["crafting_table".into()]],
-                    telemetry: false,
-                    x: 0.0,
-                    y: 1.5,
-                }],
-                removed: vec!["minecraft:story/gone".into()],
-                progress: vec![(
-                    "minecraft:story/root".into(),
-                    vec![("crafting_table".into(), Some(1_792_216_800_000))],
-                )],
-                show: true,
-            }),
-        ];
-        for p in packets {
-            round_trip(p, Clientbound::encode, Clientbound::decode);
-        }
-    }
-
-    #[test]
-    fn serverbound_round_trips() {
-        let packets = vec![
-            Serverbound::PingRequest(crate::packets::status::Ping { time: -7 }),
-            Serverbound::AcceptTeleportation(AcceptTeleportation {
-                id: 1,
-                x: 0.5,
-                y: 64.0,
-                z: 0.5,
-                yaw: 0.0,
-                pitch: 0.0,
-            }),
-            Serverbound::Chat(Chat {
-                message: "hello".into(),
-                timestamp: 1,
-                salt: 0,
-                signature: None,
-                last_seen: LastSeenUpdate {
-                    offset: 0,
-                    acknowledged: [0; 3],
-                    checksum: 0,
-                },
-            }),
-            Serverbound::ChatCommand(ChatCommand {
-                command: "time set day".into(),
-            }),
-            Serverbound::ChatAck(ChatAck { offset: 3 }),
-            Serverbound::ChatCommandSigned(ChatCommandSigned {
-                command: "say hi".into(),
-                timestamp: 1_700_000_000_000,
-                salt: -5,
-                arguments: vec![("message".into(), vec![9; 256])],
-                last_seen: LastSeenUpdate {
-                    offset: 1,
-                    acknowledged: [1, 0, 8],
-                    checksum: -3,
-                },
-            }),
-            Serverbound::ChatSessionUpdate(ChatSessionUpdate {
-                session: 0x1234,
-                expires_at: 1_800_000_000_000,
-                key: vec![0x30; 294],
-                key_signature: vec![7; 512],
-            }),
-            Serverbound::ChunkBatchReceived(ChunkBatchReceived {
-                chunks_per_tick: 9.5,
-            }),
-            Serverbound::ClientCommand(ClientCommand { action: 0 }),
-            Serverbound::ClientTickEnd(Empty),
-            Serverbound::ContainerClick(ContainerClick {
-                container: 0,
-                state: 5,
-                slot: 36,
-                button: 0,
-                input: 0,
-                changed: vec![(36, None)],
-                carried: Some(Hashed::of(&Stack::new(1, 64))),
-            }),
-            Serverbound::MovePlayerPosRot(MovePlayerPosRot {
-                x: 1.0,
-                y: 2.0,
-                z: 3.0,
-                yaw: 4.0,
-                pitch: 5.0,
-                flags: 1,
-            }),
-            Serverbound::MovePlayerStatus(MovePlayerStatus { flags: 3 }),
-            Serverbound::PlayerAction(PlayerAction {
-                action: 0,
-                pos: [1, 2, 3],
-                direction: 1,
-                sequence: 7,
-            }),
-            Serverbound::PlayerInput(PlayerInput { flags: 0b0101_0001 }),
-            Serverbound::PlayerLoaded(Empty),
-            Serverbound::Punch(Empty),
-            Serverbound::SetCarriedItem(SetCarriedItem { slot: 4 }),
-            Serverbound::UseItemOn(UseItemOn {
-                hand: 0,
-                pos: [1, 64, 1],
-                face: 1,
-                cursor: [0.5, 1.0, 0.5],
-                inside: false,
-                world_border: false,
-                sequence: 8,
-            }),
-            Serverbound::Interact(Interact {
-                id: 9,
-                hand: 0,
-                location: [0.25, 1.0, 0.0],
-                secondary: false,
-            }),
-        ];
-        for p in packets {
-            if let Serverbound::Interact(_) = &p {
-                // LpVec3 is lossy; check bytes instead.
-                let body = p.encode();
-                let mut r = Reader::new(&body);
-                let id = r.varint().unwrap();
-                assert!(matches!(
-                    Serverbound::decode(id, r.rest()).unwrap(),
-                    Serverbound::Interact(Interact { id: 9, .. })
-                ));
-                continue;
-            }
-            round_trip(p, Serverbound::encode, Serverbound::decode);
-        }
-        round_trip(
-            Serverbound::SelectTrade(SelectTrade { item: 3 }),
-            Serverbound::encode,
-            Serverbound::decode,
-        );
-        // CONTAINER_ID and the button, both VarInts.
-        let button = Serverbound::ContainerButtonClick(ContainerButtonClick {
-            container: 3,
-            button: 200,
-        });
-        assert_eq!(&button.encode()[1..], &[3, 0xC8, 1]);
-        round_trip(button, Serverbound::encode, Serverbound::decode);
-        // The name, a UTF-8 string with its VarInt length.
-        let rename = Serverbound::RenameItem(RenameItem {
-            name: "Blade".into(),
-        });
-        assert_eq!(&rename.encode()[1..], &[5, b'B', b'l', b'a', b'd', b'e']);
-        round_trip(rename, Serverbound::encode, Serverbound::decode);
-        // The slot, the container id (VarInts), then the new state.
-        let toggle = Serverbound::ContainerSlotStateChanged(ContainerSlotStateChanged {
-            slot: 4,
-            container: 2,
-            enabled: false,
-        });
-        assert_eq!(&toggle.encode()[1..], &[4, 2, 0]);
-        round_trip(toggle, Serverbound::encode, Serverbound::decode);
-        // Two optional mob effect ids: a presence byte, then the VarInt.
-        let beacon = Serverbound::SetBeacon(SetBeacon {
-            primary: Some(2),
-            secondary: None,
-        });
-        assert_eq!(&beacon.encode()[1..], &[1, 2, 0]);
-        round_trip(beacon, Serverbound::encode, Serverbound::decode);
-    }
-
-    #[test]
-    fn a_cooldown_packet_carries_its_group_and_ticks() {
-        let packet = Clientbound::Cooldown(Cooldown {
-            group: "minecraft:ender_pearl".into(),
-            duration: 20,
-        });
-        round_trip(packet, Clientbound::encode, Clientbound::decode);
-        // The group is an identifier, the ticks a VarInt; a duration of 0
-        // removes the entry.
-        let body = Clientbound::encode(&Clientbound::Cooldown(Cooldown {
-            group: "minecraft:ender_pearl".into(),
-            duration: 0,
-        }));
-        assert_eq!(body[0], crate::ids::play::clientbound::COOLDOWN as u8);
-        assert_eq!(&body[1..3], [21, b'm']);
-        assert_eq!(body[body.len() - 1], 0);
-    }
-
-    #[test]
-    fn change_game_mode_uses_the_game_type_varint() {
-        for mode in 0..=3 {
-            let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
-            assert_eq!(packet.encode(), vec![5, mode as u8]);
-            round_trip(packet, Serverbound::encode, Serverbound::decode);
-        }
-    }
-
-    #[test]
-    fn move_entity_deltas_decode_like_vec_delta_codec() {
-        let base = [10.0, 64.0, -3.5];
-        assert_eq!(
-            VecDelta::Linear([4096, 0, -2048]).end(base),
-            [11.0, 64.0, -4.0]
-        );
-        // Zero deltas keep unquantized base coordinates exactly.
-        assert_eq!(
-            VecDelta::Linear([0, 0, 0]).end([0.123_456_789, 1.0, 2.0]),
-            [0.123_456_789, 1.0, 2.0]
-        );
-        assert_eq!(
-            VecDelta::Stepped(vec![([4096, 0, 0], 1), ([4096, 0, 0], 2)]).end(base),
-            [12.0, 64.0, -3.5]
-        );
-    }
-
-    #[test]
-    fn unknown_packets_keep_their_payload() {
-        let p =
-            Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &[1, 2, 3]).unwrap();
-        assert_eq!(
-            p,
-            Clientbound::Unknown(crate::ids::play::clientbound::PLAYER_LOOK_AT, vec![1, 2, 3])
-        );
-        assert_eq!(p.encode()[1..], [1, 2, 3]);
-    }
-
-    #[test]
-    fn update_attributes_encode_like_vanilla() {
-        let p = Clientbound::UpdateAttributes(UpdateAttributes {
-            id: 5,
-            values: vec![AttributeSnapshot {
-                attribute: 1,
-                base: 0.0,
-                modifiers: vec![AttributeModifier {
-                    id: "minecraft:armor.helmet".into(),
-                    amount: 3.0,
-                    operation: 0,
-                }],
-            }],
-        });
-        let body = p.encode();
-        // The packet id (134) is a two-byte VarInt.
-        let mut expected = vec![134, 1, 5, 1, 1];
-        expected.extend(0.0f64.to_be_bytes());
-        expected.extend([1, 22]);
-        expected.extend(b"minecraft:armor.helmet");
-        expected.extend(3.0f64.to_be_bytes());
-        expected.push(0);
-        assert_eq!(body, expected);
-        assert_eq!(crate::ids::play::clientbound::UPDATE_ATTRIBUTES, 134);
-        assert_eq!(Clientbound::decode(134, &body[2..]).unwrap(), p);
-    }
-
-    #[test]
-    fn map_item_data_carries_a_server_patch() {
-        let patch = MapPatch {
-            start_x: 3,
-            start_y: 4,
-            width: 2,
-            height: 1,
-            colors: vec![1, 2],
-        };
-        let mut w = Writer::new();
-        MapPatchOpt::write(&Some(patch.clone()), &mut w);
-        assert_eq!(w.data, [2, 1, 3, 4, 2, 1, 2]);
-        let p = Clientbound::MapItemData(MapItemData {
-            map_id: 2146483647,
-            scale: 1,
-            locked: true,
-            decorations: None,
-            patch: Some(patch),
-        });
-        round_trip(p, Clientbound::encode, Clientbound::decode);
-    }
-
-    #[test]
-    fn sign_packets_match_vanilla_stream_codecs() {
-        // ClientboundOpenSignEditorPacket: BlockPos, then SignTextSlot as a VarInt (FRONT is 1).
-        let open = Clientbound::OpenSignEditor(OpenSignEditor {
-            pos: [1, 2, 3],
-            front: true,
-        });
-        let body = open.encode();
-        assert_eq!(
-            body[1..9],
-            crate::buf::pack_block_pos([1, 2, 3]).to_be_bytes()
-        );
-        assert_eq!(body[9..], [1]);
-        round_trip(open, Clientbound::encode, Clientbound::decode);
-        // ServerboundSignUpdatePacket: BlockPos, four strings with no count, then the slot.
-        let update = Serverbound::SignUpdate(SignUpdate {
-            pos: [-4, 70, 9],
-            lines: ["Hi".into(), String::new(), "x".into(), String::new()],
-            front: false,
-        });
-        let body = update.encode();
-        assert_eq!(body[9..], [2, b'H', b'i', 0, 1, b'x', 0, 0]);
-        round_trip(update, Serverbound::encode, Serverbound::decode);
-    }
-
-    #[test]
-    fn book_packets_match_vanilla_stream_codecs() {
-        // ClientboundOpenBookPacket: InteractionHand as a VarInt.
-        let open = Clientbound::OpenBook(OpenBook { hand: 1 });
-        assert_eq!(open.encode()[1..], [1]);
-        round_trip(open, Clientbound::encode, Clientbound::decode);
-        // ServerboundEditBookPacket: the slot, the pages (a counted list), then an optional title.
-        let sign = Serverbound::EditBook(EditBook {
-            slot: 40,
-            pages: vec!["a".into(), String::new()],
-            title: Some("T".into()),
-        });
-        assert_eq!(sign.encode()[1..], [40, 2, 1, b'a', 0, 1, 1, b'T']);
-        round_trip(sign, Serverbound::encode, Serverbound::decode);
-        let mut w = Writer::new();
-        w.varint(101);
-        assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
-    }
-
-    #[test]
-    fn boss_event_round_trips() {
-        let add = Clientbound::BossEvent(BossEvent {
-            id: 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
-            action: BossAction::Add {
-                name: Tag::String("Wither".into()),
-                progress: 0.5,
-                color: 5,
-                overlay: 0,
-                darken: true,
-                music: false,
-                fog: true,
-            },
-        });
-        let body = add.encode();
-        // Packet id 9, then the uuid, operation 0, and the property byte
-        // (darken 1, fog 4).
-        assert_eq!(body[0], 9);
-        assert_eq!(*body.last().unwrap(), 5);
-        round_trip(add, Clientbound::encode, Clientbound::decode);
-        round_trip(
-            Clientbound::BossEvent(BossEvent {
-                id: 7,
-                action: BossAction::UpdateProgress { progress: 0.25 },
-            }),
-            Clientbound::encode,
-            Clientbound::decode,
-        );
-        round_trip(
-            Clientbound::BossEvent(BossEvent {
-                id: 7,
-                action: BossAction::Remove,
-            }),
-            Clientbound::encode,
-            Clientbound::decode,
-        );
-    }
-
-    /// A registry entry is its id + 1, the dialog itself a 0 then its NBT.
-    #[test]
-    fn dialogs_round_trip() {
-        let notice = Tag::compound([("type", Tag::String("minecraft:notice".into()))]);
-        for dialog in [DialogHolder::Registry(3), DialogHolder::Direct(notice)] {
-            crate::packets::round_trip(
-                Clientbound::ShowDialog(ShowDialog { dialog }),
-                Clientbound::encode,
-                Clientbound::decode,
-            );
-        }
-        let mut w = Writer::new();
-        DialogHolder::write(&DialogHolder::Registry(3), &mut w);
-        assert_eq!(w.data, [4]);
-        crate::packets::round_trip(
-            Serverbound::CustomClickAction(CustomClickAction {
-                id: "minecraft:custom".into(),
-                payload: None,
-            }),
-            Serverbound::encode,
-            Serverbound::decode,
-        );
-    }
-}
+mod tests;

@@ -1,0 +1,1022 @@
+//! Container block entities: chests/barrels (27 slots) and the three furnace
+//! kinds, ticking as `AbstractFurnaceBlockEntity.serverTick` with fuel times
+//! from the data-driven `context_int_provider`/`context_float_provider` files.
+pub use crate::chunk::block_entity::{
+    Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, MOD_MENUS, ModBlockEntity,
+    ModBlockEntityFields, ModContainer, ModEnergyBuffer, ModFluidTanks, ModRevision, PotentSulfur,
+    Shelf, Skull, SkullSkin,
+};
+use crate::items::ItemStack;
+use std::collections::HashMap;
+
+/// a content mod's menu type (`data/<id>/horizon/menu/`, vanilla's
+/// `MenuType`): its container slots, its data slots (`ContainerData`) and the
+/// slots players only take from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModMenuType {
+    pub id: &'static str,
+    pub slots: usize,
+    pub data_slots: usize,
+    pub results: Vec<usize>,
+    /// its crafting grid, if it has one (`crafting`).
+    pub crafting: Option<ModCrafting>,
+    /// its linked slots, if it has any (`links`).
+    pub links: Option<ModLinks>,
+}
+
+/// a mod menu type's linked slots: `count` container slots from `from` on,
+/// which show the slots of the containers a native mod links them to
+/// (`native_menu_links`) instead of the block entity's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModLinks {
+    pub from: usize,
+    pub count: usize,
+}
+
+impl ModLinks {
+    /// The linked container slots.
+    pub fn slots(&self) -> std::ops::Range<usize> {
+        self.from..self.from + self.count
+    }
+}
+
+/// a mod menu type's crafting grid: `size`x`size` container slots from
+/// `grid` on, row by row, and the slot showing what they craft. The block
+/// entity holds the grid; the result is the menu's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModCrafting {
+    pub grid: usize,
+    pub size: usize,
+    pub result: usize,
+}
+
+impl ModCrafting {
+    /// The grid's container slots.
+    pub fn grid_slots(&self) -> std::ops::Range<usize> {
+        self.grid..self.grid + self.size * self.size
+    }
+}
+
+static MOD_MENU_TYPES: std::sync::OnceLock<Vec<ModMenuType>> = std::sync::OnceLock::new();
+
+/// One menu type as [`register_mod_menu_types`] takes it: `(id, slots, data
+/// slots, results, crafting, links)`.
+pub type ModMenuTypeEntry = (
+    String,
+    usize,
+    usize,
+    Vec<usize>,
+    Option<ModCrafting>,
+    Option<ModLinks>,
+);
+
+/// registers the content mods' menu types, a list set once per process
+/// (false when it already was).
+pub fn register_mod_menu_types(menus: impl IntoIterator<Item = ModMenuTypeEntry>) -> bool {
+    if MOD_MENU_TYPES.get().is_some() {
+        return false;
+    }
+    let menus =
+        menus.into_iter().map(
+            |(id, slots, data_slots, results, crafting, links)| ModMenuType {
+                id: Box::leak(id.into_boxed_str()),
+                slots,
+                data_slots,
+                results,
+                crafting,
+                links,
+            },
+        );
+    MOD_MENU_TYPES.set(menus.collect()).is_ok()
+}
+
+/// the content mods' menu types, in registry order.
+pub fn mod_menu_types() -> &'static [ModMenuType] {
+    MOD_MENU_TYPES.get().map_or(&[], Vec::as_slice)
+}
+
+/// the mod menu type named `id`, kept out of line: a vanilla menu never
+/// looks one up.
+#[cold]
+#[inline(never)]
+pub fn mod_menu_type(id: &str) -> Option<&'static ModMenuType> {
+    mod_menu_types().iter().find(|m| m.id == id)
+}
+
+/// whether a client of `brand` can be sent menu type `menu`: a vanilla
+/// client reads the type through `ByteBufCodecs.registry(Registries.MENU)`,
+/// and an id it lacks (`IdMap.byIdOrThrow`) disconnects it, so it is sent
+/// vanilla's only. A Horizon client has the server's (the content identity).
+pub fn menu_reaches(brand: &str, menu: &str) -> bool {
+    brand == "horizon" || menu.starts_with("minecraft:")
+}
+
+impl FurnaceKind {
+    pub fn recipe_type(self) -> &'static str {
+        match self {
+            Self::Furnace => "minecraft:smelting",
+            Self::BlastFurnace => "minecraft:blasting",
+            Self::Smoker => "minecraft:smoking",
+        }
+    }
+    pub fn fast(self) -> bool {
+        self != Self::Furnace
+    }
+    pub fn from_block(name: &str) -> Option<Self> {
+        match name {
+            "minecraft:furnace" => Some(Self::Furnace),
+            "minecraft:blast_furnace" => Some(Self::BlastFurnace),
+            "minecraft:smoker" => Some(Self::Smoker),
+            _ => None,
+        }
+    }
+}
+/// The key `recipes_used` keeps a recipe under: its full id, as vanilla's `ResourceKey<Recipe>`
+/// writes it in `RecipesUsed`. Horizon's own recipe ids are file names without the namespace, so
+/// keeping both forms would write a key twice, and vanilla refuses such a furnace
+/// ("Duplicate entry for key").
+pub fn recipe_used_key(id: &str) -> String {
+    if id.contains(':') {
+        id.to_owned()
+    } else {
+        format!("minecraft:{id}")
+    }
+}
+/// A hopper's slots: the only plain container with five.
+pub const HOPPER_SLOTS: usize = 5;
+
+/// `getDefaultName` of the `BaseContainerBlockEntity` that `block` holds: the
+/// translation key of its menu's title when it has no custom name. Copper
+/// chests hold a `ChestBlockEntity`, shulker boxes of every colour a
+/// `ShulkerBoxBlockEntity`.
+pub fn default_name_key(block: &str) -> Option<&'static str> {
+    Some(match block {
+        "minecraft:chest" | "minecraft:trapped_chest" => "container.chest",
+        n if n.ends_with("copper_chest") => "container.chest",
+        "minecraft:barrel" => "container.barrel",
+        n if n.ends_with("shulker_box") => "container.shulkerBox",
+        "minecraft:dispenser" => "container.dispenser",
+        "minecraft:dropper" => "container.dropper",
+        "minecraft:hopper" => "container.hopper",
+        "minecraft:furnace" => "container.furnace",
+        "minecraft:smoker" => "container.smoker",
+        "minecraft:blast_furnace" => "container.blast_furnace",
+        "minecraft:brewing_stand" => "container.brewing",
+        "minecraft:crafter" => "container.crafter",
+        _ => return None,
+    })
+}
+
+/// `BaseContainerBlockEntity.getDisplayName` (`getName`), the title of the
+/// `ClientboundOpenScreenPacket` that opens it: the block entity's custom
+/// name (`CustomName`, a literal), else its default name.
+pub fn display_name(custom: Option<&str>, default_key: &str) -> horizon_world::nbt::Tag {
+    match custom {
+        Some(name) => horizon_protocol::text::literal(name),
+        None => horizon_protocol::text::translatable(default_key, &[]),
+    }
+}
+
+/// `ChestBlock.MENU_PROVIDER_COMBINER`'s `getDisplayName` for a double chest:
+/// the first half's custom name (the right half, `DoubleBlockCombiner`'s
+/// `FIRST`), else the second's, else `container.chestDouble`.
+pub fn double_chest_name(first: Option<&str>, second: Option<&str>) -> horizon_world::nbt::Tag {
+    display_name(first.or(second), "container.chestDouble")
+}
+
+/// `BaseContainerBlockEntity.sendChestLockedNotifications`: the action bar
+/// message of a container that refuses to open, `container.isLocked` naming it
+/// by its display name.
+pub fn locked_message(title: &horizon_world::nbt::Tag) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::Tag;
+    Tag::compound([
+        ("translate", Tag::String("container.isLocked".into())),
+        ("with", Tag::List(vec![title.clone()])),
+    ])
+}
+
+/// The menu a container vehicle's `createMenu` builds (`ContainerEntity`):
+/// `AbstractChestBoat.createMenu` and `MinecartChest.createMenu` are
+/// `ChestMenu.threeRows` (a 9x3 menu), `MinecartHopper.createMenu` is a
+/// `HopperMenu` (five slots). `None` for any other entity type.
+pub fn vehicle_menu(entity_type: &str) -> Option<(&'static str, usize)> {
+    match entity_type {
+        "minecraft:chest_minecart" => Some(("minecraft:generic_9x3", 27)),
+        "minecraft:hopper_minecart" => Some(("minecraft:hopper", HOPPER_SLOTS)),
+        n if n.ends_with("_chest_boat") || n.ends_with("_chest_raft") => {
+            Some(("minecraft:generic_9x3", 27))
+        }
+        _ => None,
+    }
+}
+
+/// `MenuProvider.getDisplayName` for a container vehicle: `Entity.getDisplayName`
+/// is its custom name, else `getName`, the entity type's name key. Horizon's
+/// vehicles keep no custom name, so this is the type's name key.
+pub fn vehicle_menu_name(entity_type: &str) -> String {
+    format!("entity.{}", entity_type.replacen(':', ".", 1))
+}
+
+impl Campfire {
+    /// `placeFood`'s slot: the first empty one, given the item's
+    /// `campfire_cooking` time; it takes one item of `held`.
+    pub fn place_food(&mut self, held: &mut ItemStack, cooking_time: i32) -> bool {
+        let Some(slot) = self.items.iter().position(Option::is_none) else {
+            return false;
+        };
+        self.total[slot] = cooking_time;
+        self.progress[slot] = 0;
+        self.items[slot] = Some(ItemStack {
+            count: 1,
+            ..held.clone()
+        });
+        held.count = held.count.saturating_sub(1);
+        true
+    }
+    /// `cookTick` (lit): each item's progress rises by one; the slots whose
+    /// progress reached their cooking time give up their item (the caller
+    /// drops its result).
+    pub fn cook_tick(&mut self) -> Vec<(usize, ItemStack)> {
+        let mut done = Vec::new();
+        for i in 0..4 {
+            if self.items[i].is_none() {
+                continue;
+            }
+            self.progress[i] += 1;
+            if self.progress[i] >= self.total[i]
+                && let Some(item) = self.items[i].take()
+            {
+                done.push((i, item));
+            }
+        }
+        done
+    }
+    /// `cooldownTick` (unlit): the progress falls by two, no lower than 0.
+    /// Whether anything changed (`setChanged`).
+    pub fn cooldown_tick(&mut self) -> bool {
+        let mut changed = false;
+        for i in 0..4 {
+            if self.progress[i] > 0 {
+                changed = true;
+                // `Mth.clamp(value, 0, cookingTime)`: min(max(value, 0), time).
+                // A negative time a command saved answers itself, where
+                // i32::clamp would panic (min > max).
+                self.progress[i] = (self.progress[i] - 2).max(0).min(self.total[i]);
+            }
+        }
+        changed
+    }
+    pub fn idle(&self, lit: bool) -> bool {
+        if lit {
+            self.items.iter().all(Option::is_none)
+        } else {
+            self.progress.iter().all(|&p| p <= 0)
+        }
+    }
+}
+impl Skull {
+    pub fn new(
+        profile: Option<horizon_world::nbt::Tag>,
+        note_block_sound: Option<String>,
+        custom_name: Option<horizon_world::nbt::Tag>,
+    ) -> Self {
+        let skin = profile.as_ref().map(SkullSkin::of);
+        Self {
+            profile,
+            note_block_sound,
+            custom_name,
+            skin,
+        }
+    }
+}
+impl SkullSkin {
+    pub fn of(profile: &horizon_world::nbt::Tag) -> Self {
+        let download = crate::skins::profile_skin_url_nbt(profile).and_then(|url| {
+            let location = crate::skins::skin_location(&crate::skins::texture_hash(&url)?);
+            Some((url, location))
+        });
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services when the skull is drawn.
+        let dynamic = crate::skins::dynamic_nbt(profile);
+        // DefaultPlayerSkin.get(id), or getDefaultSkin (slim steve) without an id.
+        let fallback = crate::skins::profile_uuid_nbt(profile)
+            .or_else(|| {
+                crate::skins::nbt_text(profile.get("name"))
+                    .map(|name| horizon_protocol::crypto::offline_uuid(&name))
+            })
+            .map_or("entity/player/slim/steve", crate::tab_list::default_skin);
+        Self {
+            download,
+            dynamic,
+            texture: crate::skins::profile_texture_nbt(profile),
+            fallback,
+        }
+    }
+}
+/// The skull and head blocks (`SkullBlock`, `WallSkullBlock`): every
+/// `*_skull` and `*_head` but the piston's head.
+/// The item slots of the container `name`'s block carries, if any.
+fn container_size(name: &str) -> Option<usize> {
+    match name {
+        "minecraft:chest"
+        | "minecraft:trapped_chest"
+        | "minecraft:barrel"
+        | "minecraft:ender_chest" => Some(27),
+        n if n.ends_with("copper_chest") => Some(27),
+        "minecraft:hopper" => Some(HOPPER_SLOTS),
+        "minecraft:dispenser" | "minecraft:dropper" => Some(9),
+        n if n.ends_with("shulker_box") => Some(27),
+        _ => None,
+    }
+}
+fn is_skull(name: &str) -> bool {
+    name.ends_with("_skull") || (name.ends_with("_head") && name != "minecraft:piston_head")
+}
+impl Crafter {
+    /// `slotCanBeDisabled`: only empty slots.
+    pub fn slot_can_be_disabled(&self, slot: usize) -> bool {
+        slot < 9 && self.items[slot].is_none()
+    }
+    /// `setSlotState`.
+    pub fn set_slot_state(&mut self, slot: usize, enabled: bool) {
+        if self.slot_can_be_disabled(slot) {
+            self.disabled[slot] = !enabled;
+        }
+    }
+    /// `getRedstoneSignal`: filled or disabled slots.
+    pub fn redstone_signal(&self) -> i32 {
+        (0..9)
+            .filter(|&i| self.items[i].is_some() || self.disabled[i])
+            .count() as i32
+    }
+    /// `canPlaceItem`: a hopper fills the smallest stacks first.
+    pub fn can_place(&self, slot: usize, _stack: &ItemStack, max_stack: u32) -> bool {
+        if slot >= 9 || self.disabled[slot] {
+            return false;
+        }
+        let Some(current) = &self.items[slot] else {
+            return true;
+        };
+        if current.count >= max_stack {
+            return false;
+        }
+        !(slot + 1..9).any(|i| {
+            !self.disabled[i]
+                && match &self.items[i] {
+                    None => true,
+                    Some(other) => {
+                        other.count < current.count && other.same_item_same_components(current)
+                    }
+                }
+        })
+    }
+}
+impl BlockEntity {
+    pub fn for_block(name: &str) -> Option<Self> {
+        if let Some(hanging) = crate::signs::sign_kind(name) {
+            return Some(Self::Sign(crate::signs::SignData {
+                hanging,
+                ..Default::default()
+            }));
+        }
+        if let Some(kind) = FurnaceKind::from_block(name) {
+            return Some(Self::Furnace(Furnace {
+                kind,
+                items: [None, None, None],
+                lit_remaining: 0,
+                lit_total: 0,
+                cooking_timer: 0,
+                cooking_total: 0,
+                speed: 1.0,
+                recipes_used: HashMap::new(),
+            }));
+        }
+        if matches!(
+            name,
+            "minecraft:suspicious_sand"
+                | "minecraft:suspicious_gravel"
+                | "minecraft:brushable_block"
+        ) {
+            return Some(Self::Brushable(Box::default()));
+        }
+        if name == "minecraft:creaking_heart" {
+            return Some(Self::CreakingHeart(Box::default()));
+        }
+        if name == "minecraft:spawner" {
+            return Some(Self::Spawner(Box::default()));
+        }
+        if name == "minecraft:trial_spawner" {
+            return Some(Self::TrialSpawner(Box::default()));
+        }
+        if name == "minecraft:vault" {
+            return Some(Self::Vault(Box::default()));
+        }
+        if name == "minecraft:beehive" || name == "minecraft:bee_nest" {
+            return Some(Self::Beehive(Box::default()));
+        }
+        if name == "minecraft:lectern" {
+            return Some(Self::Lectern(Lectern::default()));
+        }
+        if crate::command_block::Mode::of_block(name).is_some() {
+            // CommandBlock.newBlockEntity: setAutomatic(this.automatic).
+            return Some(Self::CommandBlock(Box::new(
+                crate::command_block::CommandBlock {
+                    auto: crate::command_block::automatic_block(name),
+                    ..Default::default()
+                },
+            )));
+        }
+        if let Some(sculk) = crate::sculk::SculkEntity::for_block(name) {
+            return Some(Self::Sculk(Box::new(sculk)));
+        }
+        if name == "minecraft:crafter" {
+            // CrafterBlock.newBlockEntity copies the placed state's flag: the
+            // first tick sees it as a change from untriggered.
+            return Some(Self::Crafter(Crafter {
+                state_triggered: Some(false),
+                ..Crafter::default()
+            }));
+        }
+        if name.ends_with("_banner") {
+            return Some(Self::Banner(Banner::default()));
+        }
+        if is_skull(name) {
+            return Some(Self::Skull(Skull::default()));
+        }
+        if name == "minecraft:end_gateway" {
+            return Some(Self::EndGateway(EndGateway::default()));
+        }
+        if name == "minecraft:bell" {
+            return Some(Self::Bell);
+        }
+        if name == "minecraft:conduit" {
+            return Some(Self::Conduit(None));
+        }
+        if name == "minecraft:enchanting_table" {
+            return Some(Self::EnchantingTable);
+        }
+        if name == "minecraft:daylight_detector" {
+            return Some(Self::DaylightDetector);
+        }
+        if name == "minecraft:ender_chest" {
+            // EnderChestBlock.newBlockEntity: 27 slots, player-specific inventory.
+            return Some(Self::Chest(vec![None; 27]));
+        }
+        if name == "minecraft:end_portal" {
+            // EndPortalBlock.newBlockEntity: no data, only identity.
+            return Some(Self::EndPortal);
+        }
+        if name.ends_with("copper_golem_statue") {
+            return Some(Self::CopperGolemStatue(Default::default()));
+        }
+        if name == "minecraft:beacon" {
+            return Some(Self::Beacon(Box::new(Beacon {
+                last_check_y: i32::MIN / 2,
+                ..Default::default()
+            })));
+        }
+        if name == "minecraft:brewing_stand" {
+            return Some(Self::Brewing(Box::new(crate::brewing::BrewingStand::new())));
+        }
+        if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
+            return Some(Self::Campfire(Box::default()));
+        }
+        if name == "minecraft:jukebox" {
+            return Some(Self::Jukebox(Jukebox::default()));
+        }
+        if name == "minecraft:shelf" || name.ends_with("_shelf") {
+            return Some(Self::Shelf(Box::default()));
+        }
+        if name == "minecraft:chiseled_bookshelf" {
+            return Some(Self::ChiseledBookshelf(Box::default()));
+        }
+        if name == "minecraft:structure_block" {
+            // The entity's mode is the state's (`StructureBlock.MODE`); the block's
+            // state is not known here, so a new one starts in its default, SAVE.
+            return Some(Self::StructureBlock(Box::new(
+                crate::structure_block::StructureBlock::new(
+                    crate::structure_block::StructureMode::Save,
+                ),
+            )));
+        }
+        if name == "minecraft:test_block" {
+            // The mode is the state's, which is not known here.
+            return Some(Self::TestBlock(Box::new(
+                crate::test_block::TestBlock::new(crate::test_block::TestBlockMode::Fail),
+            )));
+        }
+        if name == "minecraft:test_instance_block" {
+            return Some(Self::TestInstanceBlock(Box::default()));
+        }
+        if name == "minecraft:jigsaw" {
+            return Some(Self::JigsawBlock(Box::default()));
+        }
+        if name == "minecraft:potent_sulfur" {
+            return Some(Self::PotentSulfur(PotentSulfur::default()));
+        }
+        Some(Self::Chest(vec![None; container_size(name)?]))
+    }
+    /// `BlockEntity.isValidBlockState`: whether this kind of entity belongs
+    /// under `name`'s block — vanilla keeps a set block's existing entity
+    /// only when its type is in the block's set, and drops it for the
+    /// block's own otherwise. Each kind fits the blocks `for_block` maps to
+    /// it (a furnace is its kind's, a sign only its standing or hanging
+    /// kind); a mod block's own can't tell its block here, so a non-vanilla
+    /// name is trusted — a name change drops it either way.
+    pub fn fits(&self, name: &str) -> bool {
+        match self {
+            Self::Chest(items) => container_size(name) == Some(items.len()),
+            Self::Furnace(f) => FurnaceKind::from_block(name) == Some(f.kind),
+            Self::Sign(s) => crate::signs::sign_kind(name) == Some(s.hanging),
+            Self::Sculk(s) => {
+                crate::sculk::SculkEntity::for_block(name).is_some_and(|n| n.id() == s.id())
+            }
+            Self::CommandBlock(_) => crate::command_block::Mode::of_block(name).is_some(),
+            Self::Skull(_) => is_skull(name),
+            Self::Banner(_) => name.ends_with("_banner"),
+            Self::CopperGolemStatue(_) => name.ends_with("copper_golem_statue"),
+            Self::Shelf(_) => name == "minecraft:shelf" || name.ends_with("_shelf"),
+            Self::Mod(_) => !name.starts_with("minecraft:"),
+            Self::Beehive(_) => matches!(name, "minecraft:beehive" | "minecraft:bee_nest"),
+            Self::Campfire(_) => {
+                matches!(name, "minecraft:campfire" | "minecraft:soul_campfire")
+            }
+            Self::Brushable(_) => matches!(
+                name,
+                "minecraft:suspicious_sand"
+                    | "minecraft:suspicious_gravel"
+                    | "minecraft:brushable_block"
+            ),
+            Self::Brewing(_) => name == "minecraft:brewing_stand",
+            Self::Beacon(_) => name == "minecraft:beacon",
+            Self::Jukebox(_) => name == "minecraft:jukebox",
+            Self::Lectern(_) => name == "minecraft:lectern",
+            Self::CreakingHeart(_) => name == "minecraft:creaking_heart",
+            Self::Spawner(_) => name == "minecraft:spawner",
+            Self::TrialSpawner(_) => name == "minecraft:trial_spawner",
+            Self::Vault(_) => name == "minecraft:vault",
+            Self::Crafter(_) => name == "minecraft:crafter",
+            Self::EndGateway(_) => name == "minecraft:end_gateway",
+            Self::DaylightDetector => name == "minecraft:daylight_detector",
+            Self::Bell => name == "minecraft:bell",
+            Self::Conduit(_) => name == "minecraft:conduit",
+            Self::EndPortal => name == "minecraft:end_portal",
+            Self::EnchantingTable => name == "minecraft:enchanting_table",
+            Self::StructureBlock(_) => name == "minecraft:structure_block",
+            Self::TestBlock(_) => name == "minecraft:test_block",
+            Self::TestInstanceBlock(_) => name == "minecraft:test_instance_block",
+            Self::JigsawBlock(_) => name == "minecraft:jigsaw",
+            Self::PotentSulfur(_) => name == "minecraft:potent_sulfur",
+            Self::ChiseledBookshelf(_) => name == "minecraft:chiseled_bookshelf",
+        }
+    }
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Chest(items) => match items.len() {
+                HOPPER_SLOTS => "minecraft:hopper",
+                9 => "minecraft:dispenser",
+                _ => "minecraft:chest",
+            },
+            Self::Furnace(f) => match f.kind {
+                FurnaceKind::Furnace => "minecraft:furnace",
+                FurnaceKind::BlastFurnace => "minecraft:blast_furnace",
+                FurnaceKind::Smoker => "minecraft:smoker",
+            },
+            Self::Brewing(_) => "minecraft:brewing_stand",
+            Self::Sign(s) => s.id(),
+            Self::Jukebox(_) => "minecraft:jukebox",
+            Self::Beacon(_) => "minecraft:beacon",
+            Self::Lectern(_) => "minecraft:lectern",
+            Self::Sculk(s) => s.id(),
+            Self::Banner(_) => "minecraft:banner",
+            Self::CopperGolemStatue(_) => "minecraft:copper_golem_statue",
+            Self::Crafter(_) => "minecraft:crafter",
+            Self::CreakingHeart(_) => "minecraft:creaking_heart",
+            Self::Spawner(_) => "minecraft:mob_spawner",
+            Self::TrialSpawner(_) => "minecraft:trial_spawner",
+            Self::Vault(_) => "minecraft:vault",
+            Self::Beehive(_) => "minecraft:beehive",
+            Self::CommandBlock(_) => "minecraft:command_block",
+            Self::Skull(_) => "minecraft:skull",
+            Self::EndGateway(_) => "minecraft:end_gateway",
+            Self::DaylightDetector => "minecraft:daylight_detector",
+            Self::Bell => "minecraft:bell",
+            Self::Conduit(_) => "minecraft:conduit",
+            Self::EndPortal => "minecraft:end_portal",
+            Self::EnchantingTable => "minecraft:enchanting_table",
+            Self::Brushable(_) => "minecraft:brushable_block",
+            Self::Campfire(_) => "minecraft:campfire",
+            Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
+            Self::Shelf(_) => "minecraft:shelf",
+            Self::Mod(m) => &m.id,
+            Self::PotentSulfur(_) => "minecraft:potent_sulfur",
+            Self::StructureBlock(_) => "minecraft:structure_block",
+            Self::JigsawBlock(_) => "minecraft:jigsaw",
+            Self::TestBlock(_) => "minecraft:test_block",
+            Self::TestInstanceBlock(_) => "minecraft:test_instance_block",
+        }
+    }
+    pub fn contents(&self) -> Vec<ItemStack> {
+        match self {
+            Self::Chest(items) => items.iter().flatten().cloned().collect(),
+            Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
+            Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
+            Self::Sign(_) => Vec::new(),
+            Self::Jukebox(j) => j.items.iter().flatten().cloned().collect(),
+            Self::Beacon(_)
+            | Self::CreakingHeart(_)
+            | Self::Spawner(_)
+            | Self::TrialSpawner(_)
+            | Self::Vault(_)
+            | Self::Beehive(_)
+            | Self::CommandBlock(_)
+            | Self::EndGateway(_)
+            | Self::Skull(_)
+            | Self::PotentSulfur(_)
+            | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
+            | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
+            | Self::DaylightDetector
+            | Self::Bell
+            | Self::Conduit(_)
+            | Self::EndPortal
+            | Self::EnchantingTable
+            | Self::Brushable(_) => Vec::new(),
+            Self::Mod(m) => m.items.iter().flatten().cloned().collect(),
+            Self::Lectern(l) => l.book.iter().cloned().collect(),
+            Self::Sculk(_) => Vec::new(),
+            Self::Banner(_) | Self::CopperGolemStatue(_) => Vec::new(),
+            Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
+            Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
+            Self::ChiseledBookshelf(b) => b.items.iter().flatten().cloned().collect(),
+            Self::Shelf(b) => b.items.iter().flatten().cloned().collect(),
+        }
+    }
+    pub fn slots(&self) -> &[Option<ItemStack>] {
+        match self {
+            Self::Chest(items) => items,
+            Self::Furnace(f) => &f.items,
+            Self::Brewing(b) => &b.items,
+            Self::Sign(_)
+            | Self::Beacon(_)
+            | Self::Lectern(_)
+            | Self::Sculk(_)
+            | Self::Banner(_)
+            | Self::CopperGolemStatue(_)
+            | Self::EndGateway(_)
+            | Self::Skull(_)
+            | Self::PotentSulfur(_)
+            | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
+            | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
+            | Self::DaylightDetector
+            | Self::Bell
+            | Self::Conduit(_)
+            | Self::EndPortal
+            | Self::EnchantingTable
+            | Self::Brushable(_) => &[],
+            Self::Jukebox(j) => &j.items,
+            Self::Crafter(c) => &c.items,
+            Self::ChiseledBookshelf(b) => &b.items,
+            Self::Shelf(b) => &b.items,
+            Self::Mod(m) => &m.items,
+            Self::CreakingHeart(_)
+            | Self::Spawner(_)
+            | Self::TrialSpawner(_)
+            | Self::Vault(_)
+            | Self::Beehive(_)
+            | Self::CommandBlock(_)
+            // Not a Container (only Clearable): hoppers don't reach in.
+            | Self::Campfire(_) => &[],
+        }
+    }
+    pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
+        match self {
+            Self::Chest(items) => items,
+            Self::Furnace(f) => &mut f.items,
+            Self::Brewing(b) => &mut b.items,
+            Self::Sign(_)
+            | Self::Beacon(_)
+            | Self::Lectern(_)
+            | Self::Sculk(_)
+            | Self::Banner(_)
+            | Self::CopperGolemStatue(_)
+            | Self::EndGateway(_)
+            | Self::Skull(_)
+            | Self::PotentSulfur(_)
+            | Self::StructureBlock(_)
+            | Self::JigsawBlock(_)
+            | Self::TestBlock(_)
+            | Self::TestInstanceBlock(_)
+            | Self::DaylightDetector
+            | Self::Bell
+            | Self::Conduit(_)
+            | Self::EndPortal
+            | Self::EnchantingTable
+            | Self::Brushable(_) => &mut [],
+            Self::Jukebox(j) => &mut j.items,
+            Self::Crafter(c) => &mut c.items,
+            Self::ChiseledBookshelf(b) => &mut b.items,
+            Self::Shelf(b) => &mut b.items,
+            Self::Mod(m) => &mut m.items,
+            Self::CreakingHeart(_)
+            | Self::Spawner(_)
+            | Self::TrialSpawner(_)
+            | Self::Vault(_)
+            | Self::Beehive(_)
+            | Self::CommandBlock(_)
+            | Self::Campfire(_) => &mut [],
+        }
+    }
+}
+pub use crate::providers::Providers;
+
+/// A `ChestBlock`, which `ChestBlock.combine` can join into a double chest:
+/// chests, trapped chests and copper chests in every weathering state, waxed
+/// or not (`CopperChestBlock` extends `ChestBlock`). Ender chests are
+/// `EnderChestBlock`s and always single.
+pub fn is_chest_block(name: &str) -> bool {
+    matches!(name, "minecraft:chest" | "minecraft:trapped_chest") || name.ends_with("copper_chest")
+}
+
+/// A chest block's name with its `type` and `facing` properties.
+#[derive(Clone, Copy, Debug)]
+pub struct ChestHalf<'a> {
+    pub block: &'a str,
+    pub kind: &'a str,
+    pub facing: &'a str,
+}
+
+impl ChestHalf<'_> {
+    /// `ChestBlock.getConnectedDirection` as an (x, z) step to the other
+    /// half: clockwise from the facing for a left half, counter-clockwise for
+    /// a right one. None for a single chest.
+    pub fn connected_step(&self) -> Option<(i32, i32)> {
+        let step = |facing: &str| match facing {
+            "north" => Some((0, -1)),
+            "south" => Some((0, 1)),
+            "west" => Some((-1, 0)),
+            "east" => Some((1, 0)),
+            _ => None,
+        };
+        let (x, z) = step(self.facing)?;
+        // Turning clockwise seen from above takes (x, z) to (-z, x).
+        match self.kind {
+            "left" => Some((-z, x)),
+            "right" => Some((z, -x)),
+            _ => None,
+        }
+    }
+
+    /// `DoubleBlockCombiner.combineWithNeigbour` as `ChestBlock.combine` calls
+    /// it: `other`, the block in this half's connected direction, is its other
+    /// half when it is the same block, a half of the other side and faces the
+    /// same way. Copper chests in different weathering states never join
+    /// (`CopperChestBlock` keeps both halves in one state instead).
+    pub fn pairs_with(&self, other: &ChestHalf) -> bool {
+        is_chest_block(self.block)
+            && self.kind != "single"
+            && other.block == self.block
+            && other.kind != "single"
+            && other.kind != self.kind
+            && other.facing == self.facing
+    }
+}
+
+/// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
+/// more with the chance of what is left over (a level random draw only when there is some).
+pub fn create_experience(
+    count: u32,
+    experience: f32,
+    random: &mut impl horizon_core::random::RandomSource,
+) -> u32 {
+    let total = count as f32 * experience;
+    let whole = total.floor();
+    let fraction = total - whole;
+    let mut xp = whole.max(0.0) as u32;
+    if fraction != 0.0 && random.next_float() < fraction {
+        xp += 1;
+    }
+    xp
+}
+
+/// The `MenuType` the block entity of a one-block storage container opens
+/// (`createMenu`): `ChestMenu.threeRows` for chests, trapped and copper chests
+/// and barrels, `ShulkerBoxMenu` for shulker boxes of any colour (its
+/// `ShulkerBoxSlot`s refuse shulker boxes), `DispenserMenu` for dispensers
+/// and droppers, `HopperMenu` for hoppers. None for other blocks.
+pub fn block_menu_type(block: &str) -> Option<&'static str> {
+    Some(match block {
+        "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => {
+            "minecraft:generic_9x3"
+        }
+        n if n.ends_with("copper_chest") => "minecraft:generic_9x3",
+        n if n.ends_with("shulker_box") => "minecraft:shulker_box",
+        "minecraft:dispenser" | "minecraft:dropper" => "minecraft:generic_3x3",
+        "minecraft:hopper" => "minecraft:hopper",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+
+    /// a client that isn't Horizon's is sent vanilla's menu types only.
+    #[test]
+    fn a_mod_menu_type_reaches_horizon_clients_only() {
+        assert!(menu_reaches("horizon", "ruby:press"));
+        assert!(!menu_reaches("vanilla", "ruby:press"));
+        assert!(!menu_reaches("fabric", "ruby:press"));
+        assert!(menu_reaches("vanilla", "minecraft:generic_9x3"));
+    }
+
+    #[test]
+    fn a_campfire_is_idle_only_while_its_tick_changes_nothing() {
+        let mut c = Campfire::default();
+        assert!(c.idle(true) && c.idle(false));
+        assert!(c.place_food(&mut ItemStack::new("minecraft:beef", 1), 600));
+        assert!(!c.idle(true));
+        assert!(c.idle(false));
+        c.cook_tick();
+        assert!(!c.idle(false));
+        c.cooldown_tick();
+        assert!(c.idle(false));
+    }
+
+    /// The campfire sleeps while `idle`, so the tick its block runs (`cook_tick` lit,
+    /// `cooldown_tick` unlit) must change nothing then, and must change an awake one.
+    #[test]
+    fn an_idle_campfire_tick_changes_nothing() {
+        let tick = |c: &mut Campfire, lit: bool| {
+            if lit {
+                !c.cook_tick().is_empty()
+            } else {
+                c.cooldown_tick()
+            }
+        };
+        let empty = Campfire::default();
+        let mut food = Campfire::default();
+        assert!(food.place_food(&mut ItemStack::new("minecraft:beef", 1), 600));
+        let mut warm = food.clone();
+        warm.cook_tick();
+        let mut cooled = warm.clone();
+        while cooled.cooldown_tick() {}
+        for (before, lit) in [
+            (&empty, true),
+            (&empty, false),
+            (&food, false),
+            (&cooled, false),
+        ] {
+            assert!(before.idle(lit), "{before:?} lit {lit}");
+            let mut after = before.clone();
+            assert!(!tick(&mut after, lit));
+            assert_eq!(&after, before, "lit {lit}");
+        }
+        for (before, lit) in [(&food, true), (&warm, false)] {
+            assert!(!before.idle(lit), "{before:?} lit {lit}");
+            let mut after = before.clone();
+            tick(&mut after, lit);
+            assert_ne!(&after, before, "lit {lit}");
+        }
+    }
+
+    #[test]
+    fn campfire_slots_take_food_cook_it_and_cool_down() {
+        let mut c = Campfire::default();
+        let mut beef = ItemStack::new("minecraft:beef", 2);
+        // placeFood: the first free slot, one item, its recipe's time.
+        assert!(c.place_food(&mut beef, 600));
+        assert_eq!(beef.count, 1);
+        assert_eq!(c.items[0].as_ref().map(|s| s.count), Some(1));
+        assert_eq!((c.progress[0], c.total[0]), (0, 600));
+        let mut fish = ItemStack::new("minecraft:cod", 1);
+        assert!(c.place_food(&mut fish, 3));
+        assert_eq!(c.items[1].as_ref().map(|s| &*s.item), Some("minecraft:cod"));
+        // cookTick: the cod is done on its third tick, the beef keeps cooking.
+        assert!(c.cook_tick().is_empty());
+        assert!(c.cook_tick().is_empty());
+        let done = c.cook_tick();
+        assert_eq!(done.len(), 1);
+        assert_eq!((done[0].0, &*done[0].1.item), (1, "minecraft:cod"));
+        assert!(c.items[1].is_none());
+        assert_eq!(c.progress[0], 3);
+        // cooldownTick: two a tick, never below zero.
+        assert!(c.cooldown_tick());
+        assert_eq!(c.progress[0], 1);
+        assert!(c.cooldown_tick());
+        assert_eq!(c.progress[0], 0);
+        // Full: four slots, no fifth.
+        for _ in 0..3 {
+            let mut more = ItemStack::new("minecraft:potato", 1);
+            assert!(c.place_food(&mut more, 600));
+        }
+        let mut fifth = ItemStack::new("minecraft:potato", 1);
+        assert!(!c.place_food(&mut fifth, 600));
+        assert_eq!(fifth.count, 1);
+    }
+
+    /// `JukeboxBlockEntity`'s single slot is a `Container` slot, so a hopper
+    /// (`HopperBlockEntity.getContainerAt`) can reach the disc in it.
+    #[test]
+    fn a_jukebox_offers_its_record_as_its_one_container_slot() {
+        let mut entity = BlockEntity::Jukebox(Jukebox::default());
+        assert_eq!(entity.slots().len(), 1);
+        assert!(entity.slots()[0].is_none(), "empty until a disc lands");
+        let disc = ItemStack::new("minecraft:cat", 1);
+        entity.slots_mut()[0] = Some(disc.clone());
+        let slots = entity.slots();
+        assert_eq!(slots[0].as_ref().map(|s| &*s.item), Some("minecraft:cat"));
+        match &entity {
+            BlockEntity::Jukebox(j) => {
+                assert_eq!(j.record().map(|s| &*s.item), Some("minecraft:cat"));
+            }
+            _ => panic!("a jukebox"),
+        }
+        assert_eq!(entity.contents().len(), 1);
+    }
+
+    /// A placed jukebox gets its block entity (`JukeboxBlock.newBlockEntity`),
+    /// so the item's block entity data lands somewhere and the box can hold a
+    /// disc without a player putting one in.
+    #[test]
+    fn a_placed_jukebox_starts_as_an_empty_jukebox_entity() {
+        let entity = BlockEntity::for_block("minecraft:jukebox").expect("a jukebox");
+        assert_eq!(entity.id(), "minecraft:jukebox");
+        assert!(matches!(entity, BlockEntity::Jukebox(_)));
+        assert_eq!(entity.slots().len(), 1);
+        assert!(entity.slots()[0].is_none());
+        // Another block's name is not a jukebox.
+        assert!(BlockEntity::for_block("minecraft:stone").is_none());
+    }
+
+    /// A whole amount pays itself without a draw; a fraction is a chance of one more.
+    #[test]
+    fn create_experience_rounds_the_fraction_by_chance() {
+        let mut random = LegacyRandom::new(7);
+        let mut untouched = LegacyRandom::new(7);
+        assert_eq!(create_experience(4, 0.5, &mut random), 2);
+        assert_eq!(create_experience(3, 0.0, &mut random), 0);
+        assert_eq!(random.next_long(), untouched.next_long());
+        let paid: u32 = (0..1000)
+            .map(|_| create_experience(1, 0.35, &mut random))
+            .sum();
+        assert!((250..450).contains(&paid), "{paid}");
+        assert!((0..100).all(|_| (1..=2).contains(&create_experience(1, 1.7, &mut random))));
+    }
+
+    /// An ender chest placed with /setblock gets its block entity (`EnderChestBlock.newBlockEntity`),
+    /// so `/data get block` answers with the entity and the chunk saves it.
+    #[test]
+    fn an_ender_chest_starts_as_a_block_entity() {
+        let entity = BlockEntity::for_block("minecraft:ender_chest").expect("an ender chest");
+        // `Chest` variant with 27 slots; `id()` reports the chest kind, block name comes from NBT.
+        assert_eq!(entity.id(), "minecraft:chest");
+        assert_eq!(entity.slots().len(), 27);
+        assert!(entity.slots()[0].is_none());
+        assert!(matches!(entity, BlockEntity::Chest(_)));
+        // `fits`: an ender chest entity fits an ender chest block.
+        assert!(entity.fits("minecraft:ender_chest"));
+        // A stone block is not an ender chest.
+        assert!(BlockEntity::for_block("minecraft:stone").is_none());
+    }
+
+    /// An end portal placed with /setblock gets its block entity (`EndPortalBlock.newBlockEntity`),
+    /// so `/data get block` answers with the entity and the chunk saves it.
+    #[test]
+    fn an_end_portal_starts_as_a_block_entity() {
+        let entity = BlockEntity::for_block("minecraft:end_portal").expect("an end portal");
+        assert_eq!(entity.id(), "minecraft:end_portal");
+        assert_eq!(entity.slots().len(), 0);
+        assert!(matches!(entity, BlockEntity::EndPortal));
+        // `fits`: an end portal entity fits an end portal block.
+        assert!(entity.fits("minecraft:end_portal"));
+        // A stone block is not an end portal.
+        assert!(BlockEntity::for_block("minecraft:stone").is_none());
+    }
+}
+
+#[cfg(test)]
+mod cooldown_negative_tests {
+    use super::*;
+
+    /// `CampfireBlockEntity.cooldownTick` clamps with `Mth.clamp(progress, 0,
+    /// cookingTime)` = `min(max(progress, 0), cookingTime)`. A cooking time a
+    /// command saved as negative answers itself, where `i32::clamp` (which
+    /// needs min <= max) would panic.
+    #[test]
+    fn a_negative_cooking_time_cools_to_itself() {
+        let mut c = Campfire::default();
+        c.progress[0] = 5;
+        c.total[0] = -1;
+        assert!(c.cooldown_tick());
+        assert_eq!(
+            c.progress[0], -1,
+            "Mth.clamp(3, 0, -1) is -1, as vanilla answers"
+        );
+    }
+}

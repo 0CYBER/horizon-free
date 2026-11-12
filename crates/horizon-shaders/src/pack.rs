@@ -7,6 +7,10 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
+
+/// The most bytes one file of a zipped pack unpacks to: far above any `.properties`, `.lang` or
+/// GLSL file, with room for the largest textures packs carry.
+pub const MAX_FILE: u64 = 64 << 20;
 use std::sync::Arc;
 
 use zip::ZipArchive;
@@ -16,6 +20,9 @@ const ROOT: &str = "shaders";
 pub struct Pack {
     name: String,
     files: Files,
+    /// The values the player chose for the pack's options, applied to its sources as they are
+    /// read (`options::apply`).
+    chosen: BTreeMap<String, String>,
 }
 
 enum Files {
@@ -69,7 +76,11 @@ impl Pack {
         } else {
             Self::zip_files(fs::read(path)?)?
         };
-        Ok(Self { name, files })
+        Ok(Self {
+            name,
+            files,
+            chosen: BTreeMap::new(),
+        })
     }
 
     /// An archive held in memory; `name` is what [`Pack::name`] returns.
@@ -78,23 +89,44 @@ impl Pack {
         Ok(Self {
             name: name.to_owned(),
             files,
+            chosen: BTreeMap::new(),
         })
     }
 
     fn zip_files(bytes: Vec<u8>) -> Result<Files, PackError> {
         let archive = ZipArchive::new(Cursor::new(Arc::from(bytes)))
             .map_err(|e| PackError::Zip(e.to_string()))?;
-        let entries: BTreeMap<String, usize> = (0..archive.len())
-            .filter_map(|i| {
-                let name = archive.name_for_index(i)?.replace('\\', "/");
-                let inner = name.strip_prefix(ROOT)?.strip_prefix('/')?;
-                (!inner.is_empty() && !inner.ends_with('/')).then(|| (inner.to_owned(), i))
-            })
-            .collect();
+        let mut entries = BTreeMap::new();
+        for i in 0..archive.len() {
+            let Some(name) = archive.name_for_index(i) else {
+                continue;
+            };
+            let name = name
+                .map_err(|e| PackError::Zip(e.to_string()))?
+                .replace('\\', "/");
+            if let Some(inner) = name.strip_prefix(ROOT).and_then(|n| n.strip_prefix('/'))
+                && !inner.is_empty()
+                && !inner.ends_with('/')
+            {
+                entries.insert(inner.to_owned(), i);
+            }
+        }
         if entries.is_empty() {
             return Err(PackError::NoShadersFolder);
         }
         Ok(Files::Zip { archive, entries })
+    }
+
+    /// The pack with options at the values in `chosen` (name to value, `true` or `false` for a
+    /// switch) instead of their defaults. A value the option doesn't list (a file edited by
+    /// hand) is left out.
+    pub fn with_chosen(mut self, chosen: BTreeMap<String, String>) -> Self {
+        let options = crate::options(&self);
+        self.chosen = chosen
+            .into_iter()
+            .filter(|(name, value)| options.get(name).is_some_and(|o| o.values.contains(value)))
+            .collect();
+        self
     }
 
     /// The folder or file name the pack was opened from (`BSL.zip`).
@@ -103,8 +135,16 @@ impl Pack {
     }
 
     /// The bytes of a file, by its path inside `shaders` (`lang/en_us.lang`). `None` when it
-    /// doesn't exist or the path leaves the folder.
+    /// doesn't exist, the path leaves the folder, or a zipped file unpacks to more than
+    /// [`MAX_FILE`].
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
+        self.read_capped(path, MAX_FILE)
+    }
+
+    /// [`Pack::read`] with at most `cap` bytes from a zipped file. A zip's sizes are its own claim:
+    /// nothing is allocated from the declared size, and the inflated bytes stop one past `cap`, so
+    /// a deflate bomb in a downloaded pack (1.5 GiB of spaces zip to 1.5 MiB) can't abort the game.
+    fn read_capped(&self, path: &str, cap: u64) -> Option<Vec<u8>> {
         let path = normalize(path)?;
         match &self.files {
             Files::Folder(root) => fs::read(root.join(&path)).ok(),
@@ -112,18 +152,28 @@ impl Pack {
                 // A clone shares the bytes and the central directory; reading needs `&mut`.
                 let mut archive = archive.clone();
                 let mut entry = archive.by_index(*entries.get(&path)?).ok()?;
-                let mut out = Vec::with_capacity(entry.size() as usize);
-                entry.read_to_end(&mut out).ok()?;
-                Some(out)
+                if entry.size() > cap {
+                    return None;
+                }
+                let mut out = Vec::new();
+                (&mut entry).take(cap + 1).read_to_end(&mut out).ok()?;
+                (out.len() as u64 <= cap).then_some(out)
             }
         }
     }
 
-    /// A text file, decoded as UTF-8 (invalid bytes replaced) without its byte-order mark.
+    /// A text file, decoded as UTF-8 (invalid bytes replaced) without its byte-order mark, with
+    /// the chosen option values in its sources.
     pub fn read_text(&self, path: &str) -> Option<String> {
         let bytes = self.read(path)?;
         let text = String::from_utf8_lossy(&bytes);
-        Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let source = !path.ends_with(".properties") && !path.ends_with(".lang");
+        Some(if source && !self.chosen.is_empty() {
+            crate::options::apply(text, &self.chosen)
+        } else {
+            text.to_owned()
+        })
     }
 
     pub fn exists(&self, path: &str) -> bool {
@@ -223,13 +273,13 @@ pub(crate) mod tests {
     use std::io::Write;
 
     /// A zip of `(path, contents)` pairs, paths from the archive root.
-    pub(crate) fn zip(files: &[(&str, &str)]) -> Vec<u8> {
+    pub(crate) fn zip<C: AsRef<[u8]>>(files: &[(&str, C)]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
         for (path, contents) in files {
             w.start_file(*path, options).unwrap();
-            w.write_all(contents.as_bytes()).unwrap();
+            w.write_all(contents.as_ref()).unwrap();
         }
         w.finish().unwrap().into_inner()
     }
@@ -241,6 +291,26 @@ pub(crate) mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_zipped_file_past_the_cap_reads_as_missing() {
+        // A deflate bomb: 64 KiB of spaces zip to almost nothing. Read with a 16 KiB cap here
+        // (MAX_FILE in the game), it is refused whatever it declares; the rest of the pack reads.
+        let bytes = zip(&[
+            ("shaders/shaders.properties", vec![b' '; 64 << 10]),
+            ("shaders/lib/common.glsl", b"void main() {}".to_vec()),
+        ]);
+        assert!(bytes.len() < 4 << 10);
+        let pack = Pack::from_zip_bytes("P.zip", bytes).unwrap();
+        assert_eq!(pack.read_capped("shaders.properties", 16 << 10), None);
+        assert_eq!(
+            pack.read_capped("shaders.properties", 64 << 10)
+                .unwrap()
+                .len(),
+            64 << 10
+        );
+        assert_eq!(pack.read("lib/common.glsl").unwrap(), b"void main() {}");
     }
 
     #[test]

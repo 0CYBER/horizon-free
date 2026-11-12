@@ -2,24 +2,92 @@
 //! level events, animations and block containers with their clicks.
 use super::{
     hub::Hub,
-    menu::{self, Menu, Rules, Slots, View},
+    menu::{
+        self, Menu, NativeMenuEvent, NativeOwner, NativeReturn, NativeStore, Rules, Slots, View,
+    },
 };
 use crate::{containers::BlockEntity, items::ItemStack, world::World};
+use horizon_core::random::RandomSource;
 use horizon_protocol::{
     item::Hashed,
-    packets::play::{self, Clientbound as C},
+    packets::{
+        configuration::CustomPayload,
+        play::{self, Clientbound as C},
+    },
 };
 use horizon_world::nbt::Tag;
 use std::collections::HashMap;
 
+/// Encode a captured level sound and its broadcast radius without a live hub.
+/// Entity-bound events use the entity packet; ordinary level sounds retain
+/// their fixed-point coordinates. The caller supplies the synced registry id.
+pub fn captured_sound_packet(
+    sound: &crate::audio::CapturedSound,
+    sound_id: Option<i32>,
+    seed: i64,
+) -> (C, f64) {
+    let holder = match sound_id {
+        Some(id) => (id, None),
+        None => (-1, Some((sound.event.clone(), None))),
+    };
+    let packet = match sound.entity {
+        Some(id) => C::SoundEntity(play::SoundEntity {
+            sound: holder,
+            source: sound.source as i32,
+            id: id as i32,
+            volume: sound.volume,
+            pitch: sound.pitch,
+            seed,
+        }),
+        None => C::Sound(play::Sound {
+            sound: holder,
+            source: sound.source as i32,
+            x: (sound.position[0] * 8.0) as i32,
+            y: (sound.position[1] * 8.0) as i32,
+            z: (sound.position[2] * 8.0) as i32,
+            volume: sound.volume,
+            pitch: sound.pitch,
+            seed,
+        }),
+    };
+    (packet, captured_sound_range(sound))
+}
+
+pub(super) fn captured_sound_range(sound: &crate::audio::CapturedSound) -> f64 {
+    // SoundEvent.getRange multiplies as floats before the broadcast widens it.
+    f64::from(if sound.volume > 1.0 {
+        16.0 * sound.volume
+    } else {
+        16.0
+    })
+}
+
 impl Hub {
     pub fn send_to(&self, conn: u32, packet: &C) {
         if let Some(g) = self.guest(conn) {
-            g.send(packet);
+            if let C::RemoveEntities(p) = packet {
+                self.send_ordered_removal(g, &p.ids);
+            } else {
+                g.send(packet);
+            }
         }
     }
 
-    /// Send to every placed guest within `range` blocks of `at`.
+    /// `ChunkMap.sendToTrackingPlayers`: send to every placed guest that
+    /// tracks the entity `id`.
+    pub fn send_to_tracking(&self, id: i32, packet: &C) {
+        let body = packet.encode();
+        for g in self
+            .guests
+            .iter()
+            .filter(|g| self.here(g) && g.tracker.is_tracking(id))
+        {
+            g.sender.send(body.clone());
+        }
+    }
+
+    /// Send to every placed guest within `range` blocks of `at`
+    /// (`PlayerList.broadcast`, which leaves out a player exactly at `range`).
     pub fn broadcast_near(&self, at: [f64; 3], range: f64, packet: &C, except: Option<u32>) {
         let body = packet.encode();
         for g in self
@@ -27,8 +95,7 @@ impl Hub {
             .iter()
             .filter(|g| self.here(g) && Some(g.conn) != except)
         {
-            let d: f64 = (0..3).map(|k| (g.position[k] - at[k]).powi(2)).sum();
-            if d <= range * range {
+            if within_range(at, g.position, range) {
                 g.sender.send(body.clone());
             }
         }
@@ -60,6 +127,31 @@ impl Hub {
             seed,
         })
     }
+    /// Draw the next seed from the server sound source.
+    pub fn next_sound_seed(&self) -> i64 {
+        next_sound_seed(&mut *self.sound_seeds.lock().unwrap())
+    }
+
+    /// The entity overload of `ServerLevel.playSeededSound`. The emitter stays
+    /// an entity id on the wire; clients which do not know it drop the sound.
+    pub fn captured_sound(&self, sound: &crate::audio::CapturedSound, except: Option<u32>) {
+        let except = except.or_else(|| {
+            sound.except_entity.and_then(|id| {
+                self.guests
+                    .iter()
+                    .find(|g| g.entity_id as u32 == id)
+                    .map(|g| g.conn)
+            })
+        });
+        let seed = self.next_sound_seed();
+        let (packet, range) = captured_sound_packet(
+            sound,
+            self.sync.id("minecraft:sound_event", &sound.event),
+            seed,
+        );
+        self.broadcast_near(sound.position, range, &packet, except);
+    }
+
     pub fn sound(
         &self,
         name: &str,
@@ -69,7 +161,9 @@ impl Hub {
         source: i32,
         except: Option<u32>,
     ) {
-        let packet = self.sound_packet(name, at, volume, pitch, source, self.ticks as i64);
+        // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
+        let seed = self.next_sound_seed();
+        let packet = self.sound_packet(name, at, volume, pitch, source, seed);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
 
@@ -201,7 +295,10 @@ impl Hub {
         );
     }
 
-    /// Open a block container for a guest (ServerPlayer.openMenu).
+    /// Open a block container for a guest (ServerPlayer.openMenu). `extra`,
+    /// for a mod menu type, goes first in a `horizon:menu_extra` payload with
+    /// the window and `pos` (`openMenu` with an extra-data writer).
+    #[allow(clippy::too_many_arguments)]
     pub fn open_container(
         &mut self,
         conn: u32,
@@ -210,6 +307,7 @@ impl Hub {
         pos: (i32, i32, i32),
         slots: Slots,
         items: Vec<Option<ItemStack>>,
+        extra: Option<Vec<u8>>,
     ) {
         let Some(kind) = self
             .sync
@@ -226,11 +324,26 @@ impl Hub {
         let g = &mut self.guests[i];
         g.next_window = g.next_window % 100 + 1;
         let window = g.next_window;
+        if let Some(data) = extra {
+            let message = horizon_protocol::menu_extra::Message {
+                window,
+                pos: [pos.0, pos.1, pos.2],
+                data,
+            };
+            match horizon_protocol::menu_extra::encode(&message) {
+                Ok(data) => g.send(&C::CustomPayload(CustomPayload {
+                    channel: horizon_protocol::menu_extra::CHANNEL.into(),
+                    data,
+                })),
+                Err(e) => log::warn!("Horizon: {menu_kind}'s extra data not sent: {e}"),
+            }
+        }
         g.send(&C::OpenScreen(play::OpenScreen {
             container: window,
             menu: kind,
             title,
         }));
+        let mod_type = crate::containers::mod_menu_type(menu_kind);
         g.menu = Some(Menu {
             window,
             kind,
@@ -241,8 +354,105 @@ impl Hub {
             sent: Vec::new(),
             drag: None,
             sent_data: Vec::new(),
+            hidden: Vec::new(),
+            mod_type,
+            craft: None,
+            links: Vec::new(),
         });
         self.send_menu_content(i, items);
+    }
+
+    /// The open menu of `conn` has no `hidden` container slots: a mod's screen
+    /// does not show them, so a click or a shift-click never reaches them.
+    pub fn hide_menu_slots(&mut self, conn: u32, hidden: Vec<usize>) {
+        if let Some(m) = self
+            .guests
+            .iter_mut()
+            .find(|g| g.conn == conn)
+            .and_then(|g| g.menu.as_mut())
+        {
+            m.hidden = hidden;
+        }
+    }
+
+    /// Opens a native mod's menu of `rows` rows (1 to 6, a chest's
+    /// `generic_9xN`) showing `items` (padded to the rows' slots), over the
+    /// guest's inventory: no click moves anything, each is a
+    /// [`NativeMenuEvent`]. The window's id, or None for an unknown guest.
+    pub fn open_native_menu(
+        &mut self,
+        conn: u32,
+        rows: u8,
+        title: Tag,
+        mut items: Vec<Option<ItemStack>>,
+    ) -> Option<i32> {
+        let rows = rows.clamp(1, 6);
+        let kind = self
+            .sync
+            .builtin
+            .get("minecraft:menu")
+            .and_then(|m| m.id(&format!("minecraft:generic_9x{rows}")))?;
+        let i = self.guests.iter().position(|g| g.conn == conn)?;
+        self.close_container_at(i);
+        let size = usize::from(rows) * 9;
+        items.resize(size, None);
+        let g = &mut self.guests[i];
+        g.native_menu = items.clone();
+        g.next_window = g.next_window % 100 + 1;
+        let window = g.next_window;
+        g.send(&C::OpenScreen(play::OpenScreen {
+            container: window,
+            menu: kind,
+            title,
+        }));
+        g.menu = Some(Menu {
+            window,
+            kind,
+            pos: None,
+            slots: Slots::Native,
+            size,
+            state: 0,
+            sent: Vec::new(),
+            drag: None,
+            sent_data: Vec::new(),
+            hidden: Vec::new(),
+            mod_type: None,
+            craft: None,
+            links: Vec::new(),
+        });
+        self.send_menu_content(i, items);
+        Some(window)
+    }
+
+    /// Replaces what a guest's open native menu shows; the changed slots go
+    /// out with the tick's container sync. The slots its store holds
+    /// (`Guest::native_store`) keep their items: the player's, not the mod's.
+    pub fn set_native_menu(&mut self, conn: u32, mut items: Vec<Option<ItemStack>>) {
+        if let Some(g) = self.guest_mut(conn)
+            && let Some(m) = g.menu.as_ref().filter(|m| m.slots == Slots::Native)
+        {
+            items.resize(m.size, None);
+            if let Some(store) = &g.native_store {
+                for (k, slot) in items.iter_mut().enumerate() {
+                    if store.holds(k) {
+                        *slot = g.native_menu.get(k).cloned().flatten();
+                    }
+                }
+            }
+            g.native_menu = items;
+        }
+    }
+
+    /// The slots `store` holds of the guest's open native menu take and give
+    /// items by vanilla's click rules from now on; its other slots stay the
+    /// mod's to show, and no click or quick move reaches them (`Menu::hidden`).
+    pub fn set_native_store(&mut self, conn: u32, store: NativeStore) {
+        if let Some(g) = self.guest_mut(conn)
+            && let Some(m) = g.menu.as_mut().filter(|m| m.slots == Slots::Native)
+        {
+            m.hidden = (0..m.size).filter(|&k| !store.holds(k)).collect();
+            g.native_store = Some(store);
+        }
     }
 
     /// Open a trading window for a guest (`Merchant.openTradingScreen`):
@@ -309,6 +519,25 @@ impl Hub {
         });
         menu.sent = items;
         g.send(&packet);
+        g.inventory_told();
+    }
+
+    /// `AbstractContainerMenu.sendAllDataToRemote` for the guest's open
+    /// block container `window`: every slot and the carried stack again.
+    pub fn resend_menu(&mut self, conn: u32, window: i32, world: &World) {
+        let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        let g = &self.guests[i];
+        let Some(items) = g
+            .menu
+            .as_ref()
+            .filter(|m| window != 0 && m.window == window)
+            .and_then(|m| m.slots.read(world, g))
+        else {
+            return;
+        };
+        self.send_menu_content(i, items);
     }
 
     fn close_container_at(&mut self, i: usize) {
@@ -317,6 +546,17 @@ impl Hub {
             g.send(&C::ContainerClose(play::ContainerClose {
                 container: menu.window,
             }));
+            if menu.slots == Slots::Native {
+                let (uuid, window) = (g.uuid, menu.window);
+                // The input slots' items go to the mods, then the player, and
+                // so does the cursor's (`removed`): not every close here has
+                // the game's own after it.
+                if let Some(back) = NativeReturn::take(g, window, true) {
+                    self.native_menu_returns.push(back);
+                }
+                self.native_menu_events
+                    .push(NativeMenuEvent::Closed { uuid, window });
+            }
         }
     }
 
@@ -335,7 +575,14 @@ impl Hub {
         if let Some(g) = self.guest_mut(conn)
             && g.menu.as_ref().is_some_and(|m| m.window == window)
         {
-            g.menu = None;
+            let native = g.menu.take().is_some_and(|m| m.slots == Slots::Native);
+            if native {
+                let uuid = g.uuid;
+                let back = NativeReturn::take(g, window, false);
+                self.native_menu_returns.extend(back);
+                self.native_menu_events
+                    .push(NativeMenuEvent::Closed { uuid, window });
+            }
         }
     }
 
@@ -378,13 +625,59 @@ impl Hub {
                 .menu
                 .as_ref()
                 .is_some_and(|m| m.window == p.container);
-        if !window_ok || self.guests[i].spectator() {
+        if !window_ok {
             return Vec::new();
+        }
+        if self.guests[i].spectator() {
+            // A spectator's click changes nothing, and sendAllDataToRemote
+            // takes back what its client predicted.
+            self.resend_menu(conn, p.container, world);
+            return Vec::new();
+        }
+        // A native mod's menu: the click is the mod's to answer, and the
+        // whole menu and the cursor go back as they were. A click on the slots
+        // its store holds, on the inventory below them, outside or a drag is
+        // a chest menu's click instead (`Guest::native_store`).
+        if in_menu && self.guests[i].menu.as_ref().map(|m| m.slots) == Some(Slots::Native) {
+            let size = self.guests[i].menu.as_ref().map_or(0, |m| m.size);
+            let stored = self.guests[i].native_store.as_ref().is_some_and(|store| {
+                p.input == menu::input::QUICK_CRAFT
+                    || usize::try_from(p.slot)
+                        .ok()
+                        .is_none_or(|s| s >= size || store.holds(s))
+            });
+            if !stored {
+                self.native_menu_events.push(NativeMenuEvent::Click {
+                    uuid: self.guests[i].uuid,
+                    window: p.container,
+                    slot: i32::from(p.slot),
+                    button: i32::from(p.button),
+                    mode: p.input,
+                    cursor: self.guests[i].carried.clone(),
+                });
+                self.resend_menu(conn, p.container, world);
+                return Vec::new();
+            }
+            // Another player's inventory is read again first, so the click
+            // moves what is there now; a menu whose owner went closes.
+            if !self.refresh_native_store(i) {
+                self.close_container_at(i);
+                return Vec::new();
+            }
         }
         // A menu that is no longer valid takes no clicks.
         if let Some(m) = self.guests[i].menu.as_ref().filter(|_| in_menu)
             && !m.slots.still_valid(world, &self.guests[i], m.pos)
         {
+            return Vec::new();
+        }
+        // AbstractContainerMenu.isValidSlotIndex: -999 or below the menu's slot
+        // count. A slot past the menu would reach the inventory beyond its 36 slots.
+        let slots = match self.guests[i].menu.as_ref().filter(|_| in_menu) {
+            Some(m) => m.size + 36,
+            None => 46,
+        };
+        if i32::from(p.slot) >= slots as i32 && p.slot != -999 {
             return Vec::new();
         }
         let source = self.guests[i].menu.as_ref().map(|m| m.slots);
@@ -401,6 +694,11 @@ impl Hub {
         } else {
             self.guests[i].drag.take()
         };
+        let hidden = self.guests[i]
+            .menu
+            .as_ref()
+            .filter(|_| in_menu)
+            .map_or_else(Vec::new, |m| m.hidden.clone());
         let guest = &mut self.guests[i];
         let mut items = source.and_then(|s| s.read(world, guest));
         if in_menu && items.is_none() {
@@ -410,6 +708,7 @@ impl Hub {
             guest,
             container: items.as_deref_mut(),
             shulker,
+            hidden: &hidden,
         };
         let (drops, changed) = menu::click(
             &mut view,
@@ -428,6 +727,9 @@ impl Hub {
             }
         } else {
             self.guests[i].drag = drag;
+        }
+        if in_menu && source == Some(Slots::Native) {
+            self.store_native_click(i);
         }
         self.answer_click(i, p, world, &changed);
         drops
@@ -450,10 +752,12 @@ impl Hub {
                 .as_mut()
                 .and_then(|items| items.get_mut(slot))
                 .and_then(Option::as_mut),
-            Some((size, _)) => g
+            // setSelectedBundleItemIndex: a slot of the menu only.
+            Some((size, _)) if slot - size < 36 => g
                 .inventory
                 .get_mut(player_slot(slot - size))
                 .and_then(Option::as_mut),
+            Some(_) => None,
             None => match slot {
                 9..=35 => g.inventory.get_mut(slot).and_then(Option::as_mut),
                 36..=44 => g.inventory.get_mut(slot - 36).and_then(Option::as_mut),
@@ -483,6 +787,101 @@ impl Hub {
         }
     }
 
+    /// What the client predicted for click `p` is what the server has, for a
+    /// menu of `total` slots read through `view`.
+    pub fn click_agreed(
+        &mut self,
+        i: usize,
+        p: &play::ContainerClick,
+        total: usize,
+        view: &dyn Fn(usize) -> Option<ItemStack>,
+        changed: &[usize],
+    ) -> bool {
+        let carried = self.guests[i].carried.clone();
+        if !self.hashed_matches(&p.carried, &carried) {
+            return false;
+        }
+        let claimed: HashMap<usize, &Option<Hashed>> =
+            p.changed.iter().map(|(s, h)| (*s as usize, h)).collect();
+        (0..total).all(|slot| match claimed.get(&slot) {
+            Some(c) => self.hashed_matches(c, &view(slot)),
+            None => !changed.contains(&slot),
+        })
+    }
+
+    /// The slots of guest `i`'s native menu that show another player's
+    /// inventory (`NativeStore::Inventory`) read it again: false when that
+    /// player is no longer on the server or is dead (`Online`), or is back
+    /// (`Away`: the game must stop writing their file), and the menu must
+    /// close. True for any other menu.
+    fn refresh_native_store(&mut self, i: usize) -> bool {
+        let updates: Vec<(usize, Option<ItemStack>)> = {
+            let Some(NativeStore::Inventory {
+                owner,
+                ender,
+                layout,
+            }) = &self.guests[i].native_store
+            else {
+                return true;
+            };
+            match *owner {
+                NativeOwner::Away(uuid) => return !self.guests.iter().any(|g| g.uuid == uuid),
+                NativeOwner::Online(conn) => {
+                    let Some(o) = self
+                        .guests
+                        .iter()
+                        .find(|o| o.conn == conn && o.placed && !o.dead)
+                    else {
+                        return false;
+                    };
+                    let slots = menu::owner_slots(o, *ender);
+                    layout
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, at)| Some((k, slots.get((*at)?)?.clone())))
+                        .collect()
+                }
+            }
+        };
+        let g = &mut self.guests[i];
+        for (k, stack) in updates {
+            if let Some(slot) = g.native_menu.get_mut(k) {
+                *slot = stack;
+            }
+        }
+        true
+    }
+
+    /// What a click left in the slots of guest `i`'s native menu that show
+    /// an online player's inventory goes back into it, in the same step.
+    fn store_native_click(&mut self, i: usize) {
+        let Some(NativeStore::Inventory {
+            owner: NativeOwner::Online(conn),
+            ender,
+            layout,
+        }) = &self.guests[i].native_store
+        else {
+            return;
+        };
+        let (conn, ender) = (*conn, *ender);
+        let menu_slots = &self.guests[i].native_menu;
+        let writes: Vec<(usize, Option<ItemStack>)> = layout
+            .iter()
+            .enumerate()
+            .filter_map(|(k, at)| Some(((*at)?, menu_slots.get(k)?.clone())))
+            .collect();
+        let Some(o) = self.guests.iter_mut().find(|o| o.conn == conn) else {
+            return;
+        };
+        let mut slots = menu::owner_slots(o, ender);
+        for (at, stack) in writes {
+            if let Some(s) = slots.get_mut(at) {
+                *s = stack;
+            }
+        }
+        menu::set_owner_slots(o, ender, slots);
+    }
+
     /// After a click: tell the client about every slot it got wrong, or that
     /// it did not claim, and the carried stack.
     fn answer_click(
@@ -493,6 +892,29 @@ impl Hub {
         changed: &[usize],
     ) {
         let in_menu = p.container != 0;
+        // handleContainerClick: a click made without the latest state gets the
+        // whole menu (`broadcastFullState`). Answering it slot by slot can leave
+        // the client with a correction of a click it has already gone past.
+        let g = &self.guests[i];
+        let open = g
+            .menu
+            .as_ref()
+            .filter(|_| in_menu)
+            .map(|m| (m.size, m.state));
+        let stale = match open {
+            Some((_, state)) => p.state != state,
+            None => !in_menu && p.state != g.menu_state,
+        };
+        if stale {
+            match open {
+                Some((size, _)) => {
+                    let items = (0..size).map(|s| self.view_slot(i, world, s)).collect();
+                    self.send_menu_content(i, items);
+                }
+                None => self.send_inventory(i),
+            }
+            return;
+        }
         let claimed: HashMap<usize, Option<Hashed>> = p
             .changed
             .iter()
@@ -542,6 +964,13 @@ impl Hub {
         // What the client now believes equals the server's state.
         let items: Vec<_> = (0..total).map(|s| self.view_slot(i, world, s)).collect();
         if in_menu {
+            // Nor is the inventory menu's sync to send what this click settled:
+            // ServerPlayer.tick broadcasts only the open menu.
+            let own = open.map_or(0, |(size, _)| size);
+            let settled = claimed.keys().copied().chain(changed.iter().copied());
+            for slot in settled.filter(|&s| s >= own && s < own + 36) {
+                self.guests[i].menu_sent[slot - own + 9] = items[slot].clone();
+            }
             if let Some(m) = self.guests[i].menu.as_mut() {
                 m.sent = items;
             }
@@ -580,21 +1009,31 @@ impl Hub {
                 .chain([&c.triggered])
                 .map(|&d| i32::from(d))
                 .collect(),
+            // A mod's menu: the data slots its tick set. A mod menu type's
+            // `ContainerData` has as many as it declares, all sent on open
+            // (`sendInitialData`), 0 where the tick set none.
+            Some(BlockEntity::Mod(e)) if m.mod_type.is_some() || !e.data.is_empty() => {
+                let mut data = e.data.clone();
+                if let Some(t) = m.mod_type {
+                    data.resize(t.data_slots, 0);
+                }
+                data
+            }
             _ => return,
         }
         .into_iter()
         .map(|v| v as i16)
         .collect::<Vec<i16>>();
-        m.sent_data.resize(data.len(), i16::MIN);
+        m.sent_data.resize(data.len(), None);
         let window = m.window;
         let changed: Vec<(usize, i16)> = data
             .iter()
             .enumerate()
-            .filter(|&(k, v)| m.sent_data[k] != *v)
+            .filter(|&(k, v)| m.sent_data[k] != Some(*v))
             .map(|(k, &v)| (k, v))
             .collect();
         for &(k, value) in &changed {
-            m.sent_data[k] = value;
+            m.sent_data[k] = Some(value);
         }
         for (k, value) in changed {
             g.send(&C::ContainerSetData(play::ContainerSetData {
@@ -616,6 +1055,12 @@ impl Hub {
                 continue;
             };
             let (size, window, slots) = (menu.size, menu.window, menu.slots);
+            // A native menu showing another player's inventory follows it,
+            // and closes once its owner is gone, dead or back.
+            if slots == Slots::Native && !self.refresh_native_store(i) {
+                self.close_container_at(i);
+                continue;
+            }
             if !slots.valid(world) {
                 self.close_container_at(i);
                 continue;
@@ -655,4 +1100,50 @@ impl Hub {
 /// Inventory index of the n-th player slot of a container menu (27 main, then the hotbar).
 fn player_slot(n: usize) -> usize {
     if n < 27 { 9 + n } else { n - 27 }
+}
+
+/// `Level.soundSeedGenerator.nextLong` for `ClientboundSoundPacket.seed`.
+fn next_sound_seed(g: &mut impl RandomSource) -> i64 {
+    g.next_long()
+}
+
+/// `PlayerList.broadcast`'s distance test: the summed squared axis distances
+/// against the squared radius, and a player exactly at the radius is out.
+pub(super) fn within_range(at: [f64; 3], pos: [f64; 3], range: f64) -> bool {
+    let d: f64 = (0..3).map(|k| (pos[k] - at[k]).powi(2)).sum();
+    d < range * range
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_sound_seed, within_range};
+    use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn two_sounds_in_one_tick_get_different_seeds() {
+        let mut g = LegacyRandom::new(0);
+        let a = next_sound_seed(&mut g);
+        let b = next_sound_seed(&mut g);
+        assert_ne!(a, b);
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+    }
+
+    #[test]
+    fn the_tick_is_not_the_sound_seed() {
+        let ticks = 12i64;
+        let mut g = LegacyRandom::new(0);
+        assert_ne!(next_sound_seed(&mut g), ticks);
+    }
+
+    /// `PlayerList.broadcast` compares the squared distances with `ifge`, so a
+    /// player exactly on the radius gets no packet while one a hair inside does.
+    #[test]
+    fn a_guest_exactly_on_the_radius_hears_nothing() {
+        let at = [10.0, 64.0, -3.0];
+        let at_radius = [at[0] + 16.0, at[1], at[2]];
+        assert!(!within_range(at, at_radius, 16.0));
+        assert!(within_range(at, [at[0] + 15.99, at[1], at[2]], 16.0));
+        assert!(within_range(at, at, 16.0));
+    }
 }

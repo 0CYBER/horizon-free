@@ -1,0 +1,678 @@
+//! `SocialInteractionsScreen`: the players of the server in three tabs (All, Hidden, Blocked),
+//! a search box, and a row for each with the button that hides or shows its chat. The
+//! Blocked tab and each row's report button belong to Mojang's services, which Horizon does
+//! not offer: the first lists no one, the second is the disabled button vanilla shows when
+//! reporting is off.
+use crate::{
+    hud::{HudAtlas, HudBatch, rgba},
+    hud_layout, tab_list,
+    text::Text,
+    ui,
+};
+use std::time::{Duration, Instant};
+
+pub const TITLE: &str = "gui.socialInteractions.title";
+/// `SocialInteractionsScreen`'s page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Page {
+    #[default]
+    All,
+    Hidden,
+    Blocked,
+}
+/// One `PlayerEntry`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub id: u128,
+    pub name: String,
+    pub skin: String,
+    pub hidden: bool,
+    /// Not in the level any more (`PlayerEntry.isRemoved`): a hidden player who left.
+    pub removed: bool,
+    pub local: bool,
+}
+/// What the screen shows (game/social.rs fills it).
+#[derive(Clone, Debug, Default)]
+pub struct SocialView {
+    pub page: Page,
+    pub search: String,
+    /// The rows of the page, sorted and filtered as `SocialInteractionsPlayerList` does.
+    pub entries: Vec<Entry>,
+    /// `serverLabel`: the server's name and the players online.
+    pub server_label: Text,
+    pub scroll: f32,
+}
+/// What a click does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Page(Page),
+    Hide(u128),
+    Show(u128),
+    Done,
+}
+
+const IMAGE_WIDTH: f32 = 238.0;
+const ROW_WIDTH: f32 = 220.0;
+const ITEM_HEIGHT: f32 = 36.0;
+const LIST_START: f32 = 88.0;
+const BG_FILL: u32 = 0xFF4A4A4A;
+const BG_FILL_REMOVED: u32 = 0xFF303030;
+const STATUS_COLOR: u32 = 0x8CFFFFFF;
+const WHITE: u32 = u32::MAX;
+
+fn margin_x(w: f32) -> f32 {
+    ((w - IMAGE_WIDTH) / 2.0).floor()
+}
+/// `windowHeight`.
+fn window_height(h: f32) -> f32 {
+    (h - 128.0 - 16.0).max(52.0)
+}
+/// `listEnd`.
+fn list_end(h: f32) -> f32 {
+    80.0 + window_height(h) - 8.0
+}
+fn row_left(w: f32) -> f32 {
+    ((w - ROW_WIDTH) / 2.0).floor()
+}
+/// `SocialInteractionsPlayerList.sortPlayerEntries`: the local player first, then names that
+/// start with a letter, a digit or `_`, then the rest, each by name ignoring case.
+pub fn sort_entries(entries: &mut [Entry]) {
+    entries.sort_by_key(|e| {
+        let plain = e
+            .name
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphanumeric());
+        (!e.local, !plain, e.name.to_lowercase())
+    });
+}
+/// The most the list scrolls: its rows less its height.
+pub fn max_scroll(h: f32, rows: usize) -> f32 {
+    // `AbstractSelectionList.contentHeight`: the rows and 4px.
+    (rows as f32 * ITEM_HEIGHT + 4.0 - (list_end(h) - LIST_START)).max(0.0)
+}
+/// `AbstractSelectionList.scrollBarX`: the scrollbar's column, six pixels
+/// right of the rows and two more (`getRowRight + scrollbarWidth + 2`).
+pub fn scrollbar_x(w: f32) -> f32 {
+    row_left(w) + ROW_WIDTH + 6.0 + 2.0
+}
+fn tabs(w: f32) -> [(f32, Page); 3] {
+    let width = (ROW_WIDTH / 3.0).floor();
+    let (left, right) = (row_left(w), row_left(w) + ROW_WIDTH);
+    [
+        (left, Page::All),
+        (((left + right - width) / 2.0 + 1.0).floor(), Page::Hidden),
+        (right - width + 1.0, Page::Blocked),
+    ]
+}
+fn tab_label(page: Page, selected: bool) -> Text {
+    let key = match page {
+        Page::All => "gui.socialInteractions.tab_all",
+        Page::Hidden => "gui.socialInteractions.tab_hidden",
+        Page::Blocked => "gui.socialInteractions.tab_blocked",
+    };
+    let label = Text::translate(key, &[]);
+    if selected { label.underlined() } else { label }
+}
+/// A row's content rectangle (`Entry.getContentX/Y/Width/Height`: 2px in from the row), `y` the
+/// row's top.
+fn row_rect(w: f32, y: f32) -> [f32; 4] {
+    [
+        row_left(w) + 2.0,
+        y + 2.0,
+        ROW_WIDTH - 4.0,
+        ITEM_HEIGHT - 4.0,
+    ]
+}
+/// `PlayerEntry.extractContent`: the hide or show button, and the report button after it.
+fn row_buttons(w: f32, y: f32) -> ([f32; 2], [f32; 2]) {
+    let [x, y, width, height] = row_rect(w, y);
+    let hide = [
+        x + (width - 20.0 - 4.0) - 20.0 - 4.0,
+        y + (height - 20.0) / 2.0,
+    ];
+    let report = [x + (width - 20.0 - 4.0), y + (height - 20.0) / 2.0];
+    (hide, report)
+}
+fn status(e: &Entry) -> Option<Text> {
+    let key = match (e.hidden, e.removed) {
+        (true, true) => "gui.socialInteractions.status_hidden_offline",
+        (true, false) => "gui.socialInteractions.status_hidden",
+        (false, true) => "gui.socialInteractions.status_offline",
+        (false, false) => return None,
+    };
+    Some(Text::translate(key, &[]).italic())
+}
+/// The rows that show: the first one at `getY() + 2 - scroll` (`getFirstEntryY`).
+fn visible(view: &SocialView, h: f32) -> impl Iterator<Item = (usize, f32)> + '_ {
+    let end = list_end(h);
+    view.entries
+        .iter()
+        .enumerate()
+        .map(move |(i, _)| (i, LIST_START + 2.0 - view.scroll + i as f32 * ITEM_HEIGHT))
+        .filter(move |&(_, y)| y + ITEM_HEIGHT > LIST_START + 4.0 && y < end)
+}
+/// The search box's rectangle.
+pub fn search_box(w: f32) -> [f32; 4] {
+    [margin_x(w) + 28.0, 74.0, 200.0, 15.0]
+}
+/// `ContainerEventHandler.mouseClicked`: the screen's children in order, which
+/// the social screen inherits without an override of its own. A click inside
+/// the search box is that `EditBox`'s own `onClick` (the caret goes under the
+/// pointer); the tabs, the rows' buttons and Done come after it.
+pub fn search_click_at(size: (f32, f32), cursor: (f32, f32)) -> bool {
+    let [x, y, w, h] = search_box(size.0);
+    ui::hovered(cursor, x, y, w, h)
+}
+/// What the click at `cursor` belongs to: the search box first (the screen's
+/// child order), then the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Click {
+    Search,
+    Action(Action),
+}
+pub fn click_kind(size: (f32, f32), cursor: (f32, f32), view: &SocialView) -> Option<Click> {
+    if search_click_at(size, cursor) {
+        return Some(Click::Search);
+    }
+    click(size, cursor, view).map(Click::Action)
+}
+/// Done's rectangle (`HeaderAndFooterLayout`'s footer).
+fn done(w: f32, h: f32) -> [f32; 4] {
+    [(w / 2.0).floor() - 100.0, h - 27.0, 200.0, 20.0]
+}
+/// What is under `cursor`, if a click would do something.
+pub fn click(size: (f32, f32), cursor: (f32, f32), view: &SocialView) -> Option<Action> {
+    let (w, h) = size;
+    for (x, page) in tabs(w) {
+        if ui::hovered(cursor, x, 45.0, (ROW_WIDTH / 3.0).floor(), 20.0) {
+            return Some(Action::Page(page));
+        }
+    }
+    let [dx, dy, dw, dh] = done(w, h);
+    if ui::hovered(cursor, dx, dy, dw, dh) {
+        return Some(Action::Done);
+    }
+    if cursor.1 < LIST_START || cursor.1 >= list_end(h) {
+        return None;
+    }
+    for (i, y) in visible(view, h) {
+        let e = &view.entries[i];
+        if e.local {
+            continue;
+        }
+        let (hide, _) = row_buttons(w, y);
+        if ui::hovered(cursor, hide[0], hide[1], 20.0, 20.0) {
+            return Some(if e.hidden {
+                Action::Show(e.id)
+            } else {
+                Action::Hide(e.id)
+            });
+        }
+    }
+    None
+}
+/// `PlayerEntry.TOOLTIP_DELAY`: a row button's tooltip shows once the cursor
+/// has rested on that same button for half a second.
+pub const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
+
+/// The row button whose tooltip the cursor is over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tip {
+    Report(u128),
+    Toggle { id: u128, hidden: bool },
+}
+
+impl Tip {
+    fn text(self) -> Text {
+        match self {
+            Tip::Report(_) => {
+                Text::translate("gui.socialInteractions.tooltip.report.disabled", &[])
+            }
+            Tip::Toggle { hidden: true, .. } => {
+                Text::translate("gui.socialInteractions.tooltip.show", &[])
+            }
+            Tip::Toggle { hidden: false, .. } => {
+                Text::translate("gui.socialInteractions.tooltip.hide", &[])
+            }
+        }
+    }
+}
+
+/// The tooltip of what the cursor is over: the row button it names.
+fn tip_at(size: (f32, f32), cursor: (f32, f32), view: &SocialView) -> Option<Tip> {
+    let (w, h) = size;
+    if cursor.1 < LIST_START || cursor.1 >= list_end(h) {
+        return None;
+    }
+    for (i, y) in visible(view, h) {
+        let e = &view.entries[i];
+        if e.local {
+            continue;
+        }
+        let (hide, report) = row_buttons(w, y);
+        if ui::hovered(cursor, hide[0], hide[1], 20.0, 20.0) {
+            return Some(Tip::Toggle {
+                id: e.id,
+                hidden: e.hidden,
+            });
+        }
+        if ui::hovered(cursor, report[0], report[1], 20.0, 20.0) {
+            return Some(Tip::Report(e.id));
+        }
+    }
+    None
+}
+
+/// `WidgetTooltipHolder`'s delay: the tooltip of the control the cursor has
+/// rested on for `TOOLTIP_DELAY`, and nothing while it moves between them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TooltipDelay {
+    hovered: Option<(Tip, Instant)>,
+}
+
+impl TooltipDelay {
+    /// The tip to draw at `now`, starting the wait when the cursor reaches a
+    /// new button (vanilla's `displayStartTime`).
+    pub fn shown(&mut self, hovered: Option<Tip>, now: Instant) -> Option<Tip> {
+        let Some(tip) = hovered else {
+            self.hovered = None;
+            return None;
+        };
+        match self.hovered {
+            Some((t, at)) if t == tip => (now.duration_since(at) > TOOLTIP_DELAY).then_some(tip),
+            _ => {
+                self.hovered = Some((tip, now));
+                None
+            }
+        }
+    }
+}
+pub fn draw(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+    view: &SocialView,
+    search: &mut ui::EditBox,
+    tooltip: &mut TooltipDelay,
+    in_world: bool,
+) {
+    let (w, h) = (batch.width, batch.height);
+    ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+    let title = Text::translate(TITLE, &[]);
+    let tw = atlas.font.width_text(&title);
+    batch.text_styled(atlas, &title, ((w - tw) / 2.0).floor(), 15.0, WHITE, true);
+    // `extractBackground`: the panel and the search icon.
+    let mx = margin_x(w) + 3.0;
+    ui::blit_sprite(
+        batch,
+        atlas,
+        "gui/sprites/social_interactions/background",
+        mx,
+        64.0,
+        236.0,
+        window_height(h) + 16.0,
+        WHITE,
+    );
+    batch.sprite_scaled(
+        atlas,
+        "gui/sprites/icon/search",
+        mx + 10.0,
+        76.0,
+        12.0,
+        12.0,
+        WHITE,
+    );
+    batch.text_styled(
+        atlas,
+        &view.server_label,
+        margin_x(w) + 8.0,
+        35.0,
+        WHITE,
+        true,
+    );
+    for (x, page) in tabs(w) {
+        ui::button(
+            batch,
+            atlas,
+            x,
+            45.0,
+            (ROW_WIDTH / 3.0).floor(),
+            20.0,
+            &tab_label(page, view.page == page),
+            true,
+            ui::hovered(cursor, x, 45.0, (ROW_WIDTH / 3.0).floor(), 20.0),
+        );
+        crate::widgets::target_as(
+            [x, 45.0, (ROW_WIDTH / 3.0).floor(), 20.0],
+            crate::widgets::Kind::Tab(view.page == page),
+        );
+    }
+    // The search box: an `EditBox` with the focus from the start (`setInitialFocus`), so its
+    // hint, shown only while unfocused, never shows.
+    let [sx, sy, sw, sh] = search_box(w);
+    (search.x, search.y, search.width, search.height) = (sx, sy, sw, sh);
+    search.max_length = 16;
+    search.text_color = WHITE;
+    search.focused = true;
+    search.draw(batch, atlas, None);
+    // The rows, clipped to the list; a focus step still walks them.
+    let max = max_scroll(h, view.entries.len());
+    if max > 0.0 {
+        crate::widgets::scroll_area(
+            [0.0, LIST_START + 4.0, w, list_end(h) - LIST_START - 4.0],
+            view.scroll,
+            max,
+        );
+    }
+    let start = batch.vertices.len();
+    let mut faces = Vec::new();
+    for (i, y) in visible(view, h) {
+        let e = &view.entries[i];
+        let [x, _, width, height] = row_rect(w, y);
+        let (fill, text_y) = match status(e) {
+            None => (BG_FILL, y + (height - 9.0) / 2.0),
+            Some(_) => (BG_FILL_REMOVED, y + (height - 18.0) / 2.0),
+        };
+        batch.fill(atlas, x, y, width, height, fill);
+        let (skin_x, skin_y) = (x + 4.0, y + ((height - 24.0) / 2.0).floor());
+        tab_list::face(
+            &mut faces,
+            &e.skin,
+            skin_x as i32,
+            skin_y as i32,
+            24,
+            true,
+            false,
+            WHITE,
+        );
+        if e.removed {
+            faces.push(hud_layout::fill(
+                skin_x as i32,
+                skin_y as i32,
+                skin_x as i32 + 24,
+                skin_y as i32 + 24,
+                0xBE000000,
+            ));
+        }
+        let text_x = skin_x + 24.0 + 4.0;
+        batch.text(atlas, &e.name, text_x, text_y.floor(), WHITE, false);
+        if let Some(s) = status(e) {
+            batch.text_styled(
+                atlas,
+                &s,
+                text_x,
+                (text_y + 12.0).floor(),
+                STATUS_COLOR,
+                false,
+            );
+        }
+        if !e.local {
+            let (hide, report) = row_buttons(w, y);
+            let sprite = |base: &str, hover: bool| {
+                format!(
+                    "gui/sprites/social_interactions/{base}{}",
+                    if hover { "_highlighted" } else { "" }
+                )
+            };
+            let hovered = |p: [f32; 2]| ui::hovered(cursor, p[0], p[1], 20.0, 20.0);
+            let base = if e.hidden {
+                "unmute_button"
+            } else {
+                "mute_button"
+            };
+            // The button's narration (`PlayerEntry`: `narration.hide` / `narration.show`).
+            let key = if e.hidden {
+                "gui.socialInteractions.narration.show"
+            } else {
+                "gui.socialInteractions.narration.hide"
+            };
+            crate::widgets::record(
+                &Text::translate(key, &[Text::literal(e.name.clone())]).plain(),
+                [hide[0], hide[1], 20.0, 20.0],
+                true,
+            );
+            batch.sprite_scaled(
+                atlas,
+                &sprite(base, hovered(hide)),
+                hide[0],
+                hide[1],
+                20.0,
+                20.0,
+                WHITE,
+            );
+            batch.sprite_scaled(
+                atlas,
+                "gui/sprites/social_interactions/report_button_disabled",
+                report[0],
+                report[1],
+                20.0,
+                20.0,
+                WHITE,
+            );
+        }
+    }
+    hud_layout::paint(batch, atlas, &faces);
+    // `enableScissor`: from 4px below the list's top.
+    batch.clip_since(start, 0.0, LIST_START + 4.0, w, list_end(h));
+    // `AbstractSelectionList.extractScrollbar`: the rows' scrollbar, right of
+    // them, when they overflow the list.
+    let content = view.entries.len() as f32 * ITEM_HEIGHT + 4.0;
+    if content > list_end(h) - LIST_START {
+        ui::scrollbar(
+            batch,
+            atlas,
+            scrollbar_x(w),
+            LIST_START,
+            list_end(h),
+            content,
+            view.scroll,
+        );
+    }
+    // `Done`.
+    let [dx, dy, dw, dh] = done(w, h);
+    ui::action_button(
+        batch,
+        atlas,
+        crate::widgets::Action::Done,
+        dx,
+        dy,
+        dw,
+        dh,
+        &Text::translate("gui.done", &[]),
+        true,
+        ui::hovered(cursor, dx, dy, dw, dh),
+    );
+    // The empty page's note, in place of the list.
+    if view.entries.is_empty() {
+        let key = if !view.search.is_empty() {
+            Some("gui.socialInteractions.search_empty")
+        } else {
+            match view.page {
+                Page::Hidden => Some("gui.socialInteractions.empty_hidden"),
+                Page::Blocked => Some("gui.socialInteractions.empty_blocked"),
+                Page::All => None,
+            }
+        };
+        if let Some(key) = key {
+            let note = Text::translate(key, &[]);
+            let nw = atlas.font.width_text(&note);
+            let y = ((72.0 + list_end(h)) / 2.0).floor();
+            batch.text_styled(
+                atlas,
+                &note,
+                ((w - nw) / 2.0).floor(),
+                y,
+                rgba(170, 170, 170, 255),
+                true,
+            );
+        }
+    }
+    if let Some(tip) = tooltip.shown(tip_at((w, h), cursor, view), Instant::now()) {
+        ui::tooltip(batch, atlas, &[tip.text()], cursor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: u128, name: &str) -> Entry {
+        Entry {
+            id,
+            name: name.into(),
+            skin: tab_list::default_skin(id).into(),
+            hidden: false,
+            removed: false,
+            local: false,
+        }
+    }
+
+    /// A click on a row's button hides a shown player and shows a hidden one, a click on
+    /// one's own row does nothing, and the tabs and Done answer where vanilla puts them.
+    #[test]
+    fn the_buttons_answer_their_clicks() {
+        let size = (427.0, 360.0);
+        let mut me = entry(1, "Me");
+        me.local = true;
+        let mut hidden = entry(3, "Hidden");
+        hidden.hidden = true;
+        let view = SocialView {
+            entries: vec![me, entry(2, "Other"), hidden],
+            ..SocialView::default()
+        };
+        let rows: Vec<_> = visible(&view, size.1).collect();
+        assert_eq!(rows.len(), 3);
+        let at = |i: usize| {
+            let (hide, _) = row_buttons(size.0, rows[i].1);
+            (hide[0] + 2.0, hide[1] + 2.0)
+        };
+        assert_eq!(
+            click(size, at(0), &view),
+            None,
+            "no button on one's own row"
+        );
+        assert_eq!(click(size, at(1), &view), Some(Action::Hide(2)));
+        assert_eq!(click(size, at(2), &view), Some(Action::Show(3)));
+        let tab = tabs(size.0)[1];
+        assert_eq!(
+            click(size, (tab.0 + 2.0, 50.0), &view),
+            Some(Action::Page(Page::Hidden))
+        );
+        let [dx, dy, ..] = done(size.0, size.1);
+        assert_eq!(click(size, (dx + 2.0, dy + 2.0), &view), Some(Action::Done));
+    }
+
+    /// The list scrolls by whole rows less its height, and a row scrolled out is not clickable.
+    #[test]
+    fn the_list_scrolls_and_clips() {
+        let h = 240.0;
+        let entries: Vec<_> = (0..10).map(|i| entry(i + 1, &format!("P{i}"))).collect();
+        let mut view = SocialView {
+            entries,
+            ..SocialView::default()
+        };
+        let shown = visible(&view, h).count();
+        assert!(shown < 10, "ten rows do not fit {h}");
+        let max = max_scroll(h, 10);
+        assert!(max > 0.0 && max < 10.0 * ITEM_HEIGHT);
+        view.scroll = max;
+        let last = visible(&view, h).last().unwrap().0;
+        assert_eq!(last, 9, "scrolled to the end shows the last row");
+        let first = visible(&view, h).next().unwrap();
+        let (hide, _) = row_buttons(427.0, first.1);
+        // A cursor above the list's top does not reach a row's button.
+        assert_eq!(click((427.0, h), (hide[0] + 2.0, 30.0), &view), None);
+    }
+
+    #[test]
+    fn rows_sort_as_the_list_does() {
+        let entry = |name: &str, local: bool| Entry {
+            id: 0,
+            name: name.into(),
+            skin: String::new(),
+            hidden: false,
+            removed: false,
+            local,
+        };
+        let mut rows = vec![
+            entry("zed", false),
+            entry("Alpha", false),
+            entry("§odd", false),
+            entry("me", true),
+            entry("_x", false),
+        ];
+        sort_entries(&mut rows);
+        let names: Vec<_> = rows.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["me", "_x", "Alpha", "zed", "§odd"]);
+    }
+
+    /// `PlayerEntry.TOOLTIP_DELAY` (500 ms): the row buttons' tooltips wait
+    /// while container item tooltips do not. Moving to another button, or
+    /// away and back, starts the wait again.
+    #[test]
+    fn a_row_buttons_tooltip_waits_half_a_second() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut delay = TooltipDelay::default();
+        let tip = Tip::Toggle {
+            id: 7,
+            hidden: false,
+        };
+        assert_eq!(delay.shown(Some(tip), at(0)), None);
+        assert_eq!(delay.shown(Some(tip), at(499)), None);
+        assert_eq!(delay.shown(Some(tip), at(500)), None, "500 ms is not > 500");
+        assert_eq!(delay.shown(Some(tip), at(501)), Some(tip));
+        // Another row button is another widget: its own wait.
+        let other = Tip::Toggle {
+            id: 8,
+            hidden: true,
+        };
+        assert_eq!(delay.shown(Some(other), at(502)), None);
+        assert_eq!(delay.shown(Some(other), at(1002)), None);
+        assert_eq!(delay.shown(Some(other), at(1003)), Some(other));
+        // Leaving hides it at once; coming back starts over.
+        assert_eq!(delay.shown(None, at(1004)), None);
+        assert_eq!(delay.shown(Some(tip), at(1005)), None);
+        assert_eq!(delay.shown(Some(tip), at(1505)), None);
+        assert_eq!(delay.shown(Some(tip), at(1506)), Some(tip));
+    }
+
+    /// `AbstractSelectionList.scrollBarX`: the bar's column is the rows' right
+    /// edge (220 wide, centred) plus `scrollbarWidth` (6) and 2. It shows only
+    /// when the content overflows the list's height.
+    #[test]
+    fn the_list_scrollbar_sits_right_of_the_rows() {
+        assert_eq!(scrollbar_x(427.0), 331.0);
+        assert_eq!(scrollbar_x(854.0), 545.0);
+        assert!(max_scroll(240.0, 10) > 0.0);
+        assert_eq!(max_scroll(1000.0, 2), 0.0);
+    }
+
+    /// `SocialInteractionsScreen.mouseClicked` gives the widgets the click
+    /// before the list: a click inside the search box is the box's own.
+    #[test]
+    fn a_click_in_the_search_box_is_the_boxes_own() {
+        let size = (427.0, 240.0);
+        let view = SocialView::default();
+        let [x, y, w, h] = search_box(size.0);
+        // Inside the box the click is the box's, at both corners.
+        assert_eq!(
+            click_kind(size, (x + 1.0, y + 1.0), &view),
+            Some(Click::Search)
+        );
+        assert_eq!(
+            click_kind(size, (x + w - 0.5, y + h - 0.5), &view),
+            Some(Click::Search)
+        );
+        // Left of it and just below it the box has no claim.
+        assert_eq!(click_kind(size, (x - 1.0, y + 1.0), &view), None);
+        assert_eq!(click_kind(size, (x + 1.0, y + h), &view), None);
+        // And the list keeps its own buttons: Done is not the box's click.
+        let [dx, dy, dw, dh] = done(size.0, size.1);
+        assert_eq!(
+            click_kind(size, (dx + dw / 2.0, dy + dh / 2.0), &view),
+            Some(Click::Action(Action::Done))
+        );
+    }
+}

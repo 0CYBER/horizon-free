@@ -4,12 +4,18 @@
 //! the block sound, attacker knockback (`blockedByItem`) and axes disabling
 //! the shield (`Player.blockUsingItem`, `BlocksAttacks.disable`).
 use super::Game;
+use super::creatures::source_damage_type;
 use horizon_client::{
-    health::{BlockOutcome, Blocking},
+    health::{BlockOutcome, Blocking, HurtSource},
     items::ItemStack,
+    mobs::{Damage, Who},
 };
 use horizon_core::random::RandomSource;
 use horizon_world::blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction};
+
+#[cfg(test)]
+#[path = "shield_ram_tests.rs"]
+mod ram_tests;
 
 /// `Inventory.SLOT_OFFHAND`: the `using` slot of an off-hand item.
 pub(super) const OFFHAND_SLOT: usize = 40;
@@ -30,11 +36,12 @@ impl Game<'_> {
             &mut self.inventory[slot]
         }
     }
+    /// The stack's `blocks_attacks`: its own component, else its item's.
     pub(super) fn blocks_attacks(
         &self,
         stack: &ItemStack,
-    ) -> Option<&horizon_client::items::BlocksAttacks> {
-        self.res.items().get(&stack.item)?.blocks_attacks.as_ref()
+    ) -> Option<std::borrow::Cow<'_, horizon_client::items::BlocksAttacks>> {
+        horizon_client::items::BlocksAttacks::of_stack(stack, self.items().get(&stack.item))
     }
     /// `ShieldItem.use` (ItemUtils.startUsingInstantly) for the hand at `slot`;
     /// false when that hand holds no blocking item or it is on cooldown.
@@ -45,8 +52,8 @@ impl Game<'_> {
         if self.blocks_attacks(stack).is_none() {
             return false;
         }
-        if self.shield_cooldown == 0 && self.using.is_none() {
-            self.using = Some((slot, 0));
+        if self.shield_cooldown == 0 {
+            self.start_using_item();
         }
         true
     }
@@ -64,7 +71,7 @@ impl Game<'_> {
         if (ticks as i32) < (component.delay_seconds * 20.0).round() as i32 {
             return None;
         }
-        let tags = &self.res.stations().enchantments.damage_tags;
+        let tags = &self.stations().enchantments.damage_tags;
         let matches = |spec: &str| match spec.strip_prefix('#') {
             Some(tag) => tags.get(tag).is_some_and(|t| t.contains(damage_type)),
             None => spec == damage_type,
@@ -112,20 +119,68 @@ impl Game<'_> {
             angle,
         })
     }
+    /// `LivingEntity.knockback` of the player by a mob event. A ram
+    /// (`RamTarget.tick`) names its hit's damage: `applyItemBlocking` runs a
+    /// second time for it, and `blockingFactor` halves the power when it
+    /// blocked part of it. What follows that block is the hurt's too
+    /// (`hurtBlockingItem`, `blockedByItem`), but not its sound: `onBlocked`
+    /// belongs to `hurtServer`.
+    pub(super) fn mob_pushes_player(
+        &mut self,
+        mut power: f64,
+        x: f64,
+        z: f64,
+        source: Damage,
+        ram_damage: Option<f32>,
+    ) {
+        let damage_type = source_damage_type(source);
+        let attacker = match source.attacker {
+            Some(Who::Mob(id)) => Some(id),
+            _ => None,
+        };
+        if let Some(damage) = ram_damage
+            && let Some(blocking) = self.player_blocking(source.from, damage_type, false)
+            && let blocked = blocking.blocked(damage)
+            && blocked > 0.0
+        {
+            let outcome = BlockOutcome {
+                blocked,
+                fully_blocked: blocked >= damage,
+                ..Default::default()
+            };
+            let hurt = HurtSource {
+                damage_type,
+                causing: attacker.map_or(0, |id| id as i32),
+                direct: 0,
+            };
+            self.after_block(outcome, (attacker, false), hurt);
+            power *= 0.5;
+        }
+        // A player's source names no melee attacker, as its damage's doesn't.
+        let _attacker = self.knockback_scope(attacker.map_or(0, |id| id as i32));
+        let source = HurtSource {
+            damage_type,
+            causing: 0,
+            direct: 0,
+        };
+        self.knock_back_player(power, x, z, source);
+    }
     /// After a hurt with the shield raised: `hurtBlockingItem`, `onBlocked`
-    /// and, for melee from a mob, `blockUsingItem`.
+    /// and, for melee from a mob, `blockUsingItem`. `source` is the hit's.
     pub(super) fn after_block(
         &mut self,
         outcome: BlockOutcome,
-        damage: f32,
-        attacker: Option<u32>,
-        projectile: bool,
+        (attacker, projectile): (Option<u32>, bool),
+        source: HurtSource<'_>,
     ) {
         let Some((slot, _)) = self.using else { return };
         let Some(stack) = self.stack_in(slot).cloned() else {
             return;
         };
-        let Some(component) = self.blocks_attacks(&stack).cloned() else {
+        let Some(component) = self
+            .blocks_attacks(&stack)
+            .map(std::borrow::Cow::into_owned)
+        else {
             return;
         };
         let at = self
@@ -138,6 +193,12 @@ impl Game<'_> {
             let pitch = 0.8 + self.world.random.next_float() * 0.4;
             self.audio.play(sound, at, 1.0, pitch);
         }
+        // BlocksAttacks.hurtBlockingItem: the hit counts the blocking item as
+        // used, before the blocked-damage gate (vanilla awards it on the
+        // server even when the item blocks none of the damage).
+        if self.remote.is_none() {
+            self.award_stat("used", &stack.item, 1);
+        }
         if outcome.blocked <= 0.0 {
             return;
         }
@@ -148,27 +209,35 @@ impl Game<'_> {
         } else {
             (base + factor * outcome.blocked).floor() as i32
         };
-        if item_damage > 0 && !self.creative {
+        if item_damage > 0
+            && !self.creative
+            && let Some(max) = blocking_item_max_damage(
+                &stack,
+                self.items()
+                    .get(&stack.item)
+                    .map_or(0, |item| item.max_damage),
+            )
+        {
             let loss = self.wear(&stack, item_damage as u32);
-            let max = self
-                .res
-                .items()
-                .get(&stack.item)
-                .map_or(0, |i| i.max_damage);
             let cell = self.stack_in_mut(slot);
-            if let Some(s) = cell.as_mut()
-                && max > 0
+            if loss > 0
+                && let Some(s) = cell.as_mut()
             {
-                s.damage += loss;
+                s.damage = s.damage.saturating_add(loss).min(max);
                 if s.damage >= max {
-                    *cell = None;
+                    let broken = s.clone();
+                    s.count -= 1;
+                    if s.count == 0 {
+                        *cell = None;
+                    }
                     self.using = None;
-                    self.audio.play(
-                        "minecraft:item.shield.break",
-                        at,
-                        0.8,
-                        0.8 + self.world.random.next_float() * 0.4,
-                    );
+                    // ItemStack.hurtAndBreak: onEquippedItemBroken for the hand it was used from.
+                    let hand = if slot == OFFHAND_SLOT {
+                        horizon_world::player_inventory::EquipmentSlot::OffHand
+                    } else {
+                        horizon_world::player_inventory::EquipmentSlot::MainHand
+                    };
+                    self.player_equipment_broke(hand, &broken);
                     return;
                 }
             }
@@ -179,12 +248,13 @@ impl Game<'_> {
         let Some(id) = attacker else {
             // Another player's melee hit has no mob behind it.
             if let Some((from, disable)) = self.combat.player_attacker {
-                let fully = outcome.blocked >= damage;
-                self.blocked_by_attacker(&component, [from[0], from[2]], fully, disable, at);
+                let fully = outcome.fully_blocked;
+                let attacker = ([from[0], from[2]], disable);
+                self.blocked_by_attacker(&component, attacker, fully, at, source);
             }
             return;
         };
-        let fully = outcome.blocked >= damage;
+        let fully = outcome.fully_blocked;
         let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
             return;
         };
@@ -197,7 +267,7 @@ impl Game<'_> {
             m.extra
                 .main_hand
                 .as_deref()
-                .and_then(|item| self.res.items().get(item))
+                .and_then(|item| self.items().get(item))
                 .map_or(0.0, |i| i.disable_blocking_seconds)
         };
         // Ravager.blockedByItem: stunned half the time (the defender pushed
@@ -226,36 +296,26 @@ impl Game<'_> {
             let _ = self.handle_mob_events(events);
             return;
         }
-        self.blocked_by_attacker(&component, [mx, mz], fully, disable, at);
+        self.blocked_by_attacker(&component, ([mx, mz], disable), fully, at, source);
     }
 
     /// What a blocked melee hit does to the defender once the shield took
     /// it: `LivingEntity.blockedByItem` knocks them back unless fully
-    /// blocked, then `Player.blockUsingItem` disables the shield.
+    /// blocked, then `Player.blockUsingItem` disables the shield. `attacker`
+    /// is where the attacker stands (x, z) and its seconds of disabling.
     fn blocked_by_attacker(
         &mut self,
         component: &horizon_client::items::BlocksAttacks,
-        attacker: [f64; 2],
+        ([mx, mz], disable): ([f64; 2], f32),
         fully: bool,
-        disable: f32,
         at: Option<[f64; 3]>,
+        source: HurtSource<'_>,
     ) {
-        let [mx, mz] = attacker;
-        // LivingEntity.blockedByItem: defender.knockback(0.5, defender - attacker),
-        // which moves the defender along -(xd, zd).
-        if !fully && let Some(p) = self.player.as_mut() {
+        // LivingEntity.blockedByItem: defender.knockback(0.5, defender - attacker,
+        // source), which moves the defender along -(xd, zd).
+        if !fully && let Some(p) = self.player.as_ref() {
             let (xd, zd) = (p.position.x - mx, p.position.z - mz);
-            let len = (xd * xd + zd * zd).sqrt();
-            if len >= 1.0e-5 {
-                let (dx, dz) = (xd / len * 0.5, zd / len * 0.5);
-                let v = p.velocity;
-                let y = if p.ground.on_ground {
-                    (v.y / 2.0 + 0.5).min(0.4)
-                } else {
-                    v.y
-                };
-                p.velocity = horizon_core::geometry::Vec3::new(v.x / 2.0 - dx, y, v.z / 2.0 - dz);
-            }
+            self.knock_back_player(0.5, xd, zd, source);
         }
         // BlocksAttacks.disable: item cooldown and stopUsingItem.
         let ticks = disable * component.disable_scale;
@@ -265,12 +325,111 @@ impl Game<'_> {
             0
         };
         if ticks > 0 {
-            self.shield_cooldown = ticks;
+            if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone())
+            {
+                self.native_player_shield_disable(player, &name, ticks);
+            }
+            let used = self
+                .using
+                .and_then(|(slot, _)| self.stack_in(slot))
+                .cloned();
+            let item = used.as_ref().map(|stack| stack.item.clone());
+            let mut cancel = false;
+            if let (Some(player), Some(name), Some(item)) =
+                (self.lan_acting_uuid, self.lan_acting_name.clone(), item)
+            {
+                self.native_player_item_cooldown(player, &name, &item, ticks as i32, &mut cancel);
+            }
+            if !cancel {
+                self.shield_cooldown = ticks;
+                // ItemCooldowns.addCooldown(stack, ticks) on the shield's group: a guest is
+                // sent it (ServerItemCooldowns), which keeps the shield down on their screen,
+                // and the 0 that ends it.
+                if let Some(stack) = &used {
+                    let default = self
+                        .items()
+                        .get(&stack.item)
+                        .and_then(|i| i.use_cooldown.clone());
+                    let group = horizon_client::cooldowns::group(stack, default.as_ref());
+                    self.add_cooldown(group, ticks as i32);
+                }
+            }
             self.using = None;
             if let Some(sound) = &component.disabled_sound {
                 let pitch = 0.8 + self.world.random.next_float() * 0.4;
                 self.audio.play(sound, at, 0.8, pitch);
             }
         }
+    }
+}
+
+/// `ItemStack.isDamageableItem` and `getMaxDamage` for the blocking stack.
+fn blocking_item_max_damage(stack: &ItemStack, prototype_max: u32) -> Option<u32> {
+    let data = stack.data();
+    let component = |id| data.and_then(|data| data.other(id));
+    if stack.count == 0
+        || component("minecraft:unbreakable").is_some()
+        || component("!minecraft:max_damage").is_some()
+        || component("!minecraft:damage").is_some()
+    {
+        return None;
+    }
+    // A non-damageable prototype supplies neither MAX_DAMAGE nor DAMAGE.
+    if prototype_max == 0
+        && stack.damage == 0
+        && !data.is_some_and(|data| data.explicit_zero_damage)
+    {
+        return None;
+    }
+    let max = match component("minecraft:max_damage") {
+        Some(value) => horizon_world::datafix::dynamic::as_int(Some(value), 0).max(0) as u32,
+        None => prototype_max,
+    };
+    (max > 0).then_some(max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::native_machines::tests::server_game;
+    use horizon_client::items::ItemStack;
+
+    /// `BlocksAttacks.hurtBlockingItem`: a hit taken while using a shield
+    /// counts it as used, even when the shield blocks none of the damage.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    fn a_blocked_hit_counts_the_shield_as_used() {
+        let mut game = server_game();
+        game.build_registries();
+        game.offhand = Some(ItemStack::new("minecraft:shield", 1));
+        game.using = Some((OFFHAND_SLOT, 0));
+        let source = HurtSource {
+            damage_type: "minecraft:mob_attack",
+            causing: 1,
+            direct: 1,
+        };
+        let outcome = BlockOutcome {
+            hurt: true,
+            blocked: 5.0,
+            fully_blocked: true,
+            sound: false,
+            knockback: false,
+            canceled: false,
+        };
+        assert_eq!(game.stats.get("used", "minecraft:shield"), 0);
+        game.after_block(outcome, (None, false), source);
+        assert_eq!(
+            game.stats.get("used", "minecraft:shield"),
+            1,
+            "a hit the shield takes whole counts it"
+        );
+        // The gate below the award: a hit the shield blocks nothing of still
+        // counts it (hurtBlockingItem runs before the `blocked > 0` branch).
+        let outcome = BlockOutcome {
+            blocked: 0.0,
+            ..outcome
+        };
+        game.after_block(outcome, (None, false), source);
+        assert_eq!(game.stats.get("used", "minecraft:shield"), 2);
     }
 }

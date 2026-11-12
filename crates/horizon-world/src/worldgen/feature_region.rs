@@ -21,14 +21,11 @@ use horizon_core::{
         WorldGenTickContainers,
     },
 };
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 struct RegionBlockQueries {
     fluids: super::fluid_predicate::FluidPredicateBindings,
-    tags: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
+    tags: Arc<super::block_feature::BoundTags>,
 }
 
 #[derive(Debug)]
@@ -70,6 +67,9 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     next_tick_order: i64,
     block_queries: Option<RegionBlockQueries>,
     world_seed: Option<i64>,
+    /// `schedule_block_tick`'s recent states and their blocks' default states
+    /// (the registry resolves those by name).
+    tick_defaults: Vec<(BlockStateId, BlockStateId)>,
 }
 /// Where each chunk of a region sits in its list: a grid over the chunks'
 /// bounding box while it is small (the usual square of neighbours), else a
@@ -118,6 +118,7 @@ impl ChunkIndex {
             cells,
         })
     }
+    #[inline]
     fn get(&self, x: i32, z: i32) -> Option<usize> {
         match self {
             Self::Grid {
@@ -172,6 +173,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             next_tick_order: 0,
             block_queries: None,
             world_seed: None,
+            tick_defaults: Vec::new(),
             min_y,
             height,
             generation: WorldGenerationContext::with_generator(
@@ -246,9 +248,11 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn chunks(&self) -> impl Iterator<Item = &TerrainChunk<'r, B>> {
         self.chunks.iter()
     }
+    #[inline]
     fn index(&self, x: i32, z: i32) -> Option<usize> {
         self.index.get(x, z)
     }
+    #[inline]
     pub fn chunk(&self, x: i32, z: i32) -> Result<&TerrainChunk<'r, B>, RegionError> {
         match self.index(x, z) {
             Some(i) => Ok(&self.chunks[i]),
@@ -261,8 +265,21 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             None => Err(RegionError::MissingChunk([x, z])),
         }
     }
+    #[inline]
     pub fn block(&self, [x, y, z]: [i32; 3]) -> Result<BlockStateId, RegionError> {
         Ok(self.chunk(x >> 4, z >> 4)?.block(x, y, z))
+    }
+    /// `FeatureWorld::scan_column` within one chunk's column.
+    pub fn scan_column(
+        &self,
+        [x, y, z]: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, RegionError> {
+        Ok(self
+            .chunk(x >> 4, z >> 4)?
+            .scan_column([x, y, z], step, limit, keep))
     }
     /// Level-style biome lookup checks the selected chunk's generation status
     /// before reading its palette. Raw biome storage remains independently
@@ -362,14 +379,25 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
         block: BlockStateId,
         delay: i32,
     ) -> Result<(), PlacementQueryError> {
-        let registry = self.chunks[0].registry();
-        let state = registry
-            .state(block)
-            .ok_or(RegionError::InvalidTickState(block))?;
-        // Default state IDs provide one identity per block, separate from fluids.
-        let block = registry
-            .default_state(&state.name)
-            .ok_or(RegionError::InvalidTickState(block))?;
+        let known = self.tick_defaults.iter().find(|(s, _)| *s == block);
+        let block = match known {
+            Some(&(_, default)) => default,
+            None => {
+                let registry = self.chunks[0].registry();
+                let state = registry
+                    .state(block)
+                    .ok_or(RegionError::InvalidTickState(block))?;
+                // Default state IDs provide one identity per block, separate from fluids.
+                let default = registry
+                    .default_state(&state.name)
+                    .ok_or(RegionError::InvalidTickState(block))?;
+                if self.tick_defaults.len() >= 16 {
+                    self.tick_defaults.clear();
+                }
+                self.tick_defaults.push((block, default));
+                default
+            }
+        };
         self.request_tick(TickKind::Block, position, TickTypeId(block.0), delay)
             .map_err(Into::into)
     }
@@ -379,8 +407,13 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
         fluid: FluidKind,
         delay: i32,
     ) -> Result<(), PlacementQueryError> {
-        self.request_tick(TickKind::Fluid, position, TickTypeId(fluid as u32), delay)
-            .map_err(Into::into)
+        self.request_tick(
+            TickKind::Fluid,
+            position,
+            TickTypeId(fluid.index() as u32),
+            delay,
+        )
+        .map_err(Into::into)
     }
 
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
@@ -649,6 +682,15 @@ where
     type Error = RegionError;
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, Self::Error> {
         self.region.block(position)
+    }
+    fn scan_column(
+        &mut self,
+        position: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, Self::Error> {
+        self.region.scan_column(position, step, limit, keep)
     }
     fn set_block(
         &mut self,

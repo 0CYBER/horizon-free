@@ -1,7 +1,7 @@
 //! The window's own ambient effects of entities, which a client makes for
 //! itself (`level().isClientSide()` branches): endermen's and endermites'
 //! portal particles, blazes' smoke and burn, eyes of ender's trail. They run
-//! on the game that has the window, in-frame or following a server, never on
+//! on the game that has the window, following a server, never on
 //! a server: nothing of them goes over the network.
 use super::Game;
 use horizon_client::blocks::RenderShape;
@@ -16,11 +16,19 @@ impl Game<'_> {
         if self.serving.is_some() || self.options.dedicated.is_some() {
             return;
         }
+        // A window simulating the world already runs `WitherBoss.aiStep`.
+        // One following a server does not: `Level.addParticle` on the server
+        // draws nothing, so the smoke, the powered effect and the charge
+        // cloud have to be made here.
+        let following = self.remote.is_some();
         let mut events = Vec::new();
         let random = self.particles.level_random();
         for m in self.mobs.iter_mut().filter(|m| !m.removed) {
             ambient::client_ai_step(m, &mut events);
             ambient::client_particles(m, random, &mut events);
+            if following && m.species() == horizon_client::mobs::Species::Wither {
+                horizon_client::mobs::wither::head_particles(m, random, &mut events);
+            }
         }
         for event in events {
             match event {
@@ -29,6 +37,22 @@ impl Game<'_> {
                         self.particles
                             .add(&ParticleOptions::simple(ty), at, velocity);
                     }
+                }
+                MobEvent::Particles { kind, at, count: 0 } => {
+                    if let Some(ty) = ParticleType::from_name(kind) {
+                        self.particles
+                            .add(&ParticleOptions::simple(ty), at, [0.0; 3]);
+                    }
+                }
+                MobEvent::ParticleColored {
+                    at,
+                    color: [r, g, b],
+                } => {
+                    self.particles.add(
+                        &ParticleOptions::colored(ParticleType::EntityEffect, [r, g, b, 1.0]),
+                        at,
+                        [0.0; 3],
+                    );
                 }
                 // Each guest of a LAN host makes its own.
                 MobEvent::LocalSound(name, at, volume, pitch) => {
@@ -48,8 +72,9 @@ impl Game<'_> {
     /// block under a sprinting player's feet streams back from them every
     /// tick, for the window's own player and for the other players it sees.
     fn sprint_dust(&mut self) {
-        // Each runner's feet, movement and supporting block.
-        let mut runners: Vec<(Vec3, Vec3, Option<[i32; 3]>)> = Vec::new();
+        // Each runner's feet, movement, supporting block, box width and index
+        // in `mobs` (none for the window's own player).
+        let mut runners: Vec<(Vec3, Vec3, Option<[i32; 3]>, f64, Option<usize>)> = Vec::new();
         // Entity.canSpawnSprintParticle.
         if let Some(p) = self.player.as_ref()
             && p.sprinting
@@ -62,16 +87,33 @@ impl Game<'_> {
             && p.fluid_height(LAVA) <= 0.0
         {
             let support = p.ground.supporting_block.map(|b| [b.x, b.y, b.z]);
-            runners.push((p.position, p.velocity, support));
+            runners.push((p.position, p.velocity, support, f64::from(0.6f32), None));
         }
-        let guests = self.lan.iter().flat_map(|host| host.models.values());
-        for m in self.mobs.iter().chain(guests) {
+        // IronGolem.canSpawnSprintParticle replaces the sprinting test: one
+        // tick in five while it moves at all, in water or not, drawn from the
+        // golem's own random as its client copy's Entity.baseTick does.
+        for (i, m) in self.mobs.iter_mut().enumerate() {
+            if &*m.kind.id != "minecraft:iron_golem" {
+                continue;
+            }
+            let movement = m.position.subtract(m.previous);
+            let moving =
+                movement.x * movement.x + movement.z * movement.z > f64::from(2.5000003E-7_f32);
+            if moving && m.random.next_int_bound(5).unwrap_or(1) == 0 {
+                runners.push((m.position, movement, None, f64::from(m.width()), Some(i)));
+            }
+        }
+        for (i, m) in self.mobs.iter().enumerate() {
             // Another player's fluids aren't known here: none where they stand.
             let feet = [
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             ];
+            if &*m.kind.id == "minecraft:iron_golem" {
+                continue;
+            }
+            let movement = m.position.subtract(m.previous);
             if m.extra.sprinting
                 && !m.extra.crouching
                 && m.alive()
@@ -83,51 +125,77 @@ impl Game<'_> {
                     .fluid_level
                     == 0
             {
-                runners.push((m.position, m.position.subtract(m.previous), None));
+                runners.push((m.position, movement, None, f64::from(0.6f32), Some(i)));
             }
         }
-        for (position, movement, support) in runners {
-            // Entity.getOnPosLegacy: getOnPos(0.2).
-            let below = (position.y - f64::from(0.2f32)).floor() as i32;
-            let tall = |game: &Self, s: [i32; 3]| {
-                let name = game.block_name(s);
-                [
-                    "minecraft:fences",
-                    "minecraft:walls",
-                    "minecraft:fence_gates",
-                ]
-                .iter()
-                .any(|tag| game.block_in_tag(tag, &name))
-            };
-            let at = match support {
-                Some(s) if tall(self, s) => s,
-                Some(s) => [s[0], below, s[2]],
-                None => [position.x.floor() as i32, below, position.z.floor() as i32],
-            };
-            let state = self.world.block(at[0], at[1], at[2]);
-            if self.res.facts().get(state).render_shape == RenderShape::Invisible {
-                continue;
-            }
-            let Some((sprite, tint)) = self.particle_sprite(state, at) else {
-                continue;
-            };
-            let width = f64::from(0.6f32);
-            let r = self.particles.random();
-            let mut x = position.x + (r.next_double() - 0.5) * width;
-            let mut z = position.z + (r.next_double() - 0.5) * width;
-            // Clamped into the block when the feet are in another column.
-            if position.x.floor() as i32 != at[0] {
-                x = x.clamp(f64::from(at[0]), f64::from(at[0]) + 1.0);
-            }
-            if position.z.floor() as i32 != at[2] {
-                z = z.clamp(f64::from(at[2]), f64::from(at[2]) + 1.0);
-            }
-            self.particles.add(
-                &ParticleOptions::block(ParticleType::Block, sprite, tint),
-                [x, position.y + 0.1, z],
-                [movement.x * -4.0, 1.5, movement.z * -4.0],
-            );
+        for (position, movement, support, width, mob) in runners {
+            self.sprint_particle(position, movement, support, width, |game| {
+                // this.random: a mob's own, so one walking out of sight leaves
+                // the particles' random alone. The window's player has none of
+                // its own here; the particles' random stands in for it.
+                let r = match mob {
+                    Some(i) => &mut game.mobs.get_mut(i)?.random,
+                    None => game.particles.random(),
+                };
+                Some((r.next_double(), r.next_double()))
+            });
         }
+    }
+
+    /// `Entity.spawnSprintParticle`: one dust crumb of the block under the
+    /// feet at `position` (`getOnPosLegacy`), thrown back against `movement`,
+    /// unless that block is invisible. `offsets` draws the two random
+    /// `nextDouble`s for x and z (the entity's random in vanilla).
+    pub(super) fn sprint_particle(
+        &mut self,
+        position: Vec3,
+        movement: Vec3,
+        support: Option<[i32; 3]>,
+        width: f64,
+        offsets: impl FnOnce(&mut Self) -> Option<(f64, f64)>,
+    ) {
+        // Entity.getOnPosLegacy: getOnPos(0.2).
+        let below = (position.y - f64::from(0.2f32)).floor() as i32;
+        let tall = |game: &Self, s: [i32; 3]| {
+            let name = game.block_name(s);
+            [
+                "minecraft:fences",
+                "minecraft:walls",
+                "minecraft:fence_gates",
+            ]
+            .iter()
+            .any(|tag| game.block_in_tag(tag, &name))
+        };
+        let at = match support {
+            Some(s) if tall(self, s) => s,
+            Some(s) => [s[0], below, s[2]],
+            None => [position.x.floor() as i32, below, position.z.floor() as i32],
+        };
+        let state = self.world.block(at[0], at[1], at[2]);
+        if self.res.facts().get(state).render_shape == RenderShape::Invisible {
+            return;
+        }
+        let Some((sprite, tint)) = self.particle_sprite(state, at) else {
+            return;
+        };
+        let Some((rx, rz)) = offsets(self) else {
+            return;
+        };
+        let mut x = position.x + (rx - 0.5) * width;
+        let mut z = position.z + (rz - 0.5) * width;
+        // Clamped into the block when the feet are in another column.
+        if position.x.floor() as i32 != at[0] {
+            x = x.clamp(f64::from(at[0]), f64::from(at[0]) + 1.0);
+        }
+        if position.z.floor() as i32 != at[2] {
+            z = z.clamp(f64::from(at[2]), f64::from(at[2]) + 1.0);
+        }
+        self.particles.add(
+            &ParticleOptions::block(ParticleType::Block, sprite, tint)
+                .with_source(&self.res.facts().get(state).name),
+            [x, position.y + 0.1, z],
+            [movement.x * -4.0, 1.5, movement.z * -4.0],
+        );
     }
 
     /// `LivingEntity.tickEffects` on a client: the swirls around an entity
@@ -144,7 +212,7 @@ impl Game<'_> {
                 .filter_map(|e| effect_particle(e.id, e.ambient))
                 .collect();
             let ambient = effects.iter().filter(|e| e.visible).all(|e| e.ambient);
-            let invisible = effects.iter().any(|e| e.id == "invisibility");
+            let invisible = self.own_invisible();
             let size = (
                 f64::from(p.dimensions.width),
                 f64::from(p.dimensions.height),
@@ -158,24 +226,23 @@ impl Game<'_> {
                 invisible,
             );
         }
-        let guests = self.lan.iter().flat_map(|host| host.models.values());
-        for m in self.mobs.iter().chain(guests) {
-            if !m.alive() {
+        for m in self.mobs.iter() {
+            // A mob with no effects swirls nothing: skipped before its size
+            // is worked out, which every mob in a crowded world would pay
+            // for (#14053).
+            if !m.alive() || (m.extra.effect_particles.is_empty() && m.extra.effects.is_empty()) {
                 continue;
             }
             let size = (f64::from(m.width()), f64::from(m.height()));
             let invisible = m.invisible || m.has_effect("minecraft:invisibility");
             if m.extra.effect_particles.is_empty() {
                 // A mob of this game: its own effects, visible and not ambient.
-                if m.extra.effects.is_empty() {
-                    continue;
-                }
                 let list: Vec<_> = m
                     .extra
                     .effects
                     .iter()
                     .filter(|e| !m.extra.hidden_effects.contains(&e.0))
-                    .filter_map(|e| effect_particle(e.0, false))
+                    .filter_map(|e| effect_particle(e.0, m.extra.ambient_effects.contains(&e.0)))
                     .collect();
                 swirl(
                     &mut self.particles,

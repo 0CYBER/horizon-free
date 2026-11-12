@@ -117,8 +117,10 @@ fn join(code: &str, relay: Option<&str>, path: PathMode) -> Result<guest::Tunnel
 /// What the game's client does: connect to the loopback port, send, read
 /// the echo back.
 fn round_trip(tunnel: guest::Tunnel, payload: &[u8]) {
-    let (port, done) = tunnel.serve_loopback().unwrap();
+    let loopback = tunnel.serve_loopback().unwrap();
+    let (port, done) = (loopback.port, loopback.thread);
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.write_all(&loopback.token).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     let mut w = s.try_clone().unwrap();
     let send = payload.to_vec();
@@ -175,6 +177,37 @@ fn the_code_alone_connects_without_any_server() {
         join(&code, None, PathMode::RelayOnly),
         Err(JoinError::NotReachable)
     ));
+}
+
+#[test]
+fn the_loopback_port_takes_only_the_client_with_its_token() {
+    let host = start(None, PathMode::Auto);
+    let (code, _) = invite_of(&host, false);
+    let tunnel = join(&code, None, PathMode::Auto).unwrap();
+    let loopback = tunnel.serve_loopback().unwrap();
+    // Another local process first: a wrong token, then one that sends nothing (a page's fetch
+    // sends HTTP, which is no token either). Neither gets the session.
+    let refused = |send: &[u8]| {
+        let mut s = TcpStream::connect(("127.0.0.1", loopback.port)).unwrap();
+        s.write_all(send).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 1];
+        // Closed without a byte of the host's server.
+        assert!(matches!(s.read(&mut buf), Ok(0) | Err(_)));
+    };
+    refused(&[0u8; guest::TOKEN_LEN]);
+    refused(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    // The game's client, with the token, still gets it.
+    let mut s = TcpStream::connect(("127.0.0.1", loopback.port)).unwrap();
+    s.write_all(&loopback.token).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let sent = payload(10_000);
+    s.write_all(&sent).unwrap();
+    let mut got = vec![0u8; sent.len()];
+    s.read_exact(&mut got).unwrap();
+    assert!(got == sent, "echo differs");
+    drop(s);
+    loopback.thread.join().unwrap();
 }
 
 #[test]
@@ -288,6 +321,56 @@ fn wrong_secrets_fail() {
     let (code2, _) = invite_of(&host, true);
     assert_eq!(long(&code2).relay.unwrap().code, fresh);
     assert_eq!(long(&code2).secret, long(&code).secret);
+}
+
+/// Forwards every connection to `to`, `delay` after it arrives.
+fn slow_door(to: SocketAddr, delay: Duration) -> SocketAddr {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let a = l.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let Ok(mut inbound) = s else { continue };
+            std::thread::spawn(move || {
+                std::thread::sleep(delay);
+                let Ok(mut outbound) = TcpStream::connect(to) else {
+                    return;
+                };
+                let (mut i2, mut o2) =
+                    (inbound.try_clone().unwrap(), outbound.try_clone().unwrap());
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut o2, &mut i2);
+                    let _ = i2.shutdown(std::net::Shutdown::Write);
+                });
+                let _ = std::io::copy(&mut inbound, &mut outbound);
+                let _ = outbound.shutdown(std::net::Shutdown::Write);
+            });
+        }
+    });
+    a
+}
+
+#[test]
+fn another_host_answering_first_does_not_end_the_join() {
+    // A housemate's game answers first at one endpoint; the invite's own host, behind a slower
+    // door, at the other.
+    let (other, ours) = (
+        start(None, PathMode::DirectOnly),
+        start(None, PathMode::DirectOnly),
+    );
+    let first = long(&invite_of(&other, false).0).endpoints[0];
+    let mut invite = long(&invite_of(&ours, false).0);
+    let door = slow_door(invite.endpoints[0], Duration::from_millis(300));
+    invite.endpoints = vec![first, door];
+    round_trip(
+        join(&invite.encode(), None, PathMode::DirectOnly).unwrap(),
+        b"ours",
+    );
+    // With no endpoint that takes the code, the wrong code is still what the guest hears.
+    invite.endpoints = vec![first];
+    assert!(matches!(
+        join(&invite.encode(), None, PathMode::DirectOnly),
+        Err(JoinError::WrongCode)
+    ));
 }
 
 #[test]

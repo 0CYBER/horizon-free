@@ -16,6 +16,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod component_predicate;
+mod foreign;
 mod special;
 pub use special::{SpecialKind, SpecialModel};
 
@@ -430,6 +432,17 @@ impl ItemModelNode {
     pub fn decode(v: &Value) -> Result<Self> {
         let m = object(v)?;
         let kind = ident(required(m, "type")?)?;
+        if kind == "minecraft:condition" {
+            let property = ident(required(m, "property")?)?;
+            if !property.starts_with("minecraft:") {
+                return Ok(Self::Condition {
+                    transformation: optional_transformation(m)?,
+                    property: ConditionProperty::Custom(property),
+                    on_true: Box::new(Self::decode(required(m, "on_true")?)?),
+                    on_false: Box::new(Self::decode(required(m, "on_false")?)?),
+                });
+            }
+        }
         Ok(match kind.as_str() {
             "minecraft:empty" => Self::Empty,
             "minecraft:model" => Self::Model(ModelLeaf {
@@ -450,12 +463,21 @@ impl ItemModelNode {
                     .collect::<Result<_>>()?,
                 transformation: optional_transformation(m)?,
             },
+            "minecraft:condition" if foreign::property_is_foreign(m)? => foreign::wrap(
+                Self::decode(required(m, "on_false")?)?,
+                optional_transformation(m)?,
+            ),
             "minecraft:condition" => Self::Condition {
                 transformation: optional_transformation(m)?,
                 property: ConditionProperty::decode(m)?,
                 on_true: Box::new(Self::decode(required(m, "on_true")?)?),
                 on_false: Box::new(Self::decode(required(m, "on_false")?)?),
             },
+            "minecraft:select" if foreign::property_is_foreign(m)? => {
+                // No case can match a property Horizon cannot read.
+                let fallback = get(m, "fallback").map(Self::decode).transpose()?;
+                foreign::wrap(fallback.unwrap_or(Self::Empty), optional_transformation(m)?)
+            }
             "minecraft:select" => {
                 let transformation = optional_transformation(m)?;
                 let property = SelectProperty::decode(m)?;
@@ -483,6 +505,7 @@ impl ItemModelNode {
                 }
             }
             "minecraft:range_dispatch" => {
+                let foreign_property = foreign::property_is_foreign(m)?;
                 let mut entries = list(required(m, "entries")?)?
                     .iter()
                     .map(|e| {
@@ -495,6 +518,17 @@ impl ItemModelNode {
                     .collect::<Result<Vec<_>>>()?;
                 // `Comparator.comparingDouble`: Double.compare, a total order.
                 entries.sort_by(|a, b| f64::from(a.0).total_cmp(&f64::from(b.0)));
+                if foreign_property {
+                    // A property Horizon cannot read is 0.
+                    let fallback = get(m, "fallback").map(Self::decode).transpose()?;
+                    let chosen = last_index_less_or_equal(&entries, 0.0)
+                        .map(|i| entries.swap_remove(i).1)
+                        .or(fallback);
+                    return Ok(foreign::wrap(
+                        chosen.unwrap_or(Self::Empty),
+                        optional_transformation(m)?,
+                    ));
+                }
                 Self::RangeDispatch {
                     transformation: optional_transformation(m)?,
                     property: NumericProperty::decode(m)?,
@@ -505,12 +539,21 @@ impl ItemModelNode {
                         .transpose()?,
                 }
             }
+            "minecraft:special" if SpecialModel::is_foreign(required(m, "model")?) => {
+                // The mod's own renderer is not run: the base model stands in.
+                Self::Model(ModelLeaf {
+                    model: ident(required(m, "base")?)?,
+                    transformation: optional_transformation(m)?,
+                    tints: Vec::new(),
+                })
+            }
             "minecraft:special" => Self::Special {
                 base: ident(required(m, "base")?)?,
                 transformation: optional_transformation(m)?,
                 model: SpecialModel::decode(required(m, "model")?)?,
             },
             "minecraft:bundle/selected_item" => Self::BundleSelectedItem,
+            other if foreign::is_foreign(other) => foreign::decode_node(other, m),
             _ => return Err(err("unknown item model type")),
         })
     }
@@ -602,6 +645,8 @@ impl TintSource {
             "minecraft:firework" => Self::Firework(default()?),
             "minecraft:potion" => Self::Potion(default()?),
             "minecraft:team" => Self::Team(default()?),
+            // A mod's own tint source, which its Java code computes: untinted here.
+            other if foreign::is_foreign(other) => Self::Constant(-1),
             _ => return Err(err("unknown item tint source")),
         })
     }
@@ -613,6 +658,7 @@ impl TintSource {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConditionProperty {
+    Custom(String),
     CustomModelData(i32),
     UsingItem,
     Broken,
@@ -628,7 +674,7 @@ pub enum ConditionProperty {
     ExtendedView,
     KeybindDown(String),
     ViewEntity,
-    /// A `component` predicate, evaluated by the host.
+    /// A single `component` predicate; external predicate types use the host.
     Component(Value),
 }
 impl ConditionProperty {
@@ -651,13 +697,7 @@ impl ConditionProperty {
             "minecraft:extended_view" => Self::ExtendedView,
             "minecraft:keybind_down" => Self::KeybindDown(string(required(m, "keybind")?)?),
             "minecraft:view_entity" => Self::ViewEntity,
-            "minecraft:component" => {
-                let predicate = required(m, "predicate")?;
-                if object(predicate)?.len() != 1 {
-                    return Err(err("a single component predicate is expected"));
-                }
-                Self::Component(predicate.clone())
-            }
+            "minecraft:component" => Self::Component(component_predicate::decode(m)?),
             _ => return Err(err("unknown condition property")),
         })
     }
@@ -877,6 +917,46 @@ impl NumericProperty {
 /// (`None` removes a prototype component).
 pub type Components = BTreeMap<String, Value>;
 
+/// A stack's components read in place: its patch first, then its item's defaults. Reading one copies
+/// nothing, where [`ItemModels::components`] clones the defaults for a stack with a patch (an enchanted
+/// sword's are a few dozen JSON values, on every draw of it).
+#[derive(Clone, Copy)]
+pub struct ComponentsView<'a> {
+    prototype: &'a Components,
+    patch: &'a BTreeMap<String, Option<Value>>,
+}
+
+impl<'a> ComponentsView<'a> {
+    pub fn get(&self, key: &str) -> Option<&'a Value> {
+        match self.patch.get(key) {
+            Some(patched) => patched.as_ref(),
+            None => self.prototype.get(key),
+        }
+    }
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+    /// Components with no patch: `components` as they are.
+    pub fn of(components: &'a Components) -> Self {
+        static NO_PATCH: BTreeMap<String, Option<Value>> = BTreeMap::new();
+        Self {
+            prototype: components,
+            patch: &NO_PATCH,
+        }
+    }
+    /// The merged map, for what needs one whole.
+    pub fn to_map(&self) -> Components {
+        let mut out = self.prototype.clone();
+        for (key, value) in self.patch {
+            match value {
+                Some(v) => out.insert(key.clone(), v.clone()),
+                None => out.remove(key),
+            };
+        }
+        out
+    }
+}
+
 /// An item stack as the resolver reads it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StackView {
@@ -951,6 +1031,10 @@ pub struct Context<'a> {
 
 /// Host services the resolver cannot derive from data alone.
 pub trait ItemEnv {
+    /// A mod's namespaced conditional property, false when no mod supplies it.
+    fn item_model_property(&self, _property: &str, _stack: &StackView) -> bool {
+        false
+    }
     /// `PotionContents.getColorOr` for the potion/effects part: the mixed
     /// effect colour, or `None` when the contents have no visible effects.
     fn potion_effect_color(&self, _potion_contents: &Value) -> Option<i32> {
@@ -964,8 +1048,12 @@ pub trait ItemEnv {
     fn bundle_fullness(&self, _stack: &StackView, _components: &Components) -> f32 {
         0.0
     }
-    /// `ItemStack.getMaxStackSize` when the prototype has no component.
+    /// Additional component predicate types supplied by the host.
     fn component_matches(&self, _stack: &StackView, _predicate: &Value) -> bool {
+        false
+    }
+    /// Membership in the level's enchantment registry tags.
+    fn enchantment_in_tag(&self, _enchantment: &str, _tag: &str) -> bool {
         false
     }
     fn is_keybind_down(&self, _keybind: &str) -> bool {
@@ -1039,14 +1127,15 @@ impl ItemModels {
         if stack.patch.is_empty() {
             return std::borrow::Cow::Borrowed(prototype);
         }
-        let mut out = prototype.clone();
-        for (key, value) in &stack.patch {
-            match value {
-                Some(v) => out.insert(key.clone(), v.clone()),
-                None => out.remove(key),
-            };
+        std::borrow::Cow::Owned(self.components_view(stack).to_map())
+    }
+    /// The stack's components, read in place (see [`ComponentsView`]).
+    pub fn components_view<'a>(&'a self, stack: &'a StackView) -> ComponentsView<'a> {
+        static NONE: Components = BTreeMap::new();
+        ComponentsView {
+            prototype: self.prototypes.get(&stack.item).unwrap_or(&NONE),
+            patch: &stack.patch,
         }
-        std::borrow::Cow::Owned(out)
     }
     /// `ItemModelResolver.updateForTopItem`.
     pub fn resolve(&self, stack: &StackView, ctx: &Context, env: &dyn ItemEnv) -> ResolvedItem {
@@ -1064,7 +1153,7 @@ impl ItemModels {
         ctx: &Context,
         env: &dyn ItemEnv,
     ) {
-        let components = self.components(stack);
+        let components = self.components_view(stack);
         let Some(Value::String(model_id)) = components.get("minecraft:item_model") else {
             return;
         };
@@ -1074,7 +1163,7 @@ impl ItemModels {
         let mut state = Resolve {
             models: self,
             stack,
-            components: &components,
+            components,
             ctx,
             env,
         };
@@ -1092,7 +1181,7 @@ impl ItemModels {
         self.properties(stack).2
     }
     fn properties(&self, stack: &StackView) -> (bool, bool, f32) {
-        match self.components(stack).get("minecraft:item_model") {
+        match self.components_view(stack).get("minecraft:item_model") {
             Some(Value::String(id)) => identifier(id)
                 .ok()
                 .and_then(|id| self.definitions.get(&id))
@@ -1111,7 +1200,7 @@ impl ItemModels {
 struct Resolve<'a> {
     models: &'a ItemModels,
     stack: &'a StackView,
-    components: &'a Components,
+    components: ComponentsView<'a>,
     ctx: &'a Context<'a>,
     env: &'a dyn ItemEnv,
 }
@@ -1300,6 +1389,9 @@ impl Resolve<'_> {
     fn condition(&self, property: &ConditionProperty) -> bool {
         let owner = self.ctx.owner;
         match property {
+            ConditionProperty::Custom(property) => {
+                self.env.item_model_property(property, self.stack)
+            }
             ConditionProperty::CustomModelData(i) => {
                 self.component("minecraft:custom_model_data")
                     .and_then(|d| custom_data_at(d, "flags", *i))
@@ -1335,7 +1427,8 @@ impl Resolve<'_> {
             ConditionProperty::KeybindDown(key) => self.env.is_keybind_down(key),
             ConditionProperty::ViewEntity => owner.is_some_and(|o| o.is_view_entity),
             ConditionProperty::Component(predicate) => {
-                self.env.component_matches(self.stack, predicate)
+                component_predicate::matches(predicate, self.components, self.env)
+                    .unwrap_or_else(|| self.env.component_matches(self.stack, predicate))
             }
         }
     }
@@ -1403,9 +1496,9 @@ impl Resolve<'_> {
     fn numeric(&self, property: &NumericProperty) -> f32 {
         let owner = self.ctx.owner;
         match property {
-            NumericProperty::BundleFullness => {
-                self.env.bundle_fullness(self.stack, self.components)
-            }
+            NumericProperty::BundleFullness => self
+                .env
+                .bundle_fullness(self.stack, &self.components.to_map()),
             NumericProperty::Compass {
                 wobble,
                 target,
@@ -1671,14 +1764,13 @@ fn stack_from_template(template: &Value) -> Option<StackView> {
 
 /// `RangeSelectItemModel.lastIndexLessOrEqual`.
 fn last_index_less_or_equal(entries: &[(f32, ItemModelNode)], needle: f32) -> Option<usize> {
-    let haystack: Vec<f32> = entries.iter().map(|e| e.0).collect();
-    let found = if haystack.len() < 16 {
-        haystack
+    let found = if entries.len() < 16 {
+        entries
             .iter()
-            .position(|h| *h > needle)
-            .map_or(haystack.len() as i64 - 1, |i| i as i64 - 1)
+            .position(|e| e.0 > needle)
+            .map_or(entries.len() as i64 - 1, |i| i as i64 - 1)
     } else {
-        match binary_search(&haystack, needle) {
+        match binary_search(entries, needle) {
             Ok(index) => index as i64,
             Err(insertion) => insertion as i64 - 1,
         }
@@ -1687,8 +1779,8 @@ fn last_index_less_or_equal(entries: &[(f32, ItemModelNode)], needle: f32) -> Op
 }
 /// `Arrays.binarySearch(float[], float)`, including its handling of equal
 /// values (-0.0 below 0.0, NaN above everything).
-fn binary_search(a: &[f32], key: f32) -> std::result::Result<usize, usize> {
-    let (mut low, mut high) = (0i64, a.len() as i64 - 1);
+fn binary_search(entries: &[(f32, ItemModelNode)], key: f32) -> std::result::Result<usize, usize> {
+    let (mut low, mut high) = (0i64, entries.len() as i64 - 1);
     let bits = |v: f32| -> i32 {
         if v.is_nan() {
             0x7fc0_0000
@@ -1698,7 +1790,7 @@ fn binary_search(a: &[f32], key: f32) -> std::result::Result<usize, usize> {
     };
     while low <= high {
         let mid = (low + high) >> 1;
-        let value = a[mid as usize];
+        let value = entries[mid as usize].0;
         if value < key {
             low = mid + 1;
         } else if value > key {
@@ -1717,5 +1809,7 @@ fn binary_search(a: &[f32], key: f32) -> std::result::Result<usize, usize> {
     Err(low as usize)
 }
 
+#[cfg(test)]
+mod foreign_tests;
 #[cfg(test)]
 mod tests;

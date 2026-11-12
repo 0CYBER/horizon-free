@@ -1,7 +1,9 @@
 //! The horse inventory (`HorseInventoryMenu`, `HorseInventoryScreen`): the
-//! saddle and body armour slots (a llama's carpet), the chest of donkeys,
-//! mules and llamas and the mount drawn following the cursor. It opens with
-//! E while riding a tamed mount or with shift + use on a tamed one. On a
+//! saddle and body armour slots (a llama's carpet, a nautilus's armour), the
+//! chest of donkeys, mules and llamas and the mount drawn following the
+//! cursor. A nautilus has the same two slots and no chest
+//! (`NautilusInventoryMenu`). It opens with E while riding a tamed mount or
+//! with shift + use on a tamed one. On a
 //! server the screen shows the server's menu (`ClientboundMountScreenOpenPacket`)
 //! and its clicks go out as container clicks; a server's players get theirs
 //! from game/lan_mount_menu.rs.
@@ -9,7 +11,7 @@ use super::{Game, Screen};
 use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
-    mobs::{Mob, Species, equine, llama},
+    mobs::{Mob, Species, equine, llama, nautilus},
 };
 
 /// Menu slot ids: the saddle, the body armour and the chest from 710.
@@ -32,18 +34,18 @@ pub(super) fn mount_columns(m: &Mob) -> usize {
         0
     }
 }
-/// Whether the mount has a horse inventory (`AbstractHorse`).
+/// Whether the mount has a horse inventory (`AbstractHorse`, `AbstractNautilus`).
 pub(super) fn has_mount_menu(species: Species) -> bool {
-    equine::is_equine(species) || llama::is_llama(species)
+    equine::is_equine(species) || llama::is_llama(species) || nautilus::is_nautilus(species)
 }
 /// The saddle slot is active (`canUseSlot(SADDLE)` and `CAN_EQUIP_SADDLE`):
 /// not on llamas.
 fn shows_saddle(species: Species) -> bool {
     !llama::is_llama(species)
 }
-/// The body slot is active: horse armour, or a llama's carpet.
+/// The body slot is active: horse armour, a llama's carpet, or nautilus armour.
 fn shows_body(species: Species) -> bool {
-    can_wear_horse_armor(species) || llama::is_llama(species)
+    can_wear_horse_armor(species) || llama::is_llama(species) || nautilus::is_nautilus(species)
 }
 
 /// The open mount menu: copies of the mount's slots, written back on every change.
@@ -77,6 +79,10 @@ fn can_wear_horse_armor(species: Species) -> bool {
 fn body_armor_fits(species: Species, item: &str) -> bool {
     if llama::is_llama(species) {
         return item.ends_with("_carpet");
+    }
+    // EntityTypeTags.CAN_WEAR_NAUTILUS_ARMOR: the nautilus armours.
+    if nautilus::is_nautilus(species) {
+        return item.ends_with("_nautilus_armor");
     }
     can_wear_horse_armor(species) && item.ends_with("_horse_armor")
 }
@@ -246,7 +252,7 @@ impl Game<'_> {
         let m = &self.mobs[index];
         let species = m.species();
         let body =
-            shows_body(species).then(|| m.extra.head.as_deref().map(|i| ItemStack::new(i, 1)));
+            shows_body(species).then(|| m.extra.body.as_deref().map(|i| ItemStack::new(i, 1)));
         let mut items = m.extra.items.clone();
         items.resize(mount_columns(m) * 3, None);
         (m.saddle_item(), body, items)
@@ -262,24 +268,36 @@ impl Game<'_> {
     ) {
         let m = &self.mobs[index];
         let at = m.center();
-        let put_on = if saddle.is_some() && !m.extra.saddled {
+        let saddle_put_on = saddle.is_some() && !m.extra.saddled;
+        let put_on = if saddle_put_on {
             saddle.as_ref()
         } else {
             body.as_ref()
                 .and_then(Option::as_ref)
-                .filter(|_| m.extra.head.is_none())
+                .filter(|_| m.extra.body.is_none())
         };
-        let sound = put_on.map(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .and_then(|i| i.equip_sound.clone())
-                .unwrap_or_else(|| "minecraft:item.armor.equip_generic".into())
-        });
+        let sound = if saddle_put_on && nautilus::is_nautilus(m.species()) {
+            // AbstractNautilus.getEquipSound: its own saddle sounds.
+            Some(format!("minecraft:{}", nautilus::saddle_sound(m)))
+        } else {
+            put_on.map(|s| {
+                horizon_client::item_sync::equip_sound(s, self.res.items())
+                    .unwrap_or_else(|| "minecraft:item.armor.equip_generic".into())
+            })
+        };
         let m = &mut self.mobs[index];
+        let id = m.id;
+        let pos = m.position;
+        let saddle_off = m.extra.saddled && saddle.is_none();
+        let body_off = body
+            .as_ref()
+            .is_some_and(|b| b.is_none() && m.extra.body.is_some());
+        let body_on = body
+            .as_ref()
+            .is_some_and(|b| b.is_some() && m.extra.body.is_none());
         m.set_saddle(saddle);
         if let Some(body) = body {
-            m.extra.head = body.map(|a| a.item);
+            m.extra.body = body.map(|a| a.item);
         }
         let mut items = items;
         let keep = m.extra.items.len().max(CHEST_SIZE);
@@ -288,7 +306,12 @@ impl Game<'_> {
         let (x, z) = (at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4);
         self.world.modified.insert((x, z));
         if let Some(sound) = sound {
-            self.audio.play(&sound, Some(at), 0.5, 1.0);
+            self.audio.play(&sound, Some(at), 1.0, 1.0);
+        }
+        if saddle_put_on || body_on {
+            self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
+        } else if saddle_off || body_off {
+            self.mob_equip_event(id, [pos.x, pos.y, pos.z], false);
         }
     }
     pub(super) fn mount_slots(&self) -> Option<Vec<usize>> {
@@ -306,6 +329,16 @@ impl Game<'_> {
         }
         v.extend((0..open.columns * 3).map(|i| CHEST + i));
         Some(v)
+    }
+    /// How many slots `mount_slots` lists, counted without building it
+    /// (`Game::slot_count` asks every frame).
+    pub(super) fn mount_slot_count(&self) -> Option<usize> {
+        let open = self
+            .mount_menu
+            .open
+            .as_ref()
+            .filter(|_| self.mount_active())?;
+        Some(36 + usize::from(open.show_saddle) + usize::from(open.show_armor) + open.columns * 3)
     }
     pub(super) fn mount_slot_position(&self, i: usize) -> Option<(f32, f32)> {
         let open = self
@@ -420,13 +453,13 @@ impl Game<'_> {
             return;
         };
         let atlas = &self.gui.atlas;
-        batch.sprite_region(
-            atlas,
-            "gui/container/horse",
-            [ox, oy, 176.0, 166.0],
-            256.0,
-            256.0,
-        );
+        // NautilusInventoryScreen draws its own background.
+        let background = if nautilus::is_nautilus(open.species) {
+            "gui/container/nautilus"
+        } else {
+            "gui/container/horse"
+        };
+        batch.sprite_region(atlas, background, [ox, oy, 176.0, 166.0], 256.0, 256.0);
         if open.columns > 0 {
             batch.sprite_region(
                 atlas,
@@ -452,6 +485,8 @@ impl Game<'_> {
             if open.armor.is_none() {
                 let sprite = if llama::is_llama(open.species) {
                     "gui/sprites/container/slot/llama_armor"
+                } else if nautilus::is_nautilus(open.species) {
+                    "gui/sprites/container/slot/nautilus_armor_inventory"
                 } else {
                     "gui/sprites/container/slot/horse_armor"
                 };
@@ -469,6 +504,7 @@ impl Game<'_> {
             }),
             None => String::new(),
         };
+        super::screen_info::name_container(|| title.clone());
         batch.text(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
         let inventory = self.translate("container.inventory", "Inventory");
         batch.text(atlas, &inventory, ox + 8.0, oy + 72.0, grey, false);
@@ -516,16 +552,19 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
-        horizon_client::mobs::render::render_with(
-            &m,
-            1.0,
-            camera,
-            &lookup,
-            240 | 240 << 8,
-            self.res.mob_data(),
-            &[],
-            &mut verts,
-        );
+        // A screen preview: custom entity model animations see is_in_gui = 1.
+        horizon_client::mobs::cem_anim::in_gui(|| {
+            horizon_client::mobs::render::render_with(
+                &m,
+                1.0,
+                camera,
+                &lookup,
+                240 | 240 << 8,
+                self.res.mob_data(),
+                &[],
+                &mut verts,
+            );
+        });
         let height = m.kind.height as f32;
         let gui = glam::Mat4::from_translation(glam::Vec3::new(cx, cy, 0.0))
             * glam::Mat4::from_scale(glam::Vec3::new(size, size, -size))

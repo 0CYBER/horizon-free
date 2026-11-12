@@ -15,10 +15,12 @@ horizon-telemetry = { path = "../horizon-telemetry", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 # SQLite built in: one file on a small volume is the whole database.
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ruzstd = "0.9"
+# The export answers gzip (pure Rust; ureq already pulls it in).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # Opens the hub's bug reports as GitHub issues (blocking, run off the async workers; rustls).
 ureq = { version = "2.12", features = ["json"] }
 

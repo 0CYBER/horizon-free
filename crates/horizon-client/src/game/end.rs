@@ -5,28 +5,32 @@
 use super::{Dim, Game};
 use horizon_client::{
     Result,
-    containers::{BlockEntity, EndGateway},
+    containers::BlockEntity,
     environment::Environment,
     items::ItemStack,
     mesher::Vertex,
-    motion::PlayerMotion,
+    mobs::Who,
     particles::{ParticleOptions, ParticleType},
+    projectiles::{Projectile, ProjectileKind},
     vanillagen::VanillaTerrain,
     world_spawn::PlayerSpawnFinder,
 };
 use horizon_core::{
     geometry::Vec3,
+    position::BlockPos,
     random::{LegacyRandom, RandomSource},
 };
+
 use std::{collections::HashMap, sync::Arc};
+
+/// `TicketType.PORTAL`'s timeout, in ticks.
+const PORTAL_TICKET: u32 = 300;
 
 /// ServerLevel.END_SPAWN_POINT.
 pub(super) const END_SPAWN: [i32; 3] = [100, 50, 0];
 /// EnderDragonFight gateway ring radius and height.
 const GATEWAY_RADIUS: f64 = 96.0;
 const GATEWAY_Y: i32 = 75;
-/// File (in the End region folder) keeping End gateway exits.
-const GATEWAY_FILE: &str = "horizon-end-gateways.json";
 
 /// A gateway teleport waiting for its destination chunks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,18 +42,43 @@ pub(super) enum GatewayJob {
     Known { exit: [i32; 3], exact: bool },
 }
 
+/// An entity travelling through an End gateway: the entity and the job that
+/// finds where it lands (`TheEndGatewayBlockEntity.getPortalPosition`).
+#[derive(Clone, Debug)]
+struct GatewayArrival {
+    /// The entity, as it waits for the exit's chunks.
+    traveller: Arriving,
+    /// The gateway's exit, or the search for one.
+    job: GatewayJob,
+    /// The spot to load before the job is resolved.
+    target: Vec3,
+}
+
+/// What waits at a gateway's exit.
+#[derive(Clone, Debug)]
+enum Arriving {
+    /// A thrown ender pearl (projectiles are not saved).
+    Pearl(Box<Projectile>),
+    /// An ordinary entity remains live in this level while its destination loads.
+    Live(u32),
+}
+
 impl GatewayJob {
-    /// TheEndGatewayBlockEntity.getPortalPosition, with legacy save fallbacks.
-    fn for_gateway(
-        gateway: [i32; 3],
-        entity: Option<&BlockEntity>,
-        legacy: Option<([i32; 3], bool)>,
-    ) -> Self {
+    /// The source of a new exit must stay loaded until its block entity is updated.
+    pub(super) fn source_chunk(self) -> Option<(i32, i32)> {
+        match self {
+            Self::Find { gateway, .. } => Some((gateway[0] >> 4, gateway[2] >> 4)),
+            Self::Known { .. } => None,
+        }
+    }
+
+    /// TheEndGatewayBlockEntity.getPortalPosition, using the gateway block entity.
+    fn for_gateway(gateway: [i32; 3], entity: Option<&BlockEntity>) -> Self {
         let configured = match entity {
             Some(BlockEntity::EndGateway(g)) => g.exit_portal.map(|exit| (exit, g.exact_teleport)),
             _ => None,
         };
-        match configured.or(legacy) {
+        match configured {
             Some((exit, exact)) => Self::Known { exit, exact },
             // Worldgen return gateways (end_gateway_return) lead exactly to the End spawn.
             None if f64::from(gateway[0]).hypot(f64::from(gateway[2])) > 512.0 => Self::Known {
@@ -70,30 +99,33 @@ fn exact_teleport(entity: Option<&BlockEntity>) -> bool {
     matches!(entity, Some(BlockEntity::EndGateway(g)) if g.exact_teleport)
 }
 
-/// Moves an exit that only the side file knew into the gateway's block entity, unless the block
-/// entity has its own; true when it took the saved one.
-fn adopt_saved_exit(entity: &mut EndGateway, (exit, exact): ([i32; 3], bool)) -> bool {
-    if entity.exit_portal.is_some() {
-        return false;
-    }
-    entity.exit_portal = Some(exit);
-    entity.exact_teleport = exact;
-    true
-}
-
 /// The end of `getPortalPosition`: the exit itself when the teleport is exact,
 /// else the spot [`Game::resolve_gateway`] finds around it (`findExitPosition`).
 fn exit_target(exit: [i32; 3], exact: bool, find: impl FnOnce([i32; 3]) -> [i32; 3]) -> [i32; 3] {
     if exact { exit } else { find(exit) }
 }
 
+fn fallback_spawn(own: Option<Vec3>, world: Option<[i32; 3]>) -> Vec3 {
+    let s = own.unwrap_or_else(|| {
+        let [x, y, z] = world.unwrap_or([0, 64, 0]);
+        Vec3::new(f64::from(x), f64::from(y), f64::from(z))
+    });
+    Vec3::new(s.x.floor() + 0.5, s.y, s.z.floor() + 0.5)
+}
+
 #[derive(Default)]
 pub(super) struct EndState {
-    /// Gateway position -> (exit, exact teleport); loaded lazily from the save.
-    exits: Option<HashMap<[i32; 3], ([i32; 3], bool)>>,
-    job: Option<GatewayJob>,
     /// Ticks until the player can use a gateway again (TheEndGatewayBlockEntity cooldown).
     gateway_cooldown: u32,
+    gateways: HashMap<u32, horizon_client::end_gateway::Traveller>,
+    /// The entities that went through a gateway, waiting for its exit.
+    arrivals: Vec<GatewayArrival>,
+    /// The chunks kept loaded for those arrivals.
+    areas: Vec<(i32, i32)>,
+    /// `Entity.placePortalTicket` of the pearls that came out of a gateway:
+    /// the chunk each landed in, kept loaded for the ticks left of its
+    /// `TicketType.PORTAL`, so that it can come down and take its owner there.
+    tickets: Vec<((i32, i32), u32)>,
     /// The Overworld generator, for stronghold positions (ServerLevel.findNearestMapStructure).
     locator: std::sync::Mutex<Option<Arc<VanillaTerrain>>>,
     /// Thrown eyes of ender in flight.
@@ -112,8 +144,6 @@ struct EndFlash {
     old_intensity: f32,
     x_angle: f32,
     y_angle: f32,
-    /// Ticks until the delayed weather.end_flash sound.
-    sound_in: Option<u32>,
 }
 impl EndFlash {
     fn tick(&mut self, clock: i64) {
@@ -137,13 +167,23 @@ impl EndFlash {
         } else {
             0.0
         };
-        if self.intensity > 0.0 && self.old_intensity <= 0.0 {
-            self.sound_in = Some(30);
-        }
+    }
+    /// `EndFlashState.flashStartedThisTick`.
+    fn started_this_tick(&self) -> bool {
+        self.intensity > 0.0 && self.old_intensity <= 0.0
     }
     fn intensity(&self, partial: f32) -> f32 {
         self.old_intensity + (self.intensity - self.old_intensity) * partial
     }
+    /// SkyRenderer.renderEndFlash's pose: the sprite at height 100 turned to the flash.
+    fn pose(&self) -> glam::Mat4 {
+        flash_pose(self.x_angle, self.y_angle)
+    }
+}
+
+fn flash_pose(x_angle: f32, y_angle: f32) -> glam::Mat4 {
+    glam::Mat4::from_rotation_y((180.0 - y_angle).to_radians())
+        * glam::Mat4::from_rotation_x((-90.0 - x_angle).to_radians())
 }
 impl EndState {
     pub(super) fn locator(&self) -> Option<Arc<VanillaTerrain>> {
@@ -180,6 +220,10 @@ impl EndState {
             life: 0,
             survive: false,
         });
+    }
+    /// Where each eye in flight was last tick and is now (the hitbox view).
+    pub(super) fn eye_motions(&self) -> impl Iterator<Item = (glam::DVec3, glam::DVec3)> + '_ {
+        self.eyes.iter().map(|e| (e.previous, e.position))
     }
     /// `EyeOfEnder.tick` on a server's client: it moves by its last known
     /// motion; only the server steers it.
@@ -219,6 +263,76 @@ impl EndState {
     }
 }
 
+/// An eye of ender from `/summon` or a saved chunk. `signalTo` never ran for
+/// it, so it has no target and `surviveAfterDeath` stays false.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::game) struct SummonedEye {
+    /// `getDeltaMovement`, which nothing changes without a target.
+    pub(super) motion: Vec3,
+    /// `EyeOfEnder.life`: not saved, so a loaded eye starts again at 0.
+    life: u32,
+}
+impl SummonedEye {
+    /// `Entity.load`'s motion and `EyeOfEnder.readAdditionalSaveData`'s
+    /// `setItem`, which keeps one of the saved item, or an eye of ender.
+    pub(super) fn load(tag: &mut horizon_world::nbt::Tag) -> Self {
+        use horizon_world::nbt::Tag;
+        let motion = horizon_client::entity_nbt::loaded_motion(tag);
+        if let Tag::Compound(c) = tag {
+            let mut item = match c.remove(&"Item".into()) {
+                Some(Tag::Compound(item)) => item,
+                _ => Default::default(),
+            };
+            let id = match item.get(&"id".into()) {
+                Some(Tag::String(s)) => {
+                    horizon_client_core::identifier::normalize_id(&s.to_string_lossy())
+                }
+                _ => None,
+            }
+            .filter(|id| id != "minecraft:air");
+            if id.is_none() {
+                item.clear();
+            }
+            let id = id.unwrap_or_else(|| "minecraft:ender_eye".into());
+            item.insert("id".into(), Tag::String(id.as_str().into()));
+            item.insert("count".into(), Tag::Int(1));
+            c.insert("Item".into(), Tag::Compound(item));
+        }
+        Self { motion, life: 0 }
+    }
+}
+
+impl Game<'_> {
+    /// `EyeOfEnder.tick` for the summoned and loaded eyes: they fly on by
+    /// their motion and shatter on tick 81, dropping nothing.
+    pub(super) fn tick_summoned_eyes(&mut self) {
+        let ticking = self.entity_ticking_area();
+        let mut shattered = Vec::new();
+        self.others.retain_mut(|o| {
+            let Some(eye) = o.eye.as_mut() else {
+                return true;
+            };
+            // ServerLevel.tick: only entities in entity-ticking chunks tick.
+            if !ticking(o.position.x.floor() as i32, o.position.z.floor() as i32) {
+                return true;
+            }
+            let m = eye.motion;
+            o.position = Vec3::new(o.position.x + m.x, o.position.y + m.y, o.position.z + m.z);
+            eye.life += 1;
+            if eye.life <= 80 {
+                return true;
+            }
+            shattered.push([o.position.x, o.position.y, o.position.z]);
+            false
+        });
+        for at in shattered {
+            self.audio
+                .play("minecraft:entity.ender_eye.death", Some(at), 1.0, 1.0);
+            self.level_event_at(2003, at.map(|v| v.floor() as i32), 0);
+        }
+    }
+}
+
 /// The EyeOfEnder entity.
 struct EyeOfEnder {
     /// Its entity id once a server's clients track it (0 until then).
@@ -253,13 +367,20 @@ impl EyeOfEnder {
 }
 
 impl Game<'_> {
+    /// The environment attributes the frame draws: the packs' Polytone layers over the
+    /// current dimension's, when a pack has some. Gameplay keeps `dim_environment`.
+    pub(super) fn view_environment(&self) -> &Environment {
+        match (&self.pack.environments, self.dim) {
+            (Some(e), Dim::Overworld) => &e[0],
+            (Some(e), Dim::Nether) => &e[1],
+            (Some(e), Dim::End) => &e[2],
+            (None, _) => self.dim_environment(),
+        }
+    }
+
     /// The environment attributes of the current dimension.
     pub(super) fn dim_environment(&self) -> &Environment {
-        match self.dim {
-            Dim::Overworld => self.res.environment(),
-            Dim::Nether => self.res.nether_environment(),
-            Dim::End => self.res.end_environment(),
-        }
+        self.res.environment_of(&self.dimension_type().id)
     }
 
     /// SkyRenderer.renderEndFlash, drawn after the renderer's resident sky mesh.
@@ -279,9 +400,7 @@ impl Game<'_> {
                 .get("environment/celestial/end_flash")
                 .copied()
         {
-            let flash = &self.end.flash;
-            let pose = glam::Mat4::from_rotation_y((180.0 - flash.y_angle).to_radians())
-                * glam::Mat4::from_rotation_x((-90.0 - flash.x_angle).to_radians());
+            let pose = self.end.flash.pose();
             let level = (intensity.clamp(0.0, 1.0) * 255.0) as u32;
             let color = level << 24 | level << 16 | level << 8 | level;
             let corners = [
@@ -307,11 +426,28 @@ impl Game<'_> {
         out
     }
 
+    /// Iris's `endFlashIntensity` and the flash's direction (camera-relative, length 100: the
+    /// sprite's centre), for shader packs; no flash outside the End.
+    pub(super) fn end_flash_for_pack(&self, partial: f32) -> (f32, glam::Vec3) {
+        if self.dimension_type().skybox != horizon_world::dimension_type::Skybox::End {
+            return (0.0, glam::Vec3::ZERO);
+        }
+        let flash = &self.end.flash;
+        (
+            flash.intensity(partial).clamp(0.0, 1.0),
+            flash
+                .pose()
+                .transform_point3(glam::Vec3::new(0.0, 100.0, 0.0)),
+        )
+    }
+
     /// LightmapRenderStateExtractor: End flashes add to the sky light factor
     /// unless Hide Lightning Flashes is on (the sky sprite is not gated), a
     /// third of it under a boss bar's world fog.
     pub(super) fn end_flash_sky(&self, sky: &mut horizon_client::environment::Sky, partial: f64) {
-        if self.dim == Dim::End && !self.settings.file.bool("hideLightningFlashes") {
+        if self.dimension_type().skybox == horizon_world::dimension_type::Skybox::End
+            && !self.settings.file.bool("hideLightningFlashes")
+        {
             let intensity = self.end.flash.intensity(partial as f32);
             sky.sky_light_factor += if self.boss_overlay.should_create_world_fog() {
                 intensity / 3.0
@@ -327,6 +463,13 @@ impl Game<'_> {
             .get(self.world.block(p[0], p[1], p[2]))
             .name
             .clone()
+    }
+
+    /// EnderEyeItem.use's `getPlayerPOVHitResult`: whether the block aimed
+    /// at is an End portal frame (the use passes there).
+    pub(super) fn aims_at_end_portal_frame(&self) -> bool {
+        self.pick()
+            .is_some_and(|hit| &*self.block_name(hit.pos) == "minecraft:end_portal_frame")
     }
 
     /// EnderEyeItem.useOn: fill an empty End portal frame, then light the
@@ -345,7 +488,10 @@ impl Game<'_> {
             if matches!(self.guest_use, Some(super::GuestUse::OnBlock(_))) {
                 return Ok(false);
             }
-            // EnderEyeItem.use: throw the eye towards the nearest stronghold.
+            // EnderEyeItem.use: startUsingItem (getUseDuration 0, so the use
+            // lasts until the button lets go), then the eye is thrown towards
+            // the nearest stronghold if there is one (CONSUME without).
+            self.start_using_item();
             self.throw_ender_eye();
             return Ok(true);
         };
@@ -374,6 +520,7 @@ impl Game<'_> {
                 p.position.y = top;
             }
         }
+        self.award_stat("used", "minecraft:ender_eye", 1);
         self.consume_held();
         self.swing_arm();
         // EnderEyeItem.useOn emits this event for all nearby players.
@@ -381,13 +528,15 @@ impl Game<'_> {
         if let Some(c) = self.portal_ring_center(hit.pos) {
             for dz in -1..=1 {
                 for dx in -1..=1 {
-                    self.set_state_named(
-                        [c[0] + dx, c[1], c[2] + dz],
-                        "minecraft:end_portal",
-                        &[],
-                    )?;
+                    let p = [c[0] + dx, c[1], c[2] + dz];
+                    let at = BlockPos::new(p[0], p[1], p[2]);
+                    self.with_level(|b, level, ticks| {
+                        b.destroy_block(level, ticks, at, true);
+                    });
+                    self.set_state_named(p, "minecraft:end_portal", &[])?;
                 }
             }
+            self.process_level_events()?;
             // EnderEyeItem.useOn: global level event 1038 (END_PORTAL_SPAWN),
             // heard by every player (vanilla places it at the frame's corner
             // + (1, 0, 1); only its direction matters).
@@ -436,65 +585,51 @@ impl Game<'_> {
         None
     }
 
+    /// `ClientLevel.tick`'s End flash, on every client in the End:
+    /// `EndFlashState.tick`, and when a flash starts (not under the credits)
+    /// its `DirectionalSoundInstance`, played 30 ticks later from the camera
+    /// toward the flash.
+    pub(super) fn tick_end_flash(&mut self) {
+        if self.dimension_type().skybox != horizon_world::dimension_type::Skybox::End {
+            return;
+        }
+        // getDefaultClockTime: the End's own clock (the client keeps the
+        // dimension's default clock in day_time), not the game time.
+        self.end.flash.tick(self.world.day_time);
+        if self.end.flash.started_this_tick() && self.win.is_none() {
+            let flash = &self.end.flash;
+            let instance = horizon_client::sound_engine::SoundInstance::directional(
+                "minecraft:weather.end_flash",
+                horizon_client::sound_engine::WEATHER,
+                horizon_client::random_source::create(),
+                self.audio.listener,
+                flash.x_angle,
+                flash.y_angle,
+            );
+            self.audio.play_instance_after(instance, 30);
+        }
+    }
+
     /// End portals, End gateways and the exit portal, once per tick.
     pub(super) fn tick_end(&mut self) -> Result<()> {
         self.end.gateway_cooldown = self.end.gateway_cooldown.saturating_sub(1);
-        if self.dim == Dim::End {
+        if self.dimension_type().has_ender_dragon_fight {
             self.tick_fight();
-            self.tick_dragon_fireballs();
+            // The fireballs fly with the other projectiles; the breath
+            // clouds tick here, once.
+            self.tick_breath();
+        } else {
+            // `/summon ender_dragon` outside the End: no fight, but the dragon flies.
+            self.tick_fight();
         }
+        // The spikes' crystals (placed above) join before they light a fire:
+        // a mod that cancels one keeps its fire out too.
+        self.native_joins_flush(false, 0);
         self.tick_crystals();
+        self.clear_crystal_fire();
         self.tick_eyes();
-        if self.dim == Dim::End {
-            self.end.flash.tick(self.world.game_time);
-            if let Some(n) = self.end.flash.sound_in.as_mut() {
-                *n = n.saturating_sub(1);
-                if *n == 0 {
-                    self.end.flash.sound_in = None;
-                    self.audio
-                        .play("minecraft:weather.end_flash", None, 1.0, 1.0);
-                }
-            }
-        }
-        if self.dim == Dim::End {
+        if self.dimension_type().has_ender_dragon_fight {
             self.ensure_exit_portal()?;
-        }
-        let Some(p) = self.player.as_ref() else {
-            return Ok(());
-        };
-        if self.travelling.is_some() || p.health.dead_or_dying() {
-            return Ok(());
-        }
-        let (portal, gateway) = self.inside_end_portals(
-            p.position,
-            f64::from(p.dimensions.width),
-            f64::from(p.dimensions.height),
-        );
-        if portal && self.dim == Dim::End && !self.level.seen_credits {
-            // EndPortalBlock.entityInside: the first exit shows the credits.
-            self.show_end_credits()?;
-        } else if portal {
-            if self.portals.player.cooldown == 0 {
-                let target = if self.dim == Dim::End {
-                    Dim::Overworld
-                } else {
-                    Dim::End
-                };
-                self.end_portal_travel = true;
-                let result = self.enter_dimension(target);
-                self.end_portal_travel = false;
-                result?;
-                // Player.getDimensionChangingDelay.
-                self.portals.player.cooldown = 10;
-            } else {
-                // Entity.setAsInsidePortal while cooling down restarts the cooldown.
-                self.portals.player.cooldown = 10;
-            }
-        } else if let Some(g) = gateway
-            && self.end.gateway_cooldown == 0
-            && self.gateway_enter(g)
-        {
-            self.enter_gateway(g)?;
         }
         Ok(())
     }
@@ -553,57 +688,7 @@ impl Game<'_> {
                 f64::from(c.pos[2]) + 0.5,
             ));
         }
-        let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
-        Some(Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5))
-    }
-
-    /// Arrival after End portal or gateway travel, once the destination is loaded.
-    pub(super) fn place_after_end_travel(
-        &mut self,
-        mut player: PlayerMotion,
-        target: Vec3,
-    ) -> Result<()> {
-        self.end_travel = false;
-        // Player.getDimensionChangingDelay (enter_dimension uses the Nether portal value).
-        self.portals.player.cooldown = 10;
-        if player.health.dead_or_dying() {
-            // Respawning out of the End: a fresh player at the spawn.
-            player = PlayerMotion::new(self.motion, target)?;
-            self.eye = 1.62;
-            self.previous_eye = 1.62;
-            self.clock.reset();
-        }
-        let position = if let Some(job) = self.end.job.take() {
-            self.resolve_gateway(job, target)?
-        } else {
-            let mut finder = self.player_spawn.take();
-            let arrival = self.end_arrival(target, &mut finder);
-            self.player_spawn = finder;
-            let Some((position, yaw)) = arrival? else {
-                // A spawn candidate's chunk is loading: try again next tick.
-                self.travelling = Some((player, target));
-                self.end_travel = true;
-                return Ok(());
-            };
-            if let Some(yaw) = yaw {
-                self.yaw = yaw;
-                player.yaw = yaw;
-                player.head_yaw = yaw;
-            }
-            position
-        };
-        player.position = position;
-        player.velocity = Vec3::ZERO;
-        player.fall_distance = 0.0;
-        self.previous_position = player.position;
-        self.player = Some(player);
-        self.pad.player_replaced();
-        self.sway = Default::default();
-        self.apply_equipment();
-        let pitch = self.world.random.next_float() * 0.4 + 0.8;
-        self.audio
-            .play("minecraft:block.portal.travel", None, 0.25, pitch);
-        Ok(())
+        Some(fallback_spawn(self.spawn, self.level.world_spawn))
     }
 
     /// Where an End portal's traveller lands once `target` has loaded, and
@@ -629,11 +714,21 @@ impl Game<'_> {
                             "minecraft:air"
                         };
                         if &*self.block_name(p) != name {
+                            // Portal arrivals rebuild the platform with drops enabled.
+                            self.with_level(|b, level, ticks| {
+                                b.destroy_block(
+                                    level,
+                                    ticks,
+                                    BlockPos::new(p[0], p[1], p[2]),
+                                    true,
+                                );
+                            });
                             self.set_state_named(p, name, &[])?;
                         }
                     }
                 }
             }
+            self.native_portal_create("minecraft:the_end", origin);
             // Direction.WEST.toYRot().
             return Ok(Some((target, Some(90.0))));
         }
@@ -641,11 +736,11 @@ impl Game<'_> {
         // anchor puts the player, facing it; else onto the spawn column.
         let mut target = target;
         if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
-            if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
+            // This existing owner transition adapter carries yaw only; its pitch path remains open.
+            if let Some((at, yaw, _pitch)) = self.find_respawn_and_use(c, false)? {
                 return Ok(Some((at, Some(yaw))));
             }
-            let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
-            target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
+            target = fallback_spawn(self.spawn, self.level.world_spawn);
         }
         let (x, z) = (target.x.floor() as i32, target.z.floor() as i32);
         // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder around
@@ -663,27 +758,13 @@ impl Game<'_> {
         Ok(Some((Vec3::new(target.x, y, target.z), None)))
     }
 
-    /// Dying away from the Overworld respawns at the world spawn there.
-    pub(super) fn respawn_out_of_end(&mut self) -> Result<()> {
-        if self.dim == Dim::Overworld || self.player.is_none() {
-            return Ok(());
-        }
-        self.end_portal_travel = true;
-        let result = self.enter_dimension(Dim::Overworld);
-        self.end_portal_travel = false;
-        // The arrival places a fresh player at the spawn.
-        self.end_travel = true;
-        result
-    }
-
     /// EnderDragonFight without a dragon: once the centre of the main island
     /// is loaded, place the active exit portal (EndPodiumFeature) and the
     /// first gateway (spawnNewGateway) if the portal is not there yet. Like
     /// scanState and spawnExitPortal, only while the fight has no exit portal
     /// location: a podium that is later broken stays broken.
     fn ensure_exit_portal(&mut self) -> Result<()> {
-        if self.travelling.is_some()
-            || !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
+        if !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
             || !self.fight_ready()
         {
             return Ok(());
@@ -872,110 +953,57 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn gateway_exits(&mut self) -> &mut HashMap<[i32; 3], ([i32; 3], bool)> {
-        if self.end.exits.is_none() {
-            let path = horizon_client::save::dimension_dir(&self.world_root, "minecraft:the_end")
-                .join(GATEWAY_FILE);
-            let parsed: Option<Vec<([i32; 3], [i32; 3], bool)>> = std::fs::read(&path)
-                .ok()
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            self.end.exits = Some(
-                parsed
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(g, e, x)| (g, (e, x)))
-                    .collect(),
-            );
-        }
-        self.end.exits.as_mut().expect("loaded exits")
-    }
-
-    fn save_gateway_exits(&mut self) -> Result<()> {
-        let list: Vec<_> = self
-            .gateway_exits()
-            .iter()
-            .map(|(g, (e, x))| (*g, *e, *x))
-            .collect();
-        let dir = horizon_client::save::dimension_dir(&self.world_root, "minecraft:the_end");
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join(GATEWAY_FILE), serde_json::to_vec(&list)?)?;
-        Ok(())
-    }
-
-    /// Drops a gateway's entry from the side file: its block entity is the source of truth.
-    fn forget_gateway_exit(&mut self, gateway: [i32; 3]) -> Result<()> {
-        if self.gateway_exits().remove(&gateway).is_some() {
-            self.save_gateway_exits()?;
-        }
-        Ok(())
-    }
-
+    /// `TheEndGatewayBlockEntity.setExitPosition`: the block entity alone owns the exit.
     fn set_gateway_exit(&mut self, gateway: [i32; 3], exit: [i32; 3], exact: bool) -> Result<()> {
-        // TheEndGatewayBlockEntity.setExitPosition (also EndGatewayFeature.knownExit).
-        let key = (gateway[0], gateway[1], gateway[2]);
         let chunk = (gateway[0] >> 4, gateway[2] >> 4);
-        // The gateway's chunk can be unloaded by now (travel waits for the destination): the
-        // exit then waits in the side file until the gateway is used again (`gateway_job`).
-        if self.world.chunks.contains_key(&chunk)
-            && let BlockEntity::EndGateway(g) = self
-                .world
-                .block_entities
-                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
+        if !self.world.chunks.contains_key(&chunk) {
+            return Err("gateway source chunk is not loaded".into());
+        }
+        // A gateway removed while an entity waits for the destination stays removed.
+        if &*self.block_name(gateway) != "minecraft:end_gateway" {
+            return Ok(());
+        }
+        if let BlockEntity::EndGateway(g) = self
+            .world
+            .block_entities
+            .get_or_insert_with((gateway[0], gateway[1], gateway[2]), || {
+                BlockEntity::EndGateway(Default::default())
+            })
         {
             g.exit_portal = Some(exit);
             g.exact_teleport = exact;
             self.world.modified.insert(chunk);
-            return self.forget_gateway_exit(gateway);
         }
-        self.gateway_exits().insert(gateway, (exit, exact));
-        self.save_gateway_exits()
+        Ok(())
     }
 
-    /// EndGatewayBlock.entityInside and TheEndGatewayBlockEntity.getPortalPosition:
-    /// travel within the End, waiting for the destination chunks to load.
-    fn enter_gateway(&mut self, gateway: [i32; 3]) -> Result<()> {
-        // TheEndGatewayBlockEntity.triggerCooldown: 40 ticks.
-        self.end.gateway_cooldown = 40;
-        let (job, destination) = self.gateway_job(gateway);
-        let Some(player) = self.player.take() else {
-            return Ok(());
-        };
-        self.end.job = Some(job);
-        self.end_travel = true;
-        self.travelling = Some((player, destination));
-        Ok(())
+    fn known_gateway_exit(&self, gateway: [i32; 3]) -> Option<([i32; 3], bool)> {
+        match self
+            .world
+            .block_entities
+            .get(&(gateway[0], gateway[1], gateway[2]))
+        {
+            Some(BlockEntity::EndGateway(g)) => g.exit_portal.map(|e| (e, g.exact_teleport)),
+            _ => None,
+        }
     }
 
     /// Where `gateway` leads (TheEndGatewayBlockEntity.getPortalPosition):
     /// its exit, or the search for one, and the spot to load before either
     /// is resolved ([`Game::resolve_gateway`]).
     pub(super) fn gateway_job(&mut self, gateway: [i32; 3]) -> (GatewayJob, Vec3) {
-        let mut known = self.gateway_exits().get(&gateway).copied();
-        // Once the gateway's chunk is loaded its block entity is the source of truth: an exit the
-        // side file kept for it moves there, and the entry is dropped, so removing or replacing
-        // the exit (`/data remove block`) is not undone by an old entry.
-        let key = (gateway[0], gateway[1], gateway[2]);
-        let chunk = (gateway[0] >> 4, gateway[2] >> 4);
-        if let Some(saved) = known
-            && self.world.chunks.contains_key(&chunk)
-            && let BlockEntity::EndGateway(g) = self
-                .world
-                .block_entities
-                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
-        {
-            if adopt_saved_exit(g, saved) {
-                self.world.modified.insert(chunk);
-            }
-            known = None;
-            let _ = self.forget_gateway_exit(gateway);
-        }
         let job = GatewayJob::for_gateway(
             gateway,
             self.world
                 .block_entities
                 .get(&(gateway[0], gateway[1], gateway[2])),
-            known,
         );
+        if let Some(c) = job.source_chunk()
+            && !self.end.areas.contains(&c)
+        {
+            self.end.areas.push(c);
+            self.streaming.extra.push((c, 1));
+        }
         let destination = match job {
             GatewayJob::Known { exit, .. } => Vec3::new(
                 f64::from(exit[0]) + 0.5,
@@ -1027,13 +1055,7 @@ impl Game<'_> {
     /// The teleport position of a gateway job, creating the exit gateway (and
     /// an island when the chunk has no landing spot) for new destinations.
     pub(super) fn resolve_gateway(&mut self, job: GatewayJob, target: Vec3) -> Result<Vec3> {
-        let bottom_center = |p: [i32; 3]| {
-            Vec3::new(
-                f64::from(p[0]) + 0.5,
-                f64::from(p[1]),
-                f64::from(p[2]) + 0.5,
-            )
-        };
+        let bottom_center = horizon_client::end_gateway::bottom_center;
         let find_exit = |game: &Self, exit: [i32; 3]| {
             let p = game.tallest_block([exit[0], exit[1] + 2, exit[2]], 5, false);
             [p[0], p[1] + 1, p[2]]
@@ -1043,6 +1065,21 @@ impl Game<'_> {
                 find_exit(self, e)
             }))),
             GatewayJob::Find { gateway, exact } => {
+                if !self
+                    .world
+                    .chunks
+                    .contains_key(&(gateway[0] >> 4, gateway[2] >> 4))
+                {
+                    return Err("gateway source chunk is not loaded".into());
+                }
+                // The player and the entities may resolve the same gateway: the
+                // first one to arrive finds the exit, the others use it.
+                let known = self.known_gateway_exit(gateway);
+                if let Some((exit, exact)) = known {
+                    return Ok(bottom_center(exit_target(exit, exact, |e| {
+                        find_exit(self, e)
+                    })));
+                }
                 // findExitPortalXZPosTentative over the loaded chunks.
                 let dir = glam::DVec2::new(f64::from(gateway[0]), f64::from(gateway[2]))
                     .normalize_or_zero();
@@ -1178,6 +1215,7 @@ impl Game<'_> {
             let base = glam::Mat4::from_translation(rel.as_vec3())
                 * glam::Mat4::from_scale(glam::Vec3::splat(2.0))
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.5, 0.0));
+            let start = out.len();
             horizon_client::mobs::render::draw(
                 model,
                 base,
@@ -1188,6 +1226,11 @@ impl Game<'_> {
                 0,
                 out,
             );
+            // HDR output: the crystal shines; its tier's window leaves the dark base alone
+            // (entity.wgsl fs_hdr_mark).
+            for v in &mut out[start..] {
+                v.layer |= u32::from(horizon_client::mesher::BRIGHT) << 16;
+            }
             if let Some(target) = crystal.beam {
                 // The beam from the target's centre up to the bobbing crystal.
                 let from = glam::DVec3::new(
@@ -1253,8 +1296,16 @@ impl Game<'_> {
             target
         };
         let survive = self.world.random.next_int_bound(5).unwrap_or(0) > 0;
+        let at = [p.position.x, p.position.y, p.position.z];
+        let ctx = self.player_context(None);
+        self.post_game_event(
+            "minecraft:projectile_shoot",
+            [start.x, start.y, start.z],
+            ctx,
+        );
+        let id = self.take_entity_id();
         self.end.eyes.push(EyeOfEnder {
-            id: 0,
+            id,
             position: start,
             previous: start,
             velocity: glam::DVec3::ZERO,
@@ -1264,10 +1315,16 @@ impl Game<'_> {
         });
         let r = self.world.random.next_float();
         let pitch = 0.33 + r * (0.5 - 0.33);
-        let at = [p.position.x, p.position.y, p.position.z];
         self.audio
             .play("minecraft:entity.ender_eye.launch", Some(at), 1.0, pitch);
+        // CriteriaTriggers.USED_ENDER_EYE, against the feature's block.
+        let (dx, dz) = (
+            at[0] - f64::from(nearest.x * 16),
+            at[2] - f64::from(nearest.z * 16),
+        );
+        self.trigger_used_ender_eye(dx * dx + dz * dz);
         self.consume_held();
+        self.award_stat("used", "minecraft:ender_eye", 1);
         self.swing_arm();
     }
 
@@ -1380,53 +1437,397 @@ impl Game<'_> {
             pitch.cos(),
             yaw.cos() * pitch.sin(),
         ) * 0.25;
-        let full = (15 * 16) | ((15 * 16) << 8);
         for eye in &self.end.eyes {
             let p = eye.previous + (eye.position - eye.previous) * alpha - camera;
-            let c = p.as_vec3();
-            let corners = [
-                (c - right - up, [r.u0, r.v1]),
-                (c + right - up, [r.u1, r.v1]),
-                (c + right + up, [r.u1, r.v0]),
-                (c - right + up, [r.u0, r.v0]),
-            ];
-            for (pos, uv) in corners {
-                out.push(Vertex {
-                    normal: [0; 4],
-                    pos: pos.to_array(),
-                    uv,
-                    layer: 0,
-                    color: 0xFFFF_FFFF,
-                    light: full,
+            out.extend(eye_quad(p.as_vec3(), right, up, r));
+        }
+    }
 
-                    glint_uv: [0.0, 0.0],
-                });
+    // ---- End gateway travel for the entities ----
+
+    /// `EndGatewayBlock.entityInside` for the items, mobs and thrown ender
+    /// pearls in the End: the gateway blocks their box swept through. A
+    /// gateway that is cooling down (`TheEndGatewayBlockEntity.triggerCooldown`)
+    /// takes nobody in. `entityInside` comes from the entity's own tick
+    /// (`applyEffectsFromBlocks`), and `ServerLevel.tick` ticks only the
+    /// entities in entity-ticking chunks: one past the simulation distance
+    /// enters none (and costs nothing here, however many lie there).
+    pub(super) fn find_end_gateway_portals(&mut self) {
+        if self.remote.is_some() || self.dim != Dim::End {
+            return;
+        }
+        let is_gateway = |game: &Self, p: BlockPos| {
+            &*game.res.facts().get(game.world.block(p.x, p.y, p.z)).name == "minecraft:end_gateway"
+        };
+        let ticking = self.entity_ticking_area();
+        let ticks = |at: Vec3| ticking(at.x.floor() as i32, at.z.floor() as i32);
+        let items: Vec<(u32, Vec3, f32, f32)> = self
+            .dropped
+            .iter()
+            .filter(|e| ticks(e.position))
+            .map(|e| (e.id, e.position, 0.25, 0.25))
+            .collect();
+        let mobs: Vec<(u32, Vec3, f32, f32)> = self
+            .mobs
+            .iter()
+            .filter(|m| ticks(m.position) && self.mob_can_use_portal(m))
+            .map(|m| (m.id, m.position, m.width(), m.height()))
+            .chain(
+                self.boats
+                    .iter()
+                    .filter(|b| ticks(b.position) && self.vehicle_can_use_portal(b.id))
+                    .map(|b| {
+                        (
+                            b.id,
+                            b.position,
+                            super::boats::WIDTH as f32,
+                            super::boats::HEIGHT as f32,
+                        )
+                    }),
+            )
+            .chain(
+                self.carts
+                    .iter()
+                    .filter(|c| ticks(c.position) && self.vehicle_can_use_portal(c.id))
+                    .map(|c| {
+                        (
+                            c.id,
+                            c.position,
+                            super::minecarts::WIDTH as f32,
+                            super::minecarts::HEIGHT as f32,
+                        )
+                    }),
+            )
+            .collect();
+        let mut inside: Vec<(u32, BlockPos)> = Vec::new();
+        for (id, to, width, height) in items.into_iter().chain(mobs) {
+            let from = self.portals.before.get(&id).copied().unwrap_or(to);
+            let found = horizon_client::end_gateway::swept_gateway(from, to, width, height, |p| {
+                is_gateway(self, p)
+            });
+            if let Some(pos) = found {
+                inside.push((id, pos));
+            }
+        }
+        // A pearl's move this tick, from where it started it.
+        let pearls: Vec<(u32, Option<Who>, Option<u32>, BlockPos)> = self
+            .creatures
+            .projectiles
+            .iter()
+            .filter(|p| ticks(p.position))
+            .filter_map(|p| {
+                let pos = horizon_client::end_gateway::pearl_gateway(p, |b| is_gateway(self, b))?;
+                Some((p.id, p.owner, p.guest, pos))
+            })
+            .collect();
+        for (id, owner, guest, pos) in pearls {
+            if owner == Some(Who::Player) {
+                self.pearl_owner_in_gateway(guest, pos);
+            }
+            inside.push((id, pos));
+        }
+        for (id, pos) in inside {
+            // One entity at a time: the gateway cools down for 40 ticks.
+            if !self.gateway_enter([pos.x, pos.y, pos.z]) {
+                continue;
+            }
+            // An entity that just came through any portal stays out of this one.
+            if self.restart_portal_cooldown(id) {
+                continue;
+            }
+            let delay = self.entity_portal_delay(id);
+            self.end
+                .gateways
+                .entry(id)
+                .or_default()
+                .enter_with_delay(pos, delay);
+        }
+        // ThrowableProjectile applies the gateway's block effect before Entity.tick.
+        self.handle_end_gateway_portals_phase(true);
+    }
+
+    /// `ThrownEnderpearl.onInsideBlock` in an End gateway: its owner's
+    /// `ServerPlayer.onInsideBlock`, the enter_block trigger, as if they had
+    /// walked in. A guest's pearl triggers theirs; one whose guest has left
+    /// has no owner.
+    fn pearl_owner_in_gateway(&mut self, guest: Option<u32>, pos: BlockPos) {
+        let state = self.world.block(pos.x, pos.y, pos.z);
+        let Some(conn) = guest else {
+            self.trigger_enter_block(state);
+            return;
+        };
+        if let Some(mut host) = self.lan.take() {
+            self.as_guest(&mut host, conn, |g| g.trigger_enter_block(state));
+            self.lan = Some(host);
+        }
+    }
+
+    /// `Entity.handlePortal` for the entities in an End gateway: they go
+    /// through to the gateway's exit, where they wait for its chunks.
+    pub(super) fn handle_end_gateway_portals(&mut self) {
+        self.handle_end_gateway_portals_phase(false);
+    }
+
+    fn handle_end_gateway_portals_phase(&mut self, after_move: bool) {
+        // Nobody in a gateway: nothing to look up.
+        if self.remote.is_some() || self.dim != Dim::End || self.end.gateways.is_empty() {
+            return;
+        }
+        // `handlePortal` runs in the entity's tick: one past the simulation
+        // distance waits in its gateway, its state kept as it is.
+        let ticking = self.entity_ticking_area();
+        let ticks = |at: Vec3| ticking(at.x.floor() as i32, at.z.floor() as i32);
+        let ids: Vec<(u32, bool, bool)> = self
+            .dropped
+            .iter()
+            .map(|e| (e.id, true, ticks(e.position)))
+            .chain(
+                self.mobs
+                    .iter()
+                    .map(|m| (m.id, self.mob_can_use_portal(m), ticks(m.position))),
+            )
+            .chain(
+                self.boats
+                    .iter()
+                    .map(|b| (b.id, self.vehicle_can_use_portal(b.id), ticks(b.position))),
+            )
+            .chain(
+                self.carts
+                    .iter()
+                    .map(|c| (c.id, self.vehicle_can_use_portal(c.id), ticks(c.position))),
+            )
+            .chain(
+                self.creatures
+                    .projectiles
+                    .iter()
+                    .filter(|p| matches!(p.kind, ProjectileKind::EnderPearl))
+                    .map(|p| (p.id, true, ticks(p.position))),
+            )
+            .collect();
+        let mut present: std::collections::HashSet<u32> =
+            ids.iter().map(|(id, _, _)| *id).collect();
+        // A pearl waiting for its exit keeps its portal cooldown.
+        present.extend(self.end.arrivals.iter().map(|a| match &a.traveller {
+            Arriving::Pearl(p) => p.id,
+            Arriving::Live(id) => *id,
+        }));
+        self.end.gateways.retain(|id, _| present.contains(id));
+        let mut leaving: Vec<(u32, BlockPos)> = Vec::new();
+        for (id, allowed, ticking) in ids {
+            if !ticking {
+                continue;
+            }
+            // Only an entity in a gateway has a state: skip the others before
+            // the per-id lookups below, which walk the entity lists.
+            if !self.end.gateways.contains_key(&id) {
+                continue;
+            }
+            let is_pearl = self
+                .creatures
+                .projectiles
+                .iter()
+                .any(|p| p.id == id && matches!(p.kind, ProjectileKind::EnderPearl));
+            if is_pearl != after_move {
+                continue;
+            }
+            let delay = self.entity_portal_delay(id);
+            let Some(state) = self.end.gateways.get_mut(&id) else {
+                continue;
+            };
+            // The End gateway has no transition time (Portal.getPortalTransitionTime).
+            if let Some(entry) = state.travel_with_delay(allowed, delay) {
+                leaving.push((id, entry));
+            }
+            if state.is_done() {
+                self.end.gateways.remove(&id);
+            }
+        }
+        for (id, entry) in leaving {
+            self.send_through_gateway(id, entry);
+        }
+    }
+
+    /// `Entity.teleportToPortalDestination` for an entity that goes through an
+    /// End gateway: an ordinary same-level entity stays live while the exit loads.
+    fn send_through_gateway(&mut self, id: u32, gateway: BlockPos) {
+        if matches!(
+            self.level_entity(id as i32),
+            Some(
+                super::commands::Target::Item(_)
+                    | super::commands::Target::Mob(_)
+                    | super::commands::Target::Boat(_)
+                    | super::commands::Target::Cart(_)
+            )
+        ) {
+            let (job, target) = self.gateway_job([gateway.x, gateway.y, gateway.z]);
+            let arrival = GatewayArrival {
+                traveller: Arriving::Live(id),
+                job,
+                target,
+            };
+            if let Some(waiting) = self.arrive_through_gateway(arrival) {
+                self.end.arrivals.push(waiting);
+            }
+            return;
+        }
+        if let Some(i) = self.creatures.projectiles.iter().position(|p| p.id == id) {
+            let pearl = Box::new(self.creatures.projectiles.remove(i));
+            self.native_leave_skip(id);
+            let (job, target) = self.gateway_job([gateway.x, gateway.y, gateway.z]);
+            let arrival = GatewayArrival {
+                traveller: Arriving::Pearl(pearl),
+                job,
+                target,
+            };
+            // It is at the exit before it moves this tick, once that has loaded.
+            if let Some(waiting) = self.arrive_through_gateway(arrival) {
+                self.end.arrivals.push(waiting);
             }
         }
     }
+
+    /// The entities that reached a gateway's exit: they land where the
+    /// gateway leads, once its chunks have loaded.
+    pub(super) fn resolve_end_gateway_arrivals(&mut self) -> Result<()> {
+        if self.remote.is_some() || self.dim != Dim::End {
+            return Ok(());
+        }
+        for arrival in std::mem::take(&mut self.end.arrivals) {
+            if let Some(waiting) = self.arrive_through_gateway(arrival) {
+                self.end.arrivals.push(waiting);
+            }
+        }
+        Ok(())
+    }
+
+    /// `Entity.teleport` of a gateway traveller once its exit's chunk has
+    /// loaded: the ordinary entity moves live and a pearl flies on from there.
+    /// The traveller comes back while it still waits.
+    fn arrive_through_gateway(&mut self, arrival: GatewayArrival) -> Option<GatewayArrival> {
+        let chunk = |at: Vec3| ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4);
+        if !self.world.chunks.contains_key(&chunk(arrival.target))
+            || arrival
+                .job
+                .source_chunk()
+                .is_some_and(|c| !self.world.chunks.contains_key(&c))
+        {
+            return Some(arrival);
+        }
+        let at = match self.resolve_gateway(arrival.job, arrival.target) {
+            Ok(at) => at,
+            Err(e) => {
+                // The traveller waits for the exit: the failure is retried.
+                log::warn!("End gateway: {e}");
+                return Some(arrival);
+            }
+        };
+        let key = chunk(at);
+        match arrival.traveller {
+            Arriving::Live(id) => {
+                if let Some(target) = self.level_entity(id as i32) {
+                    // Entity.teleportSameDimension keeps the live entity and
+                    // its motion, and moves every passenger in the same operation.
+                    self.teleport_to_in_level(target, [at.x, at.y, at.z], None, false);
+                    self.set_portal_cooldown(id);
+                    self.place_portal_ticket(key);
+                }
+            }
+            Arriving::Pearl(mut pearl) => {
+                horizon_client::end_gateway::place_pearl(&mut pearl, at);
+                // ThrownEnderpearl.teleport: placePortalTicket where it came out.
+                self.end.tickets.retain(|(c, _)| *c != key);
+                self.end.tickets.push((key, PORTAL_TICKET));
+                self.add_projectile(*pearl);
+            }
+        }
+        None
+    }
+
+    /// The chunks the entities waiting to arrive need, kept loaded like the
+    /// areas a server keeps around its players.
+    pub(super) fn keep_gateway_destinations(&mut self) {
+        let areas = &self.end.areas;
+        self.streaming
+            .extra
+            .retain(|&(c, r)| !(r == 1 && areas.contains(&c)));
+        // The pearls' portal tickets hold End chunks, and run out there
+        // (TicketType.PORTAL's timeout).
+        let in_end = self.dim == Dim::End;
+        if in_end {
+            self.end.tickets.retain_mut(|(_, ticks)| {
+                *ticks = ticks.saturating_sub(1);
+                *ticks > 0
+            });
+        }
+        let mut areas = Vec::new();
+        let arrivals = self.end.arrivals.iter().map(|a| {
+            (
+                (a.target.x.floor() as i32) >> 4,
+                (a.target.z.floor() as i32) >> 4,
+            )
+        });
+        let tickets = self.end.tickets.iter().filter(|_| in_end);
+        let sources = self
+            .end
+            .arrivals
+            .iter()
+            .filter_map(|a| a.job.source_chunk());
+        for c in arrivals
+            .chain(tickets.map(|&(c, _)| c))
+            .chain(sources)
+            .chain(self.gateway_source_chunks())
+        {
+            if !areas.contains(&c) {
+                areas.push(c);
+                self.streaming.extra.push((c, 1));
+            }
+        }
+        self.end.areas = areas;
+    }
 }
+
+/// item/generated's ground display `translation [0, 2, 0]` is 2/16 of a block, and
+/// ThrownItemRenderer draws the eye at scale 1.0.
+const GROUND_LIFT: f32 = 0.125;
+
+/// `ThrownItemRenderer.submit`: the four camera-facing vertices of an eye of ender at `at` (the
+/// entity's position; the quad itself is lifted above it). `right` and `up` are the camera's axes
+/// times the quad's 0.25 half extent.
+fn eye_quad(
+    at: glam::Vec3,
+    right: glam::Vec3,
+    up: glam::Vec3,
+    r: horizon_client::hud::Rect,
+) -> [Vertex; 4] {
+    // The lift is along the billboard's own up axis (the camera's up, so world +Y only at pitch 0):
+    // item/ender_eye parents item/generated with no display override, so its ground transform's
+    // `translation [0, 2, 0]` = 0.125 blocks applies here.
+    let c = at + up.normalize() * GROUND_LIFT;
+    [
+        (c - right - up, [r.u0, r.v1]),
+        (c + right - up, [r.u1, r.v1]),
+        (c + right + up, [r.u1, r.v0]),
+        (c - right + up, [r.u0, r.v0]),
+    ]
+    .map(|(pos, uv)| Vertex {
+        normal: [0; 4],
+        pos: pos.to_array(),
+        uv,
+        layer: 0,
+        color: 0xFFFF_FFFF,
+        light: (15 * 16) | ((15 * 16) << 8),
+        glint_uv: [0.0, 0.0],
+    })
+}
+
+#[cfg(test)]
+#[path = "end_gateway_ticking_tests.rs"]
+mod ticking_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use horizon_client::containers::EndGateway;
-
-    #[test]
-    fn a_saved_exit_moves_into_a_gateway_without_one() {
-        let saved = ([8, 100, 0], true);
-        let mut bare = EndGateway::default();
-        assert!(adopt_saved_exit(&mut bare, saved));
-        assert_eq!(bare.exit_portal, Some([8, 100, 0]));
-        assert!(bare.exact_teleport);
-        // The block entity's own exit wins over a stale entry.
-        let mut own = EndGateway {
-            exit_portal: Some([1, 2, 3]),
-            ..Default::default()
-        };
-        assert!(!adopt_saved_exit(&mut own, saved));
-        assert_eq!(own.exit_portal, Some([1, 2, 3]));
-        assert!(!own.exact_teleport);
-    }
 
     #[test]
     fn a_new_exit_keeps_the_gateways_exact_teleport() {
@@ -1449,7 +1850,18 @@ mod tests {
     }
 
     #[test]
-    fn end_gateway_job_prefers_block_entity_then_legacy_then_heuristic() {
+    fn leaving_the_end_without_a_point_of_its_own_goes_to_the_world_spawn() {
+        let world = Some([220, 63, -41]);
+        assert_eq!(fallback_spawn(None, world), Vec3::new(220.5, 63.0, -40.5));
+        assert_eq!(
+            fallback_spawn(Some(Vec3::new(10.5, 70.0, 12.5)), world),
+            Vec3::new(10.5, 70.0, 12.5)
+        );
+        assert_eq!(fallback_spawn(None, None), Vec3::new(0.5, 64.0, 0.5));
+    }
+
+    #[test]
+    fn end_gateway_job_reads_the_block_entity_and_keeps_new_sources_loaded() {
         let gateway = [702, 100, 0];
         let exit = [8, 100, 0];
         for exact in [true, false] {
@@ -1459,18 +1871,14 @@ mod tests {
                 ..Default::default()
             });
             assert_eq!(
-                GatewayJob::for_gateway(gateway, Some(&entity), Some((END_SPAWN, !exact))),
+                GatewayJob::for_gateway(gateway, Some(&entity)),
                 GatewayJob::Known { exit, exact },
             );
         }
         let empty = BlockEntity::EndGateway(EndGateway::default());
         for entity in [None, Some(&empty)] {
             assert_eq!(
-                GatewayJob::for_gateway(gateway, entity, Some((exit, false))),
-                GatewayJob::Known { exit, exact: false }
-            );
-            assert_eq!(
-                GatewayJob::for_gateway(gateway, entity, None),
+                GatewayJob::for_gateway(gateway, entity),
                 GatewayJob::Known {
                     exit: END_SPAWN,
                     exact: true
@@ -1482,14 +1890,14 @@ mod tests {
                 ..Default::default()
             });
             assert_eq!(
-                GatewayJob::for_gateway(nearby, Some(&exact), None),
+                GatewayJob::for_gateway(nearby, Some(&exact)),
                 GatewayJob::Find {
                     gateway: nearby,
                     exact: true
                 }
             );
             assert_eq!(
-                GatewayJob::for_gateway(nearby, entity, None),
+                GatewayJob::for_gateway(nearby, entity),
                 GatewayJob::Find {
                     gateway: nearby,
                     exact: false
@@ -1497,4 +1905,66 @@ mod tests {
             );
         }
     }
+
+    /// The eye sprite's atlas region; only its UVs are used here.
+    fn eye_rect() -> horizon_client::hud::Rect {
+        horizon_client::hud::Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        }
+    }
+
+    #[test]
+    fn a_thrown_eye_is_lifted_by_the_item_ground_transform() {
+        let right = glam::Vec3::X * 0.25;
+        let up = glam::Vec3::Y * 0.25;
+        let quad = eye_quad(glam::Vec3::new(0.0, 100.0, 0.0), right, up, eye_rect());
+        let corners = quad.map(|v| glam::Vec3::from_array(v.pos));
+        let centre = corners.iter().copied().sum::<glam::Vec3>() / 4.0;
+        let low = corners.iter().copied().reduce(glam::Vec3::min).unwrap();
+        let high = corners.iter().copied().reduce(glam::Vec3::max).unwrap();
+        // The eye at y = 100 + item/generated's 0.125 lift.
+        assert!(
+            centre.abs_diff_eq(glam::Vec3::new(0.0, 100.125, 0.0), 1e-5),
+            "{centre}"
+        );
+        assert_eq!((low.x, high.x), (-0.25, 0.25));
+        assert_eq!((high.x - low.x) * 0.5, 0.25);
+        assert_eq!((high.y - low.y) * 0.5, 0.25);
+        // ThrownItemRenderer draws the eye full-bright.
+        assert!(quad.iter().all(|v| v.light == 0xF0F0));
+    }
+
+    #[test]
+    fn a_thrown_eye_is_lifted_along_the_cameras_up_axis() {
+        // A camera tilted down 45 degrees: its up axis is (0, 1, 1)/sqrt(2), so the lift must
+        // move the quad along that axis, not straight up world Y.
+        let up_dir = glam::Vec3::new(0.0, 1.0, 1.0).normalize();
+        let at = glam::Vec3::new(0.0, 100.0, 0.0);
+        let quad = eye_quad(at, glam::Vec3::X * 0.25, up_dir * 0.25, eye_rect());
+        let corners = quad.map(|v| glam::Vec3::from_array(v.pos));
+        let centre = corners.iter().copied().sum::<glam::Vec3>() / 4.0;
+        assert!((centre - at).abs_diff_eq(up_dir * 0.125, 1e-5), "{centre}");
+    }
+
+    /// `endFlashPosition`'s direction: the flash sprite's centre, 100 blocks away.
+    #[test]
+    fn the_end_flash_is_where_its_sprite_is() {
+        let at =
+            |x: f32, y: f32| flash_pose(x, y).transform_point3(glam::Vec3::new(0.0, 100.0, 0.0));
+        // Straight up whatever the turn, and level toward the north at y_angle 180.
+        assert!(at(-90.0, 37.0).abs_diff_eq(glam::Vec3::new(0.0, 100.0, 0.0), 1e-3));
+        assert!(at(0.0, 180.0).abs_diff_eq(glam::Vec3::new(0.0, 0.0, -100.0), 1e-3));
+        for (x, y) in [(-60.0, -180.0), (10.0, 95.0), (-25.0, 3.0)] {
+            assert!((at(x, y).length() - 100.0).abs() < 1e-3);
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "gateway_cooldown_tests.rs"]
+mod cooldown_tests;

@@ -11,39 +11,85 @@ use horizon_client::{
     enchant::{EffectContext, Enchantments, level_value},
     items::ItemStack,
     mobs::Who,
+    projectiles::Projectile,
+    random_source,
 };
 use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::{fluid::FluidKind, level::LevelAccess, registry::BlockStateId};
 use serde_json::Value;
 
-/// Where Mending found a damaged item (`EnchantedItemInUse.inSlot`).
-#[derive(Clone, Copy)]
-enum MendSlot {
+/// `EquipmentSlot.getName` of each `mobs::finalize` slot (hands, feet to head).
+const MOB_SLOTS: [&str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
+
+/// One of the player's equipment slots (`EnchantedItemInUse.inSlot`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlayerSlot {
     Main,
     Off,
     /// An `armor` index (head first).
     Armor(usize),
 }
 
-impl Game<'_> {
-    /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
-    /// and mining fatigue.
-    pub(super) fn modify_destroy_speed(&self, mut speed: f32) -> f32 {
-        if speed > 1.0 {
-            let held = self.inventory[self.selected].as_ref();
-            speed += self
-                .res
-                .stations()
-                .enchantments
-                .attribute_add(held, "minecraft:mining_efficiency") as f32;
+/// `EquipmentSlot.VALUES` over what the player holds and wears: the main
+/// hand, the off hand, then feet, legs, chest and head (`armor` holds head
+/// first).
+const PLAYER_SLOTS: [PlayerSlot; 6] = [
+    PlayerSlot::Main,
+    PlayerSlot::Off,
+    PlayerSlot::Armor(3),
+    PlayerSlot::Armor(2),
+    PlayerSlot::Armor(1),
+    PlayerSlot::Armor(0),
+];
+
+impl PlayerSlot {
+    /// `EquipmentSlot.getName`.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Main => "mainhand",
+            Self::Off => "offhand",
+            Self::Armor(i) => ["head", "chest", "legs", "feet"][i],
         }
-        speed * self.potions.effects.mining_speed_factor()
+    }
+    fn equipment_slot(self) -> horizon_world::player_inventory::EquipmentSlot {
+        use horizon_world::player_inventory::EquipmentSlot;
+        match self {
+            Self::Main => EquipmentSlot::MainHand,
+            Self::Off => EquipmentSlot::OffHand,
+            Self::Armor(i) => super::armor_slot(i),
+        }
+    }
+}
+
+/// `Player.getDestroySpeed` multiplies by `BLOCK_BREAK_SPEED`; a player
+/// without the attribute keeps the vanilla default of 1.0.
+fn block_break_speed_factor(value: Option<f64>) -> f32 {
+    value.map_or(1.0, |value| value as f32)
+}
+
+impl Game<'_> {
+    /// `Attributes.MINING_EFFICIENCY` (efficiency), which `Player.getDestroySpeed`
+    /// adds to a tool speed above 1: 0 without a player or attribute.
+    pub(super) fn mining_efficiency(&mut self) -> f32 {
+        self.player
+            .as_mut()
+            .and_then(|player| player.attribute("minecraft:mining_efficiency").ok())
+            .unwrap_or(0.0) as f32
+    }
+    /// `Player.getDestroySpeed`'s final `Attributes.BLOCK_BREAK_SPEED` factor:
+    /// 1.0 by default, so a missing player or attribute changes nothing.
+    pub(super) fn block_break_speed(&mut self) -> f32 {
+        block_break_speed_factor(
+            self.player
+                .as_mut()
+                .and_then(|p| p.attribute("minecraft:block_break_speed").ok()),
+        )
     }
     /// `Attributes.SUBMERGED_MINING_SPEED` (0.2, raised by aqua affinity).
     pub(super) fn submerged_mining_speed(&self) -> f32 {
         let mut total = 0.0;
         for stack in self.armor.iter().flatten() {
-            for (attr, _, amount, op) in self.res.stations().enchantments.attributes(stack) {
+            for (attr, _, amount, op) in self.stations().enchantments.attributes(stack) {
                 if attr == "minecraft:submerged_mining_speed" && op == "add_multiplied_total" {
                     total += amount;
                 }
@@ -53,13 +99,13 @@ impl Game<'_> {
     }
     /// `EnchantmentHelper.processDurabilityChange` (unbreaking) for `amount` points.
     pub(super) fn durability_loss(&mut self, stack: &ItemStack, amount: u32) -> u32 {
-        let e = &self.res.stations().enchantments;
+        let e = &world_stations!(self).enchantments;
         if !e.has_component(stack, "minecraft:item_damage") {
             return amount;
         }
         let ctx = EffectContext {
             tool: Some(&stack.item),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
         e.modify_value(
@@ -74,16 +120,40 @@ impl Game<'_> {
     /// `ItemStack.hurtAndBreak` for the player's `stack`: the wear Unbreaking
     /// leaves, and `ItemDurabilityTrigger` when some is left (`applyDamage`).
     pub(super) fn wear(&mut self, stack: &ItemStack, amount: u32) -> u32 {
-        let loss = self.durability_loss(stack, amount);
+        // ItemStack.isDamageableItem: an unbreakable stack, or one without
+        // damage/max_damage, takes no wear before Unbreaking or mods are asked.
+        let component = |id| stack.data().and_then(|data| data.other(id));
+        if component("minecraft:unbreakable").is_some()
+            || component("!minecraft:max_damage").is_some()
+            || component("!minecraft:damage").is_some()
+        {
+            return 0;
+        }
+        let mut loss = self.durability_loss(stack, amount);
+        // The mods hear a server player's wear once Unbreaking has had its say,
+        // and may change it or stop it.
+        if loss > 0
+            && let (Some(uuid), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone())
+        {
+            let mut points = loss as i32;
+            let mut cancel = false;
+            self.native_item_damaged(uuid, &name, &stack.item, &mut points, &mut cancel);
+            loss = if cancel { 0 } else { points.max(0) as u32 };
+        }
         if loss > 0 {
-            self.trigger_item_durability(stack);
+            self.trigger_item_durability(stack, stack.damage + loss);
         }
         loss
     }
     /// `getEnchantedDamage - base`: damage bonus of the held weapon against a mob type.
     pub(super) fn enchant_damage_bonus(&mut self, target: &str) -> f32 {
+        self.enchanted_damage(target, 0.0)
+    }
+    /// `Player.getEnchantedDamage`: `base` run through the held weapon's
+    /// damage effects against a mob type.
+    pub(super) fn enchanted_damage(&mut self, target: &str, base: f32) -> f32 {
         let Some(held) = self.held().cloned() else {
-            return 0.0;
+            return base;
         };
         let ctx = EffectContext {
             this: Some(target),
@@ -91,30 +161,22 @@ impl Game<'_> {
             direct_attacker: Some("minecraft:player"),
             is_direct: true,
             damage_type: Some("minecraft:player_attack"),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
-        self.res.stations().enchantments.modify_value(
+        world_stations!(self).enchantments.modify_value(
             Some(&held),
             "minecraft:damage",
             &ctx,
             &mut self.world.random,
-            0.0,
+            base,
         )
-    }
-    /// Strength / weakness on the attack damage attribute.
-    pub(super) fn effect_attack_bonus(&self) -> f32 {
-        let fx = &self.potions.effects;
-        fx.amplifier("strength")
-            .map_or(0.0, |a| 3.0 * (a + 1) as f32)
-            - fx.amplifier("weakness")
-                .map_or(0.0, |a| 4.0 * (a + 1) as f32)
     }
     /// `Player.attack`'s extra knockback: `getKnockback` (the weapon's knockback
     /// enchantment, halved) plus 0.5 for a sprinting full-strength hit, and
     /// whether the hit is that knockback attack.
     pub(super) fn extra_knockback(&mut self, target_kind: &str, scale: f32) -> (f32, bool) {
-        let knockback_attack = scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting);
+        let sprinting = self.player.as_ref().is_some_and(|p| p.sprinting);
         let enchanted = match self.held().cloned() {
             Some(held) => {
                 let ctx = EffectContext {
@@ -122,10 +184,10 @@ impl Game<'_> {
                     attacker: Some("minecraft:player"),
                     direct_attacker: Some("minecraft:player"),
                     is_direct: true,
-                    items: Some(self.res.items()),
+                    items: Some(world_items!(self)),
                     ..Default::default()
                 };
-                self.res.stations().enchantments.modify_value(
+                world_stations!(self).enchantments.modify_value(
                     Some(&held),
                     "minecraft:knockback",
                     &ctx,
@@ -135,8 +197,7 @@ impl Game<'_> {
             }
             None => 0.0,
         };
-        let bonus = if knockback_attack { 0.5 } else { 0.0 };
-        (enchanted / 2.0 + bonus, knockback_attack)
+        horizon_client::attack_strength::extra_knockback(enchanted, scale, sprinting)
     }
     /// `causeExtraKnockback`'s direction, `(sin yRot, -cos yRot)` from Mth's
     /// sine table: the target flies where the attacker looks, not away from
@@ -147,35 +208,45 @@ impl Game<'_> {
         (f64::from(trig::sin(yaw)), -f64::from(trig::cos(yaw)))
     }
     /// The attacker's side of `causeExtraKnockback` as the attacking client
-    /// sees it: the server's player stops sprinting, and its flag reaches the
-    /// client. (The server's 0.6 speed cut never does: the client's own
-    /// `Player.attack` simulates no hurt, so it skips the knockback.)
+    /// sees it after a hit on a mob: the server's player stops sprinting, and
+    /// its flag reaches the client. (The server's 0.6 speed cut never does:
+    /// the client's own `Player.attack` simulates no hurt on a mob, so it
+    /// skips the knockback. A hit on another player does simulate one:
+    /// `remote_player_attack`.)
     pub(super) fn stop_sprint_after_extra_knockback(&mut self) {
         if let Some(p) = self.player.as_mut() {
             let _ = p.set_sprinting(false);
         }
     }
-    /// After a successful melee hit: fire aspect and wind burst.
+    /// `EnchantmentHelper.doPostAttackEffectsWithItemSource` after a successful
+    /// melee hit (`Player.itemAttackInteraction`, the sweep's
+    /// `doPostAttackEffects`): the victim's equipment first (Thorns), then the
+    /// attacker's weapon on the victim (fire aspect and wind burst).
     pub(super) fn post_attack(&mut self, mob: usize) {
+        if let Some(id) = self.mobs.get(mob).map(|m| m.id) {
+            self.mob_post_attack(id, Some(Who::Player), Some("minecraft:player"), None);
+        }
         let Some(held) = self.held().cloned() else {
             return;
         };
         let Some(m) = self.mobs.get(mob) else { return };
         let kind = m.kind.id.clone();
+        let victim = m.id;
         let ctx = EffectContext {
             this: Some(&kind),
             attacker: Some("minecraft:player"),
             direct_attacker: Some("minecraft:player"),
             is_direct: true,
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
         // minecraft:post_attack effects of the attacker's weapon on the victim:
         // ignite (fire aspect) and apply_mob_effect (bane of arthropods).
         let mut ignite = 0.0f32;
         let mut mob_effects = Vec::new();
+        let mut hook_calls: Vec<(String, String, Value, u32)> = Vec::new();
         for (id, level) in held.enchantments() {
-            let Some(def) = self.res.stations().enchantments.get(id) else {
+            let Some(def) = world_stations!(self).enchantments.get(id) else {
                 continue;
             };
             for effect in def.effects["minecraft:post_attack"]
@@ -184,14 +255,17 @@ impl Game<'_> {
                 .flatten()
             {
                 let e = &effect["effect"];
-                let kind_of = e["type"].as_str();
-                if effect["enchanted"] != "attacker"
-                    || effect["affected"] != "victim"
-                    || !matches!(
-                        kind_of,
-                        Some("minecraft:ignite" | "minecraft:apply_mob_effect")
-                    )
-                {
+                if effect["enchanted"] != "attacker" || effect["affected"] != "victim" {
+                    continue;
+                }
+                // A bare type name is minecraft's own, as a bare item id is.
+                let kind_of = match e["type"].as_str() {
+                    Some(k) if k.contains(':') => k.to_owned(),
+                    Some(k) => format!("minecraft:{k}"),
+                    None => continue,
+                };
+                let own = !kind_of.starts_with("minecraft:");
+                if !own && !matches!(&*kind_of, "minecraft:ignite" | "minecraft:apply_mob_effect") {
                     continue;
                 }
                 let mut random = self.world.random.clone();
@@ -205,7 +279,11 @@ impl Game<'_> {
                 if !ok {
                     continue;
                 }
-                if kind_of == Some("minecraft:ignite") {
+                // A mod's own kind: its hook answers, after this loop (the
+                // stations borrow is held here).
+                if own {
+                    hook_calls.push((id.to_string(), kind_of, e.clone(), *level));
+                } else if kind_of == "minecraft:ignite" {
                     ignite =
                         ignite.max(horizon_client::enchant::level_value(&e["duration"], *level));
                 } else {
@@ -222,6 +300,9 @@ impl Game<'_> {
         for (effect, level) in mob_effects {
             self.apply_mob_effect(mob, &effect, level);
         }
+        for (id, kind_of, data, level) in hook_calls {
+            self.native_enchant_effect(&id, &kind_of, &data, level, victim);
+        }
         self.post_attack_bursts(&held, &kind);
     }
     /// `EnchantmentHelper.doPostPiercingAttackEffects`: the
@@ -233,7 +314,7 @@ impl Game<'_> {
         };
         let mut effects = Vec::new();
         for (id, level) in held.enchantments() {
-            let Some(def) = self.res.stations().enchantments.get(id) else {
+            let Some(def) = self.stations().enchantments.get(id) else {
                 continue;
             };
             for entry in def.effects["minecraft:post_piercing_attack"]
@@ -351,13 +432,15 @@ impl Game<'_> {
         let ticks = (between("min_duration", "max_duration") * 20.0).round() as i32;
         let amplifier = (between("min_amplifier", "max_amplifier").round() as i32).max(0);
         if let Some(id) = super::potions::mob_effect_id(ids[pick]) {
+            let (new, entity) = (!m.has_effect(id), m.id as i32);
             m.add_effect(id, ticks, amplifier);
+            self.mod_effect_added(id, Some(entity), amplifier, new);
         }
     }
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):
     /// a burst at the player's feet that only knocks back and triggers
     /// blocks (`ExplodeEffect` with `block_interaction: trigger`).
-    fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
+    pub(super) fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
         let Some(p) = self.player.as_ref() else {
             return;
         };
@@ -369,13 +452,13 @@ impl Game<'_> {
             attacker: Some("minecraft:player"),
             direct_attacker: Some("minecraft:player"),
             is_direct: true,
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             direct_motion: Some(motion),
             ..Default::default()
         };
         let mut bursts = Vec::new();
         for (id, level) in held.enchantments() {
-            let Some(def) = self.res.stations().enchantments.get(id) else {
+            let Some(def) = world_stations!(self).enchantments.get(id) else {
                 continue;
             };
             for effect in def.effects["minecraft:post_attack"]
@@ -392,7 +475,7 @@ impl Game<'_> {
                     continue;
                 }
                 let ok = effect.get("requirements").is_none_or(|r| {
-                    self.res.stations().enchantments.condition(
+                    world_stations!(self).enchantments.condition(
                         r,
                         *level,
                         &ctx,
@@ -416,134 +499,436 @@ impl Game<'_> {
             let _ = self.wind_burst(feet, radius, knockback, false, false);
         }
     }
-    /// Thorns on worn armor when the mob `attacker` hits the player: the
-    /// `affected: attacker` effect of `Enchantment.doPostAttack` hurts the
-    /// entity that caused the hit.
+    /// `EnchantmentHelper.doPostAttackEffects`' `VICTIM` loop after the mob
+    /// `attacker` hurt the player: Thorns on what the player holds or wears
+    /// hurts the mob by `thorns` damage the player caused, so it is knocked
+    /// back from the player, turns on them and is theirs to kill.
     pub(super) fn thorns(&mut self, attacker: u32) {
-        let Some(index) = self.mobs.iter().position(|m| m.id == attacker && m.alive()) else {
-            return;
-        };
-        for damage in self.thorns_damage() {
-            let m = &mut self.mobs[index];
-            m.hurt(damage, None, &mut self.world.random);
-            let center = [m.position.x, m.position.y, m.position.z];
-            self.audio
-                .play("minecraft:enchant.thorns.hit", Some(center), 1.0, 1.0);
-        }
+        self.player_thorns(|g, min, max| {
+            // DamageEntity: Mth.randomBetween from the hurt entity's own random.
+            let Some(index) = g.mob_index.find(&g.mobs, attacker) else {
+                g.dragon_thorns(attacker, min, max);
+                return;
+            };
+            let damage = g.mobs[index].random.next_float() * (max - min) + min;
+            let Some(p) = g.player.as_ref() else { return };
+            let source = horizon_client::mobs::Damage {
+                kind: horizon_client::mobs::DamageKind::Thorns,
+                attacker: Some(Who::Player),
+                from: Some([p.position.x, p.position.y, p.position.z]),
+                attacker_species: None,
+            };
+            let alive = g.mobs[index].alive();
+            if g.hurt_by_player(index, damage, source) {
+                if alive && !g.mobs[index].alive() {
+                    g.native_kill_event(index);
+                }
+                g.last_hurt_by_player.insert(attacker, g.lan_acting);
+            }
+        });
     }
-    /// The victim's side of thorns: for each worn piece whose chance comes up,
-    /// the damage to deal the attacker (`DamageEntity` min 1, max 5) and the
-    /// piece's wear (`ChangeItemDamage` 2).
+    /// The victim's side of thorns when another player hit this one: the
+    /// damage each piece deals that player, rolled from the attacker's own
+    /// random (a player's, which no level draw shares).
     pub(super) fn thorns_damage(&mut self) -> Vec<f32> {
         let mut hits = Vec::new();
-        for slot in 0..4 {
-            let Some(stack) = self.armor[slot].clone() else {
+        self.player_thorns(|_, min, max| {
+            hits.push(random_source::entity().next_float() * (max - min) + min);
+        });
+        hits
+    }
+    /// `EnchantmentHelper.runIterationOnEquipment` over the player's hands and
+    /// armor, in `EquipmentSlot` order, running `Enchantment.doPostAttack` for
+    /// the `minecraft:post_attack` effects with `enchanted: victim` and
+    /// `affected: attacker` (Thorns): the chance from the level's random
+    /// (`Enchantment.damageContext`), then each `damage_entity` handed to `hit` (min,
+    /// max) and each `change_item_damage` worn off the piece, in the effect's
+    /// order. The attacker being dead stops neither the rolls nor the wear.
+    fn player_thorns(&mut self, mut hit: impl FnMut(&mut Self, f32, f32)) {
+        for slot in PLAYER_SLOTS {
+            let Some(stack) = self.player_slot(slot).clone() else {
                 continue;
             };
-            let level = stack.enchantment_level("minecraft:thorns");
-            if level == 0 {
-                continue;
-            }
-            let Some(def) = self.res.stations().enchantments.get("minecraft:thorns") else {
-                continue;
-            };
-            let effect = def.effects["minecraft:post_attack"][0].clone();
-            let ctx = EffectContext {
-                items: Some(self.res.items()),
-                ..Default::default()
-            };
-            let mut random = self.world.random.clone();
-            let ok = self.res.stations().enchantments.condition(
-                &effect["requirements"],
-                level,
-                &ctx,
-                &mut random,
-            );
-            self.world.random = random;
-            if !ok {
-                continue;
-            }
-            hits.push(1.0 + self.world.random.next_float() * 4.0);
-            // ChangeItemDamage -> ItemStack.hurtAndBreak: unbreaking applies.
-            let loss = self.wear(&stack, 2);
-            if let Some(s) = self.armor[slot].as_mut() {
-                s.damage += loss;
-                if self
-                    .res
-                    .items()
-                    .get(&s.item)
-                    .is_some_and(|i| s.damage >= i.max_damage)
+            let mut effects = Vec::new();
+            for (enchantment, level) in stack.enchantments() {
+                let Some(def) = world_stations!(self).enchantments.get(enchantment) else {
+                    continue;
+                };
+                // Enchantment.matchingSlot
+                let (name, hand) = (
+                    slot.name(),
+                    matches!(slot, PlayerSlot::Main | PlayerSlot::Off),
+                );
+                if !def.slots.iter().any(|s| {
+                    s == name || s == "any" || (s == "armor" && !hand) || (s == "hand" && hand)
+                }) {
+                    continue;
+                }
+                for effect in def.effects["minecraft:post_attack"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
                 {
-                    self.armor[slot] = None;
+                    if effect["enchanted"] == "victim" && effect["affected"] == "attacker" {
+                        effects.push((effect.clone(), *level));
+                    }
+                }
+            }
+            for (effect, level) in effects {
+                let ctx = EffectContext {
+                    this: Some("minecraft:player"),
+                    items: Some(world_items!(self)),
+                    ..Default::default()
+                };
+                let ok = effect.get("requirements").is_none_or(|r| {
+                    world_stations!(self).enchantments.condition(
+                        r,
+                        level,
+                        &ctx,
+                        &mut self.world.random,
+                    )
+                });
+                if ok {
+                    self.thorns_effect(&effect["effect"], level, slot, &mut hit);
                 }
             }
         }
-        hits
+    }
+    /// `AllOf.apply`, `DamageEntity.apply` and `ChangeItemDamage.apply` of one
+    /// Thorns-like effect of the piece in `slot`.
+    fn thorns_effect(
+        &mut self,
+        effect: &Value,
+        level: u32,
+        slot: PlayerSlot,
+        hit: &mut impl FnMut(&mut Self, f32, f32),
+    ) {
+        match effect["type"]
+            .as_str()
+            .map(|t| t.trim_start_matches("minecraft:"))
+        {
+            Some("all_of") => {
+                for e in effect["effects"].as_array().into_iter().flatten() {
+                    self.thorns_effect(e, level, slot, hit);
+                }
+            }
+            Some("damage_entity") => {
+                let min = level_value(&effect["min_damage"], level);
+                let max = level_value(&effect["max_damage"], level);
+                hit(self, min, max);
+            }
+            Some("change_item_damage") => {
+                let amount = level_value(&effect["amount"], level) as u32;
+                self.wear_player_piece(slot, amount);
+            }
+            _ => {}
+        }
+    }
+    /// `ItemStack.hurtAndBreak` for what the player has in `slot`: nothing for
+    /// an item that takes no wear or a creative player, Unbreaking's share
+    /// from the level's random, and a piece worn out leaves the slot.
+    fn wear_player_piece(&mut self, slot: PlayerSlot, amount: u32) {
+        let Some(stack) = self.player_slot(slot).clone() else {
+            return;
+        };
+        if amount == 0
+            || self.creative
+            || !horizon_client::stations::is_damageable(world_items!(self), &stack)
+        {
+            return;
+        }
+        let loss = self.wear(&stack, amount);
+        let max = world_items!(self)
+            .get(&stack.item)
+            .map_or(0, |i| i.max_damage);
+        let Some(s) = self.player_slot_mut(slot).as_mut() else {
+            return;
+        };
+        s.damage += loss;
+        if s.damage >= max {
+            *self.player_slot_mut(slot) = None;
+            self.player_equipment_broke(slot.equipment_slot(), &stack);
+            if let PlayerSlot::Armor(_) = slot {
+                self.apply_equipment();
+            }
+        }
+    }
+    /// `EnchantmentHelper.doPostAttackEffectsWithItemSource`'s victim loop:
+    /// each equipment slot's chance, damage from the attacker's random, then wear.
+    pub(super) fn mob_post_attack(
+        &mut self,
+        target: u32,
+        attacker: Option<Who>,
+        direct: Option<&str>,
+        damage_type: Option<&str>,
+    ) {
+        let attacker_kind = match attacker {
+            Some(Who::Player) => self.player.as_ref().map(|_| "minecraft:player".to_owned()),
+            Some(Who::Mob(id)) => self
+                .mobs
+                .iter()
+                .find(|m| m.id == id && !m.removed)
+                .map(|m| m.kind.id.clone())
+                .or_else(|| {
+                    self.dragon
+                        .as_ref()
+                        .filter(|d| d.id == id)
+                        .map(|_| "minecraft:ender_dragon".to_owned())
+                }),
+            None => None,
+        };
+        let attacker = attacker.filter(|_| attacker_kind.is_some());
+        let direct = direct.or(attacker_kind.as_deref());
+        use horizon_client::mobs::finalize as f;
+        let Some(m) = self.mobs.iter().find(|m| m.id == target) else {
+            return;
+        };
+        let (id, kind) = (m.id, m.kind.id.clone());
+        // EquipmentSlot.VALUES: the hands, then the feet up to the head (the
+        // body and the saddle keep no enchantments here).
+        for slot in [f::MAINHAND, f::OFFHAND, f::FEET, f::LEGS, f::CHEST, f::HEAD] {
+            let Some(stack) = self
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .and_then(|m| f::item_stack(m, slot))
+            else {
+                continue;
+            };
+            let name = MOB_SLOTS[slot];
+            let hand = slot == f::MAINHAND || slot == f::OFFHAND;
+            let mut effects = Vec::new();
+            for (enchantment, level) in stack.enchantments() {
+                let Some(def) = world_stations!(self).enchantments.get(enchantment) else {
+                    continue;
+                };
+                // Enchantment.matchingSlot
+                if !def.slots.iter().any(|s| {
+                    s == name || s == "any" || (s == "armor" && !hand) || (s == "hand" && hand)
+                }) {
+                    continue;
+                }
+                for effect in def.effects["minecraft:post_attack"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    if effect["enchanted"] == "victim" {
+                        effects.push((effect.clone(), *level));
+                    }
+                }
+            }
+            for (effect, level) in effects {
+                // Enchantment.damageContext: random_chance draws from the level's random.
+                let ctx = EffectContext {
+                    this: Some(&kind),
+                    attacker: attacker_kind.as_deref(),
+                    direct_attacker: direct,
+                    is_direct: direct.is_some() && direct == attacker_kind.as_deref(),
+                    damage_type,
+                    items: Some(world_items!(self)),
+                    ..Default::default()
+                };
+                let ok = effect.get("requirements").is_none_or(|r| {
+                    world_stations!(self).enchantments.condition(
+                        r,
+                        level,
+                        &ctx,
+                        &mut self.world.random,
+                    )
+                });
+                if ok
+                    && effect["affected"] == "attacker"
+                    && let Some(attacker) = attacker
+                {
+                    self.victim_effect(&effect["effect"], level, id, slot, attacker);
+                }
+            }
+        }
+    }
+    /// `DamageEntity.apply`, `ChangeItemDamage.apply` (on the piece) and
+    /// `AllOf` for one `post_attack` effect of the piece the mob `wearer` has
+    /// in `slot`, on the entity that hit it.
+    fn victim_effect(
+        &mut self,
+        effect: &Value,
+        level: u32,
+        wearer: u32,
+        slot: usize,
+        attacker: Who,
+    ) {
+        match effect["type"]
+            .as_str()
+            .map(|t| t.trim_start_matches("minecraft:"))
+        {
+            Some("all_of") => {
+                for e in effect["effects"].as_array().into_iter().flatten() {
+                    self.victim_effect(e, level, wearer, slot, attacker);
+                }
+            }
+            // DamageEntity.apply: the affected attacker's own random, then
+            // hurtServer by a source the wearer caused, from its feet.
+            Some("damage_entity") => {
+                let min = level_value(&effect["min_damage"], level);
+                let max = level_value(&effect["max_damage"], level);
+                let random = match attacker {
+                    Who::Player => random_source::entity().next_float(),
+                    Who::Mob(id) => match self.mob_index.find(&self.mobs, id) {
+                        Some(index) => self.mobs[index].random.next_float(),
+                        None => match self.dragon_effect_random(id) {
+                            Some(random) => random,
+                            None => return,
+                        },
+                    },
+                };
+                let damage = random * (max - min) + min;
+                let Some(m) = self.mobs.iter().find(|m| m.id == wearer) else {
+                    return;
+                };
+                let from = [m.position.x, m.position.y, m.position.z];
+                let kind = effect["damage_type"].as_str().unwrap_or("minecraft:thorns");
+                match attacker {
+                    Who::Player => {
+                        self.mob_hits_player_caused(damage, from, kind, Some(wearer));
+                    }
+                    Who::Mob(id) => {
+                        let source = horizon_client::mobs::Damage {
+                            kind: Self::damage_kind(kind),
+                            attacker: Some(Who::Mob(wearer)),
+                            from: Some(from),
+                            attacker_species: Some(m.species()),
+                        };
+                        self.mob_hits_mob(id, damage, source);
+                    }
+                }
+            }
+            Some("change_item_damage") => {
+                let amount = level_value(&effect["amount"], level) as u32;
+                self.wear_mob_piece(wearer, slot, amount);
+            }
+            _ => {}
+        }
+    }
+    /// `ItemStack.hurtAndBreak` with no player for what the mob `id` has in
+    /// `slot`: Unbreaking takes its share from the level's random, and a
+    /// piece worn out leaves the slot with its break event
+    /// (`LivingEntity.onEquippedItemBroken`).
+    fn wear_mob_piece(&mut self, id: u32, slot: usize, amount: u32) {
+        use horizon_client::mobs::finalize as f;
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let at = [m.position.x, m.position.y, m.position.z];
+        let Some(stack) = f::item_stack(m, slot).filter(|s| {
+            amount > 0 && horizon_client::stations::is_damageable(world_items!(self), s)
+        }) else {
+            return;
+        };
+        let loss = self.durability_loss(&stack, amount);
+        if loss == 0 {
+            return;
+        }
+        let damage = stack.damage + loss;
+        let max = world_items!(self)
+            .get(&stack.item)
+            .map_or(0, |i| i.max_damage);
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
+        if damage < max {
+            f::set_slot_damage(m, slot, damage);
+            return;
+        }
+        horizon_client::mobs::drops::clear_slot(m, MOB_SLOTS[slot]);
+        // LivingEntity.entityEventForEquipmentBreak
+        let event = [47, 48, 52, 51, 50, 49][slot];
+        self.lan_entity_event(id as i32, event, at);
     }
     /// `ExperienceOrb.repairPlayerItems`: returns the experience left over.
     pub(super) fn mending(&mut self, amount: u32) -> u32 {
         let mut amount = amount;
         loop {
             // EnchantmentHelper.getRandomItemWith(REPAIR_WITH_XP, damaged), in
-            // EquipmentSlot order: the main hand, the off hand, then feet, legs,
-            // chest and head (`armor` holds head first).
-            let mending = |s: &Option<ItemStack>| {
-                s.as_ref()
-                    .is_some_and(|s| s.damage > 0 && s.enchantment_level("minecraft:mending") > 0)
-            };
-            let candidates: Vec<MendSlot> = [MendSlot::Main, MendSlot::Off]
-                .into_iter()
-                .chain((0..self.armor.len()).rev().map(MendSlot::Armor))
-                .filter(|&slot| mending(self.mend_slot(slot)))
-                .collect();
-            if candidates.is_empty() {
+            // EquipmentSlot order, drawn from the player's own random.
+            let slots = PLAYER_SLOTS.map(|slot| (slot, self.player_slot(slot)));
+            let Some(slot) = pick_mending_slot(slots, &mut random_source::entity()) else {
                 return amount;
-            }
-            let slot = candidates[self
-                .world
-                .random
-                .next_int_bound(candidates.len() as i32)
-                .unwrap_or(0) as usize];
-            let Some(stack) = self.mend_slot(slot).clone() else {
+            };
+            let Some(stack) = self.player_slot(slot).clone() else {
                 return amount;
             };
             let ctx = EffectContext {
-                items: Some(self.res.items()),
+                items: Some(world_items!(self)),
                 ..Default::default()
             };
-            let to_repair_xp = self.res.stations().enchantments.modify_value(
+            let mut to_repair_xp = world_stations!(self).enchantments.modify_value(
                 Some(&stack),
                 "minecraft:repair_with_xp",
                 &ctx,
                 &mut self.world.random,
                 amount as f32,
             ) as u32;
-            let repaired = to_repair_xp.min(stack.damage);
-            if let Some(s) = self.mend_slot_mut(slot).as_mut() {
-                s.damage -= repaired;
+            let vanilla_repair = to_repair_xp;
+            if self.serving.is_some() || self.options.dedicated.is_some() {
+                let player = self.native_acting_id();
+                self.native_mending_repair(player, &stack, amount, &mut to_repair_xp);
             }
-            if repaired == 0 || to_repair_xp == 0 {
-                return 0;
+            // A hook can re-enter experience granting or replace the slot. Only
+            // repair the same eligible stack, using its current damage.
+            let Some(current) = self.player_slot_mut(slot).as_mut() else {
+                return amount;
+            };
+            let mut original = stack.clone();
+            original.damage = current.damage;
+            if *current != original
+                || current.damage == 0
+                || current.enchantment_level("minecraft:mending") == 0
+            {
+                return amount;
             }
-            let remaining = amount.saturating_sub(repaired * amount / to_repair_xp);
+            if to_repair_xp == 0 {
+                // Vanilla consumes the XP when its own repair effect returns zero.
+                return if vanilla_repair == 0 { 0 } else { amount };
+            }
+            let repaired = to_repair_xp.min(current.damage);
+            if repaired == 0 {
+                return amount;
+            }
+            current.damage -= repaired;
+            let item = current.item.to_string();
+            let player = (self.serving.is_some() || self.options.dedicated.is_some())
+                .then(|| self.native_acting_id());
+            let remaining = amount.saturating_sub(
+                (u64::from(repaired) * u64::from(amount) / u64::from(to_repair_xp)) as u32,
+            );
+            if let Some(player) = player
+                && let Some(name) = self
+                    .native_server_players()
+                    .into_iter()
+                    .find(|p| p.uuid == player)
+                    .map(|p| p.name)
+            {
+                self.native_player_item_mend(player, &name, &item, repaired, amount);
+            }
             if remaining == 0 {
                 return 0;
             }
             amount = remaining;
         }
     }
-    fn mend_slot(&self, slot: MendSlot) -> &Option<ItemStack> {
+    /// `LivingEntity.getItemBySlot` for the player.
+    fn player_slot(&self, slot: PlayerSlot) -> &Option<ItemStack> {
         match slot {
-            MendSlot::Main => &self.inventory[self.selected],
-            MendSlot::Off => &self.offhand,
-            MendSlot::Armor(i) => &self.armor[i],
+            PlayerSlot::Main => &self.inventory[self.selected],
+            PlayerSlot::Off => &self.offhand,
+            PlayerSlot::Armor(i) => &self.armor[i],
         }
     }
-    fn mend_slot_mut(&mut self, slot: MendSlot) -> &mut Option<ItemStack> {
+    fn player_slot_mut(&mut self, slot: PlayerSlot) -> &mut Option<ItemStack> {
         match slot {
-            MendSlot::Main => &mut self.inventory[self.selected],
-            MendSlot::Off => &mut self.offhand,
-            MendSlot::Armor(i) => &mut self.armor[i],
+            PlayerSlot::Main => &mut self.inventory[self.selected],
+            PlayerSlot::Off => &mut self.offhand,
+            PlayerSlot::Armor(i) => &mut self.armor[i],
         }
     }
     /// Bow enchantments at release: (extra base damage, infinity keeps the arrow).
@@ -553,11 +938,11 @@ impl Game<'_> {
         let Some(bow) = self.held().cloned() else {
             return (0.0, false);
         };
-        let e = &self.res.stations().enchantments;
+        let e = &world_stations!(self).enchantments;
         let ctx = EffectContext {
             direct_attacker: Some("minecraft:arrow"),
             attacker: Some("minecraft:player"),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
         let power = e.modify_value(
@@ -569,7 +954,7 @@ impl Game<'_> {
         );
         let ammo_ctx = EffectContext {
             tool: Some(ammo),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
         let infinity = e.has_component(&bow, "minecraft:ammo_use")
@@ -582,18 +967,28 @@ impl Game<'_> {
             ) == 0.0;
         (f64::from(power), infinity)
     }
-    /// `EnchantmentHelper.onProjectileSpawned` ignite effects of the held bow
-    /// (flame): the seconds the new arrow burns for.
-    pub(super) fn bow_projectile_ignite(&mut self) -> Option<f32> {
-        let bow = self.held().cloned()?;
+    /// `EnchantmentHelper.onProjectileSpawned`, which `AbstractArrow`'s
+    /// constructor runs for every arrow fired from a weapon, bow or crossbow:
+    /// the weapon's `projectile_spawned` ignite effects (Flame) spawn the arrow
+    /// burning.
+    pub(super) fn ignite_spawned_arrow(&mut self, weapon: &ItemStack, arrow: &mut Projectile) {
+        if let Some(seconds) = self.projectile_spawned_ignite(weapon)
+            && let Some(a) = arrow.arrow.as_mut()
+        {
+            a.ignite_for_seconds(seconds);
+        }
+    }
+    /// The `projectile_spawned` ignite effects of `weapon` (Flame): the seconds
+    /// the new arrow burns for, the longest when several apply.
+    fn projectile_spawned_ignite(&mut self, weapon: &ItemStack) -> Option<f32> {
         let ctx = EffectContext {
             this: Some("minecraft:arrow"),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
         let mut ignite: Option<f32> = None;
-        for (id, level) in bow.enchantments() {
-            let Some(def) = self.res.stations().enchantments.get(id) else {
+        for (id, level) in weapon.enchantments() {
+            let Some(def) = world_stations!(self).enchantments.get(id) else {
                 continue;
             };
             for effect in def.effects["minecraft:projectile_spawned"]
@@ -605,7 +1000,7 @@ impl Game<'_> {
                     continue;
                 }
                 let ok = effect.get("requirements").is_none_or(|r| {
-                    self.res.stations().enchantments.condition(
+                    world_stations!(self).enchantments.condition(
                         r,
                         *level,
                         &ctx,
@@ -674,14 +1069,14 @@ impl Game<'_> {
         // The attribute effects were applied to the player before: swap them.
         if was_active > 0 && (!active || equipped) {
             for (attribute, id, _, op) in
-                soul_speed_modifiers(&self.res.stations().enchantments, was_active)
+                soul_speed_modifiers(&world_stations!(self).enchantments, was_active)
             {
                 let _ = player.set_modifier(&attribute, &id, 0.0, &op, false);
             }
         }
         if active && (was_active == 0 || equipped) {
             for (attribute, id, amount, op) in
-                soul_speed_modifiers(&self.res.stations().enchantments, level)
+                soul_speed_modifiers(&world_stations!(self).enchantments, level)
             {
                 let _ = player.set_modifier(&attribute, &id, amount, &op, true);
             }
@@ -692,22 +1087,15 @@ impl Game<'_> {
         if level == 0 {
             return None;
         }
-        let r = &mut self.world.random;
-        // `spawn_particles`: in the bounding box, 0.1 above the feet, thrown
-        // back against the movement (-0.2) and up (0.1).
-        let particle = tick_effects.then(|| {
-            let x = position.x + (r.next_double() - 0.5) * f64::from(width);
-            let z = position.z + (r.next_double() - 0.5) * f64::from(width);
-            (
-                [x, position.y + 0.1, z],
-                [moved.x * -0.2, 0.1, moved.z * -0.2],
-            )
-        });
-        // `play_sound`: its `random_chance` (35%) comes first in its `all_of`,
-        // so the level random is drawn every tick the boots are worn; volume
-        // 0.6, pitch 0.6 to 1.0.
-        if r.next_float() < 0.35 && tick_effects {
-            let pitch = r.next_float() * 0.4 + 0.6;
+        let (particle, pitch) = soul_speed_tick(
+            [position.x, position.y, position.z],
+            [moved.x, moved.y, moved.z],
+            width,
+            tick_effects,
+            &mut self.world.random,
+            &mut random_source::entity(),
+        );
+        if let Some(pitch) = pitch {
             self.audio.play(
                 "minecraft:particle.soul_escape",
                 Some([position.x, position.y, position.z]),
@@ -738,14 +1126,11 @@ impl Game<'_> {
         boots.damage += loss;
         if boots.damage >= max {
             self.armor[3] = None;
-            if let Some(eye) = self.eye_position() {
-                self.audio.play(
-                    "minecraft:entity.item.break",
-                    Some(eye),
-                    0.8,
-                    0.8 + self.world.random.next_float() * 0.4,
-                );
-            }
+            // LivingEntity.onEquippedItemBroken: the broken boots.
+            self.player_equipment_broke(
+                horizon_world::player_inventory::EquipmentSlot::Feet,
+                &stack,
+            );
             self.apply_equipment();
         }
     }
@@ -760,44 +1145,110 @@ impl Game<'_> {
         let at = [p.position.x, p.position.y, p.position.z];
         let on_ground = p.ground.on_ground;
         let cell = |v: [f64; 3]| v.map(|c| c.floor() as i32);
-        if cell(from) == cell(at) && !(on_ground && !was_on_ground) {
+        // LivingEntity.collectEquipmentChanges: newly worn armor runs its
+        // location_changed effects at once, even when standing still.
+        let changed = armor_changes(&mut self.location_armor, &self.armor);
+        let moved = cell(from) != cell(at) || (on_ground && !was_on_ground);
+        if !moved && !changed.iter().any(|c| *c) {
             return;
         }
         let riding = self.riding.is_some();
+        let slots = ["head", "chest", "legs", "feet"];
         let mut disks = Vec::new();
-        for (stack, slot) in self.armor.iter().zip(["head", "chest", "legs", "feet"]) {
-            let Some(stack) = stack else { continue };
-            for (id, level) in stack.enchantments() {
-                let Some(def) = self.res.stations().enchantments.get(id) else {
-                    continue;
-                };
-                if !def
-                    .slots
-                    .iter()
-                    .any(|s| s == slot || s == "armor" || s == "any")
-                {
-                    continue;
-                }
-                for effect in def.effects["minecraft:location_changed"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                {
-                    if effect["effect"]["type"] == "minecraft:replace_disk"
-                        && location_requirements(&effect["requirements"], on_ground, riding)
-                    {
-                        disks.push((effect["effect"].clone(), *level));
-                    }
-                }
+        for i in 0..4 {
+            if moved || changed[i] {
+                disks.extend(location_disks(
+                    &self.stations().enchantments,
+                    std::iter::once((&self.armor[i], slots[i])),
+                    on_ground,
+                    riding,
+                ));
             }
         }
         for (effect, level) in disks {
-            self.replace_disk(&effect, level, at);
+            self.replace_disk(&effect, level, at, Who::Player);
+        }
+    }
+    /// `LivingEntity.onChangedBlock`, landing and `collectEquipmentChanges`
+    /// for an armor stand: run location effects before travel (including a
+    /// piston push), on landing, and for newly equipped items.
+    pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+        let stand = &mut self.armor_stands[index];
+        let block = BlockPos::containing(stand.position);
+        let moved = !landed && stand.enchantment_block.replace(block) != Some(block);
+        let changed: [bool; 6] =
+            std::array::from_fn(|i| stand.equipment[i] != stand.enchantment_equipment[i]);
+        if !moved && !landed && !changed.iter().any(|c| *c) {
+            return;
+        }
+        let id = stand.id;
+        let told: Vec<_> = (0..6)
+            .filter(|&i| changed[i])
+            .map(|i| {
+                let slot = horizon_client::entities::ArmorStand::SLOTS[i];
+                (
+                    slot,
+                    stand.enchantment_equipment[i].clone(),
+                    stand.equipment[i].clone(),
+                )
+            })
+            .collect();
+        stand.enchantment_equipment.clone_from(&stand.equipment);
+        if self.remote.is_none() && !self.options.execution_role.is_client() {
+            for (slot, from, to) in told {
+                self.native_living_equipment_change(
+                    id,
+                    "minecraft:armor_stand",
+                    slot,
+                    from.as_ref(),
+                    to.as_ref(),
+                );
+            }
+        }
+        let stand = &self.armor_stands[index];
+        let at = [stand.position.x, stand.position.y, stand.position.z];
+        let who = Who::Mob(stand.id);
+        let equipment = stand
+            .equipment
+            .iter()
+            .zip(horizon_client::entities::ArmorStand::SLOTS)
+            .enumerate()
+            .filter(|(i, _)| moved || landed || changed[*i])
+            .filter(|(_, (stack, _))| {
+                moved
+                    || landed
+                    || !stack.as_ref().is_some_and(|stack| {
+                        let data = stack.data();
+                        let component = |id| data.and_then(|data| data.other(id));
+                        let max_damage = match component("minecraft:max_damage") {
+                            Some(horizon_world::nbt::Tag::Int(value)) => *value as u32,
+                            _ => self
+                                .res
+                                .items()
+                                .get(&stack.item)
+                                .map_or(0, |i| i.max_damage),
+                        };
+                        max_damage > 0
+                            && component("minecraft:unbreakable").is_none()
+                            && component("!minecraft:max_damage").is_none()
+                            && component("!minecraft:damage").is_none()
+                            && stack.damage >= max_damage
+                    })
+            })
+            .map(|(_, item)| item);
+        let disks = location_disks(
+            &self.stations().enchantments,
+            equipment,
+            stand.on_ground,
+            stand.vehicle.is_some(),
+        );
+        for (effect, level) in disks {
+            self.replace_disk(&effect, level, at, who);
         }
     }
     /// `ReplaceDisk.apply`: the blocks of the disk around `at` that pass the
     /// predicate become the effect's state, and each placement is a game event.
-    fn replace_disk(&mut self, effect: &Value, level: u32, at: [f64; 3]) {
+    fn replace_disk(&mut self, effect: &Value, level: u32, at: [f64; 3], who: Who) {
         let registry = self.pack.assets.registry;
         let spec = &effect["block_state"];
         let Some(default) = spec["id"].as_str().and_then(|n| registry.default_state(n)) else {
@@ -835,7 +1286,7 @@ impl Game<'_> {
                         self.post_block_game_event(
                             "minecraft:block_place",
                             pos,
-                            Some(Who::Player),
+                            Some(who),
                             Some(new),
                         );
                     }
@@ -906,7 +1357,7 @@ impl Game<'_> {
                     .iter()
                     .flat_map(ItemStack::enchantments)
                     .any(|(id, _)| {
-                        self.res.stations().enchantments.get(id).is_some_and(|def| {
+                        self.stations().enchantments.get(id).is_some_and(|def| {
                             def.effects.get("minecraft:damage_immunity").is_some()
                                 && def
                                     .slots
@@ -916,28 +1367,77 @@ impl Game<'_> {
                     })
             })
     }
-    /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
+    /// Enchantment attribute modifiers of active equipment, including held Efficiency.
     /// Each piece's modifier id ends with its slot (`EnchantmentAttributeEffect.idForSlot`),
     /// so the same enchantment on two pieces stacks instead of replacing itself.
     pub(super) fn apply_enchantment_attributes(&mut self) {
         let mut wanted: Vec<(String, String, f64, String)> = Vec::new();
-        for (stack, slot) in self.armor.iter().zip(["head", "chest", "legs", "feet"]) {
+        for (stack, slot) in self
+            .armor
+            .iter()
+            .zip(["head", "chest", "legs", "feet"])
+            .chain([
+                (&self.inventory[self.selected], "mainhand"),
+                (&self.offhand, "offhand"),
+            ])
+        {
             let Some(stack) = stack else { continue };
-            for (attr, id, amount, op) in self.res.stations().enchantments.attributes(stack) {
-                wanted.push((attr, format!("{id}/{slot}"), amount, op));
+            for (attr, id, amount, op, group) in self.stations().enchantments.modifier_rows(stack) {
+                if super::equipment_modifier_applies(&group, slot) {
+                    wanted.push((attr, format!("{id}/{slot}"), amount, op));
+                }
             }
         }
         let Some(p) = self.player.as_mut() else {
             return;
         };
         for (attr, id, _, op) in std::mem::take(&mut self.potions.enchant_modifiers) {
-            let _ = p.set_modifier(&attr, &id, 0.0, &op, false);
+            let _ = p.set_modifier_unclamped(&attr, &id, 0.0, &op, false);
         }
         for (attr, id, amount, op) in &wanted {
-            let _ = p.set_modifier(attr, id, *amount, op, true);
+            let _ = p.set_modifier_unclamped(attr, id, *amount, op, true);
         }
+        let _ = p.clamp_health_to_max();
         self.potions.enchant_modifiers = wanted;
     }
+}
+
+/// `EnchantmentHelper.runLocationChangedEffects`: the replace-disk effects of
+/// active equipment slots, with the wearer's ground/passenger requirements.
+fn location_disks<'a>(
+    enchantments: &Enchantments,
+    equipment: impl IntoIterator<Item = (&'a Option<ItemStack>, &'static str)>,
+    on_ground: bool,
+    riding: bool,
+) -> Vec<(Value, u32)> {
+    let mut disks = Vec::new();
+    for (stack, slot) in equipment {
+        let Some(stack) = stack else { continue };
+        for (id, level) in stack.enchantments() {
+            let Some(def) = enchantments.get(id) else {
+                continue;
+            };
+            let armor = matches!(slot, "head" | "chest" | "legs" | "feet");
+            let hand = matches!(slot, "mainhand" | "offhand");
+            if !def.slots.iter().any(|s| {
+                s == slot || s == "any" || (s == "armor" && armor) || (s == "hand" && hand)
+            }) {
+                continue;
+            }
+            for effect in def.effects["minecraft:location_changed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if effect["effect"]["type"] == "minecraft:replace_disk"
+                    && location_requirements(&effect["requirements"], on_ground, riding)
+                {
+                    disks.push((effect["effect"].clone(), *level));
+                }
+            }
+        }
+    }
+    disks
 }
 
 /// Soul Speed's `attribute` effects at `level` (attribute, id, amount, operation),
@@ -994,5 +1494,220 @@ fn location_requirements(req: &Value, on_ground: bool, riding: bool) -> bool {
                 && (p["minecraft:vehicle"].is_null() || riding)
         }
         _ => false,
+    }
+}
+
+/// `LivingEntity.collectEquipmentChanges`: which armor slots differ from the
+/// `snapshot` taken at the last look, which is then brought up to date.
+fn armor_changes(
+    snapshot: &mut [Option<ItemStack>; 4],
+    armor: &[Option<ItemStack>; 4],
+) -> [bool; 4] {
+    let changed: [bool; 4] = std::array::from_fn(|i| armor[i] != snapshot[i]);
+    // Only a changed slot is copied: the check runs every tick for every player.
+    for ((kept, worn), changed) in snapshot.iter_mut().zip(armor).zip(changed) {
+        if changed {
+            kept.clone_from(worn);
+        }
+    }
+    changed
+}
+
+/// `EnchantmentHelper.getRandomItemWith(REPAIR_WITH_XP, player, ItemStack::isDamaged)`:
+/// collects damaged Mending pieces in `EquipmentSlot.VALUES` order and picks
+/// one with the player's own random (`Entity.random`), never the level's.
+fn pick_mending_slot(
+    slots: [(PlayerSlot, &Option<ItemStack>); 6],
+    random: &mut impl RandomSource,
+) -> Option<PlayerSlot> {
+    let mending = |s: &Option<ItemStack>| {
+        s.as_ref()
+            .is_some_and(|s| s.damage > 0 && s.enchantment_level("minecraft:mending") > 0)
+    };
+    let candidates: Vec<PlayerSlot> = slots
+        .into_iter()
+        .filter(|(_, s)| mending(s))
+        .map(|(slot, _)| slot)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let count = candidates.len() as i32;
+    let index = random.next_int_bound(count).unwrap_or(0) as usize;
+    Some(candidates[index])
+}
+
+/// `SpawnParticlesEffect.apply` and `PlaySoundEffect.apply` for Soul Speed's
+/// `minecraft:tick` effects: the sound's `random_chance` (35%) draws from
+/// `level_random` (`Enchantment.entityContext`), while the particle coordinates
+/// and sound pitch draw from `wearer_random` (`entity.getRandom()`).
+fn soul_speed_tick(
+    position: [f64; 3],
+    moved: [f64; 3],
+    width: f32,
+    tick_effects: bool,
+    level_random: &mut impl RandomSource,
+    wearer_random: &mut impl RandomSource,
+) -> (Option<([f64; 3], [f64; 3])>, Option<f32>) {
+    // `spawn_particles`: in the bounding box, 0.1 above the feet, thrown
+    // back against the movement (-0.2) and up (0.1).
+    let particle = tick_effects.then(|| {
+        let x = position[0] + (wearer_random.next_double() - 0.5) * f64::from(width);
+        let z = position[2] + (wearer_random.next_double() - 0.5) * f64::from(width);
+        (
+            [x, position[1] + 0.1, z],
+            [moved[0] * -0.2, 0.1, moved[2] * -0.2],
+        )
+    });
+    // `play_sound`: its `random_chance` (35%) comes first in its `all_of`,
+    // so the level random is drawn every tick the boots are worn; volume
+    // 0.6, pitch 0.6 to 1.0 from the wearer's random.
+    let pitch = if level_random.next_float() < 0.35 && tick_effects {
+        Some(wearer_random.next_float() * 0.4 + 0.6)
+    } else {
+        None
+    };
+    (particle, pitch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{armor_changes, block_break_speed_factor, pick_mending_slot, soul_speed_tick};
+    use horizon_client::items::ItemStack;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+
+    /// The snapshot reports a newly worn piece once, then settles.
+    #[test]
+    fn armor_changes_settle_after_one_look() {
+        let worn = [
+            None,
+            None,
+            None,
+            Some(ItemStack::new("minecraft:iron_boots", 1)),
+        ];
+        let mut snapshot: [Option<ItemStack>; 4] = Default::default();
+        assert_eq!(
+            armor_changes(&mut snapshot, &worn),
+            [false, false, false, true]
+        );
+        assert_eq!(armor_changes(&mut snapshot, &worn), [false; 4]);
+    }
+
+    /// #4094: `BLOCK_BREAK_SPEED` is a multiplier on the destroy speed.
+    #[test]
+    fn block_break_speed_is_a_destroy_speed_multiplier() {
+        assert_eq!(block_break_speed_factor(None), 1.0);
+        assert_eq!(block_break_speed_factor(Some(1.0)), 1.0);
+        assert_eq!(block_break_speed_factor(Some(0.5)), 0.5);
+        assert_eq!(block_break_speed_factor(Some(2.0)), 2.0);
+        assert_eq!(8.0 * block_break_speed_factor(Some(0.5)), 4.0);
+        assert_eq!(8.0 * block_break_speed_factor(Some(2.0)), 16.0);
+    }
+
+    /// #11309: `EnchantmentHelper.getRandomItemWith` picks among damaged
+    /// Mending items in `EquipmentSlot.VALUES` order using the player's RNG,
+    /// leaving the world RNG untouched.
+    #[test]
+    fn mending_picks_damaged_candidate_in_equipment_slot_order_from_player_rng() {
+        let mending_item = |id: &str, damage: u32| {
+            let mut stack = ItemStack::new(id, 1);
+            stack.damage = damage;
+            stack.set_crafting_enchantments(vec![("minecraft:mending".into(), 1)]);
+            Some(stack)
+        };
+        let mut unbreaking = ItemStack::new("minecraft:diamond_leggings", 1);
+        unbreaking.damage = 5;
+        unbreaking.set_crafting_enchantments(vec![("minecraft:unbreaking".into(), 3)]);
+
+        let main = mending_item("minecraft:diamond_pickaxe", 12);
+        let off = mending_item("minecraft:shield", 3);
+        let head = mending_item("minecraft:diamond_helmet", 4);
+        let chest = mending_item("minecraft:diamond_chestplate", 0);
+        let legs = Some(unbreaking);
+        let feet = mending_item("minecraft:diamond_boots", 9);
+
+        let slots = [
+            (super::PlayerSlot::Main, &main),
+            (super::PlayerSlot::Off, &off),
+            (super::PlayerSlot::Armor(3), &feet),
+            (super::PlayerSlot::Armor(2), &legs),
+            (super::PlayerSlot::Armor(1), &chest),
+            (super::PlayerSlot::Armor(0), &head),
+        ];
+
+        let mut world_rng = LegacyRandom::new(10_001);
+        let mut expected_world = LegacyRandom::new(10_001);
+        let mut player_rng = LegacyRandom::new(20_002);
+        let mut expected_player = LegacyRandom::new(20_002);
+
+        let expected_candidates = [
+            super::PlayerSlot::Main,
+            super::PlayerSlot::Off,
+            super::PlayerSlot::Armor(3),
+            super::PlayerSlot::Armor(0),
+        ];
+        for _ in 0..16 {
+            let picked = pick_mending_slot(slots, &mut player_rng);
+            let idx = expected_player.next_int_bound(4).unwrap() as usize;
+            assert_eq!(picked, Some(expected_candidates[idx]));
+        }
+        assert_eq!(player_rng.next_long(), expected_player.next_long());
+        assert_eq!(world_rng.next_long(), expected_world.next_long());
+
+        let none: Option<ItemStack> = None;
+        let empty = [
+            (super::PlayerSlot::Main, &none),
+            (super::PlayerSlot::Off, &chest),
+            (super::PlayerSlot::Armor(3), &none),
+            (super::PlayerSlot::Armor(2), &legs),
+            (super::PlayerSlot::Armor(1), &chest),
+            (super::PlayerSlot::Armor(0), &none),
+        ];
+        assert_eq!(pick_mending_slot(empty, &mut player_rng), None);
+        assert_eq!(player_rng.next_long(), expected_player.next_long());
+    }
+
+    /// #11309: Soul Speed's tick effects draw the 35% sound requirement from
+    /// the level RNG and sample particle coordinates and sound pitch from the
+    /// wearer's RNG.
+    #[test]
+    fn soul_speed_samples_particle_and_pitch_from_wearer_rng() {
+        let pos = [10.0, 64.0, -4.0];
+        let moved = [0.25, 0.0, -0.5];
+        let width = 0.6f32;
+
+        for seed in 0..32 {
+            let mut l_rng = LegacyRandom::new(seed);
+            let mut expected_level = LegacyRandom::new(seed);
+            let mut w_rng = LegacyRandom::new(seed + 1_000);
+            let mut expected_wearer = LegacyRandom::new(seed + 1_000);
+
+            let out = soul_speed_tick(pos, moved, width, true, &mut l_rng, &mut w_rng);
+            let want_x = pos[0] + (expected_wearer.next_double() - 0.5) * f64::from(width);
+            let want_z = pos[2] + (expected_wearer.next_double() - 0.5) * f64::from(width);
+            let want_pos = [want_x, pos[1] + 0.1, want_z];
+            let want_vel = [moved[0] * -0.2, 0.1, moved[2] * -0.2];
+            assert_eq!(out.0, Some((want_pos, want_vel)));
+            let want_pitch = if expected_level.next_float() < 0.35 {
+                Some(expected_wearer.next_float() * 0.4 + 0.6)
+            } else {
+                None
+            };
+            assert_eq!(out.1, want_pitch);
+            assert_eq!(l_rng.next_long(), expected_level.next_long());
+            assert_eq!(w_rng.next_long(), expected_wearer.next_long());
+        }
+
+        // When tick_effects is false, the leading 35% random_chance still draws
+        // one float from level_rng while wearer_rng is untouched.
+        let mut l_rng = LegacyRandom::new(77);
+        let mut expected_level = LegacyRandom::new(77);
+        let mut w_rng = LegacyRandom::new(88);
+        let mut expected_wearer = LegacyRandom::new(88);
+        let out = soul_speed_tick(pos, moved, width, false, &mut l_rng, &mut w_rng);
+        let _ = expected_level.next_float();
+        assert_eq!(out, (None, None));
+        assert_eq!(l_rng.next_long(), expected_level.next_long());
+        assert_eq!(w_rng.next_long(), expected_wearer.next_long());
     }
 }

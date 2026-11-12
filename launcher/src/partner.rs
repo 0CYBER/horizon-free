@@ -1,7 +1,8 @@
 //! Sculk, a server host that sponsors Horizon (Ludovic, 2026-10-26): its wide banner on the Servers
 //! page, and a card made for the sidebar on the other pages, where the banner's baked-in text was too
 //! small to read. The pictures are in the binary, never fetched; a click opens Sculk's page in the
-//! browser. A "Partner" label above each says it is an ad.
+//! browser. A "Partner" label above each says it is an ad. After `SEEN_BEFORE_HIDE` seconds on screen
+//! a "Hide" appears on either, and hiding one hides both for good.
 use crate::theme::Theme;
 use gpui::{
     div, img, prelude::*, px, rgb, ClickEvent, Div, FontWeight, HighlightStyle, Image, ImageFormat,
@@ -14,6 +15,26 @@ pub const URL: &str = "https://my.sculkhosting.com/ref/horizon";
 /// How long the sidebar's banner stays on screen, counted over every start, before a "Hide" shows
 /// beside its label: long enough to be seen, then the player may put it away for good.
 pub const SEEN_BEFORE_HIDE: u64 = 180;
+
+/// The small "Hide" beside a banner's or card's label, top right of whatever holds it (which must be
+/// `relative`). The caller adds the click: it sets `Settings::partner_hidden`, which hides every
+/// partner banner for good.
+pub fn hide_button(id: &'static str, t: &Theme) -> Stateful<Div> {
+    let t = *t;
+    let hide = div()
+        .id(id)
+        .absolute()
+        .top(px(0.))
+        .right(px(0.))
+        .cursor_pointer()
+        .child(
+            crate::text(crate::theme::MICRO)
+                .text_color(t.muted)
+                .hover(move |s| s.text_color(t.ink))
+                .child(horizon_launcher::i18n::tr("HIDE")),
+        );
+    crate::keyboard(hide, &t)
+}
 
 /// 1200×441: twice the widest it is shown at, for Retina screens. Its transparent edges let the
 /// characters stand out of the card.
@@ -53,6 +74,25 @@ pub fn banner(id: &'static str, width: f32, t: &Theme) -> Stateful<Div> {
         )
         .on_click(|_: &ClickEvent, _, cx| cx.open_url(URL));
     crate::keyboard(el, &t)
+}
+
+/// The banner alone, `width` logical pixels wide, for a card that says "Partner" itself (the
+/// glass Servers page). Hovering lifts it a little.
+pub fn banner_image(id: &'static str, width: f32, t: &Theme) -> Stateful<Div> {
+    let el = div()
+        .id(id)
+        .group(id)
+        .w(px(width))
+        .cursor_pointer()
+        .child(
+            div().relative().group_hover(id, |s| s.top(px(-2.))).child(
+                img(BANNER.clone())
+                    .w(px(width))
+                    .h(px(width * HEIGHT / WIDTH)),
+            ),
+        )
+        .on_click(|_: &ClickEvent, _, cx| cx.open_url(URL));
+    crate::keyboard(el, t)
 }
 
 /// Sculk's characters (Steve, Alex and the wolf) cropped from its banner at 2x the card's width.
@@ -111,7 +151,7 @@ fn headline() -> StyledText {
 }
 
 /// "HORIZON15 · 15% off" in a dashed cyan frame, as on Sculk's banner.
-fn code_chip(size: f32, height: f32) -> Div {
+fn code_chip(size: f32, height: f32, glass: bool) -> Div {
     div()
         .flex()
         .items_center()
@@ -122,7 +162,7 @@ fn code_chip(size: f32, height: f32) -> Div {
         .border_1()
         .border_dashed()
         .border_color(rgba(CYAN, 0.7))
-        .rounded(px(6.))
+        .rounded(px(if glass { 6. } else { 0. }))
         .font_family(crate::theme::MONO)
         .text_size(px(size))
         .whitespace_nowrap()
@@ -163,10 +203,8 @@ pub fn card(id: &'static str, width: f32, compact: bool, t: &Theme) -> Stateful<
         .flex_none()
         .w(px(width))
         .bg(rgb(CARD))
-        .border_1()
-        .border_color(rgba(CYAN, 0.22))
-        .rounded(px(10.))
-        .group_hover(id, |s| s.top(px(-2.)).border_color(rgba(CYAN, 0.5)));
+        .rounded(px(if t.glass { 10. } else { 0. }))
+        .group_hover(id, |s| s.top(px(-2.)));
     let logo = |height: f32| {
         img(LOGO.clone())
             .flex_none()
@@ -213,7 +251,7 @@ pub fn card(id: &'static str, width: f32, compact: bool, t: &Theme) -> Stateful<
                     .px(px(12.))
                     .pt(px(6.))
                     .pb(px(12.))
-                    .child(code_chip(11., 26.).flex_1()),
+                    .child(code_chip(11., 26., t.glass).flex_1()),
             )
     } else {
         let art_h = width * ART_HEIGHT / ART_WIDTH;
@@ -222,7 +260,7 @@ pub fn card(id: &'static str, width: f32, compact: bool, t: &Theme) -> Stateful<
             .items_center()
             .justify_center()
             .h(px(36.))
-            .rounded(px(8.))
+            .rounded(px(if t.glass { 8. } else { 0. }))
             .bg(rgb(CYAN))
             .group_hover(id, |s| s.bg(rgb(CYAN_HOVER)))
             .text_color(rgb(ON_CYAN))
@@ -266,7 +304,12 @@ pub fn card(id: &'static str, width: f32, compact: bool, t: &Theme) -> Stateful<
                             .child(horizon_launcher::i18n::tr("Ready in under a minute")),
                     )
                     .child(div().mt(px(16.)).child(button))
-                    .child(div().mt(px(8.)).flex().child(code_chip(12., 30.).flex_1())),
+                    .child(
+                        div()
+                            .mt(px(8.))
+                            .flex()
+                            .child(code_chip(12., 30., t.glass).flex_1()),
+                    ),
             )
     };
     let el = div()

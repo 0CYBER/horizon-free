@@ -1,15 +1,16 @@
 //! The control API (docs/server.md, section 8): HTTP and JSON on 127.0.0.1, with a random token in
 //! `.horizon/api.json` that only the server's own user can read. The CLI manages a running server through
-//! it; the web panel and the MCP server will too.
+//! it, and so does the web panel. The admin endpoints (players, moderation, text metrics) are in admin.rs.
 //!
 //! Its routes are [`ROUTES`], listed in docs/api/server-reference.md.
 
 use crate::{
+    admin::{self, Action},
     backup,
     config::Config,
     engine,
     http::{self, Request, Response},
-    panel,
+    panel, settings,
     update::{self, Install},
 };
 use serde_json::{Value, json};
@@ -47,7 +48,7 @@ pub struct Route {
 }
 
 /// Every endpoint `start` and [`route`] answer; a test checks the two agree.
-pub const ROUTES: [Route; 11] = [
+pub const ROUTES: [Route; 32] = [
     Route {
         method: "GET",
         path: "/api/v1/status",
@@ -70,6 +71,13 @@ pub const ROUTES: [Route; 11] = [
         what: "The log lines after the Nth (the last 2000 are kept)",
     },
     Route {
+        method: "GET",
+        path: "/api/v1/events",
+        takes: "`?since=N` (or `Last-Event-ID`), `?types=join,leave,kick,chat,chat_filtered,death,log,phase` (all by default)",
+        answers: "with `Accept: text/event-stream`, server-sent events as they happen (`id`, `event`: the type, `data`: JSON); otherwise `{\"next\": N, \"events\": [...]}`",
+        what: "Log lines, the supervisor's phase, and the game's joins, leaves, kicks, chat, messages the chat filter refused (`chat_filtered`, without their text) and deaths (the last 2000 kept)",
+    },
+    Route {
         method: "POST",
         path: "/api/v1/command",
         takes: "`{\"line\": \"<one command>\"}`",
@@ -82,6 +90,13 @@ pub const ROUTES: [Route; 11] = [
         takes: "",
         answers: "`{\"ok\": true}`",
         what: "Stop the game and the supervisor",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/start",
+        takes: "",
+        answers: "`{\"ok\": true}`",
+        what: "Start the game while keeping the supervisor and API running",
     },
     Route {
         method: "POST",
@@ -105,11 +120,39 @@ pub const ROUTES: [Route; 11] = [
         what: "Back up now (a running game saves first and stays up)",
     },
     Route {
+        method: "DELETE",
+        path: "/api/v1/backups",
+        takes: "`?name=<file>` (the full name `backups` lists)",
+        answers: "`{\"name\": \"<file>\"}`",
+        what: "Delete a backup",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/backups/download",
+        takes: "`?name=<file>`",
+        answers: "the zip",
+        what: "Download a backup",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/crash-reports",
+        takes: "",
+        answers: "`{\"reports\": [{\"name\", \"bytes\"}]}`, newest first (the `.txt` files in `crash-reports/`)",
+        what: "List the game's crash reports",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/crash-reports/read",
+        takes: "`?name=<file>` (a name `crash-reports` lists)",
+        answers: "the report's text (`text/plain`)",
+        what: "Read one crash report",
+    },
+    Route {
         method: "POST",
         path: "/api/v1/restore",
-        takes: "`{\"name\": \"<backup>\"}`",
-        answers: "`{\"name\": \"<backup>\"}`",
-        what: "Restart the game with that backup's world (the current one is kept in backups/)",
+        takes: "`{\"name\": \"<backup>\", \"dimension\": \"minecraft:the_nether\"}` (`dimension` optional)",
+        answers: "`{\"name\": \"<backup>\", \"dimension\": \"<id>\" or null}`",
+        what: "Restart the game with that backup's world, or only one dimension of it (what it replaces is kept in backups/)",
     },
     Route {
         method: "POST",
@@ -117,6 +160,111 @@ pub const ROUTES: [Route; 11] = [
         takes: "`{\"tag\": \"...\", \"timeout\": seconds}` (both optional)",
         answers: "`{\"ok\": true}`; `status` says how it went (`update`)",
         what: "Restart on that installed release, or download the newest first; goes back if the game isn't up within the timeout",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/metrics/prometheus",
+        takes: "",
+        answers: "the latest sample as Prometheus text: `horizon_up`, `horizon_tps`, `horizon_mspt{stat}`, `horizon_players_online`, `horizon_memory_rss_bytes`, `horizon_loaded_chunks{dimension}` and `horizon_entities{dimension}` (players and block entities apart)...",
+        what: "Metrics for a monitoring tool to scrape",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/players",
+        takes: "",
+        answers: "`online` (name, uuid, address, ping_ms, dimension, position, op_level), `max_players`, `ops`, `whitelist` (`enabled`, `players`), `bans`, `ip_bans` (with reason, source, created, expires)",
+        what: "Who is online, and vanilla's lists",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/mods",
+        takes: "",
+        answers: "`engine` (`found`, `target`, `base`, `horizon`, `hooks`) and `native` (id, version, sha256), from the `native-mods.json` the launcher wrote beside the game program",
+        what: "The native mods the server's game program was built with",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/kick",
+        takes: "`{\"name\", \"reason\"}` (reason optional)",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Kick an online player",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/ban",
+        takes: "`{\"name\", \"reason\"}` (reason optional)",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Ban a player (kicked if online)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/pardon",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Lift a player's ban",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/ban-ip",
+        takes: "`{\"ip\", \"reason\"}`, or `{\"name\"}` of an online player",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Ban an address (its players are kicked)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/pardon-ip",
+        takes: "`{\"ip\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Lift an address's ban",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/op",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Make a player an operator (op-permission-level)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/players/deop",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Make a player no longer an operator",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/whitelist",
+        takes: "`{\"enabled\": bool}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Turn the whitelist on or off",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/whitelist/add",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Whitelist a player",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/whitelist/remove",
+        takes: "`{\"name\"}`",
+        answers: "`{\"changed\": bool, \"output\": [...]}`: whether the list (or who is online) changed, and the console's lines",
+        what: "Take a player off the whitelist (kicked if enforce-whitelist)",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/config",
+        takes: "",
+        answers: "`{\"config\": {...}}`: server.toml's settings by section (`api.token` hidden)",
+        what: "The settings",
+    },
+    Route {
+        method: "PATCH",
+        path: "/api/v1/config",
+        takes: "`{\"changes\": {\"world.difficulty\": \"hard\", ...}}`",
+        answers: "`saved`, `applied` (taken by the running game at once), `restart` (from the next start), `running`",
+        what: "Change settings as `config set` does; not `engine.*`, `panel.*`, `api.*`, nor RCON, query or management keys",
     },
     Route {
         method: "POST",
@@ -132,16 +280,19 @@ pub const ROUTES: [Route; 11] = [
 pub enum Phase {
     Starting,
     Running,
+    /// The supervisor stays alive after the game stops so local management can edit its files.
+    Stopped,
     Stopping,
     /// Stopping the game to start it again (`restart`), or waiting to after a crash.
     Restarting,
 }
 
 impl Phase {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::Stopped => "stopped",
             Self::Stopping => "stopping",
             Self::Restarting => "restarting",
         }
@@ -183,6 +334,8 @@ impl Log {
 
 /// How long a game started on another release has to come up before the switch is undone.
 pub const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+/// The longest a new release may take to come up: a day.
+pub const MAX_UPDATE_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
 
 /// Updates and rollbacks (update.rs): what the check found, what is under way, how the last one ended.
 #[derive(Default)]
@@ -207,8 +360,11 @@ pub struct Shared {
     pub log: Mutex<Log>,
     pub stop: AtomicBool,
     pub restart: AtomicBool,
-    /// The backup to put in place before the game starts again (`restore`).
-    pub restore: Mutex<Option<String>>,
+    /// Stop the supervisor after the engine exits; a game-issued stop leaves the API available.
+    pub shutdown: AtomicBool,
+    /// The backup (and, when only one dimension comes back, its id) to put in place before the game starts
+    /// again (`restore`).
+    pub restore: Mutex<Option<(String, Option<String>)>>,
     /// Held while a backup is written: one at a time.
     pub backing_up: Mutex<()>,
     pub started: Instant,
@@ -219,6 +375,11 @@ pub struct Shared {
     /// The installer's folder this program runs from (none for a build of your own: no updates).
     pub install: Option<Install>,
     pub update: Mutex<Updates>,
+    /// The event stream's events (events.rs), and the streams' wake-up.
+    pub events: Mutex<crate::events::Events>,
+    pub event_added: std::sync::Condvar,
+    /// The management protocol's connections, which its notifications go to (management.rs).
+    pub management: crate::management::Clients,
 }
 
 impl Shared {
@@ -240,6 +401,7 @@ impl Shared {
             log: Mutex::new(Log::default()),
             stop: AtomicBool::new(false),
             restart: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
             restore: Mutex::new(None),
             backing_up: Mutex::new(()),
             started: Instant::now(),
@@ -247,6 +409,9 @@ impl Shared {
             panel: Mutex::new(panel::Auth::default()),
             install,
             update: Mutex::new(Updates::default()),
+            events: Mutex::default(),
+            event_added: std::sync::Condvar::new(),
+            management: crate::management::Clients::default(),
         })
     }
 
@@ -334,9 +499,17 @@ impl Shared {
     }
     pub fn set_phase(&self, phase: Phase) {
         self.state.lock().unwrap().phase = phase;
+        self.emit("phase", json!({ "phase": phase.name() }));
     }
-    fn phase(&self) -> Phase {
+    pub(crate) fn phase(&self) -> Phase {
         self.state.lock().unwrap().phase
+    }
+    /// Stops the game and then the supervisor itself (`POST /api/v1/stop`, the management `server/stop`): the
+    /// process exits, as vanilla's does. Only a `stop` that reaches the game some other way leaves the supervisor
+    /// in [`Phase::Stopped`].
+    pub fn shut_down(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
     }
 
     /// A backup while the server runs: the game saves everything and stops writing while the zip is made.
@@ -348,23 +521,45 @@ impl Shared {
                 engine::Control::connect(&self.dir)
                     .map_err(|e| format!("the game didn't answer: {e}"))?,
             ),
-            // Between a crash and the restart nothing writes the world.
-            Phase::Restarting => None,
+            // Between game runs nothing writes the world.
+            Phase::Stopped | Phase::Restarting => None,
             Phase::Starting | Phase::Stopping => {
                 return Err("the game is starting or stopping: try again in a moment".into());
             }
         };
         if let Some(game) = game.as_mut() {
-            for command in ["console save-off", "console save-all flush"] {
-                game.ask(command)
-                    .map_err(|e| format!("the game didn't save: {e}"))?;
+            let saved = game.ask("console save-off").and_then(|_| {
+                // A big world's flush can take longer than an ordinary reply.
+                game.set_reply_timeout(FLUSH_TIMEOUT)?;
+                let flushed = game.ask("console save-all flush");
+                let _ = game.set_reply_timeout(engine::REPLY_TIMEOUT);
+                flushed
+            });
+            if let Err(e) = saved {
+                // Saving may be off already (a save-off whose reply was lost counts): it goes back
+                // on, or the game would run without autosaving until the next backup.
+                save_on(&self.dir, None);
+                return Err(format!("the game didn't save: {e}"));
             }
         }
         let result = backup::create(&self.dir, &config, file_name);
         if let Some(game) = game.as_mut() {
-            let _ = game.ask("console save-on");
+            save_on(&self.dir, Some(game));
         }
         result
+    }
+}
+
+/// How long a backup waits for the game's `save-all flush`.
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Saving back on after a backup: over `game` when it is still in step, else (or when that
+/// fails) over a connection of its own, since a reply that timed out leaves the old one out of
+/// step.
+fn save_on(dir: &std::path::Path, game: Option<&mut engine::Control>) {
+    let sent = game.is_some_and(|g| g.ask("console save-on").is_ok());
+    if !sent {
+        let _ = engine::Control::connect(dir).and_then(|mut g| g.ask("console save-on"));
     }
 }
 
@@ -400,36 +595,23 @@ fn updates(shared: &Shared) -> Value {
     })
 }
 
-/// A random token: two 64-bit hashes keyed by the OS's random hasher seeds, the time and the process.
+/// A random token: 128 bits from the OS's random generator, as 32 hex digits.
 pub fn random_token() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    (0..2u64)
-        .map(|i| {
-            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_u64(i);
-            h.write_u128(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos()),
-            );
-            h.write_u32(std::process::id());
-            format!("{:016x}", h.finish())
-        })
-        .collect()
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("OS random generator");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn same_token(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+    // Digests of a fixed length: not even the token's length shows in the time taken.
+    use sha2::{Digest, Sha256};
+    let (x, y) = (Sha256::digest(a.as_bytes()), Sha256::digest(b.as_bytes()));
+    x.iter().zip(y.iter()).fold(0u8, |d, (p, q)| d | (p ^ q)) == 0
 }
 
-/// Writes a file only its owner can read.
-pub fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(text.as_bytes())
-}
+/// Writes a file only its owner can read: through a private temporary file renamed over it
+/// (`horizon_platform::server_files::private_file`), so an older, wider-readable file never keeps the token.
+pub use horizon_platform::server_files::private_file::write_private;
 
 /// Removes the endpoint file when the supervisor ends.
 pub struct Endpoint(PathBuf);
@@ -439,19 +621,35 @@ impl Drop for Endpoint {
     }
 }
 
-/// Starts the API on a free port of 127.0.0.1 and writes where it is and its token.
+/// Starts the API where `[api]` says (a free port of 127.0.0.1 by default) and writes where it is and its
+/// token (`[api] token`, or a random one).
 pub fn start(shared: Arc<Shared>) -> Result<Endpoint, String> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("control API: {e}"))?;
+    let settings = Config::load(&shared.dir)?.api;
+    let listener =
+        TcpListener::bind(settings.address()?).map_err(|e| format!("control API: {e}"))?;
     let address = listener.local_addr().map_err(|e| e.to_string())?;
-    let token = random_token();
+    let token = match settings.token.trim() {
+        "" => random_token(),
+        token => token.to_owned(),
+    };
+    let public = !crate::config::private(address.ip());
+    if public {
+        crate::supervisor::note(
+            &shared,
+            "WARN",
+            &format!(
+                "The control API listens on {address}, beyond this computer and the tailnet (api.allow_public): \
+                 only its token guards the server"
+            ),
+        );
+    }
     let path = shared.dir.join(ENDPOINT);
     write_private(
         &path,
-        &json!({ "address": address.to_string(), "token": token, "pid": std::process::id() })
+        json!({ "address": address.to_string(), "token": token, "pid": std::process::id() })
             .to_string(),
     )
     .map_err(|e| format!("{}: {e}", path.display()))?;
-    let hosts = [address.to_string(), format!("localhost:{}", address.port())];
     http::serve(listener, move |request| {
         // A page in a browser can't send the token, and a rebound DNS name can't pass as this address.
         let authorised = request
@@ -461,9 +659,10 @@ pub fn start(shared: Arc<Shared>) -> Result<Endpoint, String> {
         if !authorised {
             return Response::error(401, "missing or wrong token (see .horizon/api.json)");
         }
-        if !request
-            .header("host")
-            .is_some_and(|h| hosts.iter().any(|a| a == h))
+        if !public
+            && !request
+                .header("host")
+                .is_some_and(|h| panel::host_allowed(h, address))
         {
             return Response::error(403, "wrong Host");
         }
@@ -509,11 +708,13 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
             let (next, lines) = shared.log.lock().unwrap().since(since);
             Response::json(200, &json!({ "next": next, "lines": lines }))
         }
+        ("GET", "/api/v1/events") => crate::events::route(shared, request),
         ("POST", "/api/v1/command") => {
             let line = serde_json::from_slice::<Value>(&request.body)
                 .ok()
                 .and_then(|v| v["line"].as_str().map(str::to_owned));
-            let Some(line) = line.filter(|l| !l.trim().is_empty() && !l.contains('\n')) else {
+            let Some(line) = line.filter(|l| !l.trim().is_empty() && !l.contains(['\n', '\r']))
+            else {
                 return Response::error(400, "the body must be {\"line\": \"<one command>\"}");
             };
             if shared.state.lock().unwrap().phase != Phase::Running {
@@ -527,7 +728,14 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
             }
         }
         ("POST", "/api/v1/stop") => {
-            shared.stop.store(true, Ordering::SeqCst);
+            shared.shut_down();
+            Response::json(200, &json!({ "ok": true }))
+        }
+        ("POST", "/api/v1/start") => {
+            if shared.phase() != Phase::Stopped {
+                return Response::error(409, "the game isn't stopped right now");
+            }
+            shared.restart.store(true, Ordering::SeqCst);
             Response::json(200, &json!({ "ok": true }))
         }
         ("POST", "/api/v1/restart") => {
@@ -557,25 +765,172 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
             match backup::find(&shared.dir, body["name"].as_str().unwrap_or_default()) {
                 Ok(name) => {
-                    *shared.restore.lock().unwrap() = Some(name.clone());
+                    let dimension = match body["dimension"].as_str() {
+                        None => None,
+                        Some(d) => match backup::dimension_folder(d) {
+                            Ok((id, _)) => Some(id),
+                            Err(e) => return Response::error(400, &e),
+                        },
+                    };
+                    *shared.restore.lock().unwrap() = Some((name.clone(), dimension.clone()));
                     shared.restart.store(true, Ordering::SeqCst);
-                    Response::json(200, &json!({ "name": name }))
+                    Response::json(200, &json!({ "name": name, "dimension": dimension }))
                 }
                 Err(e) => Response::error(404, &e),
             }
         }
         ("POST", "/api/v1/update") => {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
-            let timeout = body["timeout"]
-                .as_u64()
-                .map_or(UPDATE_TIMEOUT, Duration::from_secs);
+            let timeout = body["timeout"].as_u64().map_or(UPDATE_TIMEOUT, |s| {
+                Duration::from_secs(s.max(1)).min(MAX_UPDATE_TIMEOUT)
+            });
             match shared.start_update(body["tag"].as_str().map(str::to_owned), timeout) {
                 Ok(()) => Response::json(200, &json!({ "ok": true })),
                 Err(e) => Response::error(409, &e),
             }
         }
+        ("GET", "/api/v1/metrics/prometheus") => admin::prometheus(shared),
+        ("GET", "/api/v1/players") => admin::players(shared),
+        ("GET", "/api/v1/mods") => admin::mods(shared),
+        ("POST", "/api/v1/players/kick") => admin::act(shared, Action::Kick, &request.body),
+        ("POST", "/api/v1/players/ban") => admin::act(shared, Action::Ban, &request.body),
+        ("POST", "/api/v1/players/pardon") => admin::act(shared, Action::Pardon, &request.body),
+        ("POST", "/api/v1/players/ban-ip") => admin::act(shared, Action::BanIp, &request.body),
+        ("POST", "/api/v1/players/pardon-ip") => {
+            admin::act(shared, Action::PardonIp, &request.body)
+        }
+        ("POST", "/api/v1/players/op") => admin::act(shared, Action::Op, &request.body),
+        ("POST", "/api/v1/players/deop") => admin::act(shared, Action::Deop, &request.body),
+        ("POST", "/api/v1/whitelist") => admin::act(shared, Action::Whitelist, &request.body),
+        ("POST", "/api/v1/whitelist/add") => {
+            admin::act(shared, Action::WhitelistAdd, &request.body)
+        }
+        ("POST", "/api/v1/whitelist/remove") => {
+            admin::act(shared, Action::WhitelistRemove, &request.body)
+        }
+        ("DELETE", "/api/v1/backups") => {
+            let name = request.param("name").unwrap_or_default();
+            if !backup::list(&shared.dir).iter().any(|b| b.name == name) {
+                return Response::error(404, "no such backup (`GET /api/v1/backups` lists them)");
+            }
+            match std::fs::remove_file(shared.dir.join(backup::DIR).join(name)) {
+                Ok(()) => {
+                    crate::supervisor::note(
+                        shared,
+                        "INFO",
+                        &format!("Control API: deleted the backup {name}"),
+                    );
+                    Response::json(200, &json!({ "name": name }))
+                }
+                Err(e) => Response::error(409, &e.to_string()),
+            }
+        }
+        ("GET", "/api/v1/backups/download") => {
+            let name = request.param("name").unwrap_or_default();
+            if !backup::list(&shared.dir).iter().any(|b| b.name == name) {
+                return Response::error(404, "no such backup (`GET /api/v1/backups` lists them)");
+            }
+            Response::file(shared.dir.join(backup::DIR).join(name), name)
+        }
+        ("GET", "/api/v1/crash-reports") => {
+            let list: Vec<Value> = crash_reports(&shared.dir)
+                .into_iter()
+                .map(|(name, bytes)| json!({ "name": name, "bytes": bytes }))
+                .collect();
+            Response::json(200, &json!({ "reports": list }))
+        }
+        ("GET", "/api/v1/crash-reports/read") => {
+            // Only a name the listing holds is read, so a path (`../`, `/`) matches nothing.
+            let name = request.param("name").unwrap_or_default();
+            if !crash_reports(&shared.dir).iter().any(|(n, _)| n == name) {
+                return Response::error(
+                    404,
+                    "no such crash report (`GET /api/v1/crash-reports` lists them)",
+                );
+            }
+            match std::fs::read(shared.dir.join(CRASH_DIR).join(name)) {
+                Ok(bytes) => Response::text(
+                    200,
+                    "text/plain; charset=utf-8",
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                ),
+                Err(e) => Response::error(409, &e.to_string()),
+            }
+        }
+        ("GET", "/api/v1/config") => match settings::shown(&shared.dir) {
+            Ok(config) => Response::json(200, &json!({ "config": config })),
+            Err(e) => Response::error(409, &e),
+        },
+        ("PATCH", "/api/v1/config") => patch_config(shared, &request.body),
         (_, path) if ROUTES.iter().any(|r| r.path == path) => Response::error(405, "wrong method"),
         _ => Response::error(404, "no such endpoint"),
+    }
+}
+
+/// Where the game writes its crash reports, under the server folder.
+const CRASH_DIR: &str = "crash-reports";
+
+/// The crash reports (`*.txt` files directly in `crash-reports/`) with their sizes, newest name first.
+fn crash_reports(dir: &std::path::Path) -> Vec<(String, u64)> {
+    let mut out: Vec<(String, u64)> = std::fs::read_dir(dir.join(CRASH_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok().filter(|m| m.is_file())?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.ends_with(".txt").then_some((name, meta.len()))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out
+}
+
+/// `PATCH /api/v1/config`: `config set` for a program, without the settings that change who can reach the
+/// server or what program it runs.
+fn patch_config(shared: &Shared, body: &[u8]) -> Response {
+    let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let Some(changes) = body["changes"].as_object().filter(|c| !c.is_empty()) else {
+        return Response::error(
+            400,
+            "the body must be {\"changes\": {\"section.name\": value, ...}}",
+        );
+    };
+    let mut lines = Vec::new();
+    for (key, value) in changes {
+        if !settings::changeable_remotely(key) {
+            return Response::error(403, &format!("{key} can only be changed in server.toml"));
+        }
+        let text = match value {
+            Value::String(s) if !s.contains(['\n', '\r']) => s.clone(),
+            Value::Bool(_) | Value::Number(_) => value.to_string(),
+            _ => {
+                return Response::error(
+                    400,
+                    &format!("{key}: a value is one line of text, a number or true/false"),
+                );
+            }
+        };
+        lines.push(format!("{key}={text}"));
+    }
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let live =
+        |line: &str| shared.phase() == Phase::Running && settings::ask_game(&shared.dir, line);
+    let running = matches!(shared.phase(), Phase::Running | Phase::Restarting);
+    match settings::apply(
+        &shared.dir,
+        &lines,
+        running.then_some(&live as &dyn Fn(&str) -> bool),
+    ) {
+        Ok(outcome) => {
+            crate::supervisor::note(
+                shared,
+                "INFO",
+                &format!("Control API: config set {}", lines.join(" ")),
+            );
+            Response::json(200, &outcome.to_json())
+        }
+        Err(e) => Response::error(400, &e),
     }
 }
 
@@ -617,6 +972,40 @@ impl Client {
         self.call_within(method, path, body, Duration::from_secs(60))
     }
 
+    /// Reads a server-sent event stream (`GET /api/v1/events`), one event at a time, until the server ends
+    /// it (`Ok`) or stops answering.
+    pub fn follow(&self, path: &str, mut each: impl FnMut(&Value)) -> Result<(), String> {
+        use std::io::BufRead;
+        let mut stream =
+            std::net::TcpStream::connect_timeout(&self.address, Duration::from_secs(5))
+                .map_err(|e| e.to_string())?;
+        // The stream sends a comment every 15 s: a minute of silence is a server gone.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .map_err(|e| e.to_string())?;
+        write!(
+            stream,
+            "GET {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
+            self.address, self.token
+        )
+        .map_err(|e| e.to_string())?;
+        let mut lines = std::io::BufReader::new(stream).lines();
+        let status = lines.next().and_then(Result::ok).unwrap_or_default();
+        if status.split_whitespace().nth(1) != Some("200") {
+            return Err(format!("the server answered {status:?}"));
+        }
+        for line in lines {
+            let line = line.map_err(|e| e.to_string())?;
+            if let Some(event) = line
+                .strip_prefix("data: ")
+                .and_then(|d| serde_json::from_str(d).ok())
+            {
+                each(&event);
+            }
+        }
+        Ok(())
+    }
+
     /// A call that may take long (a backup of a big world).
     pub fn call_within(
         &self,
@@ -641,6 +1030,317 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tokens_compare_whole() {
+        assert!(same_token("abc123", "abc123"));
+        assert!(!same_token("abc123", "abc124"));
+        assert!(!same_token("abc123", "abc1234"));
+        assert!(!same_token("", "a"));
+    }
+
+    fn wire_reply(
+        address: SocketAddr,
+        method: &str,
+        path: &str,
+        host: &str,
+        token: Option<&str>,
+        body: &str,
+    ) -> Value {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        let authorization = token
+            .map(|token| format!("Authorization: Bearer {token}\r\n"))
+            .unwrap_or_default();
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        stream.flush().unwrap();
+        let mut text = String::new();
+        stream.read_to_string(&mut text).unwrap();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap();
+        let mut lines = head.lines();
+        let status = lines
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|status| status.parse::<u16>().ok())
+            .unwrap();
+        let headers: Vec<Value> = lines
+            .filter_map(|line| {
+                let (name, value) = line.split_once(": ")?;
+                Some(json!([name, value]))
+            })
+            .collect();
+        json!({
+            "status": status,
+            "headers": headers,
+            "body": serde_json::from_str::<Value>(body).unwrap(),
+        })
+    }
+
+    #[test]
+    fn auth_and_command_replies_match_api_v1_goldens() {
+        let golden: Value =
+            serde_json::from_str(include_str!("../testdata/api-v1-auth-command.json")).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-api-auth-command-goldens-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".horizon")).unwrap();
+        let toml =
+            crate::config::TEMPLATE.replace("token = \"\"", "token = \"test-token-for-api\"");
+        std::fs::write(dir.join(crate::config::FILE), toml).unwrap();
+        let shared = Shared::with_install(&dir, None);
+        shared.set_phase(Phase::Stopped);
+        let endpoint = start(shared).unwrap();
+        let endpoint_info: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(ENDPOINT)).unwrap()).unwrap();
+        let address: SocketAddr = endpoint_info["address"].as_str().unwrap().parse().unwrap();
+        let token = endpoint_info["token"].as_str().unwrap();
+        let host = address.to_string();
+        let call =
+            |case: &str, method: &str, path: &str, request_token: Option<&str>, body: &str| {
+                let actual = wire_reply(address, method, path, &host, request_token, body);
+                assert_eq!(actual, golden[case], "{case}");
+            };
+        let call_host = |case: &str, host: &str| {
+            let actual = wire_reply(address, "GET", "/api/v1/status", host, Some(token), "");
+            assert_eq!(actual, golden[case], "{case}");
+        };
+        call("missing_token", "GET", "/api/v1/status", None, "");
+        call("wrong_token", "GET", "/api/v1/status", Some("wrong"), "");
+        call_host("wrong_host", "example.invalid");
+        call(
+            "command_malformed",
+            "POST",
+            "/api/v1/command",
+            Some(token),
+            "not json",
+        );
+        call(
+            "command_missing_line",
+            "POST",
+            "/api/v1/command",
+            Some(token),
+            "{}",
+        );
+        call(
+            "command_newline",
+            "POST",
+            "/api/v1/command",
+            Some(token),
+            r#"{"line":"say hi\nthere"}"#,
+        );
+        call(
+            "command_blank",
+            "POST",
+            "/api/v1/command",
+            Some(token),
+            r#"{"line":"   "}"#,
+        );
+        call(
+            "command_stopped",
+            "POST",
+            "/api/v1/command",
+            Some(token),
+            r#"{"line":"list"}"#,
+        );
+        call("unknown_endpoint", "GET", "/api/v1/nope", Some(token), "");
+        call("wrong_method", "GET", "/api/v1/command", Some(token), "");
+        drop(endpoint);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn observability_reply(mut response: Response, dynamic: &[&str]) -> Value {
+        assert!(response.stream.is_none());
+        let mut body = serde_json::from_str::<Value>(&response.body)
+            .unwrap_or_else(|_| Value::String(response.body.clone()));
+        for field in dynamic {
+            if let Some(value) = body.get_mut(*field) {
+                *value = json!("<dynamic>");
+            }
+        }
+        if let Some(text) = body.as_str() {
+            let text = text
+                .lines()
+                .map(|line| {
+                    if line.starts_with("horizon_supervisor_uptime_seconds ") {
+                        "horizon_supervisor_uptime_seconds <dynamic>"
+                    } else {
+                        line
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            body = Value::String(if response.body.ends_with('\n') {
+                format!("{text}\n")
+            } else {
+                text
+            });
+        }
+        json!({
+            "status": response.status,
+            "content_type": response.content_type,
+            "headers": std::mem::take(&mut response.headers),
+            "body": body,
+        })
+    }
+
+    #[test]
+    fn observability_replies_match_api_v1_goldens() {
+        let golden: Value =
+            serde_json::from_str(include_str!("../testdata/api-v1-observability.json")).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-api-observability-goldens-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = Shared::with_install(&dir, None);
+        shared.set_phase(Phase::Stopped);
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.crashes = 2;
+            state.last_crash = Some("exit status: 1".into());
+            state.sample = json!({
+                "t": 200,
+                "rss_bytes": 536_870_912u64,
+                "cpu_percent": 12.5,
+                "game": {
+                    "tps": 19.9,
+                    "target_tps": 20.0,
+                    "mspt": { "average": 8.25, "p50": 7.0, "p95": 12.5, "p99": 18.0 },
+                    "players": [{ "name": "Alex" }, { "name": "Steve" }],
+                    "max_players": 20,
+                    "chunks": 321,
+                },
+            });
+        }
+        shared.record(json!({ "t": 100, "game": { "tps": 20.0 } }));
+        shared.record(shared.state.lock().unwrap().sample.clone());
+        shared.log.lock().unwrap().push("first line".into());
+        shared.log.lock().unwrap().push("second line".into());
+
+        let call = |path: &str, query: &str, dynamic: &[&str]| {
+            observability_reply(
+                route(
+                    &shared,
+                    &Request {
+                        method: "GET".into(),
+                        path: path.into(),
+                        query: query.into(),
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    },
+                ),
+                dynamic,
+            )
+        };
+        let cases = [
+            (
+                "status_stopped",
+                "/api/v1/status",
+                "",
+                &["pid", "uptime_seconds"][..],
+            ),
+            ("logs_all", "/api/v1/logs", "", &[][..]),
+            ("logs_since", "/api/v1/logs", "since=1", &[][..]),
+            ("logs_invalid_since", "/api/v1/logs", "since=nope", &[][..]),
+            ("metrics_all", "/api/v1/metrics", "", &[][..]),
+            ("metrics_since", "/api/v1/metrics", "since=100", &[][..]),
+            (
+                "metrics_invalid_since",
+                "/api/v1/metrics",
+                "since=nope",
+                &[][..],
+            ),
+            (
+                "prometheus_stopped",
+                "/api/v1/metrics/prometheus",
+                "",
+                &[][..],
+            ),
+        ];
+        for (case, path, query, dynamic) in cases {
+            assert_eq!(call(path, query, dynamic), golden[case], "{case}");
+        }
+        shared.set_phase(Phase::Running);
+        assert_eq!(
+            call("/api/v1/metrics/prometheus", "", &[]),
+            golden["prometheus_running"],
+            "prometheus_running"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const LIFECYCLE_GOLDENS: &str = include_str!("../testdata/api-v1-lifecycle.json");
+
+    fn golden_phase(name: &str) -> Phase {
+        match name {
+            "starting" => Phase::Starting,
+            "running" => Phase::Running,
+            "stopped" => Phase::Stopped,
+            "stopping" => Phase::Stopping,
+            "restarting" => Phase::Restarting,
+            _ => panic!("unknown golden phase {name:?}"),
+        }
+    }
+
+    fn normalize_lifecycle_reply(path: &str, body: &mut Value) {
+        if path == "/api/v1/status" {
+            assert!(body["version"].is_string());
+            assert!(body["pid"].is_u64());
+            assert!(body["uptime_seconds"].is_u64());
+            assert!(body["engine_uptime_seconds"].is_u64());
+            body["version"] = json!("$VERSION");
+            body["pid"] = json!("$PID");
+            body["uptime_seconds"] = json!("$TIME");
+            body["engine_uptime_seconds"] = json!("$TIME");
+        }
+    }
+
+    #[test]
+    fn lifecycle_replies_match_api_v1_goldens() {
+        let cases: Value = serde_json::from_str(LIFECYCLE_GOLDENS).unwrap();
+        for case in cases.as_array().unwrap() {
+            let shared = Shared::with_install(Path::new("unused"), None);
+            let sample = json!({ "t": 200, "tps": 20, "players": 2 });
+            {
+                let mut state = shared.state.lock().unwrap();
+                state.phase = golden_phase(case["phase"].as_str().unwrap());
+                state.engine_pid = Some(4242);
+                state.engine_started = Some(Instant::now());
+                state.crashes = 2;
+                state.last_crash = Some("exit status: 1".into());
+                state.sample = sample.clone();
+            }
+            shared.record(json!({ "t": 100, "tps": 19, "players": 1 }));
+            shared.record(sample);
+            shared.log.lock().unwrap().push("first".into());
+            shared.log.lock().unwrap().push("second".into());
+
+            let raw_path = case["path"].as_str().unwrap();
+            let (path, query) = raw_path.split_once('?').unwrap_or((raw_path, ""));
+            let response = route(
+                &shared,
+                &Request {
+                    method: case["method"].as_str().unwrap().into(),
+                    path: path.into(),
+                    query: query.into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+            );
+            let mut body: Value = serde_json::from_str(&response.body).unwrap();
+            normalize_lifecycle_reply(path, &mut body);
+            assert_eq!(response.status, case["status"], "{}", case["name"]);
+            assert_eq!(body, case["body"], "{}", case["name"]);
+        }
+    }
+
+    #[test]
     fn log_keeps_the_last_lines_numbered() {
         let mut log = Log::default();
         for i in 0..LOG_LINES + 10 {
@@ -661,9 +1361,73 @@ mod tests {
     }
 
     #[test]
+    fn tokens_are_32_hex_digits_and_differ() {
+        let (a, b) = (random_token(), random_token());
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_backup_whose_flush_fails_turns_saving_back_on() {
+        let dir = std::env::temp_dir().join(format!("horizon-server-flush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".horizon")).unwrap();
+        std::fs::write(dir.join(crate::config::FILE), crate::config::TEMPLATE).unwrap();
+        // A game that answers everything but drops the connection on the flush, as a reply that
+        // timed out leaves it.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::fs::write(
+            engine::control_path(&dir),
+            json!({"port": port, "token": "t"}).to_string(),
+        )
+        .unwrap();
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let heard = asked.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut writer = stream;
+                let mut line = String::new();
+                while std::io::BufRead::read_line(&mut reader, &mut line).unwrap_or(0) > 0 {
+                    let asked = line.trim().to_owned();
+                    line.clear();
+                    heard.lock().unwrap().push(asked.clone());
+                    if asked == "console save-all flush" {
+                        break;
+                    }
+                    let _ = std::io::Write::write_all(&mut writer, b"{\"ok\":true}\n");
+                }
+            }
+        });
+        let shared = Shared::new(&dir);
+        shared.set_phase(Phase::Running);
+        let said = shared.back_up("test.zip").unwrap_err();
+        assert!(said.contains("didn't save"), "{said}");
+        let asked = asked.lock().unwrap().clone();
+        let commands: Vec<&str> = asked
+            .iter()
+            .filter(|l| !l.starts_with("auth "))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            commands,
+            [
+                "console save-off",
+                "console save-all flush",
+                "console save-on"
+            ],
+            "saving goes back on, over a connection of its own"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_api_wants_its_token() {
         let dir = std::env::temp_dir().join(format!("horizon-server-api-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".horizon")).unwrap();
+        std::fs::write(dir.join(crate::config::FILE), crate::config::TEMPLATE).unwrap();
         let shared = Shared::new(&dir);
         let _endpoint = start(shared.clone()).unwrap();
         let v: Value =
@@ -708,6 +1472,464 @@ mod tests {
         }
         drop(_endpoint);
         assert!(!dir.join(ENDPOINT).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_token_and_a_port_from_server_toml() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-api-fixed-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".horizon")).unwrap();
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let token = "a-token-for-the-discord-bot";
+        let toml = crate::config::TEMPLATE
+            .replace(
+                "[api]\nbind = \"\"",
+                &format!("[api]\nbind = \"127.0.0.1:{port}\""),
+            )
+            .replace("token = \"\"", &format!("token = \"{token}\""));
+        std::fs::write(dir.join(crate::config::FILE), toml).unwrap();
+        let _endpoint = start(Shared::new(&dir)).unwrap();
+        let address: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let get = |token: &str| {
+            http::request(
+                address,
+                token,
+                "GET",
+                "/api/v1/status",
+                None,
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .0
+        };
+        assert_eq!((get(token), get("a-token-for-the-discord-bo")), (200, 401));
+        drop(_endpoint);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn crash_reports_over_the_api() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-api-crash-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("crash-reports")).unwrap();
+        std::fs::write(dir.join("secret.txt"), "not a report").unwrap();
+        std::fs::write(
+            dir.join("crash-reports/crash-2026-11-01_10.00.00-server.txt"),
+            "old",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("crash-reports/crash-2026-11-02_10.00.00-server.txt"),
+            "---- Horizon Crash Report ----\nOutOfMemory",
+        )
+        .unwrap();
+        std::fs::write(dir.join("crash-reports/notes.log"), "skipped").unwrap();
+        let shared = Shared::with_install(&dir, None);
+        let get = |path: &str, query: &str| {
+            let r = route(
+                &shared,
+                &Request {
+                    method: "GET".into(),
+                    path: path.into(),
+                    query: query.into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+            );
+            (r.status, r.body)
+        };
+        let (status, body) = get("/api/v1/crash-reports", "");
+        let list: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(list["reports"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            list["reports"][0]["name"],
+            "crash-2026-11-02_10.00.00-server.txt"
+        );
+        let (status, text) = get(
+            "/api/v1/crash-reports/read",
+            "name=crash-2026-11-02_10.00.00-server.txt",
+        );
+        assert_eq!(status, 200);
+        assert!(text.contains("OutOfMemory"));
+        for name in [
+            "../secret.txt",
+            "..%2Fsecret.txt",
+            "/etc/passwd",
+            "notes.log",
+            "",
+        ] {
+            let (status, body) = get("/api/v1/crash-reports/read", &format!("name={name}"));
+            assert_eq!(status, 404, "{name}");
+            assert!(!body.contains("not a report"), "{name}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn config_and_backups_over_the_api() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-api-admin-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("backups")).unwrap();
+        let toml = crate::config::TEMPLATE
+            .replace("token = \"\"", "token = \"a-token-for-the-discord-bot\"");
+        std::fs::write(dir.join(crate::config::FILE), toml).unwrap();
+        std::fs::write(
+            dir.join("backups/2026-10-31T12-00-00Z-manual.zip"),
+            b"PK\x05\x06zip",
+        )
+        .unwrap();
+        let shared = Shared::with_install(&dir, None);
+        shared.set_phase(Phase::Restarting);
+        let call = |method: &str, path: &str, query: &str, body: Value| {
+            let response = route(
+                &shared,
+                &Request {
+                    method: method.into(),
+                    path: path.into(),
+                    query: query.into(),
+                    headers: Vec::new(),
+                    body: body.to_string().into_bytes(),
+                },
+            );
+            (
+                response.status,
+                serde_json::from_str::<Value>(&response.body).unwrap_or(Value::Null),
+            )
+        };
+        let (status, config) = call("GET", "/api/v1/config", "", Value::Null);
+        assert_eq!(
+            (status, &config["config"]["api"]["token"]),
+            (200, &json!("(set)"))
+        );
+        assert_eq!(config["config"]["world"]["difficulty"], "easy");
+        let (status, outcome) = call(
+            "PATCH",
+            "/api/v1/config",
+            "",
+            json!({ "changes": { "world.difficulty": "hard", "server.max_players": 50 } }),
+        );
+        assert_eq!(status, 200, "{outcome}");
+        // The game is down between a crash and its restart: both wait for its start.
+        assert_eq!(
+            outcome["restart"],
+            json!(["server.max_players", "world.difficulty"])
+        );
+        let saved = crate::config::Config::load(&dir).unwrap();
+        assert_eq!(
+            (saved.world.difficulty.as_str(), saved.server.max_players),
+            ("hard", 50)
+        );
+        for key in [
+            "engine.path",
+            "api.allow_public",
+            "panel.bind",
+            "properties.enable-rcon",
+        ] {
+            let (status, _) = call(
+                "PATCH",
+                "/api/v1/config",
+                "",
+                json!({ "changes": { key: "x" } }),
+            );
+            assert_eq!(status, 403, "{key}");
+        }
+        let (status, _) = call(
+            "PATCH",
+            "/api/v1/config",
+            "",
+            json!({ "changes": { "world.difficulty": "brutal" } }),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(
+            crate::config::Config::load(&dir).unwrap().world.difficulty,
+            "hard"
+        );
+
+        let name = "2026-10-31T12-00-00Z-manual.zip";
+        let response = route(
+            &shared,
+            &Request {
+                method: "GET".into(),
+                path: "/api/v1/backups/download".into(),
+                query: format!("name={name}"),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        );
+        assert!(response.stream.is_some());
+        assert!(response.headers.contains(&("Content-Length", "7".into())));
+        let (status, _) = call(
+            "DELETE",
+            "/api/v1/backups",
+            "name=../server.toml",
+            Value::Null,
+        );
+        assert_eq!(status, 404);
+        assert_eq!(
+            call(
+                "DELETE",
+                "/api/v1/backups",
+                &format!("name={name}"),
+                Value::Null
+            )
+            .0,
+            200
+        );
+        assert!(backup::list(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn backup_reply(mut response: Response) -> Value {
+        let body = if let Some(write) = response.stream.take() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (server, _) = listener.accept().unwrap();
+            write(&server);
+            server.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut client, &mut bytes).unwrap();
+            Value::String(
+                bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(""),
+            )
+        } else {
+            serde_json::from_str(&response.body).unwrap()
+        };
+        json!({
+            "status": response.status,
+            "content_type": response.content_type,
+            "headers": response.headers,
+            "body": body,
+        })
+    }
+
+    #[test]
+    fn backup_replies_match_api_v1_goldens() {
+        let golden: Value =
+            serde_json::from_str(include_str!("../testdata/api-v1-backups.json")).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-api-backup-goldens-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("backups")).unwrap();
+        std::fs::create_dir_all(dir.join("world/dimensions/minecraft/the_end")).unwrap();
+        std::fs::write(dir.join(crate::config::FILE), crate::config::TEMPLATE).unwrap();
+        std::fs::write(dir.join("world/level.dat"), b"level").unwrap();
+        std::fs::write(
+            dir.join("world/dimensions/minecraft/the_end/region.mca"),
+            b"end",
+        )
+        .unwrap();
+        let name = "2026-11-04_00-00-00-golden.zip";
+        std::fs::write(dir.join("backups").join(name), b"PK\x05\x06zip").unwrap();
+        let shared = Shared::with_install(&dir, None);
+        shared.set_phase(Phase::Stopped);
+        let call = |method: &str, target: &str, body: Value| {
+            let (path, query) = target.split_once('?').unwrap_or((target, ""));
+            route(
+                &shared,
+                &Request {
+                    method: method.into(),
+                    path: path.into(),
+                    query: query.into(),
+                    headers: Vec::new(),
+                    body: body.to_string().into_bytes(),
+                },
+            )
+        };
+        let check = |case: &str, response: Response| {
+            assert_eq!(backup_reply(response), golden[case], "{case}");
+        };
+        check("list", call("GET", "/api/v1/backups", Value::Null));
+        check(
+            "download",
+            call(
+                "GET",
+                &format!("/api/v1/backups/download?name={name}"),
+                Value::Null,
+            ),
+        );
+        check(
+            "restore",
+            call("POST", "/api/v1/restore", json!({ "name": name })),
+        );
+        check(
+            "restore_dimension",
+            call(
+                "POST",
+                "/api/v1/restore",
+                json!({ "name": name, "dimension": "the_end" }),
+            ),
+        );
+        check(
+            "bad_dimension",
+            call(
+                "POST",
+                "/api/v1/restore",
+                json!({ "name": name, "dimension": "../end" }),
+            ),
+        );
+        check(
+            "restore_missing",
+            call("POST", "/api/v1/restore", json!({ "name": "missing" })),
+        );
+        check(
+            "delete_missing",
+            call("DELETE", "/api/v1/backups?name=../server.toml", Value::Null),
+        );
+        check(
+            "delete",
+            call(
+                "DELETE",
+                &format!("/api/v1/backups?name={name}"),
+                Value::Null,
+            ),
+        );
+        check("list_empty", call("GET", "/api/v1/backups", Value::Null));
+
+        let mut created = backup_reply(call(
+            "POST",
+            "/api/v1/backups",
+            json!({ "name": "created" }),
+        ));
+        let created_name = created["body"]["name"].as_str().unwrap();
+        assert!(created_name.ends_with("-created.zip"));
+        assert!(dir.join("backups").join(created_name).is_file());
+        created["body"]["name"] = json!("$BACKUP");
+        assert_eq!(created, golden["create"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn stopped_supervisor_can_edit_lists_and_start_again() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-api-stopped-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(crate::config::FILE), crate::config::TEMPLATE).unwrap();
+        crate::config::update(&dir, "server", "online_mode", toml::Value::Boolean(false)).unwrap();
+        let shared = Shared::with_install(&dir, None);
+        shared.set_phase(Phase::Stopped);
+        let request = |method: &str, path: &str, body: &[u8]| {
+            route(
+                &shared,
+                &Request {
+                    method: method.into(),
+                    path: path.into(),
+                    query: String::new(),
+                    headers: Vec::new(),
+                    body: body.to_vec(),
+                },
+            )
+        };
+        let response = request("POST", "/api/v1/players/op", br#"{"name":"Alex"}"#);
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert!(response.body.contains("Made Alex a server operator"));
+        let response = request("POST", "/api/v1/start", b"");
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert!(shared.restart.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn config_reply(response: Response) -> Value {
+        assert!(response.stream.is_none());
+        json!({
+            "status": response.status,
+            "content_type": response.content_type,
+            "headers": response.headers,
+            "body": serde_json::from_str::<Value>(&response.body).unwrap(),
+        })
+    }
+
+    #[test]
+    fn config_replies_match_api_v1_goldens() {
+        let golden: Value =
+            serde_json::from_str(include_str!("../testdata/api-v1-config.json")).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-api-config-goldens-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let toml = crate::config::TEMPLATE
+            .replace("token = \"\"", "token = \"a-token-for-the-config-test\"")
+            .replace(
+                "webhook = \"\"",
+                "webhook = \"https://discord.com/api/webhooks/123/config-test\"",
+            );
+        std::fs::write(dir.join(crate::config::FILE), toml).unwrap();
+        let shared = Shared::with_install(&dir, None);
+        shared.set_phase(Phase::Stopped);
+        let call = |method: &str, body: &[u8]| {
+            config_reply(route(
+                &shared,
+                &Request {
+                    method: method.into(),
+                    path: "/api/v1/config".into(),
+                    query: String::new(),
+                    headers: Vec::new(),
+                    body: body.to_vec(),
+                },
+            ))
+        };
+        let check = |case: &str, method: &str, body: &[u8]| {
+            assert_eq!(call(method, body), golden[case], "{case}");
+        };
+
+        check("get", "GET", b"");
+        check("malformed", "PATCH", b"not json");
+        check(
+            "protected",
+            "PATCH",
+            br#"{"changes":{"api.token":"replacement"}}"#,
+        );
+        check(
+            "invalid_range",
+            "PATCH",
+            br#"{"changes":{"server.max_players":0}}"#,
+        );
+        check(
+            "invalid_shape",
+            "PATCH",
+            br#"{"changes":{"world.seed":[1,2]}}"#,
+        );
+        check(
+            "unknown",
+            "PATCH",
+            br#"{"changes":{"server.unknown":true}}"#,
+        );
+        check(
+            "patch_stopped",
+            "PATCH",
+            br#"{"changes":{"world.difficulty":"hard","server.max_players":50}}"#,
+        );
+
+        shared.set_phase(Phase::Running);
+        check(
+            "patch_running",
+            "PATCH",
+            br#"{"changes":{"server.port":25566,"backups.keep":7}}"#,
+        );
+        let saved = crate::config::Config::load(&dir).unwrap();
+        assert_eq!(
+            (
+                saved.world.difficulty.as_str(),
+                saved.server.max_players,
+                saved.server.port,
+                saved.backups.keep,
+            ),
+            ("hard", 50, 25566, 7)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

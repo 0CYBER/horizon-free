@@ -10,6 +10,7 @@ use horizon_client::{
     items::Items,
     stations::StationRecipes,
 };
+use horizon_world::loot::PackOverlay;
 use std::{fs, path::Path};
 
 pub fn main() -> horizon_client::Result<()> {
@@ -19,9 +20,9 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: recipe_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::catalog(root)?;
-    let recipes = Recipes::load(root, &items)?;
-    let stations = StationRecipes::load(root, &items);
+    let items = Items::catalog(root, &PackOverlay::NONE)?;
+    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let stations = StationRecipes::load(root, &items, &PackOverlay::NONE);
     let enchantments = Enchantments::load(root);
     let mut out = String::new();
     for line in input.lines() {
@@ -74,6 +75,18 @@ pub fn main() -> horizon_client::Result<()> {
                     .collect::<Vec<_>>()
                     .join(";"),
             },
+            "smith_transform" => {
+                let files = vec![(
+                    "recipe/test:transform".to_owned(),
+                    vec![f[1].as_bytes().to_vec()],
+                )];
+                let stations = StationRecipes::load(root, &items, &PackOverlay { files: &files });
+                let (t, b, a) = (stack(2)?, stack(3)?, stack(4)?);
+                match stations.smithing_result(&enchantments, t.as_ref(), b.as_ref(), a.as_ref()) {
+                    None => "none".to_owned(),
+                    Some(r) => canon_stack(Some(&r)),
+                }
+            }
             "smith" => {
                 let (t, b, a) = (stack(1)?, stack(2)?, stack(3)?);
                 match stations.smithing_result(&enchantments, t.as_ref(), b.as_ref(), a.as_ref()) {

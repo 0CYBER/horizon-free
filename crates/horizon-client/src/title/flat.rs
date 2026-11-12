@@ -3,10 +3,13 @@
 use super::{Button, Title};
 use crate::{
     hud::{HudAtlas, HudBatch, rgba},
+    item_render::{self, ItemRenderState, ItemRenderer, NoHost},
+    items::ItemStack,
     lang,
     text::{Text, format_translation},
     ui,
 };
+use horizon_assets::item_model::{DisplayContext, ItemEnv};
 use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{collections::BTreeSet, path::Path};
@@ -238,6 +241,8 @@ pub struct State {
     pub(super) selected: Option<usize>,
     pub(super) scroll: ui::Scroll,
     preset_selected: Option<usize>,
+    /// The preset last pressed (`PresetsList.Entry.select`): the focus only selects a row.
+    preset_pressed: Option<usize>,
     preset_scroll: ui::Scroll,
     presets: Vec<Preset>,
     blocks: BTreeSet<String>,
@@ -265,6 +270,7 @@ impl State {
             selected: None,
             scroll: ui::Scroll::default(),
             preset_selected: None,
+            preset_pressed: None,
             preset_scroll: ui::Scroll::default(),
             presets,
             blocks,
@@ -274,6 +280,7 @@ impl State {
     pub(super) fn open_presets(&mut self) {
         self.page = Page::Presets;
         self.preset_selected = None;
+        self.preset_pressed = None;
         self.preset_scroll = ui::Scroll::default();
         self.share = self.settings.to_share();
         self.share_focused = false;
@@ -290,7 +297,7 @@ impl State {
         if index < self.settings.layers.len() {
             self.settings.layers.remove(index);
         }
-        self.selected = None;
+        self.selected = selection_after_removal(row, self.settings.layers.len());
     }
     /// PresetFlatWorldScreen's Select: parse the share text into the settings
     /// the Create New World screen keeps.
@@ -298,7 +305,7 @@ impl State {
         // PresetFlatWorldScreen keeps the selected preset's decorations while
         // the share text supplies its layers and biome.
         let base = self
-            .preset_selected
+            .preset_pressed
             .and_then(|index| self.presets.get(index))
             .map(|preset| preset.settings.clone())
             .unwrap_or_else(|| self.settings.clone());
@@ -316,6 +323,7 @@ impl State {
             return;
         };
         self.preset_selected = Some(index);
+        self.preset_pressed = Some(index);
         self.share = preset.settings.to_share();
         self.share_focused = false;
     }
@@ -460,6 +468,8 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
         enabled,
         id,
         icon: None,
+        trailing: None,
+        action: None,
     };
     match state.page {
         Page::Layers => {
@@ -483,8 +493,10 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
                     true,
                     71,
                 ),
-                b(x, h - 28.0, 150.0, "gui.done", "Done", true, 72),
-                b(x + 158.0, h - 28.0, 150.0, "gui.cancel", "Cancel", true, 73),
+                b(x, h - 28.0, 150.0, "gui.done", "Done", true, 72)
+                    .does(crate::widgets::Action::Done),
+                b(x + 158.0, h - 28.0, 150.0, "gui.cancel", "Cancel", true, 73)
+                    .does(crate::widgets::Action::Cancel),
             ]
         }
         Page::Presets => vec![
@@ -505,7 +517,8 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
                 "Cancel",
                 true,
                 75,
-            ),
+            )
+            .does(crate::widgets::Action::Cancel),
         ],
     }
 }
@@ -556,10 +569,40 @@ pub(super) fn click(state: &mut State, cursor: (f32, f32), size: (f32, f32)) {
         }
     }
 }
+/// The focus landed on the row at `cursor`: it is selected (`AbstractSelectionList.setFocused`),
+/// and the share box keeps its text until the row is pressed. Whether a row was there.
+pub(super) fn focus_row(state: &mut State, cursor: (f32, f32), size: (f32, f32)) -> bool {
+    match state.page {
+        Page::Layers => {
+            let row = layer_row(state, cursor, size);
+            if row.is_some() {
+                state.selected = row;
+            }
+            row.is_some()
+        }
+        Page::Presets => {
+            let row = preset_row(state, cursor, size);
+            if row.is_some() {
+                state.preset_selected = row;
+                state.share_focused = false;
+            }
+            row.is_some()
+        }
+    }
+}
 fn share_field(size: (f32, f32)) -> [f32; 4] {
     [50.0, 40.0, (size.0.ceil() - 100.0).max(1.0), 20.0]
 }
 
+/// A list row the controller can focus and the control socket names, while its
+/// middle is in the list's view.
+pub(super) fn row_target(name: &str, rect: [f32; 4], top: f32, bottom: f32) {
+    let mid = rect[1] + rect[3] / 2.0;
+    if mid > top && mid < bottom {
+        crate::widgets::record_as(name, rect, true, crate::widgets::Kind::Row);
+        crate::widgets::target_as(rect, crate::widgets::Kind::Row);
+    }
+}
 pub(super) fn wheel(state: &mut State, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
     let (top, bottom, _, content) = list_area(state, size);
     if cursor.1 < top || cursor.1 >= bottom {
@@ -587,6 +630,7 @@ pub(super) fn release(state: &mut State) {
 pub(super) fn draw(
     title: &Title,
     atlas: &HudAtlas,
+    items: Option<&ItemRenderer>,
     batch: &mut HudBatch,
     cursor: (f32, f32),
     state: &State,
@@ -594,14 +638,15 @@ pub(super) fn draw(
     let (w, h) = (batch.width.ceil(), batch.height.ceil());
     ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
     match state.page {
-        Page::Layers => draw_layers(title, atlas, batch, cursor, state, (w, h)),
-        Page::Presets => draw_presets(title, atlas, batch, cursor, state, (w, h)),
+        Page::Layers => draw_layers(title, atlas, items, batch, cursor, state, (w, h)),
+        Page::Presets => draw_presets(title, atlas, items, batch, cursor, state, (w, h)),
     }
 }
 
 fn draw_layers(
     _title: &Title,
     atlas: &HudAtlas,
+    items: Option<&ItemRenderer>,
     batch: &mut HudBatch,
     cursor: (f32, f32),
     state: &State,
@@ -621,6 +666,7 @@ fn draw_layers(
     ui::list_background(batch, atlas, top, bottom, false);
     crate::ui::separators(batch, atlas, top, bottom, false);
     let first = batch.vertices.len();
+    let mut pending = Vec::new();
     let right = left + ROW_WIDTH;
     batch.text_styled(
         atlas,
@@ -642,9 +688,48 @@ fn draw_layers(
     );
     let offset = state.scroll.amount.trunc();
     let selected = state.selected;
+    // DetailsList: its header row ("Layer Material. Height"), then the layers
+    // top first, each "Selected: <item>. Height. <height>".
+    crate::widgets::narratable(|| {
+        use crate::widgets::{ListKind, Narratable, Row, join_for_narration as join};
+        let tr = |key: &str| Text::translate(key, &[]).plain();
+        let height = tr("createWorld.customize.flat.height");
+        let row = |i: usize| {
+            let narration = match i.checked_sub(1) {
+                None => join(&[&tr("createWorld.customize.flat.tile"), &height]),
+                Some(layer) => {
+                    let layer = &state.settings.layers[state.settings.layers.len() - 1 - layer];
+                    let item = Text::translate(
+                        "narrator.select",
+                        &[Text::literal(item_name(&layer.block))],
+                    )
+                    .plain();
+                    join(&[&item, &height, &layer.height.to_string()])
+                }
+            };
+            Row::new(i, narration)
+        };
+        let over_header = cursor.1 >= top
+            && cursor.1 < bottom
+            && cursor.1 - top - 2.0 + state.scroll.amount < HEADER;
+        let hovered = if over_header {
+            Some(0)
+        } else {
+            layer_row(state, cursor, (w, h)).map(|r| r + 1)
+        };
+        Narratable::list(
+            ListKind::Object,
+            state.settings.layers.len() + 1,
+            hovered.map(row),
+            selected.map(|r| row(r + 1)),
+            [0.0, top, w, bottom - top],
+        )
+        .key(crate::widgets::key_of(&"create_world/flat/layers"))
+    });
     for (row, layer) in state.settings.layers.iter().rev().enumerate() {
         let y = top + 2.0 + HEADER + row as f32 * LAYER_ROW - offset;
         let target = [left - 2.0, y - 1.0, ROW_WIDTH + 4.0, LAYER_ROW];
+        row_target(&item_name(&layer.block), target, top, bottom);
         let hovered = ui::hovered(cursor, target[0], target[1], target[2], target[3]);
         if selected == Some(row) {
             batch.fill(
@@ -667,8 +752,10 @@ fn draw_layers(
         }
         slot(
             atlas,
+            items,
+            &mut pending,
             batch,
-            layer_icon(atlas, &layer.block),
+            &layer.block,
             left + 2.0,
             y + 1.0,
         );
@@ -703,6 +790,7 @@ fn draw_layers(
         );
     }
     batch.clip_since(first, 0.0, top, w, bottom);
+    draw_items(atlas, items, batch, pending, [0.0, top, w, bottom]);
     ui::scrollbar(
         batch,
         atlas,
@@ -717,6 +805,7 @@ fn draw_layers(
 fn draw_presets(
     title: &Title,
     atlas: &HudAtlas,
+    items: Option<&ItemRenderer>,
     batch: &mut HudBatch,
     cursor: (f32, f32),
     state: &State,
@@ -750,6 +839,9 @@ fn draw_presets(
         state.share_focused,
         title.started,
     );
+    crate::widgets::name_last_edit_box(|| {
+        Text::translate("createWorld.customize.presets.share", &[]).plain()
+    });
     batch.text(
         atlas,
         &lang::get_or(
@@ -765,10 +857,28 @@ fn draw_presets(
     ui::list_background(batch, atlas, top, bottom, false);
     crate::ui::separators(batch, atlas, top, bottom, false);
     let first = batch.vertices.len();
+    let mut pending = Vec::new();
     let offset = state.preset_scroll.amount.trunc();
+    // PresetsList: "Selected: <preset>".
+    crate::widgets::narratable(|| {
+        use crate::widgets::{ListKind, Narratable, Row};
+        let row = |i: usize| {
+            let name = Text::literal(preset_name(&state.presets[i].id));
+            Row::new(i, Text::translate("narrator.select", &[name]).plain())
+        };
+        Narratable::list(
+            ListKind::Object,
+            state.presets.len(),
+            preset_row(state, cursor, (w, h)).map(row),
+            state.preset_selected.map(row),
+            [0.0, top, w, bottom - top],
+        )
+        .key(crate::widgets::key_of(&"create_world/flat/presets"))
+    });
     for (row, preset) in state.presets.iter().enumerate() {
         let y = top + 2.0 + row as f32 * PRESET_ROW - offset;
         let target = [left - 2.0, y - 1.0, ROW_WIDTH + 4.0, PRESET_ROW];
+        row_target(&preset_name(&preset.id), target, top, bottom);
         let hovered = ui::hovered(cursor, target[0], target[1], target[2], target[3]);
         if state.preset_selected == Some(row) {
             batch.fill(
@@ -791,8 +901,10 @@ fn draw_presets(
         }
         slot(
             atlas,
+            items,
+            &mut pending,
             batch,
-            layer_icon(atlas, &preset.display),
+            &preset.display,
             left + 2.0,
             y + 2.0,
         );
@@ -806,6 +918,7 @@ fn draw_presets(
         );
     }
     batch.clip_since(first, 0.0, top, w, bottom);
+    draw_items(atlas, items, batch, pending, [0.0, top, w, bottom]);
     ui::scrollbar(
         batch,
         atlas,
@@ -817,16 +930,86 @@ fn draw_presets(
     );
 }
 
-/// The 18x18 slot behind a layer's item icon (`container/slot`).
-fn slot(atlas: &HudAtlas, batch: &mut HudBatch, icon: Option<String>, x: f32, y: f32) {
+/// The item environment of the layer icons: only the grass colormap is needed
+/// (`minecraft:grass` tint of the grass block), as the inventory draws it.
+struct GrassEnv<'a>(&'a ItemRenderer);
+impl ItemEnv for GrassEnv<'_> {
+    fn grass_color(&self, temperature: f64, downfall: f64) -> i32 {
+        self.0.grass_color(temperature, downfall)
+    }
+}
+/// A layer's item model for the GUI, with the grass colormap in its environment.
+fn layer_state(renderer: &ItemRenderer, id: &str) -> ItemRenderState {
+    let stack = ItemStack::new(&layer_item(id), 1);
+    renderer.resolve(
+        &item_render::stack_view(&stack),
+        DisplayContext::Gui,
+        None,
+        None,
+        0,
+        &GrassEnv(renderer),
+    )
+}
+/// The 18x18 slot behind a layer's item icon (`container/slot`), then the item
+/// (`GuiGraphics.renderItem`): its GUI model, so a block shows as the isometric
+/// block. Without item models, or for an id with none, the flat sprite stands in.
+fn slot(
+    atlas: &HudAtlas,
+    items: Option<&ItemRenderer>,
+    pending: &mut Vec<(ItemRenderState, f32, f32)>,
+    batch: &mut HudBatch,
+    id: &str,
+    x: f32,
+    y: f32,
+) {
     if let Some(rect) = atlas.sprites.get("gui/sprites/container/slot").copied() {
         batch.rect_uv(x, y, 18.0, 18.0, rect, u32::MAX);
     } else {
         batch.fill(atlas, x, y, 18.0, 18.0, rgba(139, 139, 139, 255));
         batch.fill(atlas, x + 1.0, y + 1.0, 16.0, 16.0, rgba(55, 55, 55, 255));
     }
-    if let Some(icon) = icon {
+    if let Some(renderer) = items {
+        let state = layer_state(renderer, id);
+        if !state.is_empty() {
+            pending.push((state, x + 1.0, y + 1.0));
+            return;
+        }
+    }
+    if let Some(icon) = layer_icon(atlas, id) {
         batch.sprite_scaled(atlas, &icon, x + 1.0, y + 1.0, 16.0, 16.0, u32::MAX);
+    }
+}
+/// The item models of a list's rows, drawn after the list's own quads are cut
+/// to its area (`clip_since` keeps or drops a slanted quad whole): each is
+/// clipped exactly to the list, as vanilla's scissor does.
+fn draw_items(
+    atlas: &HudAtlas,
+    renderer: Option<&ItemRenderer>,
+    batch: &mut HudBatch,
+    pending: Vec<(ItemRenderState, f32, f32)>,
+    scissor: [f32; 4],
+) {
+    let Some(renderer) = renderer else { return };
+    for (state, x, y) in &pending {
+        item_render::gui::draw_scissored(
+            state,
+            renderer,
+            &atlas.sprites,
+            &NoHost,
+            batch,
+            *x,
+            *y,
+            scissor,
+        );
+    }
+}
+/// The item a layer shows: `FlatLayerInfo` draws `block.asItem()`, and the
+/// fluids' items are their buckets.
+fn layer_item(id: &str) -> String {
+    match id.strip_prefix("minecraft:").unwrap_or(id) {
+        "water" => "minecraft:water_bucket".into(),
+        "lava" => "minecraft:lava_bucket".into(),
+        name => format!("minecraft:{name}"),
     }
 }
 fn layer_icon(atlas: &HudAtlas, id: &str) -> Option<String> {
@@ -881,4 +1064,87 @@ fn pretty(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// `CreateFlatWorldScreen.DetailsList.deleteLayer`: after a row is removed the
+/// same row stays selected, or the last one when the removed row was the last
+/// of the list. An empty list selects nothing.
+pub(super) fn selection_after_removal(row: usize, remaining: usize) -> Option<usize> {
+    (remaining > 0).then(|| row.min(remaining - 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FlatSettings, Page, Preset, State, click, focus_row, layer_item, list_area,
+        selection_after_removal,
+    };
+    use crate::item_render::ItemRenderer;
+    use std::path::Path;
+
+    /// Vanilla keeps the deleted row's position selected: the layer that slid
+    /// into it, or the new last row when the last one was deleted, and nothing
+    /// when the list is empty.
+    #[test]
+    fn deleting_a_layer_keeps_the_selection_in_place() {
+        assert_eq!(selection_after_removal(0, 3), Some(0));
+        assert_eq!(selection_after_removal(2, 3), Some(2));
+        assert_eq!(selection_after_removal(3, 3), Some(2), "the last row");
+        assert_eq!(selection_after_removal(0, 0), None, "nothing left");
+    }
+
+    /// `PresetsList`: the focus selects a row and leaves the share box to a press
+    /// (`Entry.select`), so stepping through the list keeps what was typed there.
+    #[test]
+    fn only_a_press_puts_a_preset_in_the_share_box() {
+        let mut state = State::new(Path::new("missing"), None);
+        let mut settings = FlatSettings::default();
+        settings.layers.clear();
+        let share = settings.to_share();
+        state.presets.push(Preset {
+            id: "minecraft:test".to_owned(),
+            display: "Test".to_owned(),
+            settings,
+        });
+        state.page = Page::Presets;
+        state.share = "typed".to_owned();
+        let size = (480.0, 262.0);
+        let (top, _, left, _) = list_area(&state, size);
+        let row = (left + 1.0, top + 3.0);
+        assert!(focus_row(&mut state, row, size));
+        assert_eq!(state.selecting(), Some(0));
+        assert_eq!(state.share, "typed");
+        click(&mut state, row, size);
+        assert_eq!(state.share, share);
+    }
+
+    /// The grass block icon of a Superflat layer is tinted by the grass
+    /// colormap (`minecraft:grass` tint source), not the missing-tint magenta.
+    #[test]
+    fn the_grass_block_layer_icon_is_tinted_by_the_colormap() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let renderer = ItemRenderer::load(&root).unwrap();
+        let tinted: Vec<i32> = super::layer_state(&renderer, "minecraft:grass_block")
+            .layers
+            .iter()
+            .flat_map(|layer| layer.tints.clone())
+            .collect();
+        assert!(
+            !tinted.is_empty() && !tinted.contains(&-65281),
+            "{tinted:?}"
+        );
+    }
+
+    #[test]
+    fn a_layer_shows_the_item_of_its_block() {
+        assert_eq!(layer_item("minecraft:grass_block"), "minecraft:grass_block");
+        assert_eq!(layer_item("dirt"), "minecraft:dirt");
+        assert_eq!(layer_item("minecraft:water"), "minecraft:water_bucket");
+        assert_eq!(layer_item("minecraft:lava"), "minecraft:lava_bucket");
+    }
 }

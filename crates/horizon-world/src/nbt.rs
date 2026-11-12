@@ -10,6 +10,19 @@ impl From<&str> for JavaString {
         Self(value.encode_utf16().collect())
     }
 }
+/// `key` in UTF-16 in a buffer kept per thread, to search a compound
+/// without allocating a key every time.
+fn with_key<R>(key: &str, f: impl FnOnce(&JavaString) -> R) -> R {
+    thread_local! {
+        static KEY: std::cell::RefCell<JavaString> = Default::default();
+    }
+    KEY.with_borrow_mut(|units| {
+        units.0.clear();
+        units.0.extend(key.encode_utf16());
+        f(units)
+    })
+}
+
 impl JavaString {
     pub fn to_string(&self) -> Result<String, std::string::FromUtf16Error> {
         String::from_utf16(&self.0)
@@ -21,10 +34,11 @@ impl JavaString {
 
 pub type Compound = BTreeMap<JavaString, Tag>;
 
-/// Float and double variants hold their IEEE bit patterns. Java canonicalizes
-/// NaNs on binary output. Loading, like vanilla's valueOf factories, normalizes
-/// negative zero to positive zero.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Float and double variants hold their IEEE bit patterns. Java's disk output
+/// canonicalizes NaNs (`DataOutputStream.writeFloat`); its network output
+/// keeps their bits (Netty's `ByteBuf.writeFloat`). Loading, like vanilla's
+/// valueOf factories, normalizes negative zero to positive zero.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Tag {
     End,
     Byte(i8),
@@ -61,13 +75,13 @@ impl Tag {
     }
     pub fn get(&self, key: &str) -> Option<&Tag> {
         match self {
-            Self::Compound(map) => map.get(&JavaString::from(key)),
+            Self::Compound(map) => with_key(key, |key| map.get(key)),
             _ => None,
         }
     }
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Tag> {
         match self {
-            Self::Compound(map) => map.get_mut(&JavaString::from(key)),
+            Self::Compound(map) => with_key(key, |key| map.get_mut(key)),
             _ => None,
         }
     }
@@ -107,6 +121,18 @@ impl Limits {
         Self {
             max_bytes: 1 << 30,
             max_nodes: 128_000_000,
+            max_depth: 512,
+        }
+    }
+
+    /// Chunks, entities, POI and the world's `.dat` files: vanilla reads and
+    /// writes them with `NbtAccounter.unlimitedHeap()` (`NbtIo.read`), so a
+    /// chunk past the default node cap (a few thousand full containers) still
+    /// loads. The byte cap stays as the only guard on the decompressed data.
+    pub fn saved() -> Self {
+        Self {
+            max_bytes: 1 << 30,
+            max_nodes: usize::MAX,
             max_depth: 512,
         }
     }
@@ -197,36 +223,16 @@ impl<'a> Reader<'a, '_> {
     fn string(&mut self) -> Result<JavaString, Error> {
         let len = u16::from_be_bytes(self.number()?) as usize;
         let bytes = self.take(len)?;
-        let mut units = Vec::with_capacity(len);
-        let mut i = 0;
-        while i < bytes.len() {
-            let b = bytes[i];
-            let (unit, size) = match b {
-                0..=127 => (u16::from(b), 1),
-                192..=223 if i + 1 < len && bytes[i + 1] & 0xc0 == 0x80 => {
-                    ((u16::from(b & 31) << 6) | u16::from(bytes[i + 1] & 63), 2)
-                }
-                224..=239
-                    if i + 2 < len
-                        && bytes[i + 1] & 0xc0 == 0x80
-                        && bytes[i + 2] & 0xc0 == 0x80 =>
-                {
-                    (
-                        (u16::from(b & 15) << 12)
-                            | (u16::from(bytes[i + 1] & 63) << 6)
-                            | u16::from(bytes[i + 2] & 63),
-                        3,
-                    )
-                }
-                _ => return Err(self.error("invalid Java modified UTF-8")),
-            };
-            // Match DataInput.readUTF, including accepted overlong sequences.
-            units.push(unit);
-            i += size;
-        }
-        Ok(JavaString(units))
+        modified_utf8(bytes).ok_or_else(|| self.error("invalid Java modified UTF-8"))
     }
-    fn payload(&mut self, id: u8, depth: usize) -> Result<Tag, Error> {
+    /// `StringTag.skipString`: vanilla skips a file root's name unread, so a
+    /// name that isn't modified UTF-8 is read as empty rather than refused.
+    fn root_name(&mut self) -> Result<JavaString, Error> {
+        let len = u16::from_be_bytes(self.number()?) as usize;
+        Ok(modified_utf8(self.take(len)?).unwrap_or_default())
+    }
+    /// `payload`'s prologue: the node and depth accounting every tag pays.
+    fn entry(&mut self, id: u8, depth: usize) -> Result<(), Error> {
         if self.nodes >= self.limits.max_nodes {
             return Err(self.error("node limit exceeded"));
         }
@@ -234,6 +240,28 @@ impl<'a> Reader<'a, '_> {
         if matches!(id, 9 | 10) && depth >= self.limits.max_depth {
             return Err(self.error("depth limit exceeded"));
         }
+        Ok(())
+    }
+    /// A list's header after its entry: element type and length, checked
+    /// against the remaining nodes and bytes (no unchecked count is
+    /// allocated from).
+    fn list_header(&mut self) -> Result<(u8, usize), Error> {
+        let element_id = self.byte()?;
+        let len = self.count(0)?;
+        if len > 0 && (element_id == 0 || element_id > 12) {
+            return Err(self.error("invalid list element type"));
+        }
+        if len > self.limits.max_nodes.saturating_sub(self.nodes) {
+            return Err(self.error("node limit exceeded"));
+        }
+        // At least one byte per valid non-End payload; do not allocate from an unchecked count.
+        if len > self.bytes.len().saturating_sub(self.offset) {
+            return Err(self.error("truncated list"));
+        }
+        Ok((element_id, len))
+    }
+    fn payload(&mut self, id: u8, depth: usize) -> Result<Tag, Error> {
+        self.entry(id, depth)?;
         Ok(match id {
             0 => Tag::End,
             1 => Tag::Byte(self.byte()? as i8),
@@ -254,25 +282,15 @@ impl<'a> Reader<'a, '_> {
             }
             8 => Tag::String(self.string()?),
             9 => {
-                let element_id = self.byte()?;
-                let len = self.count(0)?;
-                if len > 0 && (element_id == 0 || element_id > 12) {
-                    return Err(self.error("invalid list element type"));
-                }
-                if len > self.limits.max_nodes.saturating_sub(self.nodes) {
-                    return Err(self.error("node limit exceeded"));
-                }
-                // At least one byte per valid non-End payload; do not allocate from an unchecked count.
-                if len > self.bytes.len().saturating_sub(self.offset) {
-                    return Err(self.error("truncated list"));
-                }
+                let (element_id, len) = self.list_header()?;
                 let mut values = Vec::with_capacity(len);
                 for _ in 0..len {
                     let mut value = self.payload(element_id, depth + 1)?;
-                    if let Tag::Compound(map) = &mut value {
-                        if map.len() == 1 && map.contains_key(&JavaString::default()) {
-                            value = map.remove(&JavaString::default()).unwrap();
-                        }
+                    if let Tag::Compound(map) = &mut value
+                        && map.len() == 1
+                        && map.contains_key(&JavaString::default())
+                    {
+                        value = map.remove(&JavaString::default()).unwrap();
                     }
                     values.push(value);
                 }
@@ -379,10 +397,11 @@ impl ListElements<'_, '_, '_> {
         }
         self.left -= 1;
         let mut value = self.reader.payload(self.element_id, self.depth)?;
-        if let Tag::Compound(map) = &mut value {
-            if map.len() == 1 && map.contains_key(&JavaString::default()) {
-                value = map.remove(&JavaString::default()).unwrap();
-            }
+        if let Tag::Compound(map) = &mut value
+            && map.len() == 1
+            && map.contains_key(&JavaString::default())
+        {
+            value = map.remove(&JavaString::default()).unwrap();
         }
         Ok(Some(value))
     }
@@ -390,6 +409,141 @@ impl ListElements<'_, '_, '_> {
     pub fn error(&self, reason: &'static str) -> Error {
         self.reader.error(reason)
     }
+}
+
+/// A read position in a file's bytes for readers that decode a known layout
+/// without building a `Tag` tree (structure templates). Each method runs what
+/// the tree reader runs for the tags it reads, so a streamed read accepts
+/// and rejects the same bytes as [`read_named`]; the caller walks the root
+/// compound key by key and reads each value's payload in file order.
+pub(crate) struct Cursor<'a> {
+    reader: Reader<'a, 'static>,
+}
+
+/// A compound key read by [`Cursor::next_key`]. ASCII names (every name a
+/// template uses) are compared as the file's bytes, so no key allocates;
+/// other names go through the decoded string, so an overlong-encoded name
+/// matches the keys [`read_named`] would match.
+pub(crate) struct Key<'a> {
+    bytes: &'a [u8],
+    decoded: Option<JavaString>,
+}
+impl Key<'_> {
+    pub(crate) fn is(&self, name: &str) -> bool {
+        match &self.decoded {
+            None => self.bytes == name.as_bytes(),
+            Some(key) => with_key(name, |wanted| key == wanted),
+        }
+    }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+impl<'a> Cursor<'a> {
+    /// The root of a file; `None` when it is not a compound (its payload is
+    /// still read and checked, as [`read_named`] does).
+    pub(crate) fn file(bytes: &'a [u8], limits: Limits) -> Result<Option<Self>, Error> {
+        let mut reader = Reader {
+            bytes,
+            offset: 0,
+            limits,
+            nodes: 0,
+            stream: None,
+        };
+        let id = reader.byte()?;
+        if id == 0 {
+            reader.payload(id, 0)?;
+            return Ok(None);
+        }
+        reader.root_name()?;
+        if id != 10 {
+            reader.payload(id, 0)?;
+            return Ok(None);
+        }
+        let mut cursor = Self { reader };
+        cursor.reader.entry(10, 0)?;
+        Ok(Some(cursor))
+    }
+    /// The next key of the open compound and its value's tag type, `None` at
+    /// the compound's end; the payload that follows is the caller's to read.
+    pub(crate) fn next_key(&mut self) -> Result<Option<(Key<'a>, u8)>, Error> {
+        let id = self.reader.byte()?;
+        if id == 0 {
+            return Ok(None);
+        }
+        let len = u16::from_be_bytes(self.reader.number()?) as usize;
+        let bytes = self.reader.take(len)?;
+        let decoded = if bytes.is_ascii() {
+            None
+        } else {
+            Some(
+                modified_utf8(bytes)
+                    .ok_or_else(|| self.reader.error("invalid Java modified UTF-8"))?,
+            )
+        };
+        Ok(Some((Key { bytes, decoded }, id)))
+    }
+    /// A whole tag payload, using the tree reader.
+    pub(crate) fn tag(&mut self, id: u8, depth: usize) -> Result<Tag, Error> {
+        self.reader.payload(id, depth)
+    }
+    /// A list element, unwrapped as `ListTag.addAndUnwrap` unwraps
+    /// it: a compound with a single empty-named member is that member.
+    pub(crate) fn element(&mut self, id: u8, depth: usize) -> Result<Tag, Error> {
+        let mut value = self.reader.payload(id, depth)?;
+        if let Tag::Compound(map) = &mut value
+            && map.len() == 1
+            && map.contains_key(&JavaString::default())
+        {
+            value = map.remove(&JavaString::default()).unwrap();
+        }
+        Ok(value)
+    }
+    /// A compound tag's entry checks (the caller saw type 10), then its keys.
+    pub(crate) fn compound(&mut self, depth: usize) -> Result<(), Error> {
+        self.reader.entry(10, depth)
+    }
+    /// A list tag's entry and header (the caller saw type 9).
+    pub(crate) fn list(&mut self, depth: usize) -> Result<(u8, usize), Error> {
+        self.reader.entry(9, depth)?;
+        self.reader.list_header()
+    }
+}
+
+/// `DataInput.readUTF`'s decoding, accepting its overlong sequences; `None`
+/// for bytes that aren't modified UTF-8.
+fn modified_utf8(bytes: &[u8]) -> Option<JavaString> {
+    if bytes.is_ascii() {
+        return Some(JavaString(bytes.iter().map(|&b| u16::from(b)).collect()));
+    }
+    let len = bytes.len();
+    let mut units = Vec::with_capacity(len);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let (unit, size) = match b {
+            0..=127 => (u16::from(b), 1),
+            192..=223 if i + 1 < len && bytes[i + 1] & 0xc0 == 0x80 => {
+                ((u16::from(b & 31) << 6) | u16::from(bytes[i + 1] & 63), 2)
+            }
+            224..=239
+                if i + 2 < len && bytes[i + 1] & 0xc0 == 0x80 && bytes[i + 2] & 0xc0 == 0x80 =>
+            {
+                (
+                    (u16::from(b & 15) << 12)
+                        | (u16::from(bytes[i + 1] & 63) << 6)
+                        | u16::from(bytes[i + 2] & 63),
+                    3,
+                )
+            }
+            _ => return None,
+        };
+        // Match DataInput.readUTF, including accepted overlong sequences.
+        units.push(unit);
+        i += size;
+    }
+    Some(JavaString(units))
 }
 
 /// Read a file root (type, modified-UTF name, payload), returning bytes consumed.
@@ -405,7 +559,7 @@ pub fn read_named(bytes: &[u8], limits: Limits) -> Result<(NamedTag, usize), Err
     let name = if id == 0 {
         JavaString::default()
     } else {
-        reader.string()?
+        reader.root_name()?
     };
     let tag = reader.payload(id, 0)?;
     Ok((NamedTag { name, tag }, reader.offset))
@@ -433,7 +587,7 @@ pub fn read_named_streaming(
     let name = if id == 0 {
         JavaString::default()
     } else {
-        reader.string()?
+        reader.root_name()?
     };
     let tag = reader.payload(id, 0)?;
     Ok((NamedTag { name, tag }, reader.offset))
@@ -457,6 +611,13 @@ struct Writer {
     bytes: Vec<u8>,
     limits: Limits,
     nodes: usize,
+    /// `NbtIo.StringFallbackDataOutput`, the disk writer's: a string too long
+    /// for modified UTF-8 is written empty and the rest of the tree goes on.
+    /// shortcut: vanilla also logs "Failed to write NBT String"; this crate has no logger.
+    empty_long_strings: bool,
+    /// `DataOutputStream.writeFloat`/`writeDouble` (`floatToIntBits`): a NaN
+    /// is written as the canonical one. The network writer keeps its bits.
+    canonical_nan: bool,
 }
 impl Writer {
     fn error(&self, reason: &'static str) -> Error {
@@ -486,9 +647,20 @@ impl Writer {
                 _ => 3,
             })
             .sum();
-        let len =
-            u16::try_from(len).map_err(|_| self.error("modified UTF-8 exceeds 65535 bytes"))?;
+        let Ok(len) = u16::try_from(len) else {
+            if self.empty_long_strings {
+                return self.put(&0u16.to_be_bytes());
+            }
+            return Err(self.error("modified UTF-8 exceeds 65535 bytes"));
+        };
         self.put(&len.to_be_bytes())?;
+        // One byte per unit (most strings): written at once while they fit.
+        if usize::from(len) == string.0.len()
+            && usize::from(len) <= self.limits.max_bytes.saturating_sub(self.bytes.len())
+        {
+            self.bytes.extend(string.0.iter().map(|&c| c as u8));
+            return Ok(());
+        }
         for &c in &string.0 {
             match c {
                 1..=127 => self.put(&[c as u8])?,
@@ -517,7 +689,7 @@ impl Writer {
             Tag::Int(v) => self.put(&v.to_be_bytes())?,
             Tag::Long(v) => self.put(&v.to_be_bytes())?,
             Tag::Float(v) => self.put(
-                &if f32::from_bits(*v).is_nan() {
+                &if self.canonical_nan && f32::from_bits(*v).is_nan() {
                     0x7fc0_0000_u32
                 } else {
                     *v
@@ -525,7 +697,7 @@ impl Writer {
                 .to_be_bytes(),
             )?,
             Tag::Double(v) => self.put(
-                &if f64::from_bits(*v).is_nan() {
+                &if self.canonical_nan && f64::from_bits(*v).is_nan() {
                     0x7ff8_0000_0000_0000_u64
                 } else {
                     *v
@@ -597,11 +769,15 @@ impl Writer {
     }
 }
 
+/// `NbtIo.write`: a file root. A string too long for modified UTF-8 is
+/// written empty, as vanilla's disk writer does; [`write_network`] refuses it.
 pub fn write_named(root: &NamedTag, limits: Limits) -> Result<Vec<u8>, Error> {
     let mut writer = Writer {
         bytes: Vec::new(),
         limits,
         nodes: 0,
+        empty_long_strings: true,
+        canonical_nan: true,
     };
     writer.put(&[root.tag.id()])?;
     if root.tag.id() != 0 {
@@ -616,10 +792,32 @@ pub fn write_network(tag: &Tag, limits: Limits) -> Result<Vec<u8>, Error> {
         bytes: Vec::new(),
         limits,
         nodes: 0,
+        empty_long_strings: false,
+        canonical_nan: false,
     };
     writer.put(&[tag.id()])?;
     writer.payload(tag, 0)?;
     Ok(writer.bytes)
+}
+
+/// `NbtUtils.compareNbt(expected, actual, true)`.
+pub fn compare_nbt(expected: &Tag, actual: Option<&Tag>) -> bool {
+    let Some(actual) = actual else { return false };
+    if std::mem::discriminant(expected) != std::mem::discriminant(actual) {
+        return false;
+    }
+    match (expected, actual) {
+        (Tag::Compound(e), Tag::Compound(a)) => {
+            a.len() >= e.len() && e.iter().all(|(k, v)| compare_nbt(v, a.get(k)))
+        }
+        (Tag::List(e), Tag::List(a)) => {
+            if e.is_empty() {
+                return a.is_empty();
+            }
+            a.len() >= e.len() && e.iter().all(|x| a.iter().any(|y| compare_nbt(x, Some(y))))
+        }
+        _ => expected == actual,
+    }
 }
 
 /// SNBT (`TagParser`): compounds, lists, typed arrays, quoted and bare
@@ -628,13 +826,18 @@ pub fn parse_snbt(text: &str) -> Result<(Tag, usize), String> {
     let mut p = Snbt {
         s: text.as_bytes(),
         i: 0,
+        depth: 0,
     };
     let tag = p.value()?;
     Ok((tag, p.i))
 }
+/// Nesting deeper than NBT's own limit (`NbtAccounter`'s 512) is refused
+/// rather than overflowing the stack.
+const SNBT_MAX_DEPTH: usize = 512;
 struct Snbt<'a> {
     s: &'a [u8],
     i: usize,
+    depth: usize,
 }
 impl Snbt<'_> {
     fn skip(&mut self) {
@@ -696,60 +899,22 @@ impl Snbt<'_> {
     fn value(&mut self) -> Result<Tag, String> {
         match self.peek() {
             Some(b'{') => {
-                self.i += 1;
-                let mut map = Compound::new();
-                if self.peek() == Some(b'}') {
-                    self.i += 1;
-                    return Ok(Tag::Compound(map));
+                if self.depth >= SNBT_MAX_DEPTH {
+                    return Err(format!("tag nesting too deep at {}", self.i));
                 }
-                loop {
-                    let key = self.string()?;
-                    self.expect(b':')?;
-                    map.insert(JavaString::from(key.as_str()), self.value()?);
-                    match self.peek() {
-                        Some(b',') => self.i += 1,
-                        Some(b'}') => {
-                            self.i += 1;
-                            return Ok(Tag::Compound(map));
-                        }
-                        _ => return Err(format!("expected ',' or '}}' at {}", self.i)),
-                    }
-                }
+                self.depth += 1;
+                let tag = self.compound();
+                self.depth -= 1;
+                tag
             }
             Some(b'[') => {
-                self.i += 1;
-                let typed = match (self.s.get(self.i), self.s.get(self.i + 1)) {
-                    (Some(&t @ (b'B' | b'I' | b'L')), Some(b';')) => {
-                        self.i += 2;
-                        Some(t)
-                    }
-                    _ => None,
-                };
-                let mut items = Vec::new();
-                if self.peek() != Some(b']') {
-                    loop {
-                        items.push(self.value()?);
-                        match self.peek() {
-                            Some(b',') => self.i += 1,
-                            Some(b']') => break,
-                            _ => return Err(format!("expected ',' or ']' at {}", self.i)),
-                        }
-                    }
+                if self.depth >= SNBT_MAX_DEPTH {
+                    return Err(format!("tag nesting too deep at {}", self.i));
                 }
-                self.i += 1;
-                let long = |t: &Tag| match *t {
-                    Tag::Byte(v) => i64::from(v),
-                    Tag::Short(v) => i64::from(v),
-                    Tag::Int(v) => i64::from(v),
-                    Tag::Long(v) => v,
-                    _ => 0,
-                };
-                Ok(match typed {
-                    Some(b'B') => Tag::ByteArray(items.iter().map(|t| long(t) as u8).collect()),
-                    Some(b'I') => Tag::IntArray(items.iter().map(|t| long(t) as i32).collect()),
-                    Some(_) => Tag::LongArray(items.iter().map(long).collect()),
-                    None => Tag::List(items),
-                })
+                self.depth += 1;
+                let tag = self.list();
+                self.depth -= 1;
+                tag
             }
             Some(b'"' | b'\'') => Ok(Tag::String(JavaString::from(self.string()?.as_str()))),
             _ => {
@@ -758,7 +923,77 @@ impl Snbt<'_> {
             }
         }
     }
+    fn compound(&mut self) -> Result<Tag, String> {
+        self.i += 1;
+        let mut map = Compound::new();
+        if self.peek() == Some(b'}') {
+            self.i += 1;
+            return Ok(Tag::Compound(map));
+        }
+        loop {
+            let key = self.string()?;
+            self.expect(b':')?;
+            map.insert(JavaString::from(key.as_str()), self.value()?);
+            match self.peek() {
+                // SnbtGrammar: an entry may be followed by a comma before the brace.
+                Some(b',') => {
+                    self.i += 1;
+                    if self.peek() == Some(b'}') {
+                        self.i += 1;
+                        return Ok(Tag::Compound(map));
+                    }
+                }
+                Some(b'}') => {
+                    self.i += 1;
+                    return Ok(Tag::Compound(map));
+                }
+                _ => return Err(format!("expected ',' or '}}' at {}", self.i)),
+            }
+        }
+    }
+    fn list(&mut self) -> Result<Tag, String> {
+        self.i += 1;
+        let typed = match (self.s.get(self.i), self.s.get(self.i + 1)) {
+            (Some(&t @ (b'B' | b'I' | b'L')), Some(b';')) => {
+                self.i += 2;
+                Some(t)
+            }
+            _ => None,
+        };
+        let mut items = Vec::new();
+        if self.peek() != Some(b']') {
+            loop {
+                items.push(self.value()?);
+                match self.peek() {
+                    // SnbtGrammar: a list or array may end with a comma.
+                    Some(b',') => {
+                        self.i += 1;
+                        if self.peek() == Some(b']') {
+                            break;
+                        }
+                    }
+                    Some(b']') => break,
+                    _ => return Err(format!("expected ',' or ']' at {}", self.i)),
+                }
+            }
+        }
+        self.i += 1;
+        let long = |t: &Tag| match *t {
+            Tag::Byte(v) => i64::from(v),
+            Tag::Short(v) => i64::from(v),
+            Tag::Int(v) => i64::from(v),
+            Tag::Long(v) => v,
+            _ => 0,
+        };
+        Ok(match typed {
+            Some(b'B') => Tag::ByteArray(items.iter().map(|t| long(t) as u8).collect()),
+            Some(b'I') => Tag::IntArray(items.iter().map(|t| long(t) as i32).collect()),
+            Some(_) => Tag::LongArray(items.iter().map(long).collect()),
+            None => Tag::List(items),
+        })
+    }
     /// A bare word: a typed number, a boolean, or else a string.
+    /// `FloatTag.valueOf` / `DoubleTag.valueOf` canonicalize either zero sign.
     fn scalar(word: &str) -> Tag {
         match word {
             "true" => return Tag::Byte(1),
@@ -770,15 +1005,30 @@ impl Snbt<'_> {
             Some(c @ (b'b' | b's' | b'l' | b'f' | b'd')) => (&word[..word.len() - 1], Some(*c)),
             _ => (word, None),
         };
+        // Only digits (and an exponent) make a number: a word like `nan` or
+        // `infd` that Rust's float parse would take is a string here.
+        if body
+            .bytes()
+            .any(|c| c.is_ascii_alphabetic() && c != b'e' && c != b'E')
+        {
+            return Tag::String(JavaString::from(word));
+        }
         let parsed = match suffix {
             Some(b'b') => body.parse::<i8>().ok().map(Tag::Byte),
             Some(b's') => body.parse::<i16>().ok().map(Tag::Short),
             Some(b'l') => body.parse::<i64>().ok().map(Tag::Long),
-            Some(b'f') => body.parse::<f32>().ok().map(|v| Tag::Float(v.to_bits())),
-            Some(_) => body.parse::<f64>().ok().map(|v| Tag::Double(v.to_bits())),
-            None if body.contains('.') || body.contains('e') || body.contains('E') => {
-                body.parse::<f64>().ok().map(|v| Tag::Double(v.to_bits()))
-            }
+            Some(b'f') => body
+                .parse::<f32>()
+                .ok()
+                .map(|v| Tag::Float(if v == 0.0 { 0 } else { v.to_bits() })),
+            Some(_) => body
+                .parse::<f64>()
+                .ok()
+                .map(|v| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() })),
+            None if body.contains('.') || body.contains('e') || body.contains('E') => body
+                .parse::<f64>()
+                .ok()
+                .map(|v| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() })),
             None => body.parse::<i32>().ok().map(Tag::Int),
         };
         parsed.unwrap_or_else(|| Tag::String(JavaString::from(word)))
@@ -788,6 +1038,75 @@ impl Snbt<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// SnbtGrammar: a compound, list or typed array may end with one comma; a
+    /// comma alone or two in a row are errors.
+    #[test]
+    fn snbt_takes_one_trailing_comma() {
+        let parse = |s: &str| parse_snbt(s).map(|(t, _)| t);
+        assert_eq!(parse("{a:1b,}"), parse("{a:1b}"));
+        assert_eq!(parse("[1, 2 ,]"), parse("[1,2]"));
+        assert_eq!(parse("[I;1,2,]"), parse("[I;1,2]"));
+        assert_eq!(parse("{a:[{},],}"), parse("{a:[{}]}"));
+        for bad in ["{,}", "[,]", "[I;,]", "{a:1b,,}", "[1,,2]", "[1,,]"] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+    /// `NbtIo.write` (`StringFallbackDataOutput`) writes a string too long for
+    /// modified UTF-8 empty and goes on (#5064); the network writer refuses
+    /// it. Vanilla 26.3's bytes for `{s: 32768 x U+0000}` (65536 encoded).
+    #[test]
+    fn the_disk_writer_empties_a_string_too_long_for_modified_utf8() {
+        let long = Tag::String(JavaString(vec![0; 32768]));
+        let root = NamedTag {
+            name: "".into(),
+            tag: Tag::compound([("s", long.clone())]),
+        };
+        assert_eq!(
+            write_named(&root, Limits::saved()).unwrap(),
+            [0x0a, 0, 0, 0x08, 0, 1, b's', 0, 0, 0]
+        );
+        assert!(write_network(&root.tag, Limits::saved()).is_err());
+        // The rest of the tree is kept.
+        let root = NamedTag {
+            name: "".into(),
+            tag: Tag::compound([
+                ("before", Tag::String("kept".into())),
+                ("long", long),
+                ("after", Tag::Int(7)),
+            ]),
+        };
+        let bytes = write_named(&root, Limits::saved()).unwrap();
+        let back = read_named(&bytes, Limits::saved()).unwrap().0.tag;
+        assert_eq!(back.get("before"), Some(&Tag::String("kept".into())));
+        assert_eq!(back.get("long"), Some(&Tag::String("".into())));
+        assert_eq!(back.get("after"), Some(&Tag::Int(7)));
+    }
+    /// `NbtIo.readUnnamedTag` skips the root's name unread
+    /// (`StringTag.skipString`), so a name that isn't modified UTF-8 still
+    /// loads (#5064). Vanilla 26.3 reads these bytes the same way.
+    #[test]
+    fn a_root_name_that_is_not_modified_utf8_is_skipped() {
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let (root, used) = read_named(&hex("0a0002ffff00"), Limits::saved()).unwrap();
+        assert_eq!((root.tag, used), (Tag::Compound(Compound::new()), 6));
+        let (root, _) = read_named(&hex("0a0002ffff030001780000000700"), Limits::saved()).unwrap();
+        assert_eq!(root.tag, Tag::compound([("x", Tag::Int(7))]));
+        assert_eq!(
+            read_named(&hex("0a00047465737400"), Limits::saved())
+                .unwrap()
+                .0
+                .name,
+            "test".into()
+        );
+        // A name cut short, or a key inside that isn't modified UTF-8, still fails.
+        assert!(read_named(&hex("0a0009ff"), Limits::saved()).is_err());
+        assert!(read_named(&hex("0a000003000278ff0000000700"), Limits::saved()).is_err());
+    }
     #[test]
     fn streamed_lists_reach_the_visitor_and_stay_empty_in_the_tree() {
         let list = |n: i32| Tag::List((0..n).map(Tag::Int).collect());
@@ -903,6 +1222,61 @@ mod tests {
             (tag, data.len())
         );
     }
+    /// Modified UTF-8 one unit at a time, as `DataOutputStream.writeUTF` does.
+    fn utf_units(units: &[u16]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &c in units {
+            match c {
+                1..=127 => out.push(c as u8),
+                0..=2047 => out.extend([0xc0 | (c >> 6) as u8, 0x80 | (c & 63) as u8]),
+                _ => out.extend([
+                    0xe0 | (c >> 12) as u8,
+                    0x80 | ((c >> 6) & 63) as u8,
+                    0x80 | (c & 63) as u8,
+                ]),
+            }
+        }
+        out
+    }
+    /// The one-byte strings read and written whole come out as the others:
+    /// ASCII, a zero unit (two bytes), units past ASCII, alone and mixed; and
+    /// a string one byte over the byte limit fails where it always failed.
+    #[test]
+    fn ascii_strings_read_and_write_as_every_other_string() {
+        let strings: Vec<Vec<u16>> = vec![
+            vec![],
+            "minecraft:stone".encode_utf16().collect(),
+            vec![0],
+            vec![b'a'.into(), 0, b'b'.into()],
+            vec![127, 128, 0x7ff, 0x800, 0xffff],
+            "caf\u{e9}".encode_utf16().collect(),
+            vec![0xd800, b'x'.into()],
+            (0..3000).map(|i| 1 + (i % 127) as u16).collect(),
+        ];
+        for units in strings {
+            let string = JavaString(units.clone());
+            let encoded = utf_units(&units);
+            assert_eq!(modified_utf8(&encoded), Some(string.clone()));
+            let mut expected = vec![8, 0, 0];
+            expected.extend((encoded.len() as u16).to_be_bytes());
+            expected.extend(&encoded);
+            let root = NamedTag {
+                name: JavaString::default(),
+                tag: Tag::String(string),
+            };
+            assert_eq!(write_named(&root, Limits::default()).unwrap(), expected);
+            assert_eq!(read_named(&expected, Limits::default()).unwrap().0, root);
+            // One byte short: the error is at the last write, a unit (or the
+            // length of an empty string) that no longer fits.
+            let last = units.last().map_or(2, |&c| utf_units(&[c]).len());
+            let limits = Limits {
+                max_bytes: expected.len() - 1,
+                ..Limits::default()
+            };
+            let e = write_named(&root, limits).unwrap_err();
+            assert_eq!(e.offset, expected.len() - last, "{units:?}");
+        }
+    }
     #[test]
     fn malformed_lengths_truncation_limits_and_utf_are_rejected() {
         for data in [
@@ -951,15 +1325,29 @@ mod tests {
         );
     }
     #[test]
-    fn duplicate_keys_last_wins_and_nan_output_is_canonical() {
+    fn duplicate_keys_last_wins_and_nan_output_is_canonical_on_disk() {
         let bytes = [10, 1, 0, 1, b'x', 1, 1, 0, 1, b'x', 2, 0];
         assert_eq!(
             read_network(&bytes, Limits::default()).unwrap().0.get("x"),
             Some(&Tag::Byte(2))
         );
+        // Vanilla 26.3 (#5064): `FriendlyByteBuf.writeNbt` keeps a NaN's bits,
+        // `NbtIo.write` writes the canonical NaN.
+        let nan = |bits: u32| NamedTag {
+            name: "".into(),
+            tag: Tag::compound([("v", Tag::Float(bits))]),
+        };
         assert_eq!(
             write_network(&Tag::Float(0xff80_0001), Limits::default()).unwrap(),
-            [5, 0x7f, 0xc0, 0, 0]
+            [5, 0xff, 0x80, 0, 1]
+        );
+        assert_eq!(
+            write_network(&Tag::Double(0x7ff0_0000_0000_0001), Limits::default()).unwrap(),
+            [6, 0x7f, 0xf0, 0, 0, 0, 0, 0, 1]
+        );
+        assert_eq!(
+            write_named(&nan(0x7f80_0001), Limits::default()).unwrap(),
+            [10, 0, 0, 5, 0, 1, b'v', 0x7f, 0xc0, 0, 0, 0]
         );
         assert_eq!(
             write_network(&Tag::Double((-0.0_f64).to_bits()), Limits::default()).unwrap()[1],
@@ -980,5 +1368,30 @@ mod tests {
             panic!()
         };
         assert_eq!(d[0].get("e"), Some(&Tag::Float(2.5f32.to_bits())));
+    }
+    #[test]
+    fn snbt_nesting_is_bounded() {
+        let nest = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+        assert!(parse_snbt(&nest(512)).is_ok());
+        assert!(parse_snbt(&nest(513)).is_err());
+        // Far past any limit it errs instead of overflowing the stack.
+        assert!(parse_snbt(&nest(100_000)).is_err());
+    }
+    #[test]
+    fn snbt_bare_words_stay_strings() {
+        for word in ["nan", "NaN", "inf", "infd", "NaNf", "Infinityd", "nand"] {
+            assert_eq!(
+                parse_snbt(word).unwrap().0,
+                Tag::String(JavaString::from(word)),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            parse_snbt("1e5").unwrap().0,
+            Tag::Double(100000f64.to_bits())
+        );
+        assert_eq!(parse_snbt("1.5f").unwrap().0, Tag::Float(1.5f32.to_bits()));
+        assert_eq!(parse_snbt("3b").unwrap().0, Tag::Byte(3));
+        assert_eq!(parse_snbt("-2L").unwrap().0, Tag::Long(-2));
     }
 }

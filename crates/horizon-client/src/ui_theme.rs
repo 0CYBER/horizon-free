@@ -1,6 +1,6 @@
-//! The design system's widgets drawn in the game (`crates/horizon-theme`:
-//! palette, type scale, radii, control sizes, motion and the bundled fonts;
-//! `docs/design-system.md`). Every menu is vanilla's (`ui`); what is left
+//! The design system's widgets drawn in the game: palette, type scale, radii,
+//! control sizes and fonts from `menu_style`, given at startup (in the official
+//! game `crates/horizon-theme`, `docs/design-system.md`). Every menu is vanilla's (`ui`); what is left
 //! here draws Horizon's own overlays that vanilla has no screen for: the
 //! on-screen keyboard a controller types with (`osk`), plus the
 //! `horizon.txt` preferences.
@@ -39,59 +39,114 @@ pub(crate) fn set_preference(dir: &Path, key: &str, value: Option<&str>) {
     let _ = std::fs::write(dir.join("horizon.txt"), out);
 }
 
-/// The dark palette (`horizon_theme::DARK`) in the HUD's colour encoding, plus the
+/// The overlays' palette (`menu_style`) in the HUD's colour encoding, plus the
 /// translucent plates the overlays draw over the game.
 pub(crate) mod color {
-    use horizon_theme::DARK as P;
-    pub const fn hex(c: u32, a: u8) -> u32 {
-        (a as u32) << 24 | (c & 0xff) << 16 | (c >> 8 & 0xff) << 8 | (c >> 16 & 0xff)
+    use horizon_client_render::menu_style::{self, OverlayColours};
+    pub use menu_style::hud_colour as hex;
+    fn p() -> &'static OverlayColours {
+        &menu_style::get().overlay
     }
     /// The page, under every veil.
-    pub const BG: u32 = hex(P.page, 255);
+    pub fn bg() -> u32 {
+        hex(p().page, 255)
+    }
     /// Hover plates, secondary buttons, fields, the segmented track: the
     /// dark palette's soft plate, as ink over the veil so the plates read the
     /// same over any backdrop (over the page colour they are `plate_soft`).
-    pub const RAISED: u32 = hex(P.ink, 20);
+    pub fn raised() -> u32 {
+        hex(p().ink, 20)
+    }
     /// Pressed plates and a switch that is off (`plate`, the same way).
-    pub const HOVER: u32 = hex(P.ink, 36);
+    pub fn hover() -> u32 {
+        hex(p().ink, 36)
+    }
     /// One-pixel rules between rows, slider tracks.
-    pub const BORDER: u32 = hex(P.rule, 255);
+    pub fn border() -> u32 {
+        hex(p().rule, 255)
+    }
     /// Text and selection (`ink`).
-    pub const TEXT: u32 = hex(P.ink, 255);
+    pub fn text() -> u32 {
+        hex(p().ink, 255)
+    }
     /// Values and secondary text (`ink_soft`).
-    pub const MUTED: u32 = hex(P.ink_soft, 255);
-    pub const ACCENT: u32 = hex(P.accent, 255);
-    pub const ON_ACCENT: u32 = hex(P.on_accent, 255);
+    pub fn muted() -> u32 {
+        hex(p().ink_soft, 255)
+    }
+    pub fn accent() -> u32 {
+        hex(p().accent, 255)
+    }
+    pub fn on_accent() -> u32 {
+        hex(p().on_accent, 255)
+    }
     pub(crate) fn with_alpha(c: u32, a: f32) -> u32 {
         let base = (c >> 24) as f32;
         (c & 0x00ff_ffff) | ((base * a.clamp(0.0, 1.0)).round() as u32) << 24
     }
 }
 
-/// The launcher's type scale and shapes (`horizon_theme`), in dp.
-pub(crate) const SMALL: f32 = horizon_theme::CAPTION.px;
-pub(crate) const BODY: f32 = horizon_theme::LABEL.px;
-/// Fields; plates (hover rows, selection); pills (buttons, segments).
-pub(crate) const RADIUS: f32 = horizon_theme::RADIUS;
-pub(crate) const RADIUS_PLATE: f32 = horizon_theme::RADIUS_PLATE;
+/// The type scale and shapes (`menu_style`), in dp.
+pub(crate) fn sizes() -> &'static horizon_client_render::menu_style::Sizes {
+    &horizon_client_render::menu_style::get().sizes
+}
+pub(crate) fn small() -> f32 {
+    sizes().caption
+}
+pub(crate) fn body() -> f32 {
+    sizes().label
+}
+/// The boot screen's wordmark (`display`) and console lines (`micro`).
+fn display() -> f32 {
+    sizes().display
+}
+fn micro() -> f32 {
+    sizes().micro
+}
+/// Fields; plates (hover rows, selection).
+pub(crate) fn radius() -> f32 {
+    sizes().radius
+}
+pub(crate) fn radius_plate() -> f32 {
+    sizes().radius_plate
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Face {
     Regular,
     Medium,
+    /// The wordmark and page titles (the design system's 500).
+    SemiBold,
+    /// Counts, timestamps and the boot screen's console lines.
+    Mono,
 }
+#[cfg(not(test))]
+const TEST_FONTS: Option<horizon_client_render::menu_style::Fonts> = None;
+#[cfg(test)]
+const TEST_FONTS: Option<horizon_client_render::menu_style::Fonts> =
+    Some(horizon_client_render::menu_style::Fonts {
+        regular: horizon_theme::fonts::GEIST_REGULAR,
+        medium: horizon_theme::fonts::GEIST_MEDIUM,
+        semibold: horizon_theme::fonts::GEIST_SEMIBOLD,
+        mono: horizon_theme::fonts::GEIST_MONO,
+    });
 struct Fonts {
-    faces: [FontRef<'static>; 2],
+    faces: [FontRef<'static>; 4],
 }
 impl Fonts {
-    fn load() -> Self {
-        let f = |b: &'static [u8]| FontRef::try_from_slice(b).expect("bundled font");
-        Self {
+    /// The faces given in `menu_style`; none given, none (unit tests take the design system's).
+    fn load() -> Option<Self> {
+        let given = horizon_client_render::menu_style::get()
+            .fonts
+            .or(TEST_FONTS)?;
+        let f = |b: &'static [u8]| FontRef::try_from_slice(b).expect("given font");
+        Some(Self {
             faces: [
-                f(horizon_theme::fonts::GEIST_REGULAR),
-                f(horizon_theme::fonts::GEIST_MEDIUM),
+                f(given.regular),
+                f(given.medium),
+                f(given.semibold),
+                f(given.mono),
             ],
-        }
+        })
     }
     fn face(&self, f: Face) -> &FontRef<'static> {
         &self.faces[f as usize]
@@ -102,6 +157,21 @@ impl Fonts {
         let upem = font.units_per_em().unwrap_or(1000.0);
         PxScale::from(px * font.height_unscaled() / upem)
     }
+}
+/// `text` without its `§` formatting codes (`StringDecomposer.iterateFormatted`
+/// skips the `§` and the character after it, a lone trailing `§` too).
+pub(crate) fn unformatted(text: &str) -> impl Iterator<Item = char> + '_ {
+    let mut chars = text.chars();
+    std::iter::from_fn(move || {
+        loop {
+            match chars.next()? {
+                '§' => {
+                    chars.next();
+                }
+                ch => return Some(ch),
+            }
+        }
+    })
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
@@ -118,7 +188,8 @@ struct Cached {
 }
 /// Glyphs and corner masks rasterized into the atlas region `horizon/ui-text`.
 struct Cache {
-    fonts: Fonts,
+    /// None: no fonts were given, and text draws nothing.
+    fonts: Option<Fonts>,
     entries: HashMap<Key, Cached>,
     shelf: (u32, u32, u32),
     pending: Vec<crate::font::Patch>,
@@ -206,9 +277,16 @@ impl Cache {
         if let Some(c) = self.entries.get(&key) {
             return *c;
         }
-        let scale = self.fonts.scale(face, f32::from(size) / 4.0);
+        let Some(fonts) = &self.fonts else {
+            return Cached {
+                rect: None,
+                left: 0.0,
+                top: 0.0,
+            };
+        };
+        let scale = fonts.scale(face, f32::from(size) / 4.0);
         let glyph = id.with_scale_and_position(scale, ab_glyph::point(0.0, 0.0));
-        let made = match self.fonts.face(face).outline_glyph(glyph) {
+        let made = match fonts.face(face).outline_glyph(glyph) {
             Some(outline) => {
                 let b = outline.px_bounds();
                 let (w, h) = (b.width() as u32, b.height() as u32);
@@ -314,6 +392,8 @@ impl<'a> Ui<'a> {
     pub fn finish(self) {
         let pending = with_cache(self.atlas, |c| std::mem::take(&mut c.pending));
         self.batch.patches.extend(pending);
+        // Pack glyphs `layout` borrowed from the resource pack's font.
+        self.batch.patches.extend(self.atlas.font.take_patches());
     }
 
     // ---- geometry, snapped to physical pixels ----
@@ -416,24 +496,89 @@ impl<'a> Ui<'a> {
     }
 
     // ---- text ----
+    /// `text` laid out at `px` pixels to the em: its advance, the face's ascent
+    /// and descent, and (`draw`) its glyphs as `(x, y, w, h, rect)` from the pen
+    /// on the baseline, all in physical pixels. `§` codes are dropped (the
+    /// design system keeps its own colours). A character Geist lacks, such as a
+    /// pack's private-use icon, is the resource pack's default-font glyph:
+    /// vanilla's 9px line scaled onto Geist's, or at GUI scale as the pack
+    /// draws it when every character is such a glyph (a picture title).
+    fn layout(
+        &self,
+        face: Face,
+        px: f32,
+        text: &str,
+        draw: bool,
+    ) -> (f32, f32, f32, Vec<(f32, f32, f32, f32, Rect)>) {
+        let atlas = self.atlas;
+        let gui = self.scale;
+        with_cache(atlas, |c| {
+            let Some(fonts) = &c.fonts else {
+                return (0.0, 0.0, 0.0, Vec::new());
+            };
+            let scale = fonts.scale(face, px);
+            let (ascent, descent) = {
+                let f = fonts.face(face).as_scaled(scale);
+                (f.ascent(), f.descent())
+            };
+            let chars: Vec<(char, Option<crate::font::Glyph>)> = unformatted(text)
+                .map(|ch| {
+                    let pack = (!ch.is_whitespace() && fonts.face(face).glyph_id(ch).0 == 0)
+                        .then(|| atlas.font.glyph(ch))
+                        // The pack lacks it too (its missing glyph): Geist's box, like vanilla's.
+                        .filter(|g| g.rect.is_some() || g.right <= 0.0);
+                    (ch, pack)
+                })
+                .collect();
+            let k = if chars.iter().all(|(_, g)| g.is_some()) {
+                gui
+            } else {
+                (ascent - descent) / 9.0
+            };
+            let (mut pen, mut prev, mut quads) = (0.0, None, Vec::new());
+            for (ch, pack) in chars {
+                if let Some(g) = pack {
+                    if let (true, Some(rect)) = (draw, g.rect) {
+                        // Vanilla's baseline is 7 below the line's top.
+                        let (x, y) = ((pen + g.left * k).round(), ((g.top - 7.0) * k).round());
+                        quads.push((x, y, (g.right - g.left) * k, (g.bottom - g.top) * k, rect));
+                    }
+                    pen += g.advance * k;
+                    prev = None;
+                    continue;
+                }
+                let (id, advance, kern) = {
+                    let Some(fonts) = &c.fonts else {
+                        break;
+                    };
+                    let font = fonts.face(face);
+                    let id = font.glyph_id(ch);
+                    let f = font.as_scaled(scale);
+                    (id, f.h_advance(id), prev.map_or(0.0, |p| f.kern(p, id)))
+                };
+                pen += kern;
+                if draw && !ch.is_whitespace() {
+                    let g = c.glyph(atlas, face, id, px);
+                    if let Some(rect) = g.rect {
+                        quads.push((
+                            (pen + g.left).round(),
+                            g.top,
+                            rect.w as f32,
+                            rect.h as f32,
+                            rect,
+                        ));
+                    }
+                }
+                pen += advance;
+                prev = Some(id);
+            }
+            (pen, ascent, descent, quads)
+        })
+    }
     /// The advance of `text` in dp.
     pub(crate) fn measure(&self, face: Face, size: f32, text: &str) -> f32 {
         let px = (size * self.density * 4.0).round() / 4.0;
-        with_cache(self.atlas, |c| {
-            let font = c.fonts.face(face);
-            let scaled = font.as_scaled(c.fonts.scale(face, px));
-            let mut w = 0.0;
-            let mut prev = None;
-            for ch in text.chars() {
-                let id = font.glyph_id(ch);
-                if let Some(p) = prev {
-                    w += scaled.kern(p, id);
-                }
-                w += scaled.h_advance(id);
-                prev = Some(id);
-            }
-            w / self.density
-        })
+        self.layout(face, px, text, false).0 / self.density
     }
     /// Draw a line of text in a `line`-tall box whose top is `y` (the
     /// launcher's line heights: about 1.45 × size for the interface);
@@ -449,52 +594,21 @@ impl<'a> Ui<'a> {
         text: &str,
     ) -> f32 {
         let px = (size * self.density * 4.0).round() / 4.0;
-        let real = color >> 24 != 0;
         let (x0, y0) = (self.px_x(x), self.px_y(y));
-        let box_px = line * self.density;
-        let atlas = self.atlas;
-        let density = self.density;
-        let mut quads = Vec::new();
-        let width = with_cache(atlas, |c| {
-            let scale = c.fonts.scale(face, px);
-            let (ascent, descent) = {
-                let f = c.fonts.face(face).as_scaled(scale);
-                (f.ascent(), f.descent())
-            };
-            let baseline = y0 + ((box_px - (ascent - descent)) / 2.0 + ascent).round();
-            let mut pen = x0;
-            let mut prev = None;
-            for ch in text.chars() {
-                let (id, advance, kern) = {
-                    let font = c.fonts.face(face);
-                    let id = font.glyph_id(ch);
-                    let f = font.as_scaled(scale);
-                    (id, f.h_advance(id), prev.map_or(0.0, |p| f.kern(p, id)))
-                };
-                pen += kern;
-                if real && !ch.is_whitespace() {
-                    let g = c.glyph(atlas, face, id, px);
-                    if let Some(rect) = g.rect {
-                        quads.push(((pen + g.left).round(), baseline + g.top, rect));
-                    }
-                }
-                pen += advance;
-                prev = Some(id);
-            }
-            (pen - x0) / density
-        });
+        let (width, ascent, descent, quads) = self.layout(face, px, text, color >> 24 != 0);
+        let baseline = y0 + ((line * self.density - (ascent - descent)) / 2.0 + ascent).round();
         let s = self.scale;
-        for (gx, gy, rect) in quads {
+        for (gx, gy, w, h, rect) in quads {
             self.batch.rect_uv(
-                gx / s,
-                gy / s,
-                rect.w as f32 / s,
-                rect.h as f32 / s,
+                (x0 + gx) / s,
+                (baseline + gy) / s,
+                w / s,
+                h / s,
                 rect,
                 color,
             );
         }
-        width
+        width / self.density
     }
     /// Text in a `1.45 × size` line box whose top is `y`.
     pub(crate) fn text(
@@ -524,6 +638,115 @@ impl<'a> Ui<'a> {
     // ---- the launcher's components ----
 }
 
+// ---- the boot screen ----
+
+/// The boot screen's palette on the pure black: a white wordmark and dimmed
+/// console lines (the theme's ink is for light pages).
+const BOOT_TEXT: u32 = color::hex(0xFFFFFF, 255);
+const BOOT_LOG: u32 = color::hex(0x9BA1A6, 255);
+
+/// The boot screen while the menu is not ready yet: the wordmark centred on
+/// pure black and the console's last lines at the bottom right, as the
+/// terminal prints them.
+pub fn draw_boot(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
+    // Pure black under everything: the frame's panorama (the title artwork
+    // once the bundle is in) must not leak through.
+    batch.fill(
+        atlas,
+        0.0,
+        0.0,
+        batch.width,
+        batch.height,
+        color::hex(0x000000, 255),
+    );
+    wordmark(atlas, batch);
+    draw_boot_log(atlas, batch, logs);
+}
+
+/// The wordmark with its tagline, centred.
+fn wordmark(atlas: &HudAtlas, batch: &mut HudBatch) {
+    let mut ui = Ui::new(atlas, batch, (0.0, 0.0));
+    let size = (ui.w / 16.0).clamp(display(), 96.0);
+    let small = (size * 0.25).clamp(micro(), 18.0);
+    let block = size * 1.45 + small * 0.6 + small * 1.5;
+    let top = (ui.h - block) / 2.0;
+    ui.text_centered(Face::SemiBold, size, ui.w / 2.0, top, BOOT_TEXT, "Horizon");
+    ui.text_centered(
+        Face::Mono,
+        small,
+        ui.w / 2.0,
+        top + size * 1.45 + small * 0.6,
+        BOOT_LOG,
+        "Rust based minecraft client",
+    );
+    ui.finish();
+}
+
+/// The console's last lines at the bottom left, over any loading screen: long
+/// lines wrap word-wise, the block grows upwards.
+pub fn draw_boot_log(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
+    if logs.is_empty() {
+        return;
+    }
+    let mut ui = Ui::new(atlas, batch, (0.0, 0.0));
+    let (size, line, pad) = (micro(), micro() * 1.5, 16.0);
+    let max_w = ui.w / 2.0;
+    let max_rows = (((ui.h - pad) / line) as usize).clamp(1, 24);
+    let mut y = ui.h - pad - line;
+    let mut drawn = 0;
+    'lines: for text in logs.iter().rev() {
+        let chunks = wrapping_lines(&ui, Face::Mono, size, text, max_w);
+        for chunk in chunks.iter().rev() {
+            if drawn == max_rows {
+                break 'lines;
+            }
+            ui.text(Face::Mono, size, pad, y, BOOT_LOG, chunk);
+            y -= line;
+            drawn += 1;
+        }
+    }
+    ui.finish();
+}
+
+/// The lines `text` wraps into at `max_w`, word-wise; a word wider than
+/// `max_w` on its own breaks at the edge.
+fn wrapping_lines(ui: &Ui, face: Face, size: f32, text: &str, max_w: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ') {
+        let mut word = word;
+        loop {
+            let candidate = if line.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{line} {word}")
+            };
+            if ui.measure(face, size, &candidate) <= max_w {
+                line = candidate;
+                break;
+            }
+            if line.is_empty() {
+                // The word alone does not fit: hard-break it at the edge.
+                let mut end = 0;
+                for (i, ch) in word.char_indices() {
+                    if i > 0 && ui.measure(face, size, &word[..i]) > max_w {
+                        break;
+                    }
+                    end = i + ch.len_utf8();
+                }
+                lines.push(word[..end].to_owned());
+                word = &word[end..];
+            } else {
+                lines.push(std::mem::take(&mut line));
+            }
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,7 +756,12 @@ mod tests {
         let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
         reset_atlas();
         let draw = |cache: &mut Cache| {
-            let glyph = cache.fonts.face(Face::Regular).glyph_id('A');
+            let glyph = cache
+                .fonts
+                .as_ref()
+                .unwrap()
+                .face(Face::Regular)
+                .glyph_id('A');
             assert!(
                 cache
                     .glyph(&atlas, Face::Regular, glyph, 16.0)
@@ -553,6 +781,166 @@ mod tests {
             assert_eq!((a.x, a.y, a.width, a.height), (b.x, b.y, b.width, b.height));
             assert_eq!(a.rgba, b.rgba);
         }
+        reset_atlas();
+    }
+
+    #[test]
+    fn the_boot_atlas_holds_the_run_time_glyph_region_without_a_pack() {
+        let atlas = HudAtlas::boot();
+        assert_eq!((atlas.width, atlas.height), (1024, 1024));
+        assert_eq!(
+            atlas.sprites["horizon/ui-text"].texels((atlas.width, atlas.height)),
+            (1024, 512)
+        );
+        assert_eq!(
+            atlas.sprites["horizon/white"].texels((atlas.width, atlas.height)),
+            (4, 4)
+        );
+    }
+
+    #[test]
+    fn the_boot_screen_centres_the_wordmark_and_left_aligns_the_console() {
+        reset_atlas();
+        let atlas = HudAtlas::boot();
+        let mut batch = HudBatch::new([1280, 720]);
+        draw_boot(&atlas, &mut batch, &[]);
+        // The first quad is the pure black backdrop over the frame's panorama.
+        let (w, h) = (batch.width, batch.height);
+        let bg = &batch.vertices[..6];
+        assert!(bg.iter().all(|v| v.color == 0xFF00_0000));
+        assert!(bg.iter().all(|v| v.pos[0] == 0.0 || v.pos[0] == w));
+        assert!(bg.iter().all(|v| v.pos[1] == 0.0 || v.pos[1] == h));
+        assert!(
+            !batch.patches.is_empty(),
+            "the glyphs are queued for the atlas"
+        );
+
+        let mut batch = HudBatch::new([1280, 720]);
+        wordmark(&atlas, &mut batch);
+        let (min, max) = batch
+            .vertices
+            .iter()
+            .map(|v| v.pos[0])
+            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        assert!(
+            min < batch.width / 2.0 && max > batch.width / 2.0,
+            "the wordmark straddles the centre"
+        );
+        assert!(((min + max) / 2.0 - batch.width / 2.0).abs() < 1.0);
+
+        let long = "[12:34:56] [Render thread/INFO]: Horizon: resources loaded in 1.0s; 1240 block states, 1500 items, 62 biomes; 8 worker threads".to_owned();
+        let mut batch = HudBatch::new([1280, 720]);
+        draw_boot_log(&atlas, &mut batch, &[long]);
+        let (min, max) = batch
+            .vertices
+            .iter()
+            .map(|v| v.pos[0])
+            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        assert!(min >= 4.0, "the line stays inside the left inset");
+        assert!(
+            max - min <= batch.width / 2.0 + 1.0,
+            "a too wide line is cut to half the screen"
+        );
+
+        let mut batch = HudBatch::new([1280, 720]);
+        let ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
+        let lines = wrapping_lines(
+            &ui,
+            Face::Mono,
+            micro(),
+            "the quick brown fox jumps over the lazy dog",
+            90.0,
+        );
+        assert!(lines.len() > 1, "a long line wraps");
+        assert!(
+            lines
+                .iter()
+                .all(|l| ui.measure(Face::Mono, micro(), l) <= 90.0),
+            "every wrapped line fits"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| l.split_whitespace().count())
+                .sum::<usize>(),
+            9,
+            "the wrap keeps every word"
+        );
+
+        let mut batch = HudBatch::new([1280, 720]);
+        draw_boot_log(&atlas, &mut batch, &[]);
+        assert!(batch.vertices.is_empty() && batch.patches.is_empty());
+        reset_atlas();
+    }
+
+    /// The quads' top-left corners and UVs `text_line` draws for `text`.
+    fn drawn(atlas: &HudAtlas, text: &str) -> (f32, Vec<([f32; 2], [f32; 2])>) {
+        let mut batch = HudBatch::new([1280, 720]);
+        let mut ui = Ui::new(atlas, &mut batch, (0.0, 0.0));
+        let w = ui.text_line(Face::Medium, body(), 20.0, 10.0, 10.0, color::text(), text);
+        let quads = batch
+            .vertices
+            .iter()
+            .step_by(6)
+            .map(|v| (v.pos, v.uv))
+            .collect();
+        (w, quads)
+    }
+
+    #[test]
+    fn section_sign_codes_are_formatting_not_text() {
+        reset_atlas();
+        let atlas = HudAtlas::boot();
+        // A pack's lang gives `menu.options` as "§6Options..." (vanilla draws it gold).
+        assert_eq!(drawn(&atlas, "§6Options..."), drawn(&atlas, "Options..."));
+        assert_eq!(drawn(&atlas, "§lA§r§"), drawn(&atlas, "A"));
+        reset_atlas();
+    }
+
+    #[test]
+    fn a_private_use_glyph_geist_lacks_is_the_packs_bitmap() {
+        let root = std::env::temp_dir().join(format!("hz-ui-pua-{}", std::process::id()));
+        let font = root.join("assets/minecraft/font");
+        let tex = root.join("assets/minecraft/textures/font");
+        std::fs::create_dir_all(&font).unwrap();
+        std::fs::create_dir_all(&tex).unwrap();
+        std::fs::write(
+            font.join("default.json"),
+            r#"{"providers":[{"type":"bitmap","file":"minecraft:font/icon.png","ascent":7,"chars":[""]}]}"#,
+        )
+        .unwrap();
+        let mut png = Vec::new();
+        let mut enc = png::Encoder::new(&mut png, 8, 8);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header()
+            .unwrap()
+            .write_image_data(&[255; 256])
+            .unwrap();
+        std::fs::write(tex.join("icon.png"), png).unwrap();
+        reset_atlas();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let icon = atlas.font.glyph('\u{e238}');
+        let uv = icon
+            .rect
+            .map(|r| [r.u0, r.v0])
+            .expect("the pack draws U+E238");
+        // Alone (a picture label) and inside a Geist line, the quad is the pack's bitmap.
+        for text in ["\u{e238}", "Quit \u{e238}"] {
+            let (w, quads) = drawn(&atlas, text);
+            assert_eq!(quads.last().unwrap().1, uv, "{text:?}");
+            assert!(w > 0.0);
+        }
+        // Alone it is drawn as the pack draws it: 8 GUI pixels wide, advance 9.
+        let (w, quads) = drawn(&atlas, "\u{e238}");
+        assert_eq!(quads.len(), 1);
+        let mut batch = HudBatch::new([1280, 720]);
+        let ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
+        assert!(
+            (w * ui.density / ui.scale - icon.advance).abs() < 0.01,
+            "{w}"
+        );
         reset_atlas();
     }
 }

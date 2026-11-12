@@ -3,187 +3,27 @@
 //! number formatting.
 use crate::text::{self, Style, Text};
 use horizon_world::nbt::Tag;
-
-/// `Double.toString`.
-pub fn java_double(v: f64) -> String {
-    java_float_text(v, &format!("{v}"), &format!("{v:e}"))
-}
-/// `Float.toString`.
-pub fn java_float(v: f32) -> String {
-    java_float_text(f64::from(v), &format!("{v}"), &format!("{v:e}"))
-}
-fn java_float_text(v: f64, plain: &str, sci: &str) -> String {
-    if v.is_nan() {
-        return "NaN".into();
-    }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if v == 0.0 {
-        return if v.is_sign_negative() { "-0.0" } else { "0.0" }.into();
-    }
-    let a = v.abs();
-    if (1.0e-3..1.0e7).contains(&a) {
-        if plain.contains('.') {
-            plain.to_owned()
-        } else {
-            format!("{plain}.0")
-        }
-    } else {
-        let (mantissa, exponent) = sci.split_once('e').unwrap_or((sci, "0"));
-        let mantissa = if mantissa.contains('.') {
-            mantissa.to_owned()
-        } else {
-            format!("{mantissa}.0")
-        };
-        format!("{mantissa}E{exponent}")
-    }
-}
-
-/// `SnbtGrammar.escapeControlCharacters`.
-fn escape_control(c: char) -> Option<&'static str> {
-    Some(match c {
-        '\u{8}' => "b",
-        '\u{c}' => "f",
-        '\n' => "n",
-        '\r' => "r",
-        '\t' => "t",
-        _ => return None,
-    })
-}
-/// `StringTag.quoteAndEscape`.
-pub fn quote_and_escape(input: &str) -> String {
-    let mut out = String::from(" ");
-    let mut quote = '\0';
-    for c in input.chars() {
-        if c == '\\' {
-            out.push_str("\\\\");
-        } else if c != '"' && c != '\'' {
-            match escape_control(c) {
-                Some(e) => {
-                    out.push('\\');
-                    out.push_str(e);
-                }
-                None => out.push(c),
-            }
-        } else {
-            if quote == '\0' {
-                quote = if c == '"' { '\'' } else { '"' };
-            }
-            if quote == c {
-                out.push('\\');
-            }
-            out.push(c);
-        }
-    }
-    if quote == '\0' {
-        quote = '"';
-    }
-    out.replace_range(0..1, &quote.to_string());
-    out.push(quote);
-    out
-}
-fn unquoted_key(key: &str) -> bool {
-    if key.eq_ignore_ascii_case("true") || key.eq_ignore_ascii_case("false") {
-        return false;
-    }
-    let mut chars = key.chars();
-    let first_ok = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '.' || c == '_');
-    // `[A-Za-z._]+[A-Za-z0-9._+-]*`
-    first_ok && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
-}
-fn string_of(t: &horizon_world::nbt::JavaString) -> String {
-    t.to_string_lossy()
-}
-
-/// `Tag.toString` (StringTagVisitor).
-pub fn to_snbt(tag: &Tag) -> String {
-    let mut out = String::new();
-    visit(tag, &mut out);
-    out
-}
-fn visit(tag: &Tag, out: &mut String) {
-    match tag {
-        Tag::End => out.push_str("END"),
-        Tag::Byte(v) => out.push_str(&format!("{v}b")),
-        Tag::Short(v) => out.push_str(&format!("{v}s")),
-        Tag::Int(v) => out.push_str(&v.to_string()),
-        Tag::Long(v) => out.push_str(&format!("{v}L")),
-        Tag::Float(v) => {
-            out.push_str(&java_float(f32::from_bits(*v)));
-            out.push('f');
-        }
-        Tag::Double(v) => {
-            out.push_str(&java_double(f64::from_bits(*v)));
-            out.push('d');
-        }
-        Tag::String(s) => out.push_str(&quote_and_escape(&string_of(s))),
-        Tag::ByteArray(a) => {
-            out.push_str("[B;");
-            out.push_str(
-                &a.iter()
-                    .map(|v| format!("{}B", *v as i8))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            );
-            out.push(']');
-        }
-        Tag::IntArray(a) => {
-            out.push_str("[I;");
-            out.push_str(&a.iter().map(i32::to_string).collect::<Vec<_>>().join(","));
-            out.push(']');
-        }
-        Tag::LongArray(a) => {
-            out.push_str("[L;");
-            out.push_str(
-                &a.iter()
-                    .map(|v| format!("{v}L"))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            );
-            out.push(']');
-        }
-        Tag::List(l) => {
-            out.push('[');
-            for (i, t) in l.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                visit(t, out);
-            }
-            out.push(']');
-        }
-        Tag::Compound(c) => {
-            out.push('{');
-            let mut entries: Vec<(String, &Tag)> =
-                c.iter().map(|(k, v)| (string_of(k), v)).collect();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            for (i, (k, v)) in entries.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                if unquoted_key(k) {
-                    out.push_str(k);
-                } else {
-                    out.push_str(&quote_and_escape(k));
-                }
-                out.push(':');
-                visit(v, out);
-            }
-            out.push('}');
-        }
-    }
-}
+use horizon_world::snbt_text::string_of;
+pub use horizon_world::snbt_text::{java_double, java_float, quote_and_escape, to_snbt};
 
 // ---- the coloured form -----------------------------------------------------
+
+/// Writer provenance for a live moving-piston command read, or its selected subtree.
+#[derive(Clone, Copy)]
+pub enum PistonPart {
+    Entity,
+    State,
+    Properties,
+    /// Any other block entity's whole compound (`BlockEntity.saveWithFullMetadata`).
+    BlockEntity,
+}
 
 struct Pretty {
     indentation: String,
     result: Text,
     indent_depth: usize,
     depth: usize,
+    piston: Option<PistonPart>,
 }
 fn is_numeric(t: &Tag) -> bool {
     matches!(
@@ -229,6 +69,10 @@ impl Pretty {
         self.lit("]", None);
     }
     fn sub(&mut self, tag: &Tag, indent: bool) {
+        self.sub_with(tag, indent, None);
+    }
+    fn sub_with(&mut self, tag: &Tag, indent: bool, piston: Option<PistonPart>) {
+        let previous = std::mem::replace(&mut self.piston, piston);
         if indent {
             self.indent_depth += 1;
         }
@@ -238,6 +82,7 @@ impl Pretty {
             self.indent_depth -= 1;
         }
         self.depth -= 1;
+        self.piston = previous;
     }
     fn visit(&mut self, tag: &Tag) {
         match tag {
@@ -328,7 +173,11 @@ impl Pretty {
                 "\n"
             };
             let n = c.len();
-            for (i, (k, v)) in java_hash_order(c).into_iter().enumerate() {
+            let entries = match self.piston {
+                Some(part) => piston_hash_order(c, part),
+                None => java_hash_order(c),
+            };
+            for (i, (k, v)) in entries.into_iter().enumerate() {
                 self.lit(&entry, None);
                 let key = string_of(k);
                 if !key.is_empty()
@@ -342,7 +191,12 @@ impl Pretty {
                 }
                 self.lit(":", None);
                 self.lit(" ", None);
-                self.sub(v, true);
+                let child = match (self.piston, key.as_str()) {
+                    (Some(PistonPart::Entity), "blockState") => Some(PistonPart::State),
+                    (Some(PistonPart::State), "properties") => Some(PistonPart::Properties),
+                    _ => None,
+                };
+                self.sub_with(v, true, child);
                 if i + 1 < n {
                     self.lit(",", None);
                     self.lit(spacing, None);
@@ -357,22 +211,75 @@ impl Pretty {
         }
     }
 }
+fn hash_bucket(len: usize, key: &horizon_world::nbt::JavaString) -> usize {
+    let mut capacity = 16usize;
+    while len > capacity * 3 / 4 {
+        capacity *= 2;
+    }
+    let h = string_of(key)
+        .encode_utf16()
+        .fold(0u32, |h, ch| h.wrapping_mul(31).wrapping_add(u32::from(ch)));
+    ((h ^ (h >> 16)) as usize) & (capacity - 1)
+}
+fn piston_hash_order(
+    c: &horizon_world::nbt::Compound,
+    part: PistonPart,
+) -> Vec<(&horizon_world::nbt::JavaString, &Tag)> {
+    let mut entries: Vec<_> = c.iter().collect();
+    match part {
+        PistonPart::Entity => {
+            // saveAdditional, then the base's components and saveMetadata.
+            let fields = [
+                "blockState",
+                "facing",
+                "progress",
+                "extending",
+                "source",
+                "components",
+                "id",
+                "x",
+                "y",
+                "z",
+            ];
+            entries.sort_by_key(|(k, _)| {
+                (
+                    hash_bucket(c.len(), k),
+                    fields
+                        .iter()
+                        .position(|s| *s == string_of(k))
+                        .unwrap_or(fields.len()),
+                )
+            });
+        }
+        PistonPart::Properties => {
+            // StateDefinition builds property codecs in sorted-name order.
+            // DFU's nested map-pair encoder writes the second codec first.
+            entries.sort_by_key(|(k, _)| (hash_bucket(c.len(), k), std::cmp::Reverse(*k)));
+        }
+        PistonPart::State => return java_hash_order(c),
+        PistonPart::BlockEntity => {
+            // saveAdditional's fields, then `components`, then saveMetadata's
+            // id and position; the fields keep the default order among them.
+            const METADATA: [&str; 5] = ["components", "id", "x", "y", "z"];
+            let mut entries = java_hash_order(c);
+            entries.sort_by_key(|(k, _)| {
+                let key = string_of(k);
+                (
+                    hash_bucket(c.len(), k),
+                    METADATA.iter().position(|m| *m == key).map_or(0, |i| i + 1),
+                )
+            });
+            return entries;
+        }
+    }
+    entries
+}
 /// The iteration order of the `HashMap<String, Tag>` a `CompoundTag` holds,
 /// for a map that grew to its size by insertion: buckets by
 /// `HashMap.hash(String.hashCode())`, keys sharing a bucket in key order.
 pub fn java_hash_order(
     c: &horizon_world::nbt::Compound,
 ) -> Vec<(&horizon_world::nbt::JavaString, &Tag)> {
-    let mut capacity = 16usize;
-    while c.len() > capacity * 3 / 4 {
-        capacity *= 2;
-    }
-    let bucket = |k: &horizon_world::nbt::JavaString| {
-        let h = string_of(k)
-            .encode_utf16()
-            .fold(0u32, |h, ch| h.wrapping_mul(31).wrapping_add(u32::from(ch)));
-        ((h ^ (h >> 16)) as usize) & (capacity - 1)
-    };
     // Keys sharing a bucket iterate in insertion order: the order vanilla's
     // savers write them, as far as it is known here.
     const WRITE_ORDER: &[&str] = &[
@@ -413,7 +320,12 @@ pub fn java_hash_order(
         "FallFlying",
         "sleeping_pos",
         "Brain",
+        "last_hurt_by_player",
+        "last_hurt_by_player_memory_time",
+        "last_hurt_by_mob",
+        "ticks_since_last_hurt_by_mob",
         "equipment",
+        "locator_bar_icon",
         // ArmorStand.
         "Invisible",
         "Small",
@@ -422,6 +334,20 @@ pub fn java_hash_order(
         "NoBasePlate",
         "Marker",
         "Pose",
+        // Mannequin.addAdditionalSaveData.
+        "profile",
+        "hidden_layers",
+        "main_hand",
+        "pose",
+        "immovable",
+        "description",
+        "hide_description",
+        // Interaction.addAdditionalSaveData.
+        "width",
+        "height",
+        "attack",
+        "interaction",
+        "response",
     ];
     // BlockEntity.saveMetadata writes the position after the entity's data.
     const AFTER: &[&str] = &["x", "y", "z"];
@@ -439,7 +365,7 @@ pub fn java_hash_order(
             .unwrap_or(WRITE_ORDER.len())
     };
     let mut entries: Vec<_> = c.iter().collect();
-    entries.sort_by_key(|(k, _)| (bucket(k), rank(k)));
+    entries.sort_by_key(|(k, _)| (hash_bucket(c.len(), k), rank(k)));
     entries
 }
 /// `NbtUtils.toPrettyComponent`: the coloured, unindented form.
@@ -452,6 +378,19 @@ pub fn pretty_indented(tag: &Tag, indentation: &str) -> Text {
         result: Text::empty(),
         indent_depth: 0,
         depth: 0,
+        piston: None,
+    };
+    p.visit(tag);
+    p.result
+}
+/// Command-only writer order; ordinary pretty printing keeps its existing policy.
+pub fn pretty_piston(tag: &Tag, part: PistonPart) -> Text {
+    let mut p = Pretty {
+        indentation: String::new(),
+        result: Text::empty(),
+        indent_depth: 0,
+        depth: 0,
+        piston: Some(part),
     };
     p.visit(tag);
     p.result
@@ -464,6 +403,62 @@ mod tests {
 
     fn rt(s: &str) -> String {
         to_snbt(&parse_snbt(s).unwrap().0)
+    }
+    #[test]
+    fn live_piston_writer_order_does_not_change_default_pretty() {
+        let tag = parse_snbt(
+            r#"{id:"minecraft:piston",blockState:{id:"minecraft:piston_head",properties:{facing:"east",short:"false",type:"normal"}},components:{},x:1,y:100,z:0,facing:5b,progress:0.0f,source:1b,extending:1b}"#,
+        ).unwrap().0;
+        let ordinary = r#"{blockState: {id: "minecraft:piston_head", properties: {facing: "east", short: "false", type: "normal"}}, components: {}, x: 1, facing: 5b, progress: 0.0f, y: 100, z: 0, id: "minecraft:piston", source: 1b, extending: 1b}"#;
+        assert_eq!(pretty(&tag).plain(), ordinary);
+        assert_eq!(
+            pretty_piston(&tag, PistonPart::Entity).plain(),
+            r#"{blockState: {id: "minecraft:piston_head", properties: {short: "false", facing: "east", type: "normal"}}, components: {}, x: 1, facing: 5b, progress: 0.0f, y: 100, z: 0, source: 1b, id: "minecraft:piston", extending: 1b}"#,
+        );
+        let state = tag.get("blockState").unwrap();
+        assert_eq!(
+            pretty_piston(state, PistonPart::State).plain(),
+            r#"{id: "minecraft:piston_head", properties: {short: "false", facing: "east", type: "normal"}}"#,
+        );
+        let props = state.get("properties").unwrap();
+        assert_eq!(
+            pretty_piston(props, PistonPart::Properties).plain(),
+            r#"{short: "false", facing: "east", type: "normal"}"#,
+        );
+        assert_eq!(
+            pretty(props).plain(),
+            r#"{facing: "east", short: "false", type: "normal"}"#
+        );
+        assert_eq!(pretty(&tag).plain(), ordinary);
+    }
+    #[test]
+    fn mannequin_compound_orders_pose_before_immovable_in_shared_bucket() {
+        let tag = parse_snbt(
+            r#"{AbsorptionAmount:0.0f,Air:300s,Brain:{memories:{}},DeathTime:0s,FallFlying:0b,Fire:0s,Health:20.0f,HurtTime:0s,Invulnerable:0b,Motion:[0.0d,0.0d,0.0d],OnGround:0b,PortalCooldown:0,Pos:[2.5d,100.0d,2.5d],Rotation:[0.0f,0.0f],UUID:[I;369,0,0,1],attributes:[],current_impulse_context_reset_grace_time:0,description:{text:"Guard"},hide_description:1b,immovable:1b,pose:"crouching",profile:{name:"alex"}}"#,
+        )
+        .unwrap()
+        .0;
+        let rendered = pretty(&tag).plain();
+        let pose_idx = rendered.find("pose: \"crouching\"").unwrap();
+        let immovable_idx = rendered.find("immovable: 1b").unwrap();
+        assert!(
+            pose_idx < immovable_idx,
+            "expected `pose` before `immovable` in bucket 5, got: {rendered}"
+        );
+    }
+    #[test]
+    fn interaction_compound_orders_width_before_interaction_in_shared_bucket() {
+        // `width` and `interaction` share a bucket at every table size;
+        // `Interaction.addAdditionalSaveData` writes `width` first.
+        let tag = parse_snbt(
+            r#"{Air:300s,Fire:0s,Invulnerable:0b,Motion:[0.0d,0.0d,0.0d],OnGround:0b,PortalCooldown:0,Pos:[4.5d,100.0d,4.5d],Rotation:[0.0f,0.0f],UUID:[I;66,0,0,1],fall_distance:0.0d,height:1.25f,interaction:{player:[I;1,2,3,4],timestamp:9L},response:0b,width:1.0f}"#,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            pretty(&tag).plain(),
+            "{Motion: [0.0d, 0.0d, 0.0d], Invulnerable: 0b, fall_distance: 0.0d, Air: 300s, OnGround: 0b, PortalCooldown: 0, Rotation: [0.0f, 0.0f], Pos: [4.5d, 100.0d, 4.5d], response: 0b, Fire: 0s, width: 1.0f, interaction: {player: [I; 1, 2, 3, 4], timestamp: 9L}, UUID: [I; 66, 0, 0, 1], height: 1.25f}",
+        );
     }
     #[test]
     fn compact_form_matches_vanilla() {
@@ -509,5 +504,19 @@ mod tests {
         assert!(colors.contains(&text::GOLD));
         let long = parse_snbt("{l:[{a:1},{b:2}]}").unwrap().0;
         assert_eq!(pretty(&long).plain(), "{l: [{a: 1}, {b: 2}]}");
+    }
+    #[test]
+    fn block_entity_metadata_follows_its_fields() {
+        // A conduit's `/data get block`, as vanilla 26.3 printed it: `Target`
+        // and `components` share a bucket, and saveAdditional wrote `Target` first.
+        let tag = parse_snbt(
+            r#"{id:"minecraft:conduit",x:4098,y:300,z:4098,components:{},Target:[I;1,2,3,4]}"#,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            pretty_piston(&tag, PistonPart::BlockEntity).plain(),
+            r#"{Target: [I; 1, 2, 3, 4], components: {}, x: 4098, y: 300, z: 4098, id: "minecraft:conduit"}"#,
+        );
     }
 }

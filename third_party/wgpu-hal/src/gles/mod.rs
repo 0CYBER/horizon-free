@@ -130,10 +130,11 @@ use crate::{CopyExtent, TextureDescriptor};
 #[derive(Clone, Debug)]
 pub struct Api;
 
-//Note: we can support more samplers if not every one of them is used at a time,
-// but it probably doesn't worth it.
-const MAX_TEXTURE_SLOTS: usize = 16;
-const MAX_SAMPLERS: usize = 16;
+// The arrays below are sized for this many slots; the limits the adapter reports are
+// the context's own (GL 4.6 usually has 32 texture units per stage, WebGL2 16), capped
+// here (the dirty masks are `u32`).
+const MAX_TEXTURE_SLOTS: usize = 32;
+const MAX_SAMPLERS: usize = 32;
 const MAX_VERTEX_ATTRIBUTES: usize = 16;
 const ZERO_BUFFER_SIZE: usize = 256 << 10;
 const MAX_IMMEDIATES: usize = 64;
@@ -922,6 +923,7 @@ enum Command {
         topology: u32,
         indirect_buf: glow::Buffer,
         indirect_offset: wgt::BufferAddress,
+        draw_count: u32,
         first_instance_location: Option<glow::UniformLocation>,
     },
     DrawIndexedIndirect {
@@ -929,6 +931,7 @@ enum Command {
         index_type: u32,
         indirect_buf: glow::Buffer,
         indirect_offset: wgt::BufferAddress,
+        draw_count: u32,
         first_instance_location: Option<glow::UniformLocation>,
     },
     Dispatch([u32; 3]),

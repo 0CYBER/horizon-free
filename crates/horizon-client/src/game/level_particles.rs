@@ -67,21 +67,34 @@ impl Game<'_> {
         let (at, count, xz, height, floating) = match self.res.behaviours().bone_meal_spreads(state)
         {
             Some(spreads) => {
-                // BonemealableBlock.getParticlePos: below for rooted dirt
-                // (its hanging roots) and mangrove leaves (their propagule).
-                let at = match &*facts.get(state).name {
-                    "minecraft:rooted_dirt" | "minecraft:mangrove_leaves" => [p[0], p[1] - 1, p[2]],
-                    _ => p,
-                };
                 if spreads {
-                    (at, count * 3, 3.0, 1.0, false)
+                    // BonemealableBlock.getParticlePos: a NEIGHBOR_SPREADER
+                    // (grass, nylium, netherrack, moss) sparks over the block
+                    // above it, where its spread lands (#11310).
+                    ([p[0], p[1] + 1, p[2]], count * 3, 3.0, 1.0, false)
                 } else {
+                    // getParticlePos of a GROWER is the block itself, below
+                    // for rooted dirt (its hanging roots) and mangrove leaves
+                    // (their propagule).
+                    let at = match &*facts.get(state).name {
+                        "minecraft:rooted_dirt" | "minecraft:mangrove_leaves" => {
+                            [p[0], p[1] - 1, p[2]]
+                        }
+                        _ => p,
+                    };
                     // ParticleUtils.spawnParticleInBlock: up to the
                     // block's shape (a full block when air).
                     (at, count, 0.5, self.block_shape_top(at), true)
                 }
             }
             None if &*facts.get(state).name == "minecraft:water" => (p, count * 3, 3.0, 1.0, false),
+            // A mod block the level answered bone meal for: the port knows no
+            // `BonemealableBlock.Type` for it, and vanilla's `GROWER` is the
+            // one a block growing itself has, so the sparks stay inside it
+            // rather than spreading over its neighbours.
+            None if !facts.get(state).name.starts_with("minecraft:") => {
+                (p, count, 0.5, self.block_shape_top(p), true)
+            }
             None => return,
         };
         self.spawn_particles(at, count, xz, height, floating, ParticleType::HappyVillager);
@@ -132,8 +145,9 @@ impl Game<'_> {
             }
         }
     }
-    /// `LevelEventHandler` 2012 (a turtle egg laid on sand):
-    /// `ParticleUtils.spawnParticleInBlock` with happy villager sparks.
+    /// `LevelEventHandler` 2011 (a bee grew a crop) and 2012 (a turtle egg
+    /// laid on sand): `ParticleUtils.spawnParticleInBlock` with happy villager
+    /// sparks.
     pub(super) fn turtle_egg_particles(&mut self, pos: BlockPos, count: i32) {
         let at = [pos.x, pos.y, pos.z];
         let height = self.block_shape_top(at);
@@ -249,10 +263,7 @@ impl Game<'_> {
         let mut root = None;
         for step in 1..11 {
             let y = pos.y + step;
-            if !(horizon_client::chunk::MIN_Y
-                ..horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT)
-                .contains(&y)
-            {
+            if !(self.world.bottom_y()..self.world.top_y()).contains(&y) {
                 break;
             }
             let state = self.world.block(pos.x, y, pos.z);
@@ -269,8 +280,8 @@ impl Game<'_> {
         };
         let above = self.world.block(pos.x, root_y + 1, pos.z);
         let above_facts = self.res.facts().get(above);
-        let nether = self.dim == super::Dim::Nether;
-        let fluid = if &*above_facts.name == "minecraft:mud" && !nether {
+        let evaporates = self.dimension_type().water_evaporates;
+        let fluid = if &*above_facts.name == "minecraft:mud" && !evaporates {
             horizon_client::blocks::Fluid::Water
         } else {
             above_facts.fluid
@@ -278,7 +289,9 @@ impl Game<'_> {
         let ty = match fluid {
             horizon_client::blocks::Fluid::Water => ParticleType::DrippingDripstoneWater,
             horizon_client::blocks::Fluid::Lava => ParticleType::DrippingDripstoneLava,
-            horizon_client::blocks::Fluid::None if nether => ParticleType::DrippingDripstoneLava,
+            horizon_client::blocks::Fluid::None if evaporates => {
+                ParticleType::DrippingDripstoneLava
+            }
             horizon_client::blocks::Fluid::None => ParticleType::DrippingDripstoneWater,
         };
         let offset = self
@@ -302,6 +315,12 @@ impl Game<'_> {
     /// (an end portal opening, the dragon's death roar): here, and sent to
     /// every guest whatever their dimension.
     pub(super) fn global_level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        // ServerLevel.globalLevelEvent: without global_sound_events it is a
+        // plain level event, which the client has no sound for (1023, 1028
+        // and 1038 are only in `LevelEventHandler.globalLevelEvent`).
+        if !self.ui.rules.bool("global_sound_events") {
+            return;
+        }
         self.global_level_event_sound(id, pos);
         if self.audio.capture.is_some() {
             self.lan_global_events.push((id, pos, data));

@@ -6,12 +6,45 @@
 use crate::{
     DATA_VERSION,
     chunk::BlockSection,
+    collision_context::EntityContextKind,
     compression::invalid,
     nbt::Tag,
     registry::{BlockRegistry, BlockStateId, BlockTable},
 };
 use horizon_core::geometry::{Axis, VoxelShape};
 use std::{collections::HashMap, io};
+
+/// `PipeBlock`'s shape for `size` pixels across (`makeShapes`): the core
+/// cube, with an arm from the centre out to each joined side (`sides` by
+/// `Direction`: down, up, north, south, west, east).
+pub fn pipe_shape(size: f64, sides: [bool; 6]) -> io::Result<VoxelShape> {
+    use horizon_core::geometry::{Aabb, ShapeOp, Vec3};
+    let (lo, hi) = ((8.0 - size / 2.0) / 16.0, (8.0 + size / 2.0) / 16.0);
+    let shape = |min: [f64; 3], max: [f64; 3]| {
+        VoxelShape::from_box(Aabb::new(
+            Vec3::new(min[0], min[1], min[2]),
+            Vec3::new(max[0], max[1], max[2]),
+        ))
+        .map_err(|e| invalid(e.to_string()))
+    };
+    let mut result = shape([lo; 3], [hi; 3])?;
+    let arms = [
+        ([lo, 0.0, lo], [hi, 0.5, hi]),
+        ([lo, 0.5, lo], [hi, 1.0, hi]),
+        ([lo, lo, 0.0], [hi, hi, 0.5]),
+        ([lo, lo, 0.5], [hi, hi, 1.0]),
+        ([0.0, lo, lo], [0.5, hi, hi]),
+        ([0.5, lo, lo], [1.0, hi, hi]),
+    ];
+    for (joined, (min, max)) in sides.into_iter().zip(arms) {
+        if joined {
+            result = shape(min, max)?
+                .join(&result, ShapeOp::OR)
+                .map_err(|e| invalid(e.to_string()))?;
+        }
+    }
+    Ok(result)
+}
 
 #[derive(PartialEq, Eq, Hash)]
 struct GridKey {
@@ -29,6 +62,8 @@ pub struct CachedCollisionRegistry<'r> {
     state_shapes: Vec<i32>,
     grid_count: usize,
     canonical_identities: bool,
+    contexts: HashMap<BlockStateId, [Option<usize>; 9]>,
+    outline_edges: HashMap<usize, Vec<[f64; 6]>>,
 }
 impl<'r> CachedCollisionRegistry<'r> {
     pub fn registry(&self) -> &'r BlockRegistry {
@@ -45,7 +80,8 @@ impl<'r> CachedCollisionRegistry<'r> {
         let Some(Tag::List(entries)) = tag.get("shapes") else {
             return Err(invalid("missing collision shapes"));
         };
-        if entries.len() > registry.len() {
+        // Each state can add four outline, four collision and one interaction shape.
+        if entries.len() > registry.len().saturating_mul(10) {
             return Err(invalid("too many cached collision shapes"));
         }
         let mut shapes = Vec::with_capacity(entries.len());
@@ -184,13 +220,125 @@ impl<'r> CachedCollisionRegistry<'r> {
         {
             return Err(invalid("invalid cached shape mapping"));
         }
+        let mut contexts = HashMap::new();
+        let mut outline_edges = HashMap::new();
+        if let Some(rows) = tag.get("context_shapes") {
+            let Tag::List(rows) = rows else {
+                return Err(invalid("context shapes is not a list"));
+            };
+            if rows.len() > registry.len() {
+                return Err(invalid("too many context shape rows"));
+            }
+            const KEYS: [&str; 9] = [
+                "outline_item",
+                "outline_player",
+                "outline_living",
+                "outline_other",
+                "collision_item",
+                "collision_player",
+                "collision_living",
+                "collision_other",
+                "interaction",
+            ];
+            for row in rows {
+                let Some(Tag::Int(state)) = row.get("state") else {
+                    return Err(invalid("context shape missing state"));
+                };
+                if *state < 0 || *state as usize >= registry.len() {
+                    return Err(invalid("context shape state outside registry"));
+                }
+                let Tag::Compound(fields) = row else {
+                    return Err(invalid("context shape row is not a compound"));
+                };
+                if fields.keys().any(|key| {
+                    key.to_string()
+                        .map_or(true, |key| key != "state" && !KEYS.contains(&key.as_str()))
+                }) {
+                    return Err(invalid("unknown context shape field"));
+                }
+                let mut ids = [None; 9];
+                for (i, key) in KEYS.into_iter().enumerate() {
+                    let Some(id) = row.get(key) else {
+                        continue;
+                    };
+                    let Tag::Int(id) = id else {
+                        return Err(invalid("context shape reference is not an int"));
+                    };
+                    if *id < 0 || *id as usize >= shapes.len() {
+                        return Err(invalid("context shape reference outside shapes"));
+                    }
+                    ids[i] = Some(*id as usize);
+                    if i < 4 {
+                        outline_edges
+                            .entry(*id as usize)
+                            .or_insert_with(|| shapes[*id as usize].edges());
+                    }
+                }
+                if ids.iter().all(Option::is_none)
+                    || contexts.insert(BlockStateId(*state as u32), ids).is_some()
+                {
+                    return Err(invalid("empty or duplicate context shape row"));
+                }
+            }
+        }
         Ok(Self {
             registry,
             shapes,
             state_shapes: state_shapes.clone(),
             grid_count: grids.len(),
             canonical_identities,
+            contexts,
+            outline_edges,
         })
+    }
+    pub fn has_context_shapes(&self, state: BlockStateId) -> bool {
+        self.contexts.contains_key(&state)
+    }
+    fn context_shape_id(
+        &self,
+        state: BlockStateId,
+        kind: EntityContextKind,
+        offset: usize,
+    ) -> Option<usize> {
+        let kind = kind.index()?;
+        self.contexts.get(&state)?[offset + kind]
+    }
+    /// A declared outline override for an actual entity; no entity uses the ordinary outline.
+    pub fn context_outline_shape(
+        &self,
+        state: BlockStateId,
+        kind: EntityContextKind,
+    ) -> Option<&VoxelShape> {
+        Some(&self.shapes[self.context_shape_id(state, kind, 0)?])
+    }
+    pub fn context_outline_edges(
+        &self,
+        state: BlockStateId,
+        kind: EntityContextKind,
+    ) -> Option<&[[f64; 6]]> {
+        Some(
+            self.outline_edges
+                .get(&self.context_shape_id(state, kind, 0)?)?
+                .as_slice(),
+        )
+    }
+    pub fn context_collision_shape(
+        &self,
+        state: BlockStateId,
+        kind: EntityContextKind,
+    ) -> Option<&VoxelShape> {
+        Some(&self.shapes[self.context_shape_id(state, kind, 4)?])
+    }
+    pub fn interaction_shape(&self, state: BlockStateId) -> Option<&VoxelShape> {
+        Some(&self.shapes[self.contexts.get(&state)?[8]?])
+    }
+    /// Every declared physical variant participates in conservative cursor metadata.
+    pub fn collision_variants(&self, state: BlockStateId) -> impl Iterator<Item = &VoxelShape> {
+        self.contexts
+            .get(&state)
+            .into_iter()
+            .flat_map(|ids| ids[4..8].iter())
+            .filter_map(|id| id.map(|id| &self.shapes[id]))
     }
     /// Older exports omit native canonical identities. Such imports retain their
     /// local alias graph but cannot support identity-dependent world iteration.
@@ -228,5 +376,52 @@ impl<'r> CachedCollisionRegistry<'r> {
             return Err(invalid("section uses a different collision registry"));
         }
         self.cached_shape(section.get(index)?)
+    }
+}
+
+#[cfg(test)]
+mod pipe_tests {
+    use super::*;
+    use crate::registry::BlockTableFile;
+    use horizon_core::geometry::ShapeOp;
+    use std::path::PathBuf;
+
+    /// `pipe_shape` at the chorus plant's 10 pixels is vanilla's own shape for
+    /// each of its 64 states.
+    #[test]
+    fn pipe_shapes_match_the_chorus_plant() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("cached-collision.nbt").exists() {
+            eprintln!("skipping: no resources at {}", root.display());
+            return;
+        }
+        let registry = crate::level::data::load_registry(&root).unwrap();
+        let file = BlockTableFile::open(&root.join("cached-collision.nbt"), &registry).unwrap();
+        let cached = CachedCollisionRegistry::from_table(file.table("collision").unwrap()).unwrap();
+        let mut checked = 0;
+        for id in 0..registry.len() as u32 {
+            let state = BlockStateId(id);
+            let s = registry.state(state).unwrap();
+            if s.name != "minecraft:chorus_plant" {
+                continue;
+            }
+            let sides = ["down", "up", "north", "south", "west", "east"]
+                .map(|k| s.properties.get(k).map(String::as_str) == Some("true"));
+            let ours = pipe_shape(10.0, sides).unwrap();
+            let theirs = cached.cached_shape(state).unwrap().unwrap();
+            assert!(
+                !ours.join_is_not_empty(theirs, ShapeOp::XOR).unwrap(),
+                "{sides:?}"
+            );
+            assert_eq!(ours.boxes(), theirs.boxes(), "{sides:?}");
+            checked += 1;
+        }
+        assert_eq!(checked, 64);
     }
 }

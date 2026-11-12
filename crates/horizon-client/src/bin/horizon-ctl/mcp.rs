@@ -4,9 +4,15 @@
 //! shared table, run through the same `Session` as the CLI.
 use crate::{Session, commands};
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
 
-const PROTOCOL: &str = "2025-06-18";
+/// What an agent reads before its first call.
+const INSTRUCTIONS: &str = "Play Horizon, a Rust reimplementation of Minecraft Java Edition. Start with launch (it finds the game installed by the Horizon launcher and opens or creates a world), then read the world with state, inventory, screen, entities and find_block, and act with goto, look_at_block, break, place, interact, click_slot and click_button. Actions block until they finish and report what happened. Coordinates are block coordinates; yaw 0 faces south (+Z).";
+
+/// The revisions this server advertises: `horizon_mcp` serves them (`2026-07-28` stateless,
+/// `2025-06-18` for the clients that still open with `initialize`).
+fn server() -> horizon_mcp::Server<'static> {
+    horizon_mcp::Server::new("horizon-ctl", horizon_core::release::VERSION, INSTRUCTIONS)
+}
 
 fn tools() -> Vec<Value> {
     commands::COMMANDS
@@ -24,6 +30,9 @@ fn tools() -> Vec<Value> {
                 description = "Capture the game window and return it as a PNG image.".into();
             }
             let mut tool = json!({ "name": commands::tool_name(c), "description": description, "inputSchema": schema });
+            if let Some(out) = commands::reply_schema(c) {
+                tool["outputSchema"] = out;
+            }
             if commands::DESTRUCTIVE.contains(&c.name) {
                 tool["annotations"] = json!({ "destructiveHint": true });
             } else if commands::OPEN_WORLD.contains(&c.name) {
@@ -60,9 +69,56 @@ pub fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Under `--paced`, whether a tool runs without the world moving: it only reads, or it
+/// manages the session or the pause itself.
+fn still(cmd: &commands::Cmd) -> bool {
+    matches!(cmd.group, commands::Group::Observe)
+        || matches!(
+            cmd.name,
+            "hello"
+                | "status"
+                | "worlds"
+                | "logs"
+                | "save"
+                | "launch"
+                | "quit"
+                | "pause"
+                | "resume"
+                | "inventory"
+                | "ui"
+        )
+}
+
 impl Session {
-    /// One tool call: (content blocks, is_error).
+    /// The screen the game shows, if it answers.
+    fn screen_now(&mut self) -> Option<String> {
+        let reply = self.run(&["screen".to_owned()]).ok()?;
+        reply["screen"].as_str().map(str::to_owned)
+    }
+
+    /// `--paced`: an agent thinks between tool calls, often for many seconds, and in single
+    /// player the world went on without it (a mob kept hitting). The pause menu stops a
+    /// single-player world as vanilla's does; it is opened after an action and closed before
+    /// the next, only when the game is playing (not over another menu, nor a pause a person
+    /// opened). Reading tools leave it open. A LAN or server world does not stop.
     fn call(&mut self, name: &str, args: &Value) -> (Vec<Value>, bool) {
+        let cmd = commands::COMMANDS
+            .iter()
+            .find(|c| c.mcp && commands::tool_name(c) == name);
+        let pace = self.paced && cmd.is_some_and(|c| !still(c));
+        if pace && std::mem::take(&mut self.held) && self.screen_now().as_deref() == Some("paused")
+        {
+            let _ = self.run(&["resume".to_owned()]);
+        }
+        let out = self.call_tool(name, args);
+        if pace && self.screen_now().as_deref() == Some("playing") {
+            self.held = self.run(&["pause".to_owned()]).is_ok();
+        }
+        out
+    }
+
+    /// One tool call: (content blocks, is_error).
+    fn call_tool(&mut self, name: &str, args: &Value) -> (Vec<Value>, bool) {
         let text = |v: &Value| json!({ "type": "text", "text": serde_json::to_string_pretty(v).unwrap_or_default() });
         let Some(cmd) = commands::COMMANDS
             .iter()
@@ -131,15 +187,10 @@ impl Session {
         }
     }
 
+    /// The two tool methods; `horizon_mcp` answers the protocol's own (`initialize`,
+    /// `server/discover`) and frames these results for the revision the request speaks.
     fn handle(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
-            "initialize" => Ok(json!({
-                "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL),
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "horizon-ctl", "version": horizon_core::release::VERSION },
-                "instructions": "Play Horizon, a Rust reimplementation of Minecraft Java Edition. Start with launch (it finds the game installed by the Horizon launcher and opens or creates a world), then read the world with state, inventory, screen, entities and find_block, and act with goto, look_at_block, break, place, interact, click_slot and click_button. Actions block until they finish and report what happened. Coordinates are block coordinates; yaw 0 faces south (+Z).",
-            })),
-            "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools() })),
             "tools/call" => {
                 let name = params
@@ -151,7 +202,20 @@ impl Session {
                 }
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 let (content, error) = self.call(name, &args);
-                Ok(json!({ "content": content, "isError": error }))
+                let mut result = json!({ "content": content, "isError": error });
+                // A tool that declares an outputSchema answers with structuredContent too.
+                if !error
+                    && tools()
+                        .iter()
+                        .any(|t| t["name"] == name && t.get("outputSchema").is_some())
+                    && let Some(v) = result["content"][0]["text"]
+                        .as_str()
+                        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+                        .filter(Value::is_object)
+                {
+                    result["structuredContent"] = v;
+                }
+                Ok(result)
             }
             _ => Err((-32601, format!("Method not found: {method}"))),
         }
@@ -159,42 +223,41 @@ impl Session {
 }
 
 pub fn serve(session: &mut Session) -> Result<(), String> {
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Err(e) => Some(
-                json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": e.to_string() } }),
-            ),
-            Ok(msg) => {
-                let method = msg
-                    .get("method")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let params = msg.get("params").cloned().unwrap_or(json!({}));
-                // Notifications (no id) get no reply.
-                msg.get("id").cloned().map(|id| match session.handle(method, &params) {
-                    Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-                    Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
-                })
-            }
-        };
-        if let Some(reply) = reply {
-            writeln!(stdout, "{reply}")
-                .and_then(|_| stdout.flush())
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
+    server().serve(|method, params| session.handle(method, params))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paced_reading_tools_keep_the_world_still() {
+        let find = |n: &str| commands::COMMANDS.iter().find(|c| c.name == n).unwrap();
+        for n in [
+            "state",
+            "inventory",
+            "entities",
+            "events",
+            "find-block",
+            "pause",
+            "save",
+        ] {
+            assert!(still(find(n)), "{n} should not let time pass");
+        }
+        let moving = [
+            "goto",
+            "break",
+            "place",
+            "attack",
+            "wait",
+            "wait-for",
+            "screenshot",
+            "click-slot",
+        ];
+        for n in moving {
+            assert!(!still(find(n)), "{n} needs the world running");
+        }
+    }
 
     #[test]
     fn base64_matches_rfc_4648() {
@@ -213,6 +276,16 @@ mod tests {
             assert!(names.insert(t["name"].as_str().unwrap().to_owned()));
             assert_eq!(t["inputSchema"]["type"], "object");
         }
+        let by = |n: &str| list.iter().find(|t| t["name"] == n).unwrap();
+        assert_eq!(
+            by("hello")["outputSchema"]["required"],
+            json!(["protocol", "release", "features"])
+        );
+        assert_eq!(
+            by("status")["outputSchema"]["properties"]["screen"]["type"],
+            "string"
+        );
+        assert!(by("state").get("outputSchema").is_none());
         for want in [
             "launch",
             "state",
@@ -233,28 +306,66 @@ mod tests {
     #[test]
     fn protocol_basics() {
         let mut s = Session::new(std::env::temp_dir().join("horizon-ctl-mcp-test.sock"), None);
-        let init = s
-            .handle("initialize", &json!({ "protocolVersion": "2025-03-26" }))
-            .unwrap();
-        assert_eq!(init["protocolVersion"], "2025-03-26");
-        assert!(s.handle("nope", &json!({})).is_err());
-        let r = s
-            .handle(
-                "tools/call",
-                &json!({ "name": "goto", "arguments": { "x": 1 } }),
+        let mut app = |method: &str, params: &Value| s.handle(method, params);
+        let server = server();
+        let line = |method: &str, params: Value| {
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string()
+        };
+
+        // A client that opens with the handshake revision.
+        let init = server
+            .handle_line(
+                &line("initialize", json!({ "protocolVersion": "2025-06-18" })),
+                &mut app,
             )
             .unwrap();
-        assert_eq!(r["isError"], true);
+        assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(init["result"]["serverInfo"]["name"], "horizon-ctl");
+
+        // A modern client: stateless, and the same tools.
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            horizon_mcp::VERSION_KEY.to_owned(),
+            json!(horizon_mcp::MODERN),
+        );
+        meta.insert(horizon_mcp::CLIENT_CAPABILITIES_KEY.to_owned(), json!({}));
+        let params = json!({ "_meta": Value::Object(meta) });
+        let list = server
+            .handle_line(&line("tools/list", params), &mut app)
+            .unwrap();
+        assert_eq!(list["result"]["resultType"], "complete");
+        assert!(list["result"]["tools"].as_array().unwrap().len() > 3);
+
+        let r = server
+            .handle_line(
+                &line(
+                    "tools/call",
+                    json!({ "name": "goto", "arguments": { "x": 1 } }),
+                ),
+                &mut app,
+            )
+            .unwrap();
+        assert_eq!(r["result"]["isError"], true);
         assert!(
-            r["content"][0]["text"]
+            r["result"]["content"][0]["text"]
                 .as_str()
                 .unwrap()
                 .contains("y is required")
         );
         // No game: a connection error, reported as a tool error.
-        let r = s
-            .handle("tools/call", &json!({ "name": "state", "arguments": {} }))
+        let r = server
+            .handle_line(
+                &line("tools/call", json!({ "name": "state", "arguments": {} })),
+                &mut app,
+            )
             .unwrap();
-        assert_eq!(r["isError"], true);
+        assert_eq!(r["result"]["isError"], true);
+        // Methods this server does not have are the protocol's to refuse.
+        assert_eq!(
+            server
+                .handle_line(&line("nope/nope", json!({})), &mut app)
+                .unwrap()["error"]["code"],
+            json!(-32601)
+        );
     }
 }

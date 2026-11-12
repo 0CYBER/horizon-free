@@ -10,10 +10,10 @@ use std::{
     fs,
     io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
+static NEXT: AtomicU32 = AtomicU32::new(0);
 struct Directory(PathBuf);
 impl Directory {
     fn new() -> Self {
@@ -199,18 +199,121 @@ fn corrupt_allocations_are_dropped_and_bad_payloads_fail() {
     assert_eq!(RegionFile::open(dir.region()).unwrap().chunks().count(), 0);
     fs::write(dir.region(), [0, 0, 2, 1]).unwrap();
     assert_eq!(RegionFile::open(dir.region()).unwrap().chunks().count(), 0);
-    for (len, codec) in [
-        (0, 3),
-        (4093, 3),
-        (u32::MAX, 3),
-        (1, 127),
-        (2, 131),
-        (1, 131),
-    ] {
+    // `getChunkDataInputStream` answers `null` for a chunk the file cannot
+    // deliver, so the reader skips it instead of giving up on the region.
+    for (len, codec) in [(0, 3), (4093, 3), (u32::MAX, 3)] {
         malformed_region(&dir.region(), 513, 0, len, codec);
         let mut reader = RegionFile::open(dir.region()).unwrap();
-        assert!(reader.read(ChunkPos::new(-32, 0)).is_err());
+        assert!(reader.read(ChunkPos::new(-32, 0)).unwrap().is_none());
     }
+    // A custom compression id has no codec of its own, still fails.
+    malformed_region(&dir.region(), 513, 0, 1, 127);
+    let mut reader = RegionFile::open(dir.region()).unwrap();
+    assert!(reader.read(ChunkPos::new(-32, 0)).is_err());
+}
+
+/// `getChunkDataInputStream`: a file that ends inside the chunk's header or
+/// payload reads as a chunk that is not there ("Chunk header is truncated"),
+/// not as an error, so a reader skips it.
+#[test]
+fn a_chunk_cut_off_by_the_end_of_the_file_is_absent() {
+    let dir = Directory::new();
+    // Slot 0 points at sector 2, but the file ends two bytes into it.
+    malformed_region(&dir.region(), 513, 0, 4093, 3);
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(dir.region())
+        .unwrap();
+    file.set_len(8192 + 2).unwrap();
+    let mut reader = RegionFile::open(dir.region()).unwrap();
+    assert!(reader.read(ChunkPos::new(-32, 0)).unwrap().is_none());
+}
+
+/// `SerializableChunkData.parse` reads the position with `getIntOr("xPos", 0)`
+/// and `getIntOr("zPos", 0)`, so a chunk that does not carry them is the chunk
+/// at 0, 0, and `Tag.asInt` takes the narrower integer tags too.
+#[test]
+fn a_chunk_without_its_position_is_at_the_origin() {
+    let chunk = |extra: Vec<(&str, Tag)>| {
+        let mut entries = vec![
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("sections", Tag::List(Vec::new())),
+        ];
+        entries.extend(extra);
+        ChunkData::new(NamedTag {
+            name: JavaString::default(),
+            tag: Tag::compound(entries),
+        })
+    };
+    assert_eq!(chunk(Vec::new()).unwrap().position(), ChunkPos::new(0, 0));
+    assert_eq!(
+        chunk(vec![("xPos", Tag::Int(-3)), ("zPos", Tag::Int(7))])
+            .unwrap()
+            .position(),
+        ChunkPos::new(-3, 7)
+    );
+    assert_eq!(
+        chunk(vec![("xPos", Tag::Short(-3)), ("zPos", Tag::Byte(7))])
+            .unwrap()
+            .position(),
+        ChunkPos::new(-3, 7)
+    );
+}
+
+/// `SerializableChunkData.parse` reads `getListOrEmpty("sections")`, so a chunk
+/// without a section list is a chunk with no sections, not an unreadable one.
+#[test]
+fn a_chunk_without_sections_loads_as_an_empty_chunk() {
+    let chunk = ChunkData::new(NamedTag {
+        name: JavaString::default(),
+        tag: Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("xPos", Tag::Int(2)),
+            ("zPos", Tag::Int(5)),
+        ]),
+    })
+    .unwrap();
+    assert_eq!(chunk.position(), ChunkPos::new(2, 5));
+    assert_eq!(chunk.block(BlockPos::new(33, 0, 80)).unwrap(), None);
+    let nbt = chunk.into_nbt();
+    let Some(Tag::List(sections)) = nbt.tag.get("sections") else {
+        panic!("sections is not a list")
+    };
+    assert!(sections.is_empty());
+}
+
+/// `getChunkDataInputStream`: the external branch never reads the stub's length
+/// — `streamLength != 0` only logs "Chunk has both internal and external
+/// streams" — and `createExternalChunkInputStream` answers `null` when the
+/// `.mcc` is not a regular file, so that chunk is absent, not damaged.
+#[test]
+fn an_external_stub_reads_its_mcc_whatever_its_length_says() {
+    let dir = Directory::new();
+    let pos = ChunkPos::new(-32, 0);
+    let external = dir.0.join("c.-32.0.mcc");
+    let payload = vec![7; 4000];
+    fs::write(&external, &payload).unwrap();
+    // Slot 0 points at sector 2 and the stub declares 2 bytes of which one at
+    // most is inline: the data comes from the `.mcc` either way.
+    malformed_region(&dir.region(), 0x0000_0201, 0, 2, 3 | 128);
+    let mut reader = RegionFile::open(dir.region()).unwrap();
+    let record = reader.read(pos).unwrap().unwrap();
+    assert_eq!(record.compression, Compression::None);
+    assert_eq!(record.compressed, payload);
+    assert_eq!(record.timestamp, 0);
+    fs::remove_file(&external).unwrap();
+    assert!(reader.read(pos).unwrap().is_none());
+}
+
+/// `getChunkDataInputStream` answers `null` for a stub whose `.mcc` is not a
+/// regular file, so the chunk is absent rather than damaged.
+#[test]
+fn a_stub_without_its_mcc_is_an_absent_chunk() {
+    let dir = Directory::new();
+    let pos = ChunkPos::new(-32, 0);
+    malformed_region(&dir.region(), 0x0000_0201, 0, 1, 3 | 128);
+    let mut reader = RegionFile::open(dir.region()).unwrap();
+    assert!(reader.read(pos).unwrap().is_none());
 }
 
 #[test]
@@ -323,4 +426,91 @@ fn benchmark_saving_into_a_full_region() {
     }
     let in_place = start.elapsed() / rounds as u32;
     println!("one chunk into a full region: rewrite {rewrite:?}, in place {in_place:?}");
+}
+
+/// `RegionFileStorage.read` reads the root straight off the decompressing
+/// stream (#5064): bytes after it and a damaged stream past it are never read,
+/// so the chunk loads. A root cut short still fails.
+#[test]
+fn a_chunk_loads_whatever_follows_its_root() {
+    let root = NamedTag {
+        name: JavaString::default(),
+        tag: Tag::compound([("x", Tag::Int(7))]),
+    };
+    let bytes = horizon_world::nbt::write_named(&root, Limits::saved()).unwrap();
+    let record = |compression: Compression, compressed: Vec<u8>| ChunkRecord {
+        compression,
+        compressed,
+        timestamp: 0,
+    };
+    let with = |tail: &[u8]| [bytes.as_slice(), tail].concat();
+    let filler: Vec<u8> = (0..70_000).map(|i| (i * 31) as u8).collect();
+    let mut zlib_tail = Compression::Zlib.encode(&with(&filler)).unwrap();
+    let end = zlib_tail.len();
+    zlib_tail[end - 4..].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    let mut lz4_tail = Compression::Lz4.encode(&with(&filler)).unwrap();
+    // The second block's checksum: the first block holds the root.
+    let second = 21 + u32::from_le_bytes(lz4_tail[9..13].try_into().unwrap()) as usize;
+    lz4_tail[second + 17] ^= 0xff;
+    for (name, chunk) in [
+        (
+            "uncompressed, a byte after",
+            record(Compression::None, with(&[0xff])),
+        ),
+        (
+            "zlib, junk after",
+            record(
+                Compression::Zlib,
+                Compression::Zlib.encode(&with(b"junk")).unwrap(),
+            ),
+        ),
+        (
+            "gzip, junk after",
+            record(
+                Compression::Gzip,
+                Compression::Gzip.encode(&with(b"junk")).unwrap(),
+            ),
+        ),
+        (
+            "zlib, damaged checksum",
+            record(Compression::Zlib, zlib_tail),
+        ),
+        (
+            "lz4, damaged second block",
+            record(Compression::Lz4, lz4_tail),
+        ),
+    ] {
+        assert_eq!(chunk.nbt(Limits::saved()).unwrap(), root, "{name}");
+    }
+    let cut = Compression::Zlib.encode(&bytes[..bytes.len() - 2]).unwrap();
+    assert!(record(Compression::Zlib, cut).nbt(Limits::saved()).is_err());
+}
+
+/// `RegionFile.write` rewrites both header sectors from memory
+/// (`writeHeader`), so entries the constructor dropped as invalid (#5064:
+/// overlapping the header, empty, past the end) are zero on disk afterwards;
+/// their timestamps stay. Vanilla 26.3 leaves this file with these bytes.
+#[test]
+fn a_chunk_write_rewrites_the_whole_region_header() {
+    let dir = Directory::new();
+    let mut header = vec![0u8; 8192];
+    header[20..24].copy_from_slice(&[0, 0, 1, 1]); // slot 5: sector 1
+    header[200..204].copy_from_slice(&[0, 0, 5, 0]); // slot 50: no sectors
+    header[400..404].copy_from_slice(&[0, 0, 0x64, 1]); // slot 100: past the end
+    header[4096 + 20..4096 + 24].copy_from_slice(&12345u32.to_be_bytes());
+    fs::write(dir.region(), &header).unwrap();
+    let root = NamedTag {
+        name: JavaString::default(),
+        tag: Tag::compound([("x", Tag::Int(7))]),
+    };
+    let record = ChunkRecord::from_nbt(&root, Compression::Zlib, 1, Limits::saved()).unwrap();
+    let mut region = RegionFile::open_writable(dir.region(), false).unwrap();
+    region.write(ChunkPos::new(-32, 0), &record).unwrap();
+    drop(region);
+    let bytes = fs::read(dir.region()).unwrap();
+    assert_eq!(bytes[0..4], [0, 0, 2, 1]);
+    for slot in [5, 50, 100] {
+        assert_eq!(bytes[slot * 4..slot * 4 + 4], [0; 4], "slot {slot}");
+    }
+    assert_eq!(bytes[4096 + 20..4096 + 24], 12345u32.to_be_bytes());
 }

@@ -32,11 +32,29 @@ impl Game<'_> {
         }
     }
 
+    /// `GameModeSwitcherScreen.mouseReleased`: releasing the debug
+    /// modifier's own mouse button applies the hovered mode and closes the
+    /// screen, as the modifier key's release does (`keyReleased`). A modifier
+    /// bound to a keyboard key matches no mouse button.
+    pub(super) fn switcher_release(&mut self, button: winit::event::MouseButton) {
+        if horizon_client::game_mode_switcher::release_applies(
+            &keybinds::mouse_name(button),
+            self.settings.keys.get("key.debug.modifier"),
+        ) {
+            self.close_gamemode_switcher(true);
+        }
+    }
+
     pub(super) fn draw_gamemode_switcher(&mut self, batch: &mut HudBatch) {
         let (w, h) = (batch.width as i32, batch.height as i32);
         let Some(switcher) = &mut self.gamemode_switcher else {
             return;
         };
+        // GameModeSwitcherScreen: `GameNarrator.NO_TITLE`; its slots are no
+        // widgets, so it says how to navigate.
+        horizon_client::widgets::begin_screen(|| {
+            horizon_client::widgets::ScreenInfo::new("gamemode_switcher", "")
+        });
         switcher.hover(w, h, (self.cursor.0 as i32, self.cursor.1 as i32));
         let selected = switcher.selected;
         let atlas = &self.gui.atlas;

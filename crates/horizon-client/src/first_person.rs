@@ -12,6 +12,8 @@
 #[derive(Clone, Copy, Debug)]
 pub enum ItemPose {
     Swing,
+    /// A STAB swing (`SwingAnimationType` 2): a spear's jab.
+    Stab,
     Using,
     Eat {
         remaining: f32,
@@ -25,6 +27,12 @@ pub enum ItemPose {
     SpinAttack,
     Bow {
         ticks_used: f32,
+    },
+    /// A brush in use (`ItemUseAnimation.BRUSH`): the ticks left of the use
+    /// and the partial tick.
+    Brush {
+        remaining: f32,
+        partial: f32,
     },
     /// A spear being charged (`ItemUseAnimation.SPEAR`): the time held and
     /// the ticks since its last hit's feedback.
@@ -76,6 +84,9 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     if matches!(pose, ItemPose::Using) {
         return m;
     }
+    if let ItemPose::Brush { remaining, partial } = pose {
+        return m * brush_transform(left, remaining, partial);
+    }
     // The spear's own place in the hand, without the equip height.
     if let ItemPose::Spear {
         kinetic,
@@ -85,6 +96,9 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     {
         return Mat4::from_translation(Vec3::new(invert * 0.56, -0.52, -0.72))
             * crate::spear::first_person_use(&kinetic, ticks_since_hit, time_held, !left);
+    }
+    if matches!(pose, ItemPose::Stab) {
+        return m * crate::spear::first_person_attack(attack, !left);
     }
     if matches!(pose, ItemPose::SpinAttack) {
         return m
@@ -154,6 +168,128 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     m
 }
 
+/// Combat feel Legacy's first-person item (`docs/pvp.md`): Minecraft 1.8.9's
+/// `ItemRenderer.renderItemInFirstPerson` for a flat item, drawn through 26.3's
+/// model. 1.8.9 posed the item (`transformFirstPersonItem`: the arm's place,
+/// 45° about Y, the swing's turns, a 0.4 scale), then applied its own
+/// `firstperson` display (`[0, -135, 25]`, `[0, 4, 2]`, `1.7`, rotated Y, X,
+/// Z) and `RenderItem`'s 0.5 scale. 26.3 applies `firstperson_righthand`
+/// (`[0, -90, 25]`, `[1.13, 3.2, 1.13]`, `0.68`) itself after this pose, so
+/// the pose ends with its inverse ([`MODERN_FLAT_DISPLAY`]). `block` is a
+/// sword held up while use is held: 1.8.9's `doBlockTransformations`, with
+/// the swing's turns kept as 1.7.10 kept them (hitting while blocking swings
+/// the sword). None for the poses 1.8.9 had no form of (crossbow, trident,
+/// spear, brush), which stay modern.
+pub fn legacy_item_pose(
+    left: bool,
+    inverse_height: f32,
+    attack: f32,
+    pose: ItemPose,
+    block: bool,
+) -> Option<glam::Mat4> {
+    use glam::{Mat4, Vec3};
+    let deg = |d: f32| d.to_radians();
+    let pi = std::f32::consts::PI;
+    let sin = |v: f32| v.sin();
+    // transformFirstPersonItem(equipProgress, swingProgress).
+    let first_person = |swing: f32| {
+        let f = sin(swing * swing * pi);
+        let f1 = sin(swing.sqrt() * pi);
+        Mat4::from_translation(Vec3::new(0.56, -0.52 - inverse_height * 0.6, -0.72))
+            * Mat4::from_rotation_y(deg(45.0))
+            * Mat4::from_rotation_y(deg(f * -20.0))
+            * Mat4::from_rotation_z(deg(f1 * -20.0))
+            * Mat4::from_rotation_x(deg(f1 * -80.0))
+            * Mat4::from_scale(Vec3::splat(0.4))
+    };
+    let m = match pose {
+        _ if block => {
+            // doBlockTransformations.
+            first_person(attack)
+                * Mat4::from_translation(Vec3::new(-0.5, 0.2, 0.0))
+                * Mat4::from_rotation_y(deg(30.0))
+                * Mat4::from_rotation_x(deg(-80.0))
+                * Mat4::from_rotation_y(deg(60.0))
+        }
+        ItemPose::Swing => {
+            // doItemUsedTransformations, then transformFirstPersonItem.
+            let root = attack.sqrt();
+            Mat4::from_translation(Vec3::new(
+                -0.4 * sin(root * pi),
+                0.2 * sin(root * pi * 2.0),
+                -0.2 * sin(attack * pi),
+            )) * first_person(attack)
+        }
+        ItemPose::Using => first_person(0.0),
+        ItemPose::Eat {
+            remaining,
+            duration,
+            partial,
+        } => {
+            // performDrinking.
+            let time = remaining - partial + 1.0;
+            let fraction = time / duration;
+            let bob = if fraction >= 0.8 {
+                0.0
+            } else {
+                ((time / 4.0 * pi).cos() * 0.1).abs()
+            };
+            let j = 1.0 - horizon_core::jmath::pow(f64::from(fraction), 27.0) as f32;
+            Mat4::from_translation(Vec3::new(0.0, bob, 0.0))
+                * Mat4::from_translation(Vec3::new(j * 0.6, j * -0.5, 0.0))
+                * Mat4::from_rotation_y(deg(j * 90.0))
+                * Mat4::from_rotation_x(deg(j * 10.0))
+                * Mat4::from_rotation_z(deg(j * 30.0))
+                * first_person(0.0)
+        }
+        ItemPose::Bow { ticks_used } => {
+            // doBowTransformations.
+            let power = (ticks_used / 20.0 * (ticks_used / 20.0) + ticks_used / 20.0 * 2.0) / 3.0;
+            let power = power.min(1.0);
+            let mut m = first_person(0.0)
+                * Mat4::from_rotation_z(deg(-18.0))
+                * Mat4::from_rotation_y(deg(-12.0))
+                * Mat4::from_rotation_x(deg(-8.0))
+                * Mat4::from_translation(Vec3::new(-0.9, 0.2, 0.0));
+            if power > 0.1 {
+                let shake = sin((ticks_used - 0.1) * 1.3) * (power - 0.1);
+                m *= Mat4::from_translation(Vec3::new(0.0, shake * 0.01, 0.0));
+            }
+            m * Mat4::from_translation(Vec3::new(0.0, 0.0, power * 0.1))
+                * Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0 + power * 0.2))
+        }
+        _ => return None,
+    };
+    // 1.8.9's `firstperson` display and RenderItem's 0.5, then 26.3's display undone.
+    let legacy_display = Mat4::from_translation(Vec3::new(0.0, 4.0, 2.0) / 16.0)
+        * Mat4::from_rotation_y(deg(-135.0))
+        * Mat4::from_rotation_z(deg(25.0))
+        * Mat4::from_scale(Vec3::splat(1.7))
+        * Mat4::from_scale(Vec3::splat(0.5));
+    let right = m * legacy_display * modern_flat_display(false).inverse();
+    // 1.8.9 had only a right main arm: the left arm mirrors it.
+    let mirror = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+    Some(if left { mirror * right * mirror } else { right })
+}
+/// 26.3's `firstperson_righthand` display of a flat item (`item/generated` and
+/// `item/handheld`), on the `left` hand mirrored as `ItemTransform.apply` does,
+/// without the model's centring translation.
+pub fn modern_flat_display(left: bool) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    let s = if left { -1.0 } else { 1.0 };
+    Mat4::from_translation(Vec3::new(s * 1.13, 3.2, 1.13) / 16.0)
+        * Mat4::from_rotation_y((s * -90.0f32).to_radians())
+        * Mat4::from_rotation_z((s * 25.0f32).to_radians())
+        * Mat4::from_scale(Vec3::splat(0.68))
+}
+/// Whether a model layer's matrix is 26.3's flat-item first-person display (a resource
+/// pack's own display keeps the modern pose).
+pub fn is_modern_flat_display(matrix: &glam::Mat4, left: bool) -> bool {
+    let expected =
+        modern_flat_display(left) * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+    matrix.abs_diff_eq(expected, 1e-4)
+}
+
 /// How `submitArmWithItem` holds a stack with a `minecraft:map_id`: in both
 /// hands when it is the main hand's and the off hand is empty
 /// (`renderTwoHandedMap`), else in its own hand (`renderOneHandedMap`).
@@ -172,8 +308,118 @@ impl MapHold {
     }
 }
 
+/// `FirstPersonHandsAndItemsRenderer.applyBrushTransform`: the brush in use,
+/// swept back and forth by the ticks left of its use (`remaining`).
+fn brush_transform(left: bool, remaining: f32, partial: f32) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    use horizon_core::geometry::trig::Mth;
+    let ticks = remaining % 10.0;
+    let delta = ticks - partial + 1.0;
+    let scaled = 1.0 - delta / 10.0;
+    let swipe = -15.0 + 75.0 * (scaled * 2.0 * std::f32::consts::PI).mcos();
+    let sweep = Mat4::from_rotation_x(swipe.to_radians());
+    if left {
+        Mat4::from_translation(Vec3::new(0.1, 0.83, 0.35))
+            * Mat4::from_rotation_x((-80.0f32).to_radians())
+            * Mat4::from_rotation_y((-90.0f32).to_radians())
+            * sweep
+            * Mat4::from_translation(Vec3::new(-0.3, 0.22, 0.35))
+    } else {
+        Mat4::from_translation(Vec3::new(-0.25, 0.22, 0.35))
+            * Mat4::from_rotation_x((-80.0f32).to_radians())
+            * Mat4::from_rotation_y(90.0f32.to_radians())
+            * sweep
+    }
+}
+
+/// `renderPlayerArm` up to `renderPlayerHand`: the pose of the bare `left`
+/// or right arm.
+pub fn player_arm_pose(left: bool, inverse_height: f32, attack: f32) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    use horizon_core::geometry::trig::Mth;
+    let f = if left { -1.0 } else { 1.0 };
+    let pi = std::f32::consts::PI;
+    let root = attack.sqrt();
+    let x = -0.3 * (root * pi).msin();
+    let y = 0.4 * (root * std::f32::consts::TAU).msin();
+    let z = -0.4 * (attack * pi).msin();
+    let z_rot = (attack * attack * pi).msin();
+    let y_rot = (root * pi).msin();
+    let deg = |d: f32| d.to_radians();
+    Mat4::from_translation(Vec3::new(
+        f * (x + 0.640_000_05),
+        y - 0.6 + inverse_height * -0.6,
+        z + -0.719_999_97,
+    )) * Mat4::from_rotation_y(deg(f * 45.0))
+        * Mat4::from_rotation_y(deg(f * y_rot * 70.0))
+        * Mat4::from_rotation_z(deg(f * z_rot * -20.0))
+        * Mat4::from_translation(Vec3::new(-f, 3.6, 3.5))
+        * Mat4::from_rotation_z(deg(f * 120.0))
+        * Mat4::from_rotation_x(deg(200.0))
+        * Mat4::from_rotation_y(deg(f * -135.0))
+        * Mat4::from_translation(Vec3::new(f * 5.6, 0.0, 0.0))
+}
+
+/// `renderTwoHandedMap` up to its arms: the swing, the tilt from the view
+/// pitch (`calculateMapTilt`) and the turn towards the player.
+pub fn two_handed_map_base(pitch: f32, inverse_height: f32, attack: f32) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    use horizon_core::geometry::trig::Mth;
+    let pi = std::f32::consts::PI;
+    let y_swing = -0.2 * (attack * pi).msin();
+    let z_swing = -0.4 * (attack.sqrt() * pi).msin();
+    let tilt = (1.0 - pitch / 45.0 + 0.1).clamp(0.0, 1.0);
+    let tilt = -(tilt * pi).mcos() * 0.5 + 0.5;
+    Mat4::from_translation(Vec3::new(0.0, -y_swing / 2.0, z_swing))
+        * Mat4::from_translation(Vec3::new(
+            0.0,
+            0.04 + inverse_height * -1.2 + tilt * -0.5,
+            -0.72,
+        ))
+        * Mat4::from_rotation_x((tilt * -85.0).to_radians())
+}
+
+/// The arms under a held map, as (left arm, pose before `renderPlayerHand`):
+/// `renderOneHandedMap`'s arm turned 10 degrees outwards, or
+/// `renderTwoHandedMap`'s two `renderMapHand` arms under the map's
+/// `two_handed_map_base`. Vanilla skips them for an invisible player.
+pub fn map_arm_poses(
+    hold: MapHold,
+    left: bool,
+    pitch: f32,
+    inverse_height: f32,
+    attack: f32,
+) -> Vec<(bool, glam::Mat4)> {
+    use glam::{Mat4, Vec3};
+    let deg = |d: f32| d.to_radians();
+    match hold {
+        MapHold::OneHanded => {
+            let f = if left { -1.0 } else { 1.0 };
+            let m = Mat4::from_translation(Vec3::new(f * 0.125, -0.125, 0.0))
+                * Mat4::from_rotation_z(deg(f * 10.0))
+                * player_arm_pose(left, inverse_height, attack);
+            vec![(left, m)]
+        }
+        MapHold::TwoHanded => {
+            let base = two_handed_map_base(pitch, inverse_height, attack)
+                * Mat4::from_rotation_y(deg(90.0));
+            [false, true]
+                .into_iter()
+                .map(|left| {
+                    let f = if left { -1.0 } else { 1.0 };
+                    let hand = Mat4::from_rotation_y(deg(92.0))
+                        * Mat4::from_rotation_x(deg(45.0))
+                        * Mat4::from_rotation_z(deg(f * -41.0))
+                        * Mat4::from_translation(Vec3::new(f * 0.3, -1.1, 0.45));
+                    (left, base * hand)
+                })
+                .collect()
+        }
+    }
+}
+
 /// `renderOneHandedMap` up to `renderMap`: the pose of a map in the hand on
-/// the `left` or right arm (the arm under it is not drawn).
+/// the `left` or right arm (its arm: [`map_arm_poses`]).
 pub fn one_handed_map_pose(left: bool, inverse_height: f32, attack: f32) -> glam::Mat4 {
     use glam::{Mat4, Vec3};
     use horizon_core::geometry::trig::Mth;
@@ -355,13 +601,24 @@ impl HandHeights {
     /// `getItemSwapScale(1.0F)`. Returns whether each hand's visible item
     /// is replaced at the end.
     pub fn tick(&mut self, hands_busy: bool, swap_scale: f32, changed: [bool; 2]) -> [bool; 2] {
+        self.tick_with(hands_busy, swap_scale, changed, false)
+    }
+    /// [`Self::tick`]; `legacy` (Combat feel Legacy) raises the main hand fully whatever the
+    /// attack strength, as 1.8.9's `ItemRenderer.updateEquippedItem` did (no dip after a hit).
+    pub fn tick_with(
+        &mut self,
+        hands_busy: bool,
+        swap_scale: f32,
+        changed: [bool; 2],
+        legacy: bool,
+    ) -> [bool; 2] {
         self.old_main = self.main;
         self.old_off = self.off;
         if hands_busy {
             self.main = (self.main - 0.4).clamp(0.0, 1.0);
             self.off = (self.off - 0.4).clamp(0.0, 1.0);
         } else {
-            let attack = swap_scale;
+            let attack = if legacy { 1.0 } else { swap_scale };
             let main_target = if changed[0] {
                 0.0
             } else {
@@ -390,6 +647,23 @@ impl HandHeights {
     }
 }
 
+/// `FirstPersonHandsAndItemsRenderer.submit`: the displayed stack's model
+/// scales the interpolated equip displacement independently for each hand.
+pub fn equip_displacement(height: f32, swap_animation_scale: f32) -> f32 {
+    swap_animation_scale * (1.0 - height)
+}
+
+/// `Mth.wrapDegrees`: an angle difference in -180..=180.
+fn wrap_degrees(d: f32) -> f32 {
+    let d = d % 360.0;
+    if d >= 180.0 {
+        d - 360.0
+    } else if d < -180.0 {
+        d + 360.0
+    } else {
+        d
+    }
+}
 /// `LocalPlayer.xBob` and `yBob`: the hands lag behind the view when it
 /// turns. `LocalPlayer.applyInput` eases them halfway to the rotation every
 /// tick; `FirstPersonHandsAndItemsRenderer` turns the hands by a tenth of
@@ -400,6 +674,8 @@ pub struct HandSway {
     pub y_bob: f32,
     pub x_bob_o: f32,
     pub y_bob_o: f32,
+    /// The yaw `tick_wrapped` has followed so far, unwrapped like vanilla's.
+    y_rot: f32,
 }
 impl HandSway {
     /// `LocalPlayer.applyInput` with the player's `getXRot` and `getYRot`.
@@ -409,13 +685,34 @@ impl HandSway {
         self.x_bob += (x_rot - self.x_bob) * 0.5;
         self.y_bob += (y_rot - self.y_bob) * 0.5;
     }
+    /// `tick` for a yaw kept in -180..180 (a boat turns its rider through the wrap). Vanilla's
+    /// yaw runs on without wrapping, so `yRot - yBob` is always the short way round; this
+    /// follows the wrapped yaw by its short steps to give `tick` the same unwrapped yaw.
+    pub fn tick_wrapped(&mut self, x_rot: f32, y_rot: f32) {
+        self.y_rot += wrap_degrees(y_rot - self.y_rot);
+        self.tick(x_rot, self.y_rot);
+    }
     /// The degrees the hands turn about X, then Y, before either is drawn:
     /// `(viewXRot - xBob) * 0.1` and `(viewYRot - yBob) * 0.1`, the bobs
     /// interpolated as `extractRenderState` does.
     pub fn rotation(&self, partial: f32, view_x_rot: f32, view_y_rot: f32) -> [f32; 2] {
         let x_bob = crate::camera::lerp(partial, self.x_bob_o, self.x_bob);
         let y_bob = crate::camera::lerp(partial, self.y_bob_o, self.y_bob);
-        [(view_x_rot - x_bob) * 0.1, (view_y_rot - y_bob) * 0.1]
+        [
+            (view_x_rot - x_bob) * 0.1,
+            wrap_degrees(view_y_rot - y_bob) * 0.1,
+        ]
+    }
+    /// The hands' view space to camera-relative world space, turned by the
+    /// sway. The hand pass draws with the camera's view, whose rotation a
+    /// ridden boat's turn spreads over the frames of a tick
+    /// (`LocalPlayer.getViewYRot`): anything else swings the hands back and
+    /// forth by that turn, up to 10 degrees, 20 times a second (#4583).
+    pub fn to_world(&self, partial: f32, camera: &crate::camera::Camera) -> glam::Mat4 {
+        let [x, y] = self.rotation(partial, camera.x_rot, camera.y_rot);
+        crate::camera::view_matrix(camera.y_rot, camera.x_rot).inverse()
+            * glam::Mat4::from_rotation_x(x.to_radians())
+            * glam::Mat4::from_rotation_y(y.to_radians())
     }
 }
 
@@ -786,6 +1083,80 @@ impl Clicks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equip_displacement_uses_the_visible_items_scale() {
+        use horizon_assets::item_model::{ClientItem, ItemModels, StackView};
+        use serde_json::json;
+
+        let mut models = ItemModels::default();
+        for (item, scale) in [("minecraft:spear", 1.95), ("minecraft:sword", 1.0)] {
+            models.definitions.insert(
+                item.into(),
+                ClientItem::decode(&json!({
+                    "model": { "type": "minecraft:empty" },
+                    "swap_animation_scale": scale,
+                }))
+                .unwrap(),
+            );
+            models.prototypes.insert(
+                item.into(),
+                [("minecraft:item_model".into(), json!(item))].into(),
+            );
+        }
+        let spear = StackView::new("minecraft:spear", 1);
+        let sword = StackView::new("minecraft:sword", 1);
+        let height = 0.5;
+        // The model of the visible stack determines each hand's displacement.
+        assert_eq!(
+            equip_displacement(height, models.swap_animation_scale(&spear)),
+            0.975
+        );
+        assert_eq!(
+            equip_displacement(height, models.swap_animation_scale(&sword)),
+            0.5
+        );
+        assert_eq!(
+            equip_displacement(1.0, models.swap_animation_scale(&spear)),
+            0.0
+        );
+
+        // A component override (such as a resource-pack model) takes precedence.
+        let mut overridden = spear;
+        overridden.patch.insert(
+            "minecraft:item_model".into(),
+            Some(json!("minecraft:sword")),
+        );
+        assert_eq!(
+            equip_displacement(height, models.swap_animation_scale(&overridden)),
+            0.5
+        );
+    }
+
+    /// #4583: while a boat turns the player steadily, the hands keep their
+    /// place on screen through every frame of a tick.
+    #[test]
+    fn the_hands_hold_still_on_screen_while_a_boat_turns() {
+        const TURN: f32 = 10.0;
+        let mut sway = HandSway::default();
+        let mut yaw = 0.0;
+        for _ in 0..30 {
+            sway.tick(0.0, yaw);
+            yaw += TURN;
+        }
+        let on_screen = |partial: f32| {
+            let camera = crate::camera::Camera {
+                y_rot: yaw - TURN * (1.0 - partial),
+                ..Default::default()
+            };
+            crate::camera::view_matrix(camera.y_rot, 0.0) * sway.to_world(partial, &camera)
+        };
+        let first = on_screen(0.0);
+        for partial in [0.25, 0.5, 0.75, 0.99] {
+            let frame = on_screen(partial);
+            assert!(frame.abs_diff_eq(first, 1.0e-3), "{partial}: {frame:?}");
+        }
+    }
     #[test]
     fn drawing_a_bow_or_holding_a_charged_crossbow_hides_a_hand() {
         let (bow, apple) = (
@@ -860,6 +1231,67 @@ mod tests {
         assert_eq!(swing_duration(d, None, None), 6);
         assert_eq!(swing_duration(d, Some(1), Some(0)), 4);
         assert_eq!(swing_duration(d, None, Some(2)), 12);
+    }
+
+    #[test]
+    fn legacy_hand_puts_a_flat_item_where_1_8_9_drew_it() {
+        use glam::{Mat4, Vec3};
+        // At rest, the item's centre (model (0.5, 0.5, 0.5)) ends where 1.8.9's chain puts it:
+        // translate(0.56, -0.52, -0.72) . rotY(45) . scale(0.4) . translate((0, 4, 2) / 16)
+        // . ... . scale(0.5) . translate(-0.5): the centre is (0, 0.25, 0.125) scaled by 0.4,
+        // turned 45 degrees about Y.
+        let pose = legacy_item_pose(false, 0.0, 0.0, ItemPose::Swing, false).unwrap();
+        let layer = modern_flat_display(false) * Mat4::from_translation(Vec3::splat(-0.5));
+        let centre = (pose * layer).transform_point3(Vec3::splat(0.5));
+        let c45 = std::f32::consts::FRAC_1_SQRT_2;
+        let expected = Vec3::new(0.56 + 0.05 * c45, -0.52 + 0.1, -0.72 + 0.05 * c45);
+        assert!(centre.abs_diff_eq(expected, 1e-4), "{centre} vs {expected}");
+        // The left arm mirrors it.
+        let left = legacy_item_pose(true, 0.0, 0.0, ItemPose::Swing, false).unwrap();
+        let left_layer = modern_flat_display(true) * Mat4::from_translation(Vec3::splat(-0.5));
+        let l = (left * left_layer).transform_point3(Vec3::splat(0.5));
+        assert!(l.abs_diff_eq(Vec3::new(-expected.x, expected.y, expected.z), 1e-4));
+        // Lowered by the equip height: 0.6 of it, straight down.
+        let low = legacy_item_pose(false, 0.5, 0.0, ItemPose::Swing, false).unwrap();
+        let c = (low * layer).transform_point3(Vec3::splat(0.5));
+        assert!(c.abs_diff_eq(expected - Vec3::new(0.0, 0.3, 0.0), 1e-4));
+        // A blocking sword sits elsewhere, and poses 1.8.9 lacked stay modern.
+        let block = legacy_item_pose(false, 0.0, 0.0, ItemPose::Using, true).unwrap();
+        assert!(
+            !(block * layer)
+                .transform_point3(Vec3::splat(0.5))
+                .abs_diff_eq(expected, 0.01)
+        );
+        let trident = ItemPose::Trident { ticks_used: 3.0 };
+        assert!(legacy_item_pose(false, 0.0, 0.0, trident, false).is_none());
+    }
+
+    #[test]
+    fn legacy_hand_does_not_dip_after_a_hit() {
+        // Just after a hit the attack strength is 0: 26.3 lowers the main hand to 0,
+        // 1.8.9 keeps it up (it only lowers on an item change).
+        let mut modern = HandHeights {
+            main: 1.0,
+            old_main: 1.0,
+            off: 1.0,
+            old_off: 1.0,
+        };
+        let mut legacy = modern;
+        modern.tick_with(false, 0.0, [false; 2], false);
+        legacy.tick_with(false, 0.0, [false; 2], true);
+        assert!((modern.main - 0.6).abs() < 1e-6, "falls 0.4 a tick");
+        assert_eq!(legacy.main, 1.0);
+        // An item change still lowers it.
+        legacy.tick_with(false, 1.0, [true, false], true);
+        assert!((legacy.main - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_flat_display_check_knows_vanillas_matrix() {
+        let m = modern_flat_display(false) * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+        assert!(is_modern_flat_display(&m, false));
+        assert!(!is_modern_flat_display(&m, true));
+        assert!(!is_modern_flat_display(&glam::Mat4::IDENTITY, false));
     }
 }
 
@@ -942,6 +1374,83 @@ mod item_pose_tests {
                     "{left} {inverse_height} {attack}: {got:?}"
                 );
             }
+        }
+    }
+    #[test]
+    fn maps_draw_the_arms_under_them_as_vanilla() {
+        // PoseStack.last().pose() (column-major) where renderOneHandedMap's
+        // renderPlayerArm and renderTwoHandedMap's renderMapHand call
+        // renderPlayerHand, replayed with vanilla's PoseStack, Axis and Mth.
+        let near = |got: glam::Mat4, want: [f32; 16], what: &str| {
+            let got = got.to_cols_array();
+            for (g, w) in got.iter().zip(want) {
+                assert!((g - w).abs() < 1e-5, "{what}: {got:?}");
+            }
+        };
+        // (left, inverse height, attack, arm)
+        #[rustfmt::skip]
+        let one: [(bool, f32, f32, [f32; 16]); 3] = [
+            (false, 0.0, 0.0, [
+                -0.2350201, -0.7860474, -0.5717472, 0.0,
+                0.24694103, 0.52063686, -0.8172866, 0.0,
+                0.9400987, -0.33326668, 0.07174723, 0.0,
+                0.65913033, -1.1543381, -0.73980355, 1.0,
+            ]),
+            (true, 0.25, 0.3, [
+                -0.4967606, 0.84289914, -0.20676011, 0.0,
+                0.7202682, 0.2674863, -0.6400506, 0.0,
+                -0.4841926, -0.46687466, -0.7399901, 0.0,
+                -0.59715486, -1.4160433, -0.7328731, 1.0,
+            ]),
+            (false, 0.6, 0.85, [
+                -0.47358897, -0.8403256, -0.2637542, 0.0,
+                0.081554025, 0.25634, -0.96313995, 0.0,
+                0.87696207, -0.47764266, -0.052867785, 0.0,
+                0.61887383, -1.6482887, -0.7229744, 1.0,
+            ]),
+        ];
+        for (left, inverse_height, attack, want) in one {
+            let arms = map_arm_poses(MapHold::OneHanded, left, 0.0, inverse_height, attack);
+            assert_eq!(arms.len(), 1, "one arm under a one-handed map");
+            assert_eq!(arms[0].0, left, "the arm of the hand holding it");
+            near(
+                arms[0].1,
+                want,
+                &format!("one {left} {inverse_height} {attack}"),
+            );
+        }
+        // (pitch, inverse height, attack, right arm, left arm)
+        #[rustfmt::skip]
+        let two: [(f32, f32, f32, [f32; 16], [f32; 16]); 2] = [
+            (0.0, 0.0, 0.0, [
+                -0.7380599, 0.44766384, 0.50484115, 0.0,
+                -0.67428374, -0.46198538, -0.57611704, 0.0,
+                -0.024677532, -0.76561517, 0.64282537, 0.0,
+                0.5091893, -0.16204369, 0.3544525, 1.0,
+            ], [
+                -0.77043974, -0.3951866, -0.50025004, 0.0,
+                0.637035, -0.5076031, -0.58010805, 0.0,
+                -0.024677532, -0.76561517, 0.64282537, 0.0,
+                -0.48071152, -0.12760738, 0.35746527, 1.0,
+            ]),
+            (30.0, 0.2, 0.5, [
+                -0.7380599, -0.11453738, 0.6649426, 0.0,
+                -0.67428374, 0.16124588, -0.72065324, 0.0,
+                -0.024677532, -0.98024535, -0.1962398, 0.0,
+                0.5091893, -0.9508533, -0.13439482, 1.0,
+            ], [
+                -0.77043974, 0.14373614, -0.6210978, 0.0,
+                0.637035, 0.13586378, -0.75876695, 0.0,
+                -0.024677532, -0.98024535, -0.1962398, 0.0,
+                -0.48071152, -0.9316926, -0.1056232, 1.0,
+            ]),
+        ];
+        for (pitch, inverse_height, attack, right, left) in two {
+            let arms = map_arm_poses(MapHold::TwoHanded, false, pitch, inverse_height, attack);
+            assert_eq!(arms.len(), 2, "both arms under a two-handed map");
+            assert_eq!((arms[0].0, arms[1].0), (false, true), "right, then left");
+            near(arms[0].1, right, &format!("two right {pitch}"));
+            near(arms[1].1, left, &format!("two left {pitch}"));
         }
     }
     #[test]
@@ -1091,5 +1600,23 @@ mod action_result_tests {
                 None
             );
         }
+    }
+
+    /// The hands' sway turns the short way round when the yaw wraps from 179 to -179 degrees (a
+    /// boat turning its rider), instead of swinging them 36 degrees the long way.
+    #[test]
+    fn hand_sway_takes_the_short_way_over_the_yaw_wrap() {
+        let mut sway = HandSway::default();
+        sway.tick_wrapped(0.0, 179.0);
+        for _ in 0..20 {
+            sway.tick_wrapped(0.0, 179.0);
+        }
+        // The view is still at 179; one tick later it reads -179 (2 degrees on).
+        sway.tick_wrapped(0.0, -179.0);
+        let [_, y] = sway.rotation(1.0, 0.0, -179.0);
+        assert!(
+            y.abs() < 0.5,
+            "a 2 degree turn sways the hands by under half a degree: {y}"
+        );
     }
 }

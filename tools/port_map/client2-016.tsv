@@ -1,0 +1,79 @@
+AbstractFriendsEntryContainerWidget	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+AbstractFriendsTab	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+AddFriendWidget	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+FriendEntry	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+FriendsListConfirmScreen	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+FriendsOverlayScreen	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+FriendsOverlayTabButton	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+FriendsTab	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+IncomingEntry	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+OutgoingEntry	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+PendingTab	skip:service		Mojang friends service UI (friend list, requests, presence): service. Horizon's Friends button opens its own invite-code screen (game/screens.rs)
+EffectsInInventory.extractRenderState	port	crates/horizon-client/src/game/potions.rs::Game::draw_inventory_effects	panel layout and visibility beside the survival and creative inventories; drawn by inventory_effects::paint
+EffectsInInventory.extractEffects	port	crates/horizon-client-render/src/inventory_effects.rs::paint	one row per effect: icon, then text and background
+EffectsInInventory.extractBackground	port	crates/horizon-client-render/src/inventory_effects.rs::background	nine-slice panel background, ambient variant included
+EffectsInInventory.extractText	port	crates/horizon-client-render/src/inventory_effects.rs::paint	name and duration text, clipping with ..., hover tooltip for compact panels
+EffectsInInventory.getEffectName	inline	crates/horizon-client-render/src/inventory_effects.rs::panels	name plus level suffix for amplifier 1-9, folded into panels
+EnchantmentNames.getRandomName	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	galactic word names from the enchant seed (WORDS), drawn in the enchanting option slots
+EnchantmentScreen.init	skip:ui		creates the book model for drawing only; the book itself is not drawn (see extractBook)
+EnchantmentScreen.containerTick	port	crates/horizon-client/src/game/locator_bar.rs::Game::track_experience_display	gap: player: keeps the experience bar up while the table is open; the book tick (tickBook) is not run
+EnchantmentScreen.extractBook	port	crates/horizon-client/src/item_render/gui.rs::draw_enchanting_book	the open book over the table, drawn from the book's own open amount and flip
+EnchantmentScreen.tickBook	port	crates/horizon-client/src/game/stations.rs::Game::tick_enchanting_book	the book opens for an offer and turns when the item or the offers change
+GrindstoneScreen.extractBackground	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	grindstone texture and the error sprite when an input is set and there is no result
+HangingSignEditScreen.extractSignBackground	port	crates/horizon-client/src/game/sign_edit.rs::Game::draw_sign_editor	hanging sign board at 4.5x scale
+HopperScreen.extractBackground	port	crates/horizon-client/src/game/machines.rs::Game::draw_machine_screen	hopper background for block and minecart hoppers
+HorseInventoryScreen.shouldRenderSaddleSlot	port	crates/horizon-client/src/game/mount_menu.rs::shows_saddle	saddle slot shown for every mount except llamas
+HorseInventoryScreen.shouldRenderArmorSlot	port	crates/horizon-client/src/game/mount_menu.rs::shows_body	armour slot for horse armour wearers and llamas
+InventoryScreen.containerTick	port	crates/horizon-client/src/game/game_mode.rs::inventory_after_mode	the survival inventory becomes the creative one when the player gets infinite materials; a spectator's is still closed
+InventoryScreen.init	inline	crates/horizon-client/src/game/play_keys.rs::Game::key_pressed	gap: minor: the creative screen is chosen when E opens the inventory; no switch while a survival screen is already open
+InventoryScreen.getRecipeBookButtonPosition	port	crates/horizon-client/src/game/recipe_book.rs::Game::book_button_pos	book button at (leftPos+104, height/2-22), same as the crafting placement
+InventoryScreen.extractLabels	inline	crates/horizon-client/src/game.rs::Game::draw_inventory	Crafting title at x 97 in the survival inventory
+InventoryScreen.extractRenderState	inline	crates/horizon-client/src/game.rs::Game::draw_inventory	effect panels (draw_inventory_effects), slots and widgets
+InventoryScreen.extractBackground	inline	crates/horizon-client/src/game.rs::Game::draw_inventory	background texture and the player preview (draw_inventory_player)
+InventoryScreen.extractEntityInInventoryFollowsMouse	port	crates/horizon-client/src/game/perspective.rs::Game::draw_player_preview	gap: minor: player only; mounts use mount_menu.rs::draw_mob_preview. Head and body turn toward the cursor as vanilla
+InventoryScreen.mouseReleased	inline	crates/horizon-client/src/game/inventory_input.rs::Game::inventory_mouse_release	release goes through the slot path; a recipe-book press is handled first and has no separate release flag
+ItemCombinerScreen.extractBackground	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	anvil and smithing backgrounds, with the error sprite
+JigsawBlockEditScreen	home	crates/horizon-client/src/game/block_editor.rs	boxes, priority tooltips (`edit_tooltip`, in `jigsaw_edit.rs`), joint/levels/generate; the screen shell is `block_editor.rs`
+LecternScreen.createMenuControls	port	crates/horizon-client/src/game/books.rs::Game::book_click	Done is always drawn; Take Book only when the lectern allows building (`Game::may_build`)
+LoomScreen.init	skip:ui		bakes the banner flag model for the preview; the loom is drawn by screen_layout::loom
+LoomScreen.isScrollBarActive	port	crates/horizon-client/src/game/loom.rs::LoomState::offscreen_rows	gap: minor: more than 16 patterns (four rows of four); the displayPatterns check is at the call sites
+LoomScreen.extractBannerOnButton	port	crates/horizon-client/src/game/loom.rs::Game::paint_screen	grey square and pattern sprite on each pattern button (Fill and Atlas draws from screen_layout::loom)
+LoomScreen.hasClickedOutside	port	crates/horizon-client/src/game/inventory_input.rs::Game::clicked_outside	outside test against the container rectangle, plus the recipe book area
+MerchantScreen.postButtonClick	port	crates/horizon-client/src/game/trading.rs::Game::try_move_items	selection hint, move the offer's items, and the SelectTrade packet on a server
+MerchantScreen.init	skip:ui		trade buttons are laid out in draw_merchant and hit-tested in merchant_click
+MerchantScreen.extractLabels	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	title with the trader level, Trades and Inventory labels
+MerchantScreen.extractBackground	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	villager background and the out-of-stock sprite
+MerchantScreen.extractProgressBar	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	experience bar, with the pending trade's XP
+MerchantScreen.extractScroller	port	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	the thumb's sprite and its cursor (a hand, the vertical resize while dragged); the disabled sprite below 8 offers
+MerchantScreen.extractContents	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	the seven offer rows from the scroll offset
+MerchantScreen.extractButtonArrows	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	trade arrow, and the out-of-stock arrow
+MerchantScreen.extractAndDecorateCostA	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	discount: base count struck through, new count drawn (merchant.rs cost_a)
+MerchantScreen.mouseScrolled	port	crates/horizon-client/src/game/trading.rs::Game::merchant_scroll	gap: minor: one offer per wheel step; vanilla uses the float scroll amount
+MerchantScreen.mouseDragged	port	crates/horizon-client/src/game/trading.rs::Game::merchant_drag	the scroller takes presses only past seven offers and picks the nearest one
+MerchantScreen.mouseClicked	port	crates/horizon-client/src/game/trading.rs::Game::merchant_click	a press inside the scroller's 139-px track starts the drag (dragging set, merchant_drag follows the pointer), only past seven offers; otherwise the offer buttons are hit-tested
+MerchantScreen.TradeOfferButton.extractToolTip	inline	crates/horizon-client/src/game/trading.rs::Game::draw_merchant	item tooltip for cost A, cost B or the result under the hovered offer
+MinecartCommandBlockEditScreen.populateAndSendPacket	port	crates/horizon-client/src/game/command_minecarts.rs::Game::open_cart_command_block	a game master's interact opens the editor on the cart's BaseCommandBlock, and the edit is written back to the cart
+PageButton.extractContents	inline	crates/horizon-client/src/game/books.rs::Game::draw_book	page arrows with their hover sprites (page_buttons)
+ShulkerBoxScreen.extractBackground	port	crates/horizon-client/src/game/storage.rs::Game::draw_chest_screen	shulker box background texture, drawn with the other container screens
+SignEditScreen.extractSignBackground	port	crates/horizon-client/src/game/sign_edit.rs::Game::draw_sign_editor	sign board at 3.9x scale, wall signs at 12 rows
+SmithingScreen.containerTick	port	crates/horizon-client/src/game/stations.rs::smithing_slot_icons	the empty slots' icons follow the template in the slot
+SmithingScreen.getTemplateItem	port	crates/horizon-client/src/game/stations.rs::smithing_slot_icons	the template's base and addition icons are picked there
+SmithingScreen.extractRenderState	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	gap: player: onboarding tooltips for empty slots are missing (see extractOnboardingTooltips)
+SmithingScreen.extractBackground	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	gap: player: the armour stand preview beside the slots is not drawn
+SmithingScreen.updateArmorStandPreview	port	crates/horizon-client/src/game/armor_stands.rs::Game::draw_smithing_armor_stand	the armour stand wearing the upgraded item, beside the slots
+SmithingScreen.extractErrorIcon	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	error sprite at (65, 46) when all inputs are set and there is no result
+SmithingScreen.extractOnboardingTooltips	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	gap: player: only the upgrade error tooltip exists; the missing-template and slot description tooltips are not drawn
+StonecutterScreen.extractBackground	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	background, scroller and the recipe grid
+StonecutterScreen.extractTooltip	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	tooltip of the hovered recipe result
+StonecutterScreen.extractButtons	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	recipe cell sprites: selected and highlighted
+StonecutterScreen.extractRecipes	inline	crates/horizon-client/src/game/stations.rs::Game::draw_station	recipe result icons in the grid
+StonecutterScreen.mouseDragged	port	crates/horizon-client/src/game/stations.rs::stonecutter_drag_offs	the dragged scroller's offset picks the recipe row
+StonecutterScreen.mouseScrolled	port	crates/horizon-client/src/game/stations.rs::Game::station_scroll	one row of recipes per wheel step, only with more than 12 recipes
+StonecutterScreen.isScrollBarActive	inline	crates/horizon-client/src/game/stations.rs::Game::station_scroll	more than 12 visible recipes
+StonecutterScreen.getOffscreenRows	inline	crates/horizon-client/src/game/stations.rs::Game::station_scroll	rows beyond the 3 visible rows, ceil(recipes/4) - 3
+StructureBlockEditScreen	home	crates/horizon-client/src/game/block_editor.rs	
+TestBlockEditScreen	home	crates/horizon-client/src/game/block_editor.rs	
+TestInstanceBlockEditScreen	home	crates/horizon-client/src/game/block_editor.rs	
+BelowOrAboveWidgetTooltipPositioner.positionTooltip	port	crates/horizon-client-render/src/ui.rs::focused_tooltip_position	the keyboard-focused tooltip below the widget, above it when it does not fit, with vanilla's margins
+ClientActivePlayersTooltip.getWidth	port	crates/horizon-client/src/multiplayer.rs::player_list	the sample's names are the tooltip's lines; its width comes from them (the status tooltip's own sizing)
+ClientActivePlayersTooltip.extractImage	inline	crates/horizon-client/src/multiplayer.rs::player_list	the sample names, styled by their § codes, become the tooltip's text lines, then and_more for the players the sample leaves out; gap: player: no player face is drawn beside each name (vanilla draws a 10x10 face per entry through PlayerFaceExtractor), so the tooltip is text only

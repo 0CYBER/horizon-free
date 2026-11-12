@@ -63,6 +63,8 @@ pub fn register(m: &mut Mob) {
             g.add(6, LookAtPlayer::new(6.0));
             g.add(7, RandomLookAround::default());
             m.extra.egg_time = m.random.next_int_bound(6000).unwrap_or(0) + 6000;
+            // `Chicken()`: water costs nothing.
+            m.set_malus(super::path::PathType::Water, 0.0);
         }
         _ => {}
     }
@@ -73,16 +75,20 @@ pub fn chicken_ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !m.on_ground && m.velocity.y < 0.0 {
         m.velocity.y *= 0.6;
     }
+    chicken_egg_step(m, events);
+}
+/// `Chicken.aiStep`: the server's egg timer runs even when NoAI skips goals.
+pub fn chicken_egg_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.alive() && !m.is_baby() && !m.extra.jockey {
         m.extra.egg_time -= 1;
         if m.extra.egg_time <= 0 {
             let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
             let at = [m.position.x, m.position.y, m.position.z];
-            events.push(MobEvent::Sound("entity.chicken.egg", at, 1.0, pitch));
-            events.push(MobEvent::GiftLoot {
+            // The sound and `entity_place` follow only a drop (`LayEgg`).
+            events.push(MobEvent::LayEgg {
                 mob: m.id,
-                table: "minecraft:gameplay/chicken_lay",
                 at,
+                pitch,
             });
             m.extra.egg_time = m.random.next_int_bound(6000).unwrap_or(0) + 6000;
         }
@@ -102,6 +108,16 @@ pub fn chicken_flap(m: &mut Mob) {
     }
     a.flapping *= 0.9;
     a.flap += a.flapping * 2.0;
+}
+/// `Chicken.isFlapping` and `Chicken.onFlap`: movement crosses a strict
+/// distance threshold, then schedules the next wing beat without a sound.
+pub fn chicken_process_flapping(m: &mut Mob) -> bool {
+    if m.ai.steps.fly_dist > m.ai.steps.next_flap {
+        m.ai.steps.next_flap = m.ai.steps.fly_dist + m.anim.flap_speed / 2.0;
+        true
+    } else {
+        false
+    }
 }
 /// Farm animal climate from the biome tags (`spawns_warm/cold_variant_farm_animals`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -134,6 +150,19 @@ pub fn sheep_color(climate: Climate, random: &mut impl RandomSource) -> u8 {
     }
 }
 
+/// `Sheep.readAdditionalSaveData`'s `Color`: `DyeColor.LEGACY_ID_CODEC` reads
+/// `Codec.BYTE` (any number tag, `Number.byteValue`), then `ByIdMap.continuous`
+/// with `OutOfBoundsStrategy.ZERO` gives white for a byte outside 0..=15; the
+/// old `& 15` wrapped the id instead.
+pub fn saved_color(value: Option<&horizon_world::nbt::Tag>) -> u8 {
+    value
+        .and_then(horizon_world::datafix::dynamic::as_number)
+        .map(|n| n.byte_value())
+        .and_then(|id| u8::try_from(id).ok())
+        .filter(|id| *id < 16)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +171,42 @@ mod tests {
     /// `chicken_flap` reads only the ground flag: any mob type will do.
     fn chicken() -> Mob {
         Mob::new(1, crate::mobs::sensor_scan_tests::kind(), Vec3::ZERO, 0.0)
+    }
+
+    #[test]
+    fn chicken_flap_threshold_is_strict_and_advances_once() {
+        let mut m = chicken();
+        m.anim.flap_speed = 1.0;
+        m.ai.steps.fly_dist = 1.0;
+        assert!(!chicken_process_flapping(&mut m));
+        m.ai.steps.fly_dist = 1.2;
+        assert!(chicken_process_flapping(&mut m));
+        assert!((m.ai.steps.next_flap - 1.7).abs() < 1.0e-6);
+        assert!(!chicken_process_flapping(&mut m));
+        m.ai.steps.fly_dist = m.ai.steps.next_flap;
+        assert!(!chicken_process_flapping(&mut m));
+        m.ai.steps.fly_dist = 1.8;
+        assert!(chicken_process_flapping(&mut m));
+        assert!((m.ai.steps.next_flap - 2.3).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn a_laid_egg_leaves_the_sound_to_the_drop() {
+        // Chicken.aiStep (expected): the pitch's two floats, then the timer's
+        // nextInt(6000); the sound and `entity_place` wait for the loot roll.
+        let mut m = chicken();
+        m.extra.egg_time = 1;
+        let mut oracle = m.random.clone();
+        let mut events = Vec::new();
+        chicken_egg_step(&mut m, &mut events);
+        let pitch = (oracle.next_float() - oracle.next_float()) * 0.2 + 1.0;
+        let next = oracle.next_int_bound(6000).unwrap() + 6000;
+        assert_eq!(m.extra.egg_time, next);
+        assert_eq!(events.len(), 1, "no sound before the drop");
+        assert!(matches!(
+            events[0],
+            MobEvent::LayEgg { mob: 1, pitch: p, .. } if p == pitch
+        ));
     }
 
     #[test]
@@ -167,5 +232,40 @@ mod tests {
         chicken_flap(&mut m);
         assert!((m.anim.flap_speed - 0.7).abs() < 1.0e-6);
         assert!((m.anim.flapping - 0.81).abs() < 1.0e-6);
+    }
+}
+
+#[cfg(test)]
+mod sheep_colour_save_tests {
+    use super::*;
+    use horizon_world::nbt::Tag;
+
+    /// `Sheep.readAdditionalSaveData` reads `Color` with
+    /// `DyeColor.LEGACY_ID_CODEC`, whose out-of-bounds strategy is white;
+    /// the `& 15` wrapped 99 to light blue (3).
+    #[test]
+    fn an_unknown_sheep_colour_reads_white() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.id = "minecraft:sheep".into();
+        k.species = Species::Sheep;
+        let types = [("minecraft:sheep".into(), kind)].into();
+        let tag = Tag::compound([
+            ("id", Tag::String("minecraft:sheep".into())),
+            (
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(0.0f64.to_bits()),
+                    Tag::Double(64.0f64.to_bits()),
+                    Tag::Double(0.0f64.to_bits()),
+                ]),
+            ),
+            ("Color", Tag::Byte(99)),
+        ]);
+        let m = crate::entity_nbt::mob_from_nbt(&tag, &types, 1, None).unwrap();
+        assert_eq!(m.extra.color, 0, "an unknown dye id is white");
+        // Codec.BYTE takes an int tag's low byte: 259 is 3, light blue.
+        assert_eq!(saved_color(Some(&Tag::Int(259))), 3);
+        assert_eq!(saved_color(Some(&Tag::Byte(-1))), 0);
     }
 }

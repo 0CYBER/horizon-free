@@ -22,6 +22,7 @@ impl<K> Cursor<K> {
         self.remaining != 0
     }
 }
+#[derive(Clone)]
 pub struct ObjectOpenSet<K> {
     slots: Vec<Option<K>>,
     size: i32,
@@ -132,13 +133,13 @@ impl<K: ObjectKey + Clone> ObjectOpenSet<K> {
                 }
                 p = (p + 1) & mask;
             }
-            if p < hole {
-                if let Some(cursor) = &mut cursor {
-                    cursor
-                        .wrapped
-                        .get_or_insert_with(Vec::new)
-                        .push(self.slots[p].clone());
-                }
+            if p < hole
+                && let Some(cursor) = &mut cursor
+            {
+                cursor
+                    .wrapped
+                    .get_or_insert_with(Vec::new)
+                    .push(self.slots[p].clone());
             }
             let key = self.slots[p].clone();
             *self

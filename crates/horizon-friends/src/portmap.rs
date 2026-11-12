@@ -207,6 +207,9 @@ fn upnp_map(igd: Igd, client: Ipv4Addr, internal: u16, lease: Duration) -> io::R
     Err(last)
 }
 
+/// The shortest time between two renewals of a mapping.
+const MIN_RENEWAL: Duration = Duration::from_secs(30);
+
 impl Mapping {
     /// A mapping as a router would have granted it (tests elsewhere).
     #[cfg(test)]
@@ -222,9 +225,10 @@ impl Mapping {
             },
         }
     }
-    /// Whether the lease is past half-time.
+    /// Whether the lease is past half-time, and never sooner than 30 s after the last renewal:
+    /// a router that grants seconds isn't asked again on every wake-up of the host's loop.
     pub fn due(&self) -> bool {
-        self.renewed.elapsed() >= self.lifetime / 2
+        self.renewed.elapsed() >= (self.lifetime / 2).max(MIN_RENEWAL)
     }
     pub fn renew(&mut self) -> io::Result<()> {
         let internal = self.internal;
@@ -343,6 +347,7 @@ pub fn pcp_map(
         return Err(io::Error::other(format!("result {}", r[3])));
     }
     let life = Duration::from_secs(u64::from(u32::from_be_bytes(r[4..8].try_into().unwrap())));
+    no_lifetime(lease, life)?;
     let port = u16::from_be_bytes([r[42], r[43]]);
     let o: [u8; 16] = r[44..60].try_into().unwrap();
     let v6 = Ipv6Addr::from(o);
@@ -387,10 +392,19 @@ pub fn natpmp_map(
             u16::from_be_bytes([r[2], r[3]])
         )));
     }
-    Ok((
-        u16::from_be_bytes([r[10], r[11]]),
-        Duration::from_secs(u64::from(u32::from_be_bytes(r[12..16].try_into().unwrap()))),
-    ))
+    let life = Duration::from_secs(u64::from(u32::from_be_bytes(r[12..16].try_into().unwrap())));
+    no_lifetime(lease, life)?;
+    Ok((u16::from_be_bytes([r[10], r[11]]), life))
+}
+
+/// A success that grants a zero lifetime to a mapping asked for with one: in PCP and NAT-PMP
+/// zero means the mapping is gone, and taking it as granted renewed it ten times a second while
+/// advertising an address that doesn't exist. Asking for zero (a delete) expects zero.
+fn no_lifetime(lease: Duration, life: Duration) -> io::Result<()> {
+    if life.is_zero() && !lease.is_zero() {
+        return Err(io::Error::other("the router granted no lifetime"));
+    }
+    Ok(())
 }
 
 // ----- UPnP IGD ---------------------------------------------------------------------------------
@@ -402,9 +416,16 @@ fn split_url(url: &str) -> Option<(String, u16, String)> {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
     };
-    let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h, p.parse().ok()?),
-        _ => (hostport, 80),
+    // `[v6]` or `[v6]:port`: the colons inside the brackets are not a port's.
+    let (host, port) = match hostport.rfind(']') {
+        Some(i) => match &hostport[i + 1..] {
+            "" => (&hostport[..=i], 80),
+            p => (&hostport[..=i], p.strip_prefix(':')?.parse().ok()?),
+        },
+        None => match hostport.rsplit_once(':') {
+            Some((h, p)) => (h, p.parse().ok()?),
+            None => (hostport, 80),
+        },
     };
     Some((
         host.trim_matches(|c| c == '[' || c == ']').to_owned(),
@@ -413,6 +434,12 @@ fn split_url(url: &str) -> Option<(String, u16, String)> {
     ))
 }
 
+/// How long a router has for its whole HTTP answer.
+const HTTP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Gateways tried from one discovery: anyone on the LAN can answer SSDP, each with its own.
+const MAX_GATEWAYS: usize = 8;
+
 /// A tiny HTTP/1.1 client (Connection: close; Content-Length, chunked or
 /// to the end).
 fn http(
@@ -420,6 +447,16 @@ fn http(
     url: &str,
     headers: &[(&str, &str)],
     body: &str,
+) -> io::Result<(u16, String)> {
+    http_within(method, url, headers, body, HTTP_DEADLINE)
+}
+
+fn http_within(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+    within: Duration,
 ) -> io::Result<(u16, String)> {
     let (host, port, path) = split_url(url).ok_or_else(|| io::Error::other("bad URL"))?;
     let addr = (host.as_str(), port)
@@ -438,8 +475,39 @@ fn http(
     req.push_str("\r\n");
     req.push_str(body);
     s.write_all(req.as_bytes())?;
+    // One deadline for the whole answer: a per-read timeout alone let a device sending a byte every
+    // few seconds hold the request (and the lock or the stop waiting on it) for weeks.
+    let deadline = Instant::now() + within;
     let mut raw = Vec::new();
-    s.take(1 << 20).read_to_end(&mut raw)?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "router too slow"))?;
+        s.set_read_timeout(Some(left.min(Duration::from_secs(5))))?;
+        // A read that times out at the deadline is the router being too slow, whatever kind the
+        // platform reports it as (Linux: WouldBlock).
+        let n = match s.read(&mut chunk) {
+            Ok(n) => n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "router too slow"));
+            }
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..n]);
+        if raw.len() > 1 << 20 {
+            return Err(io::Error::other("router answer too big"));
+        }
+    }
     let text = String::from_utf8_lossy(&raw).into_owned();
     let (head, rest) = text
         .split_once("\r\n\r\n")
@@ -466,11 +534,16 @@ fn dechunk(mut s: &str) -> String {
         let Ok(n) = usize::from_str_radix(size.split(';').next().unwrap_or("").trim(), 16) else {
             break;
         };
-        if n == 0 || rest.len() < n {
+        // `n` is the device's byte count: a chunk ending inside a character (the text went through
+        // `from_utf8_lossy`) or past the end stops here rather than panicking.
+        let (Some(chunk), Some(next)) = (rest.get(..n), rest.get(n..)) else {
+            break;
+        };
+        if n == 0 {
             break;
         }
-        out.push_str(&rest[..n]);
-        s = rest[n..].trim_start_matches("\r\n");
+        out.push_str(chunk);
+        s = next.trim_start_matches("\r\n");
     }
     out
 }
@@ -518,6 +591,7 @@ pub fn ssdp_discover(timeout: Duration) -> Vec<String> {
         if let Ok((n, _)) = s.recv_from(&mut buf)
             && let Some(l) = ssdp_location(&String::from_utf8_lossy(&buf[..n]))
             && !found.contains(&l)
+            && found.len() < MAX_GATEWAYS
         {
             found.push(l);
         }
@@ -578,6 +652,12 @@ impl Igd {
             let Some(control) = tag(block, "controlURL") else {
                 continue;
             };
+            // The device's text goes into a request line and a header: no line breaks, spaces or
+            // other control characters in it.
+            let clean = |s: &str| !s.chars().any(|c| c.is_control() || c == ' ');
+            if !clean(control) || !clean(service) || !clean(&base) {
+                continue;
+            }
             let control = if control.starts_with("http://") {
                 control.to_owned()
             } else {
@@ -676,8 +756,12 @@ pub fn default_gateway() -> Option<Ipv4Addr> {
     }
     #[cfg(windows)]
     {
+        // A program without a console of its own (the launcher) opens none for `route`.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let out = std::process::Command::new("route")
             .args(["print", "-4", "0.0.0.0"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()?;
         windows_gateway(&String::from_utf8_lossy(&out.stdout))
@@ -723,6 +807,35 @@ pub fn windows_gateway(text: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chunk_ending_inside_a_character_stops_the_body() {
+        // "é" is two bytes: a one-byte chunk ends inside it.
+        assert_eq!(dechunk("2\r\nab\r\n1\r\né\r\n0\r\n\r\n"), "ab");
+        assert_eq!(dechunk("2\r\nab\r\n9\r\nshort"), "ab");
+        assert_eq!(dechunk("3\r\nabc\r\n2\r\né\r\n0\r\n\r\n"), "abcé");
+    }
+
+    #[test]
+    fn a_router_trickling_its_answer_runs_out_of_time() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/desc.xml", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.read(&mut [0; 1024]);
+            // Each byte well within the per-read timeout.
+            for b in b"HTTP/1.1 200 OK\r\n\r\n".iter().cycle().take(200) {
+                if s.write_all(&[*b]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let started = Instant::now();
+        let err = http_within("GET", &url, &[], "", Duration::from_millis(300)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
     use std::{
         collections::HashMap,
         net::TcpListener,
@@ -804,6 +917,58 @@ mod tests {
         m.renew().unwrap();
         m.remove();
         assert!(table.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_router_that_grants_no_lifetime_maps_nothing() {
+        // Success, the nonce and a port, but a lifetime of 0, for PCP and NAT-PMP alike.
+        let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let gw = s.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1100];
+            while let Ok((n, from)) = s.recv_from(&mut buf) {
+                let r = &buf[..n];
+                let reply = match (r[0], r.get(1)) {
+                    (2, Some(1)) => {
+                        let mut out = r.to_vec();
+                        out[1] = 0x81;
+                        out[2..8].fill(0);
+                        out[42..44].copy_from_slice(&26580u16.to_be_bytes());
+                        out
+                    }
+                    (0, Some(2)) => {
+                        vec![0, 130, 0, 0, 0, 0, 0, 1, 0x63, 0xec, 0x67, 0xd4, 0, 0, 0, 0]
+                    }
+                    (0, Some(0)) => vec![0, 128, 0, 0, 0, 0, 0, 1, 198, 51, 100, 7],
+                    _ => continue,
+                };
+                let _ = s.send_to(&reply, from);
+            }
+        });
+        let targets = Targets {
+            pmp: vec![gw],
+            upnp: vec![],
+        };
+        let why = map(&targets, Ipv4Addr::new(192, 168, 1, 20), 25580, LEASE).unwrap_err();
+        assert!(why.contains("PCP: the router granted no lifetime"), "{why}");
+        assert!(
+            why.contains("NAT-PMP: the router granted no lifetime"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn a_short_lease_is_renewed_no_more_than_every_30_seconds() {
+        let mut m = Mapping::granted(Method::Pcp, "198.51.100.7:26580".parse().unwrap());
+        m.lifetime = Duration::from_secs(10);
+        m.renewed = Instant::now() - Duration::from_secs(20);
+        assert!(!m.due(), "half of 10 s has passed, 30 s hasn't");
+        m.renewed = Instant::now() - Duration::from_secs(31);
+        assert!(m.due());
+        // A long lease still renews at half-time.
+        m.lifetime = LEASE;
+        m.renewed = Instant::now() - LEASE / 2;
+        assert!(m.due());
     }
 
     #[test]
@@ -951,6 +1116,14 @@ mod tests {
         assert_eq!(
             split_url("http://192.168.1.1:5000/a/b"),
             Some(("192.168.1.1".into(), 5000, "/a/b".into()))
+        );
+        assert_eq!(
+            split_url("http://[fe80::1]/rootDesc.xml"),
+            Some(("fe80::1".into(), 80, "/rootDesc.xml".into()))
+        );
+        assert_eq!(
+            split_url("http://[fe80::1]:5000/x"),
+            Some(("fe80::1".into(), 5000, "/x".into()))
         );
         assert_eq!(
             split_url("http://router/"),

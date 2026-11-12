@@ -103,10 +103,10 @@ impl LiveFeatures {
                 .collect(),
             &data.biome_tags,
         )?);
-        let mut bindings =
-            FeatureBlockBindings::with_tags(registry, data.integers().clone(), &data.block_tags)?
-                .with_fluid_tags(&resources.fluid_tags)?
-                .with_biomes(biomes.clone());
+        let mut bindings = data
+            .feature_block_bindings()?
+            .with_fluid_tags(&resources.fluid_tags)?
+            .with_biomes(biomes.clone());
         if let Some(structures) = &data.structures {
             bindings = bindings.with_structures(structures.clone());
         }
@@ -216,6 +216,16 @@ impl LiveFeatures {
     pub fn data(&self) -> &Arc<GeneratorData> {
         &self.data
     }
+    /// The structure templates and processor lists of this bundle, for the
+    /// pieces a level places live (`/place structure`).
+    pub(crate) fn structures(&self) -> Option<&super::structure::StructureResources> {
+        self.bindings.structures.as_deref()
+    }
+    /// `BlockState.isSolidRender` facts, which legacy structure pieces ask of
+    /// the blocks around them.
+    pub(crate) fn tree_blocks(&self) -> Option<Arc<super::tree_blocks::TreeBlocks>> {
+        self.bindings.tree_blocks().ok()
+    }
     pub fn biome_id(&self, name: &str) -> Option<BiomeId> {
         self.data.biome_id(name)
     }
@@ -224,6 +234,10 @@ impl LiveFeatures {
     pub fn configured_json(&self, name: &str) -> Option<Value> {
         let resources = self.data.feature_resources.as_ref()?;
         serde_json::from_str(resources.features.get(name)?).ok()
+    }
+    /// The structure templates and processor lists features place from.
+    pub fn structure_resources(&self) -> Option<Arc<super::structure::StructureResources>> {
+        self.bindings.structures.clone()
     }
     pub fn configured(&self, name: &str) -> Option<Arc<FeatureDefinition>> {
         let mut cache = self.configured.lock().unwrap();
@@ -276,10 +290,46 @@ impl LiveFeatures {
         let Some(feature) = self.configured(name) else {
             return false;
         };
+        self.place_definition(&feature, name, world, random, origin)
+    }
+    /// An inline feature value (`ResourceOrHolderArgument`), decoded by the
+    /// same codec as a named feature; it is not cached. `None` when it does
+    /// not decode.
+    pub fn configured_inline(&self, json: &str) -> Option<FeatureDefinition> {
+        match self.decode_inline(json) {
+            Ok(feature) => Some(feature),
+            Err(e) => {
+                eprintln!("Horizon: inline feature cannot be placed: {e}");
+                None
+            }
+        }
+    }
+    /// The `ConfiguredFeature` codec on an inline value, over the same
+    /// catalog and block bindings as [`Self::configured_inline`]: nothing is
+    /// placed, logged or cached.
+    pub fn decode_inline(
+        &self,
+        json: &str,
+    ) -> Result<FeatureDefinition, crate::worldgen::DecodeError> {
+        self.catalog.feature_with_blocks(json, &self.bindings)
+    }
+    /// `Feature.place` for a decoded feature; `label` names it in errors.
+    /// Execution errors report failure.
+    pub fn place_definition<W: FeatureWorld + PlacementContext>(
+        &self,
+        feature: &FeatureDefinition,
+        label: &str,
+        world: &mut W,
+        random: &mut impl RandomSource,
+        origin: [i32; 3],
+    ) -> bool
+    where
+        W::Error: std::fmt::Display,
+    {
         match feature.place(world, random, origin, self.blocks) {
             Ok(placed) => placed,
             Err(e) => {
-                eprintln!("Horizon: placing {name} failed: {e}");
+                eprintln!("Horizon: placing {label} failed: {e}");
                 false
             }
         }

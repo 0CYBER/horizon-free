@@ -30,7 +30,8 @@ fn stamp(time: SystemTime) -> String {
     let secs = time
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    let (y, m, d) = horizon_server_files::java_properties::civil_from_days(secs.div_euclid(86_400));
+    let (y, m, d) =
+        horizon_platform::server_files::java_properties::civil_from_days(secs.div_euclid(86_400));
     let s = secs.rem_euclid(86_400);
     format!(
         "{y:04}-{m:02}-{d:02}_{:02}-{:02}-{:02}",
@@ -90,7 +91,15 @@ pub fn create(dir: &Path, config: &Config, file_name: &str) -> Result<PathBuf, S
     let path = backups.join(file_name);
     let part = backups.join(format!("{file_name}.part"));
     let result = (|| {
-        let file = File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
+        // Owner only: a backup holds server.toml and server.properties, with the API token, the
+        // RCON password and the management secret.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options
+            .open(&part)
+            .map_err(|e| format!("{}: {e}", part.display()))?;
         let mut zip = ZipWriter::new(BufWriter::new(file));
         let world = dir.join(&config.world.name);
         if world.is_dir() {
@@ -146,11 +155,15 @@ pub fn list(dir: &Path) -> Vec<Backup> {
 }
 
 /// Deletes the oldest automatic backups beyond `keep`. Backups made by hand are never deleted.
+/// The length of a backup name's time stamp, `2026-11-11_13-15-00`.
+const STAMP_LEN: usize = "0000-00-00_00-00-00".len();
+
 pub fn prune(dir: &Path, keep: usize) -> Vec<String> {
     let auto_suffix = format!("-{AUTO}.zip");
     list(dir)
         .into_iter()
-        .filter(|b| b.name.ends_with(&auto_suffix))
+        // Only `<stamp>-auto.zip`: a backup labelled by hand `nightly-auto` is not automatic.
+        .filter(|b| b.name.len() == STAMP_LEN + auto_suffix.len() && b.name.ends_with(&auto_suffix))
         .skip(keep)
         .filter(|b| std::fs::remove_file(dir.join(DIR).join(&b.name)).is_ok())
         .map(|b| b.name)
@@ -223,8 +236,134 @@ pub fn restore(dir: &Path, config: &Config, name: &str) -> Result<Option<PathBuf
     } else {
         None
     };
-    std::fs::rename(&restored, &current)
-        .map_err(|e| format!("putting the backup in place: {e}"))?;
+    if let Err(e) = std::fs::rename(&restored, &current) {
+        // The world goes back where it was: the game must not start on an empty folder and
+        // make a new world.
+        if let Some(old) = &moved {
+            let _ = std::fs::rename(old, &current);
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+        return Err(format!("putting the backup in place: {e}"));
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(moved)
+}
+
+/// A dimension id (`minecraft:the_nether`, or `the_nether` for `minecraft:`) as the id and its folder in the
+/// world (`dimensions/<namespace>/<path>`, as the game saves it). Only the characters of a resource id.
+pub fn dimension_folder(dimension: &str) -> Result<(String, String), String> {
+    let (namespace, path) = dimension
+        .split_once(':')
+        .unwrap_or(("minecraft", dimension));
+    let namespace_ok = !namespace.is_empty()
+        && namespace
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-' | '.'));
+    let path_ok = !path.is_empty()
+        && path
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..")
+        && path
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-' | '.' | '/'));
+    if !namespace_ok || !path_ok {
+        return Err(format!(
+            "{dimension:?} is not a dimension id (like minecraft:the_nether)"
+        ));
+    }
+    Ok((
+        format!("{namespace}:{path}"),
+        format!("dimensions/{namespace}/{path}"),
+    ))
+}
+
+/// Puts one dimension of the backup in place of the current one, leaving the rest of the world (the other
+/// dimensions, `level.dat`, the players) as it is. The current dimension goes to
+/// `backups/replaced-<time>/<world>/dimensions/...`. The server must be stopped. Returns where the old
+/// folder went (None when the world had none).
+pub fn restore_dimension(
+    dir: &Path,
+    config: &Config,
+    name: &str,
+    dimension: &str,
+) -> Result<Option<PathBuf>, String> {
+    let (id, folder) = dimension_folder(dimension)?;
+    let world = &config.world.name;
+    let prefix = format!("{world}/{folder}/");
+    let zip_path = dir.join(DIR).join(name);
+    let scratch = dir.join(".horizon/restore");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let file = File::open(&zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?;
+        let mut zip = ZipArchive::new(file).map_err(|e| format!("{name}: {e}"))?;
+        let mut files = 0;
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).map_err(|e| format!("{name}: {e}"))?;
+            let Some(inner) = entry.enclosed_name() else {
+                continue;
+            };
+            if !inner.starts_with(&prefix) {
+                continue;
+            }
+            let out = scratch.join(&inner);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+                continue;
+            }
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut dest = File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            std::io::copy(&mut entry, &mut dest).map_err(|e| format!("{name}: {e}"))?;
+            files += 1;
+        }
+        if files == 0 {
+            return Err(format!(
+                "{name} holds nothing of the dimension {id} (no {world}/{folder}/)"
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&scratch);
+        return Err(e);
+    }
+    let restored = scratch.join(world).join(&folder);
+    let current = dir.join(world).join(&folder);
+    let moved = if current.exists() {
+        let target = dir
+            .join(DIR)
+            .join(format!("replaced-{}", stamp(SystemTime::now())))
+            .join(world)
+            .join(&folder);
+        if target.exists() {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return Err(format!(
+                "{} exists already; try again in a second",
+                target.display()
+            ));
+        }
+        std::fs::create_dir_all(target.parent().expect("the folder has a parent"))
+            .map_err(|e| e.to_string())?;
+        std::fs::rename(&current, &target)
+            .map_err(|e| format!("moving the current {id} aside: {e}"))?;
+        Some(target)
+    } else {
+        None
+    };
+    let put = (|| {
+        std::fs::create_dir_all(current.parent().expect("the folder has a parent"))?;
+        std::fs::rename(&restored, &current)
+    })();
+    if let Err(e) = put {
+        // Put the old folder back: the world must not be left without the dimension.
+        if let Some(old) = &moved {
+            let _ = std::fs::rename(old, &current);
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+        return Err(format!("putting the backup's {id} in place: {e}"));
+    }
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(moved)
 }
@@ -235,7 +374,9 @@ pub fn interval(every: &str) -> Result<Option<std::time::Duration>, String> {
     if every == "0" || every.is_empty() {
         return Ok(None);
     }
-    let (number, unit) = every.split_at(every.len() - 1);
+    // The last character, whatever its width: `split_at(len - 1)` panicked on "6é".
+    let unit_at = every.char_indices().last().map_or(0, |(i, _)| i);
+    let (number, unit) = every.split_at(unit_at);
     let n: u64 = number.trim().parse().map_err(|_| {
         format!("backups.every is {every:?}: use a number and m, h or d, like \"6h\"")
     })?;
@@ -249,7 +390,10 @@ pub fn interval(every: &str) -> Result<Option<std::time::Duration>, String> {
             ));
         }
     };
-    Ok((n > 0).then(|| std::time::Duration::from_secs(n * secs)))
+    let total = n
+        .checked_mul(secs)
+        .ok_or_else(|| format!("backups.every is {every:?}: too long"))?;
+    Ok((n > 0).then(|| std::time::Duration::from_secs(total)))
 }
 
 #[cfg(test)]
@@ -279,6 +423,44 @@ mod tests {
         );
         assert_eq!(interval("0").unwrap(), None);
         assert!(interval("6 hours").is_err());
+        // Not a panic: a wide last character, and a number too large for the unit.
+        assert!(interval("6é").is_err());
+        assert!(interval("é").is_err());
+        assert!(interval(&format!("{}d", u64::MAX)).is_err());
+    }
+
+    #[test]
+    fn prune_keeps_backups_labelled_by_hand_whatever_their_label() {
+        let dir = std::env::temp_dir().join(format!("horizon-server-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(DIR)).unwrap();
+        let t = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let names = [
+            auto_name(t),
+            auto_name(t + std::time::Duration::from_secs(60)),
+            file_name(t, Some("nightly-auto")).unwrap(),
+        ];
+        for name in &names {
+            std::fs::write(dir.join(DIR).join(name), b"zip").unwrap();
+        }
+        assert_eq!(prune(&dir, 0).len(), 2);
+        assert!(dir.join(DIR).join(&names[2]).exists(), "kept: made by hand");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("horizon-server-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("world")).unwrap();
+        std::fs::write(dir.join("world/level.dat"), b"x").unwrap();
+        std::fs::write(dir.join("server.toml"), crate::config::TEMPLATE).unwrap();
+        let path = create(&dir, &Config::default(), "b.zip").unwrap();
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -327,6 +509,58 @@ mod tests {
         );
         assert_eq!(find(&dir, "auto").unwrap(), left[0]);
         assert!(find(&dir, "nothing").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_one_dimension_only() {
+        let dir = std::env::temp_dir().join(format!("horizon-server-dim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = Config::default();
+        let world = dir.join("world");
+        let overworld = world.join("dimensions/minecraft/overworld/region/r.0.0.mca");
+        let nether = world.join("dimensions/minecraft/the_nether/region/r.0.0.mca");
+        for (file, bytes) in [(&overworld, "ow-before"), (&nether, "nether-before")] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, bytes).unwrap();
+        }
+        std::fs::write(world.join("level.dat"), b"level-before").unwrap();
+        let name = file_name(SystemTime::now(), None).unwrap();
+        create(&dir, &config, &name).unwrap();
+        std::fs::write(&overworld, "ow-after").unwrap();
+        std::fs::write(&nether, "nether-after").unwrap();
+        std::fs::write(world.join("level.dat"), b"level-after").unwrap();
+
+        // Unknown or malformed dimensions change nothing.
+        assert!(restore_dimension(&dir, &config, &name, "minecraft:the_end").is_err());
+        assert!(restore_dimension(&dir, &config, &name, "../world").is_err());
+        assert!(restore_dimension(&dir, &config, &name, "minecraft:../x").is_err());
+        assert_eq!(std::fs::read(&nether).unwrap(), b"nether-after");
+
+        // `the_nether` means `minecraft:the_nether`.
+        let moved = restore_dimension(&dir, &config, &name, "the_nether")
+            .unwrap()
+            .unwrap();
+        assert_eq!(std::fs::read(&nether).unwrap(), b"nether-before");
+        assert_eq!(std::fs::read(&overworld).unwrap(), b"ow-after");
+        assert_eq!(
+            std::fs::read(world.join("level.dat")).unwrap(),
+            b"level-after"
+        );
+        assert_eq!(
+            std::fs::read(moved.join("region/r.0.0.mca")).unwrap(),
+            b"nether-after"
+        );
+        assert!(!dir.join(".horizon/restore").exists());
+
+        // A dimension the world lost comes back too, with nothing to put aside.
+        std::fs::remove_dir_all(world.join("dimensions/minecraft/the_nether")).unwrap();
+        assert!(
+            restore_dimension(&dir, &config, &name, "minecraft:the_nether")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read(&nether).unwrap(), b"nether-before");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

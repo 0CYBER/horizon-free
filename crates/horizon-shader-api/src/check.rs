@@ -4,8 +4,10 @@
 //!
 //! Each stage is built as the renderer builds it, parsed and validated by
 //! naga, checked against its signature and the API's rules (no bindings, no
-//! entry points, no `horizon_` names), then translated to SPIR-V, Metal and
-//! HLSL with its options at their defaults, minimums and maximums.
+//! entry points, no `horizon_` names; in 0.2 none of the structs Horizon hands it
+//! constructed), then translated to SPIR-V, Metal and HLSL with its options at their
+//! defaults, minimums and maximums.
+use crate::inputs::{DISPLACEMENT_INPUT, Frame};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{Composed, StageKind, compose};
@@ -68,21 +70,104 @@ pub struct CheckedStage {
     pub texture_reads: usize,
 }
 
+impl CheckedStage {
+    /// Whether the stage's function, or a function it calls, reads the prelude's `global`
+    /// (a resource of the stage, such as `reflection`).
+    pub fn reads(&self, global: &str) -> bool {
+        let Some((function, _)) = self
+            .module
+            .functions
+            .iter()
+            .find(|(_, f)| f.name.as_deref() == Some(self.kind.function()))
+        else {
+            return false;
+        };
+        self.module
+            .global_variables
+            .iter()
+            .filter(|(_, g)| g.name.as_deref() == Some(global))
+            .any(|(handle, _)| !self.info[function][handle].is_empty())
+    }
+}
+
 #[derive(Debug)]
 pub struct Report {
     pub stages: Vec<CheckedStage>,
+    /// The manifest's `[sky]`.
+    pub sky: Option<crate::manifest::Stage>,
+    /// The manifest's `[reflection]`.
+    pub reflection: Option<crate::manifest::Reflection>,
+    /// The manifest's `[shadow]`.
+    pub shadow: Option<crate::manifest::Shadow>,
+    /// The manifest's `[material] fog`: whether Horizon fogs the material's colour.
+    pub material_fog: bool,
+    /// The manifest's `[[textures]]`, and each image decoded, in that order.
+    pub textures: Vec<(crate::manifest::PackTexture, Image)>,
+    /// The manifest the stages were checked against.
+    pub manifest: crate::manifest::Manifest,
+}
+
+#[derive(Clone, Debug)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    /// RGBA, 8 bits a channel, rows from the top.
+    pub rgba: Vec<u8>,
+}
+
+/// Decodes the PNG `bytes` into RGBA8.
+pub fn decode_png(bytes: &[u8]) -> Result<Image, String> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let (width, height) = (reader.info().width, reader.info().height);
+    let max = crate::manifest::MAX_TEXTURE_SIZE;
+    if width == 0 || height == 0 || width > max || height > max {
+        return Err(format!(
+            "{width}×{height}; a texture is at most {max}×{max}"
+        ));
+    }
+    let mut buffer = vec![0; reader.output_buffer_size().ok_or("too large")?];
+    let frame = reader.next_frame(&mut buffer).map_err(|e| e.to_string())?;
+    let data = &buffer[..frame.buffer_size()];
+    let pixels = (width * height) as usize;
+    let rgba = match frame.color_type {
+        png::ColorType::Rgba => data.to_vec(),
+        png::ColorType::Rgb => data
+            .chunks(3)
+            .flat_map(|c| [c[0], c[1], c[2], 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => data
+            .chunks(2)
+            .flat_map(|c| [c[0], c[0], c[0], c[1]])
+            .collect(),
+        png::ColorType::Grayscale => data.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return Err("indexed colour was not expanded".into()),
+    };
+    if rgba.len() != pixels * 4 {
+        return Err("unexpected pixel data".into());
+    }
+    Ok(Image {
+        width,
+        height,
+        rgba,
+    })
 }
 
 /// Checks every stage of `pack`, and that each option is an `override` of
-/// its type in some stage. Returns every problem found, not just the first.
+/// its type in some stage, or one `[shadow]` sizes its map by. Returns every problem
+/// found, not just the first.
 pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
     let m = &pack.manifest;
     let stages = m
         .sky
         .iter()
         .map(|s| (StageKind::Sky, s))
+        .chain(m.vertex.iter().map(|s| (StageKind::Vertex, s)))
         .chain(m.material.iter().map(|s| (StageKind::Material, s)))
-        .chain(m.post.iter().map(|s| (StageKind::Post, s)));
+        .chain(m.weather.iter().map(|s| (StageKind::Weather, s)))
+        .chain(m.post.iter().map(|s| (StageKind::Post, s)))
+        .chain(m.tonemap.iter().map(|s| (StageKind::Tonemap, s)));
     let (mut checked, mut problems) = (Vec::new(), Vec::new());
     for (kind, stage) in stages {
         match check_stage(pack, kind, &stage.file) {
@@ -93,8 +178,14 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
             Err(p) => problems.extend(p),
         }
     }
+    // The options the shadow map's size follows need no `override`: the frame has the size.
+    let sizes: Vec<&String> = m
+        .shadow
+        .iter()
+        .flat_map(|s| s.resolution_option.iter().chain(&s.distance_option))
+        .collect();
     if problems.is_empty() {
-        for option in &m.options {
+        for option in m.options.iter().filter(|o| !sizes.contains(&&o.id)) {
             let used = checked.iter().any(|c| {
                 c.module
                     .overrides
@@ -114,8 +205,23 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
             }
         }
     }
+    let mut textures = Vec::new();
+    for t in &m.textures {
+        match decode_png(pack.source_bytes(&t.file).unwrap_or_default()) {
+            Ok(image) => textures.push((t.clone(), image)),
+            Err(e) => problems.push(problem(&t.file, e)),
+        }
+    }
     if problems.is_empty() {
-        Ok(Report { stages: checked })
+        Ok(Report {
+            sky: pack.manifest.sky.clone(),
+            stages: checked,
+            textures,
+            reflection: m.reflection.clone(),
+            shadow: m.shadow.clone(),
+            material_fog: m.material.as_ref().and_then(|s| s.fog).unwrap_or(true),
+            manifest: m.clone(),
+        })
     } else {
         Err(problems)
     }
@@ -128,9 +234,28 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
     let mut own = compose(pack, kind, file);
     let entries = own.parts.pop().expect("entries are the last part");
     own.text.truncate(entries.1.start);
+    // The material prelude's LabPBR functions call into the renderer: a stand-in here.
+    if kind == StageKind::Material {
+        own.text += crate::stages::PBR_STUB;
+    }
     let module = parse(&own)?;
+    own.text.truncate(entries.1.start);
     let mut problems = signature(&module, kind, file);
+    if kind == StageKind::Material && pack.manifest.displacement.is_some() {
+        problems.extend(function_signature(
+            &module,
+            "displacement",
+            &["DisplacementInput"],
+            "f32",
+            crate::stages::DISPLACEMENT_SIGNATURE,
+            file,
+        ));
+    }
     problems.extend(api_rules(&module, kind, &own));
+    // 0.1's structs won't grow: it is retired when 0.2 is on by default.
+    if pack.manifest.api == crate::Api::V0_2 {
+        problems.extend(constructions(&module, &own));
+    }
     problems.extend(options(&module, &pack.manifest.options, file));
     if !problems.is_empty() {
         return Err(problems);
@@ -259,6 +384,41 @@ fn signature(module: &naga::Module, kind: StageKind, file: &str) -> Vec<Problem>
     )]
 }
 
+/// The module defines `fn <name>(<args>) -> <output>`, written out as `expected`.
+fn function_signature(
+    module: &naga::Module,
+    name: &str,
+    args_expected: &[&str],
+    output: &str,
+    expected: &str,
+    file: &str,
+) -> Vec<Problem> {
+    let found = module
+        .functions
+        .iter()
+        .find(|(_, f)| f.name.as_deref() == Some(name));
+    let Some((_, f)) = found else {
+        return vec![problem(file, format!("defines no `{expected}`"))];
+    };
+    let args: Vec<String> = f
+        .arguments
+        .iter()
+        .map(|a| type_name(module, a.ty))
+        .collect();
+    let result = f.result.as_ref().map(|r| type_name(module, r.ty));
+    if args == args_expected && result.as_deref() == Some(output) {
+        return Vec::new();
+    }
+    vec![problem(
+        file,
+        format!(
+            "`fn {name}({}) -> {}` should be `{expected}`",
+            args.join(", "),
+            result.as_deref().unwrap_or("()"),
+        ),
+    )]
+}
+
 /// The names of everything a module defines at its top level.
 fn names(module: &naga::Module) -> HashSet<String> {
     let types = module.types.iter().filter_map(|(_, t)| t.name.clone());
@@ -280,7 +440,13 @@ fn names(module: &naga::Module) -> HashSet<String> {
 /// A pack's files declare no bindings, no entry points and no `horizon_`
 /// names: what the prelude doesn't define is the pack's.
 fn api_rules(module: &naga::Module, kind: StageKind, own: &Composed) -> Vec<Problem> {
-    let prelude = naga::front::wgsl::parse_str(&kind.prelude()).expect("the prelude parses");
+    // The prelude as composed: the stage's own, with the pack's `[[textures]]`. The material
+    // prelude's LabPBR functions call into the renderer: its stand-in is ours too.
+    let mut text = own.text[own.parts[0].1.clone()].to_owned();
+    if kind == StageKind::Material {
+        text += crate::stages::PBR_STUB;
+    }
+    let prelude = naga::front::wgsl::parse_str(&text).expect("the prelude parses");
     let ours = names(&prelude);
     let file = &own.parts[own.parts.len() - 1].0;
     let mut problems = Vec::new();
@@ -314,6 +480,50 @@ fn api_rules(module: &naga::Module, kind: StageKind, own: &Composed) -> Vec<Prob
             file,
             format!("`{name}`: names starting with horizon_ are Horizon's"),
         ));
+    }
+    problems
+}
+
+/// 0.2: the pack's files construct none of the structs Horizon hands a stage (`Frame`, the
+/// stage inputs and the post helpers' `SurfaceData`). They may gain fields, which would break a
+/// positional `PostInput(...)`; reading them and passing them along stay as they are. `Surface`,
+/// which `material` returns, is built.
+fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
+    let provided: Vec<&str> = StageKind::ALL
+        .iter()
+        .map(|k| k.input().name)
+        .chain([Frame::WGSL.name, DISPLACEMENT_INPUT.name, "SurfaceData"])
+        .collect();
+    let arenas = module
+        .functions
+        .iter()
+        .map(|(_, f)| &f.expressions)
+        .chain([&module.global_expressions]);
+    let in_pack = |at: Option<usize>| {
+        at.is_some_and(|at| own.parts[1..].iter().any(|(_, r)| r.contains(&at)))
+    };
+    let mut problems = Vec::new();
+    for arena in arenas {
+        for (handle, e) in arena.iter() {
+            let naga::Expression::Compose { ty, .. } = *e else {
+                continue;
+            };
+            let Some(name) = module.types[ty].name.as_deref() else {
+                continue;
+            };
+            let at = arena.get_span(handle).to_range().map(|r| r.start);
+            // Built in the pack's files (the prelude's helpers aren't the pack's), as a struct the
+            // prelude declares (a pack's own struct of the same name is its own).
+            let horizon_s = (module.types.get_span(ty).to_range())
+                .is_some_and(|r| own.parts[0].1.contains(&r.start));
+            if provided.contains(&name) && horizon_s && in_pack(at) {
+                problems.push(located(
+                    own,
+                    at,
+                    format!("constructs `{name}`: it is Horizon's and may gain fields; read it, don't construct it"),
+                ));
+            }
+        }
     }
     problems
 }

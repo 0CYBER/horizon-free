@@ -91,7 +91,7 @@ impl Stacked {
             let mut max = 0;
             for (key, &count) in self.keys.iter().zip(&self.amounts) {
                 if count > max {
-                    if ing.0.contains(&**key) {
+                    if ing.items.contains(&**key) {
                         max = count;
                     }
                     if max >= min {
@@ -153,14 +153,16 @@ impl<'a> Picker<'a> {
         let items: Vec<usize> = (0..stacked.keys.len())
             .filter(|&i| {
                 stacked.amounts[i] > 0
-                    && ingredients.iter().any(|g| g.0.contains(&*stacked.keys[i]))
+                    && ingredients
+                        .iter()
+                        .any(|g| g.items.contains(&*stacked.keys[i]))
             })
             .collect();
         let (ni, nt) = (ingredients.len(), items.len());
         let mut connection = vec![false; ni * nt];
         for (g, ing) in ingredients.iter().enumerate() {
             for (t, &key) in items.iter().enumerate() {
-                if ing.0.contains(&*stacked.keys[key]) {
+                if ing.items.contains(&*stacked.keys[key]) {
                     connection[t * ni + g] = true;
                 }
             }
@@ -303,6 +305,14 @@ pub enum PostPlace {
     Ghost,
 }
 
+/// Why a viewer transfer could not move a complete set of ingredients.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferError {
+    Missing,
+    NoRoom,
+    Unavailable,
+}
+
 /// The menu slots a placement works on.
 struct Grid {
     width: usize,
@@ -313,6 +323,29 @@ struct Grid {
 }
 
 impl Menu {
+    /// `on_take` for a quick-moved slot. A merchant result reports the stack it moved. A
+    /// crafting result reports the copy it takes (which Item.onCraftedBy may still change)
+    /// minus what stayed behind: `ResultSlot.onQuickCraft` counts only the items that moved.
+    pub(super) fn take_after_quick_move(
+        &mut self,
+        env: &Env,
+        index: usize,
+        clicked: &mut ItemStack,
+        stack: &mut ItemStack,
+    ) {
+        if self.slots[index].role == super::Role::MerchantResult {
+            return self.on_take(env, index, stack);
+        }
+        let left = if self.slots[index].role == super::Role::CraftResult {
+            stack.count
+        } else {
+            0
+        };
+        clicked.count -= left;
+        self.on_take(env, index, clicked);
+        clicked.count += left;
+    }
+
     fn place_grid(&self) -> Option<Grid> {
         match self.kind {
             Kind::Inventory => Some(Grid {
@@ -333,6 +366,13 @@ impl Menu {
                 inputs: vec![0],
                 clear: vec![0, 2],
             }),
+            // A mod menu type's crafting grid places as a crafting table's.
+            Kind::Mod(t) => t.crafting.map(|c| Grid {
+                width: c.size,
+                height: c.size,
+                inputs: c.grid_slots().collect(),
+                clear: c.grid_slots().collect(),
+            }),
             _ => None,
         }
     }
@@ -340,9 +380,26 @@ impl Menu {
     /// `Inventory.fillStackedContents` then the menu's
     /// `fillCraftSlotsStackedContents`.
     pub fn stacked_contents(&self, env: &Env) -> Stacked {
+        self.stacked_for(env, false)
+    }
+
+    /// The counted items; a viewer's (`viewer`) counts every stack, worn,
+    /// enchanted and renamed ones too, as crafting by hand takes them.
+    fn stacked_for(&self, env: &Env, viewer: bool) -> Stacked {
         let mut stacked = Stacked::default();
+        let account = |stacked: &mut Stacked, stack: &ItemStack| {
+            if viewer {
+                stacked.account_stack(stack, Self::max_stack(env, stack));
+            } else {
+                stacked.account_simple(stack, Self::max_stack(env, stack));
+            }
+        };
         for stack in self.containers[PLAYER][..36].iter().flatten() {
-            stacked.account_simple(stack, Self::max_stack(env, stack));
+            account(&mut stacked, stack);
+        }
+        // The mods' extra sources, after the inventory.
+        for stack in self.sources.iter().flatten().flatten() {
+            account(&mut stacked, stack);
         }
         match self.kind {
             // A furnace's SimpleContainer counts all three slots, unfiltered.
@@ -351,9 +408,16 @@ impl Menu {
                     stacked.account_stack(stack, Self::max_stack(env, stack));
                 }
             }
+            // A crafter's `fillStackedContents`: its 3x3 slots are the menu's
+            // MAIN container (`CrafterMenu.addSlots`), not a crafting GRID.
+            Kind::Crafter | Kind::CrafterBlock => {
+                for stack in self.containers[MAIN].iter().flatten() {
+                    stacked.account_simple(stack, Self::max_stack(env, stack));
+                }
+            }
             _ => {
                 for stack in self.containers[GRID].iter().flatten() {
-                    stacked.account_simple(stack, Self::max_stack(env, stack));
+                    account(&mut stacked, stack);
                 }
             }
         }
@@ -389,7 +453,16 @@ impl Menu {
         }
         let ingredients: Vec<&Ingredient> = placement.ingredients.iter().collect();
         let post = if stacked.try_pick(&ingredients, 1, None) {
-            self.place(env, id, &grid, &placement, &mut stacked, use_max);
+            let matches = self.recipe_in_grid(env, id);
+            self.place(
+                env,
+                &grid,
+                &placement,
+                &mut stacked,
+                use_max,
+                matches,
+                false,
+            );
             PostPlace::Nothing
         } else {
             self.clear_grid(env, &grid);
@@ -398,6 +471,60 @@ impl Menu {
         // AbstractCraftingMenu.finishPlacingRecipe: the result follows the grid.
         self.recompute(env);
         post
+    }
+
+    /// Move one set of ingredients from the player's real inventory and grid,
+    /// or with `all` as many as they allow (`useMaxItems`: the largest count
+    /// every grid slot can take, alternatives shared out by
+    /// `StackedItemContents`, capped at the ingredients' stack size).
+    /// The viewer leaves both alone on failure, including in creative mode.
+    /// Unlike the recipe book it takes worn, enchanted and renamed items, as
+    /// JEI's transfer and crafting by hand do.
+    pub fn transfer_recipe(&mut self, env: &Env, id: &str, all: bool) -> Result<(), TransferError> {
+        if !(matches!(self.kind, Kind::Inventory | Kind::Crafting) || self.mod_crafting().is_some())
+            || self.carried.is_some()
+        {
+            return Err(TransferError::Unavailable);
+        }
+        let grid = self.place_grid().ok_or(TransferError::Unavailable)?;
+        let placement = env
+            .recipes
+            .placement(id)
+            .ok_or(TransferError::Unavailable)?;
+        if placement.impossible()
+            || placement.ingredients.len() > grid.inputs.len()
+            || placement
+                .shaped
+                .is_some_and(|(w, h)| w > grid.width || h > grid.height)
+        {
+            return Err(TransferError::Unavailable);
+        }
+        let mut stacked = self.stacked_for(env, true);
+        let ingredients: Vec<_> = placement.ingredients.iter().collect();
+        if !stacked.try_pick(&ingredients, 1, None) {
+            return Err(TransferError::Missing);
+        }
+        // The vanilla placement can return leftover grid items as drops.
+        // A viewer transfer must keep the original slots if it cannot move
+        // every input without dropping anything.
+        let previous = self.containers.clone();
+        let sources = self.sources.clone();
+        let (drops, dropped) = (self.drops.len(), self.dropped.len());
+        self.place(env, &grid, &placement, &mut stacked, all, false, true);
+        let no_room = self.dropped.len() != dropped;
+        if no_room || !self.recipe_in_grid(env, id) {
+            self.containers = previous;
+            self.sources = sources;
+            self.drops.truncate(drops);
+            self.dropped.truncate(dropped);
+            return Err(if no_room {
+                TransferError::NoRoom
+            } else {
+                TransferError::Unavailable
+            });
+        }
+        self.recompute(env);
+        Ok(())
     }
 
     /// `recipeMatches`: the recipe already fills the grid.
@@ -422,14 +549,14 @@ impl Menu {
     fn place(
         &mut self,
         env: &Env,
-        id: &str,
         grid: &Grid,
         placement: &Placement,
         stacked: &mut Stacked,
         use_max: bool,
+        matches: bool,
+        viewer: bool,
     ) {
         let ingredients: Vec<&Ingredient> = placement.ingredients.iter().collect();
-        let matches = self.recipe_in_grid(env, id);
         let biggest = stacked.try_pick_all(&ingredients, i32::MAX, None);
         if matches {
             for &s in &grid.inputs {
@@ -482,7 +609,7 @@ impl Menu {
             let item = used[ingredient as usize].clone();
             let mut remaining = adjusted;
             while remaining > 0 {
-                remaining = self.move_item_to_grid(target, &item, remaining);
+                remaining = self.move_item_to_grid(target, &item, remaining, viewer);
                 if remaining == -1 {
                     break;
                 }
@@ -491,21 +618,34 @@ impl Menu {
     }
 
     /// `moveItemToGrid`: the rest still to move, or -1 when nothing matches.
-    fn move_item_to_grid(&mut self, target: usize, item: &str, count: i32) -> i32 {
+    /// The inventory first, then the mods' extra sources in order. A viewer's
+    /// (`viewer`) takes worn, enchanted and renamed stacks too.
+    fn move_item_to_grid(&mut self, target: usize, item: &str, count: i32, viewer: bool) -> i32 {
         let existing = self.slot(target).cloned();
-        let found = (0..36).find(|&i| {
-            self.containers[PLAYER][i].as_ref().is_some_and(|s| {
+        let fits = |s: &Option<ItemStack>| {
+            s.as_ref().is_some_and(|s| {
                 &*s.item == item
-                    && usable_for_crafting(s)
+                    && (viewer || usable_for_crafting(s))
                     && existing
                         .as_ref()
                         .is_none_or(|e| e.same_item_same_components(s))
             })
-        });
-        let Some(i) = found else {
+        };
+        let found = match (0..36).find(|&i| fits(&self.containers[PLAYER][i])) {
+            Some(i) => Some((None, i)),
+            None => self
+                .sources
+                .iter()
+                .enumerate()
+                .find_map(|(k, source)| source.iter().position(fits).map(|i| (Some(k), i))),
+        };
+        let Some((source, i)) = found else {
             return -1;
         };
-        let cell = &mut self.containers[PLAYER][i];
+        let cell = match source {
+            None => &mut self.containers[PLAYER][i],
+            Some(k) => &mut self.sources[k][i],
+        };
         let taken = match cell.as_mut() {
             Some(have) if (count as u32) < have.count => split(have, count as u32),
             _ => cell.take().expect("found"),
@@ -587,9 +727,7 @@ impl Menu {
                 count: 0,
                 ..stack.clone()
             });
-            let room = super::CONTAINER_MAX
-                .min(Self::max_stack(env, cell))
-                .saturating_sub(cell.count);
+            let room = Self::max_stack(env, cell).saturating_sub(cell.count);
             let add = stack.count.min(room);
             cell.count += add;
             stack.count -= add;
@@ -640,6 +778,9 @@ impl Menu {
         true
     }
 }
+
+#[cfg(test)]
+mod transfer_all_tests;
 
 #[cfg(test)]
 mod tests {
@@ -700,7 +841,7 @@ mod tests {
     #[test]
     fn damaged_or_named_stacks_are_not_counted() {
         let mut named = ItemStack::new("minecraft:stick", 4);
-        named.data_mut().custom_name = Some("x".into());
+        named.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("x".into()));
         let mut damaged = ItemStack::new("minecraft:iron_sword", 1);
         damaged.damage = 3;
         let mut s = Stacked::default();

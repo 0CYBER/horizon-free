@@ -12,11 +12,14 @@ use horizon_client::{
     mobs::{Mob, Species, sulfur_cube},
     particles::{ParticleOptions, ParticleType},
     projectiles::{Projectile, ProjectileKind},
+    random_source,
 };
+// Its old home, for mixin code that names it here.
+pub(super) use horizon_client::mod_api::NativeDispensed;
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3},
     position::BlockPos,
-    random::{LegacyRandom, RandomSource},
+    random::RandomSource,
 };
 use horizon_world::{
     fluid::FluidKind,
@@ -67,11 +70,28 @@ fn y_rot(d: Direction) -> f32 {
         _ => 270.0,
     }
 }
+/// `DirectionalPlaceContext.getRotation`: `get2DDataValue() * 90`, so a
+/// vertical direction (`data2d = -1`) gives -90 where `toYRot` gives 270: the
+/// same horizontal facing, but the raw value a mod's placement hook reads.
+fn place_rotation(d: Direction) -> f32 {
+    match d {
+        Direction::Up | Direction::Down => -90.0,
+        _ => y_rot(d),
+    }
+}
 fn block_box(p: Pos) -> Aabb {
     Aabb::new(
         Vec3::new(f64::from(p.0), f64::from(p.1), f64::from(p.2)),
         Vec3::new(f64::from(p.0 + 1), f64::from(p.1 + 1), f64::from(p.2 + 1)),
     )
+}
+/// `EntitySectionStorage.forEachAccessibleNonEmptySection`: x ascending, then
+/// the packed key (`SectionPos.asLong`: z as 22 unsigned bits, then y as 20);
+/// within a section the entities go in the order they joined, which ids follow.
+fn section_order(at: Vec3) -> (i32, u32, u32) {
+    let s = |v: f64| (v.floor() as i32) >> 4;
+    let (x, y, z) = (s(at.x), s(at.y), s(at.z));
+    (x, z as u32 & 0x3F_FFFF, y as u32 & 0xF_FFFF)
 }
 fn overlaps(a: Aabb, b: Aabb) -> bool {
     let (a0, a1, b0, b1) = (
@@ -89,6 +109,11 @@ fn shrink(mut stack: ItemStack) -> Option<ItemStack> {
 }
 /// A dispenser's answer: the slot's new content and the level event played.
 type Dispensed = (Option<ItemStack>, i32);
+
+/// None keeps vanilla's behaviour; an explicit empty remainder consumes the stack.
+fn mod_dispensed(answer: Option<NativeDispensed>) -> Option<Dispensed> {
+    answer.map(|(left, event)| (left.filter(|stack| stack.count > 0), event))
+}
 
 thread_local! {
     /// `OptionalDispenseItemBehavior.success` of the registered behaviours
@@ -114,38 +139,10 @@ fn optional_event(behaviour: &'static str) -> i32 {
 #[derive(Clone, Copy)]
 enum Target {
     Player,
+    /// A server player, by connection: the integrated owner and every guest.
+    Guest(u32),
     Mob(usize),
     Stand(usize),
-}
-
-/// `RandomSource.create()`: the unseeded random an entity owns
-/// (`RandomSupport.generateUniqueSeed`). Draws of an entity's own random never
-/// touch the level's stream.
-pub(super) fn entity_random() -> LegacyRandom {
-    use std::sync::atomic::{AtomicI64, Ordering};
-    static UNIQUIFIER: AtomicI64 = AtomicI64::new(8_682_522_807_148_012);
-    const STEP: i64 = 1_181_783_497_276_652_981;
-    // seedUniquifier.updateAndGet(s -> s * STEP)
-    let mut current = UNIQUIFIER.load(Ordering::Relaxed);
-    let seed = loop {
-        let next = current.wrapping_mul(STEP);
-        match UNIQUIFIER.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
-        {
-            Ok(_) => break next,
-            Err(actual) => current = actual,
-        }
-    };
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as i64);
-    LegacyRandom::new(seed ^ nanos)
-}
-/// `new ItemEntity(level, x, y, z, stack)`'s motion, from the item's own random.
-pub(super) fn new_item_motion() -> [f64; 3] {
-    let mut r = entity_random();
-    let x = r.next_double() * 0.2 - 0.1;
-    let z = r.next_double() * 0.2 - 0.1;
-    [x, 0.2, z]
 }
 
 /// `EquipmentSlot`.
@@ -212,24 +209,17 @@ fn equine(s: Species) -> bool {
             | Species::TraderLlama
     )
 }
-/// Mobs whose body slot Horizon keeps in `extra.head` (no helmet slot is drawn).
-pub(super) fn body_in_head(s: Species) -> bool {
-    equine(s)
-        || matches!(s, Species::Wolf | Species::HappyGhast | Species::SulfurCube)
-        || horizon_client::mobs::nautilus::is_nautilus(s)
-}
 /// What a mob holds in a slot.
 pub(super) fn mob_slot_item(m: &Mob, slot: Slot) -> Option<Arc<str>> {
     let x = &m.extra;
-    let body = body_in_head(m.species());
     match slot {
         Slot::MainHand => x.main_hand.clone(),
         Slot::OffHand => x.off_hand.clone(),
         Slot::Feet => x.feet.clone(),
         Slot::Legs => x.legs.clone(),
         Slot::Chest => x.chest.clone(),
-        Slot::Head => x.head.clone().filter(|_| !body),
-        Slot::Body => x.head.clone().filter(|_| body),
+        Slot::Head => x.head.clone(),
+        Slot::Body => x.body.clone(),
         Slot::Saddle => m.saddle_item().map(|s| s.item),
     }
 }
@@ -296,12 +286,13 @@ pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
     let item: Arc<str> = stack.item.clone();
     let x = &mut m.extra;
     match slot {
-        Slot::MainHand => x.main_hand = Some(item),
+        Slot::MainHand => x.set_main_hand(Some(item)),
         Slot::OffHand => x.off_hand = Some(item),
         Slot::Feet => x.feet = Some(item),
         Slot::Legs => x.legs = Some(item),
         Slot::Chest => x.chest = Some(item),
-        Slot::Head | Slot::Body => x.head = Some(item),
+        Slot::Head => x.head = Some(item),
+        Slot::Body => x.body = Some(item),
         Slot::Saddle => m.set_saddle(Some(stack)),
     }
 }
@@ -448,14 +439,15 @@ impl Game<'_> {
 
     // ---- DefaultDispenseItemBehavior ----
 
-    /// `DispenserBlock.getDispensePosition(source, scale, offset)`.
+    /// `DispenserBlock.getDispensePosition(source, scale, offset)`; vanilla adds
+    /// `scale * step + offset` first, then adds that sum to the block centre.
     fn dispense_position(pos: Pos, facing: Direction, scale: f64, offset: [f64; 3]) -> Vec3 {
         let s = step(facing);
         let c = Self::center(pos);
         Vec3::new(
-            c[0] + scale * f64::from(s[0]) + offset[0],
-            c[1] + scale * f64::from(s[1]) + offset[1],
-            c[2] + scale * f64::from(s[2]) + offset[2],
+            c[0] + (scale * f64::from(s[0]) + offset[0]),
+            c[1] + (scale * f64::from(s[1]) + offset[1]),
+            c[2] + (scale * f64::from(s[2]) + offset[2]),
         )
     }
     /// `DefaultDispenseItemBehavior.spawnItem` at `getDispensePosition`.
@@ -478,7 +470,7 @@ impl Game<'_> {
             r.triangle(0.2, spread),
             r.triangle(f64::from(s[2]) * pow, spread),
         ];
-        self.spawn_item(stack, at, v, 0);
+        self.spawn_item_thrown(stack, at, v);
     }
     /// `DefaultDispenseItemBehavior.execute`: drop one item.
     fn default_execute(
@@ -494,6 +486,28 @@ impl Game<'_> {
         stack.count -= 1;
         self.spawn_dispensed(pos, facing, one, 6);
         (stack.count > 0).then_some(stack)
+    }
+    /// Drop one item as DefaultDispenseItemBehavior does. For a dispenser hook:
+    /// return this remainder in its answer with `CLICK`; the caller plays the
+    /// answer's event and smoke once. A client, another dimension or an unloaded
+    /// chunk keeps the input stack unchanged. API 67.
+    pub(super) fn native_dispense_default(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        facing: Direction,
+        stack: ItemStack,
+    ) -> Option<ItemStack> {
+        if !(self.serving.is_some() || self.options.dedicated.is_some())
+            || dimension != self.dim.id()
+            || !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4))
+        {
+            return Some(stack);
+        }
+        if stack.count == 0 {
+            return None;
+        }
+        self.default_execute((pos[0], pos[1], pos[2]), facing, stack)
     }
     /// `new DefaultDispenseItemBehavior().dispense(..)` including its events.
     pub(super) fn dispense_default(
@@ -559,17 +573,19 @@ impl Game<'_> {
     }
     /// `ItemStack.hurtAndBreak(amount)` without an entity.
     fn hurt_and_break(&mut self, mut stack: ItemStack, amount: u32) -> Option<ItemStack> {
-        let max = self
-            .res
-            .items()
-            .get(&stack.item)
-            .map_or(0, |i| i.max_damage);
-        if max == 0 {
+        if !horizon_client::stations::is_damageable(world_items!(self), &stack) {
             return Some(stack);
         }
-        stack.damage += self.durability_loss(&stack, amount);
-        if stack.damage >= max {
-            return shrink(ItemStack { damage: 0, ..stack });
+        let max = horizon_client::stations::max_damage(world_items!(self), &stack);
+        let loss = self.durability_loss(&stack, amount);
+        if loss == 0 {
+            return Some(stack);
+        }
+        stack.damage = (stack.damage.min(max as u32) as i32)
+            .wrapping_add(loss as i32)
+            .clamp(0, max) as u32;
+        if stack.damage >= max as u32 {
+            return shrink(stack);
         }
         Some(stack)
     }
@@ -584,6 +600,32 @@ impl Game<'_> {
         facing: Direction,
         stack: ItemStack,
     ) -> Result<Option<ItemStack>> {
+        let mut answer = None;
+        if self.serving.is_some() || self.options.dedicated.is_some() {
+            self.native_dispense_item(
+                self.dim.id(),
+                [pos.0, pos.1, pos.2],
+                facing,
+                &stack,
+                &mut answer,
+            );
+        }
+        if let Some((left, event)) = mod_dispensed(answer) {
+            if event == FAIL {
+                self.native_block_failed_dispense(
+                    self.dim.id(),
+                    [pos.0, pos.1, pos.2],
+                    &stack.item,
+                );
+            }
+            // DefaultDispenseItemBehavior.dispense: playSound, then playAnimation;
+            // a NOOP behaviour (event 0) plays neither.
+            if event != 0 {
+                self.dispenser_event(event, pos, 0);
+                self.dispenser_event(2000, pos, data_value(facing));
+            }
+            return Ok(left);
+        }
         let item = stack.item.to_string();
         let (left, event) = match item.as_str() {
             "minecraft:arrow"
@@ -611,6 +653,10 @@ impl Game<'_> {
             | "minecraft:axolotl_bucket"
             | "minecraft:tadpole_bucket"
             | "minecraft:sulfur_cube_bucket" => self.dispense_filled_bucket(pos, facing, stack)?,
+            // A mod fluid's bucket (`DispensibleContainerItem`).
+            mod_bucket if horizon_world::fluid::FluidKind::of_bucket(mod_bucket).is_some() => {
+                self.dispense_filled_bucket(pos, facing, stack)?
+            }
             "minecraft:bucket" => self.dispense_empty_bucket(pos, facing, stack)?,
             "minecraft:flint_and_steel" => self.dispense_flint_and_steel(pos, facing, stack)?,
             "minecraft:bone_meal" => self.dispense_bone_meal(pos, facing, stack)?,
@@ -632,6 +678,9 @@ impl Game<'_> {
             }
             _ => self.dispense_default_method(pos, facing, stack)?,
         };
+        if event == FAIL {
+            self.native_block_failed_dispense(self.dim.id(), [pos.0, pos.1, pos.2], &item);
+        }
         self.dispenser_event(event, pos, 0);
         self.dispenser_event(2000, pos, data_value(facing));
         Ok(left)
@@ -668,7 +717,12 @@ impl Game<'_> {
             }
             return Ok((self.default_execute(pos, facing, stack), CLICK));
         }
-        if stack.item.ends_with("_spawn_egg") {
+        // DispenserBlock.getDefaultDispenseMethod: an egg without ENTITY_DATA drops as an item.
+        if stack.item.ends_with("_spawn_egg")
+            && stack
+                .data()
+                .is_none_or(|data| data.other("!minecraft:entity_data").is_none())
+        {
             return self.dispense_spawn_egg(pos, facing, stack);
         }
         Ok((self.default_execute(pos, facing, stack), CLICK))
@@ -676,39 +730,68 @@ impl Game<'_> {
 
     // ---- entities ----
 
-    /// Entities whose box overlaps the block at `p`, in the order the level
-    /// added them (an entity section keeps insertion order; ids grow with it).
+    /// Entities whose box overlaps the block at `p`, in `getEntitiesOfClass`
+    /// order ([`section_order`]): players are entities of the level like any
+    /// other, so they sort with the mobs and stands.
     fn targets_at(&self, p: Pos) -> Vec<Target> {
         let block = block_box(p);
-        let mut found: Vec<(u32, Target)> = self
+        let key = |at: Vec3, id: u32| (section_order(at), id);
+        let mut found: Vec<(_, Target)> = self
             .mobs
             .iter()
             .enumerate()
             .filter(|(_, m)| !m.removed && overlaps(m.bounds(), block))
-            .map(|(i, m)| (m.id, Target::Mob(i)))
+            .map(|(i, m)| (key(m.position, m.id), Target::Mob(i)))
             .collect();
         found.extend(
             self.armor_stands
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| overlaps(s.bounds(), block))
-                .map(|(i, s)| (s.id, Target::Stand(i))),
+                .map(|(i, s)| (key(s.position, s.id), Target::Stand(i))),
         );
-        found.sort_by_key(|(id, _)| *id);
-        let mut out: Vec<Target> = found.into_iter().map(|(_, t)| t).collect();
+        // `ServerLevel.getEntities`: every player placed in this level, the
+        // integrated owner included (a server has no player of its own), its
+        // client loaded or not (it joins the level at placeNewPlayer/respawn).
+        if let Some(host) = &self.lan {
+            found.extend(
+                (host.hub.guests.iter())
+                    .filter(|g| host.hub.here(g) && !g.dead && !g.spectator())
+                    .filter(|g| overlaps(g.bounds(), block))
+                    .map(|g| {
+                        (
+                            key(
+                                Vec3::new(g.position[0], g.position[1], g.position[2]),
+                                g.entity_id as u32,
+                            ),
+                            Target::Guest(g.conn),
+                        )
+                    }),
+            );
+        }
         if let Some(v) = self.player_view()
             && v.alive
             && !self.spectator()
             && overlaps(v.bounds, block)
         {
-            out.push(Target::Player);
+            // The local player joins before the chunks around it load their
+            // entities (prepareLevels loads only saved tickets): the lowest id,
+            // 0 as `own_entity_id` has it.
+            found.push((key(v.position, 0), Target::Player));
         }
-        out
+        found.sort_by_key(|(k, _)| *k);
+        found.into_iter().map(|(_, t)| t).collect()
     }
-    /// `EntityType.getYOffset(level, pos, false, box)`: the entity box set on
+    /// `EntityType.getYOffset(level, pos, false, box)`: [`Self::drop_offset_from`] without
+    /// `movedUp`.
+    pub(super) fn drop_offset(&self, width: f64, height: f64, p: Pos) -> f64 {
+        self.drop_offset_from(width, height, p, false)
+    }
+    /// `EntityType.getYOffset(level, pos, movedUp, box)`: the entity box set on
     /// top of the block (`setPos(x + 0.5, y + 1, z + 0.5)`) falls one block
-    /// against the collision shapes overlapping that block alone.
-    fn drop_offset(&self, width: f64, height: f64, p: Pos) -> f64 {
+    /// against the collision shapes overlapping that block, or, `moved_up`, two
+    /// blocks against those of the block and the one under it.
+    pub(super) fn drop_offset_from(&self, width: f64, height: f64, p: Pos, moved_up: bool) -> f64 {
         use horizon_world::{
             block_collision_scan::BlockCollisionScan, collision_context::CollisionContext,
         };
@@ -720,7 +803,11 @@ impl Game<'_> {
             Vec3::new(x + h, y + height, z + h),
         );
         let cell = Aabb::new(
-            Vec3::new(f64::from(p.0), f64::from(p.1), f64::from(p.2)),
+            Vec3::new(
+                f64::from(p.0),
+                f64::from(p.1) - if moved_up { 1.0 } else { 0.0 },
+                f64::from(p.2),
+            ),
             Vec3::new(
                 f64::from(p.0) + 1.0,
                 f64::from(p.1) + 1.0,
@@ -732,7 +819,7 @@ impl Game<'_> {
             binding: self.collision,
             subject: None,
         };
-        let mut amount = -1.0;
+        let mut amount = if moved_up { -2.0 } else { -1.0 };
         // Level.getCollisions(null, aabb): CollisionContext.empty().
         if let Ok(scan) = BlockCollisionScan::new(
             &mut scene,
@@ -756,6 +843,23 @@ impl Game<'_> {
         } else {
             format!("minecraft:{kind}")
         };
+        // Ender Dragons are simulated separately from `Mob` and therefore do
+        // not have a mob-type registry entry for the generic dispenser path.
+        if name == "minecraft:ender_dragon" {
+            // `EntityType.getYOffset` uses the created entity's full 16 by 8
+            // bounding box when the dispenser asks to move it down.
+            let y_off = if try_move_down {
+                self.drop_offset(16.0, 8.0, p)
+            } else {
+                0.0
+            };
+            let at = [
+                f64::from(p.0) + 0.5,
+                f64::from(p.1) + y_off,
+                f64::from(p.2) + 0.5,
+            ];
+            return self.spawn_dragon_spawned(at);
+        }
         let t = self.res.mob_types().get(&name)?.clone();
         let y_off = if try_move_down {
             self.drop_offset(t.width, t.height, p)
@@ -767,16 +871,40 @@ impl Game<'_> {
             f64::from(p.1) + y_off,
             f64::from(p.2) + 0.5,
         ];
-        let id = self.spawn_mob(&name, at, true)?;
+        // EntityType.create: `snapTo(.., Mth.wrapDegrees(level.random.nextFloat() * 360), 0)`.
+        let id = self.spawn_mob_reason_yaw(
+            &name,
+            at,
+            true,
+            false,
+            false,
+            super::creatures::SpawnYaw::Created,
+        )?;
         // finalizeSpawn's riders (chicken jockeys, spider jockeys...) come
         // with a dispensed mob as with any spawn that is not natural.
         self.spawn_jockeys(id, false);
         Some(id)
     }
+    /// `Player.setItemSlot` of a dispensed piece for the player in place:
+    /// `onEquipItem` plays the sound and the event; the modifiers follow.
+    fn put_on_player(&mut self, slot: Slot, one: &ItemStack) {
+        let name = match slot.armor_index() {
+            Some(i) => {
+                self.armor[i] = Some(one.clone());
+                ["head", "chest", "legs", "feet"][i]
+            }
+            None => {
+                self.offhand = Some(one.clone());
+                "offhand"
+            }
+        };
+        self.player_equipped(name, Some(one));
+        self.apply_equipment();
+    }
     /// `EquipmentDispenseItemBehavior.dispenseEquipment`: the first living
     /// entity in front that `canEquipWithDispenser` gets one of the item.
     fn dispense_equipment(&mut self, pos: Pos, facing: Direction, stack: &mut ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item) else {
+        let Some(info) = self.items().get(&stack.item) else {
             return false;
         };
         let (Some(slot), true) = (
@@ -809,8 +937,23 @@ impl Game<'_> {
                         _ => slot.armor_index().is_some_and(|i| self.armor[i].is_none()),
                     }
             }
+            Target::Guest(conn) => {
+                allows("minecraft:player")
+                    && self
+                        .lan
+                        .as_ref()
+                        .and_then(|h| h.hub.guest(conn))
+                        .is_some_and(|g| match slot {
+                            Slot::OffHand => g.offhand.is_none(),
+                            _ => slot.armor_index().is_some_and(|i| g.armor[i].is_none()),
+                        })
+            }
+            // ArmorStand.canUseSlot: not a locked slot, and a hand needs arms.
             Target::Stand(i) => slot.stand_index().is_some_and(|s| {
-                allows("minecraft:armor_stand") && self.armor_stands[i].equipment[s].is_none()
+                let stand = &self.armor_stands[i];
+                allows("minecraft:armor_stand")
+                    && !stand.is_disabled(s)
+                    && stand.equipment[s].is_none()
             }),
             Target::Mob(i) => {
                 let m = &self.mobs[i];
@@ -827,20 +970,34 @@ impl Game<'_> {
         stack.count -= 1;
         // setItemSlot: onEquipItem plays the equip sound and the equip event.
         let (at, sound) = match target {
+            Target::Guest(conn) => {
+                // The guest's own turn: their state in place, so the slot, the
+                // sound, the game event and the equipment sync run as for the host.
+                let done = self
+                    .for_player(super::commands::Target::Guest(conn), |g| {
+                        g.put_on_player(slot, &one)
+                    })
+                    .is_some();
+                if !done {
+                    stack.count += 1;
+                    return false;
+                }
+                self.native_block_dispense_armor(
+                    self.dim.id(),
+                    [pos.0, pos.1, pos.2],
+                    &stack.item,
+                    "player",
+                );
+                return true;
+            }
             Target::Player => {
-                // Player.setItemSlot: onEquipItem plays the sound and the event.
-                let name = match slot.armor_index() {
-                    Some(i) => {
-                        self.armor[i] = Some(one.clone());
-                        ["head", "chest", "legs", "feet"][i]
-                    }
-                    None => {
-                        self.offhand = Some(one.clone());
-                        "offhand"
-                    }
-                };
-                self.player_equipped(name, Some(&one));
-                self.apply_equipment();
+                self.put_on_player(slot, &one);
+                self.native_block_dispense_armor(
+                    self.dim.id(),
+                    [pos.0, pos.1, pos.2],
+                    &stack.item,
+                    "player",
+                );
                 return true;
             }
             Target::Stand(i) => {
@@ -869,15 +1026,28 @@ impl Game<'_> {
             }
             let who = match target {
                 Target::Mob(i) => Some(horizon_client::mobs::Who::Mob(self.mobs[i].id)),
-                Target::Player | Target::Stand(_) => None,
+                Target::Player | Target::Guest(_) | Target::Stand(_) => None,
             };
             let ctx = self.who_context(who, None);
             self.post_game_event("minecraft:equip", [at.x, at.y, at.z], ctx);
         }
+        self.native_block_dispense_armor(
+            self.dim.id(),
+            [pos.0, pos.1, pos.2],
+            &stack.item,
+            match target {
+                Target::Stand(_) => "armor_stand",
+                Target::Mob(_) => "mob",
+                Target::Player | Target::Guest(_) => "player",
+            },
+        );
         true
     }
     /// After `EntityType.spawn` / `MobBucketItem.spawn`: `mob.playAmbientSound()`.
     fn mob_ambient(&mut self, id: u32) -> Result<()> {
+        if self.dragon_spawn_ambient(id) {
+            return Ok(());
+        }
         let Some(i) = self.mobs.iter().position(|m| m.id == id) else {
             return Ok(());
         };
@@ -890,24 +1060,63 @@ impl Game<'_> {
         self.mobs.insert(i, m);
         self.handle_mob_events(events)
     }
-    /// A mob a bucket emptied: `setFromBucket` keeps it, then it calls out.
-    pub(super) fn mob_placed(&mut self, id: u32) -> Result<()> {
+    /// A mob a bucket emptied (`MobBucketItem.spawn`): the bucket's components
+    /// and entity data (`loadFromBucketTag`), then `setFromBucket(true)`, which
+    /// `requiresCustomPersistence` reads, then it calls out. Only the bucket's
+    /// data can make it persistent, not the spawn: `spawn_mob_at` creates a
+    /// persistent mob. A tadpole's setter does nothing: its `fromBucket` is
+    /// always true.
+    pub(super) fn mob_placed(&mut self, id: u32, stack: &ItemStack) -> Result<()> {
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            m.persistent = true;
+            m.persistent = false;
+            horizon_client::entity_nbt::apply_item_components(m, stack);
+            match m.species() {
+                Species::Cod
+                | Species::Salmon
+                | Species::Pufferfish
+                | Species::TropicalFish
+                | Species::Axolotl => m.extra.from_bucket = true,
+                Species::SulfurCube => {
+                    // SulfurCube.loadFromBucketTag: its own lowercase keys, 0
+                    // and false when absent, whatever `Age` the data holds.
+                    let data = stack
+                        .data()
+                        .and_then(|c| c.other("minecraft:bucket_entity_data"));
+                    let age = data.and_then(|d| horizon_client::save::number(d.get("age")));
+                    m.extra.age = age.unwrap_or(0) as i32;
+                    m.extra.age_locked =
+                        data.is_some_and(|d| horizon_client::entity_nbt::flag(d, "age_locked"));
+                    m.extra.scratch[3] = 1;
+                }
+                _ => {}
+            }
         }
         self.mob_ambient(id)
     }
+    /// `SpawnEggItemBehavior.execute`: spawn the type selected by the stack's entity data.
     fn dispense_spawn_egg(
         &mut self,
         pos: Pos,
         facing: Direction,
         stack: ItemStack,
     ) -> Result<Dispensed> {
-        let kind = stack.item.trim_end_matches("_spawn_egg").to_owned();
+        let (kind, _) = horizon_client::block_entity_item::spawn_egg_on_spawner(&stack, false);
         let front = offset(pos, facing);
         let Some(id) = self.spawn_mob_at(&kind, front, facing != Direction::Up) else {
             return Ok((Some(stack), CLICK));
         };
+        // EntityType.create: `finalizeSpawn` first, the egg's components after.
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            // SpawnEggItemBehavior's `EntityType.spawn` never calls
+            // `setPersistenceRequired`, as a spawn egg used by hand doesn't;
+            // only the elder guardian's and copper golem's constructors do.
+            m.persistent = matches!(m.species(), Species::ElderGuardian | Species::CopperGolem);
+            horizon_client::entity_nbt::apply_item_components(m, &stack);
+        }
+        // EntityType.updateCustomEntityTag: a configured egg
+        // (`/give @s pig_spawn_egg[minecraft:entity_data={…}]`) spawns the mob
+        // it describes from a dispenser too, not only from a player's hand.
+        self.apply_spawn_egg_entity_data(id, &stack);
         self.mob_ambient(id)?;
         // SpawnEggItemBehavior: the entity was placed by the dispenser.
         self.post_block_game_event("minecraft:entity_place", [pos.0, pos.1, pos.2], None, None);
@@ -974,20 +1183,24 @@ impl Game<'_> {
             count: 1,
             ..stack.clone()
         };
+        // A rocket makes its own random in `launch_angled_rocket`: the constructor's draws
+        // and then the shot's spread come from that one.
+        if item == "minecraft:firework_rocket" {
+            self.launch_angled_rocket(at, &one, None, |own| {
+                let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
+                shot.shoot(own, dir, power, uncertainty);
+                shot.velocity
+            });
+            return;
+        }
         // Projectile.shoot spreads the shot with the projectile's own random.
-        let mut own = entity_random();
         match item.as_str() {
             "minecraft:experience_bottle"
             | "minecraft:splash_potion"
             | "minecraft:lingering_potion" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
-                shot.shoot(&mut own, dir, power, uncertainty);
+                shot.shoot(&mut random_source::entity(), dir, power, uncertainty);
                 self.launch_thrown(one, at, shot.velocity, None);
-            }
-            "minecraft:firework_rocket" => {
-                let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
-                shot.shoot(&mut own, dir, power, uncertainty);
-                self.launch_angled_rocket(at, shot.velocity, &one);
             }
             _ => {
                 let kind = match item.as_str() {
@@ -1033,7 +1246,7 @@ impl Game<'_> {
                     a.set_item(&one);
                     a.pickup = horizon_client::arrows::Pickup::Allowed;
                 }
-                shot.shoot(&mut own, dir, power, uncertainty);
+                shot.shoot_own(dir, power, uncertainty);
                 self.add_projectile(shot);
             }
         }
@@ -1051,8 +1264,14 @@ impl Game<'_> {
         // EntityType.create rolls a yaw from the level random before the stack config turns it.
         let _ = self.world.random.next_float();
         self.next_entity += 1;
-        let stand =
+        let (_, uuid) = horizon_client::mobs::living_random();
+        self.persist.uuids.insert(self.next_entity, uuid);
+        let mut stand =
             horizon_client::entities::ArmorStand::new(self.next_entity, foot, y_rot(facing));
+        // Entity.applyImplicitComponents: a name from an anvil names the stand.
+        if let Some(name) = stack.custom_name() {
+            stand.custom_name = Some(horizon_client::text::Text::literal(name));
+        }
         self.world.modified.insert((front.0 >> 4, front.2 >> 4));
         self.armor_stands.push(stand);
         (shrink(stack), CLICK)
@@ -1119,7 +1338,19 @@ impl Game<'_> {
             boat = boat.with_chest();
         }
         self.world.modified.insert((front.0 >> 4, front.2 >> 4));
+        let (id, kind, yaw) = (boat.id, boat.entity_type(), boat.yaw);
         self.boats.push(boat);
+        // BoatDispenseItemBehavior: createDefaultStackConfig with no user,
+        // then setYRot(direction.toYRot()).
+        self.apply_vehicle_stack_config(super::commands::Target::Boat(id), &kind, &stack, false);
+        self.set_boat_yaw(id, yaw);
+        if self.serving.is_some() || self.options.dedicated.is_some() {
+            let boat = self.boats.last().unwrap();
+            self.native_vehicle_create(
+                boat.entity_type().as_str(),
+                [boat.position.x, boat.position.y, boat.position.z],
+            );
+        }
         (shrink(stack), CLICK)
     }
     /// `MinecartDispenseItemBehavior`.
@@ -1159,6 +1390,21 @@ impl Game<'_> {
         );
         self.world.modified.insert((front.0 >> 4, front.2 >> 4));
         self.carts.push(cart);
+        // AbstractMinecart.createMinecart: createDefaultStackConfig with no user.
+        let id = self.next_entity;
+        self.apply_vehicle_stack_config(
+            super::commands::Target::Cart(id),
+            kind.id(),
+            &stack,
+            false,
+        );
+        if self.serving.is_some() || self.options.dedicated.is_some() {
+            let cart = self.carts.last().unwrap();
+            self.native_vehicle_create(
+                cart.kind.id(),
+                [cart.position.x, cart.position.y, cart.position.z],
+            );
+        }
         (shrink(stack), CLICK)
     }
 
@@ -1176,43 +1422,26 @@ impl Game<'_> {
         let (content, sound, mob) =
             horizon_client::items::bucket_contents(&item).expect("filled bucket dispatcher");
         let target_pos = Self::pos_of(target);
-        let emptied = self
-            .with_level(|b, level, ticks| b.bucket_empty(level, ticks, target_pos, content, sound));
+        let emptied = self.with_level(|b, level, ticks| {
+            b.bucket_empty(level, ticks, target_pos, None, content, sound, false, false)
+        });
         self.process_level_events()?;
-        if !emptied {
+        if emptied.is_none() {
             return Ok((self.dispense_default(pos, facing, stack), CLICK));
         }
-        if self.dim == super::Dim::Nether
+        if self.dimension_type().water_evaporates
             && matches!(
                 content,
                 BucketContent::Fluid(FluidKind::Water) | BucketContent::MobWater
             )
         {
-            // The water evaporates in a cloud of smoke.
-            let c = Self::center(target);
-            for _ in 0..8 {
-                let r = self.particles.random();
-                let p = [
-                    f64::from(target.0) + (r.next_double() * 2.0 - 1.0),
-                    f64::from(target.1) + (r.next_double() * 2.0 - 1.0),
-                    f64::from(target.2) + (r.next_double() * 2.0 - 1.0),
-                ];
-                let _ = c;
-                self.particles.add(
-                    &ParticleOptions::simple(ParticleType::LargeSmoke),
-                    p,
-                    [0.0; 3],
-                );
-            }
+            self.evaporation_smoke([target.0, target.1, target.2]);
         }
         if let Some(kind) = mob {
-            // MobBucketItem.checkExtraContent: the mob (from the bucket, so
-            // persistent) calls out, then ENTITY_PLACE.
+            // MobBucketItem.checkExtraContent: the mob from the bucket calls
+            // out, then ENTITY_PLACE.
             if let Some(id) = self.spawn_mob_at(kind, target, true) {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    horizon_client::entity_nbt::load_bucket_data(m, &stack);
-                }
-                self.mob_placed(id)?;
+                self.mob_placed(id, &stack)?;
             }
             self.post_block_game_event(
                 "minecraft:entity_place",
@@ -1235,7 +1464,8 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = Self::pos_of(offset(pos, facing));
-        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target));
+        let picked =
+            self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target, false));
         self.process_level_events()?;
         match picked {
             Some(filled) => {
@@ -1297,6 +1527,9 @@ impl Game<'_> {
         if self
             .with_level(|b, level, ticks| b.fire_can_be_placed_at(level, ticks, target_pos, facing))
         {
+            if !self.native_block_ignite_allowed(target_pos, "flint_and_steel") {
+                return Ok((Some(stack), CLICK));
+            }
             let fire =
                 self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, target_pos));
             self.level_set([target.0, target.1, target.2], fire)?;
@@ -1317,8 +1550,8 @@ impl Game<'_> {
                 None,
             );
         } else if &*name == "minecraft:tnt" {
-            if self.ui.rules.bool("tnt_explodes") {
-                self.spawn_primed_tnt(target_pos, false);
+            if self.ui.rules.bool("tnt_explodes") && self.tnt_prime_allowed(target_pos) {
+                self.spawn_primed_tnt(target_pos, false, None, None);
                 self.with_level(|b, level, ticks| b.remove_block(level, ticks, target_pos, false));
                 self.process_level_events()?;
             } else {
@@ -1378,11 +1611,15 @@ impl Game<'_> {
         if self.sulfur_cube_swallow(front, &stack) {
             return (shrink(stack), optional_event("tnt"));
         }
+        let target = Self::pos_of(front);
+        if !self.tnt_prime_allowed(target) {
+            set_success("tnt", false);
+            return (Some(stack), FAIL);
+        }
         set_success("tnt", true);
         // new PrimedTnt(level, x + 0.5, y, z + 0.5, null), its sound and ENTITY_PLACE.
-        let target = Self::pos_of(front);
         let rot = self.world.random.next_double() * f64::from(std::f32::consts::TAU);
-        self.add_primed_tnt(target, rot, 80);
+        self.add_primed_tnt(target, rot, 80, None, None);
         self.audio.play(
             "minecraft:entity.tnt.primed",
             Some([
@@ -1412,7 +1649,7 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
         let free = self.res.facts().is_air(self.block_at(target))
-            && target.1 >= horizon_client::chunk::MIN_Y + 2
+            && target.1 >= self.world.bottom_y() + 2
             && self.ui.difficulty != 0
             && self.can_build_wither(target);
         if free {
@@ -1456,30 +1693,14 @@ impl Game<'_> {
             if equipped { CLICK } else { FAIL },
         ))
     }
-    /// `WitherSkullBlock.getOrCreateWitherBase().find(level, pos)`: the soul
-    /// sand T below the row `head` is in.
+    /// `WitherSkullBlock.getOrCreateWitherBase().find(level, pos)`: a soul
+    /// sand T for the skull row, in any orientation.
     fn can_build_wither(&self, head: Pos) -> bool {
-        let soul = |p: Pos| {
-            matches!(
-                &*self.dispenser_block_name(p),
-                "minecraft:soul_sand" | "minecraft:soul_soil"
-            )
-        };
-        let air = |p: Pos| self.res.facts().is_air(self.block_at(p));
-        for (ax, az) in [(1, 0), (0, 1)] {
-            for col in 0..3 {
-                let left = (head.0 - ax * col, head.1, head.2 - az * col);
-                let at = |c: i32, row: i32| (left.0 + ax * c, left.1 - row, left.2 + az * c);
-                if (0..3).all(|c| soul(at(c, 1)))
-                    && soul(at(1, 2))
-                    && air(at(0, 2))
-                    && air(at(2, 2))
-                {
-                    return true;
-                }
-            }
-        }
-        false
+        self.find_wither_pattern(
+            horizon_client::block_pattern::WITHER_BASE,
+            [head.0, head.1, head.2],
+        )
+        .is_some()
     }
     fn dispense_carved_pumpkin(
         &mut self,
@@ -1532,7 +1753,7 @@ impl Game<'_> {
                 f64::from(front.2) + 0.5,
             ),
             inside: false,
-            yaw: y_rot(facing),
+            yaw: place_rotation(facing),
             pitch: 0.0,
             sneaking: false,
             item: stack.item.to_string(),
@@ -1549,8 +1770,12 @@ impl Game<'_> {
         };
         let target = (placed.x, placed.y, placed.z);
         let state = self.apply_item_block_state([target.0, target.1, target.2], state, &stack)?;
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
+        if !self.world.block_entities.stateful_entity(state.0)
+            && let Some(entity) = self.new_block_entity_for_state(state)
+        {
             self.world.block_entities.insert(target, entity);
+        }
+        if self.world.block_entities.get(&target).is_some() {
             self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         }
         self.process_level_events()?;
@@ -1699,15 +1924,12 @@ impl Game<'_> {
         table: &str,
         held: Option<&ItemStack>,
     ) -> Vec<ItemStack> {
-        match self.res.items().loot_sequence(parent) {
+        match world_items!(self).loot_sequence(parent) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items().loot_table_from(table, false, held, random)
+                world_items!(self).loot_table_from(table, false, held, random)
             }
-            None => self
-                .res
-                .items()
-                .loot_table(table, false, held, &mut self.world.random),
+            None => world_items!(self).loot_table(table, false, held, &mut self.world.random),
         }
     }
     /// `Entity.spawnAtLocation(level, stack, offset)`: an item at the entity's
@@ -1718,9 +1940,7 @@ impl Game<'_> {
         y_offset: f64,
         stack: ItemStack,
     ) -> [f64; 3] {
-        let v = new_item_motion();
-        self.spawn_item(stack, [at.x, at.y + y_offset, at.z], v, 10);
-        v
+        self.spawn_item_own(stack, [at.x, at.y + y_offset, at.z], 10)
     }
     /// `Mob.convertTo(type, ConversionParams.single(this, false, false))`: a
     /// new mob of `kind` in the same place (no spawn finalization, so no
@@ -1728,6 +1948,16 @@ impl Game<'_> {
     /// is discarded.
     pub(super) fn convert_mob(&mut self, index: usize, kind: &str) -> Option<u32> {
         let t = self.res.mob_types().get(kind).cloned()?;
+        let (old_id, old_kind) = (
+            self.mobs[index].id,
+            super::native_hooks::mob_kind(&self.mobs[index]),
+        );
+        // LivingConversionEvent.Pre: a canceled conversion leaves the mob.
+        let mut cancel = false;
+        self.native_living_conversion_pre(old_id, &old_kind, kind, &mut cancel);
+        if cancel {
+            return None;
+        }
         let old = &self.mobs[index];
         self.next_entity += 1;
         let mut mob = Mob::new(self.next_entity, t, old.position, old.yaw);
@@ -1749,6 +1979,7 @@ impl Game<'_> {
             &mut mob.extra.main_hand,
             &mut mob.extra.off_hand,
             &mut mob.extra.head,
+            &mut mob.extra.body,
             &mut mob.extra.chest,
             &mut mob.extra.legs,
             &mut mob.extra.feet,
@@ -1758,6 +1989,9 @@ impl Game<'_> {
         let id = mob.id;
         self.mobs[index].removed = true;
         self.mobs.push(mob);
+        self.native_mobs_joined(self.mobs.len() - 1, false);
+        self.native_entity_transform(old_id, &old_kind, id, kind);
+        self.native_living_conversion_post(old_id, &old_kind, id, kind);
         Some(id)
     }
     /// `ShearsDispenseItemBehavior.tryShearEntity`: the first live, ready
@@ -1775,6 +2009,8 @@ impl Game<'_> {
                 continue;
             }
             let at = m.position;
+            let entity_id = m.id;
+            let kind = m.kind.id.clone();
             let sound_at = Some([at.x, at.y, at.z]);
             match m.species() {
                 Species::SulfurCube if sulfur_cube::has_body(m) => {
@@ -1782,7 +2018,7 @@ impl Game<'_> {
                     // passenger attachment, and nothing is swallowed for 5 s.
                     let height = f64::from(m.height());
                     let id = m.id;
-                    if let Some(body) = self.mobs[i].extra.head.take() {
+                    if let Some(body) = self.mobs[i].extra.body.take() {
                         self.spawn_at_location(at, height, ItemStack::new(&body, 1));
                     }
                     // setItemSlot(BODY, EMPTY): an unequip.
@@ -1816,7 +2052,7 @@ impl Game<'_> {
                                 f64::from(r.next_float() * 0.05),
                                 f64::from((r.next_float() - r.next_float()) * 0.1),
                             ];
-                            if let Some(item) = self.dropped.last_mut() {
+                            if let Some(item) = self.just_spawned_item() {
                                 item.velocity = Vec3::new(
                                     item.velocity.x + push[0],
                                     item.velocity.y + push[1],
@@ -1875,24 +2111,33 @@ impl Game<'_> {
                     self.audio
                         .play("minecraft:entity.mooshroom.shear", sound_at, 1.0, 1.0);
                     // convertTo(COW): the cow takes its place, then the mushrooms drop.
-                    self.convert_mob(i, "minecraft:cow");
-                    let drops = self.sequence_loot(
-                        "minecraft:shearing/mooshroom",
-                        &format!("minecraft:shearing/mooshroom/{variant}"),
-                        Some(&shears),
-                    );
-                    for stack in drops {
-                        for _ in 0..stack.count {
-                            let one = ItemStack {
-                                count: 1,
-                                ..stack.clone()
-                            };
-                            self.spawn_at_location(at, height, one);
+                    // A canceled conversion (LivingConversionEvent.Pre) drops nothing.
+                    if self.convert_mob(i, "minecraft:cow").is_some() {
+                        self.mooshroom_shear_puff([at.x, at.y, at.z], height);
+                        let drops = self.sequence_loot(
+                            "minecraft:shearing/mooshroom",
+                            &format!("minecraft:shearing/mooshroom/{variant}"),
+                            Some(&shears),
+                        );
+                        for stack in drops {
+                            for _ in 0..stack.count {
+                                let one = ItemStack {
+                                    count: 1,
+                                    ..stack.clone()
+                                };
+                                self.spawn_item_own(one, [at.x, at.y + height, at.z], 0);
+                            }
                         }
                     }
                 }
                 _ => continue,
             }
+            self.native_block_shear_entity(
+                self.dim.id(),
+                [target.0, target.1, target.2],
+                entity_id,
+                &kind,
+            );
             self.post_block_game_event(
                 "minecraft:shear",
                 [target.0, target.1, target.2],
@@ -1920,7 +2165,7 @@ impl Game<'_> {
                 };
                 (Holder::Player, v.bounds.center(), None)
             }
-            Target::Stand(_) => return false,
+            Target::Guest(_) | Target::Stand(_) => return false,
         };
         let area = Aabb::new(centre, centre).inflate(Vec3::new(16.0, 16.0, 16.0));
         let mut leashed: Vec<(u32, usize)> = self
@@ -2018,16 +2263,16 @@ impl Game<'_> {
             .collect();
         for i in cubes {
             let m = &self.mobs[i];
-            if m.is_baby() || m.extra.head.as_deref() == Some(&*stack.item) {
+            if m.is_baby() || m.extra.body.as_deref() == Some(&*stack.item) {
                 continue;
             }
             let (at, height) = (m.position, f64::from(m.height()));
             // The swallowed block comes out on top (the passenger attachment).
-            if let Some(old) = self.mobs[i].extra.head.take() {
+            if let Some(old) = self.mobs[i].extra.body.take() {
                 self.spawn_at_location(at, height, ItemStack::new(&old, 1));
             }
             let m = &mut self.mobs[i];
-            m.extra.head = Some(stack.item.clone());
+            m.extra.body = Some(stack.item.clone());
             m.persistent = true;
             let (at, id) = (m.position, m.id);
             // setItemSlot: a body item without `equippable` posts UNEQUIP.
@@ -2140,6 +2385,260 @@ pub(super) fn tipped_effect(stack: &ItemStack) -> Option<(&'static str, i32)> {
             def.effects
                 .iter()
                 .find(|(id, _, _)| !horizon_client::brewing::effect(id).is_some_and(|e| e.instant))
-                .map(|(id, duration, _)| (*id, (duration / 8).max(1)))
+                .map(|(id, duration, _)| {
+                    (
+                        horizon_client::brewing::namespaced(id),
+                        (duration / 8).max(1),
+                    )
+                })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mod_dispenser_answers_preserve_fallback_and_own_consumption() {
+        assert!(
+            mod_dispensed(None).is_none(),
+            "no registered behaviour keeps vanilla"
+        );
+        assert_eq!(mod_dispensed(Some((None, CLICK))), Some((None, CLICK)));
+        let stack = ItemStack::new("minecraft:stone", 7);
+        let Some((Some(left), event)) = mod_dispensed(Some((Some(stack.clone()), FAIL))) else {
+            panic!("handled stack")
+        };
+        assert_eq!(left, stack, "the returned remainder is not consumed again");
+        assert_eq!(event, FAIL, "the answer chooses its sound");
+        assert_eq!(
+            mod_dispensed(Some((Some(ItemStack { count: 0, ..stack }), 0))),
+            Some((None, 0))
+        );
+    }
+
+    use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::{Arc, atomic::AtomicI32, mpsc};
+
+    /// A server with no player of its own, an open hub and one guest (conn 2)
+    /// standing at (8.5, 200, 8.5) on a stone floor.
+    fn server_with_guest() -> Game<'static> {
+        let mut game = super::super::native_machines::tests::server_game();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.block_ticks
+            .add_empty_chunk(horizon_core::position::ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+        game.lan_host(
+            super::super::lan::LanSettings {
+                port: 0,
+                guest_commands: true,
+                force_game_mode: false,
+            },
+            NetConfig {
+                announce: false,
+                ..NetConfig::loopback(0, "dispenser-equip-test".into(), 2)
+            },
+            HubConfig {
+                default_game_mode: 0,
+                guest_commands: true,
+                force_game_mode: false,
+                hardcore: false,
+                view_distance: 2,
+                simulation_distance: 2,
+                dimension: "minecraft:overworld".into(),
+                allow_flight: false,
+                seed: 0,
+                max_players: 2,
+                integrated: false,
+                levels: Default::default(),
+            },
+        )
+        .unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut guest = Guest::new(
+            Joined {
+                conn: 2,
+                uuid: 208,
+                name: "Wearer".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(2),
+                brand: "test".into(),
+                sender: PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+                expected: false,
+                configured: Default::default(),
+            },
+            2,
+            [8.5, 200.0, 8.5],
+            2,
+        );
+        guest.dimension = "minecraft:overworld".into();
+        guest.placed = true;
+        guest.loaded = true;
+        game.lan.as_mut().unwrap().hub.guests.push(guest);
+        game
+    }
+
+    fn dispense_at_guest(game: &mut Game<'_>, item: &str) -> (bool, u32) {
+        let mut stack = ItemStack::new(item, 2);
+        // The dispenser sits one block over the guest's feet, facing down.
+        let done = game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack);
+        (done, stack.count)
+    }
+
+    /// `EquipmentDispenseItemBehavior`: a server's player, the integrated
+    /// owner or a guest, takes the piece (a server has no player of its own).
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_dispenser_equips_a_server_player_in_front() {
+        let mut game = server_with_guest();
+        assert!(game.player.is_none(), "the server thread has no player");
+        // The guest's feet are in block (8, 200, 8): the dispenser at y 201
+        // facing down targets the block under it.
+        let mut stack = ItemStack::new("minecraft:carved_pumpkin", 3);
+        assert!(game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
+        assert_eq!(stack.count, 2);
+        let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
+        assert_eq!(
+            guest.armor[0].as_ref().map(|s| (&*s.item, s.count)),
+            Some(("minecraft:carved_pumpkin", 1))
+        );
+        // The head is taken now: a second pumpkin is not dispensed onto them.
+        assert!(!game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
+        assert_eq!(stack.count, 2);
+        // A boots piece still has its own empty slot.
+        let (done, left) = dispense_at_guest(&mut game, "minecraft:iron_boots");
+        assert_eq!((done, left), (true, 1), "boots go on the free feet slot");
+        let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
+        assert!(guest.armor[3].is_some() && guest.armor[1].is_none());
+    }
+
+    /// A spectator is not a target (`canEquipWithDispenser`: `!isSpectator()`).
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_dispenser_skips_a_spectator_and_a_dead_player() {
+        let mut game = server_with_guest();
+        for spectate in [true, false] {
+            let g = &mut game.lan.as_mut().unwrap().hub.guests[0];
+            g.game_mode = if spectate { 3 } else { 0 };
+            g.dead = !spectate;
+            let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
+            assert!(!game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
+            assert_eq!(stack.count, 1);
+        }
+    }
+
+    /// `ArmorStand.canUseSlot` through `isDisabled`: the first stand in front
+    /// that can wear the piece gets it. Bit `1 << filterBit` locks a slot
+    /// (head 4, chest 3, legs 2, feet 1); a hand needs arms.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_dispenser_skips_an_armor_stand_whose_slot_is_locked() {
+        use horizon_client::entities::ArmorStand;
+        let mut game = server_with_guest();
+        game.lan.as_mut().unwrap().hub.guests.clear();
+        let at = horizon_core::geometry::Vec3::new(8.5, 200.0, 8.5);
+        let mut stands = [(1, 1u32 << 4), (2, 0)].map(|(id, locked)| {
+            let mut s = ArmorStand::new(id, at, 0.0);
+            s.disabled_slots = locked as i32;
+            s
+        });
+        stands[0].show_arms = true;
+        game.armor_stands = stands.to_vec().into();
+        // The head-locked first stand is skipped for a helmet; the second wears it.
+        let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
+        assert!(game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
+        assert!(game.armor_stands[0].equipment[5].is_none());
+        assert!(game.armor_stands[1].equipment[5].is_some());
+        // The same stand takes chest armour: only its head is locked.
+        let mut stack = ItemStack::new("minecraft:iron_chestplate", 1);
+        assert!(game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
+        assert!(game.armor_stands[0].equipment[4].is_some());
+        // Every stand locked for that slot: nothing takes it (the dispenser ejects it).
+        game.armor_stands[0].disabled_slots = 1 << 4;
+        game.armor_stands[1].disabled_slots = 1 << 4;
+        game.armor_stands[1].equipment[5] = None;
+        let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
+        assert!(!game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
+        assert_eq!(stack.count, 1);
+    }
+
+    /// A stand of entity id `id` standing at `x`, 200, `z`.
+    fn stand_at(id: u32, x: f64, z: f64) -> horizon_client::entities::ArmorStand {
+        let at = horizon_core::geometry::Vec3::new(x, 200.0, z);
+        horizon_client::entities::ArmorStand::new(id, at, 0.0)
+    }
+
+    /// A guest whose client is still on its loading screen (joined or
+    /// respawned, no ServerboundPlayerLoadedPacket yet) is in the level all the
+    /// same: `getEntitiesOfClass` finds it and it wears the piece.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_dispenser_equips_a_player_whose_client_is_still_loading() {
+        let mut game = server_with_guest();
+        let g = &mut game.lan.as_mut().unwrap().hub.guests[0];
+        (g.loaded, g.loading) = (false, true);
+        let (done, left) = dispense_at_guest(&mut game, "minecraft:iron_helmet");
+        assert_eq!((done, left), (true, 1));
+        let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
+        let head = guest.armor[0].as_ref().map(|s| &*s.item);
+        assert_eq!(head, Some("minecraft:iron_helmet"));
+    }
+
+    /// Players are entities of the level: in one section they go in join
+    /// order (entity ids) with the mobs and stands, not after them.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_player_and_a_stand_in_front_go_in_join_order() {
+        // (stand id, guest id) -> who wears the helmet: the lower id joined first.
+        for (stand_id, guest_id, guest_first) in [(7, 5, true), (3, 5, false)] {
+            let mut game = server_with_guest();
+            game.lan.as_mut().unwrap().hub.guests[0].entity_id = guest_id;
+            game.armor_stands = vec![stand_at(stand_id, 8.5, 8.5)].into();
+            let (done, _) = dispense_at_guest(&mut game, "minecraft:iron_helmet");
+            assert!(done);
+            let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
+            assert_eq!(
+                guest.armor[0].is_some(),
+                guest_first,
+                "stand {stand_id}, guest {guest_id}"
+            );
+            assert_eq!(game.armor_stands[0].equipment[5].is_some(), !guest_first);
+        }
+    }
+
+    /// `forEachAccessibleNonEmptySection` walks sections before join order:
+    /// a stand whose feet are in section x 1 but whose box reaches into block
+    /// x 15 comes after one in section x 0, even with the lower id.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_dispenser_walks_entity_sections_before_ids() {
+        let mut game = server_with_guest();
+        game.lan.as_mut().unwrap().hub.guests.clear();
+        // Stand boxes are 0.5 wide: x 16.2 spans 15.95..16.45.
+        game.armor_stands = vec![stand_at(1, 16.2, 8.5), stand_at(2, 15.5, 8.5)].into();
+        let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
+        assert!(game.dispense_equipment((15, 201, 8), Direction::Down, &mut stack));
+        assert!(game.armor_stands[0].equipment[5].is_none());
+        assert!(game.armor_stands[1].equipment[5].is_some());
+    }
+
+    /// `SectionPos.asLong` packs z (22 bits) over y (20 bits) under a fixed x,
+    /// and the section set is sorted as longs: z -1 packs as 0x3FFFFF << 20,
+    /// above z 0's 0; y -1 at z 0 packs as 0xFFFFF, below z 1's 1 << 20.
+    #[test]
+    fn sections_sort_as_their_packed_keys() {
+        use horizon_core::geometry::Vec3;
+        let at = |x: f64, y: f64, z: f64| super::section_order(Vec3::new(x, y, z));
+        assert!(at(0.0, 0.0, -1.0) > at(0.0, 0.0, 0.0));
+        assert!(at(0.0, -1.0, 0.0) < at(0.0, 0.0, 16.0));
+        assert!(at(0.0, -1.0, 0.0) > at(0.0, 0.0, 0.0));
+        // x is the outer loop, ascending as a signed coordinate.
+        assert!(at(-1.0, 0.0, 0.0) < at(0.0, 0.0, 0.0));
+        assert!(at(15.9, 0.0, 0.0) < at(16.0, 0.0, 0.0));
+    }
 }

@@ -1,0 +1,759 @@
+//! Read-only ZIP archives (resource packs, data packs and the unifont glyph
+//! archive), on the `zip` crate. Like Java's `ZipFile` (what vanilla's
+//! `FilePackResources` reads with), the file stays open and only what is asked
+//! for is read, and entries aren't CRC-checked.
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::{self, Read, Seek, SeekFrom},
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+use zip::{CompressionMethod, ZipArchive};
+
+/// The most one entry inflates to: far above any real pack file, but a zip
+/// bomb stops here.
+const MAX_ENTRY: usize = 1 << 30;
+/// The most every entry inflates to together, once per archive: per-entry
+/// limits still let a bomb spend its budget one 1 GiB entry at a time.
+const MAX_TOTAL: usize = 4 << 30;
+
+/// One archive with its entries indexed by name (`\` read as `/`), files
+/// and folders apart.
+pub struct Zip {
+    archive: ZipArchive<Reader>,
+    entries: BTreeMap<String, usize>,
+    /// Folder entries (`name/`) by their name without the slash.
+    folders: BTreeMap<String, usize>,
+    /// The archive's length: no size an entry claims can be bigger.
+    len: usize,
+    /// The bytes left for every entry together, drawn down as they are read.
+    budget: AtomicU64,
+}
+fn invalid(e: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+}
+/// `file`'s bytes at `at`, which any number of readers may do at once: the
+/// file has no cursor for them to share.
+fn read_at(file: &fs::File, out: &mut [u8], at: u64) -> io::Result<usize> {
+    #[cfg(unix)]
+    return std::os::unix::fs::FileExt::read_at(file, out, at);
+    #[cfg(windows)]
+    return std::os::windows::fs::FileExt::seek_read(file, out, at);
+}
+/// The bytes of `file` from `start` to `end`.
+fn read_range(file: &fs::File, start: u64, end: u64) -> io::Result<Vec<u8>> {
+    let mut out = vec![0; (end - start) as usize];
+    let mut done = 0;
+    while done < out.len() {
+        match read_at(file, &mut out[done..], start + done as u64)? {
+            0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+            read => done += read,
+        }
+    }
+    Ok(out)
+}
+/// The archive as the `zip` crate sees it: the file's bytes, with its tail
+/// (the central directory on, END record normalized) from memory. A clone
+/// shares both and has its own position.
+#[derive(Clone)]
+struct Reader {
+    /// What comes before the tail; none when the tail is the whole archive.
+    file: Option<Arc<fs::File>>,
+    tail: Arc<[u8]>,
+    tail_at: u64,
+    position: u64,
+}
+impl Read for Reader {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let read = match self.position.checked_sub(self.tail_at) {
+            Some(into) => {
+                let rest = self.tail.get(into as usize..).unwrap_or_default();
+                let read = rest.len().min(out.len());
+                out[..read].copy_from_slice(&rest[..read]);
+                read
+            }
+            None => {
+                let before = (self.tail_at - self.position).min(out.len() as u64) as usize;
+                match &self.file {
+                    Some(file) => read_at(file, &mut out[..before], self.position)?,
+                    None => 0,
+                }
+            }
+        };
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+impl Seek for Reader {
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        let position = match to {
+            SeekFrom::Start(at) => Some(at),
+            SeekFrom::End(by) => (self.tail_at + self.tail.len() as u64).checked_add_signed(by),
+            SeekFrom::Current(by) => self.position.checked_add_signed(by),
+        };
+        self.position = position.ok_or_else(|| invalid("seek before the archive's start"))?;
+        Ok(self.position)
+    }
+}
+impl Zip {
+    /// Reads the central directory, not the entries: opening a pack of many
+    /// gigabytes for its `pack.mcmeta` costs what opening a small one does.
+    pub fn open(path: &Path) -> io::Result<Self> {
+        let file = fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        let mut tail_at = len.saturating_sub((END_HEADER + u16::MAX as usize) as u64);
+        let mut tail = read_range(&file, tail_at, len)?;
+        if let Some(end) = find_end(&tail) {
+            let directory = u32_at(&tail, end + 12);
+            let start = (tail_at + end as u64).saturating_sub(directory.into());
+            // All ones says the real length is in the Zip64 record instead.
+            if directory != u32::MAX && start < tail_at {
+                tail_at = start;
+                tail = read_range(&file, tail_at, len)?;
+            }
+        }
+        normalize_end(&mut tail);
+        Self::new(Reader {
+            file: Some(Arc::new(file)),
+            tail: Arc::from(tail),
+            tail_at,
+            position: 0,
+        })
+    }
+    pub fn from_bytes(mut data: Vec<u8>) -> io::Result<Self> {
+        normalize_end(&mut data);
+        Self::new(Reader {
+            file: None,
+            tail: Arc::from(data),
+            tail_at: 0,
+            position: 0,
+        })
+    }
+    fn new(reader: Reader) -> io::Result<Self> {
+        let len = (reader.tail_at + reader.tail.len() as u64) as usize;
+        let archive = ZipArchive::new(reader).map_err(invalid)?;
+        let (mut entries, mut folders) = (BTreeMap::new(), BTreeMap::new());
+        for i in 0..archive.len() {
+            let Some(name) = archive.name_for_index(i) else {
+                continue;
+            };
+            let name = name.map_err(invalid)?.replace('\\', "/");
+            match name.strip_suffix('/') {
+                Some(folder) => folders.insert(folder.to_owned(), i),
+                None => entries.insert(name, i),
+            };
+        }
+        Ok(Self {
+            archive,
+            entries,
+            folders,
+            len,
+            budget: AtomicU64::new(MAX_TOTAL as u64),
+        })
+    }
+    /// The central directory on, as read at opening: every entry's name, sizes
+    /// and checksum, so what changes with the archive's content.
+    pub fn directory(&self) -> Arc<[u8]> {
+        self.archive.clone().into_inner().tail
+    }
+    /// The files, as `FilePackResources.listResources` lists them (folder
+    /// entries skipped).
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+    /// `FilePackResources.getResource` through `ZipFile.getEntry`: the file
+    /// `name`, else the folder entry `name/`, whose bytes Java reads like a
+    /// file's (Loka's pack stores its `pack.mcmeta` and `pack.png` that way).
+    fn index(&self, name: &str) -> Option<usize> {
+        self.entries
+            .get(name)
+            .or_else(|| self.folders.get(name))
+            .copied()
+    }
+    pub fn contains(&self, name: &str) -> bool {
+        self.index(name).is_some()
+    }
+    pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
+        self.read_within(name, &self.budget)
+    }
+    /// `read`, drawing `budget` down as entries are returned: a per-entry cap
+    /// is not a total one, and a bomb spends its budget one 1 GiB entry at a
+    /// time otherwise.
+    fn read_within(&self, name: &str, budget: &AtomicU64) -> io::Result<Vec<u8>> {
+        let (method, raw) = self.raw(name)?;
+        let bytes = match method {
+            CompressionMethod::Stored => raw,
+            CompressionMethod::Deflated => {
+                let mut decoded = Vec::with_capacity(raw.len().min(MAX_ENTRY));
+                inflate(&raw)
+                    .take(MAX_ENTRY as u64 + 1)
+                    .read_to_end(&mut decoded)
+                    .map_err(|_| invalid("corrupt deflate stream"))?;
+                if decoded.len() > MAX_ENTRY {
+                    return Err(invalid("entry inflates past the size limit"));
+                }
+                decoded
+            }
+            _ => return Err(invalid("unsupported zip compression")),
+        };
+        take(budget, bytes.len() as u64)?;
+        Ok(bytes)
+    }
+    /// What [`Self::read`] reads, written to `out` a piece at a time as it inflates, each piece
+    /// taken from `budget`: the bytes left for everything sharing it. Past the budget it stops
+    /// with [`io::ErrorKind::FileTooLarge`], `out` holding part of the entry; the entry's own
+    /// limit ([`MAX_ENTRY`]) still applies. Memory stays at the compressed entry and one piece,
+    /// whatever the entry inflates to. The bytes written.
+    pub fn copy_to(
+        &self,
+        name: &str,
+        out: &mut impl io::Write,
+        budget: &AtomicU64,
+    ) -> io::Result<u64> {
+        let (method, raw) = self.raw(name)?;
+        let mut from: Box<dyn Read + '_> = match method {
+            CompressionMethod::Stored => Box::new(raw.as_slice()),
+            CompressionMethod::Deflated => Box::new(inflate(&raw)),
+            _ => return Err(invalid("unsupported zip compression")),
+        };
+        let mut piece = vec![0; 64 << 10];
+        let mut total = 0u64;
+        loop {
+            let n = match from.read(&mut piece) {
+                Ok(0) => return Ok(total),
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => return Err(invalid("corrupt deflate stream")),
+            };
+            total += n as u64;
+            if total > MAX_ENTRY as u64 {
+                return Err(invalid("entry inflates past the size limit"));
+            }
+            take(budget, n as u64)?;
+            out.write_all(&piece[..n])?;
+        }
+    }
+    /// The entry `name` as stored: its compression and its bytes.
+    fn raw(&self, name: &str) -> io::Result<(CompressionMethod, Vec<u8>)> {
+        let index = self
+            .index(name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?;
+        // A clone shares the reader's data and the central directory: reading
+        // needs `&mut`.
+        let mut archive = self.archive.clone();
+        let mut entry = archive.by_index_raw(index).map_err(invalid)?;
+        let method = entry.compression();
+        let mut raw = Vec::with_capacity((entry.compressed_size() as usize).min(self.len));
+        entry.read_to_end(&mut raw)?;
+        Ok((method, raw))
+    }
+}
+
+/// `n` bytes taken from `budget`, or `FileTooLarge` (taking nothing) when it has fewer left.
+fn take(budget: &AtomicU64, n: u64) -> io::Result<()> {
+    let mut left = budget.load(Ordering::Relaxed);
+    loop {
+        let rest = left.checked_sub(n).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "the packs unpack to more than their size allows",
+            )
+        })?;
+        match budget.compare_exchange_weak(left, rest, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(()),
+            Err(now) => left = now,
+        }
+    }
+}
+
+/// A deflated entry's bytes as they inflate. Java's ZipFile trusts neither size an entry
+/// declares: it inflates the stream to its end and keeps what comes out. Packs in the wild (a
+/// Nexo-generated one served through Dropbox, for one) carry central-directory sizes that point
+/// at other files, and miniz_oxide, which refuses input past the stream's end, failed whole
+/// entries with "corrupt deflate stream" and with them the whole pack. Only the size limits
+/// stand between the archive and a zip bomb.
+fn inflate(raw: &[u8]) -> flate2::read::DeflateDecoder<&[u8]> {
+    flate2::read::DeflateDecoder::new(raw)
+}
+
+/// The 22 fixed bytes of the end-of-central-directory record.
+const END_HEADER: usize = 22;
+
+fn u16_at(data: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes(data[at..at + 2].try_into().unwrap())
+}
+fn u32_at(data: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(data[at..at + 4].try_into().unwrap())
+}
+
+/// Where the END record starts. Its comment can hide the signature: scan back
+/// through the last 64 KiB, like every zip reader.
+fn find_end(data: &[u8]) -> Option<usize> {
+    if data.len() < END_HEADER {
+        return None;
+    }
+    let start = data.len().saturating_sub(END_HEADER + u16::MAX as usize);
+    (start..=data.len() - END_HEADER).rev().find(|&pos| {
+        data[pos..pos + 4] == [0x50, 0x4b, 0x05, 0x06]
+            && pos + END_HEADER + u16_at(data, pos + 20) as usize <= data.len()
+    })
+}
+
+/// Java's `ZipFile` ignores the END record's disk numbers and file counts,
+/// reading the central directory from `cenpos` to `cenpos + cenlen` whatever
+/// they say; the `zip` crate insists the record agrees with the directory.
+/// Packs written while streaming (Nexo serves them for gommehd.net, for one)
+/// leave every file's local header a stub and the END counts and disk number
+/// at 0 and 0xFFFF: archives Java opens but the crate refuses. Count the real
+/// directory entries and normalize the record so it does not look multi-disk
+/// or empty.
+fn normalize_end(data: &mut [u8]) {
+    let Some(end) = find_end(data) else { return };
+    // The directory's real position and length, as Java derives them; the
+    // recorded offset is relative to the archive's start.
+    let cenlen = u32_at(data, end + 12) as usize;
+    let cenpos = end.saturating_sub(cenlen);
+    let mut count = 0u16;
+    let mut p = cenpos;
+    while p + 46 <= end && data[p..p + 4] == [0x50, 0x4b, 0x01, 0x02] {
+        count = count.saturating_add(1);
+        p += 46
+            + u16_at(data, p + 28) as usize
+            + u16_at(data, p + 30) as usize
+            + u16_at(data, p + 32) as usize;
+    }
+    let disk = u16_at(data, end + 4);
+    let with_directory = u16_at(data, end + 6);
+    if disk == 0
+        && with_directory == 0
+        && u16_at(data, end + 8) == count
+        && u16_at(data, end + 10) == count
+    {
+        return;
+    }
+    data[end + 4..end + 10].fill(0);
+    data[end + 8..end + 10].copy_from_slice(&count.to_le_bytes());
+    data[end + 10..end + 12].copy_from_slice(&count.to_le_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    /// `bytes` as a file and opened, the file removed again where the system lets it.
+    fn opened(test: &str, bytes: &[u8]) -> io::Result<Zip> {
+        let path =
+            std::env::temp_dir().join(format!("horizon-zip-{}-{test}.zip", std::process::id()));
+        fs::write(&path, bytes)?;
+        let zip = Zip::open(&path);
+        let _ = fs::remove_file(&path);
+        zip
+    }
+    #[test]
+    fn opening_a_file_reads_its_directory_and_not_its_entries() {
+        let body: Vec<u8> = (0..1 << 20).map(|i: u32| (i ^ i >> 8) as u8).collect();
+        let bytes = archive_of(&[
+            ("big.bin", &body, false),
+            ("pack.mcmeta", b"{\"pack\":{}}", false),
+            ("a/b.txt", b"hello hello hello hello", true),
+        ]);
+        let zip = opened("lazy", &bytes).unwrap();
+        assert!(zip.archive.clone().into_inner().tail.len() < 70_000);
+        assert_eq!(zip.read("big.bin").unwrap(), body);
+        assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
+        assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
+        assert!(zip.read("missing").is_err());
+    }
+    #[test]
+    fn a_directory_longer_than_the_end_scan_is_read_whole() {
+        let names: Vec<String> = (0..2000).map(|i| format!("{:0>60}.txt", i)).collect();
+        let files: Vec<(&str, &[u8], bool)> = names
+            .iter()
+            .map(|n| (n.as_str(), &b"x"[..], false))
+            .collect();
+        let zip = opened("long-directory", &archive_of(&files)).unwrap();
+        assert_eq!(zip.names().count(), 2000);
+        assert_eq!(zip.read(&names[0]).unwrap(), b"x");
+    }
+    #[test]
+    fn a_file_is_opened_past_end_counts_java_ignores() {
+        let mut bytes = archive();
+        let end = bytes.len() - END_HEADER;
+        bytes[end + 4..end + 6].fill(0xFF);
+        bytes[end + 8..end + 12].fill(0);
+        let zip = opened("end-counts", &bytes).unwrap();
+        assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
+    }
+    #[test]
+    fn a_file_is_opened_with_equal_nonzero_disk_numbers() {
+        let mut bytes = archive();
+        let end = bytes.len() - END_HEADER;
+        bytes[end + 4..end + 8].fill(0xFF);
+        let zip = opened("end-disks", &bytes).unwrap();
+        assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
+    }
+    #[test]
+    fn a_file_that_is_no_archive_does_not_open() {
+        assert!(opened("empty", b"").is_err());
+        assert!(opened("garbage", b"PK not really").is_err());
+    }
+    /// A hand-built archive with one stored and one deflated entry.
+    fn archive() -> Vec<u8> {
+        archive_of(&[
+            ("pack.mcmeta", b"{\"pack\":{}}", false),
+            ("a/b.txt", b"hello hello hello hello", true),
+        ])
+    }
+    /// A hand-built archive of `(name, body, deflated)` entries.
+    fn archive_of(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut central = Vec::new();
+        for &(name, body, deflate) in files {
+            let data = if deflate {
+                miniz_oxide::deflate::compress_to_vec(body, 6)
+            } else {
+                body.to_vec()
+            };
+            let offset = out.len() as u32;
+            let local = |v: &mut Vec<u8>, sig: u32| {
+                v.extend(sig.to_le_bytes());
+            };
+            local(&mut out, 0x0403_4b50);
+            out.extend([20, 0, 0, 0]);
+            out.extend((if deflate { 8u16 } else { 0 }).to_le_bytes());
+            out.extend([0; 8]);
+            out.extend((data.len() as u32).to_le_bytes());
+            out.extend((body.len() as u32).to_le_bytes());
+            out.extend((name.len() as u16).to_le_bytes());
+            out.extend(0u16.to_le_bytes());
+            out.extend(name.as_bytes());
+            out.extend(&data);
+            local(&mut central, 0x0201_4b50);
+            central.extend([20, 0, 20, 0, 0, 0]);
+            central.extend((if deflate { 8u16 } else { 0 }).to_le_bytes());
+            central.extend([0; 8]);
+            central.extend((data.len() as u32).to_le_bytes());
+            central.extend((body.len() as u32).to_le_bytes());
+            central.extend((name.len() as u16).to_le_bytes());
+            central.extend([0; 12]);
+            central.extend(offset.to_le_bytes());
+            central.extend(name.as_bytes());
+        }
+        let start = out.len() as u32;
+        out.extend(&central);
+        out.extend(0x0605_4b50u32.to_le_bytes());
+        out.extend([0; 4]);
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((central.len() as u32).to_le_bytes());
+        out.extend(start.to_le_bytes());
+        out.extend([0; 2]);
+        out
+    }
+    #[test]
+    fn reads_stored_and_deflated_entries() {
+        // Its CRCs are zero: Java's ZipFile doesn't check them either.
+        let zip = Zip::from_bytes(archive()).unwrap();
+        assert_eq!(zip.names().collect::<Vec<_>>(), ["a/b.txt", "pack.mcmeta"]);
+        assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
+        assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
+        assert!(zip.read("missing").is_err());
+    }
+
+    /// A per-entry cap is not a total one: an archive whose entries together
+    /// inflate past the budget is refused, whatever each entry alone says.
+    #[test]
+    fn entries_share_one_total_inflated_budget() {
+        let zip = Zip::from_bytes(archive()).unwrap();
+        let tight = AtomicU64::new(16);
+        assert!(zip.read_within("a/b.txt", &tight).is_err());
+        let zip = Zip::from_bytes(archive()).unwrap();
+        let tight = AtomicU64::new(12);
+        assert_eq!(
+            zip.read_within("pack.mcmeta", &tight).unwrap(),
+            b"{\"pack\":{}}"
+        );
+        assert!(zip.read_within("a/b.txt", &tight).is_err());
+    }
+
+    /// The offset of the central-directory header of `name`.
+    fn central_header(bytes: &[u8], name: &str) -> usize {
+        let mut at = 0;
+        while let Some(i) = bytes[at..]
+            .windows(4)
+            .position(|s| s == [0x50, 0x4b, 0x01, 0x02])
+        {
+            let p = at + i;
+            let nlen = u16::from_le_bytes(bytes[p + 28..p + 30].try_into().unwrap()) as usize;
+            if &bytes[p + 46..p + 46 + nlen] == name.as_bytes() {
+                return p;
+            }
+            at = p + 4;
+        }
+        panic!("no central header for {name}");
+    }
+
+    /// Java's `ZipFile` inflates the stream and keeps what comes out, so a
+    /// central directory that names a size other than the stream's (the
+    /// Nexo pack Dropbox serves for one server does) changes nothing.
+    #[test]
+    fn reads_a_deflate_stream_larger_than_its_declared_size() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "large.txt",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+            )
+            .unwrap();
+        writer.write_all(&vec![b'x'; 4096]).unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let central = central_header(&bytes, "large.txt");
+        bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+
+        let zip = Zip::from_bytes(bytes).unwrap();
+        assert_eq!(zip.read("large.txt").unwrap(), vec![b'x'; 4096]);
+    }
+
+    /// Some pack writers leave an entry's compressed size longer than its
+    /// deflate stream, so the bytes past the stream's end are part of it.
+    /// Java inflates to the stream's end and ignores them; miniz_oxide
+    /// refused the input and failed the entry, and with it the whole pack.
+    #[test]
+    fn reads_past_trailing_bytes_after_the_deflate_stream() {
+        let mut bytes = written();
+        let name = "Pack-main/assets/minecraft/lang/en_us.json";
+        let central = central_header(&bytes, name);
+        let local =
+            u32::from_le_bytes(bytes[central + 42..central + 46].try_into().unwrap()) as usize;
+        for at in [central + 20, local + 18] {
+            let csize = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            bytes[at..at + 4].copy_from_slice(&(csize + 8).to_le_bytes());
+        }
+
+        let zip = Zip::from_bytes(bytes).unwrap();
+        assert_eq!(
+            zip.read(name).unwrap(),
+            "{\"a\":\"b\"}".repeat(100).as_bytes()
+        );
+    }
+
+    /// Loka's server pack (#3413) names its metadata `pack.mcmeta/`.
+    /// `ZipFile.getEntry("pack.mcmeta")` falls back to that folder entry and
+    /// vanilla reads its bytes; a file of the exact name still comes first.
+    #[test]
+    fn a_name_falls_back_to_its_folder_entry() {
+        let zip = Zip::from_bytes(archive_of(&[
+            ("pack.mcmeta/", b"{\"pack\":{\"pack_format\":75}}", true),
+            ("pack.png/", b"png", false),
+            ("a/", b"folder", false),
+            ("a", b"file", false),
+        ]))
+        .unwrap();
+        assert_eq!(zip.names().collect::<Vec<_>>(), ["a"]);
+        assert!(zip.contains("pack.mcmeta"));
+        assert_eq!(
+            zip.read("pack.mcmeta").unwrap(),
+            b"{\"pack\":{\"pack_format\":75}}"
+        );
+        assert_eq!(zip.read("pack.png").unwrap(), b"png");
+        assert_eq!(zip.read("a").unwrap(), b"file");
+        assert!(!zip.contains("pack"));
+    }
+
+    /// A pack as zip tools write it: folder entries, a nested pack root,
+    /// stored and deflated files, and a Windows-style name.
+    fn written() -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        w.add_directory("Pack-main/", stored).unwrap();
+        w.add_directory("Pack-main/assets/minecraft/", stored)
+            .unwrap();
+        w.start_file("Pack-main/pack.mcmeta", stored).unwrap();
+        w.write_all(b"{\"pack\":{\"pack_format\":64}}").unwrap();
+        w.start_file("Pack-main/assets/minecraft/lang/en_us.json", deflated)
+            .unwrap();
+        w.write_all("{\"a\":\"b\"}".repeat(100).as_bytes()).unwrap();
+        w.start_file(
+            "Pack-main\\assets\\minecraft\\texts\\splashes.txt",
+            deflated,
+        )
+        .unwrap();
+        w.write_all(b"Also try Horizon!").unwrap();
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn reads_nested_folders_and_skips_folder_entries() {
+        let zip = Zip::from_bytes(written()).unwrap();
+        assert_eq!(
+            zip.names().collect::<Vec<_>>(),
+            [
+                "Pack-main/assets/minecraft/lang/en_us.json",
+                "Pack-main/assets/minecraft/texts/splashes.txt",
+                "Pack-main/pack.mcmeta",
+            ]
+        );
+        assert!(zip.contains("Pack-main/pack.mcmeta"));
+        assert!(!zip.contains("Pack-main/"));
+        assert_eq!(
+            zip.read("Pack-main/assets/minecraft/lang/en_us.json")
+                .unwrap(),
+            "{\"a\":\"b\"}".repeat(100).as_bytes()
+        );
+        assert_eq!(
+            zip.read("Pack-main/assets/minecraft/texts/splashes.txt")
+                .unwrap(),
+            b"Also try Horizon!"
+        );
+    }
+
+    #[test]
+    fn a_bad_entry_fails_alone() {
+        let mut bytes = written();
+        // The deflated lang file's stream becomes a reserved block type.
+        let (start, len) = {
+            let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+            let index = archive
+                .index_for_name("Pack-main/assets/minecraft/lang/en_us.json")
+                .unwrap();
+            let entry = archive.by_index_raw(index).unwrap();
+            (
+                entry.data_start().unwrap() as usize,
+                entry.compressed_size() as usize,
+            )
+        };
+        bytes[start..start + len].fill(0xff);
+        let zip = Zip::from_bytes(bytes).unwrap();
+        assert!(
+            zip.read("Pack-main/assets/minecraft/lang/en_us.json")
+                .is_err()
+        );
+        assert_eq!(
+            zip.read("Pack-main/pack.mcmeta").unwrap(),
+            b"{\"pack\":{\"pack_format\":64}}"
+        );
+    }
+
+    #[test]
+    fn refuses_what_is_not_a_zip() {
+        assert!(Zip::from_bytes(b"PK not really".to_vec()).is_err());
+        assert!(Zip::from_bytes(Vec::new()).is_err());
+        let mut cut = written();
+        cut.truncate(cut.len() / 2);
+        assert!(Zip::from_bytes(cut).is_err());
+    }
+
+    /// A pack as a streaming writer serves it (Nexo/gommehd.net): every
+    /// local header is a 30-byte stub and the END record's disk number and
+    /// counts are wrong. Java 25's `ZipFile` opens it, with each size either
+    /// in the directory or as 0xFFFFFFFF plus its Zip64 extra field (without
+    /// that field it refuses the archive: "invalid zip64 extra len size").
+    #[test]
+    fn reads_a_streamed_archive() {
+        for zip64 in [false, true] {
+            let files: [(&str, &[u8]); 2] = [
+                ("pack.mcmeta", b"{\"pack\":{}}"),
+                ("a/b.txt", b"streamed entry"),
+            ];
+            let mut out = Vec::new();
+            let mut central = Vec::new();
+            for (name, body) in files {
+                let data = miniz_oxide::deflate::compress_to_vec(body, 6);
+                let offset = out.len() as u32;
+                out.extend(0x0403_4b50u32.to_le_bytes());
+                out.extend([0; 26]);
+                out.extend(&data);
+                let extra: Vec<u8> = if zip64 {
+                    [1u16, 8]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .chain((body.len() as u64).to_le_bytes())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                central.extend(0x0201_4b50u32.to_le_bytes());
+                central.extend([20, 0, 20, 0, 0, 0]);
+                central.extend(8u16.to_le_bytes());
+                central.extend([0; 8]);
+                central.extend((data.len() as u32).to_le_bytes());
+                central.extend(if zip64 { u32::MAX } else { body.len() as u32 }.to_le_bytes());
+                central.extend((name.len() as u16).to_le_bytes());
+                central.extend((extra.len() as u16).to_le_bytes());
+                central.extend([0; 10]);
+                central.extend(offset.to_le_bytes());
+                central.extend(name.as_bytes());
+                central.extend(extra);
+            }
+            let start = out.len() as u32;
+            out.extend(&central);
+            out.extend(0x0605_4b50u32.to_le_bytes());
+            out.extend(u16::MAX.to_le_bytes());
+            out.extend([0; 6]);
+            out.extend((central.len() as u32).to_le_bytes());
+            out.extend(start.to_le_bytes());
+            out.extend([0; 2]);
+            let zip = Zip::from_bytes(out).unwrap();
+            assert_eq!(zip.names().collect::<Vec<_>>(), ["a/b.txt", "pack.mcmeta"]);
+            assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
+            assert_eq!(zip.read("a/b.txt").unwrap(), b"streamed entry");
+        }
+    }
+
+    /// A streamed archive whose zip64 extra lies: both sizes claimed are
+    /// u64::MAX / 2. `Zip::from_bytes` may refuse it; if not, `read` errs or reads
+    /// instead of dying on a capacity that no archive could hold.
+    #[test]
+    fn declared_sizes_past_the_archive_do_not_abort() {
+        let name = "a/b.txt";
+        let body = b"streamed entry";
+        let data = miniz_oxide::deflate::compress_to_vec(body, 6);
+        let mut out = Vec::new();
+        let mut central = Vec::new();
+        let offset = out.len() as u32;
+        out.extend(0x0403_4b50u32.to_le_bytes());
+        out.extend([0; 26]);
+        out.extend(&data);
+        // Both directory sizes 0xFFFFFFFF so the zip64 extra's uncompressed,
+        // then compressed, sizes are the ones read.
+        let extra: Vec<u8> = [1u16, 16]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .chain((u64::MAX / 2).to_le_bytes())
+            .chain((u64::MAX / 2).to_le_bytes())
+            .collect();
+        central.extend(0x0201_4b50u32.to_le_bytes());
+        central.extend([20, 0, 20, 0, 0, 0]);
+        central.extend(8u16.to_le_bytes());
+        central.extend([0; 8]);
+        central.extend(u32::MAX.to_le_bytes());
+        central.extend(u32::MAX.to_le_bytes());
+        central.extend((name.len() as u16).to_le_bytes());
+        central.extend((extra.len() as u16).to_le_bytes());
+        central.extend([0; 10]);
+        central.extend(offset.to_le_bytes());
+        central.extend(name.as_bytes());
+        central.extend(extra);
+        let start = out.len() as u32;
+        out.extend(&central);
+        out.extend(0x0605_4b50u32.to_le_bytes());
+        out.extend(u16::MAX.to_le_bytes());
+        out.extend([0; 6]);
+        out.extend((central.len() as u32).to_le_bytes());
+        out.extend(start.to_le_bytes());
+        out.extend([0; 2]);
+        if let Ok(zip) = Zip::from_bytes(out) {
+            let _ = zip.read(name);
+        }
+    }
+}

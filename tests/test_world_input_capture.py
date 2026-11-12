@@ -1,8 +1,9 @@
 """Exercise the client's capture methods without opening or focusing an OS window.
 
-The fixture substitutes only winit and mouse state. Method bodies come from the
-client, so the assertions observe grab attempts, visibility and stored capture
-state. Native Windows delivery remains a manual check. Vanilla 26.3 reference:
+Capture fixtures substitute winit; the raw-motion fixture uses the real mouse
+accumulator and rotation math. Method bodies come from the client, so assertions
+observe capture and camera outcomes. Native OS routing is checked separately by
+`tools/splitscreen_e2e.py --only native_pointer` on macOS. Vanilla 26.3 reference:
 LevelLoadingScreen.tick/onClose, Gui.setScreen, MouseHandler.grabMouse/releaseMouse.
 """
 from pathlib import Path
@@ -17,14 +18,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def method(source, name):
-    start = source.index(f"    fn {name}(")
+    # A method moved out of game.rs is `pub(super)` in its own file; the fixtures paste it as a
+    # private one.
+    plain, moved = f"    fn {name}(", f"    pub(super) fn {name}("
+    start = source.index(plain if plain in source else moved)
     opening = source.index("{", start)
     depth = 1
     end = opening + 1
     while depth:
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
-    return source[start:end]
+    return source[start:end].replace("pub(super) fn", "fn", 1)
 
 
 def function(source, name):
@@ -40,26 +44,31 @@ def function(source, name):
 
 class WorldInputCaptureTests(unittest.TestCase):
     def test_loading_completion_wiring(self):
-        game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        game = "".join((ROOT / "crates/horizon-client/src" / path).read_text(encoding="utf-8")
+                       for path in ("game/player_spawn.rs", "game/window_handler.rs", "game.rs"))
         remote = (ROOT / "crates/horizon-client/src/game/remote.rs").read_text(encoding="utf-8")
         spawn = method(game, "spawn_player")
         self.assertLess(spawn.index("self.player = Some(player)"),
                         spawn.index("self.capture_loaded_world()"))
-        tick = remote[remote.index("    pub(super) fn tick_remote("):]
-        ready = tick[tick.index("if self.remote.as_ref().is_some_and(|r| !r.loaded_sent)"):]
+        # ClientPacketListener.tick: the level load tracker ends the loading screen,
+        # the server hears PlayerLoaded, the mouse is captured, then the player moves.
+        ready = remote[remote.index("    fn tick_client_load("):]
         self.assertLess(ready.index("r.loaded_sent = true"),
                         ready.index("self.capture_loaded_world()"))
-        self.assertLess(ready.index("self.capture_loaded_world()"),
-                        ready.index("let stick = self.pad_move()"))
+        level = remote[remote.index("    fn tick_remote_level("):]
+        self.assertLess(level.index("self.tick_client_load()"),
+                        level.index("let stick = self.input_move()"))
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_capture_lifecycle(self):
-        source = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        source = "".join((ROOT / "crates/horizon-client/src" / path).read_text(encoding="utf-8")
+                         for path in ("game.rs", "game/pointer_capture.rs"))
         mouse = (ROOT / "crates/horizon-client-input/src/mouse.rs").read_text(encoding="utf-8")
         fixture = r'''
 use std::cell::Cell;
 #[derive(Clone, Copy, PartialEq)]
 enum Screen { Playing, Paused, Inventory, Chat }
+#[derive(Clone, Copy)]
 enum CursorGrabMode { Locked, Confined, None }
 mod winit {
     pub mod dpi {
@@ -93,32 +102,68 @@ impl Window {
         if self.fail { Err(()) } else { Ok(()) }
     }
     fn set_cursor_visible(&self, visible: bool) { self.visible.set(visible); }
+    fn id(&self) -> WindowId { WindowId }
 }
+#[derive(Clone, Copy)]
+struct WindowId;
+impl WindowId { fn dummy() -> Self { WindowId } }
+enum WindowEvent { Focused(bool) }
+mod input_trace { pub enum InputOrigin { User } }
+trait EventLoopCtl {}
+struct Loop;
+impl EventLoopCtl for Loop {}
 #[derive(Default)]
 struct Mouse { ignore_first: bool }
 impl Mouse { fn set_ignore_first_move(&mut self) { self.ignore_first = true; } }
 struct Remote;
 #[derive(Default)]
+struct StudioFreecam { active: bool }
+#[derive(Default)]
+struct Studio { freecam: StudioFreecam, rmb_down: bool }
+impl Studio { fn flying(&self) -> bool { self.freecam.active } }
+#[derive(Default)]
+struct Replay { driver: Option<()> }
+impl Replay { fn playing(&self) -> bool { self.driver.is_some() } }
+#[derive(Default)]
+struct Options { offscreen: bool }
+#[derive(Default)]
 struct ServerPacks { prompt: Option<()> }
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
-    captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
+    keyboard_mouse: bool, split_window: bool, view_at: [u32; 2],
+    captured: bool, capture_mode: Option<CursorGrabMode>, regrab_on_refocus: bool, title: Option<()>, screen: Screen,
+    remote: Option<Remote>,
+    studio: Studio, replay: Replay,
     mining: bool, lan_acting: Option<u32>, renderer: Option<Renderer>, cursor: (f32, f32),
-    server_packs: ServerPacks,
+    server_packs: ServerPacks, command_prompt: Option<()>, options: Options,
+    unclaimed_window: bool, scripted: bool, focus_after_run: Option<bool>, applied_focus: Vec<bool>,
 }
 impl Default for Game {
     fn default() -> Self {
         Self { focused: true, agent_pointer: false, window: Some(Window::default()),
-            mouse: Mouse::default(), captured: false, title: None,
-            screen: Screen::Playing, remote: None, mining: false, lan_acting: None,
-            renderer: None, cursor: (0.0, 0.0), server_packs: ServerPacks::default() }
+            keyboard_mouse: true, split_window: false, view_at: [0, 0],
+            mouse: Mouse::default(), captured: false, capture_mode: None, regrab_on_refocus: false, title: None,
+            screen: Screen::Playing, remote: None, studio: Studio::default(), replay: Replay::default(),
+            mining: false, lan_acting: None,
+            renderer: None, cursor: (0.0, 0.0), server_packs: ServerPacks::default(),
+            command_prompt: None, options: Options::default(),
+            unclaimed_window: false, scripted: false, focus_after_run: None, applied_focus: Vec::new() }
     }
 }
 HELPER
 impl Game {
     fn stop_mining(&mut self) { self.mining = false; }
+    fn studio_up(&self) -> bool { self.replay.playing() || self.studio.flying() }
     fn reset_inventory_clicks(&mut self) {}
+    fn restore_held_keys(&mut self) {}
     fn dialog_open(&self) -> bool { false }
+    fn scripted_run(&self) -> bool { self.scripted }
+    fn handle_window_event(&mut self, _: &dyn EventLoopCtl, _: WindowId, event: WindowEvent,
+                           _: input_trace::InputOrigin) {
+        let WindowEvent::Focused(focused) = event;
+        self.applied_focus.push(focused);
+        self.focused = focused;
+    }
 METHODS
 }
 fn main() {
@@ -129,6 +174,16 @@ fn main() {
         game.capture(true);
         assert!(!game.captured);
         game.server_packs.prompt = None;
+        game.capture(true);
+        assert!(game.captured);
+    }
+    // So does a clicked command's confirmation.
+    {
+        let mut game = Game::default();
+        game.command_prompt = Some(());
+        game.capture(true);
+        assert!(!game.captured);
+        game.command_prompt = None;
         game.capture(true);
         assert!(game.captured);
     }
@@ -174,10 +229,198 @@ fn main() {
         assert!(game.agent_pointer);
         assert_eq!(game.window.as_ref().unwrap().grabs.get(), grabs);
         game.focused = true;
-        assert!(!game.captured); // Focus alone does not resume gameplay.
-        game.capture(true); // Click or resume action.
+        assert!(!game.captured); // Setting the flag is not a grab: `capture` is.
+        game.capture(true); // `regrab_on_refocus`, or a click on the world.
         assert!(game.captured);
         assert_eq!(game.cursor, (213.5, 120.0)); // The grab puts the mouse at the centre.
+    }
+    // A window that held the pointer asks for it back when the focus returns:
+    // the system drops a grabbed pointer with the focus and vanilla's grab
+    // outlives it (`MouseHandler.mouseGrabbed` stays true while GLFW keeps its
+    // cursor mode), so no click is needed to lock it again.
+    {
+        let mut game = Game::default();
+        game.capture(true);
+        assert!(game.captured);
+        let grabs = game.window.as_ref().unwrap().grabs.get();
+        game.focused = false; // Alt+Tab: the release `window_event` makes.
+        game.regrab_on_refocus = game.captured;
+        game.capture(false);
+        assert!(!game.captured);
+        game.focused = true;
+        game.regrab_on_refocus();
+        assert!(game.captured);
+        assert!(game.window.as_ref().unwrap().grabs.get() > grabs);
+        assert!(game.mouse.ignore_first);
+        // Taken once: a focus gain that follows a screen's release takes nothing.
+        game.capture(false);
+        let grabs = game.window.as_ref().unwrap().grabs.get();
+        game.regrab_on_refocus();
+        assert!(!game.captured);
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), grabs);
+        // A screen open while the window was away keeps the pointer free.
+        game.regrab_on_refocus = true;
+        game.screen = Screen::Inventory;
+        game.regrab_on_refocus();
+        assert!(!game.captured);
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), grabs);
+        // A window that never held the pointer does not take it on focus.
+        game.screen = Screen::Playing;
+        game.regrab_on_refocus();
+        assert!(!game.captured);
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), grabs);
+        // A prompt over the world keeps the pointer, as the grab itself checks.
+        game.regrab_on_refocus = true;
+        game.server_packs.prompt = Some(());
+        game.regrab_on_refocus();
+        assert!(!game.captured);
+    }
+    // Studio replays keep the pointer released after focus returns; camera look
+    // only captures it while the right mouse button is held.
+    {
+        let mut game = Game::default();
+        game.replay.driver = Some(());
+        game.studio.rmb_down = true;
+        game.capture(true);
+        assert!(game.captured);
+        game.regrab_on_refocus = true;
+        game.focused = false;
+        game.capture(false);
+        game.focused = true;
+        game.regrab_on_refocus();
+        assert!(!game.captured);
+        assert!(!game.studio.rmb_down);
+    }
+    // A controller-only player's screens leave the shared native pointer alone.
+    {
+        let mut game = Game::default();
+        game.keyboard_mouse = false;
+        game.captured = true;
+        game.mining = true;
+        for capture in [false, true] {
+            game.capture(capture);
+            assert!(!game.captured);
+            assert!(!game.mining);
+            let window = game.window.as_ref().unwrap();
+            assert_eq!(window.grabs.get(), 0);
+            assert_eq!(window.warps.get(), 0);
+            assert!(!window.visible.get()); // No change to native visibility.
+        }
+    }
+    // The owning player's warp includes its view's offset in the shared window;
+    // its menu cursor remains in local GUI coordinates.
+    {
+        let mut game = Game::default();
+        game.view_at = [1200, 400];
+        game.renderer = Some(Renderer { config: Config { width: 1000, height: 600 } });
+        game.capture(true);
+        assert!(game.captured);
+        assert_eq!(game.window.as_ref().unwrap().at.get(), (1700.0, 700.0));
+        assert_eq!(game.cursor, (250.0, 150.0));
+        game.capture(false);
+        assert!(!game.captured);
+        assert_eq!(game.window.as_ref().unwrap().at.get(), (1700.0, 700.0));
+        assert_eq!(game.cursor, (250.0, 150.0));
+    }
+    // A composited view still has a visible native window. Its owner must grab,
+    // hide and release the real pointer even though its renderer is offscreen.
+    {
+        let mut game = Game::default();
+        game.options.offscreen = true;
+        game.split_window = true;
+        game.window.as_ref().unwrap().visible.set(true);
+        game.capture(true);
+        assert!(game.captured);
+        let window = game.window.as_ref().unwrap();
+        assert_eq!(window.grabs.get(), 1, "split owner must grab the native pointer");
+        assert!(!window.visible.get());
+        game.capture(false);
+        assert!(!game.captured);
+        assert!(game.window.as_ref().unwrap().visible.get());
+    }
+    // `--offscreen` shows no window: the grab is the game's own, and the system
+    // pointer is never grabbed, warped or hidden.
+    {
+        let mut game = Game::default();
+        game.options.offscreen = true;
+        game.window.as_ref().unwrap().visible.set(true);
+        game.capture_loaded_world();
+        assert!(game.captured);
+        assert!(game.mouse.ignore_first);
+        game.capture(false);
+        assert!(!game.captured);
+        game.capture(true);
+        assert!(game.captured);
+        let window = game.window.as_ref().unwrap();
+        assert_eq!((window.grabs.get(), window.warps.get()), (0, 0));
+        assert!(window.visible.get());
+    }
+    // An agent's window no one has clicked yet keeps its grab to itself as `--offscreen`
+    // does, focused or not: the person's pointer is never grabbed, warped or hidden.
+    for focused in [true, false] {
+        let mut game = Game::default();
+        game.unclaimed_window = true;
+        game.focused = focused;
+        game.window.as_ref().unwrap().visible.set(true);
+        game.capture_loaded_world();
+        assert!(game.captured);
+        game.capture(false);
+        game.capture(true);
+        let window = game.window.as_ref().unwrap();
+        assert_eq!((window.grabs.get(), window.warps.get()), (0, 0));
+        assert!(window.visible.get());
+    }
+    // A scripted run's grab is the game's own, even in a window the person clicked into,
+    // and once it ends the system pointer follows: a run that closed a screen leaves the
+    // pointer to be taken then, as the window's own grab would have.
+    {
+        let mut game = Game::default();
+        game.window.as_ref().unwrap().visible.set(true);
+        game.scripted = true;
+        game.capture(true);
+        assert!(game.captured);
+        let window = game.window.as_ref().unwrap();
+        assert_eq!((window.grabs.get(), window.warps.get()), (0, 0));
+        assert!(window.visible.get());
+        game.settle_after_run(&Loop);
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), 0, "nothing moves while it runs");
+        game.scripted = false;
+        game.settle_after_run(&Loop);
+        assert!(game.captured);
+        let window = game.window.as_ref().unwrap();
+        assert_eq!(window.grabs.get(), 1);
+        assert!(!window.visible.get());
+        game.settle_after_run(&Loop);
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), 1, "settled once");
+    }
+    // A pointer the window held as the run began stays the system's while it runs, and the
+    // run's release lets it go when the run ends.
+    {
+        let mut game = Game::default();
+        game.capture(true);
+        let warps = game.window.as_ref().unwrap().warps.get();
+        game.scripted = true;
+        game.capture(false);
+        assert!(!game.captured);
+        assert!(game.capture_mode.is_some());
+        assert_eq!(game.window.as_ref().unwrap().warps.get(), warps);
+        game.scripted = false;
+        game.settle_after_run(&Loop);
+        assert!(!game.captured);
+        assert!(game.capture_mode.is_none());
+        assert!(game.window.as_ref().unwrap().visible.get());
+    }
+    // A person's click into the window or away from it during the run applies once it ends.
+    {
+        let mut game = Game::default();
+        game.scripted = true;
+        game.focus_after_run = Some(false);
+        game.settle_after_run(&Loop);
+        assert!(game.applied_focus.is_empty());
+        game.scripted = false;
+        game.settle_after_run(&Loop);
+        assert_eq!(game.applied_focus, vec![false]);
+        assert!(!game.focused);
     }
     let mut game = Game::default();
     // On a server the chat is ChatScreen (#708): loading never grabs over it.
@@ -191,18 +434,21 @@ fn main() {
     // Grabbing and releasing put the pointer at the window's centre
     // (MouseHandler.grabMouse / releaseMouse), in the surface's pixels when it
     // has one; releasing an already released pointer leaves it where it is.
+    // A grab warps once on every system: Windows before the Locked grab, which
+    // clips the pointer where it is (#6076).
+    let grab_warps = 1;
     game.renderer = Some(Renderer { config: Config { width: 1000, height: 600 } });
     game.capture(true);
     assert!(game.captured);
     let window = game.window.as_ref().unwrap();
-    assert_eq!((window.warps.get(), window.at.get()), (1, (500.0, 300.0)));
+    assert_eq!((window.warps.get(), window.at.get()), (grab_warps, (500.0, 300.0)));
     game.capture(false);
     let window = game.window.as_ref().unwrap();
-    assert_eq!(window.warps.get(), 3);
+    assert_eq!(window.warps.get(), grab_warps + 2);
     assert_eq!(game.cursor, (250.0, 150.0));
     game.cursor = (1.0, 1.0);
     game.capture(false);
-    assert_eq!(game.window.as_ref().unwrap().warps.get(), 3);
+    assert_eq!(game.window.as_ref().unwrap().warps.get(), grab_warps + 2);
     assert_eq!(game.cursor, (1.0, 1.0));
     game.renderer = None;
     game.window.as_mut().unwrap().fail = true;
@@ -216,7 +462,10 @@ fn main() {
             "mouse_position_after_grab_change")
         fixture = fixture.replace("HELPER", function(mouse, "mouse_position_after_grab_change"))
         fixture = fixture.replace("METHODS", capture + "\n" +
-                                  method(source, "capture_loaded_world"))
+                                  method(source, "capture_loaded_world") + "\n" +
+                                  method(source, "regrab_on_refocus") + "\n" +
+                                  method(source, "internal_grab") + "\n" +
+                                  method(source, "settle_after_run"))
         with tempfile.TemporaryDirectory(prefix="horizon-input-") as folder:
             folder = Path(folder)
             rust = folder / "capture.rs"
@@ -226,6 +475,112 @@ fn main() {
                            check=True, capture_output=True, text=True, timeout=60)
             subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=10)
 
+
+    @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
+    def test_native_split_mouse_turns_only_its_owner(self):
+        source = "".join((ROOT / "crates/horizon-client/src" / path).read_text(encoding="utf-8")
+                         for path in ("game/window_handler.rs", "game.rs"))
+        fixture = r'''
+use std::time::Instant;
+#[path = "MOUSE_PATH"] mod mouse;
+use mouse::{MouseLook, LookOptions, Rotation};
+struct ActiveEventLoop;
+struct DeviceId;
+enum DeviceEvent { MouseMotion { delta: (f64, f64) }, Other }
+#[derive(PartialEq)] enum Screen { Playing, Paused }
+struct Options { offscreen: bool }
+mod input_trace {
+    pub enum InputOrigin { User }
+    pub enum TraceKind { Motion { x: f64, y: f64 } }
+}
+struct Radial(bool);
+impl Radial { fn is_open(&self) -> bool { self.0 } }
+struct Pad { radial: Radial }
+struct Game {
+    pending_save: Option<()>, captured: bool, focused: bool, keyboard_mouse: bool, split_window: bool,
+    options: Options, screen: Screen, mouse: MouseLook, last_input: Instant, pad: Pad, scripted: bool,
+}
+impl Game {
+    fn scripted_run(&self) -> bool { self.scripted }
+    // The input trace records the motion; it does not change the turn.
+    fn note_input(&mut self, _: input_trace::InputOrigin, _: input_trace::TraceKind) {}
+    // Handing input back from the controller does not change the turn either.
+    fn pad_yield_input(&mut self, _: &ActiveEventLoop) {}
+    // `game/pad/capture.rs`: the radial menu owns the pad while it is open.
+    fn pad_radial_captures(&self) -> bool { self.pad.radial.is_open() }
+METHOD
+}
+fn main() {
+    // (offscreen renderer, compositor, keyboard/mouse owner, active, gameplay, saving, the pad's
+    // radial menu open, a scripted run).
+    for (offscreen, split, owner, active, playing, saving, radial, scripted, turns) in [
+        (false, false, true, true, true, false, false, false, true),
+        (true, true, true, true, true, false, false, false, true),
+        (true, true, false, true, true, false, false, false, false),
+        (true, false, true, true, true, false, false, false, false),
+        (true, true, true, false, true, false, false, false, false),
+        (true, true, true, true, false, false, false, false, false),
+        (true, true, true, true, true, true, false, false, false),
+        (false, false, true, true, true, false, true, false, false),
+        (false, false, true, true, true, false, false, true, false),
+    ] {
+        let mut game = Game {
+            pending_save: saving.then_some(()), captured: true, focused: active,
+            keyboard_mouse: owner, split_window: split, options: Options { offscreen },
+            screen: if playing { Screen::Playing } else { Screen::Paused },
+            mouse: MouseLook::default(), last_input: Instant::now(), pad: Pad { radial: Radial(radial) },
+            scripted,
+        };
+        game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (0.0, 0.0) });
+        game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (20.0, -10.0) });
+        let look = LookOptions { sensitivity: 0.5, smooth_camera: false, scoping: false, invert_x: false, invert_y: false };
+        let (x, y) = game.mouse.handle_accumulated_movement(1.0, true, true, look).unwrap();
+        let mut rotation = Rotation { x_rot: 0.0, y_rot: 0.0, x_rot_o: 0.0, y_rot_o: 0.0 };
+        rotation.turn(x, y);
+        let want = if turns { (3.0, -1.5) } else { (0.0, 0.0) };
+        assert!((rotation.y_rot - want.0).abs() < 0.00001 && (rotation.x_rot - want.1).abs() < 0.00001,
+            "rotation=({}, {}), offscreen={offscreen}, split={split}, owner={owner}, active={active}, playing={playing}, saving={saving}, radial={radial}, scripted={scripted}", rotation.y_rot, rotation.x_rot);
+    }
+}
+'''
+        fixture = fixture.replace("MOUSE_PATH", (ROOT / "crates/horizon-client-input/src/mouse.rs").as_posix())
+        fixture = fixture.replace("METHOD", method(source, "device_event"))
+        self.run_fixture(fixture, "native-mouse")
+
+    @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
+    def test_split_layout_keeps_capture_in_the_same_window(self):
+        source = (ROOT / "crates/horizon-client/src/game/split/windows.rs").read_text(encoding="utf-8")
+        body = function(source.replace("pub(super) fn", "pub fn"), "into_window").replace("Game<'_>", "Game")
+        fixture = r'''
+use std::sync::Arc;
+struct Window(usize);
+impl Window { fn id(&self) -> usize { self.0 } }
+struct Game { captured: bool, window: Option<Arc<Window>> }
+impl Game { fn capture(&mut self, captured: bool) { self.captured = captured; } }
+FUNCTION
+fn main() {
+    let first = Arc::new(Window(1));
+    let mut game = Game { captured: true, window: Some(first.clone()) };
+    into_window(&mut game, first.clone());
+    assert!(game.captured, "a player joining or a layout resize must not release P1's existing native window");
+    into_window(&mut game, Arc::new(Window(2)));
+    assert!(!game.captured, "moving to a different native window releases the previous grab");
+    assert_eq!(game.window.as_ref().unwrap().id(), 2);
+}
+'''.replace("FUNCTION", body)
+        self.run_fixture(fixture, "split-window")
+
+    def run_fixture(self, fixture, name):
+        with tempfile.TemporaryDirectory(prefix="horizon-input-") as folder:
+            folder = Path(folder)
+            rust = folder / f"{name}.rs"
+            binary = folder / (name + (".exe" if os.name == "nt" else ""))
+            rust.write_text(fixture, encoding="utf-8")
+            built = subprocess.run(["rustc", "--edition=2024", str(rust), "-o", str(binary)],
+                                   capture_output=True, text=True, timeout=60)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
 
 if __name__ == "__main__":
     unittest.main()

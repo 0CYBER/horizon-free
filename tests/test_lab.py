@@ -1,15 +1,20 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 import zipfile
 
-from tools import check_public_tree, lab
+from tools import agent_control_e2e, check_public_tree, lab
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def minimal_class(source="Example.java"):
@@ -170,7 +175,8 @@ class ArtifactTests(unittest.TestCase):
 
 class PublicationTests(unittest.TestCase):
     def test_private_paths_rejected(self):
-        for path in [".local/minecraft/source.java", "decompiled/Foo.txt", "game.JAR", "capture.jfr", "source/Foo.java"]:
+        for path in [".local/minecraft/source.java", "decompiled/Foo.txt", "game.JAR", "capture.jfr", "source/Foo.java",
+                     "fixtures/26.3/horizon-data.bin"]:
             self.assertTrue(check_public_tree.prohibited(path), path)
         for path in ["tools/lab.py", "crates/horizon-core/src/lib.rs", "Cargo.lock", "docs/analysis.md",
                      "mods/horizon/src/main/java/dev/horizonlab/HorizonLab.java",
@@ -181,6 +187,41 @@ class PublicationTests(unittest.TestCase):
             self.assertFalse(check_public_tree.prohibited(path), path)
         for path in ["tools/Minecraft.java", "tests/java/Client.java", ".local/tools/JfrSummary.java"]:
             self.assertTrue(check_public_tree.prohibited(path), path)
+
+    def test_copied_data_fixer_tables_are_rejected_in_the_tree_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+            def git(*args):
+                subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *args],
+                               cwd=directory, env=env, check=True, capture_output=True)
+            def check(*args):
+                return subprocess.run([sys.executable, str(ROOT / "tools/check_public_tree.py"), *args],
+                                      cwd=directory, env=env, capture_output=True, text=True)
+            def commit(path, text):
+                (directory / path).parent.mkdir(parents=True, exist_ok=True)
+                (directory / path).write_text(text)
+                git("add", path)
+                git("commit", "-q", "-m", path)
+            git("init", "-q", "-b", "main")
+            # Made-up ids in the tables' shapes: a few lines are fine, a table's worth is not.
+            flattening = "".join(f'("minecraft:widget.{n}", "minecraft:widget_{n}"),\n' for n in range(60))
+            states = "".join(f"{n}\tminecraft:widget\t\tminecraft:widget\tkind={n}\n" for n in range(60))
+            commit("tests/fixture.rs", flattening[:400])
+            self.assertEqual(check().returncode, 0, check().stderr)
+            for path, text in [("crates/a/src/items.rs", flattening), ("data/states.txt", states),
+                               ("data/states.json", json.dumps(states.splitlines())),
+                               ("crates/horizon-world/src/datafix/block_state_data.txt", "retired\n")]:
+                with self.subTest(path=path):
+                    commit(path, text)
+                    result = check()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(path, result.stderr)
+                    git("rm", "-q", path)
+                    git("commit", "-q", "-m", "remove")
+            # History keeps the old copies: only the tree is checked for them.
+            self.assertEqual(check().returncode, 0)
+            self.assertEqual(check("--history").returncode, 0)
 
     def test_force_added_ignored_file_is_detected_in_index_and_history(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -199,6 +240,15 @@ class PublicationTests(unittest.TestCase):
                 self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository())
                 git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
                 self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository(history=True))
+                # A range reads only its own commits: the artifact's commit lies before it.
+                (directory / ".local" / "artifact.txt").unlink()
+                git("rm", "-q", "--cached", ".local/artifact.txt")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "removal")
+                self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository(True, ["HEAD~1..HEAD"]))
+                (directory / "README.md").write_text("public\n")
+                git("add", "README.md")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "public")
+                self.assertEqual(check_public_tree.paths_in_repository(True, ["HEAD~1..HEAD"]), ["README.md", ""])
 
 
 def library(name, os_name=None):
@@ -283,6 +333,55 @@ class PlatformLibraryTests(unittest.TestCase):
             (launcher / "libraries" / required["path"]).unlink()
             with self.assertRaisesRegex(FileNotFoundError, "official launcher"):
                 lab.import_library(required, Path(temp) / "other", launcher)
+
+
+class LinkDirTests(unittest.TestCase):
+    class Refused(OSError):
+        winerror = 1314  # ERROR_PRIVILEGE_NOT_HELD: no Developer Mode, not an administrator
+
+    def test_a_symbolic_link_where_the_system_allows_one(self):
+        with mock.patch("os.symlink") as symlink, mock.patch("subprocess.run") as run:
+            lab.link_dir(Path("/res"), Path("/work/26.3"))
+        symlink.assert_called_once_with(Path("/res"), Path("/work/26.3"), target_is_directory=True)
+        run.assert_not_called()
+
+    def test_a_junction_on_windows_without_symlink_privilege(self):
+        with mock.patch.object(sys, "platform", "win32"),                 mock.patch("os.symlink", side_effect=self.Refused("privilege")),                 mock.patch("subprocess.run") as run:
+            lab.link_dir(Path("res"), Path("work/26.3"))
+        run.assert_called_once_with(["cmd", "/c", "mklink", "/J", str(Path("work/26.3")), str(Path("res").resolve())],
+                                    check=True, capture_output=True)
+
+    def test_other_failures_and_other_systems_still_raise(self):
+        for platform, error in (("linux", self.Refused("privilege")), ("win32", FileExistsError("exists"))):
+            with self.subTest(platform=platform), mock.patch.object(sys, "platform", platform),                     mock.patch("os.symlink", side_effect=error), mock.patch("subprocess.run") as run:
+                with self.assertRaises(OSError):
+                    lab.link_dir(Path("res"), Path("work/26.3"))
+                run.assert_not_called()
+
+    def test_removing_the_scratch_folder_keeps_the_linked_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target, work = Path(temp) / "resources", Path(temp) / "work"
+            target.mkdir()
+            work.mkdir()
+            (target / "kept.json").write_text("{}")
+            try:
+                lab.link_dir(target, work / "26.3")
+            except OSError as error:
+                self.skipTest(f"this host can make neither a symlink nor a junction: {error}")
+            self.assertEqual((work / "26.3" / "kept.json").read_text(), "{}")
+            shutil.rmtree(work)
+            self.assertTrue((target / "kept.json").exists())
+
+
+class GameEnvScreenTests(unittest.TestCase):
+    def test_macos_and_windows_start_no_virtual_screen(self):
+        for platform in ("darwin", "win32"):
+            with self.subTest(platform=platform), mock.patch.object(sys, "platform", platform),                     mock.patch.dict(os.environ, {}, clear=False),                     mock.patch.object(agent_control_e2e.subprocess, "run") as run,                     tempfile.TemporaryDirectory() as home:
+                os.environ.pop("DISPLAY", None)
+                env = agent_control_e2e.game_env("e2e", home=home)
+                run.assert_not_called()
+                self.assertEqual(env["HORIZON_HOME"], home)
+                self.assertNotIn("VSCREEN", env)
 
 
 if __name__ == "__main__":

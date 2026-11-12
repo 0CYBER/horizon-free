@@ -9,7 +9,14 @@ It is off until you turn it on, so `/help` and the command tree stay vanilla's:
 
 - a server: `horizon-pregen = true` under `[properties]` in `server.toml` (or `horizon-pregen=true` in a
   vanilla folder's `server.properties`), then restart it;
-- single player and LAN: start the game with `--pregen`.
+- single player and LAN: turn on **Options → Horizon Settings... → Extras... → Chunk pregeneration**.
+  The choice is saved in `horizon-extras.txt` and applies immediately, including in an open world.
+  Cheats must still be enabled. `--pregen` also works and keeps the command enabled for that run,
+  even when the saved switch is off.
+
+Turning the switch off hides the command again; it does not cancel a running task. Use `/pregen cancel`
+first, or turn the switch back on to manage it. A server you join controls its own commands: this
+setting only applies to worlds you host.
 
 ```text
 /pregen start <radius> [square|circle] [<x> <z>]   radius in blocks; the centre defaults to where you
@@ -25,6 +32,9 @@ centre chunk is at most `radius / 16`. It runs in the dimension the command was 
 ticking while the task runs, whoever is in it. The progress goes to the server log every five seconds
 and to the player who started it, and once more when it is done. A task is not kept across a restart:
 start it again and the chunks already saved load instead of generating.
+
+On a server with `max_view_distance` set ([hosting](hosting.md#seeing-further-max_view_distance)), the
+players see the pregenerated chunks past `view_distance` as well: that ring only sends saved chunks.
 
 ## How it works
 

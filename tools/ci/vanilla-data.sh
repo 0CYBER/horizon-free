@@ -25,7 +25,7 @@ done
 mkdir -p .local "$shared/prepared"
 for entry in "$shared"/*; do
   name=$(basename "$entry")
-  case "$name" in prepared|sounds|*.log) continue ;; esac
+  case "$name" in prepared|sounds|languages|*.log) continue ;; esac
   if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$entry" ".local/$name"; fi
 done
 
@@ -41,6 +41,10 @@ until mkdir "$lock" 2>/dev/null; do
   sleep 5
 done
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+# horizon-prepare's lock file (LOCK in crates/horizon-prepare/src/lib.rs) is no prepared output: it stays a plain
+# file in .local/. Earlier runs listed it as one and left .local/ a link to it in a preparation since pruned, which
+# horizon-prepare then fails to open ("No such file or directory").
+if [ -L .local/.horizon-prepare.lock ]; then rm .local/.horizon-prepare.lock; fi
 # horizon-prepare writes .local/horizon-client and its exporters' outputs beside it: all of them live in
 # $prepared, listed in $prepared/.entries, and .local/ links to them. A real folder of that kind in .local/ is
 # what an older failed preparation left: it would hide the preparations (and a new one would not count it as its
@@ -75,7 +79,8 @@ if [ ! -f "$prepared/.entries" ]; then
     rm -rf "$prepared"
     exit 1
   fi
-  LC_ALL=C comm -13 <(echo "$before") <(ls -1A .local | LC_ALL=C sort) > "$RUNNER_TEMP/prepared-entries"
+  LC_ALL=C comm -13 <(echo "$before") <(ls -1A .local | LC_ALL=C sort) |
+    { grep -vxF .horizon-prepare.lock || true; } > "$RUNNER_TEMP/prepared-entries"
   while read -r name; do mv ".local/$name" "$prepared/$name"; done < "$RUNNER_TEMP/prepared-entries"
   mv "$RUNNER_TEMP/prepared-entries" "$prepared/.entries"
   echo "Prepared in $((SECONDS - started)) s: $(tr '\n' ' ' < "$prepared/.entries")"
@@ -84,10 +89,11 @@ fi
 # the same neighbours as in the shared folder.
 for entry in "$shared"/*; do
   name=$(basename "$entry")
-  case "$name" in prepared|sounds|*.log) continue ;; esac
+  case "$name" in prepared|sounds|languages|*.log) continue ;; esac
   [ -e "$prepared/$name" ] || ln -sfn "$entry" "$prepared/$name"
 done
 while read -r name; do
+  [ "$name" = .horizon-prepare.lock ] && continue  # listed by preparations before this fix
   if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$prepared/$name" ".local/$name"; else
     echo "::error::.local/$name is not a link to the prepared resources"; exit 1; fi
 done < "$prepared/.entries"
@@ -103,6 +109,26 @@ if [ -f "$shared/sounds/$version/sounds.json" ] && [ -d "$assets" ]; then
     if [ "$(uname)" = Darwin ]; then cp -cR "$shared/sounds/$version/$entry" "$assets/"
     else cp -R --reflink=auto "$shared/sounds/$version/$entry" "$assets/"; fi
   done
+fi
+# The languages (horizon-prepare languages copies them from the official launcher's asset store, which no runner
+# has) depend only on the Minecraft version too: kept once in $shared/languages/<version>/ (assets/pack.mcmeta, the
+# language list, and assets/minecraft/lang/) and cloned into each preparation to fill missing files. Without them a
+# preparation has en_us alone, and pack_screen's harness, which draws ten languages, fails.
+languages="$shared/languages/$version/assets"
+if [ -d "$languages/minecraft/lang" ] && [ -d "$assets" ]; then
+  mkdir -p "$assets/lang"
+  # File by file: `cp -n` exits 1 on macOS (and on some coreutils) when it skips one, which ends the script.
+  for file in "$languages/minecraft/lang/"*; do
+    [ -e "$assets/lang/${file##*/}" ] && continue
+    if [ "$(uname)" = Darwin ]; then cp -c "$file" "$assets/lang/"; else cp --reflink=auto "$file" "$assets/lang/"; fi
+  done
+  if [ ! -e "$assets/../pack.mcmeta" ]; then
+    if [ "$(uname)" = Darwin ]; then
+      cp -c "$languages/pack.mcmeta" "$assets/../"
+    else
+      cp --reflink=auto "$languages/pack.mcmeta" "$assets/../"
+    fi
+  fi
 fi
 touch "$prepared"
 # The four newest preparations stay.

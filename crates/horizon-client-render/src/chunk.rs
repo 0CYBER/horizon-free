@@ -1,0 +1,1298 @@
+//! Resident client chunk storage. Sections are reference-counted so worker
+//! threads can mesh and light immutable snapshots while the game thread edits
+//! (copy-on-write through `Arc::make_mut`).
+use horizon_core::paletted::{PalettedContainer, Strategy};
+use horizon_world::nbt::{Compound, Tag};
+use horizon_world::registry::BlockStateId;
+use std::sync::atomic::{AtomicI16, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+
+pub mod block_entity;
+
+/// The vanilla Overworld's column, which every dimension's chunks hold for
+/// now (`LevelShape::column`).
+pub const MIN_Y: i32 = -64;
+pub const HEIGHT: i32 = 384;
+pub const SECTIONS: usize = (HEIGHT / 16) as usize;
+
+/// A level's build range, skylight and ceiling, from its dimension type
+/// (`min_y`, `height`, `logical_height`, `has_skylight`, `has_ceiling`), as
+/// `LevelHeightAccessor` and `SerializableChunkData.write` read them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelShape {
+    pub sky_light: bool,
+    /// `DimensionType.hasCeiling`: weather, spawning and maps read it.
+    pub has_ceiling: bool,
+    pub min_y: i32,
+    pub height: i32,
+    /// `DimensionType.logicalHeight`: how high portals and chorus fruit reach.
+    pub logical_height: i32,
+}
+impl LevelShape {
+    pub const OVERWORLD: Self = Self {
+        sky_light: true,
+        has_ceiling: false,
+        min_y: MIN_Y,
+        height: HEIGHT,
+        logical_height: HEIGHT,
+    };
+    pub const NETHER: Self = Self {
+        sky_light: false,
+        has_ceiling: true,
+        min_y: 0,
+        height: 256,
+        logical_height: 128,
+    };
+    pub const END: Self = Self {
+        sky_light: true,
+        has_ceiling: false,
+        min_y: 0,
+        height: 256,
+        logical_height: 256,
+    };
+    /// A dimension type's shape, checked as its codec checks it.
+    pub fn new(
+        min_y: i32,
+        height: i32,
+        logical_height: i32,
+        sky_light: bool,
+        has_ceiling: bool,
+    ) -> Result<Self, String> {
+        ColumnLayout::new(min_y, height)?;
+        if !(0..=height).contains(&logical_height) {
+            return Err(format!(
+                "logical_height {logical_height} is outside 0..={height}"
+            ));
+        }
+        Ok(Self {
+            sky_light,
+            has_ceiling,
+            min_y,
+            height,
+            logical_height,
+        })
+    }
+    /// One above the highest block (`getMaxY() + 1`).
+    pub fn max_y(self) -> i32 {
+        self.min_y + self.height
+    }
+    pub fn min_section(self) -> i32 {
+        self.min_y >> 4
+    }
+    pub fn section_count(self) -> usize {
+        (self.height >> 4) as usize
+    }
+    /// Whether section `y` (a section coordinate) is inside the level.
+    pub fn has_section(self, y: i32) -> bool {
+        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
+    }
+    /// The sections a chunk of this level holds: the level's, widened to the
+    /// vanilla Overworld's `-64..320` so that vanilla's Nether and End keep
+    /// the 24 sections they have always had.
+    pub fn column(self) -> ColumnLayout {
+        ColumnLayout::of_level(self.min_y, self.height)
+    }
+}
+
+/// The shapes of a world's three levels, from its dimension types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelShapes {
+    pub overworld: LevelShape,
+    pub nether: LevelShape,
+    pub end: LevelShape,
+}
+impl LevelShapes {
+    pub const VANILLA: Self = Self {
+        overworld: LevelShape::OVERWORLD,
+        nether: LevelShape::NETHER,
+        end: LevelShape::END,
+    };
+    /// The shape of the level `id` (`minecraft:overworld`,
+    /// `minecraft:the_nether`, `minecraft:the_end`); others get the
+    /// Overworld's.
+    pub fn get(&self, id: &str) -> LevelShape {
+        match id {
+            "minecraft:the_nether" => self.nether,
+            "minecraft:the_end" => self.end,
+            _ => self.overworld,
+        }
+    }
+    pub fn get_mut(&mut self, id: &str) -> &mut LevelShape {
+        match id {
+            "minecraft:the_nether" => &mut self.nether,
+            "minecraft:the_end" => &mut self.end,
+            _ => &mut self.overworld,
+        }
+    }
+}
+impl Default for LevelShapes {
+    fn default() -> Self {
+        Self::VANILLA
+    }
+}
+
+/// The span of block Y a chunk holds: from `min_y`, `sections` sections up
+/// (`LevelShape::column`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnLayout {
+    min_y: i32,
+    sections: usize,
+}
+impl ColumnLayout {
+    pub const VANILLA: Self = Self {
+        min_y: MIN_Y,
+        sections: SECTIONS,
+    };
+    /// The column of a level from `min_y`, `height` high
+    /// (`LevelShape::column`).
+    pub fn of_level(min_y: i32, height: i32) -> Self {
+        let low = min_y.min(MIN_Y);
+        let high = (min_y + height).max(MIN_Y + HEIGHT);
+        Self {
+            min_y: low,
+            sections: ((high - low) / 16) as usize,
+        }
+    }
+    /// `DimensionType.MIN_Y`, `MAX_Y`: 12 bits of `BlockPos` Y, less 32.
+    pub const LOWEST_Y: i32 = -2032;
+    pub const HIGHEST_Y: i32 = 2031;
+    /// A dimension type's `min_y` and `height`, as its codec accepts them:
+    /// multiples of 16, at least 16 high, within `LOWEST_Y..=HIGHEST_Y`.
+    pub fn new(min_y: i32, height: i32) -> Result<Self, String> {
+        if min_y % 16 != 0 || height % 16 != 0 {
+            return Err(format!(
+                "min_y {min_y} and height {height} must be multiples of 16"
+            ));
+        }
+        if height < 16 {
+            return Err(format!("height {height} is below 16"));
+        }
+        if min_y < Self::LOWEST_Y
+            || i64::from(min_y) + i64::from(height) > i64::from(Self::HIGHEST_Y) + 1
+        {
+            return Err(format!(
+                "min_y {min_y} with height {height} leaves {}..={}",
+                Self::LOWEST_Y,
+                Self::HIGHEST_Y
+            ));
+        }
+        Ok(Self {
+            min_y,
+            sections: (height / 16) as usize,
+        })
+    }
+    pub fn min_y(self) -> i32 {
+        self.min_y
+    }
+    /// One above the highest block.
+    pub fn max_y(self) -> i32 {
+        self.min_y + self.height()
+    }
+    pub fn height(self) -> i32 {
+        self.sections as i32 * 16
+    }
+    pub fn sections(self) -> usize {
+        self.sections
+    }
+    /// The index of the section holding block `y`, if the column holds it.
+    pub fn section_index(self, y: i32) -> Option<usize> {
+        usize::try_from((i64::from(y) - i64::from(self.min_y)) >> 4)
+            .ok()
+            .filter(|&s| s < self.sections)
+    }
+    /// The minimum block Y of section `index`.
+    pub fn section_y(self, index: usize) -> i32 {
+        self.min_y + index as i32 * 16
+    }
+}
+/// `true` for each section of `layout`: what callers that keep no
+/// per-section record (of fluids, say) pass as "every section may have it".
+pub fn every_section(layout: ColumnLayout) -> &'static [bool] {
+    static ALL: [bool; crate::section_mask::SectionMask::CAPACITY] =
+        [true; crate::section_mask::SectionMask::CAPACITY];
+    &ALL[..layout.sections()]
+}
+impl Default for ColumnLayout {
+    fn default() -> Self {
+        Self::VANILLA
+    }
+}
+
+/// Biomes are 4x4x4 containers over the biome table (67 entries: a 7-bit
+/// global palette).
+pub const BIOME_STRATEGY: Strategy = Strategy::biomes(8);
+
+/// Bits of the block states' global palette: 16 for vanilla's 35,723 states
+/// (what vanilla servers and clients send), more when content mods add states
+/// past 65,536 (docs/modpacks.md). Set once, before the first chunk.
+static BLOCK_BITS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(16);
+/// States in the registry, set with [`BLOCK_BITS`].
+static BLOCK_STATES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// Block states are `PalettedContainer`s over the registry: vanilla's 16-bit
+/// global palette, wider with enough content mods.
+pub fn block_strategy() -> Strategy {
+    Strategy::blocks(BLOCK_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Whether the registry has this state. Every id is known until the registry is loaded.
+pub fn known_block_state(id: u32) -> bool {
+    id < BLOCK_STATES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A server's block container in our palette width. Ids past our registry (a
+/// server or host with mods we lack) read as air: every per-state table is
+/// indexed by them, and a palette's unused entries are scanned too.
+pub fn known_blocks_only(blocks: PalettedContainer) -> PalettedContainer {
+    let ours = block_strategy();
+    let unknown = |id: u32| !known_block_state(id) || u64::from(id) >> ours.global_bits != 0;
+    let any_unknown = if blocks.is_global() {
+        blocks.has(unknown)
+    } else {
+        blocks.maybe_has(unknown)
+    };
+    if !any_unknown && blocks.strategy().global_bits == ours.global_bits {
+        return blocks;
+    }
+    let mut values = [0u32; 4096];
+    blocks.unpack(&mut values);
+    for value in &mut values {
+        if unknown(*value) {
+            *value = 0;
+        }
+    }
+    PalettedContainer::from_values(ours, &values)
+}
+
+/// Frees `columns` (`count` of them) on a short-lived thread of its own
+/// when there are many: a teleport or a dimension change drops a few
+/// thousand columns at once, and freeing their sections took the frame
+/// 15-20 ms. A few are freed here.
+pub fn free_columns<T: Send + 'static>(columns: T, count: usize) {
+    if count < 64 {
+        return;
+    }
+    // Should the thread not start, the closure drops `columns` here.
+    let _ = std::thread::Builder::new()
+        .name("Chunk freeing".into())
+        .spawn(move || drop(columns));
+}
+
+/// Sizes the block states' global palette for a registry of `states`.
+pub fn set_block_states(states: usize) {
+    let bits = horizon_core::paletted::ceil_log2(states).max(16);
+    BLOCK_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+    BLOCK_STATES.store(
+        u32::try_from(states).unwrap_or(u32::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    forget_shared();
+}
+
+/// One allocation per kind of uniform section (a single block, a single
+/// biome and one light value), shared by every column that has it, keyed by
+/// (block, biome, light). A tall column is mostly such sections: air with
+/// full sky light above the terrain. Edits copy them (`Arc::make_mut`).
+type SharedSections = std::collections::HashMap<(u32, u32, u8), Arc<Section>>;
+static SHARED: std::sync::Mutex<Option<SharedSections>> = std::sync::Mutex::new(None);
+
+/// Replaces the uniform sections of `sections` with the shared ones.
+pub fn share_uniform(sections: &mut [Arc<Section>]) {
+    let key = |s: &Section| -> Option<(u32, u32, u8)> {
+        let Light::Uniform(light) = s.light else {
+            return None;
+        };
+        if s.blocks.bits() != 0 || s.biomes.bits() != 0 {
+            return None;
+        }
+        Some((s.blocks.uniform()?, s.biomes.uniform()?, light))
+    };
+    let Ok(mut shared) = SHARED.lock() else {
+        return;
+    };
+    let shared = shared.get_or_insert_with(Default::default);
+    for section in sections {
+        let Some(k) = key(section) else {
+            continue;
+        };
+        let one = shared.entry(k).or_insert_with(|| section.clone());
+        if !Arc::ptr_eq(one, section) {
+            *section = one.clone();
+        }
+    }
+}
+
+/// Forgets the shared sections, when the palette changes.
+fn forget_shared() {
+    if let Ok(mut shared) = SHARED.lock() {
+        *shared = None;
+    }
+}
+/// Packed light per block: sky light in the high nibble, block light in the
+/// low one. A section keeps only the kind of light that varies in it
+/// (`Light::packed`): most sections have no block light and only sky light
+/// that changes, or the reverse below ground.
+#[derive(Clone)]
+pub enum Light {
+    Uniform(u8),
+    /// Sky light per block, as nibbles (block `i` in byte `i / 2`, the even
+    /// one in the low nibble, as a vanilla DataLayer), and one block light.
+    Sky(Box<[u8; 2048]>, u8),
+    /// Block light per block, as nibbles, and one sky light.
+    Block(Box<[u8; 2048]>, u8),
+    Full(Box<[u8; 4096]>),
+}
+#[inline]
+fn nibble(layer: &[u8; 2048], i: usize) -> u8 {
+    layer[i >> 1] >> ((i & 1) << 2) & 15
+}
+impl Light {
+    #[inline]
+    pub fn get(&self, i: usize) -> u8 {
+        match self {
+            Self::Uniform(v) => *v,
+            Self::Sky(layer, block) => nibble(layer, i) << 4 | block,
+            Self::Block(layer, sky) => sky << 4 | nibble(layer, i),
+            Self::Full(a) => a[i],
+        }
+    }
+    /// The smallest form of packed light per block.
+    pub fn packed(light: Box<[u8; 4096]>) -> Self {
+        match Self::classify(&light) {
+            (false, false, first) => Self::Uniform(first),
+            (true, false, first) => Self::Sky(Self::pack_layer(&light, 4), first & 15),
+            (false, true, first) => Self::Block(Self::pack_layer(&light, 0), first >> 4),
+            (true, true, _) => Self::Full(light),
+        }
+    }
+    /// The smallest form of packed light per block, allocating a 4 KiB box only
+    /// when both sky and block light vary within the section.
+    pub fn from_slice(light: &[u8; 4096]) -> Self {
+        match Self::classify(light) {
+            (false, false, first) => Self::Uniform(first),
+            (true, false, first) => Self::Sky(Self::pack_layer(light, 4), first & 15),
+            (false, true, first) => Self::Block(Self::pack_layer(light, 0), first >> 4),
+            (true, true, _) => Self::Full(Box::new(*light)),
+        }
+    }
+    fn classify(light: &[u8; 4096]) -> (bool, bool, u8) {
+        let first = light[0];
+        let (mut sky_varies, mut block_varies) = (false, false);
+        for &v in light.iter() {
+            let d = v ^ first;
+            sky_varies |= d & 0xF0 != 0;
+            block_varies |= d & 15 != 0;
+        }
+        (sky_varies, block_varies, first)
+    }
+    fn pack_layer(light: &[u8; 4096], shift: u32) -> Box<[u8; 2048]> {
+        let mut layer = Box::new([0u8; 2048]);
+        for (out, pair) in layer.iter_mut().zip(light.as_chunks::<2>().0) {
+            *out = (pair[0] >> shift & 15) | (pair[1] >> shift & 15) << 4;
+        }
+        layer
+    }
+    /// The packed light of blocks `at..at + out.len()`, into `out`.
+    #[inline]
+    pub fn copy_run(&self, at: usize, out: &mut [u8]) {
+        match self {
+            Self::Uniform(v) => out.fill(*v),
+            Self::Full(a) => out.copy_from_slice(&a[at..at + out.len()]),
+            Self::Sky(layer, block) => {
+                for (k, o) in out.iter_mut().enumerate() {
+                    *o = nibble(layer, at + k) << 4 | block;
+                }
+            }
+            Self::Block(layer, sky) => {
+                for (k, o) in out.iter_mut().enumerate() {
+                    *o = sky << 4 | nibble(layer, at + k);
+                }
+            }
+        }
+    }
+    /// The packed light of every block, in index order.
+    pub fn to_array(&self) -> Box<[u8; 4096]> {
+        match self {
+            Self::Full(a) => a.clone(),
+            Self::Uniform(v) => Box::new([*v; 4096]),
+            _ => Box::new(std::array::from_fn(|i| self.get(i))),
+        }
+    }
+    /// Whether any block's packed light has a bit of `mask` set.
+    pub fn any(&self, mask: u8) -> bool {
+        let layer_any = |layer: &[u8; 2048]| layer.iter().any(|&v| v != 0);
+        match self {
+            Self::Uniform(v) => v & mask != 0,
+            Self::Sky(layer, block) => block & mask != 0 || (mask & 0xF0 != 0 && layer_any(layer)),
+            Self::Block(layer, sky) => {
+                (sky << 4) & mask != 0 || (mask & 15 != 0 && layer_any(layer))
+            }
+            Self::Full(a) => a.iter().any(|v| v & mask != 0),
+        }
+    }
+    /// Whether any block's packed light differs from `v` in the bits of `mask`.
+    pub fn any_not(&self, mask: u8, v: u8) -> bool {
+        match self {
+            Self::Uniform(u) => (u ^ v) & mask != 0,
+            Self::Full(a) => a.iter().any(|u| (u ^ v) & mask != 0),
+            _ => (0..4096).any(|i| (self.get(i) ^ v) & mask != 0),
+        }
+    }
+    /// Heap bytes it holds.
+    pub fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Uniform(_) => 0,
+            Self::Sky(..) | Self::Block(..) => 2048,
+            Self::Full(_) => 4096,
+        }
+    }
+    /// Whether every block's light is the same as in `other`.
+    pub fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Uniform(a), Self::Uniform(b)) => a == b,
+            (Self::Full(a), Self::Full(b)) => a == b,
+            (Self::Sky(a, x), Self::Sky(b, y)) | (Self::Block(a, x), Self::Block(b, y)) => {
+                x == y && a == b
+            }
+            _ => (0..4096).all(|i| self.get(i) == other.get(i)),
+        }
+    }
+}
+/// One of a chunk's heightmaps (`Chunk::surface`): the heights, built whole on the first read,
+/// and the columns a write may have moved since, each found again on its next read. Reads share
+/// the chunk (helper threads read the world): a stale column is found the same by any of them.
+#[derive(Default)]
+struct Heights {
+    heights: OnceLock<Box<[AtomicI16; 256]>>,
+    stale: [AtomicU64; 4],
+}
+impl Heights {
+    /// `Heightmap.update`: a write two or more below column `i`'s height can't move it; any
+    /// other marks the column.
+    fn write(&mut self, i: usize, y: i32) {
+        let Some(heights) = self.heights.get_mut() else {
+            return;
+        };
+        let stale = self.stale[i >> 6].get_mut();
+        if *stale & 1 << (i & 63) == 0 && y >= i32::from(*heights[i].get_mut()) - 1 {
+            *stale |= 1 << (i & 63);
+        }
+    }
+}
+impl Clone for Heights {
+    fn clone(&self) -> Self {
+        let copy = Self::default();
+        // A reader can refresh a height and then clear its stale bit while we clone. Copy the
+        // bits first: a stale snapshot will rescan; a clean one acquires the refreshed height.
+        // Copying heights first could keep an old height with a newly cleared bit.
+        for (to, from) in copy.stale.iter().zip(&self.stale) {
+            to.store(from.load(Ordering::Acquire), Ordering::Relaxed);
+        }
+        if let Some(heights) = self.heights.get() {
+            let _ = copy.heights.set(Box::new(std::array::from_fn(|i| {
+                AtomicI16::new(heights[i].load(Ordering::Relaxed))
+            })));
+        }
+        copy
+    }
+}
+#[inline]
+fn column(x: i32, z: i32) -> usize {
+    ((z & 15) << 4 | (x & 15)) as usize
+}
+#[inline]
+pub fn index(x: i32, y: i32, z: i32) -> usize {
+    ((y & 15) << 8 | (z & 15) << 4 | (x & 15)) as usize
+}
+#[derive(Clone)]
+pub struct Section {
+    pub blocks: PalettedContainer,
+    /// Biome table index per 4x4x4 cell, `(y << 2 | z) << 2 | x`.
+    pub biomes: PalettedContainer,
+    pub light: Light,
+}
+impl Default for Section {
+    fn default() -> Self {
+        Self {
+            blocks: PalettedContainer::new(block_strategy(), 0),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
+            light: Light::Uniform(0xF0),
+        }
+    }
+}
+impl Section {
+    #[inline]
+    pub fn get(&self, i: usize) -> u32 {
+        self.blocks.get(i)
+    }
+    pub fn set(&mut self, i: usize, v: u32) -> u32 {
+        self.blocks.set(i, v)
+    }
+    /// All 4,096 block states in index order.
+    pub fn unpack(&self, out: &mut [u32; 4096]) {
+        self.blocks.unpack(out);
+    }
+    /// The block states of a whole section at once.
+    pub fn from_blocks(values: &[u32; 4096]) -> PalettedContainer {
+        PalettedContainer::from_values(block_strategy(), values)
+    }
+    #[inline]
+    pub fn light(&self, i: usize) -> u8 {
+        self.light.get(i)
+    }
+    pub fn is_uniform(&self, v: u32) -> bool {
+        self.blocks.is_uniform(v)
+    }
+    /// Whether every block, biome and light value is the same as `other`'s.
+    pub fn same_as(&self, other: &Self) -> bool {
+        self.blocks == other.blocks
+            && self.biomes == other.biomes
+            && self.light.same_as(&other.light)
+    }
+    /// Heap bytes held by the block, biome and light storage (benchmark accounting).
+    pub fn heap_bytes(&self) -> usize {
+        self.blocks.heap_bytes() + self.biomes.heap_bytes() + self.light.heap_bytes()
+    }
+    /// Collapse storage that became uniform, and drop palette entries no
+    /// block uses any more.
+    pub fn compact(&mut self) {
+        for container in [&mut self.blocks, &mut self.biomes] {
+            if container.bits() != 0
+                && let Some(v) = container.uniform()
+            {
+                *container = PalettedContainer::new(container.strategy(), v);
+            }
+        }
+        // Only the kind of light that varies is kept.
+        if matches!(self.light, Light::Full(_)) {
+            let Light::Full(a) = std::mem::replace(&mut self.light, Light::Uniform(0)) else {
+                unreachable!()
+            };
+            self.light = Light::packed(a);
+        }
+    }
+}
+/// The heap bytes of a set of columns by what holds them (`Chunk::census`,
+/// `horizon-ctl memory`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ColumnCensus {
+    pub columns: usize,
+    /// Section slots of every column, shared ones included.
+    pub sections: usize,
+    /// Distinct section allocations.
+    pub unique_sections: usize,
+    /// Distinct sections of a single block state (no data array).
+    pub uniform_block_sections: usize,
+    /// Distinct sections with light per block (not one value).
+    pub light_arrays: usize,
+    pub block_bytes: usize,
+    pub biome_bytes: usize,
+    pub light_bytes: usize,
+    pub heightmap_bytes: usize,
+    /// The section records themselves (`Arc<Section>`).
+    pub section_record_bytes: usize,
+    /// The column records and their lists of sections.
+    pub column_bytes: usize,
+}
+impl ColumnCensus {
+    pub fn total_bytes(&self) -> usize {
+        self.block_bytes
+            + self.biome_bytes
+            + self.light_bytes
+            + self.heightmap_bytes
+            + self.section_record_bytes
+            + self.column_bytes
+    }
+}
+#[derive(Clone)]
+pub struct Chunk {
+    pub x: i32,
+    pub z: i32,
+    /// The minimum block Y of `sections[0]` (the layout's when it was made).
+    min_y: i32,
+    pub sections: Vec<Arc<Section>>,
+    /// `Heightmap.Types.WORLD_SURFACE` per column (`z << 4 | x`): one above
+    /// the highest non-air block, or the column's minimum Y. Built on the first read; a
+    /// `set` that can move a column's surface marks that column, found again on its next read.
+    surface: Heights,
+    /// `Heightmap.Types.MOTION_BLOCKING` per column, kept like `surface`.
+    motion_blocking: Heights,
+    pub lit: bool,
+    /// Light read from a save with `isLightOn`: no light job is needed.
+    pub light_loaded: bool,
+    /// Newly generated (not loaded from a save): eligible for generation-time spawns.
+    pub fresh: bool,
+    /// Finished from a proto chunk just now, in any kind of world, not read
+    /// from a save (`ChunkEvent.Load`'s `isNewChunk`).
+    pub generated: bool,
+    /// Block entities read from a save, moved into the world on arrival.
+    pub block_entities: Vec<((i32, i32, i32), block_entity::BlockEntity)>,
+    /// `CustomName` of the container block entities (shown as the screen title).
+    pub block_names: Vec<((i32, i32, i32), Tag)>,
+    /// Generation postprocessing marks (ProtoChunk.postProcessing) as world
+    /// positions, applied once by LevelChunk.postProcessGeneration.
+    pub postprocess: Vec<[i32; 3]>,
+    /// Saved data Horizon keeps but does not simulate (save.rs).
+    pub saved: Option<Arc<ChunkExtras>>,
+    /// Entities read from a save (vanilla entity NBT), spawned on arrival.
+    pub entities: Vec<horizon_world::nbt::Tag>,
+    /// Structure starts reaching into this chunk (`structures.References`):
+    /// structure id and the start's chunk.
+    pub structure_refs: Vec<(Arc<str>, (i32, i32))>,
+    /// The starts generation made in this chunk (`structures.starts`), saved
+    /// with the state their placement has reached by then.
+    pub structure_starts: Vec<Arc<horizon_world::worldgen::structure::start::StructureStart>>,
+}
+impl Chunk {
+    /// An all-air chunk in the current `layout`.
+    pub fn empty(x: i32, z: i32) -> Self {
+        Self::with_layout(x, z, ColumnLayout::VANILLA)
+    }
+    pub fn with_layout(x: i32, z: i32, layout: ColumnLayout) -> Self {
+        let mut one = [Arc::new(Section::default())];
+        share_uniform(&mut one);
+        let [empty] = one;
+        Self {
+            x,
+            z,
+            min_y: layout.min_y(),
+            sections: (0..layout.sections()).map(|_| empty.clone()).collect(),
+            surface: Heights::default(),
+            motion_blocking: Heights::default(),
+            lit: false,
+            light_loaded: false,
+            fresh: false,
+            generated: false,
+            block_entities: Vec::new(),
+            block_names: Vec::new(),
+            structure_refs: Vec::new(),
+            structure_starts: Vec::new(),
+            postprocess: Vec::new(),
+            saved: None,
+            entities: Vec::new(),
+        }
+    }
+    /// The original `structures.starts`, including starts with unknown pieces.
+    pub fn saved_structure_starts(&self) -> Option<&horizon_world::nbt::Compound> {
+        let structures = self.saved.as_ref()?.root.get(&"structures".into())?;
+        match structures.get("starts")? {
+            horizon_world::nbt::Tag::Compound(starts) => Some(starts),
+            _ => None,
+        }
+    }
+    /// The minimum block Y of the column.
+    #[inline]
+    pub fn min_y(&self) -> i32 {
+        self.min_y
+    }
+    /// The column the chunk holds.
+    pub fn layout(&self) -> ColumnLayout {
+        ColumnLayout {
+            min_y: self.min_y,
+            sections: self.sections.len(),
+        }
+    }
+    /// One above the column's highest block.
+    #[inline]
+    pub fn max_y(&self) -> i32 {
+        self.min_y + self.sections.len() as i32 * 16
+    }
+    /// The index of the section holding block `y`, if the column holds it.
+    #[inline]
+    pub fn section_index(&self, y: i32) -> Option<usize> {
+        usize::try_from((i64::from(y) - i64::from(self.min_y)) >> 4)
+            .ok()
+            .filter(|&s| s < self.sections.len())
+    }
+    #[inline]
+    pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
+        match self.section_index(y) {
+            Some(s) => self.sections[s].get(index(x, y, z)),
+            None => 0,
+        }
+    }
+    #[inline]
+    pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        BlockStateId(self.get(x, y, z))
+    }
+    /// The highest y where `matches`, scanning down. Sections holding only
+    /// `skip` are passed over whole: `matches` must be false for it.
+    pub fn highest(&self, skip: u32, mut matches: impl FnMut(i32) -> bool) -> Option<i32> {
+        self.sections
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, section)| !section.is_uniform(skip))
+            .find_map(|(s, _)| {
+                let base = self.min_y + s as i32 * 16;
+                (base..base + 16).rev().find(|&y| matches(y))
+            })
+    }
+    pub fn set(&mut self, x: i32, y: i32, z: i32, v: u32) -> u32 {
+        let Some(s) = self.section_index(y) else {
+            return v;
+        };
+        let previous = Arc::make_mut(&mut self.sections[s]).set(index(x, y, z), v);
+        // `Heightmap.update`: a write two or more below a map's height can't
+        // move it. Any other change rebuilds that map on the next read.
+        if previous != v {
+            for map in [&mut self.surface, &mut self.motion_blocking] {
+                map.write(column(x, z), y);
+            }
+        }
+        previous
+    }
+    /// Section `s`'s block states replaced whole (a bulk edit): its storage
+    /// compacted, and the heightmaps built again on their next read.
+    pub fn replace_blocks(&mut self, s: usize, values: &[u32; 4096]) {
+        let section = Arc::make_mut(&mut self.sections[s]);
+        section.blocks = Section::from_blocks(values);
+        section.compact();
+        self.surface = Heights::default();
+        self.motion_blocking = Heights::default();
+    }
+    /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)` (`x`, `z` within the
+    /// chunk): one above the highest block that isn't `air`, or the column's
+    /// minimum Y.
+    /// Sections must change only through `set` once this has been read.
+    pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(u32) -> bool) -> i32 {
+        self.height(&self.surface, x, z, |v| !air(v))
+    }
+    /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)` (`x`, `z` within
+    /// the chunk): one above the highest state where `blocks` (a motion
+    /// blocking block or a fluid), or the column's minimum Y. Kept as
+    /// `world_surface` is.
+    pub fn motion_blocking(&self, x: i32, z: i32, blocks: impl Fn(u32) -> bool) -> i32 {
+        self.height(&self.motion_blocking, x, z, blocks)
+    }
+    /// One column's height in `map`: the whole map built on its first read, a column a write
+    /// marked found again down that column alone.
+    fn height(&self, map: &Heights, x: i32, z: i32, counts: impl Fn(u32) -> bool) -> i32 {
+        let heights = map.heights.get_or_init(|| {
+            let built = self.prime(&counts);
+            Box::new(std::array::from_fn(|i| AtomicI16::new(built[i])))
+        });
+        let i = column(x, z);
+        let (word, bit) = (i >> 6, 1u64 << (i & 63));
+        if map.stale[word].load(Ordering::Acquire) & bit != 0 {
+            let height = self.column_height(i, &counts);
+            heights[i].store(height, Ordering::Relaxed);
+            map.stale[word].fetch_and(!bit, Ordering::Release);
+            return i32::from(height);
+        }
+        i32::from(heights[i].load(Ordering::Relaxed))
+    }
+    /// [`Self::prime`] for column `i` alone.
+    fn column_height(&self, i: usize, counts: impl Fn(u32) -> bool) -> i16 {
+        for (s, section) in self.sections.iter().enumerate().rev() {
+            if section.blocks.uniform().is_some_and(|v| !counts(v)) {
+                continue;
+            }
+            let base = self.min_y + s as i32 * 16;
+            if let Some(dy) = (0..16)
+                .rev()
+                .find(|&dy| counts(section.blocks.get(dy << 8 | i)))
+            {
+                return (base + dy as i32 + 1) as i16;
+            }
+        }
+        self.min_y as i16
+    }
+    /// `Heightmap.primeHeightmaps`: each section from the top, skipping
+    /// those of one state that doesn't count, until every column is found.
+    fn prime(&self, counts: impl Fn(u32) -> bool) -> Box<[i16; 256]> {
+        let mut surface = Box::new([self.min_y as i16; 256]);
+        let mut found = [false; 256];
+        let mut left = 256;
+        let mut values = [0u32; 4096];
+        for (s, section) in self.sections.iter().enumerate().rev() {
+            if left == 0 {
+                break;
+            }
+            if section.blocks.uniform().is_some_and(|v| !counts(v)) {
+                continue;
+            }
+            section.unpack(&mut values);
+            let base = self.min_y + s as i32 * 16;
+            for i in 0..256 {
+                if found[i] {
+                    continue;
+                }
+                if let Some(dy) = (0..16).rev().find(|&dy| counts(values[dy << 8 | i])) {
+                    surface[i] = (base + dy as i32 + 1) as i16;
+                    found[i] = true;
+                    left -= 1;
+                }
+            }
+        }
+        surface
+    }
+    #[inline]
+    pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
+        match self.section_at(y) {
+            Ok(section) => section.light(index(x, y, z)),
+            Err(light) => light,
+        }
+    }
+    /// The section holding block height `y`, or the light of the air outside the
+    /// column's sections there: none below them, full sky above.
+    #[inline]
+    pub fn section_at(&self, y: i32) -> Result<&Section, u8> {
+        match self.section_index(y) {
+            Some(s) => Ok(&self.sections[s]),
+            None if y < self.min_y => Err(0),
+            None => Err(0xF0),
+        }
+    }
+    /// Heap bytes held by the sections (benchmark accounting).
+    pub fn heap_bytes(&self) -> usize {
+        self.sections.iter().map(|s| s.heap_bytes()).sum::<usize>()
+    }
+    /// Adds this column's heap bytes to `census` by what holds them. A
+    /// section shared with another column (`share_uniform`, or a copy not yet
+    /// written to) counts once: `seen` holds the sections counted so far.
+    pub fn census(
+        &self,
+        census: &mut ColumnCensus,
+        seen: &mut crate::fast_hash::FxHashSet<*const Section>,
+    ) {
+        census.columns += 1;
+        census.sections += self.sections.len();
+        census.column_bytes += std::mem::size_of::<Self>()
+            + self.sections.capacity() * std::mem::size_of::<Arc<Section>>();
+        census.heightmap_bytes += [&self.surface, &self.motion_blocking]
+            .iter()
+            .filter(|map| map.heights.get().is_some())
+            .count()
+            * std::mem::size_of::<[i16; 256]>();
+        for section in &self.sections {
+            if !seen.insert(Arc::as_ptr(section)) {
+                continue;
+            }
+            census.unique_sections += 1;
+            // The `Arc`'s two counts and the section record.
+            census.section_record_bytes +=
+                2 * std::mem::size_of::<usize>() + std::mem::size_of::<Section>();
+            if section.blocks.bits() == 0 {
+                census.uniform_block_sections += 1;
+            }
+            census.block_bytes += section.blocks.heap_bytes();
+            census.biome_bytes += section.biomes.heap_bytes();
+            if section.light.heap_bytes() != 0 {
+                census.light_arrays += 1;
+                census.light_bytes += section.light.heap_bytes();
+            }
+        }
+    }
+    /// Biome table index at a block position (`ChunkAccess.getNoiseBiome` with
+    /// the quart y clamped to the column).
+    #[inline]
+    pub fn biome(&self, x: i32, y: i32, z: i32) -> u16 {
+        let qy = ((y - self.min_y) >> 2).clamp(0, self.sections.len() as i32 * 4 - 1);
+        self.sections[(qy >> 2) as usize]
+            .biomes
+            .get(((qy & 3) << 4 | ((z & 15) >> 2) << 2 | (x & 15) >> 2) as usize) as u16
+    }
+    /// Sets the biome of one quart cell (`qy` counts from the column's bottom).
+    pub fn set_biome_cell(&mut self, qx: i32, qy: i32, qz: i32, biome: u16) {
+        let section = Arc::make_mut(&mut self.sections[(qy >> 2) as usize]);
+        section.biomes.set(
+            ((qy & 3) << 4 | (qz & 3) << 2 | (qx & 3)) as usize,
+            u32::from(biome),
+        );
+    }
+}
+
+/// A proto chunk saved before it became final. Decoration writes into a
+/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
+/// past the finished ones hold writes that generating them again would lose
+/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
+pub struct SavedProto {
+    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
+    pub column: Chunk,
+    /// Decorated itself (`features`), not only written to by its neighbours
+    /// (`terrain`).
+    pub decorated: bool,
+    /// Block entity data in placement order, with `x`, `y` and `z`.
+    pub block_entities: Vec<Tag>,
+    /// Entities placed by structures, with absolute `Pos`.
+    pub entities: Vec<Tag>,
+}
+
+/// A container's loot table and what Horizon rolled from it. Vanilla keeps
+/// `LootTable` and `LootTableSeed` until the container is first opened;
+/// Horizon rolls when it generates or loads the chunk, and saves the table
+/// again while the container still holds exactly the rolled items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RolledLoot {
+    pub pos: (i32, i32, i32),
+    pub table: String,
+    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
+    pub seed: Option<i64>,
+    /// The rolled `Items`.
+    pub items: Tag,
+}
+impl RolledLoot {
+    /// Puts the loot table back in place of `Items` while they are still the
+    /// roll; false once the container holds anything else.
+    pub fn restore(&self, map: &mut Compound) -> bool {
+        // An empty shulker box saves no `Items`, which matches an empty roll.
+        let saved = map.get(&"Items".into());
+        let empty = matches!(&self.items, Tag::List(l) if l.is_empty());
+        if saved != Some(&self.items) && !(saved.is_none() && empty) {
+            return false;
+        }
+        map.remove(&"Items".into());
+        map.insert("LootTable".into(), Tag::String(self.table.as_str().into()));
+        if let Some(seed) = self.seed.filter(|s| *s != 0) {
+            map.insert("LootTableSeed".into(), Tag::Long(seed));
+        }
+        true
+    }
+}
+
+/// Save data loaded with a chunk that Horizon keeps but does not simulate.
+#[derive(Clone, Debug, Default)]
+pub struct ChunkExtras {
+    /// Server-owned mod data attached to this chunk.
+    pub attachments: horizon_world::attachments::Attachments,
+    /// Attachment maps of the chunk's block entities, on a save snapshot.
+    pub block_entity_attachments: Vec<((i32, i32, i32), horizon_world::attachments::Attachments)>,
+    /// Chunk root keys written back as loaded (structures, PostProcessing,
+    /// InhabitedTime, blending data, ...).
+    pub root: Compound,
+    /// Block entities Horizon does not model.
+    pub block_entities: Vec<Tag>,
+    /// The NBT of the modelled block entities as loaded, to restore the fields and
+    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
+    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
+    /// Every saved block entity's position in the order of the save's list,
+    /// the order `SerializableChunkData` puts them in the chunk's maps.
+    pub block_entity_order: Vec<(i32, i32, i32)>,
+    /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
+    /// save time. Registered with the level's tick scheduler on arrival and
+    /// replaced with the scheduler's pending ticks when saving.
+    pub block_ticks: Vec<horizon_core::ticks::SavedTick>,
+    pub fluid_ticks: Vec<horizon_core::ticks::SavedTick>,
+    /// Game time written as `LastUpdate`.
+    pub last_update: i64,
+    /// Containers still holding their loot table's roll.
+    pub rolled_loot: Vec<RolledLoot>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn extreme_y_queries_are_air_and_writes_leave_the_column_unchanged() {
+        for layout in [ColumnLayout::VANILLA, ColumnLayout::new(0, 256).unwrap()] {
+            let mut chunk = Chunk::with_layout(0, 0, layout);
+            chunk.set(0, layout.min_y(), 0, 7);
+            for y in [i32::MIN, i32::MIN + 63, -2_146_769_275, i32::MAX] {
+                assert_eq!(layout.section_index(y), None);
+                assert_eq!(chunk.section_index(y), None);
+                assert_eq!(chunk.get(0, y, 0), 0);
+                assert_eq!(
+                    chunk.light(0, y, 0),
+                    if y < layout.min_y() { 0 } else { 0xf0 }
+                );
+                chunk.set(0, y, 0, 9);
+            }
+            assert_eq!(chunk.get(0, layout.min_y(), 0), 7);
+        }
+    }
+    #[test]
+    fn each_light_form_keeps_every_value_and_run() {
+        // Sky varies alone, block varies alone, both, neither.
+        let cases: [(fn(usize) -> u8, &str); 4] = [
+            (|i| ((i % 16) as u8) << 4 | 3, "sky"),
+            (|i| 0xA0 | (i / 256) as u8, "block"),
+            (|i| (i % 251) as u8, "full"),
+            (|_| 0x7C, "uniform"),
+        ];
+        for (value, name) in cases {
+            let light = Light::packed(Box::new(std::array::from_fn(value)));
+            let form = match light {
+                Light::Sky(..) => "sky",
+                Light::Block(..) => "block",
+                Light::Full(_) => "full",
+                Light::Uniform(_) => "uniform",
+            };
+            assert_eq!(form, name);
+            for at in [0, 17, 1000, 4078] {
+                let mut run = [0u8; 18];
+                light.copy_run(at, &mut run);
+                let expected: Vec<u8> = (at..at + 18).map(value).collect();
+                assert_eq!(run.as_slice(), expected, "{name} at {at}");
+                assert_eq!(light.get(at + 5), value(at + 5), "{name}");
+            }
+        }
+    }
+    #[test]
+    fn highest_skips_only_sections_that_cannot_match() {
+        let (air, cave_air, stone) = (0, 7, 1);
+        let mut chunk = Chunk::empty(0, 0);
+        // Stone low down, cave air (uniform in its section) above it, and a
+        // section of air with one stone block higher up.
+        for y in MIN_Y..MIN_Y + 40 {
+            chunk.set(3, y, 4, stone);
+        }
+        for i in 0..4096 {
+            Arc::make_mut(&mut chunk.sections[5]).set(i, cave_air);
+        }
+        chunk.set(3, 150, 4, stone);
+        let full = |c: &Chunk, matches: &dyn Fn(u32) -> bool| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| matches(c.get(3, y, 4)))
+        };
+        for matches in [
+            &(|v: u32| v != air) as &dyn Fn(u32) -> bool,
+            &|v: u32| v == stone,
+            &|v: u32| v == cave_air,
+        ] {
+            let fast = chunk.highest(air, |y| matches(chunk.get(3, y, 4)));
+            assert_eq!(fast, full(&chunk, matches));
+        }
+        assert_eq!(
+            chunk.highest(air, |y| chunk.get(3, y, 4) == stone),
+            Some(150)
+        );
+        assert_eq!(Chunk::empty(0, 0).highest(air, |_| unreachable!()), None);
+    }
+    /// The kept WORLD_SURFACE heights match a scan of every column after
+    /// each of a few thousand writes (air, cave air, stone, whole sections).
+    #[test]
+    fn world_surface_follows_writes() {
+        let (air, cave_air, stone) = (0, 7, 1);
+        let is_air = |v: u32| v == air || v == cave_air;
+        let scan = |c: &Chunk, x: i32, z: i32| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| !is_air(c.get(x, y, z)))
+                .map_or(MIN_Y, |y| y + 1)
+        };
+        let mut chunk = Chunk::empty(0, 0);
+        assert_eq!(chunk.world_surface(5, 5, is_air), MIN_Y);
+        for y in MIN_Y..MIN_Y + 70 {
+            for i in 0..256 {
+                chunk.set(i & 15, y, i >> 4, stone);
+            }
+        }
+        for i in 0..4096 {
+            Arc::make_mut(&mut chunk.sections[8]).set(i, cave_air);
+        }
+        let mut random = horizon_core::random::LegacyRandom::new(9);
+        use horizon_core::random::RandomSource;
+        for step in 0..4000 {
+            let x = random.next_int_bound(16).unwrap();
+            let z = random.next_int_bound(16).unwrap();
+            let y = MIN_Y + 40 + random.next_int_bound(120).unwrap();
+            let v = [air, cave_air, stone][random.next_int_bound(3).unwrap() as usize];
+            chunk.set(x, y, z, v);
+            if step % 7 == 0 {
+                for i in 0..256 {
+                    assert_eq!(
+                        chunk.world_surface(i & 15, i >> 4, is_air),
+                        scan(&chunk, i & 15, i >> 4)
+                    );
+                }
+            }
+        }
+        // Out-of-range writes and unchanged states keep the map.
+        let before = chunk.world_surface(3, 3, is_air);
+        chunk.set(3, MIN_Y + HEIGHT, 3, stone);
+        chunk.set(3, before - 1, 3, chunk.get(3, before - 1, 3));
+        assert!(chunk.surface.heights.get().is_some());
+        assert_eq!(chunk.world_surface(3, 3, |_| unreachable!()), before);
+    }
+    /// A write two below a column's height can't move it, so the next read asks about no block;
+    /// a write at or above it (placing on top, clearing the top block) is found again on the next
+    /// read by looking down that column alone, and the other columns keep their heights.
+    #[test]
+    fn a_write_finds_its_own_column_again() {
+        // Each column holds its own state (16 + i), so a read that looks at another column's
+        // blocks shows up as a state that isn't air or this column's.
+        let state = |i: usize| 16 + i as u32;
+        let mut chunk = Chunk::empty(0, 0);
+        for i in 0..256 {
+            for y in MIN_Y..MIN_Y + 20 + (i as i32 % 7) {
+                chunk.set(i as i32 & 15, y, i as i32 >> 4, state(i));
+            }
+        }
+        let seen = std::cell::RefCell::new(Vec::new());
+        let surface = |c: &Chunk, i: usize| {
+            c.world_surface(i as i32 & 15, i as i32 >> 4, |v| {
+                seen.borrow_mut().push(v);
+                v == 0
+            })
+        };
+        let heights: Vec<i32> = (0..256).map(|i| surface(&chunk, i)).collect();
+        assert_eq!(heights[0], MIN_Y + 20);
+        assert_eq!(heights[6], MIN_Y + 26);
+        seen.borrow_mut().clear();
+
+        let (column, x, z) = (0x35, 5, 3);
+        let top = heights[column];
+        // Two below the height: the column keeps its map entry.
+        chunk.set(x, top - 2, z, 0);
+        assert_eq!(surface(&chunk, column), top);
+        assert!(seen.borrow().is_empty());
+        chunk.set(x, top - 2, z, state(column));
+
+        // At the height: placed on top, found again down this column only.
+        chunk.set(x, top, z, state(column));
+        assert_eq!(surface(&chunk, column), top + 1);
+        assert!(!seen.borrow().is_empty());
+        assert!(seen.borrow().iter().all(|&v| v == 0 || v == state(column)));
+        seen.borrow_mut().clear();
+        assert_eq!(surface(&chunk, column), top + 1);
+        for i in (0..256).filter(|&i| i != column) {
+            assert_eq!(surface(&chunk, i), heights[i]);
+        }
+        assert!(
+            seen.borrow().is_empty(),
+            "a read found again an untouched column"
+        );
+
+        // One below the height: the top block cleared, the height drops by one.
+        chunk.set(x, top, z, 0);
+        assert_eq!(surface(&chunk, column), top);
+        assert!(seen.borrow().iter().all(|&v| v == 0 || v == state(column)));
+    }
+    /// Chunk snapshots can be cloned while helper threads refresh a stale height. No snapshot
+    /// may retain the old height with its stale bit cleared, for either map.
+    #[test]
+    fn cloning_during_a_height_refresh_keeps_the_new_height() {
+        for _ in 0..4096 {
+            let mut chunk = Chunk::empty(0, 0);
+            chunk.set(0, MIN_Y + 4, 0, 1);
+            assert_eq!(chunk.world_surface(0, 0, |v| v == 0), MIN_Y + 5);
+            assert_eq!(chunk.motion_blocking(0, 0, |v| v != 0), MIN_Y + 5);
+            chunk.set(0, MIN_Y + 5, 0, 1);
+            let ready = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    ready.wait();
+                    assert_eq!(chunk.world_surface(0, 0, |v| v == 0), MIN_Y + 6);
+                    assert_eq!(chunk.motion_blocking(0, 0, |v| v != 0), MIN_Y + 6);
+                });
+                ready.wait();
+                for _ in 0..4 {
+                    let snapshot = chunk.clone();
+                    assert_eq!(snapshot.world_surface(0, 0, |v| v == 0), MIN_Y + 6);
+                    assert_eq!(snapshot.motion_blocking(0, 0, |v| v != 0), MIN_Y + 6);
+                }
+            });
+        }
+    }
+    /// MOTION_BLOCKING ignores states that don't count (air, grass) and
+    /// follows writes as the surface map does, both maps kept at once.
+    #[test]
+    fn motion_blocking_follows_writes() {
+        let (air, grass, water, stone) = (0, 3, 5, 1);
+        let blocks = |v: u32| v == water || v == stone;
+        let scan = |c: &Chunk, x: i32, z: i32| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| blocks(c.get(x, y, z)))
+                .map_or(MIN_Y, |y| y + 1)
+        };
+        let mut chunk = Chunk::empty(0, 0);
+        assert_eq!(chunk.motion_blocking(5, 5, blocks), MIN_Y);
+        for y in MIN_Y..MIN_Y + 70 {
+            for i in 0..256 {
+                chunk.set(i & 15, y, i >> 4, stone);
+            }
+        }
+        for i in 0..4096 {
+            Arc::make_mut(&mut chunk.sections[8]).set(i, grass);
+        }
+        let mut random = horizon_core::random::LegacyRandom::new(11);
+        use horizon_core::random::RandomSource;
+        for step in 0..4000 {
+            let x = random.next_int_bound(16).unwrap();
+            let z = random.next_int_bound(16).unwrap();
+            let y = MIN_Y + 40 + random.next_int_bound(120).unwrap();
+            let v = [air, grass, water, stone][random.next_int_bound(4).unwrap() as usize];
+            chunk.set(x, y, z, v);
+            if step % 7 == 0 {
+                for i in 0..256 {
+                    assert_eq!(
+                        chunk.motion_blocking(i & 15, i >> 4, blocks),
+                        scan(&chunk, i & 15, i >> 4)
+                    );
+                    chunk.world_surface(i & 15, i >> 4, |v| v == air);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shapes_follow_the_dimension_type_codec() {
+        assert_eq!(ColumnLayout::new(-64, 384), Ok(ColumnLayout::VANILLA));
+        assert_eq!(ColumnLayout::default(), ColumnLayout::VANILLA);
+        // To The Max's Overworld: the highest top vanilla allows.
+        let tall = ColumnLayout::new(-64, 2096).unwrap();
+        assert_eq!((tall.sections(), tall.max_y()), (131, 2032));
+        assert!(ColumnLayout::new(-2032, 4064).is_ok());
+        for (min_y, height) in [(-64, 2112), (-2048, 64), (-60, 384), (0, 250), (0, 0)] {
+            assert!(
+                ColumnLayout::new(min_y, height).is_err(),
+                "{min_y} {height}"
+            );
+        }
+        assert_eq!(tall.section_index(-65), None);
+        assert_eq!(tall.section_index(-64), Some(0));
+        assert_eq!(tall.section_index(2031), Some(130));
+        assert_eq!(tall.section_index(2032), None);
+        assert_eq!(tall.section_y(130), 2016);
+        assert_eq!(
+            LevelShape::new(-64, 384, 384, true, false),
+            Ok(LevelShape::OVERWORLD)
+        );
+        assert_eq!(
+            LevelShape::new(0, 256, 128, false, true),
+            Ok(LevelShape::NETHER)
+        );
+        assert!(LevelShape::new(0, 256, 257, true, false).is_err());
+        assert!(LevelShape::new(-60, 384, 384, true, false).is_err());
+    }
+
+    #[test]
+    fn vanilla_levels_keep_the_overworld_column() {
+        for shape in [LevelShape::OVERWORLD, LevelShape::NETHER, LevelShape::END] {
+            assert_eq!(shape.column(), ColumnLayout::VANILLA, "{shape:?}");
+        }
+        let tall = LevelShape::new(-64, 2096, 2096, true, false).unwrap();
+        assert_eq!(tall.column(), ColumnLayout::new(-64, 2096).unwrap());
+        let deep = LevelShape::new(-512, 256, 256, false, true).unwrap();
+        assert_eq!(deep.column(), ColumnLayout::new(-512, 832).unwrap());
+        assert!(LevelShape::NETHER.has_section(15) && !LevelShape::NETHER.has_section(16));
+        assert!(!LevelShape::NETHER.has_section(-1));
+    }
+
+    #[test]
+    fn a_tall_column_stores_its_whole_height() {
+        let layout = ColumnLayout::new(-64, 2096).unwrap();
+        let mut chunk = Chunk::with_layout(0, 0, layout);
+        assert_eq!(
+            (chunk.min_y(), chunk.max_y(), chunk.sections.len()),
+            (-64, 2032, 131)
+        );
+        let stone = 1;
+        assert_eq!(chunk.set(5, 2031, 6, stone), 0);
+        assert_eq!(chunk.set(5, 2032, 6, stone), stone, "above the column");
+        assert_eq!(chunk.get(5, 2031, 6), stone);
+        assert_eq!(chunk.get(5, 2032, 6), 0);
+        assert_eq!(chunk.world_surface(5, 6, |v| v == 0), 2032);
+        assert_eq!(chunk.world_surface(0, 0, |v| v == 0), -64);
+        assert_eq!(chunk.highest(0, |y| y < 1000), None);
+        chunk.set(5, 999, 6, stone);
+        assert_eq!(chunk.highest(0, |y| y < 1000), Some(999));
+        assert_eq!(chunk.light(0, 2100, 0), 0xF0);
+        assert_eq!(chunk.light(0, -65, 0), 0);
+        chunk.set_biome_cell(0, 130 * 4 + 3, 0, 9);
+        assert_eq!(chunk.biome(0, 5000, 0), 9);
+    }
+}

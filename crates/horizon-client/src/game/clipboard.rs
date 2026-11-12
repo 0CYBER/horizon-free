@@ -13,18 +13,41 @@ impl Game<'_> {
             return None;
         }
         let m = self.modifiers;
-        let held = |keys: [KeyCode; 2]| keys.iter().any(|k| self.keys.contains(k));
-        // InputQuirks.EDIT_SHORTCUT_KEY_MODIFIER: Cmd on macOS, Ctrl elsewhere.
-        let edit = if cfg!(target_os = "macos") {
-            m.super_key() || held([KeyCode::SuperLeft, KeyCode::SuperRight])
-        } else {
-            m.control_key() || held([KeyCode::ControlLeft, KeyCode::ControlRight])
-        };
+        let held = |keys: [KeyCode; 2]| keys.iter().any(|k| self.physical_keys.contains(k));
         clipboard::edit_shortcut(
             clipboard::shortcut_letter(&event.logical_key, event.physical_key),
-            edit,
+            self.has_control_down_with_quirk(),
             m.shift_key() || held([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
             m.alt_key() || held([KeyCode::AltLeft, KeyCode::AltRight]),
+        )
+    }
+    /// `InputWithModifiers.hasControlDownWithQuirk`: the edit shortcuts'
+    /// modifier (`InputQuirks.EDIT_SHORTCUT_KEY_MODIFIER`: Cmd on macOS, Ctrl
+    /// elsewhere), held on the keyboard or by an agent. It reads the physical
+    /// keys, never `keys`: a latched sprint or sneak toggle puts Control or
+    /// Shift in `keys` without the key being down.
+    pub(super) fn has_control_down_with_quirk(&self) -> bool {
+        let held = |keys: [KeyCode; 2]| keys.iter().any(|k| self.physical_keys.contains(k));
+        if cfg!(target_os = "macos") {
+            self.modifiers.super_key() || held([KeyCode::SuperLeft, KeyCode::SuperRight])
+        } else {
+            self.modifiers.control_key() || held([KeyCode::ControlLeft, KeyCode::ControlRight])
+        }
+    }
+    /// Whether the held keys let a key's text through to the focused field
+    /// (`clipboard::types_text`): not with the edit modifier, unless it is
+    /// part of AltGr.
+    pub(super) fn types_text(&self) -> bool {
+        let held = |keys: [KeyCode; 2]| keys.iter().any(|k| self.physical_keys.contains(k));
+        let edit = if cfg!(target_os = "macos") {
+            held([KeyCode::SuperLeft, KeyCode::SuperRight])
+        } else {
+            held([KeyCode::ControlLeft, KeyCode::ControlRight])
+        };
+        clipboard::types_text(
+            edit,
+            held([KeyCode::AltLeft, KeyCode::AltRight]),
+            clipboard::ALTGR_IS_CTRL_ALT,
         )
     }
     /// A shortcut in an append-only field limited to `max_chars` characters

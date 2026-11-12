@@ -1,6 +1,8 @@
 //! Files dropped anywhere on the window (`horizon_launcher::import`): a shared instance becomes
 //! a new instance, a Java modpack goes to the Modpacks import, a resource or shader pack into
-//! the selected instance. The Packs section and the world rows take their own drops first.
+//! the selected instance, a game build (a `horizon-client` program, or an archive or an Actions
+//! artifact holding one) installed as its own version. The Packs section and the world rows take
+//! their own drops first.
 use super::*;
 use gpui::ExternalPaths;
 use horizon_launcher::import::{self, Dropped};
@@ -14,6 +16,12 @@ pub(super) struct Importing {
     note: Option<Result<String, String>>,
 }
 
+impl Importing {
+    pub(super) fn location_busy(&self) -> bool {
+        self.busy > 0
+    }
+}
+
 impl Launcher {
     pub(super) fn import_dropped(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
         for file in files {
@@ -24,11 +32,27 @@ impl Launcher {
             match import::what(&file) {
                 Err(e) => self.importing.note = Some(Err(e)),
                 Ok(Dropped::Instance) => self.import_instance(file, cx),
+                // The same import the Versions page's Import button starts. It
+                // reports through `Msg::Imported`, which the Versions page
+                // already shows, so the note here only says it began -- and
+                // says so only if it did, since one import runs at a time.
+                Ok(Dropped::Build) => {
+                    if !self.can_import_build() {
+                        self.importing.note = Some(Err(tr(
+                            "Wait for the current operation to finish.",
+                        )
+                        .to_owned()));
+                        continue;
+                    }
+                    self.start_build_import(file, cx);
+                    self.importing.note = Some(Ok(tr("Importing…").to_owned()));
+                }
                 Ok(Dropped::Modpack) => {
                     self.show_modpack(None);
                     self.pack_job(move |log| horizon_launcher::modpacks::import(&file, log));
-                    self.importing.note = Some(Ok(format!(
-                        "{name} is a Java modpack: importing it on the Modpacks page."
+                    self.importing.note = Some(Ok(trf(
+                        "{name} is a Java modpack: importing it on the Modpacks page.",
+                        &[("name", &name)],
                     )));
                 }
                 Ok(Dropped::Pack(_)) => {
@@ -37,17 +61,18 @@ impl Launcher {
                     };
                     self.importing.note =
                         Some(horizon_launcher::packs::add(&i.home, &file).map(|p| {
-                            format!(
-                                "Added {} to {}'s packs: switch it on under Packs.",
-                                p.title, i.name
+                            trf(
+                                "Added {title} to {instance}'s packs: switch it on under Packs.",
+                                &[("title", &p.title), ("instance", &i.name)],
                             )
                         }));
                     self.game_packs.stale();
                 }
                 Ok(Dropped::DataPack) => {
-                    self.importing.note = Some(Err(format!(
+                    self.importing.note = Some(Err(trf(
                         "{name} is a data pack: drop it on a world on Home, or install it into \
-                         one from there."
+                         one from there.",
+                        &[("name", &name)],
                     )))
                 }
             }
@@ -68,7 +93,10 @@ impl Launcher {
                     this.reload_instances();
                     this.select_instance(&i);
                     this.go(Page::Play);
-                    format!("Made the instance {} from the shared file.", i.name)
+                    trf(
+                        "Made the instance {name} from the shared file.",
+                        &[("name", &i.name)],
+                    )
                 }));
                 cx.notify();
             });
@@ -94,7 +122,7 @@ impl Launcher {
         let line = match (&self.importing.note, self.importing.busy) {
             (_, n) if n > 0 => text(theme::LABEL)
                 .text_color(t.ink_soft)
-                .child("Making the instance from the shared file…"),
+                .child(tr("Making the instance from the shared file…")),
             (Some(Ok(said)), _) => text(theme::LABEL)
                 .text_color(t.ink_soft)
                 .child(said.clone()),

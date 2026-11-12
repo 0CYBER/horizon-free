@@ -3,7 +3,7 @@ name = "horizon-server-files"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-rust-version = "1.90"
+rust-version.workspace = true
 description = "The dedicated server's vanilla files: server.properties, eula.txt, ops, whitelist and bans, and account lookups"
 
 [dependencies]
@@ -11,6 +11,7 @@ horizon-core = { path = "../horizon-core" }
 horizon-protocol = { path = "../horizon-protocol" }
 horizon-world = { path = "../horizon-world" }
 log = "0.4"
+getrandom = "0.3"
 # Online mode: finding accounts by name (the services' profiles endpoint).
 # Secure chat: the services' public keys arrive base64-encoded.
 base64 = "0.22"

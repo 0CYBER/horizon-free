@@ -1,5 +1,13 @@
 import argparse
+import datetime
 import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -9,12 +17,81 @@ PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/hor
             "horizon-theme": "crates/horizon-theme", "xtask": "xtask"}
 LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"horizon-client": {"horizon-core"}}
-MODS = " --features horizon-client/mods,horizon-mods/pack"
+MODS = ""
 CLIPPY = pr_ready.CI_CLIPPY + " && " + pr_ready.CI_CLIPPY_SERVER
+# The bash on PATH: Windows' CreateProcess looks in System32 before PATH, so a bare "bash" there is WSL's
+# (#5383), which has none of the host's paths. Git Bash on PATH runs the launcher's snippets as on Linux.
+BASH = shutil.which("bash")
+POSIX_BASH = BASH is not None and not (
+    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
 
 
-def args(host="local", quick=False):
-    return argparse.Namespace(host=host, quick=quick)
+def args(host="local", quick=False, harnesses=False):
+    return argparse.Namespace(host=host, quick=quick, harnesses=harnesses)
+
+
+class GitChangedPathsTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.git("init")
+        for key, value in (("core.quotePath", "true"), ("core.autocrlf", "false"),
+                           ("core.hooksPath", str(self.root / "no-hooks")), ("commit.gpgsign", "false")):
+            self.git("config", key, value)
+        for module in (pr_ready, pr_ready.parity):
+            patcher = mock.patch.object(module, "ROOT", self.root)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def git(self, *arguments):
+        return subprocess.run(["git", *arguments], cwd=self.root, capture_output=True,
+                              text=True, encoding="utf-8", check=True).stdout
+
+    def write(self, path, text):
+        destination = self.root / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text, encoding="utf-8", newline="\n")
+
+    def commit(self):
+        self.git("add", ".")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base")
+
+    def test_unicode_paths_select_checks_and_keep_line_counts(self):
+        tracked = "crates/horizon-core/src/caf\u00e9 edit.rs"
+        untracked = "crates/horizon-core/src/\u65b0 file.rs"
+        self.write(tracked, "first\n")
+        self.commit()
+        self.write(tracked, "first\nsecond\n")
+        self.write(untracked, "new\nfile\n")
+        changed = pr_ready.parity.changed_files("HEAD")
+        self.assertEqual(changed, {tracked, untracked})
+        self.assertEqual(pr_ready.line_counts("HEAD", changed), {tracked: (1, 0), untracked: (2, 0)})
+        self.assertTrue(all(pr_ready.workspace_rust(path) for path in changed))
+        self.assertEqual(pr_ready.touched_crates(changed, PACKAGES), ["horizon-core"])
+
+    def test_renamed_rust_source_keeps_both_paths_and_counts(self):
+        before, after = "crates/horizon-core/src/moved.rs", "docs/moved.md"
+        self.write(before, "fn moved() {\n}\n")
+        self.commit()
+        (self.root / "docs").mkdir()
+        self.git("mv", before, after)
+        changed = pr_ready.parity.changed_files("HEAD")
+        self.assertEqual(changed, {before, after})
+        self.assertEqual(pr_ready.line_counts("HEAD", changed), {before: (0, 2), after: (2, 0)})
+        self.assertEqual(pr_ready.touched_crates(changed, PACKAGES), ["horizon-core"])
+
+    @unittest.skipIf(os.name == "nt", "Windows filenames cannot contain tabs or newlines")
+    def test_tabs_and_newlines_remain_in_paths(self):
+        tracked = "crates/horizon-core/src/tab\tfile.rs"
+        untracked = "crates/horizon-core/src/line\r\nfile.rs"
+        self.write(tracked, "first\n")
+        self.commit()
+        self.write(tracked, "first\nsecond\n")
+        self.write(untracked, "new\n")
+        changed = pr_ready.parity.changed_files("HEAD")
+        self.assertEqual(changed, {tracked, untracked})
+        self.assertEqual(pr_ready.line_counts("HEAD", changed), {tracked: (1, 0), untracked: (1, 0)})
 
 
 class PrReadyTests(unittest.TestCase):
@@ -30,6 +107,17 @@ class PrReadyTests(unittest.TestCase):
         # The workspace manifest and lock touch every crate.
         self.assertIsNone(pr_ready.touched_crates({"Cargo.lock", "crates/horizon-core/src/lib.rs"}, PACKAGES))
 
+    def test_shared_client_sources_select_the_library_without_gameplay(self):
+        packages = {**PACKAGES, "horizon-client-lib": "crates/horizon-client-lib"}
+        for path in ["src/client_lib.rs", "src/health.rs", "src/lan/hub.rs", "src/bin/horizon-ctl/main.rs",
+                     "examples/probe/main.rs", "tests/lan_bot.rs"]:
+            self.assertEqual(pr_ready.touched_crates({f"crates/horizon-client/{path}"}, packages),
+                             ["horizon-client-lib"])
+        for path in ["src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs", "src/game/combat.rs",
+                     "tests/launch_api.rs", "Cargo.toml", "build.rs"]:
+            self.assertEqual(pr_ready.touched_crates({f"crates/horizon-client/{path}"}, packages),
+                             ["horizon-client"])
+
     def test_which_workspace_builds_a_path(self):
         self.assertTrue(pr_ready.workspace_rust("crates/horizon-theme/fonts/x.ttf"))
         self.assertTrue(pr_ready.workspace_rust("Cargo.toml"))
@@ -42,6 +130,7 @@ class PrReadyTests(unittest.TestCase):
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-prepare/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-theme/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-telemetry/src/lib.rs"))
+        self.assertTrue(pr_ready.launcher_rust("crates/horizon-mod-api-gen/src/injection.rs"))
         self.assertFalse(pr_ready.launcher_rust("launcher/links.json"))
         self.assertFalse(pr_ready.launcher_rust("launcher/README.md"))
         self.assertFalse(pr_ready.launcher_rust("crates/horizon-client/src/game.rs"))
@@ -52,7 +141,7 @@ class PrReadyTests(unittest.TestCase):
         by_name = {step.name: step for step in steps}
         self.assertEqual(by_name["clippy"].command, CLIPPY)
         self.assertEqual(by_name["tests: horizon-client"].command,
-                         "cargo test --locked -p horizon-client --features horizon-client/mods --tests")
+                         "cargo test --locked -p horizon-client --tests")
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-client --doc")
         self.assertIsNone(by_name["doc tests"].status)
 
@@ -81,10 +170,108 @@ class PrReadyTests(unittest.TestCase):
 
     def test_tests_get_the_features_ci_s_workspace_run_gives_them(self):
         self.assertEqual(pr_ready.mod_features(["horizon-world"]), "")
-        self.assertEqual(pr_ready.mod_features(["horizon-client"]), " --features horizon-client/mods")
+        self.assertEqual(pr_ready.mod_features(["horizon-client"]), "")
         self.assertEqual(pr_ready.mod_features(["horizon-mods"]),
-                         " --features horizon-mods/runtime,horizon-mods/pack,horizon-mods/index")
+                         " --features horizon-mods/index")
         self.assertEqual(pr_ready.mod_features(None), MODS)
+
+    def test_mod_api_data_inputs_build_and_test_the_consuming_crates(self):
+        packages = {**PACKAGES, "horizon-client-render": "crates/horizon-client-render",
+                    "horizon-mod-api-gen": "crates/horizon-mod-api-gen"}
+        for path in ("native-hooks.json", "tools/native-hook-fragments/player.json"):
+            with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages,
+                                      LIBRARIES | {"horizon-client-render", "horizon-mod-api-gen"}, DEPENDENCIES)
+                by_name = {step.name: step for step in steps}
+                self.assertIsNone(by_name["clippy"].skip)
+                self.assertIsNone(by_name["rustfmt"].skip)
+                tests = next(step for step in steps if step.name.startswith("tests:"))
+                self.assertIsNone(tests.skip)
+                self.assertEqual(tests.command, "cargo test --locked -p horizon-client -p horizon-client-render "
+                                               "-p horizon-mod-api-gen --tests")
+
+    def test_shared_generator_edits_run_launcher_checks(self):
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main",
+                                  {"crates/horizon-mod-api-gen/src/injection.rs"},
+                                  {**PACKAGES, "horizon-mod-api-gen": "crates/horizon-mod-api-gen"},
+                                  LIBRARIES | {"horizon-mod-api-gen"}, DEPENDENCIES)
+        by_name = {step.name: step for step in steps}
+        for name in ("launcher rustfmt", "launcher clippy", "launcher tests"):
+            self.assertIsNone(by_name[name].skip)
+
+    @unittest.skipUnless(os.name == "nt", "the Windows runner's own jobs")
+    def test_a_windows_check_ends_what_it_left_running(self):
+        """A check that exits leaving a child that holds its output: the run goes on, and the child is ended."""
+        leaving = ("import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']);"
+                   " print('left one')")
+        step = pr_ready.Step("leaving", f"python3 -c \"{leaving}\"")
+        started = time.monotonic()
+        pr_ready.run_windows([step], verbose=False)
+        self.assertLess(time.monotonic() - started, 60)
+        self.assertEqual((step.status, step.output.strip()), ("pass", "left one"))
+
+    @unittest.skipUnless(shutil.which("cargo"), "needs cargo")
+    def test_windows_launcher_checks_include_binary_tests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            launcher = root / "launcher"
+            (launcher / "src").mkdir(parents=True)
+            (launcher / "Cargo.toml").write_text(
+                '[package]\nname = "launcher-check-fixture"\nversion = "0.1.0"\nedition = "2021"\n[workspace]\n')
+            (launcher / "src/lib.rs").write_text('#[test]\nfn library_passes() {}\n')
+            (launcher / "src/main.rs").write_text(
+                'fn main() {}\n#[test]\nfn binary_fails() { panic!("launcher binary test ran"); }\n')
+            with mock.patch.object(pr_ready, "ROOT", root), \
+                    mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}):
+                subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=launcher, check=True,
+                               capture_output=True)
+                step = pr_ready.Step("launcher tests", "cargo test --locked --lib --bins")
+                pr_ready.run_windows([step], verbose=False)
+            self.assertEqual(step.status, "fail")
+            self.assertIn("launcher binary test ran", step.output)
+
+    @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
+    def test_the_launcher_fallback_asks_for_a_feature_the_launcher_has(self):
+        """The macOS fallback must name gpui_platform/runtime_shaders: gpui_platform is launcher/Cargo.toml's
+        rename of gpui-fast-platform, whose runtime_shaders reaches gpui_macos; the gpui rename (gpui-fast)
+        has no such feature, and neither has Linux any fallback."""
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main", {"launcher/src/main.rs"},
+                                  PACKAGES, LIBRARIES, DEPENDENCIES)
+        command = {step.name: step for step in steps}["launcher clippy"].command
+        for uname, metal, features in (("Darwin", False, ["--features", "gpui_platform/runtime_shaders"]),
+                                        ("Darwin", True, []), ("Linux", False, [])):
+            with self.subTest(uname=uname, metal=metal):
+                self.assertEqual(self.launcher_step_arguments(command, uname, metal),
+                                 ["clippy", "--all-targets", "--locked", *features, "--", "-D", "warnings"])
+
+    def launcher_step_arguments(self, command, uname, metal):
+        """Run a launcher step's shell snippet with fake uname, xcrun, pkg-config and cargo; what the fake
+        cargo receives is the snippet's observable behaviour."""
+        with tempfile.TemporaryDirectory() as fake_bin:
+            scripts = {"uname": f"#!/bin/sh\necho {uname}\n",
+                       "xcrun": f"#!/bin/sh\nexit {0 if metal else 1}\n",
+                       # xkbcommon found: Linux never looks for nix-shell (a NixOS host would have it).
+                       "pkg-config": "#!/bin/sh\nexit 0\n",
+                       "cargo": "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"}
+            for name, script in scripts.items():
+                path = os.path.join(fake_bin, name)
+                # LF on every host: text mode makes the shebang "#!/bin/sh\r" on
+                # Windows, which bash cannot run, so the fake names are skipped.
+                with open(path, "w", newline="\n") as file:
+                    file.write(script)
+                os.chmod(path, 0o755)
+            env = dict(os.environ)
+            if os.name == "nt":
+                # Git Bash puts /usr/bin ahead of every Windows PATH entry, so a fake
+                # named uname can only win when the shell itself puts its folder first.
+                command = 'export PATH="$(cygpath -u "$FAKE_BIN"):$PATH"\n' + command
+                env["FAKE_BIN"] = fake_bin
+            else:
+                env["PATH"] = fake_bin + os.pathsep + os.environ["PATH"]
+            return subprocess.run([BASH, "-c", command], capture_output=True, text=True,
+                                  cwd=pr_ready.ROOT, env=env, check=True).stdout.splitlines()
 
     def test_python_tests_always_run(self):
         with mock.patch.object(pr_ready, "affected_here", return_value=[]):
@@ -222,9 +409,55 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual(by_name["launcher clippy"].status, "skip")
         self.assertIsNone(by_name["clippy"].status)
         with mock.patch.object(pr_ready, "affected_here", return_value=["food"]):
-            steps = pr_ready.plan(args(host="macmini"), "origin/main", changed, {"horizon-world": "crates/horizon-world"}, {"horizon-world"}, {})
+            steps = pr_ready.plan(args(host="macmini", harnesses=True), "origin/main", changed, {"horizon-world": "crates/horizon-world"}, {"horizon-world"}, {})
         self.assertIn("--changed-files", steps[-1].command)
         self.assertIn("crates/horizon-world/src/food.rs", steps[-1].command)
+
+    def test_harnesses_run_only_where_ci_s_parity_job_would(self):
+        packages = {"horizon-world": "crates/horizon-world"}
+        code = {"crates/horizon-world/src/food.rs"}
+        self.assertFalse(pr_ready.runs_parity(code))
+        for path in ("tools/test_food_parity.py", "tools/parity.py", "tools/lab.py", "tools/parity_hosts.json",
+                     "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaFoodOracle.java",
+                     "crates/horizon-world/examples/food_probe.rs", "crates/horizon-client/src/game/sculk_fixture.rs",
+                     ".github/workflows/parity-main.yml"):
+            with self.subTest(path=path):
+                self.assertTrue(pr_ready.runs_parity(code | {path}))
+        with mock.patch.object(pr_ready, "affected_here", return_value=["food", "light"]):
+            steps = pr_ready.plan(args(host="macmini"), "origin/main", code, packages, {"horizon-world"}, {})
+            self.assertEqual(steps[-1].status, "list")
+            self.assertIsNone(steps[-1].command)
+            self.assertIn("2 affected, left to parity-main on main", steps[-1].detail)
+            self.assertIn("--harnesses runs them here", steps[-1].detail)
+            steps = pr_ready.plan(args(host="macmini"), "origin/main", code | {"tools/test_food_parity.py"}, packages,
+                                  {"horizon-world"}, {})
+            self.assertIn("--changed-files", steps[-1].command)
+
+    def test_ci_s_rust_follows_the_six_week_train(self):
+        self.assertEqual(pr_ready.ci_rust(datetime.date(2025, 2, 20)), 85)
+        self.assertEqual(pr_ready.ci_rust(datetime.date(2025, 6, 26)), 88)
+        self.assertEqual(pr_ready.ci_rust(datetime.date(2026, 10, 31)), 99)
+        self.assertEqual(pr_ready.ci_rust(datetime.date(2026, 11, 12)), 100)
+
+    def test_an_older_rust_warns_without_failing(self):
+        today = datetime.date(2026, 10, 31)
+        self.assertIsNone(pr_ready.old_rust((1, 99, 1), today))
+        self.assertIsNone(pr_ready.old_rust(None, today))
+        warning = pr_ready.old_rust((1, 97, 0), today)
+        self.assertIn("1.97.0 is older than CI's stable (1.99)", warning)
+        self.assertIn("`rustup update`", warning)
+        steps = pr_ready.plan(args(quick=True), "origin/main", {"crates/horizon-core/src/jmath.rs"}, PACKAGES, LIBRARIES,
+                              DEPENDENCIES)
+        by_name = {step.name: step for step in steps}
+        by_name["clippy"].status, by_name["clippy"].detail = "fail", "failed"
+        pr_ready.mark_old_rust(steps, warning)
+        names = [step.name for step in steps]
+        self.assertEqual(names.index("Rust") + 1, names.index("clippy"))
+        self.assertEqual(steps[names.index("Rust")].status, "warn")
+        self.assertEqual(by_name["clippy"].detail, "failed; likely the old Rust above")
+        steps = pr_ready.plan(args(quick=True), "origin/main", {"README.md"}, PACKAGES, LIBRARIES, DEPENDENCIES)
+        pr_ready.mark_old_rust(steps, warning)
+        self.assertNotIn("Rust", [step.name for step in steps])
 
     def test_summaries_of_check_output(self):
         output = "test result: ok. 3 passed; 0 failed;\ntest result: FAILED. 4 passed; 1 failed;\n"
@@ -239,6 +472,36 @@ class PrReadyTests(unittest.TestCase):
                                                  "their current inputs.\nNothing to run: every harness passed."),
                          "no harness affected")
         self.assertEqual(pr_ready.duration(125), "2 min 5 s")
+
+    def test_python_checks_run_beside_cargo_and_harnesses_after_it(self):
+        steps = pr_ready.plan(args(), "origin/main", {"crates/horizon-core/src/lib.rs"}, PACKAGES, LIBRARIES,
+                              DEPENDENCIES)
+        steps[0].status = "pass"
+        steps[-1].where, steps[-1].command, steps[-1].status = "here", "parity", None
+        cargo_started = threading.Event()
+        runs = []
+
+        def run_script(group, host, verbose):
+            names = [step.name for step in group]
+            if "Python tests" in names:
+                # Waits for cargo: running them first, alone, would time out here.
+                runs.append(("python", cargo_started.wait(2)))
+            elif "rustfmt" in names:
+                cargo_started.set()
+                runs.append(("cargo", host))
+            elif names:
+                runs.append(("after", names))
+
+        with mock.patch.object(pr_ready, "run_script", run_script):
+            pr_ready.run_checks(steps, "local", verbose=False)
+        self.assertCountEqual(runs[:2], [("python", True), ("cargo", "local")])
+        self.assertEqual(runs[2], ("after", ["Parity"]))
+
+        runs.clear()
+        cargo_started.clear()
+        with mock.patch.object(pr_ready, "run_script", run_script):
+            pr_ready.run_checks(steps, "local", verbose=True)
+        self.assertEqual(runs[0], ("python", False))
 
 
 if __name__ == "__main__":

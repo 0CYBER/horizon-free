@@ -49,6 +49,18 @@ pub(crate) fn read<W: FeatureWorld>(
 ) -> TreeResult<BlockStateId, W::Error> {
     world.block(position).map_err(world_error)
 }
+/// `FeatureWorld::scan_column`.
+pub(crate) fn scan_column<W: FeatureWorld>(
+    world: &mut W,
+    position: [i32; 3],
+    step: i32,
+    limit: i32,
+    keep: impl FnMut(BlockStateId) -> bool,
+) -> TreeResult<i32, W::Error> {
+    world
+        .scan_column(position, step, limit, keep)
+        .map_err(world_error)
+}
 pub(crate) fn write<W: FeatureWorld>(
     world: &mut W,
     position: [i32; 3],
@@ -619,10 +631,10 @@ impl TreeFeature {
         if clipped < tree_height && self.min_clipped_height.is_none_or(|min| clipped < min) {
             return Ok(false);
         }
-        if let Some(root) = &self.root_placer {
-            if !root.place_roots(run, self, origin, trunk_origin)? {
-                return Ok(false);
-            }
+        if let Some(root) = &self.root_placer
+            && !root.place_roots(run, self, origin, trunk_origin)?
+        {
+            return Ok(false);
         }
         let attachments = self
             .trunk_placer

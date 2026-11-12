@@ -11,6 +11,41 @@ pub struct FluidTagId(pub u32);
 pub trait FluidMembership {
     fn fluid_in_tag(&self, fluid: FluidKind, tag: FluidTagId) -> bool;
 }
+
+/// Where the tags of the mod fluids start: one each, past any tag a caller
+/// numbers itself, holding that fluid's source and flowing forms.
+const MOD_TAGS: u32 = 1 << 16;
+
+impl FluidTagId {
+    /// The tag that holds just this mod fluid (none for vanilla's).
+    pub fn of_mod_fluid(fluid: FluidKind) -> Option<Self> {
+        (!fluid.is_vanilla()).then(|| Self(MOD_TAGS + fluid.source().index() as u32))
+    }
+    /// The mod fluid (its source) this tag holds.
+    pub fn mod_fluid(self) -> Option<FluidKind> {
+        self.0
+            .checked_sub(MOD_TAGS)
+            .and_then(|i| FluidKind::from_index(i as usize))
+    }
+}
+
+/// Whether `tag` holds `fluid`: a mod fluid's own tag by the table, the
+/// caller's tags by `tags`.
+fn holds<W: FluidMembership + ?Sized>(tags: &W, fluid: FluidKind, tag: FluidTagId) -> bool {
+    match tag.mod_fluid() {
+        Some(source) => fluid.source() == source,
+        None => tags.fluid_in_tag(fluid, tag),
+    }
+}
+
+/// An entity's immersion in one mod fluid, as `Entity.isInFluidType` sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModFluidImmersion {
+    /// The fluid's source form.
+    pub fluid: FluidKind,
+    pub height: f64,
+    pub eyes_inside: bool,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct FluidTracker {
     pub fluid: FluidKind,
@@ -165,14 +200,30 @@ pub struct EntityFluidInteraction {
 impl EntityFluidInteraction {
     /// Preserve the caller's tag-set iteration order: a fluid's current belongs
     /// to the first matching tag, even when several tags contain that fluid.
+    /// Each mod fluid of the table gets its own tag after the caller's (NeoForge
+    /// tracks every `FluidType`), so its current and immersion are its own.
     pub fn new(tags: impl IntoIterator<Item = FluidTagId>) -> Self {
         let mut state = Self::default();
         for tag in tags {
-            if !state.currents.iter().any(|(t, _)| *t == tag) {
-                state.currents.push((tag, CurrentAccumulator::default()));
-            }
+            state.add_tag(tag);
         }
+        state.add_mod_tags();
         state
+    }
+    fn add_tag(&mut self, tag: FluidTagId) {
+        if !self.currents.iter().any(|(t, _)| *t == tag) {
+            self.currents.push((tag, CurrentAccumulator::default()));
+        }
+    }
+    /// The table's mod fluids' tags, also for an entity made before its
+    /// content root loaded them.
+    fn add_mod_tags(&mut self) {
+        let mods = FluidKind::all()
+            .filter(|f| f.source() == *f)
+            .filter_map(FluidTagId::of_mod_fluid);
+        for tag in mods {
+            self.add_tag(tag);
+        }
     }
     pub fn trackers(&self) -> &[FluidTracker] {
         &self.trackers
@@ -183,7 +234,7 @@ impl EntityFluidInteraction {
     pub fn fluid_height<W: FluidMembership>(&self, tags: &W, tag: FluidTagId) -> f64 {
         let mut height = 0.0;
         for t in &self.trackers {
-            if t.height > height && tags.fluid_in_tag(t.fluid, tag) {
+            if t.height > height && holds(tags, t.fluid, tag) {
                 height = t.height;
             }
         }
@@ -195,7 +246,35 @@ impl EntityFluidInteraction {
     pub fn is_eye_in_fluid<W: FluidMembership>(&self, tags: &W, tag: FluidTagId) -> bool {
         self.trackers
             .iter()
-            .any(|t| t.eyes_inside && tags.fluid_in_tag(t.fluid, tag))
+            .any(|t| t.eyes_inside && holds(tags, t.fluid, tag))
+    }
+    /// The mod fluids the entity is in, from its last update: their heights and
+    /// whether the eyes are in them.
+    pub fn mod_fluids(&self) -> impl Iterator<Item = ModFluidImmersion> + '_ {
+        self.currents.iter().filter_map(|(tag, _)| {
+            let fluid = tag.mod_fluid()?;
+            let mut immersion = ModFluidImmersion {
+                fluid,
+                height: 0.0,
+                eyes_inside: false,
+            };
+            for t in self.trackers.iter().filter(|t| t.fluid.source() == fluid) {
+                immersion.height = immersion.height.max(t.height);
+                immersion.eyes_inside |= t.eyes_inside;
+            }
+            (immersion.height > 0.0 || immersion.eyes_inside).then_some(immersion)
+        })
+    }
+    /// Each mod fluid's current, at its `motionScale`, when it `canPushEntity`.
+    pub fn apply_mod_currents<W: CurrentTarget>(&self, world: &mut W) -> Result<(), W::Error> {
+        for m in self.mod_fluids().filter(|m| m.height > 0.0) {
+            let numbers = m.fluid.info().entity;
+            if numbers.can_push {
+                let tag = FluidTagId::of_mod_fluid(m.fluid).expect("a mod fluid");
+                self.apply_current(world, tag, numbers.motion_scale)?;
+            }
+        }
+        Ok(())
     }
     pub fn apply_current<W: CurrentTarget>(
         &self,
@@ -224,6 +303,7 @@ impl EntityFluidInteraction {
             t.eyes_inside = false;
             true
         });
+        self.add_mod_tags();
         for (_, c) in &mut self.currents {
             c.reset();
         }
@@ -300,7 +380,7 @@ impl EntityFluidInteraction {
                         } else {
                             self.currents
                                 .iter()
-                                .position(|(tag, _)| world.fluid_in_tag(kind, *tag))
+                                .position(|(tag, _)| holds(world, kind, *tag))
                         };
                         let entry = (kind, index, current);
                         last = Some(entry);
@@ -333,5 +413,122 @@ impl EntityFluidInteraction {
             }
         }
         Ok(last.is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A body the accumulator pushes: the player flag and the velocity it
+    /// reads are the only things `apply_to` asks for.
+    struct Body {
+        player: bool,
+        velocity: Vec3,
+        added: Vec3,
+    }
+    impl CurrentTarget for Body {
+        type Error = std::convert::Infallible;
+        fn is_player_class(&self) -> bool {
+            self.player
+        }
+        fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+            Ok(self.velocity)
+        }
+        fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+            self.added = self.added.add_vector(delta);
+            Ok(())
+        }
+    }
+
+    /// `EntityFluidInteraction$CurrentAccumulator.applyTo`: a body that is not
+    /// a player takes the direction of the accumulated current, so two samples
+    /// of one block push as hard as one; a player takes their average, so the
+    /// push grows with the number of blocks and is halved by two of them.
+    #[test]
+    fn a_current_pushes_a_player_by_its_average_and_anything_else_by_its_direction() {
+        let mut acc = CurrentAccumulator::default();
+        acc.accumulate(Vec3::new(1.0, 0.0, 0.0));
+        let mut mob = Body {
+            player: false,
+            velocity: Vec3::ZERO,
+            added: Vec3::ZERO,
+        };
+        acc.apply_to(&mut mob, 0.014).unwrap();
+        assert!((mob.added.x - 0.014).abs() < 1e-12, "mob: {}", mob.added.x);
+        acc.accumulate(Vec3::new(1.0, 0.0, 0.0));
+        let mut mob = Body {
+            player: false,
+            velocity: Vec3::ZERO,
+            added: Vec3::ZERO,
+        };
+        acc.apply_to(&mut mob, 0.014).unwrap();
+        assert!(
+            (mob.added.x - 0.014).abs() < 1e-12,
+            "a second sample does not double a mob's push: {}",
+            mob.added.x
+        );
+        let mut player = Body {
+            player: true,
+            velocity: Vec3::ZERO,
+            added: Vec3::ZERO,
+        };
+        acc.apply_to(&mut player, 0.014).unwrap();
+        assert!(
+            (player.added.x - 0.014).abs() < 1e-12,
+            "the average of two (1,0,0) samples is (1,0,0): {}",
+            player.added.x
+        );
+    }
+
+    /// The same body with a single weak sample: the average is (0.5,0,0) for a
+    /// player, and a nearly still body gets the 0.0045 lift either way.
+    #[test]
+    fn a_weak_current_on_a_still_body_is_lifted_to_the_minimum() {
+        let mut acc = CurrentAccumulator::default();
+        // A tenth of a block a tick: 0.0014 once scaled, under the minimum.
+        acc.accumulate(Vec3::new(0.1, 0.0, 0.0));
+        let mut player = Body {
+            player: true,
+            velocity: Vec3::ZERO,
+            added: Vec3::ZERO,
+        };
+        acc.apply_to(&mut player, 0.014).unwrap();
+        assert!(
+            (player.added.x - 0.0045).abs() < 1e-12,
+            "{}",
+            player.added.x
+        );
+        // A body that is already moving on x or z takes the small push as it is.
+        let mut moving = Body {
+            player: true,
+            velocity: Vec3::new(0.05, 0.0, 0.0),
+            added: Vec3::ZERO,
+        };
+        acc.apply_to(&mut moving, 0.014).unwrap();
+        assert!(
+            (moving.added.x - 0.0014).abs() < 1e-12,
+            "{}",
+            moving.added.x
+        );
+    }
+
+    /// `applyTo` returns before reading the velocity with no samples, and when
+    /// the accumulated current is under the 1e-5 of a squared length.
+    #[test]
+    fn no_current_and_a_current_under_the_threshold_push_nothing() {
+        let mut body = Body {
+            player: false,
+            velocity: Vec3::ZERO,
+            added: Vec3::ZERO,
+        };
+        CurrentAccumulator::default()
+            .apply_to(&mut body, 0.014)
+            .unwrap();
+        assert_eq!(body.added, Vec3::ZERO);
+        let mut acc = CurrentAccumulator::default();
+        acc.accumulate(Vec3::new(0.001, 0.0, 0.0));
+        acc.apply_to(&mut body, 0.014).unwrap();
+        assert_eq!(body.added, Vec3::ZERO);
     }
 }

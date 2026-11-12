@@ -42,6 +42,12 @@ pub struct Interaction {
     pub sound: Option<&'static str>,
     /// The custom statistic the player earns (`use_cauldron`, ...).
     pub stat: Option<&'static str>,
+    /// `lowerFillLevel` posts BLOCK_CHANGE with the new state.
+    pub lower_fill_level: bool,
+    /// The `Level.gameEvent` the interaction ends with, after its sound:
+    /// `FLUID_PICKUP` from `fillBucket` and the glass bottle, `FLUID_PLACE`
+    /// from `emptyBucket` and a water potion. Washing posts none.
+    pub fluid_event: Option<&'static str>,
 }
 
 fn state(name: &str, level: Option<u8>) -> BlockState {
@@ -60,6 +66,16 @@ fn pass() -> Interaction {
         block: None,
         sound: None,
         stat: None,
+        lower_fill_level: false,
+        fluid_event: None,
+    }
+}
+
+/// `InteractionResult.CONSUME`: a lava or powder snow bucket under water.
+fn consume() -> Interaction {
+    Interaction {
+        outcome: Outcome::Consume,
+        ..pass()
     }
 }
 
@@ -126,6 +142,26 @@ fn changed(block: BlockState, sound: Option<&'static str>, stat: &'static str) -
         block: Some(block),
         sound,
         stat: Some(stat),
+        lower_fill_level: false,
+        fluid_event: None,
+    }
+}
+
+fn changed_lowered(
+    cauldron: &BlockState,
+    sound: Option<&'static str>,
+    stat: &'static str,
+) -> Interaction {
+    let mut result = changed(lowered(cauldron), sound, stat);
+    result.lower_fill_level = true;
+    result
+}
+
+impl Interaction {
+    /// The same answer, ending with the interaction's `Level.gameEvent`.
+    fn with_event(mut self, event: &'static str) -> Self {
+        self.fluid_event = Some(event);
+        self
     }
 }
 
@@ -183,7 +219,7 @@ pub fn interact(
             stack.data_mut().dyed_color = None;
             stack.tidy();
         }
-        return changed(lowered(cauldron), None, "clean_armor");
+        return changed_lowered(cauldron, None, "clean_armor");
     }
     let fill_bucket = |player: &mut dyn Player, new: &str, can_fill: bool, sound| {
         if !can_fill {
@@ -195,20 +231,16 @@ pub fn interact(
             Some(sound),
             "use_cauldron",
         )
+        .with_event("minecraft:fluid_pickup")
     };
     let empty_bucket = |player: &mut dyn Player, block: BlockState, sound| {
         filled(player, ItemStack::new("minecraft:bucket", 1), true);
-        changed(block, Some(sound), "fill_cauldron")
+        changed(block, Some(sound), "fill_cauldron").with_event("minecraft:fluid_place")
     };
     match item {
         "minecraft:lava_bucket" => {
             return if under_water {
-                Interaction {
-                    outcome: Outcome::Consume,
-                    block: None,
-                    sound: None,
-                    stat: None,
-                }
+                consume()
             } else {
                 empty_bucket(
                     player,
@@ -226,12 +258,7 @@ pub fn interact(
         }
         "minecraft:powder_snow_bucket" => {
             return if under_water {
-                Interaction {
-                    outcome: Outcome::Consume,
-                    block: None,
-                    sound: None,
-                    stat: None,
-                }
+                consume()
             } else {
                 empty_bucket(
                     player,
@@ -253,6 +280,7 @@ pub fn interact(
                 Some("minecraft:item.bottle.empty"),
                 "use_cauldron",
             )
+            .with_event("minecraft:fluid_place")
         }
         ("water", "minecraft:bucket") => fill_bucket(
             player,
@@ -266,11 +294,8 @@ pub fn interact(
                 ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"),
                 true,
             );
-            changed(
-                lowered(cauldron),
-                Some("minecraft:item.bottle.fill"),
-                "use_cauldron",
-            )
+            changed_lowered(cauldron, Some("minecraft:item.bottle.fill"), "use_cauldron")
+                .with_event("minecraft:fluid_pickup")
         }
         ("water", "minecraft:potion") => {
             if level == 3 || !water_potion {
@@ -282,6 +307,7 @@ pub fn interact(
             next.properties
                 .insert("level".into(), (level % 3 + 1).to_string());
             changed(next, Some("minecraft:item.bottle.empty"), "use_cauldron")
+                .with_event("minecraft:fluid_place")
         }
         ("water", name)
             if name
@@ -298,7 +324,7 @@ pub fn interact(
             cleaned.data_mut().banner_patterns.pop();
             cleaned.tidy();
             filled(player, cleaned, false);
-            changed(lowered(cauldron), None, "clean_banner")
+            changed_lowered(cauldron, None, "clean_banner")
         }
         ("water", name)
             if name
@@ -307,7 +333,7 @@ pub fn interact(
                 .is_some_and(|c| COLORS.contains(&c)) =>
         {
             filled(player, held.transmute("minecraft:shulker_box", 1), false);
-            changed(lowered(cauldron), None, "clean_shulker_box")
+            changed_lowered(cauldron, None, "clean_shulker_box")
         }
         ("lava", "minecraft:bucket") => fill_bucket(
             player,
@@ -325,9 +351,72 @@ pub fn interact(
     }
 }
 
+/// What `interact` would answer for `held`, changing nothing: a client's
+/// `useItemOn`, where every interaction checks the same conditions and acts
+/// only `if (!level.isClientSide())`.
+pub fn outcome(
+    cauldron: &BlockState,
+    under_water: bool,
+    removes_dye: bool,
+    held: &ItemStack,
+) -> Outcome {
+    struct Dry(Option<ItemStack>);
+    impl Player for Dry {
+        fn creative(&self) -> bool {
+            false
+        }
+        fn hand(&mut self) -> &mut Option<ItemStack> {
+            &mut self.0
+        }
+        fn add(&mut self, _: &mut ItemStack) -> bool {
+            true
+        }
+        fn contains(&self, _: &ItemStack) -> bool {
+            false
+        }
+        fn drop_stack(&mut self, _: ItemStack) {}
+    }
+    interact(
+        cauldron,
+        under_water,
+        removes_dye,
+        &mut Dry(Some(held.clone())),
+    )
+    .outcome
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_client_sees_the_bucket_taken_without_acting() {
+        let empty = state("minecraft:cauldron", None);
+        let water = |l| state("minecraft:water_cauldron", Some(l));
+        let stack = |id| ItemStack::new(id, 1);
+        let outcome = |c: &BlockState, under_water, id| outcome(c, under_water, false, &stack(id));
+        assert_eq!(
+            outcome(&empty, false, "minecraft:water_bucket"),
+            Outcome::Success
+        );
+        assert_eq!(
+            outcome(&empty, false, "minecraft:lava_bucket"),
+            Outcome::Success
+        );
+        // fillLavaInteraction under water: CONSUME, the bucket kept.
+        assert_eq!(
+            outcome(&empty, true, "minecraft:lava_bucket"),
+            Outcome::Consume
+        );
+        assert_eq!(
+            outcome(&water(3), false, "minecraft:bucket"),
+            Outcome::Success
+        );
+        // fillBucket needs a full cauldron.
+        assert_eq!(outcome(&water(2), false, "minecraft:bucket"), Outcome::Pass);
+        assert_eq!(outcome(&empty, false, "minecraft:bucket"), Outcome::Pass);
+        assert_eq!(outcome(&empty, false, "minecraft:stone"), Outcome::Pass);
+    }
 
     #[test]
     fn a_burning_entity_lowers_water_and_melts_powder_snow() {

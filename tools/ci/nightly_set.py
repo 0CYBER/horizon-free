@@ -4,7 +4,9 @@
     nightly_set.py command     one `/nightly …` comment (nightly-command.yml): checks who asked, updates the set,
                                starts the build and answers in the thread
 
-A comment by Ludovic or by a login in .github/trusted-reviewers.txt, on any issue or pull request:
+A comment by Ludovic or by an account in .github/trusted-reviewers.txt, on any issue or pull request. Accounts are
+matched by their numeric GitHub ID, never by login: a login is a name anyone can claim once its owner renames or
+deletes the account, an ID is never reused (docs/release-flow.md "Trusted reviewers"):
 
     /nightly 2640 2642     the set becomes these pull requests, merged onto main in this order; builds now
     /nightly add 2650      adds one, or takes its newest head again; builds now
@@ -14,7 +16,7 @@ A comment by Ludovic or by a login in .github/trusted-reviewers.txt, on any issu
     /nightly dry-run 2640  builds main + these and signs with a throwaway key; publishes nothing, the set stays
 
 The set (set.json on the nightly-state branch) keeps each pull request at the head it had when someone asked for
-it; the scheduled nightly takes their newest heads and drops the merged and closed ones (nightly.py pick).
+it; the scheduled nightly builds them at those heads and drops the merged and closed ones (nightly.py pick).
 builds.jsonl there records every build's set, for the stats. Nothing here runs a pull request's code: its commits
 are fetched and merged with `git merge-tree --write-tree`, which writes git objects and never a working tree, so no
 file of theirs reaches the disk and no hook, filter or script of theirs runs.
@@ -34,7 +36,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-OWNER = "ludovic111"
+OWNER = "ludovic111"  # for messages only: who is Ludovic is decided by OWNER_ID
+# ludovic111's numeric GitHub ID (`gh api users/ludovic111 --jq .id`). None fails closed: nobody is the owner until
+# tools/ci/resolve_reviewer_ids.py has filled it in.
+OWNER_ID: int | None = 136255825
 REVIEWERS = ".github/trusted-reviewers.txt"
 CODEOWNERS = ".github/CODEOWNERS"
 # What CODEOWNERS guards today, refused even if the file moved: what builds, signs and checks releases.
@@ -49,6 +54,7 @@ BOT = ("github-actions[bot]", "41898283+github-actions[bot]@users.noreply.github
 SAFE_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "merge.renormalize=false"]
 NUMBER = re.compile(r"^#?(\d{1,6}),?$")
 LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+USER_ID = re.compile(r"^[1-9][0-9]{0,11}$")
 VERBS = ("add", "remove", "clear", "status", "dry-run")
 USAGE = ("Use `/nightly 2640 2642`, `/nightly add 2650`, `/nightly remove 2640`, `/nightly clear`, "
          "`/nightly status` or `/nightly dry-run 2640`.")
@@ -99,39 +105,71 @@ def parse(body: str) -> Command | None:
     return Command(verb, prs)
 
 
+@dataclass(frozen=True)
+class Actor:
+    """Who wrote a comment: the login (for messages and logs) and the numeric ID (for every decision)."""
+    login: str
+    id: int
+
+
+def actor_from_env(env=os.environ) -> Actor:
+    """The comment's author from the workflow's AUTHOR and AUTHOR_ID. Without a numeric ID nobody is anyone."""
+    login, raw = env.get("AUTHOR", ""), env.get("AUTHOR_ID", "")
+    if not USER_ID.match(raw.strip()):
+        raise Refused("The workflow didn't say who wrote this comment (AUTHOR_ID), so nothing was done.")
+    return Actor(login, int(raw))
+
+
 @dataclass
 class Reviewers:
-    logins: set[str]  # lowercase
+    members: dict[int, str]  # numeric ID -> login as listed (for messages)
     paused: bool
+    skipped: list[str] = field(default_factory=list)  # lines not understood, ignored (fail closed)
+
+    def listed(self, user_id: int) -> bool:
+        return user_id in self.members
+
+    @property
+    def logins(self) -> set[str]:
+        """The listed logins, lowercase: for messages and tests only, never to decide who may act."""
+        return {login.lower() for login in self.members.values()}
 
 
 def read_reviewers(text: str) -> Reviewers:
-    """The list file: one login per line, `#` comments, and a `paused` line that stops every reviewer."""
-    logins, paused = set(), False
-    for raw in text.splitlines():
+    """The list file, shared by /nightly, the triage commands and /claim: `<id> <login>` per line, `#` comments,
+    and a `paused` line that stops every reviewer. Any other line (a bare login from the old format included) is
+    ignored and reported on stderr: it grants nothing rather than being half-read."""
+    members: dict[int, str] = {}
+    paused, skipped = False, []
+    for n, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
         words = line.split()
-        if len(words) != 1:  # not a login: ignored rather than half-read
-            continue
-        word = words[0]
-        if word.lower() == "paused":
+        if words == ["paused"] or (len(words) == 1 and words[0].lower() == "paused"):
             paused = True
-        elif LOGIN.match(word):
-            logins.add(word.lower())
-    return Reviewers(logins, paused)
+        elif len(words) == 2 and USER_ID.match(words[0]) and LOGIN.match(words[1]):
+            members[int(words[0])] = words[1]
+        else:
+            skipped.append(f"line {n}: {line[:60]!r}")
+    if skipped:
+        print(f"{REVIEWERS}: ignored (not `<id> <login>` or `paused`): " + "; ".join(skipped), file=sys.stderr)
+    return Reviewers(members, paused, skipped)
 
 
-def is_owner(login: str) -> bool:
-    return login.lower() == OWNER
+def is_owner_id(user_id: int | None) -> bool:
+    return OWNER_ID is not None and user_id == OWNER_ID
 
 
-def authorize(login: str, reviewers: Reviewers) -> None:
+def is_owner(actor: Actor) -> bool:
+    return is_owner_id(actor.id)
+
+
+def authorize(actor: Actor, reviewers: Reviewers) -> None:
     """Ludovic always; a listed reviewer unless the list is paused; nobody else."""
-    if is_owner(login):
+    if is_owner(actor):
         return
-    if login.lower() not in reviewers.logins:
+    if not reviewers.listed(actor.id):
         raise Refused(f"Only Ludovic and the trusted reviewers listed in `{REVIEWERS}` can pick the Nightly.")
     if reviewers.paused:
         raise Refused(f"`/nightly` is paused: Ludovic stopped it in `{REVIEWERS}`.")
@@ -157,21 +195,12 @@ class PullRequest:
     author: str
     base: str
     files: list[str]
-    approvals: dict[str, str] = field(default_factory=dict)  # login (lowercase) -> the head their approval is on
 
 
-def approvers(pr: PullRequest, head: str, team: set[str]) -> list[str]:
-    """Who approved `pr` at exactly `head`: a trusted reviewer, or Ludovic (his own review or his agents', which post
-    as ludovic111), never its author. A Nightly reaches every player (Ludovic, 2026-10-28): nothing goes in that the
-    Team or the agents haven't reviewed, and a push after the review needs a new one."""
-    ok = {t.lower() for t in team} | {OWNER}
-    return sorted(login for login, sha in pr.approvals.items()
-                  if sha == head and login in ok and login != pr.author.lower())
-
-
-def check(pr: PullRequest | None, number: int, patterns: list[str], team: set[str] | None = None) -> str | None:
-    """Why `pr` can't go in a Nightly, or None. `team`: the trusted reviewers, whose approval (or Ludovic's) it needs
-    at its head; None skips that, for a dry run, which publishes nothing."""
+def check(pr: PullRequest | None, number: int, patterns: list[str]) -> str | None:
+    """Why `pr` can't go in a Nightly, or None. No review is needed (Ludovic, 2026-10-30, at the Team's request; it
+    needed an approving review at its head from 2026-10-28): a trusted reviewer or Ludovic picks any open pull
+    request to main, unreviewed or not, as long as it leaves the files CODEOWNERS guards alone."""
     if pr is None:
         return f"#{number} isn't a pull request here"
     if pr.state != "open":
@@ -182,9 +211,6 @@ def check(pr: PullRequest | None, number: int, patterns: list[str], team: set[st
     if bad:
         more = f" and {len(bad) - 1} more" if len(bad) > 1 else ""
         return f"#{number} changes `{bad[0]}`{more}, which only Ludovic merges (CODEOWNERS)"
-    if team is not None and not approvers(pr, pr.head, team):
-        return (f"#{number} has no approving review at its head {pr.head[:7]} from the Team or Ludovic's agents "
-                "(not its author)")
     return None
 
 
@@ -215,13 +241,14 @@ def describe(prs: list[dict], heading: str = "The set") -> str:
     return "\n".join(lines)
 
 
-def apply(state: dict, cmd: Command, login: str, now: str, lookup: Callable[[int], PullRequest | None],
-          patterns: list[str], team: set[str] = frozenset()) -> Result:
-    """What `cmd` by `login` makes of `state` (set.json). Pure but for `lookup`; raises Refused."""
+def apply(state: dict, cmd: Command, actor: Actor, now: str, lookup: Callable[[int], PullRequest | None],
+          patterns: list[str]) -> Result:
+    """What `cmd` by `actor` makes of `state` (set.json). Pure but for `lookup`; raises Refused."""
+    login = actor.login
     st = copy.deepcopy(state)
     prs: list[dict] = st.setdefault("prs", [])
     blocked: list[int] = st.setdefault("blocked", [])
-    owner = is_owner(login)
+    owner = is_owner(actor)
     if cmd.verb == "status":
         extra = f"\nOnly Ludovic can add these back: {', '.join(f'#{n}' for n in blocked)}." if blocked else ""
         return Result(state, describe(prs) + extra, False)
@@ -241,7 +268,7 @@ def apply(state: dict, cmd: Command, login: str, now: str, lookup: Callable[[int
         problems, asked = [], []
         for n in cmd.prs:
             pr = lookup(n)
-            if why := check(pr, n, patterns, None if cmd.verb == "dry-run" else team):
+            if why := check(pr, n, patterns):
                 problems.append(why)
             else:
                 asked.append(entry(pr, login, now))
@@ -290,8 +317,35 @@ def identity(date: str) -> dict:
             "GIT_COMMITTER_EMAIL": email, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
 
 
+# `git merge-tree --write-tree` (the trial merge, in the object database) only exists since git 2.38.
+MIN_GIT_VERSION = (2, 38)
+
+
+def git_version() -> tuple[int, ...]:
+    """The local git's version as numbers, e.g. (2, 38, 1); empty when it cannot be read."""
+    try:
+        result = subprocess.run(["git", "--version"], capture_output=True, text=True)
+    except OSError:
+        return ()
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", result.stdout)
+    return tuple(int(part) for part in match.groups(default="0")) if match else ()
+
+
+def require_git_version() -> tuple[int, ...]:
+    """The local git's version, or a plain failure when it is too old for the trial merge."""
+    version = git_version()
+    if version < MIN_GIT_VERSION:
+        found = ".".join(str(part) for part in version) if version else None
+        detail = f"this git is {found}." if found else "this git's version could not be read."
+        raise RuntimeError(
+            f"git {'.'.join(str(part) for part in MIN_GIT_VERSION)} or newer is required: this tool trial-merges "
+            f"the pull requests with `git merge-tree --write-tree`, which only exists since git 2.38; {detail}")
+    return version
+
+
 def merge_tree(a: str, b: str, cwd: str | None = None) -> tuple[str | None, list[str]]:
     """The merged tree of commits a and b, or None and the conflicted paths. Objects only, no working tree."""
+    require_git_version()
     r = git("merge-tree", "--write-tree", "--name-only", "--no-messages", a, b, cwd=cwd, check=False)
     if r.returncode == 0:
         return r.stdout.split()[0], []
@@ -462,16 +516,7 @@ def lookup(repo: str) -> Callable[[int], PullRequest | None]:
         files = gh("api", "--paginate", f"repos/{repo}/pulls/{n}/files", "--jq",
                    ".[] | .filename, (.previous_filename // empty)").splitlines()
         state = "merged" if p.get("merged_at") else p["state"]
-        approvals: dict[str, str] = {}  # each reviewer's last say: an approval, or a change request or dismissal
-        for r in json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/pulls/{n}/reviews") or "[]"):
-            for review in r if isinstance(r, list) else [r]:
-                who = (review.get("user") or {}).get("login", "").lower()
-                if review.get("state") == "APPROVED":
-                    approvals[who] = review.get("commit_id", "")
-                elif review.get("state") in ("CHANGES_REQUESTED", "DISMISSED"):
-                    approvals.pop(who, None)
-        return PullRequest(n, state, p["head"]["sha"], p["title"], p["user"]["login"], p["base"]["ref"], files,
-                           approvals)
+        return PullRequest(n, state, p["head"]["sha"], p["title"], p["user"]["login"], p["base"]["ref"], files)
     return get
 
 
@@ -499,7 +544,7 @@ def dispatch(repo: str, issue: str, request: str, dry_run: list[dict] | None) ->
 def command() -> None:
     """nightly-command.yml: the comment arrives in env vars, never in a shell line."""
     repo, issue = os.environ["GITHUB_REPOSITORY"], os.environ["ISSUE"]
-    login, body, url = os.environ["AUTHOR"], os.environ.get("BODY", ""), os.environ.get("COMMENT_URL", "")
+    body, url = os.environ.get("BODY", ""), os.environ.get("COMMENT_URL", "")
     token = os.environ["GH_TOKEN"]
     try:
         cmd = parse(body)
@@ -510,8 +555,10 @@ def command() -> None:
         return
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     try:
-        reviewers = Path(REVIEWERS).read_text() if Path(REVIEWERS).exists() else ""
-        authorize(login, read_reviewers(reviewers))
+        actor = actor_from_env()
+        login = actor.login
+        reviewers = read_reviewers(Path(REVIEWERS).read_text() if Path(REVIEWERS).exists() else "")
+        authorize(actor, reviewers)
         patterns = guarded_patterns(Path(CODEOWNERS).read_text() if Path(CODEOWNERS).exists() else "")
         if cmd.verb != "status":
             today = now[:10]
@@ -522,7 +569,7 @@ def command() -> None:
         results: list[Result] = []
 
         def change(state: dict, builds: str):
-            result = apply(state, cmd, login, now, lookup(repo), patterns, read_reviewers(reviewers).logins)
+            result = apply(state, cmd, actor, now, lookup(repo), patterns)
             results.append(result)
             if result.state is state:  # status, dry run: nothing to save
                 return None

@@ -4,7 +4,7 @@
 //! start the supervisor writes them into `server.properties`, which the game reads exactly as vanilla's
 //! server does; what the game changes there itself (`/whitelist on`) is copied back afterwards.
 
-use horizon_server_files::{
+use horizon_platform::server_files::{
     java_properties::{Properties, date_string, now_millis},
     properties::{DIFFICULTIES, GAME_MODES, ServerProperties, SystemEntropy},
 };
@@ -28,6 +28,9 @@ whitelist = true             # only whitelisted players and operators can join
 enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10           # chunks sent around each player
 simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
+max_view_distance = 0        # past view_distance, saved chunks only, up to this (never generated; 0: off)
+admin_feedback_to_ops = true # operators see each other's commands ([name: ...], vanilla); false: only the log
+accept_older_clients = false # true: 26.2 clients join too, their packets translated (docs/hosting.md)
 
 [world]
 name = "world"               # the world folder
@@ -44,6 +47,8 @@ hardcore = false             # one life: a player who dies becomes a spectator
 path = ""                    # the game program; empty: the one installed beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true      # start the game again when it crashes
+low_memory = false           # true: no transparent huge pages, ~60 MB less idle for ~1 % more tick time
+parallel_tick = false        # true: the server tick shares its work among helper threads (same results)
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
@@ -55,10 +60,58 @@ keep = 1                     # other releases kept by updates, besides the one i
 [panel]
 bind = "127.0.0.1:8130"      # the web panel: this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false         # true lets bind be any address; never put the panel on the open internet
+
+[api]
+bind = ""                    # the control API: "" a free port on 127.0.0.1; or a fixed one, like 127.0.0.1:8131 or a tailnet address
+token = ""                   # its token (16 characters or more); "" a new random one at every start
+allow_public = false         # true lets bind be any address; the token is then all that guards the server
+
+# A proxy handing players over between servers (docs/server.md). Not vanilla's accepts-transfers (the transfer packet).
+[transfer]
+enabled = false              # true: take a proxy's player-* requests; needs Velocity forwarding (forwarding.secret)
+expect_seconds = 10          # how long a player the proxy announced is waited for, when it names no time
+max_expect_seconds = 60      # the longest the proxy may ask for
+max_expected = 64            # players waited for at once
+max_freeze_seconds = 30      # the longest a player stays frozen while it is handed over
+max_hold_seconds = 60        # the longest a player arriving from another server is held before it is dropped
+stop_wait_seconds = 10       # a stop with players on waits this long for the proxy to move them out (0 to 60; 0: no wait)
+
+# Post the chat, joins, leaves and deaths to a Discord channel, drawn like the in-game chat (docs/hosting.md)
+[discord]
+webhook = ""                 # the channel's webhook URL (a secret: anyone with it can post there); "" off
+events = ["chat", "join", "leave", "death"]   # what is posted; "kick" too if you like
+enabled = true               # false pauses it and keeps the webhook
+
+# Horizon's anticheat (docs/anticheat.md) is on: `combat` drops attacks no vanilla client sends and
+# `ground` the false ground claims of a no-fall or a walk on water; both kick, and ban at the second kick.
+# timer and prediction only write logs/anticheat.log until they're trusted. To change it:
+# [anticheat]
+# enabled = true             # false: the server checks only what vanilla's checks
+# alerts = true              # tell online operators (alert_level = 2) in their chat; the console always is
+# log = "logs/anticheat.log" # every flag, one line each
+# [anticheat.timer]          # a sped-up game: more client ticks than the server's clock allows
+# enabled = true             # false turns this check off
+# setback = 2                # the violation level from which the player is sent back; 0: never
+# alert = 5
+# kick = 20
+# decay = 0.02               # violation level lost each second
+# ban_after = 0              # the kick (counting this check's earlier ones) that bans instead; 0: never
+
+# The chat filter (docs/chat-filter.md) is on: a message, sign, anvil name or book title with a hate slur reaches
+# nobody, the sender is told, and logs/chat-filter.log keeps it for operators. To change it:
+# [chat_filter]
+# enabled = true             # false: players' text goes out as they wrote it
+# mute_after = 2             # the hit (within window_minutes) that mutes for mute_minutes; 0: never
+# tempban_after = 3          # the hit that bans for tempban_hours; 0: never
+# words_file = ""            # your own list, in the format of the built-in one; "": the built-in list
+
+# Fights follow 26.3's rules. For 1.8.9's (no attack cooldown or sweep, 1.8 weapon damage; docs/pvp.md):
+# [combat]
+# legacy = true
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-pub(crate) const TYPED: [(&str, &str, &str); 14] = [
+pub(crate) const TYPED: [(&str, &str, &str); 17] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -68,6 +121,17 @@ pub(crate) const TYPED: [(&str, &str, &str); 14] = [
     ("server", "enforce_whitelist", "enforce-whitelist"),
     ("server", "view_distance", "view-distance"),
     ("server", "simulation_distance", "simulation-distance"),
+    ("server", "max_view_distance", "horizon-max-view-distance"),
+    (
+        "server",
+        "admin_feedback_to_ops",
+        "horizon-admin-feedback-to-ops",
+    ),
+    (
+        "server",
+        "accept_older_clients",
+        "horizon-accept-older-clients",
+    ),
     ("world", "name", "level-name"),
     ("world", "seed", "level-seed"),
     ("world", "game_mode", "gamemode"),
@@ -92,6 +156,48 @@ pub struct Config {
     pub updates: Updates,
     #[serde(default)]
     pub panel: Panel,
+    #[serde(default)]
+    pub api: Api,
+    /// A proxy's hand-overs (docs/server.md), passed to the game as `--transfers`.
+    #[serde(default)]
+    pub transfer: Transfer,
+    /// Chat and players posted to a Discord channel (discord.rs).
+    #[serde(default)]
+    pub discord: crate::discord::Settings,
+    /// The game reads this section itself (docs/anticheat.md); written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "anticheat_default")]
+    pub anticheat: horizon_anticheat::Config,
+    /// The game reads this section itself (docs/chat-filter.md); written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "chat_filter_default")]
+    pub chat_filter: horizon_chat_filter::Config,
+    /// A one-time prune of barely visited chunks before a start (prune.rs); written only when set.
+    #[serde(default, skip_serializing_if = "crate::prune::Settings::is_default")]
+    pub prune_chunks: crate::prune::Settings,
+    /// The game reads this section itself (docs/pvp.md); written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "Combat::is_default")]
+    pub combat: Combat,
+}
+
+/// `[combat]`: `legacy = true` resolves the players' melee hits by 1.8.9's rules (no attack cooldown or sweep,
+/// 1.8.9 weapon damage). The game reads it from the same file (game/dedicated.rs, `load_combat`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Combat {
+    pub legacy: bool,
+}
+impl Combat {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The game reads this section itself too (docs/chat-filter.md).
+fn chat_filter_default(c: &horizon_chat_filter::Config) -> bool {
+    *c == horizon_chat_filter::Config::default()
+}
+
+fn anticheat_default(c: &horizon_anticheat::Config) -> bool {
+    *c == horizon_anticheat::Config::default()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,6 +212,14 @@ pub struct Server {
     pub enforce_whitelist: bool,
     pub view_distance: u32,
     pub simulation_distance: u32,
+    /// Horizon's far ring (docs/hosting.md): saved chunks sent past `view_distance`, up to this; 0 is off.
+    pub max_view_distance: u32,
+    /// Whether operators get each other's command feedback (`[name: ...]`, vanilla's broadcastToAdmins);
+    /// false leaves it to the console's log, so nobody in game sees an operator's commands.
+    pub admin_feedback_to_ops: bool,
+    /// Whether 26.2 clients may join, their packets translated (horizon-protocol's `ClientSession`); off, they
+    /// are turned away as vanilla turns away any other release.
+    pub accept_older_clients: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -126,6 +240,10 @@ pub struct Engine {
     pub path: String,
     pub resources: String,
     pub restart_on_crash: bool,
+    /// The game without transparent huge pages (docs/hosting.md): less memory, slightly slower ticks.
+    pub low_memory: bool,
+    /// The game's parallel tick phases (`HORIZON_PARALLEL_TICK=1`), for hosts that cannot set the variable.
+    pub parallel_tick: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,24 +265,62 @@ impl Default for Panel {
 impl Panel {
     /// Where the panel listens; `None` when it is off.
     pub fn address(&self) -> Result<Option<std::net::SocketAddr>, String> {
-        if self.bind.trim().is_empty() {
-            return Ok(None);
-        }
-        let address: std::net::SocketAddr = self.bind.trim().parse().map_err(|_| {
-            format!(
-                "panel.bind is \"{}\": use an address and a port, like 127.0.0.1:8130",
-                self.bind
-            )
-        })?;
-        if !self.allow_public && !private(address.ip()) {
-            return Err(format!(
-                "panel.bind is \"{}\": the panel listens only on this computer (127.0.0.1) or a tailnet \
-                 address (100.64.0.0/10, fd7a:115c:a1e0::/48); reach it from elsewhere over Tailscale or SSH",
-                self.bind
-            ));
-        }
-        Ok(Some(address))
+        listen_address("panel", &self.bind, self.allow_public, 8130)
     }
+}
+
+/// The control API's fixed address and token (docs/api/server.md); by default neither: a free port on
+/// 127.0.0.1 and a random token, both written to `.horizon/api.json`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Api {
+    pub bind: String,
+    pub token: String,
+    pub allow_public: bool,
+}
+
+impl Api {
+    /// Where the API listens: `bind`, or a free port on 127.0.0.1.
+    pub fn address(&self) -> Result<std::net::SocketAddr, String> {
+        Ok(listen_address("api", &self.bind, self.allow_public, 8131)?
+            .unwrap_or_else(|| (std::net::Ipv4Addr::LOCALHOST, 0).into()))
+    }
+
+    fn check(&self) -> Result<(), String> {
+        self.address()?;
+        let token = self.token.trim();
+        if !token.is_empty() && (token.len() < 16 || token.chars().any(|c| !c.is_ascii_graphic())) {
+            return Err(
+                "api.token must be 16 characters or more, without spaces (or \"\": a random one)"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// A `bind` setting: `None` when empty; anything but this computer or the tailnet needs `allow_public`.
+fn listen_address(
+    what: &str,
+    bind: &str,
+    allow_public: bool,
+    example_port: u16,
+) -> Result<Option<std::net::SocketAddr>, String> {
+    if bind.trim().is_empty() {
+        return Ok(None);
+    }
+    let address: std::net::SocketAddr = bind.trim().parse().map_err(|_| {
+        format!(
+            "{what}.bind is \"{bind}\": use an address and a port, like 127.0.0.1:{example_port}"
+        )
+    })?;
+    if !allow_public && !private(address.ip()) {
+        return Err(format!(
+            "{what}.bind is \"{bind}\": the {what} listens only on this computer (127.0.0.1) or a tailnet \
+             address (100.64.0.0/10, fd7a:115c:a1e0::/48); reach it from elsewhere over Tailscale or SSH"
+        ));
+    }
+    Ok(Some(address))
 }
 
 /// Loopback, or a Tailscale address: reachable only from this computer or the owner's tailnet.
@@ -176,6 +332,85 @@ pub fn private(ip: std::net::IpAddr) -> bool {
         std::net::IpAddr::V6(v6) => {
             v6.is_loopback() || v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0]
         }
+    }
+}
+
+/// `[transfer]`: a proxy moving players between this server and others (docs/server.md, the game's
+/// `lan/arrivals.rs`). Off by default. The supervisor passes it to the game as `--transfers`, not as a
+/// server.properties key, which stays vanilla's; and it is not vanilla's `accepts-transfers`, which is about the
+/// transfer packet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Transfer {
+    pub enabled: bool,
+    pub expect_seconds: u32,
+    pub max_expect_seconds: u32,
+    pub max_expected: u32,
+    pub max_freeze_seconds: u32,
+    pub max_hold_seconds: u32,
+    pub stop_wait_seconds: u32,
+}
+
+impl Default for Transfer {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            expect_seconds: 10,
+            max_expect_seconds: 60,
+            max_expected: 64,
+            max_freeze_seconds: 30,
+            max_hold_seconds: 60,
+            stop_wait_seconds: 10,
+        }
+    }
+}
+
+impl Transfer {
+    fn check(&self) -> Result<(), String> {
+        for (name, n) in [
+            ("expect_seconds", self.expect_seconds),
+            ("max_expect_seconds", self.max_expect_seconds),
+            ("max_expected", self.max_expected),
+            ("max_freeze_seconds", self.max_freeze_seconds),
+            ("max_hold_seconds", self.max_hold_seconds),
+        ] {
+            if n == 0 {
+                return Err(format!("transfer.{name} must be above zero"));
+            }
+        }
+        if self.expect_seconds > self.max_expect_seconds {
+            return Err("transfer.expect_seconds is above transfer.max_expect_seconds".into());
+        }
+        // The supervisor kills a game that has not stopped within STOP_TIMEOUT: the wait must leave
+        // time for the saves (the game caps the wait with a freeze at 90 s).
+        if self.stop_wait_seconds > 60 {
+            return Err("transfer.stop_wait_seconds is above 60".into());
+        }
+        // The game cuts the wait at 90 s: past it, no hand-over could start during a stop.
+        if self.stop_wait_seconds > 0
+            && u64::from(self.stop_wait_seconds) + u64::from(self.max_freeze_seconds) > 90
+        {
+            return Err(
+                "transfer.stop_wait_seconds and transfer.max_freeze_seconds add up to more than 90: no hand-over could start during a stop (lower one, or set stop_wait_seconds = 0)"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// The game's `--transfers` value, when the section turns transfers on.
+    pub fn engine_arg(&self) -> Option<String> {
+        self.enabled.then(|| {
+            format!(
+                "expect_seconds={},max_expect_seconds={},max_expected={},max_freeze_seconds={},max_hold_seconds={},stop_wait_seconds={}",
+                self.expect_seconds,
+                self.max_expect_seconds,
+                self.max_expected,
+                self.max_freeze_seconds,
+                self.max_hold_seconds,
+                self.stop_wait_seconds
+            )
+        })
     }
 }
 
@@ -212,6 +447,9 @@ impl Default for Server {
             enforce_whitelist: false,
             view_distance: 10,
             simulation_distance: 10,
+            max_view_distance: 0,
+            admin_feedback_to_ops: true,
+            accept_older_clients: false,
         }
     }
 }
@@ -232,6 +470,8 @@ impl Default for Engine {
             path: String::new(),
             resources: String::new(),
             restart_on_crash: true,
+            low_memory: false,
+            parallel_tick: false,
         }
     }
 }
@@ -288,7 +528,14 @@ impl Config {
                 DIFFICULTIES.join(", ")
             ));
         }
-        if w.name.is_empty() || w.name.contains(['/', '\\']) || w.name == ".." {
+        // Not the server folder itself, nor one of the supervisor's own folders in it.
+        if w.name.is_empty()
+            || w.name.contains(['/', '\\'])
+            || matches!(
+                w.name.as_str(),
+                "." | ".." | "backups" | "logs" | ".horizon"
+            )
+        {
             return Err(format!(
                 "world.name \"{}\" must be a folder name, without slashes",
                 w.name
@@ -296,6 +543,12 @@ impl Config {
         }
         crate::backup::interval(&self.backups.every)?;
         self.panel.address()?;
+        self.api.check()?;
+        self.transfer.check()?;
+        self.discord.check()?;
+        self.anticheat.check()?;
+        self.chat_filter.check()?;
+        self.prune_chunks.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -340,7 +593,7 @@ impl Config {
             &date_string(now_millis()),
             false,
         );
-        std::fs::write(path, text)?;
+        replace(&path, &text)?;
         Ok(written)
     }
 
@@ -395,15 +648,36 @@ pub fn render(config: &Config) -> String {
         ("engine", "path"),
         ("engine", "resources"),
         ("engine", "restart_on_crash"),
+        ("engine", "low_memory"),
+        ("engine", "parallel_tick"),
         ("backups", "every"),
         ("backups", "keep"),
         ("updates", "keep"),
         ("panel", "bind"),
         ("panel", "allow_public"),
+        ("api", "bind"),
+        ("api", "token"),
+        ("api", "allow_public"),
+        ("transfer", "enabled"),
+        ("transfer", "expect_seconds"),
+        ("transfer", "max_expect_seconds"),
+        ("transfer", "max_expected"),
+        ("transfer", "max_freeze_seconds"),
+        ("transfer", "max_hold_seconds"),
+        ("transfer", "stop_wait_seconds"),
     ] {
         set(&mut doc, section, field, &table[section][field]);
     }
-    doc.to_string()
+    let mut text = doc.to_string();
+    for section in ["anticheat", "chat_filter", "prune_chunks", "combat"] {
+        if let Some(settings) = table.get(section) {
+            let mut only = toml::Table::new();
+            only.insert(section.into(), settings.clone());
+            text.push('\n');
+            text.push_str(&toml::to_string(&only).expect("a section's settings are a table"));
+        }
+    }
+    text
 }
 
 /// After the game stopped: copies into `server.toml` the keys it wrote that the game changed in
@@ -424,6 +698,7 @@ pub fn sync_back(dir: &Path, written: &[(String, String)]) -> Result<Vec<String>
     if changed.is_empty() {
         return Ok(Vec::new());
     }
+    let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     let path = dir.join(FILE);
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
@@ -440,8 +715,42 @@ pub fn sync_back(dir: &Path, written: &[(String, String)]) -> Result<Vec<String>
     }
     let updated = doc.to_string();
     Config::parse(&updated)?;
-    std::fs::write(&path, updated).map_err(|e| e.to_string())?;
+    replace(&path, &updated).map_err(|e| e.to_string())?;
     Ok(changed.iter().map(|(k, _)| (*k).to_owned()).collect())
+}
+
+/// Held while `server.toml` is read, changed and written back, so two of this process's writers
+/// (management clients, the API, the supervisor's [`sync_back`]) don't drop each other's change.
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Writes `text` to `path` through a new file renamed over it: a reader (or a crash) sees the old
+/// file or the new one, never an empty or half-written one. An empty `server.toml` reads as every
+/// default, and the next start would write those into `server.properties`. Another process (the
+/// CLI's `config set`) has its own temporary file.
+pub(crate) fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .map_or_else(Default::default, |n| n.to_string_lossy());
+    let tmp = path.with_file_name(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut file, text.as_bytes())?;
+        file.sync_all()?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Sets one typed setting in `server.toml` (`whitelist on`), keeping the owner's comments.
@@ -452,6 +761,7 @@ pub fn update(dir: &Path, section: &str, field: &str, value: toml::Value) -> Res
 /// Sets settings in `server.toml`, keeping the owner's comments; nothing is written unless the result is
 /// a valid configuration.
 pub fn update_all(dir: &Path, changes: &[(String, String, toml::Value)]) -> Result<(), String> {
+    let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     let path = dir.join(FILE);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
@@ -460,7 +770,7 @@ pub fn update_all(dir: &Path, changes: &[(String, String, toml::Value)]) -> Resu
     }
     let updated = doc.to_string();
     Config::parse(&updated)?;
-    std::fs::write(&path, updated).map_err(|e| e.to_string())
+    replace(&path, &updated).map_err(|e| e.to_string())
 }
 
 pub fn read_properties(path: &Path) -> Result<Properties, String> {
@@ -540,12 +850,108 @@ mod tests {
         assert_eq!(render(&Config::default()), TEMPLATE);
     }
 
+    /// `[transfer]` is off by default, passes nothing to the game then, and is checked when it is read.
+    #[test]
+    fn transfers_are_off_by_default_and_checked() {
+        assert_eq!(Config::default().transfer.engine_arg(), None);
+        let on = TEMPLATE.replace(
+            "enabled = false              # true: take",
+            "enabled = true               # true: take",
+        );
+        let config = Config::parse(&on).unwrap();
+        assert_eq!(
+            config.transfer.engine_arg().as_deref(),
+            Some(
+                "expect_seconds=10,max_expect_seconds=60,max_expected=64,max_freeze_seconds=30,max_hold_seconds=60,stop_wait_seconds=10"
+            )
+        );
+        assert_eq!(Config::parse(&render(&config)).unwrap(), config);
+        for (from, to) in [
+            ("expect_seconds = 10 ", "expect_seconds = 0  "),
+            ("max_expect_seconds = 60", "max_expect_seconds = 5 "),
+            ("max_freeze_seconds = 30", "max_freeze_seconds = 0 "),
+            ("stop_wait_seconds = 10", "stop_wait_seconds = 61"),
+            ("max_freeze_seconds = 30", "max_freeze_seconds = 81"),
+        ] {
+            let bad = on.replace(from, to);
+            assert_ne!(bad, on, "{from} is in the template");
+            assert!(Config::parse(&bad).is_err(), "{to} was taken");
+        }
+    }
+
+    #[test]
+    fn the_chat_filter_is_on_unless_its_section_turns_it_off() {
+        assert!(Config::default().chat_filter.enabled);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[chat_filter]"));
+        let text =
+            format!("{TEMPLATE}\n[chat_filter]\nmute_after = 3\nwords_file = \"slurs.txt\"\n");
+        let c = Config::parse(&text).unwrap();
+        assert_eq!(c.chat_filter.mute_after, 3);
+        assert_eq!(Config::parse(&render(&c)).unwrap(), c);
+        // The game reads the same section from the same file.
+        assert_eq!(
+            horizon_chat_filter::Config::from_server_toml(&text).unwrap(),
+            c.chat_filter
+        );
+        let off = Config::parse(&format!("{TEMPLATE}\n[chat_filter]\nenabled = false\n")).unwrap();
+        assert!(!off.chat_filter.enabled);
+        assert_eq!(Config::parse(&render(&off)).unwrap(), off);
+        assert!(Config::parse("[chat_filter]\nmute = 2\n").is_err());
+    }
+
+    #[test]
+    fn anticheat_is_on_unless_its_section_turns_it_off() {
+        assert!(Config::default().anticheat.enabled);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[anticheat]"));
+        let text =
+            format!("{TEMPLATE}\n[anticheat]\nenabled = true\n[anticheat.timer]\nkick = 20\n");
+        let c = Config::parse(&text).unwrap();
+        assert!(c.anticheat.enabled);
+        assert_eq!(c.anticheat.timer.kick, 20.0);
+        let off = Config::parse(&format!("{TEMPLATE}\n[anticheat]\nenabled = false\n")).unwrap();
+        assert!(!off.anticheat.enabled);
+        assert_eq!(Config::parse(&render(&off)).unwrap(), off);
+        // The game reads the same section from the same file.
+        assert_eq!(
+            horizon_anticheat::Config::from_server_toml(&text).unwrap(),
+            c.anticheat
+        );
+        assert_eq!(Config::parse(&render(&c)).unwrap(), c);
+        assert!(Config::parse("[anticheat]\nenable = true\n").is_err());
+        assert!(Config::parse("[anticheat.timer]\nalert = -1\n").is_err());
+    }
+
+    #[test]
+    fn legacy_combat_is_off_unless_its_section_turns_it_on() {
+        assert!(!Config::default().combat.legacy);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[combat]"));
+        let on = Config::parse(&format!("{TEMPLATE}\n[combat]\nlegacy = true\n")).unwrap();
+        assert!(on.combat.legacy);
+        // Kept when the file is written again, and left out while off.
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[combat]"), "{off}");
+        assert!(Config::parse("[combat]\nlegacy = 1\n").is_err());
+        assert!(Config::parse("[combat]\nlegcy = true\n").is_err());
+    }
+
     #[test]
     fn defaults_are_vanilla() {
         // Every typed default is what vanilla 26.3 writes for a missing key.
         let vanilla =
             ServerProperties::new(Properties::default(), &mut SystemEntropy::default()).unwrap();
         for (key, value) in Config::default().vanilla() {
+            // Horizon's own, which vanilla doesn't have: their defaults behave as vanilla does
+            // (the far ring off, operators told of each other's commands, other releases turned away).
+            if key.starts_with("horizon-") {
+                let vanilla_like = match key.as_str() {
+                    "horizon-admin-feedback-to-ops" => "true",
+                    "horizon-accept-older-clients" => "false",
+                    _ => "0",
+                };
+                assert_eq!(value, vanilla_like, "{key}");
+                continue;
+            }
             assert_eq!(vanilla.raw.get(&key), Some(value.as_str()), "{key}");
         }
     }
@@ -622,6 +1028,49 @@ mod tests {
         assert!(Config::parse("[server]\nprot = 1\n").is_err());
         assert!(Config::parse("[properties]\nmotd = \"x\"\n").is_err());
         assert!(Config::parse("[world]\nname = \"../x\"\n").is_err());
+        for folder in [".", "..", "backups", "logs", ".horizon"] {
+            let text = format!("[world]\nname = \"{folder}\"\n");
+            assert!(Config::parse(&text).is_err(), "{folder}");
+        }
+    }
+
+    #[test]
+    fn settings_changed_at_once_are_all_kept() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-at-once-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), TEMPLATE).unwrap();
+        // Eight writers at once, as eight management clients each setting another key.
+        std::thread::scope(|scope| {
+            for n in 0..8i64 {
+                let dir = &dir;
+                scope.spawn(move || {
+                    update(
+                        dir,
+                        "properties",
+                        &format!("horizon-test-{n}"),
+                        toml::Value::Integer(n),
+                    )
+                    .unwrap()
+                });
+            }
+        });
+        let c = Config::load(&dir).unwrap();
+        for n in 0..8i64 {
+            assert_eq!(
+                c.properties.get(&format!("horizon-test-{n}")),
+                Some(&toml::Value::Integer(n)),
+                "horizon-test-{n} kept"
+            );
+        }
+        // No temporary file is left beside it.
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [std::ffi::OsString::from(FILE)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

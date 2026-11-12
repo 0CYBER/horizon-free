@@ -8,7 +8,7 @@ use super::{
     int_range, number_text, optional,
     placement::{PlacementContext, PlacementQueryError},
     required,
-    tree::{TreeDecoder, TreeResult, kind, read, unit_float, write},
+    tree::{TreeDecoder, TreeResult, kind, read, scan_column, unit_float, write},
     tree_blocks::{self as tb, TreeBlocks},
     value_provider::{FloatProvider, IntProvider},
 };
@@ -85,14 +85,27 @@ impl Speleothem {
         if !self.empty_or_water(read(world, pos)?) {
             return Ok(None);
         }
+        // Column.scan: up to range - 1 empty blocks from pos, then the edge.
+        // pos is known empty, and the block that ended the walk was read
+        // by it: neither is read again.
         let mut scan = |step: i32| -> TreeResult<Option<i32>, W::Error> {
-            let mut p = pos;
-            let mut i = 1;
-            while i < range && self.empty_or_water(read(world, p)?) {
-                p[1] = p[1].wrapping_add(step);
-                i += 1;
-            }
-            Ok(edge(self, read(world, p)?).then_some(p[1]))
+            let (start, limit) = match range - 1 {
+                ..=0 => (pos, 0),
+                n => ([pos[0], pos[1].wrapping_add(step), pos[2]], n - 1),
+            };
+            let mut stop = None;
+            let y = scan_column(world, start, step, limit, |s| {
+                let keep = self.empty_or_water(s);
+                if !keep {
+                    stop = Some(s);
+                }
+                keep
+            })?;
+            let state = match stop {
+                Some(state) => state,
+                None => read(world, [pos[0], y, pos[2]])?,
+            };
+            Ok(edge(self, state).then_some(y))
         };
         let ceiling = scan(1)?;
         let floor = scan(-1)?;

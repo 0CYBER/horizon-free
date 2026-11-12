@@ -36,13 +36,25 @@ impl Game<'_> {
         let batch = match quiet::decode(data) {
             Ok(b) => b,
             Err(e) => {
-                super::dedicated::log(
-                    "WARN",
-                    &format!("{name} sent quiet commands that were refused: {e}"),
-                );
+                // At most one a second: a client sending refused payloads by the hundred a tick
+                // must not fill the log.
+                static LAST: std::sync::Mutex<Option<std::time::Instant>> =
+                    std::sync::Mutex::new(None);
+                let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+                if last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1)) {
+                    *last = Some(std::time::Instant::now());
+                    super::dedicated::log(
+                        "WARN",
+                        &format!("{name} sent quiet commands that were refused: {e}"),
+                    );
+                }
                 return;
             }
         };
+        // Nothing to run, nothing to log: an empty batch would only be a summary line.
+        if batch.lines.is_empty() {
+            return;
+        }
         let waiting: usize = host
             .quiet
             .iter()
@@ -51,6 +63,13 @@ impl Game<'_> {
             .sum();
         let room = PENDING.saturating_sub(waiting);
         let dropped = batch.lines.len().saturating_sub(room);
+        // No room at all: counted on the player's last waiting batch, not a new (logged) one.
+        if room == 0
+            && let Some(last) = host.quiet.iter_mut().rev().find(|b| b.conn == conn)
+        {
+            last.dropped += dropped;
+            return;
+        }
         host.quiet.push_back(QuietBatch {
             conn,
             mod_id: batch.mod_id,
@@ -112,11 +131,22 @@ impl Game<'_> {
         if !integrated && (!host.settings.guest_commands || !allowed) {
             return false;
         }
-        let Some(permission) = host.hub.guest(conn).map(|g| g.permission) else {
+        let Some((permission, uuid, name)) = host
+            .hub
+            .guest(conn)
+            .map(|g| (g.permission, g.uuid, g.name.clone()))
+        else {
             return false;
         };
         let command = line.trim_start_matches('/');
         if !self.signable_arguments(permission, command).is_empty() {
+            return false;
+        }
+        // The mods hear it as they hear a typed command; the batch is quiet,
+        // so their replies go nowhere.
+        let mut canceled = false;
+        self.native_player_command(uuid, &name, command, &mut canceled, &mut Vec::new());
+        if canceled {
             return false;
         }
         self.run_guest_command(GuestCommand {

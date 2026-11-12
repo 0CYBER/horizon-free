@@ -7,6 +7,7 @@ loaded at run time, so a missing driver is an error message, not a dialog.
 Linux ELF: the loader must be the standard one (not a /nix/store path) and the
 needed libraries the ones every desktop distribution has. `--server`: a server
 build, which may not need ALSA or udev either (minimal server images lack them).
+`--musl`: require the musl loader and libraries instead of glibc.
 """
 
 import argparse
@@ -15,7 +16,8 @@ import sys
 from pathlib import Path
 
 # DLLs that are part of Windows 10 and 11. api-ms-win-* and ext-ms-win-* API
-# sets resolve inside Windows too.
+# sets resolve inside Windows too. uiautomationcore.dll (UI Automation, in System32
+# since Windows 7) is what the launcher's accessibility (accesskit_windows) imports.
 WINDOWS_SYSTEM = {
     "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "cfgmgr32.dll", "combase.dll",
     "comctl32.dll", "comdlg32.dll", "crypt32.dll", "d2d1.dll", "d3d11.dll", "d3d12.dll",
@@ -24,13 +26,16 @@ WINDOWS_SYSTEM = {
     "kernelbase.dll", "mfplat.dll", "mmdevapi.dll", "msvcrt.dll", "ncrypt.dll", "ntdll.dll",
     "ole32.dll", "oleaut32.dll", "opengl32.dll", "propsys.dll", "secur32.dll", "setupapi.dll",
     "shcore.dll", "shell32.dll", "shlwapi.dll", "ucrtbase.dll", "user32.dll", "userenv.dll",
-    "uxtheme.dll", "version.dll", "winmm.dll", "ws2_32.dll", "xinput1_4.dll",
+    "uiautomationcore.dll", "uxtheme.dll", "version.dll", "winmm.dll", "ws2_32.dll",
+    "xinput1_4.dll",
 }
 LINUX_LOADER = "/lib64/ld-linux-x86-64.so.2"
 LINUX_SYSTEM = {
     "libc.so.6", "libm.so.6", "libgcc_s.so.1", "libdl.so.2", "libpthread.so.0", "librt.so.1",
     "ld-linux-x86-64.so.2", "libasound.so.2", "libudev.so.1",
 }
+MUSL_LOADER = "/lib/ld-musl-x86_64.so.1"
+MUSL_SYSTEM = {"libc.musl-x86_64.so.1", "libgcc_s.so.1", "libasound.so.2", "libudev.so.1"}
 # The game's sound (cpal) and controllers (gilrs): a desktop has them, a server image may not.
 LINUX_DESKTOP_ONLY = {"libasound.so.2", "libudev.so.1"}
 
@@ -114,18 +119,23 @@ def elf_needs(data):
     return interpreter, needed, runpath
 
 
-def check(path, server=False):
+def check(path, server=False, musl=False):
     data = Path(path).read_bytes()
     problems = []
     if data[:2] == b"MZ":
+        if musl:
+            problems.append("expected a musl ELF binary, got a Windows executable")
         names = pe_imports(data)
         problems += [f"imports {n}, which Windows does not ship" for n in names if not windows_allowed(n)]
         summary = ", ".join(sorted(set(n.lower() for n in names)))
     else:
         interpreter, needed, runpath = elf_needs(data)
-        if interpreter not in (None, LINUX_LOADER):
-            problems.append(f"loader is {interpreter}, not {LINUX_LOADER}")
-        problems += [f"needs {n}, which not every distribution has" for n in needed if n not in LINUX_SYSTEM]
+        loader = MUSL_LOADER if musl else LINUX_LOADER
+        libraries = MUSL_SYSTEM if musl else LINUX_SYSTEM
+        # The desktop musl build must be dynamic: GPU and window libraries use dlopen.
+        if interpreter != loader and (musl or interpreter is not None):
+            problems.append(f"loader is {interpreter}, not {loader}")
+        problems += [f"needs {n}, which not every distribution has" for n in needed if n not in libraries]
         if server:
             problems += [f"needs {n}, which a server may not have" for n in needed if n in LINUX_DESKTOP_ONLY]
         problems += [f"has a run path to {p}" for p in runpath if "/nix/store" in p]
@@ -141,8 +151,9 @@ def main():
     parser.add_argument("binaries", nargs="+")
     parser.add_argument("--server", action="store_true",
                         help="a server build: not even ALSA or udev (the game's sound and controllers)")
+    parser.add_argument("--musl", action="store_true", help="require dynamic musl instead of glibc")
     args = parser.parse_args()
-    ok = all([check(path, args.server) for path in args.binaries])
+    ok = all([check(path, args.server, args.musl) for path in args.binaries])
     sys.exit(0 if ok else 1)
 
 

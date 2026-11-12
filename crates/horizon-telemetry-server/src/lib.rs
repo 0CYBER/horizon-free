@@ -5,9 +5,14 @@
 //! - `GET /v1/aggregate?days=30`: the anonymous totals the website reads, cached.
 //! - `GET /v1/benchmarks/summary`: players' benchmark results grouped by GPU and CPU, groups of at
 //!   least 3 installs only (`summary`), cached; the website's Benchmarks page reads it.
+//! - `GET /v1/export/benchmarks` and `/v1/export/hardware`: raw benchmark reports and per-machine
+//!   totals for the perf work, behind a bearer token (`export`); off without one.
 //! - `POST /v1/live`: a game's anonymous "I'm playing" ping (`live`, in memory only).
-//! - `GET /v1/live`: how many play now, rounded, cached briefly.
-//! - `/hub/…`: the hub's votes (`hub`), bug reports and suggestions (`intake`).
+//! - `GET /v1/live`: how many play now, exactly, cached briefly.
+//! - `GET /v1/live/history?range=24h|7d|30d|all&series=players|official`: that count, or the
+//!   official server's (its status ping), over time, written down once a minute (`history`:
+//!   totals only), cached a minute.
+//! - `/hub/…`: the hub's votes (`hub`) and bug reports (`intake`).
 //! - `GET /healthz`.
 //!
 //! Abuse limits: a token bucket per IP address (kept in memory for an hour, never stored), a
@@ -29,7 +34,9 @@ use axum::routing::{delete, get, post};
 use horizon_telemetry::batch;
 
 pub mod classes;
+pub mod export;
 pub mod github;
+pub mod history;
 pub mod hub;
 pub mod intake;
 pub mod live;
@@ -50,9 +57,14 @@ pub struct Config {
     pub requests_per_hour: f64,
     /// Items one install may send a day.
     pub items_per_day: u32,
-    /// Behind a proxy (Railway, Fly…): the client's address is the proxy's `X-Real-IP`, else the
-    /// last `X-Forwarded-For` entry.
+    /// Behind a proxy (Railway, Fly…): the client's address is read from `client_ip_header`.
     pub trust_proxy: bool,
+    /// The one header the proxy in front sets to the client's address, overwriting whatever the
+    /// client sent (`HORIZON_TELEMETRY_CLIENT_IP_HEADER`, e.g. `x-real-ip` on Railway). Its last
+    /// comma-separated entry is used. Read only with `trust_proxy`; without it the TCP peer counts,
+    /// which behind a proxy is the proxy, so every client shares one bucket (the server warns at
+    /// start).
+    pub client_ip_header: Option<String>,
     /// The website allowed to read the totals from a browser.
     pub allow_origin: String,
     /// Live count requests (pings and reads) an IP address may make an hour, with a burst of a
@@ -62,22 +74,36 @@ pub struct Config {
     pub live_window: Duration,
     /// Sessions the live count holds at most; a new one past that is refused.
     pub live_max_sessions: usize,
+    /// Days the live count's minute samples are kept (`history`).
+    pub live_minute_days: u32,
+    /// Days its hourly totals are kept; at least 31, for the 30-day view. Daily ones stay.
+    pub live_hour_days: u32,
+    /// The official server, asked for its player count every minute (`history`'s `official`
+    /// series); None asks nothing.
+    pub official_server: Option<String>,
     /// The hub's votes and reads of their counts an IP address may make an hour.
     pub hub_per_hour: f64,
-    /// Bug reports and suggestions together an IP address may send an hour.
+    /// Bug reports an IP address may send an hour.
     pub hub_posts_per_hour: f64,
     /// Bug reports taken a day, from everyone: each one opens a GitHub issue.
     pub hub_reports_per_day: u32,
-    /// Suggestions taken a day, from everyone.
-    pub hub_suggestions_per_day: u32,
-    /// Days reports and suggestions are kept (Kira has relayed them long before).
+    /// Days reports are kept (opened as issues long before).
     pub hub_keep_days: u32,
-    /// The bearer token `GET /hub/suggestions` wants (Kira's); unset, it answers 404.
-    pub hub_token: Option<String>,
+    /// The bearer token the protected export (`export`) wants; unset, it answers 404.
+    pub export_token: Option<String>,
     /// Opens the website's bug reports as issues; unset, `POST /hub/report` answers 503.
     pub github_token: Option<String>,
     /// Where those issues go, `owner/name`.
     pub github_repo: String,
+    /// `GET /v1/aggregate` and `/v1/benchmarks/summary` requests an IP address may make an hour (with a
+    /// burst of a tenth of it): website visitors' browsers read them.
+    pub reads_per_hour: f64,
+    /// Totals built (cache misses of `/v1/aggregate`) an hour, from everyone: each one scans the window's
+    /// daily totals on the blocking pool. Past it, a miss answers 503 until the bucket refills.
+    pub aggregate_builds_per_hour: f64,
+    /// The `days` values `/v1/aggregate` answers (`HORIZON_TELEMETRY_AGGREGATE_DAYS=7,30,90,366`); others
+    /// get 400. None (unset) takes any value from 1 to 366, as before.
+    pub aggregate_days: Option<Vec<u32>>,
 }
 
 impl Default for Config {
@@ -88,18 +114,24 @@ impl Default for Config {
             requests_per_hour: 60.0,
             items_per_day: 100,
             trust_proxy: false,
+            client_ip_header: None,
             allow_origin: "https://playhorizon.dev".into(),
             live_per_hour: 600.0,
             live_window: horizon_telemetry::live::WINDOW,
             live_max_sessions: 200_000,
+            live_minute_days: 7,
+            live_hour_days: 90,
+            official_server: Some(horizon_telemetry::server_status::OFFICIAL_STATUS_ADDRESS.into()),
             hub_per_hour: 600.0,
             hub_posts_per_hour: 20.0,
             hub_reports_per_day: 30,
-            hub_suggestions_per_day: 200,
             hub_keep_days: 90,
-            hub_token: None,
+            export_token: None,
             github_token: None,
             github_repo: "horizon-rust/horizon".into(),
+            reads_per_hour: 600.0,
+            aggregate_builds_per_hour: 600.0,
+            aggregate_days: None,
         }
     }
 }
@@ -107,9 +139,11 @@ impl Default for Config {
 impl Config {
     /// The defaults, with `HORIZON_TELEMETRY_RETENTION_DAYS`, `…_MIN_INSTALL_DAYS`,
     /// `…_REQUESTS_PER_HOUR`, `…_ITEMS_PER_DAY`, `…_TRUST_PROXY` (1), `…_ALLOW_ORIGIN`,
-    /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS`, `…_HUB_PER_HOUR`,
-    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_SUGGESTIONS_PER_DAY`, `…_HUB_KEEP_DAYS`,
-    /// `…_HUB_TOKEN`, `…_GITHUB_TOKEN` and `…_GITHUB_REPO`. Empty tokens count as unset.
+    /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS`, `…_LIVE_MINUTE_DAYS`,
+    /// `…_LIVE_HOUR_DAYS`, `…_OFFICIAL_SERVER` (`off` for none), `…_HUB_PER_HOUR`,
+    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_KEEP_DAYS`, `…_GITHUB_TOKEN`,
+    /// `…_GITHUB_REPO`, `…_READS_PER_HOUR`, `…_AGGREGATE_BUILDS_PER_HOUR` and `…_AGGREGATE_DAYS`, plus `TELEMETRY_EXPORT_TOKEN` (or `HORIZON_TELEMETRY_EXPORT_TOKEN`) for the
+    /// protected export. An empty token counts as unset.
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(format!("HORIZON_TELEMETRY_{k}")).ok();
         let secret = |k: &str| {
@@ -132,6 +166,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.items_per_day),
             trust_proxy: var("TRUST_PROXY").is_some_and(|v| v == "1"),
+            client_ip_header: var("CLIENT_IP_HEADER").and_then(|v| header_name(&v)),
             allow_origin: var("ALLOW_ORIGIN").unwrap_or(d.allow_origin),
             live_per_hour: var("LIVE_PER_HOUR")
                 .and_then(|v| v.parse().ok())
@@ -142,6 +177,17 @@ impl Config {
             live_max_sessions: var("LIVE_MAX_SESSIONS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.live_max_sessions),
+            live_minute_days: var("LIVE_MINUTE_DAYS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.live_minute_days),
+            live_hour_days: var("LIVE_HOUR_DAYS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.live_hour_days),
+            official_server: match var("OFFICIAL_SERVER").as_deref().map(str::trim) {
+                Some("" | "off") => None,
+                Some(address) => Some(address.to_owned()),
+                None => d.official_server,
+            },
             hub_per_hour: var("HUB_PER_HOUR")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_per_hour),
@@ -151,17 +197,73 @@ impl Config {
             hub_reports_per_day: var("HUB_REPORTS_PER_DAY")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_reports_per_day),
-            hub_suggestions_per_day: var("HUB_SUGGESTIONS_PER_DAY")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(d.hub_suggestions_per_day),
             hub_keep_days: var("HUB_KEEP_DAYS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_keep_days),
-            hub_token: secret("HUB_TOKEN"),
+            export_token: std::env::var("TELEMETRY_EXPORT_TOKEN")
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+                .or_else(|| secret("EXPORT_TOKEN")),
             github_token: secret("GITHUB_TOKEN"),
             github_repo: var("GITHUB_REPO").unwrap_or(d.github_repo),
+            reads_per_hour: var("READS_PER_HOUR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.reads_per_hour),
+            aggregate_builds_per_hour: var("AGGREGATE_BUILDS_PER_HOUR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.aggregate_builds_per_hour),
+            aggregate_days: var("AGGREGATE_DAYS").and_then(|v| parse_days(&v)),
         }
     }
+}
+
+/// A header name as `HORIZON_TELEMETRY_CLIENT_IP_HEADER` gives it, lowercase; None when empty or not
+/// a header name.
+pub fn header_name(text: &str) -> Option<String> {
+    let name = text.trim().to_ascii_lowercase();
+    (!name.is_empty() && axum::http::HeaderName::from_bytes(name.as_bytes()).is_ok())
+        .then_some(name)
+}
+
+impl Config {
+    /// Why the client-address settings can't run, when they can't: `TRUST_PROXY=1` without the header
+    /// would count every client as the proxy, one shared bucket, which stops intake and refuses
+    /// players' deletion requests. `main.rs` refuses to start then, as the relay does without
+    /// `RELAY_PROXY_FROM`, so a deployment missing the setting fails its health check instead of
+    /// going live.
+    pub fn client_ip_refusal(&self) -> Option<String> {
+        (self.trust_proxy && self.client_ip_header.is_none()).then(|| {
+            "HORIZON_TELEMETRY_TRUST_PROXY=1 needs HORIZON_TELEMETRY_CLIENT_IP_HEADER, the header your proxy \
+             overwrites with the client's address (x-real-ip on Railway, as the Dockerfile sets): without it \
+             every client would count as the proxy and share one rate-limit bucket. Not starting."
+                .into()
+        })
+    }
+
+    /// What the client-address settings will do, when it isn't what they seem to ask for: printed at
+    /// start (`main.rs`).
+    pub fn client_ip_warning(&self) -> Option<String> {
+        match (self.trust_proxy, &self.client_ip_header) {
+            (false, Some(name)) => Some(format!(
+                "HORIZON_TELEMETRY_CLIENT_IP_HEADER={name} is ignored without HORIZON_TELEMETRY_TRUST_PROXY=1: \
+                 rate limits count the TCP peer"
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// `7,30,90,366` as the `days` `/v1/aggregate` answers: None when empty or when any value isn't a
+/// number from 1 to 366 (then every value is taken, and the server says so at start).
+pub fn parse_days(text: &str) -> Option<Vec<u32>> {
+    let days: Option<Vec<u32>> = text
+        .split(',')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| d.parse().ok().filter(|d| (1..=366).contains(d)))
+        .collect();
+    days.filter(|d| !d.is_empty())
 }
 
 pub struct App {
@@ -171,10 +273,18 @@ pub struct App {
     buckets: Mutex<Buckets>,
     /// The same for the live count's requests.
     live_buckets: Mutex<Buckets>,
+    /// The same for the website's reads of the totals.
+    read_buckets: Mutex<Buckets>,
+    /// Totals built from the database, from everyone (`aggregate_builds_per_hour`).
+    builds: Mutex<HashMap<(), (f64, Instant)>>,
     /// Who is playing now (`live`).
     live: Mutex<Live>,
     /// `GET /v1/live`'s answer and when it was made.
     live_cache: Mutex<Option<(Instant, String)>>,
+    /// `GET /v1/live/history`'s answers by range, with when they were made.
+    history_cache: Mutex<HashMap<(history::Series, history::Range), (Instant, String)>>,
+    /// When the server started: the live count is whole only a window later.
+    started: Instant,
     /// `/v1/aggregate` answers by `days`, with when they were made.
     cache: Mutex<HashMap<u32, (Instant, String)>>,
     /// `/v1/benchmarks/summary`'s answer and when it was made.
@@ -185,7 +295,7 @@ pub struct App {
     hub_key: RandomState,
     /// The hub's votes and vote counts, per hashed address.
     hub_buckets: Mutex<hub::HashedBuckets>,
-    /// The hub's reports and suggestions, per hashed address.
+    /// The hub's bug reports, per hashed address.
     hub_post_buckets: Mutex<hub::HashedBuckets>,
     /// `GET /hub/votes`'s answer and when it was made.
     votes_cache: Mutex<Option<(Instant, String)>>,
@@ -231,8 +341,12 @@ impl App {
             config,
             buckets: Mutex::default(),
             live_buckets: Mutex::default(),
+            read_buckets: Mutex::default(),
+            builds: Mutex::default(),
             live: Mutex::new(live),
             live_cache: Mutex::default(),
+            history_cache: Mutex::default(),
+            started: Instant::now(),
             cache: Mutex::default(),
             summary_cache: Mutex::default(),
             today,
@@ -258,32 +372,59 @@ impl App {
         take(&self.live_buckets, self.config.live_per_hour, ip)
     }
 
+    /// [`Self::allow`] for the website's reads of the totals.
+    fn allow_read(&self, ip: IpAddr) -> bool {
+        take(&self.read_buckets, self.config.reads_per_hour, ip)
+    }
+
+    /// One more totals build from the database, from everyone; false past the hour's budget.
+    fn allow_build(&self) -> bool {
+        take(&self.builds, self.config.aggregate_builds_per_hour, ())
+    }
+
+    /// Checks and stores one batch's body (inflating it, then SQLite): blocking, so it runs on the
+    /// blocking pool ([`blocking`]).
+    fn store_batch(&self, body: &[u8]) -> Response {
+        let batch = match batch::decode(body) {
+            Ok(batch) => batch,
+            Err(e) => return status(StatusCode::BAD_REQUEST, &e),
+        };
+        let today = (self.today)();
+        let install = store::install_key(&batch.install_id).unwrap_or_default();
+        let mut store = self.store();
+        let sent = store.count_on(&install, today).unwrap_or(u32::MAX);
+        if sent.saturating_add(batch.items.len() as u32) > self.config.items_per_day {
+            return status(
+                StatusCode::TOO_MANY_REQUESTS,
+                "this install's daily limit is reached",
+            );
+        }
+        match store.insert(&batch, today) {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => {
+                eprintln!("horizon-telemetry-server: could not store a batch: {e}");
+                status(StatusCode::SERVICE_UNAVAILABLE, "try again later")
+            }
+        }
+    }
+
     fn live(&self) -> std::sync::MutexGuard<'_, Live> {
         self.live.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The address requests are counted under, for the rate limits only: kept in memory, never
-    /// stored or logged. Behind a proxy (Railway) the TCP peer is the proxy, so it is the proxy's
-    /// `X-Real-IP`, else the last `X-Forwarded-For` entry: the one the proxy added, which a client
-    /// can't choose (the first one it can). An IPv6 client counts by its /64.
+    /// stored or logged. Behind a proxy (Railway) the TCP peer is the proxy, so with `trust_proxy`
+    /// it is the last entry of the one configured header (`client_ip_header`), which the proxy
+    /// overwrites. No other header is read: which one a client can't forge depends on the platform.
+    /// An IPv6 client counts by its /64.
     fn client(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> IpAddr {
-        let header = |name: &str| headers.get(name)?.to_str().ok();
         let forwarded = self
             .config
-            .trust_proxy
-            .then(|| {
-                header("x-real-ip")
-                    .and_then(|ip| ip.trim().parse().ok())
-                    .or_else(|| {
-                        header("x-forwarded-for")?
-                            .rsplit(',')
-                            .next()?
-                            .trim()
-                            .parse()
-                            .ok()
-                    })
-            })
-            .flatten();
+            .client_ip_header
+            .as_deref()
+            .filter(|_| self.config.trust_proxy)
+            .and_then(|name| headers.get(name)?.to_str().ok())
+            .and_then(|value| value.rsplit(',').next()?.trim().parse().ok());
         rate_key(
             forwarded
                 .or(peer.map(|p| p.ip()))
@@ -302,21 +443,75 @@ impl App {
         *self.summary_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
+    /// Writes down the live count as this minute's (`history`), once the server has run a whole
+    /// window: before that, games that play haven't all pinged it yet. True when it did.
+    pub fn record_live(&self) -> rusqlite::Result<bool> {
+        if self.started.elapsed() < self.config.live_window {
+            return Ok(false);
+        }
+        let count = self.live().count(Instant::now());
+        self.record_sample(
+            history::Series::Players,
+            unix_now(),
+            &history::Sample::of(&count),
+        )
+    }
+
+    /// Asks the official server for its player count (a status ping, blocking, at most 5 seconds
+    /// a step) and writes it down as this minute's. False when there is no official server or it
+    /// didn't answer: that minute stays empty.
+    pub fn record_official(&self) -> rusqlite::Result<bool> {
+        const MAX_OFFICIAL_PLAYERS: u64 = 1_000_000;
+        let Some(address) = &self.config.official_server else {
+            return Ok(false);
+        };
+        let unix = unix_now();
+        match horizon_telemetry::server_status::players(address, Duration::from_secs(5)) {
+            // No real server has more; a larger number is a bad answer, not a count (it would wrap
+            // negative as i64 or overflow the history's SUM).
+            Ok(players) if players.online > MAX_OFFICIAL_PLAYERS => Ok(false),
+            Ok(players) => {
+                let sample = history::Sample {
+                    playing: players.online,
+                    ..history::Sample::default()
+                };
+                self.record_sample(history::Series::Official, unix, &sample)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Writes down `sample` as `series`' count of the minute holding `unix` (seconds). False when
+    /// that minute has one already.
+    pub fn record_sample(
+        &self,
+        series: history::Series,
+        unix: i64,
+        sample: &history::Sample,
+    ) -> rusqlite::Result<bool> {
+        self.store().record_live(series, unix, sample)
+    }
+
     /// Daily upkeep: totals rebuilt, expired rows removed, idle rate-limit entries and live
-    /// sessions forgotten, the hub's old reports and suggestions removed. Reports still waiting for
+    /// sessions forgotten, the hub's old reports removed. Reports still waiting for
     /// their issue are [`Self::file_pending`]'s.
     pub fn maintain(&self) -> rusqlite::Result<usize> {
         let oldest = (self.today)().saturating_sub(self.config.retention_days);
         let removed = self.store().expire(oldest)?;
         self.expire_intake()?;
         self.forget_hub_buckets();
-        for buckets in [&self.buckets, &self.live_buckets] {
+        for buckets in [&self.buckets, &self.live_buckets, &self.read_buckets] {
             buckets
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|_, (_, at)| at.elapsed() < Duration::from_secs(3600));
         }
         self.live().forget_expired(Instant::now());
+        self.store().prune_live(
+            unix_now(),
+            self.config.live_minute_days,
+            self.config.live_hour_days.max(31),
+        )?;
         if removed > 0 {
             self.forget_cached();
         }
@@ -357,6 +552,22 @@ fn rate_key(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// Runs `f` on tokio's blocking pool: SQLite calls (and the work around them) block, and the server
+/// has two async workers, so two slow calls on them would stall every handler, `/healthz` included.
+/// A task that panicked answers 503.
+pub async fn blocking<T: Send + 'static>(
+    app: &Arc<App>,
+    f: impl FnOnce(&App) -> T + Send + 'static,
+) -> Result<T, Box<Response>> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || f(&app))
+        .await
+        .map_err(|e| {
+            eprintln!("horizon-telemetry-server: a blocking task failed: {e}");
+            Box::new(status(StatusCode::SERVICE_UNAVAILABLE, "try again later"))
+        })
+}
+
 fn peer(req: &Request) -> Option<SocketAddr> {
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -381,27 +592,9 @@ async fn receive(State(app): State<Arc<App>>, req: Request) -> Response {
     let Ok(body) = axum::body::to_bytes(req.into_body(), batch::MAX_COMPRESSED).await else {
         return status(StatusCode::PAYLOAD_TOO_LARGE, "a batch is at most 256 KiB");
     };
-    let batch = match batch::decode(&body) {
-        Ok(batch) => batch,
-        Err(e) => return status(StatusCode::BAD_REQUEST, &e),
-    };
-    let today = (app.today)();
-    let install = store::install_key(&batch.install_id).unwrap_or_default();
-    let mut store = app.store();
-    let sent = store.count_on(&install, today).unwrap_or(u32::MAX);
-    if sent.saturating_add(batch.items.len() as u32) > app.config.items_per_day {
-        return status(
-            StatusCode::TOO_MANY_REQUESTS,
-            "this install's daily limit is reached",
-        );
-    }
-    match store.insert(&batch, today) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            eprintln!("horizon-telemetry-server: could not store a batch: {e}");
-            status(StatusCode::SERVICE_UNAVAILABLE, "try again later")
-        }
-    }
+    blocking(&app, move |app| app.store_batch(&body))
+        .await
+        .unwrap_or_else(|r| *r)
 }
 
 async fn forget(State(app): State<Arc<App>>, Path(id): Path<String>, req: Request) -> Response {
@@ -411,7 +604,13 @@ async fn forget(State(app): State<Arc<App>>, Path(id): Path<String>, req: Reques
     let Some(install) = store::install_key(&id) else {
         return status(StatusCode::BAD_REQUEST, "not an install ID");
     };
-    match app.store().delete_install(&install) {
+    let deleted = match blocking(&app, move |app| app.store().delete_install(&install)).await {
+        Ok(deleted) => deleted,
+        Err(response) => return *response,
+    };
+    match deleted {
+        // Nothing of that install: the cached totals still hold, so a made-up ID costs no rebuild.
+        Ok(0) => StatusCode::NO_CONTENT.into_response(),
         Ok(_) => {
             app.forget_cached();
             StatusCode::NO_CONTENT.into_response()
@@ -428,8 +627,26 @@ struct Window {
     days: Option<u32>,
 }
 
-async fn aggregate(State(app): State<Arc<App>>, Query(window): Query<Window>) -> Response {
-    let days = window.days.unwrap_or(30).clamp(1, 366);
+async fn aggregate(
+    State(app): State<Arc<App>>,
+    Query(window): Query<Window>,
+    req: Request,
+) -> Response {
+    if !app.allow_read(app.client(req.headers(), peer(&req))) {
+        return status(StatusCode::TOO_MANY_REQUESTS, "too many requests");
+    }
+    let asked = window.days.unwrap_or(30);
+    let days = match &app.config.aggregate_days {
+        Some(allowed) if allowed.contains(&asked) => asked,
+        Some(allowed) => {
+            let list: Vec<String> = allowed.iter().map(u32::to_string).collect();
+            return status(
+                StatusCode::BAD_REQUEST,
+                &format!("days: one of {}", list.join(", ")),
+            );
+        }
+        None => asked.clamp(1, 366),
+    };
     let cached = app
         .cache
         .lock()
@@ -440,23 +657,29 @@ async fn aggregate(State(app): State<Arc<App>>, Query(window): Query<Window>) ->
     let json = match cached {
         Some(json) => json,
         None => {
-            let to = (app.today)();
-            let made =
+            if !app.allow_build() {
+                return status(StatusCode::SERVICE_UNAVAILABLE, "try again in a minute");
+            }
+            let made = blocking(&app, move |app| {
+                let to = (app.today)();
                 app.store()
-                    .aggregate(to + 1 - days.min(to + 1), to, app.config.min_install_days);
+                    .aggregate(to + 1 - days.min(to + 1), to, app.config.min_install_days)
+                    .map(|value| value.to_string())
+            })
+            .await;
             match made {
-                Ok(value) => {
-                    let json = value.to_string();
+                Ok(Ok(json)) => {
                     app.cache
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .insert(days, (Instant::now(), json.clone()));
                     json
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     eprintln!("horizon-telemetry-server: could not build the totals: {e}");
                     return status(StatusCode::SERVICE_UNAVAILABLE, "try again later");
                 }
+                Err(response) => return *response,
             }
         }
     };
@@ -465,7 +688,10 @@ async fn aggregate(State(app): State<Arc<App>>, Query(window): Query<Window>) ->
 
 /// `GET /v1/benchmarks/summary`: players' benchmark groups (`summary`), made again at most every
 /// ten minutes.
-async fn benchmarks(State(app): State<Arc<App>>) -> Response {
+async fn benchmarks(State(app): State<Arc<App>>, req: Request) -> Response {
+    if !app.allow_read(app.client(req.headers(), peer(&req))) {
+        return status(StatusCode::TOO_MANY_REQUESTS, "too many requests");
+    }
     let cached = app
         .summary_cache
         .lock()
@@ -476,15 +702,21 @@ async fn benchmarks(State(app): State<Arc<App>>) -> Response {
     let json = match cached {
         Some(json) => json,
         None => {
-            let oldest = (app.today)().saturating_sub(app.config.retention_days);
-            let uploads = match app.store().benchmark_uploads(oldest) {
-                Ok(uploads) => uploads,
-                Err(e) => {
+            let made = blocking(&app, |app| {
+                let oldest = (app.today)().saturating_sub(app.config.retention_days);
+                app.store().benchmark_uploads(oldest).map(|uploads| {
+                    summary::summary(&uploads, summary::MIN_INSTALLS, &utc_now()).to_string()
+                })
+            })
+            .await;
+            let json = match made {
+                Ok(Ok(json)) => json,
+                Ok(Err(e)) => {
                     eprintln!("horizon-telemetry-server: could not read the benchmarks: {e}");
                     return status(StatusCode::SERVICE_UNAVAILABLE, "try again later");
                 }
+                Err(response) => return *response,
             };
-            let json = summary::summary(&uploads, summary::MIN_INSTALLS, &utc_now()).to_string();
             *app.summary_cache.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some((Instant::now(), json.clone()));
             json
@@ -493,11 +725,16 @@ async fn benchmarks(State(app): State<Arc<App>>) -> Response {
     json_response(&app, json, CACHE_FOR.as_secs())
 }
 
+/// Now in seconds since 1970.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// Now as `YYYY-MM-DDTHH:MM:SSZ`.
 fn utc_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let secs = unix_now() as u64;
     let (days, rest) = (secs / 86_400, secs % 86_400);
     // Days since 1970 to a civil date (Howard Hinnant's algorithm).
     let z = days as i64 + 719_468;
@@ -539,7 +776,7 @@ async fn ping(State(app): State<Arc<App>>, req: Request) -> Response {
     }
 }
 
-/// `GET /v1/live`: the rounded live count (`horizon_telemetry::live::Count`), made again at
+/// `GET /v1/live`: the exact live count (`horizon_telemetry::live::Count`), made again at
 /// most every eighth of the window.
 async fn playing(State(app): State<Arc<App>>, req: Request) -> Response {
     if !app.allow_live(app.client(req.headers(), peer(&req))) {
@@ -559,6 +796,65 @@ async fn playing(State(app): State<Arc<App>>, req: Request) -> Response {
         }
     };
     json_response(&app, json, fresh_for.as_secs())
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryQuery {
+    range: Option<String>,
+    series: Option<String>,
+}
+
+/// How long a history answer is reused: a new sample comes each minute.
+const HISTORY_FOR: Duration = Duration::from_secs(60);
+
+/// `GET /v1/live/history?range=24h|7d|30d|all&series=players|official` (default 24h, players):
+/// the live count, or the official server's, over time (`history::History`), made again at most
+/// every minute. 400 for another range or series.
+async fn live_history(
+    State(app): State<Arc<App>>,
+    Query(query): Query<HistoryQuery>,
+    req: Request,
+) -> Response {
+    if !app.allow_live(app.client(req.headers(), peer(&req))) {
+        return status(StatusCode::TOO_MANY_REQUESTS, "too many requests");
+    }
+    let Some(range) = history::Range::parse(query.range.as_deref().unwrap_or("24h")) else {
+        return status(StatusCode::BAD_REQUEST, "range: 24h, 7d, 30d or all");
+    };
+    let Some(series) = history::Series::parse(query.series.as_deref().unwrap_or("players")) else {
+        return status(StatusCode::BAD_REQUEST, "series: players or official");
+    };
+    let cached = app
+        .history_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(series, range))
+        .filter(|(at, _)| at.elapsed() < HISTORY_FOR)
+        .map(|(_, json)| json.clone());
+    let json = match cached {
+        Some(json) => json,
+        None => match blocking(&app, move |app| {
+            app.store()
+                .live_history(series, range, unix_now())
+                .map(|history| serde_json::to_string(&history).unwrap_or_default())
+        })
+        .await
+        {
+            Ok(Ok(json)) => {
+                app.history_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert((series, range), (Instant::now(), json.clone()));
+                json
+            }
+            Ok(Err(e)) => {
+                eprintln!("horizon-telemetry-server: could not read the live history: {e}");
+                return status(StatusCode::SERVICE_UNAVAILABLE, "try again later");
+            }
+            Err(response) => return *response,
+        },
+    };
+    json_response(&app, json, HISTORY_FOR.as_secs())
 }
 
 fn json_response(app: &App, json: String, max_age: u64) -> Response {
@@ -584,17 +880,15 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/v1/batch", post(receive))
         .route("/v1/live", post(ping).get(playing))
+        .route("/v1/live/history", get(live_history))
         .route("/v1/installs/{id}", delete(forget))
         .route("/v1/aggregate", get(aggregate))
         .route("/v1/benchmarks/summary", get(benchmarks))
+        .route("/v1/export/benchmarks", get(export::benchmarks))
+        .route("/v1/export/hardware", get(export::hardware))
         .route("/hub/vote", post(hub::vote).options(hub::preflight))
         .route("/hub/votes", get(hub::votes))
         .route("/hub/report", post(intake::report).options(hub::preflight))
-        .route(
-            "/hub/suggest",
-            post(intake::suggest).options(hub::preflight),
-        )
-        .route("/hub/suggestions", get(intake::suggestions))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }

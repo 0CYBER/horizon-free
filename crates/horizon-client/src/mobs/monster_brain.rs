@@ -609,7 +609,7 @@ impl B {
                     t.begin(cx.lr, cx.now);
                     // start
                     mem(m).path.set_opt(path.clone());
-                    m.nav_move_to_path(path.clone(), f64::from(*speed));
+                    m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     if *slide {
                         // SlideToTargetSink.start
                         let at = m.center();
@@ -775,7 +775,7 @@ impl B {
                 let w = cx.w;
                 let in_reach = w
                     .target_info(target)
-                    .is_some_and(|t| m.within_melee_range(&t));
+                    .is_some_and(|t| m.within_melee_range(w, &t));
                 if !super::creaking::can_move(m) || !in_reach || !visible_contains(m, w, target) {
                     return false;
                 }
@@ -783,6 +783,7 @@ impl B {
                 m.swing();
                 let mut gcx = Cx {
                     w,
+                    lr: cx.lr,
                     events: cx.events,
                 };
                 super::ai::do_hurt_target(m, target, &mut gcx);
@@ -842,9 +843,13 @@ impl B {
                 }
                 super::breeze::set_pose(m, super::breeze::INHALING);
                 // level.playSound(null, breeze, BREEZE_CHARGE, HOSTILE, 1, 1)
-                let at = [m.position.x, m.position.y, m.position.z];
-                cx.events
-                    .push(MobEvent::Sound("entity.breeze.charge", at, 1.0, 1.0));
+                cx.events.push(MobEvent::entity_sound(
+                    m,
+                    "entity.breeze.charge",
+                    5,
+                    1.0,
+                    1.0,
+                ));
                 if let Some(p) = mem(m).breeze_jump_target.value() {
                     look_at_eyes(
                         m,
@@ -960,7 +965,7 @@ impl B {
                     if d > 4 && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                         *last_target = Some(now_target);
                         mem(m).path.set_opt(path.clone());
-                        m.nav_move_to_path(path.clone(), f64::from(*speed));
+                        m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     }
                 }
             }
@@ -1079,7 +1084,7 @@ fn block_of(p: Vec3) -> [i32; 3] {
 }
 /// `Swim`: deeper than the jump threshold, or in lava.
 fn swim_condition(m: &Mob) -> bool {
-    m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
+    m.floats()
 }
 /// `PositionTracker.isVisibleBy`.
 fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {
@@ -1094,7 +1099,7 @@ fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {
 /// ranged weapon: `Mob.isWithinMeleeAttackRange`.
 fn within_attack_range(m: &Mob, w: &MobWorld, target: Who) -> bool {
     w.target_info(target)
-        .is_some_and(|t| m.within_melee_range(&t))
+        .is_some_and(|t| m.within_melee_range(w, &t))
 }
 
 // ---- The breeze's behaviours --------------------------------------------
@@ -1250,17 +1255,7 @@ fn shoot_tick(m: &mut Mob, cx: &mut Bx) {
     );
     // The new entity's own random spreads the shot (5 - difficulty id * 4):
     // not the breeze's.
-    let mut own = LegacyRandom::new(
-        cx.now
-            .wrapping_mul(0x5DEE_CE66)
-            .wrapping_add(i64::from(m.id)),
-    );
-    p.shoot(
-        &mut own,
-        [xd, yd, zd],
-        0.7,
-        5.0 - f32::from(cx.w.difficulty.id) * 4.0,
-    );
+    p.shoot_own([xd, yd, zd], 0.7, 5.0 - f32::from(cx.w.difficulty.id) * 4.0);
     cx.events.push(MobEvent::Projectile(p));
     breeze_sound(m, cx, "entity.breeze.shoot", 1.5);
 }
@@ -1269,7 +1264,7 @@ fn long_jump_can_run(m: &mut Mob, cx: &mut Bx) -> bool {
     if !m.on_ground && !m.fluids.in_water {
         return false;
     }
-    if m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava {
+    if m.floats() {
         return false;
     }
     if mem(m).breeze_jump_target.present() {

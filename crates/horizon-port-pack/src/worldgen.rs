@@ -169,11 +169,33 @@ pub fn upgrade(
 ) -> bool {
     let states = block_states(v);
     report.block_states += usize::from(states);
+    let features = features(kind, v, report);
     let renamed = crate::carry::renamed_ids(v);
     let dropped = crate::processors::each_list(kind, v, &mut |list| {
         drop_java_processors(list, &mut report.processors_dropped)
     });
-    upgrade_types(kind, v, report, set_tags) || states || dropped || renamed
+    upgrade_types(kind, v, report, set_tags) || states || features || dropped || renamed
+}
+
+/// A 1.21.1 configured or placed feature in 26.3's form, as world packs get
+/// it ([`crate::upgrade`]): `config` unwrapped (26.3 skips a feature that
+/// keeps it), patches and placements rewritten. Whether it changed.
+fn features(kind: &str, v: &mut Value, report: &mut Upgrade) -> bool {
+    let mut r = crate::upgrade::Report::default();
+    let new = match kind {
+        // Every 1.21.1 configured feature has `config`; one without is 26.3's.
+        "configured_feature" if v.get("config").is_some() => {
+            crate::upgrade::features::feature(v, &mut r)
+        }
+        "placed_feature" => crate::upgrade::features::placed(v, &mut r),
+        _ => return false,
+    };
+    for (t, n) in r.unknown {
+        *report.unsupported.entry(t).or_default() += n;
+    }
+    let changed = new != *v;
+    *v = new;
+    changed
 }
 
 /// Takes the processors written in Java (any type outside `minecraft:` and
@@ -379,8 +401,16 @@ fn upgrade_types(
         "template_pool" => {
             let mut changed = false;
             let mut elements: Vec<&mut Value> = Vec::new();
-            for e in v["elements"].as_array_mut().into_iter().flatten() {
-                let element = &mut e["element"];
+            for e in v
+                .get_mut("elements")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                // Indexing would panic on an element that isn't an object.
+                let Some(element) = e.get_mut("element") else {
+                    continue;
+                };
                 // A list element holds elements of its own.
                 if element.get("elements").is_some_and(Value::is_array) {
                     elements.extend(element["elements"].as_array_mut().into_iter().flatten());
@@ -534,11 +564,14 @@ pub fn piece_counts<R: Read + std::io::Seek>(
     zip: &mut zip::ZipArchive<R>,
 ) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
+    let mut budget = crate::entry::Budget::archive();
     for i in 0..zip.len() {
         let Ok(mut entry) = zip.by_index(i) else {
             continue;
         };
-        let name = entry.name().to_owned();
+        let Ok(name) = entry.name().map(|n| n.into_owned()) else {
+            continue;
+        };
         let Some((ns, rest)) = name
             .strip_prefix("data/")
             .and_then(|r| r.strip_suffix(".json"))
@@ -553,11 +586,11 @@ pub fn piece_counts<R: Read + std::io::Seek>(
         } else {
             continue;
         };
-        let mut text = String::new();
-        let Ok(v) = entry
-            .read_to_string(&mut text)
+        let declared = entry.size();
+        let Ok(v) = budget
+            .read_text(&mut entry, declared, crate::entry::MAX_TEXT)
             .map_err(|_| ())
-            .and_then(|_| serde_json::from_str::<Value>(&text).map_err(|_| ()))
+            .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|_| ()))
         else {
             continue;
         };
@@ -592,9 +625,13 @@ pub fn piece_counts<R: Read + std::io::Seek>(
 
 /// Adds a structure's piece counts to its `horizon:piece_limited` key.
 pub fn add_piece_counts(id: &str, v: &mut Value, counts: &BTreeMap<String, Value>) -> bool {
-    match (counts.get(id), v.get_mut("horizon:piece_limited")) {
+    match (
+        counts.get(id),
+        v.get_mut("horizon:piece_limited")
+            .and_then(Value::as_object_mut),
+    ) {
         (Some(pieces), Some(limited)) => {
-            limited["pieces"] = pieces.clone();
+            limited.insert("pieces".into(), pieces.clone());
             true
         }
         _ => false,
@@ -611,10 +648,10 @@ fn moogs_spacing(p: &mut Value, lost: &mut BTreeMap<String, usize>) {
     let separation = scaled("separation").min(spacing - 1);
     p["spacing"] = spacing.into();
     p["separation"] = separation.into();
-    if let Some(o) = p.as_object_mut() {
-        if o.remove("when_replacing").is_some() {
-            *lost.entry("when_replacing".into()).or_default() += 1;
-        }
+    if let Some(o) = p.as_object_mut()
+        && o.remove("when_replacing").is_some()
+    {
+        *lost.entry("when_replacing".into()).or_default() += 1;
     }
 }
 
@@ -699,22 +736,29 @@ pub fn structure_set_tags<R: Read + std::io::Seek>(
     zip: &mut zip::ZipArchive<R>,
 ) -> BTreeMap<String, Vec<String>> {
     let mut raw: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut budget = crate::entry::Budget::archive();
     for i in 0..zip.len() {
         let Ok(mut entry) = zip.by_index(i) else {
             continue;
         };
         let Some(id) = entry
             .name()
-            .strip_prefix("data/")
+            .ok()
+            .as_deref()
+            .and_then(|n| n.strip_prefix("data/"))
             .and_then(|r| r.split_once("/tags/worldgen/structure_set/"))
             .and_then(|(ns, path)| Some(format!("{ns}:{}", path.strip_suffix(".json")?)))
         else {
             continue;
         };
-        let mut text = String::new();
-        let Ok(v) = entry.read_to_string(&mut text).map_err(drop).and_then(|_| {
-            serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).map_err(drop)
-        }) else {
+        let declared = entry.size();
+        let Ok(v) = budget
+            .read_text(&mut entry, declared, crate::entry::MAX_TEXT)
+            .map_err(drop)
+            .and_then(|text| {
+                serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).map_err(drop)
+            })
+        else {
             continue;
         };
         let values = v["values"].as_array().into_iter().flatten();
@@ -772,23 +816,26 @@ pub fn loader_biome_tags(work: &Path) -> BTreeMap<String, Value> {
         else {
             continue;
         };
+        let mut budget = crate::entry::Budget::archive();
         for i in 0..zip.len() {
             let Ok(mut entry) = zip.by_index(i) else {
                 continue;
             };
             let Some(path) = entry
                 .name()
-                .strip_prefix("data/c/tags/worldgen/biome/")
+                .ok()
+                .as_deref()
+                .and_then(|n| n.strip_prefix("data/c/tags/worldgen/biome/"))
                 .and_then(|p| p.strip_suffix(".json"))
                 .map(str::to_owned)
             else {
                 continue;
             };
-            let mut text = String::new();
-            if entry.read_to_string(&mut text).is_ok() {
-                if let Ok(v) = serde_json::from_str(&text) {
-                    out.insert(path, v);
-                }
+            let declared = entry.size();
+            if let Ok(text) = budget.read_text(&mut entry, declared, crate::entry::MAX_TEXT)
+                && let Ok(v) = serde_json::from_str(&text)
+            {
+                out.insert(path, v);
             }
         }
     }
@@ -816,7 +863,14 @@ pub fn with_included(
 /// Where `fetch` keeps the pack's loader jar, and where it comes from:
 /// NeoForge's own Maven repository. Only NeoForge packs need it today.
 pub fn loader_jar(work: &Path, loader: &str, version: &str) -> Option<(PathBuf, String)> {
-    (loader == "neoforge" && !version.is_empty()).then(|| {
+    // The version comes from the modpack: only a plain version (`21.1.77`, `21.1.0-beta`) makes a
+    // file name or a URL, never `/`, `..` or a `#` that would end the URL early.
+    let plain = (1..=64).contains(&version.len())
+        && !version.contains("..")
+        && version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b));
+    (loader == "neoforge" && plain).then(|| {
         (
             work.join("loader").join(format!("neoforge-{version}-universal.jar")),
             format!(
@@ -830,6 +884,26 @@ pub fn loader_jar(work: &Path, loader: &str, version: &str) -> Option<(PathBuf, 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_a_plain_neoforge_version_makes_a_loader_path() {
+        let work = Path::new("/work");
+        let (dest, url) = loader_jar(work, "neoforge", "21.1.77").unwrap();
+        assert_eq!(dest, work.join("loader/neoforge-21.1.77-universal.jar"));
+        assert!(url.ends_with("/21.1.77/neoforge-21.1.77-universal.jar"));
+        assert!(loader_jar(work, "neoforge", "21.1.0-beta").is_some());
+        for bad in [
+            "",
+            "21.1.1/neoforge-21.1.1-universal.jar#/../../../../x",
+            "../x",
+            "21.1.1#",
+            "a/b",
+            "a\\b",
+        ] {
+            assert_eq!(loader_jar(work, "neoforge", bad), None, "{bad:?}");
+        }
+        assert_eq!(loader_jar(work, "fabric", "0.16.0"), None);
+    }
 
     const NO_TAGS: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
@@ -1232,6 +1306,25 @@ mod tests {
     }
 
     #[test]
+    fn worldgen_files_of_an_unexpected_shape_are_left_alone() {
+        let mut report = Upgrade::default();
+        let none = BTreeMap::new();
+        for mut v in [
+            json!([1, 2]),
+            json!({"elements": [1, {"weight": 1}]}),
+            json!({"elements": 3}),
+            json!({}),
+        ] {
+            let before = v.clone();
+            upgrade("template_pool", &mut v, &mut report, &none);
+            assert_eq!(v, before);
+        }
+        let counts = BTreeMap::from([("rs:x".to_owned(), json!([{"name": "rs:a"}]))]);
+        let mut v = json!({"horizon:piece_limited": 1});
+        assert!(!add_piece_counts("rs:x", &mut v, &counts));
+    }
+
+    #[test]
     fn writes_block_states_in_26_3_shape() {
         let mut report = Upgrade::default();
         let mut list = json!({"processors": [{"processor_type": "minecraft:rule", "rules": [{
@@ -1250,7 +1343,7 @@ mod tests {
             &mut report,
             &NO_TAGS
         ));
-        assert_eq!(spring["config"]["state"], json!({"id": "minecraft:water"}));
+        assert_eq!(spring["state"], json!({"id": "minecraft:water"}));
         // An object with other keys is not a state; a 26.3 state is left as it is.
         let mut other = json!({"Name": "x", "weight": 1, "state": {"id": "minecraft:stone"}});
         assert!(!upgrade(
@@ -1261,6 +1354,56 @@ mod tests {
         ));
         assert_eq!(report.block_states, 2);
         assert_eq!(report.mapped, 0);
+    }
+
+    /// A mod's 1.21.1 configured feature keeps its fields under `config`;
+    /// 26.3 reads them on the feature itself and skips the old shape, so
+    /// the mod's ores never generate.
+    #[test]
+    fn mod_features_unwrap_their_config() {
+        let mut report = Upgrade::default();
+        let mut ore = json!({"type": "minecraft:ore", "config": {
+            "discard_chance_on_air_exposure": 0.0, "size": 5, "targets": [{
+                "state": {"Name": "x:silver_ore"},
+                "target": {"predicate_type": "minecraft:tag_match",
+                    "tag": "minecraft:stone_ore_replaceables"}}]}});
+        assert!(upgrade(
+            "configured_feature",
+            &mut ore,
+            &mut report,
+            &NO_TAGS
+        ));
+        assert_eq!(
+            ore,
+            json!({"type": "minecraft:ore", "discard_chance_on_air_exposure": 0.0, "size": 5,
+                "targets": [{"state": {"id": "x:silver_ore"}, "target": {
+                    "predicate_type": "minecraft:tag_match",
+                    "tag": "minecraft:stone_ore_replaceables"}}]})
+        );
+        // A mod's own feature type is unwrapped too.
+        let mut selector = json!({"type": "lithostitched:weighted_selector",
+            "config": {"features": ["x:tree"]}});
+        assert!(upgrade(
+            "configured_feature",
+            &mut selector,
+            &mut report,
+            &NO_TAGS
+        ));
+        assert_eq!(selector.get("config"), None);
+        assert!(selector["features"].is_array());
+        // A placed feature's 1.21.1 placements are 26.3's.
+        let mut placed = json!({"feature": "x:ore", "placement": [
+            {"type": "minecraft:random_offset", "xz_spread": 2, "y_spread": 1}]});
+        assert!(upgrade(
+            "placed_feature",
+            &mut placed,
+            &mut report,
+            &NO_TAGS
+        ));
+        assert_eq!(
+            placed["placement"][0],
+            json!({"type": "minecraft:offset", "x": 2, "y": 1, "z": 2})
+        );
     }
 
     #[test]

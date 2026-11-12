@@ -54,12 +54,37 @@ pub fn is_pack(path: &Path) -> bool {
 }
 
 impl Pack {
+    /// Reads only the manifest, without loading or validating shader source.
+    pub fn read_manifest(path: &Path) -> Result<Manifest, String> {
+        let file = std::fs::File::open(if path.is_dir() {
+            path.join(MANIFEST)
+        } else {
+            path.to_path_buf()
+        })
+        .map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        if path.is_dir() {
+            file.take(MAX_OTHER + 1).read_to_string(&mut text)
+        } else {
+            let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+            zip.by_name(MANIFEST)
+                .map_err(|e| e.to_string())?
+                .take(MAX_OTHER + 1)
+                .read_to_string(&mut text)
+        }
+        .map_err(|e| e.to_string())?;
+        if text.len() as u64 > MAX_OTHER {
+            return Err("shader manifest is too large".into());
+        }
+        Manifest::parse(&text)
+    }
+
     /// Reads `path`: a `.hshader` file, or a folder (its hidden files and
     /// folders, such as `.git`, are skipped).
     pub fn read(path: &Path) -> Result<Pack, String> {
         let mut files = BTreeMap::new();
         if path.is_dir() {
-            read_dir(path, "", &mut files)?;
+            read_dir(path, "", &mut files, &mut 0)?;
         } else {
             let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             let mut zip = zip::ZipArchive::new(file)
@@ -67,17 +92,31 @@ impl Pack {
             if zip.len() > MAX_ENTRIES {
                 return Err(format!("over {MAX_ENTRIES} files in the package"));
             }
+            // The pack's total is counted while reading, not after (from_files): a zip's sizes are its
+            // own claim, and 511 files of 1 MiB of zeros take 561 KiB zipped, so checking afterwards
+            // let one upload hold 1 GiB of the registry's memory.
+            let per_file = MAX_OTHER.max(MAX_WGSL);
+            let mut total = 0u64;
             for i in 0..zip.len() {
                 let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
                 if entry.is_dir() {
                     continue;
                 }
-                let name = entry.name().to_owned();
+                let name = entry.name().map_err(|e| e.to_string())?.into_owned();
+                let room = per_file.min(MAX_TOTAL - total);
                 let mut bytes = Vec::new();
                 (&mut entry)
-                    .take(MAX_OTHER.max(MAX_WGSL) + 1)
+                    .take(room + 1)
                     .read_to_end(&mut bytes)
                     .map_err(|e| format!("{name}: {e}"))?;
+                if bytes.len() as u64 > room {
+                    return Err(if room < per_file {
+                        format!("the pack is over {} MiB", MAX_TOTAL >> 20)
+                    } else {
+                        format!("{name} is over {} KiB", per_file >> 10)
+                    });
+                }
+                total += bytes.len() as u64;
                 if files.insert(name.clone(), bytes).is_some() {
                     return Err(format!("{name} is in the package twice"));
                 }
@@ -111,11 +150,14 @@ impl Pack {
                     return Err(format!("{name}: not UTF-8"));
                 }
                 MAX_WGSL
-            } else if name == MANIFEST || EXTRAS.contains(&name.as_str()) {
+            } else if name == MANIFEST
+                || EXTRAS.contains(&name.as_str())
+                || manifest.textures.iter().any(|t| &t.file == name)
+            {
                 MAX_OTHER
             } else {
                 return Err(format!(
-                    "{name}: a pack holds only {MANIFEST}, .wgsl files and {}",
+                    "{name}: a pack holds only {MANIFEST}, .wgsl files, its [[textures]] and {}",
                     EXTRAS.join(", ")
                 ));
             };
@@ -126,10 +168,22 @@ impl Pack {
         if total > MAX_TOTAL {
             return Err(format!("the pack is over {} MiB", MAX_TOTAL >> 20));
         }
+        if let Some(t) = manifest
+            .textures
+            .iter()
+            .find(|t| !files.contains_key(&t.file))
+        {
+            return Err(format!("{}: named in {MANIFEST} but missing", t.file));
+        }
         if let Some(missing) = used.iter().find(|f| !files.contains_key(**f)) {
             return Err(format!("{missing}: named in {MANIFEST} but missing"));
         }
         Ok(Pack { manifest, files })
+    }
+
+    /// The bytes of the pack's file `file` (a `[[textures]]` image).
+    pub fn source_bytes(&self, file: &str) -> Option<&[u8]> {
+        self.files.get(file).map(Vec::as_slice)
     }
 
     /// A WGSL file's text (every file the manifest names is checked UTF-8).
@@ -172,7 +226,13 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn read_dir(dir: &Path, prefix: &str, files: &mut BTreeMap<String, Vec<u8>>) -> Result<(), String> {
+/// A folder's files, refused once they add up to more than [`MAX_TOTAL`] (`total` so far).
+fn read_dir(
+    dir: &Path,
+    prefix: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    total: &mut u64,
+) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -183,11 +243,15 @@ fn read_dir(dir: &Path, prefix: &str, files: &mut BTreeMap<String, Vec<u8>>) -> 
         let path = entry.path();
         let rel = format!("{prefix}{name}");
         if path.is_dir() {
-            read_dir(&path, &format!("{rel}/"), files)?;
+            read_dir(&path, &format!("{rel}/"), files, total)?;
         } else {
             let size = entry.metadata().map_err(|e| format!("{rel}: {e}"))?.len();
             if size > MAX_TOTAL {
                 return Err(format!("{rel} is over {} MiB", MAX_TOTAL >> 20));
+            }
+            *total += size;
+            if *total > MAX_TOTAL {
+                return Err(format!("the pack is over {} MiB", MAX_TOTAL >> 20));
             }
             let bytes = std::fs::read(&path).map_err(|e| format!("{rel}: {e}"))?;
             files.insert(rel, bytes);

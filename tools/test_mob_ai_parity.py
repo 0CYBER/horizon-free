@@ -15,6 +15,7 @@ The oracle traces every mob random draw with its call stack; --trace builds the 
 the rng-trace feature and line tables so the report shows Horizon's draws next to vanilla's.
 """
 import argparse
+import json
 import os
 import shutil
 import struct
@@ -56,6 +57,22 @@ def scenarios():
         add(f'{species}_alone', 200, [
             f'mob minecraft:{species} 0.5 -60 0.5 90 {seed * 7 + 1} persistent',
         ])
+    # A zombie holding a spear (Mob.isWithinMeleeAttackRange): the spear's attack_range times its
+    # mob_factor, 0.5 to 2.25, instead of the default reach; a player too close is out of range.
+    add('zombie_spear_player', 200, ['player 6.5 -60 0.5',
+                                     'mob minecraft:zombie 0.5 -60 0.5 0 361 persistent hand=iron_spear*1'],
+        'time=18000')
+    add('zombie_spear_close', 120, ['player 1.2 -60 0.5',
+                                    'mob minecraft:zombie 0.5 -60 0.5 270 362 persistent hand=wooden_spear*1'],
+        'time=18000')
+    # A vindicator has no SpearUseGoal, so its MeleeAttackGoal hits with the spear's range: it must keep
+    # half a block off the player and reaches 2.25 out.
+    add('vindicator_spear_player', 200, ['player 6.5 -60 0.5',
+                                         'mob minecraft:vindicator 0.5 -60 0.5 0 363 persistent hand=iron_spear*1'],
+        'time=18000')
+    add('vindicator_spear_close', 120, ['player 1.0 -60 0.5',
+                                        'mob minecraft:vindicator 0.5 -60 0.5 270 364 persistent hand=stone_spear*1'],
+        'time=18000')
     # Drowned in a pool with the player on the shore and in the water.
     add('drowned_pool', 200, ['fill -6 -64 -6 6 -61 6 minecraft:water',
                               'player 9.5 -60 0.5',
@@ -66,6 +83,16 @@ def scenarios():
     # Night: undead do not burn, monsters seek darkness.
     add('zombie_night', 200, ['player 10.5 -60 0.5', 'mob minecraft:zombie 0.5 -60 0.5 0 31 persistent'], 'time=18000')
     add('skeleton_day_burn', 120, ['mob minecraft:skeleton 0.5 -60 0.5 0 32 persistent'])
+    # NoAI only skips serverAiStep: Mob.aiStep's burnUndead still sets a NoAI zombie alight (#3430).
+    add('zombie_noai_day_burn', 120, ['mob minecraft:zombie 0.5 -60 0.5 0 33 persistent noai'])
+    # AgeableMob.aiStep runs with NoAI, including both signs and age-lock controls.
+    for species in ('pig', 'cow', 'horse', 'turtle'):
+        for age in (-2, 2):
+            for noai in (False, True):
+                for locked in (False, True):
+                    flags = (' noai' if noai else '') + (' agelocked' if locked else '')
+                    add(f'{species}_age_{age}_noai_{noai}_locked_{locked}', 4,
+                        [f'mob minecraft:{species} 0.5 -60 0.5 0 34 persistent age={age}{flags}'])
     # The wither (summoned, not built: no invulnerable spawn phase).
     add('wither_player', 200, ['player 10.5 -60 0.5', 'mob minecraft:wither 0.5 -58 0.5 0 41 persistent'])
     # A villager with a job site, a bed and a bell.
@@ -77,6 +104,75 @@ def scenarios():
         'player 12.5 -60 0.5',
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
+    # Village goals of iron golems (GolemRandomStrollInVillageGoal, MoveBackToVillageGoal; POIs: beds, a bell, a composter, a door).
+    VILLAGE = ['block 4 -60 0 minecraft:composter',
+               'block -4 -60 2 minecraft:red_bed[facing=north,part=foot]',
+               'block -4 -60 1 minecraft:red_bed[facing=north,part=head]',
+               'block 0 -60 -6 minecraft:bell',
+               'block 8 -60 -3 minecraft:oak_door[facing=east,half=lower]',
+               'block 8 -59 -3 minecraft:oak_door[facing=east,half=upper]']
+    for i, (x, seed) in enumerate([(0.5, 240), (6.5, 241)]):
+        add(f'iron_golem_village_{i}', 400, VILLAGE + [f'mob minecraft:iron_golem {x} -60 3.5 0 {seed} persistent'], 'difficulty=0')
+    add('iron_golem_outside_village', 400, VILLAGE + ['mob minecraft:iron_golem 30.5 -60 3.5 0 242 persistent'], 'difficulty=0')
+    # IronGolem.doHurtTarget throws what it hits up by 0.4 scaled by max(0, 1 - knockback resistance):
+    # all of it for a zombie, a quarter for a ravager (0.75), none for a warden (1). The zombie's
+    # scenario stops before the golem kills it (the probe has no target killed within the
+    # attacker's tick). A golem holding a target restarts its anger timer every tick
+    # (NeutralMob.updatePersistentAnger), and the NoAI targets still push (LivingEntity.aiStep).
+    for i, (species, ticks) in enumerate([('zombie', 48), ('ravager', 120), ('warden', 120)]):
+        add(f'iron_golem_tosses_{species}', ticks, [
+            f'mob minecraft:iron_golem 0.5 -60 0.5 270 {330 + i} persistent',
+            f'mob minecraft:{species} 3.5 -60 0.5 90 {340 + i} persistent noai',
+        ], 'difficulty=2 time=18000')
+    # An enderman in the rain teleports away again and again (LivingEntity.randomTeleport): it lands
+    # on the first #entities_can_teleport_to block below the spot, at the spot's own height less the
+    # blocks it went down, never into a liquid, and not onto or into #enderman_does_not_teleport_to.
+    # The open field stops before a teleport lands past the probe's loaded 9x9 chunks.
+    add('enderman_rain_teleports', 46, ['mob minecraft:enderman 0.5 -60 0.5 0 351 persistent'], 'rain')
+    add('enderman_rain_dangers', 300, [
+        'fill -32 -61 -32 -1 -61 32 minecraft:magma_block',
+        'fill 1 -60 -32 32 -60 -1 minecraft:sweet_berry_bush[age=3]',
+        'fill 1 -60 1 32 -60 32 minecraft:wither_rose',
+        'fill -8 -61 -8 -2 -61 8 minecraft:bedrock',
+        'mob minecraft:enderman 0.5 -60 0.5 0 352 persistent',
+    ], 'rain')
+    # Not onto ground that holds water (Enderman.canRandomlyTeleportTo): a floor of waterlogged slabs.
+    add('enderman_rain_waterlogged', 190, [
+        'fill -32 -61 -32 32 -61 32 minecraft:oak_slab[type=top,waterlogged=true]',
+        'fill -3 -61 -3 3 -61 3 minecraft:stone',
+        'mob minecraft:enderman 0.5 -60 0.5 0 353 persistent',
+    ], 'rain')
+    # A NoAI enderman still teleports out of the rain's hurt (Enderman.hurtServer).
+    add('enderman_rain_noai', 46, ['mob minecraft:enderman 0.5 -60 0.5 0 354 persistent noai'], 'rain')
+    # LivingEntity.hurtServer ends with MobEffectInstance.onMobHurt: Infested draws its chance, count
+    # and throw angles from the mob's random before Enderman.hurtServer's teleport roll, and its
+    # silverfish come out where the enderman was hurt. (Tick 16's teleport lands past the probe's
+    # loaded chunks.)
+    add('enderman_rain_infested', 15, ['mob minecraft:enderman 0.5 -60 0.5 0 355 persistent effect=infested:0'], 'rain')
+    # Shulker.hurtServer rolls its low-health teleport after super.hurtServer (the hurt sound's pitch):
+    # a strong poison takes it under half health at tick 151, and the teleport (first at tick 281)
+    # happens inside the hurt, before the rest of the shulker's tick; also without AI.
+    add('shulker_poison_teleport', 330, ['mob minecraft:shulker 0.5 -60 0.5 0 356 persistent effect=poison:4'])
+    add('shulker_poison_teleport_noai', 330,
+        ['mob minecraft:shulker 0.5 -60 0.5 0 357 persistent noai effect=poison:4'])
+    # Enderman.hurtServer draws and teleports inside each hurt, even one the hurt cooldown turns
+    # away: strong poison and wither hurt it twice a tick (MobEffect.applyEffectTick), so it may
+    # teleport twice a tick, the second draw after the first teleport; also without AI. (The NoAI
+    # enderman's tick 6 teleport lands past the probe's loaded chunks.)
+    add('enderman_two_hurts_a_tick', 12,
+        ['mob minecraft:enderman 0.5 -60 0.5 0 358 persistent effect=poison:5 effect=wither:5'])
+    add('enderman_two_hurts_a_tick_noai', 5,
+        ['mob minecraft:enderman 0.5 -60 0.5 0 359 persistent noai effect=poison:5 effect=wither:5'])
+    # RandomStandGoal (rearing, with the ambient sound) of every equine, left alone for 800 ticks.
+    for i, species in enumerate(['horse', 'donkey', 'mule', 'zombie_horse', 'skeleton_horse', 'llama']):
+        # The zombie horse at night: by day it burns, and a burning horse's hurts are another matter.
+        add(f'{species}_rears_alone', 800, [f'mob minecraft:{species} 0.5 -60 0.5 0 {260 + i} persistent'],
+            'difficulty=0' + (' time=18000' if species == 'zombie_horse' else ''))
+    # Enough of them for the one in 400 draw to land a few times (the rearing and its sound).
+    for i, species in enumerate(['horse', 'donkey', 'mule', 'zombie_horse', 'skeleton_horse']):
+        add(f'{species}_herd_rears', 1200, [f'mob minecraft:{species} {-10.5 + 3 * k} -60 {-3.5 + 7 * (k % 2)} 0 {300 + 10 * i + k} persistent'
+                                            for k in range(8)], 'difficulty=0' + (' time=18000' if species == 'zombie_horse' else ''))
+    add('baby_horse_rears_alone', 800, ['mob minecraft:horse 0.5 -60 0.5 0 270 persistent baby'], 'difficulty=0')
     # The warden: idle, sniffing out a player, roaring and fighting (WardenAi).
     # Without finalizeSpawn's dig cooldown a warden digs straight back down. warden_player
     # and warden_cow stop before the first blow kills the player or the cow (the probe has no dying
@@ -88,6 +184,15 @@ def scenarios():
     add('warden_creative', 300, ['player 4.5 -60 0.5 creative', 'mob minecraft:warden 0.5 -60 0.5 0 64 digcooldown'])
     add('warden_persistent', 400, ['player 7.5 -60 0.5', 'mob minecraft:warden 0.5 -60 0.5 0 65 persistent digcooldown'])
     add('warden_emerging', 300, ['player 6.5 -60 0.5', 'mob minecraft:warden 0.5 -60 0.5 0 66 emerge'])
+    # #8832: overlapping entities must not displace a warden while it emerges.
+    # Reverse tick order to cover the other mob's pushability query. The
+    # fixture has no flag that starts a dig, so digging is covered by
+    # `warden_push_tests` in mobs/ai.rs.
+    warden = 'mob minecraft:warden 0.5 -60 0.5 0 66 emerge'
+    cow = 'mob minecraft:cow 1.0 -60 0.5 0 68 persistent noai'
+    add('warden_emerging_push_first', 5, [warden, cow])
+    add('warden_emerging_push_second', 5, [cow, warden])
+    add('warden_emerging_push_player', 5, ['player 1.0 -60 0.5 creative', warden])
     add('warden_cow', 176, ['mob minecraft:warden 0.5 -60 0.5 0 67 digcooldown', 'mob minecraft:cow 4.5 -60 0.5 0 68 persistent'])
     # Two villagers gossip (TradeWithVillager): what one heard of the player
     # passes to the other, weakened, once in 1200 ticks; idle and at the bell.
@@ -233,6 +338,22 @@ def scenarios():
                 f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent{baby}',
                 f'feed 20 0 minecraft:{food}', f'feed 40 0 minecraft:{food}',
             ])
+    # The player uses a sword on untamed horses (#2697): Horse, AbstractChestedHorse and
+    # ZombieHorse.mobInteract make them mad (makeMad: rear, angry sound) instead of taking the
+    # rider, not while one still stands; an untamed skeleton horse ignores it (SkeletonHorse).
+    # The zombie horse goes at night (it burns by day), the skeleton horse stops before its
+    # first step sound (Horizon plays the block's).
+    for species, seed, babies, ticks, opts in [
+            ('horse', 180, True, 80, ''), ('donkey', 181, True, 80, ''), ('mule', 182, False, 80, ''),
+            ('zombie_horse', 183, False, 80, 'time=18000'), ('llama', 184, True, 80, ''),
+            ('skeleton_horse', 185, False, 45, '')]:
+        for baby in ('', ' baby') if babies else ('',):
+            add(f'sword_{species}{baby.replace(" ", "_")}', ticks, [
+                'player 3.5 -60 0.5',
+                f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent{baby}',
+                'interact 20 0 minecraft:iron_sword', 'interact 30 0 minecraft:iron_sword',
+                'interact 40 0 minecraft:iron_sword',
+            ], opts)
     # Striders: standing on a lava pool (floatStrider), walking from cold grass to it
     # (StriderGoToLavaGoal, suffocating), and drawn by a player holding warped fungus.
     LAVA = 'fill -5 -63 -5 5 -61 5 minecraft:lava'
@@ -243,6 +364,16 @@ def scenarios():
     add('strider_cold', 200, ['mob minecraft:strider 0.5 -60 0.5 0 134 persistent'])
     add('strider_tempted', 200, [LAVA, 'player 9.5 -60 0.5 hand=minecraft:warped_fungus',
                                  'mob minecraft:strider 0.5 -61 0.5 0 135 persistent'])
+    # Wild ocelots (Ocelot.registerGoals + reassessTrustingGoals): alone, fleeing a survival player
+    # inside 16 blocks (OcelotAvoidEntityGoal, sprinting inside 7), ignoring a creative one, and drawn
+    # by raw cod (OcelotTemptGoal). Rabbits wait for RaidGardenGoal, whose first canUse draws from
+    # the rabbit's random.
+    add('ocelot_alone', 200, ['mob minecraft:ocelot 0.5 -60 0.5 0 181 persistent'])
+    add('ocelot_player', 200, ['player 6.5 -60 0.5', 'mob minecraft:ocelot 0.5 -60 0.5 0 182 persistent'])
+    add('ocelot_player_far', 200, ['player 14.5 -60 0.5', 'mob minecraft:ocelot 0.5 -60 0.5 0 183 persistent'])
+    add('ocelot_creative', 200, ['player 6.5 -60 0.5 creative', 'mob minecraft:ocelot 0.5 -60 0.5 0 184 persistent'])
+    add('ocelot_tempted', 200, ['player 8.5 -60 0.5 hand=minecraft:cod',
+                                'mob minecraft:ocelot 0.5 -60 0.5 0 185 persistent'])
     # Bats: hanging under a stone ceiling alone, woken by a player passing beneath, flying off with
     # nothing above, and fluttering about a closed cave where they may hang up again.
     CEILING = 'fill -6 -57 -6 6 -57 6 minecraft:stone'
@@ -272,12 +403,90 @@ def scenarios():
     add('bee_hive_rain', 300, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 162 persistent'], 'rain')
     add('bee_hive_morning', 1000, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 163 persistent'], 'time=22900 daycycle')
     add('bee_hive_honey', 2600, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 164 persistent nectar'])
+    # Parrots (#3091): FlyingMoveControl(10, false) and FlyingPathNavigation. ParrotWanderGoal flies
+    # to the top of a tree (an empty block over leaves or a log), and a parrot in the air glides
+    # down (calculateFlapping). On Peaceful: Parrot.getAmbient's 1-in-1000 imitation roll is the
+    # level's random there, which the probe doesn't share.
+    TREE = ['fill 4 -60 4 4 -56 4 minecraft:oak_log', 'fill 2 -55 2 6 -55 6 minecraft:oak_leaves[persistent=true]']
+    for i, seed in enumerate([181, 182]):
+        add(f'parrot_alone_{i}', 400, [f'mob minecraft:parrot 0.5 -60 0.5 {90 * i} {seed} persistent'], 'difficulty=0')
+    # FollowPlayerRiddenEntityGoal: a dolphin swims after the boat a player rides along a pool.
+    for i, (vx, vz, dx, seed) in enumerate([(0.15, 0.0, 0.5, 200), (0.0, 0.12, 2.5, 201), (-0.15, 0.0, 0.5, 202)]):
+        add(f'dolphin_boat_{i}', 240, ['fill -40 -64 -40 40 -61 40 minecraft:water',
+                                       f'player {-8.5 if vx >= 0 and vz == 0 else (8.5 if vx < 0 else 0.5)} -61 {-8.5 if vz > 0 else 0.5} boat={vx},{vz}',
+                                       f'mob minecraft:dolphin {dx} -63 0.5 0 {seed} persistent'], 'difficulty=0')
+    add('dolphin_boat_far', 160, ['fill -40 -64 -40 40 -61 40 minecraft:water', 'player -20.5 -61 0.5 boat=0.1,0',
+                                  'mob minecraft:dolphin 20.5 -63 0.5 0 203 persistent'], 'difficulty=0')
+    # FollowMobGoal: a parrot flies after a mob of another kind within 7 blocks and keeps about 3 away.
+    for i, (cx, seed) in enumerate([(5.5, 190), (3.5, 191), (-6.5, 192)]):
+        add(f'parrot_cow_{i}', 300, [f'mob minecraft:parrot 0.5 -59 0.5 0 {seed} persistent',
+                                      f'mob minecraft:cow {cx} -60 0.5 0 {seed + 10} persistent noai'], 'difficulty=0')
+    add('parrot_cow_far', 200, ['mob minecraft:parrot 0.5 -59 0.5 0 195 persistent',
+                                'mob minecraft:cow 12.5 -60 0.5 0 196 persistent noai'], 'difficulty=0')
+    add('parrot_tree', 400, TREE + ['mob minecraft:parrot 0.5 -60 0.5 0 183 persistent'], 'difficulty=0')
+    add('parrot_falling', 100, ['mob minecraft:parrot 0.5 -50 0.5 0 184 persistent'], 'difficulty=0')
+    # A wolf the player hits (#3185, #2820): any wolf with a target is angry (the angry texture):
+    # NeutralMob.updatePersistentAnger in Wolf.aiStep restarts the 20-39 s timer, one random draw,
+    # every tick it has one, not once when hurt.
+    add('wolf_hurt', 200, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 181 persistent', 'hurt 20 0'])
+    # A tamed wolf its owner hits (#4119): TamableAnimal.canAttack never lets it target its owner,
+    # so HurtByTargetGoal doesn't start and the wolf stays calm; a second wolf of the same owner
+    # isn't called either.
+    add('wolf_owner_hurt', 120, ['player 5.5 -60 0.5', 'mob minecraft:wolf 0.5 -60 0.5 0 185 persistent owned',
+                                 'mob minecraft:wolf 0.5 -60 3.5 0 186 persistent owned', 'hurt 20 0'])
+    # A wet wolf (#2885): Wolf.aiStep starts the shake of a wet wolf standing still on the ground,
+    # Wolf.tick plays its sound (two draws) the same tick and cancels it again in water or rain.
+    add('wolf_shake', 200, ['fill 0 -61 0 0 -61 0 minecraft:water', 'mob minecraft:wolf 0.5 -61 0.5 0 183 persistent'])
+    add('wolf_rain', 100, ['mob minecraft:wolf 0.5 -60 0.5 0 184 persistent'], 'rain')
     # Mobs dropped into deep water (#542): FloatGoal users float at the surface (their navigation
     # can float, so Mob.jumpInLiquid adds 0.04 a tick), zombies sink.
     for species, seed in [('pig', 171), ('cow', 172), ('wolf', 173), ('cat', 174), ('horse', 175),
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # A ghast floating near a player (RandomFloatAroundGoal, GhastMoveControl, GhastLookGoal) and shooting it.
+    # Blazes: hovering (Blaze.aiStep's slow fall; the burn and smoke are the client's and draw nothing here),
+    # rising toward a player above them (customServerAiStep's 0.3F), and BlazeAttackGoal's volleys.
+    add('blaze_alone', 200, ['mob minecraft:blaze 0.5 -60 0.5 0 274 persistent'])
+    add('blaze_player_above', 160, ['player 4.5 -52 0.5', 'mob minecraft:blaze 0.5 -60 0.5 0 275 persistent'])
+    add('blaze_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:blaze 0.5 -60 0.5 0 276 persistent'])
+    add('ghast_player', 120, ['player 7.5 -56 0.5', 'mob minecraft:ghast 0.5 -56 0.5 0 273 persistent'])
+    # AbstractHorse.hurtServer (#3432): every hurt draws nextInt(3), and a 0 rears the horse
+    # (standIfPossible). A llama makes the draw too but never rears (canPerformRearing). A horse
+    # scenario waits for #2720: a rearing horse is immobile (AbstractHorse.isImmobile).
+    add('llama_hurt', 200, ['player 4.5 -60 0.5', 'mob minecraft:llama 0.5 -60 0.5 0 182 persistent']
+        + [f'hurt {t} 0' for t in range(10, 190, 25)])
+    # Constructor path maluses: an Animal avoids fire (FIRE -1, FIRE_IN_NEIGHBOR 16).
+    add('pig_tempt_fire', 100, ['player 9.5 -60 0.5 hand=minecraft:carrot', 'fill 3 -61 -3 3 -61 3 minecraft:netherrack',
+                                'fill 3 -60 -3 3 -60 3 minecraft:fire', 'mob minecraft:pig 0.5 -60 0.5 0 221 persistent'])
+    # A baby villager grows up: Villager.ageBoundaryReached rebuilds its brain, so the adult schedule
+    # (work, meet) replaces the baby's (play) at once.
+    for seed in (201, 202):
+        add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
+                                               f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
+    # Baby villagers play tag (PlayTagWithOtherKids): one picks a friend to chase, the chased one
+    # runs off to a spot in the village (isFriendChasingMe).
+    add('villager_kids_tag', 400, ['block 0 -60 -6 minecraft:bell', 'player 12.5 -60 0.5',
+                                   'mob minecraft:villager 0.5 -60 0.5 0 231 persistent age=-24000',
+                                   'mob minecraft:villager 2.5 -60 0.5 0 232 persistent age=-24000',
+                                   'mob minecraft:villager 1.5 -60 2.5 0 233 persistent age=-24000'], 'time=2000')
+    # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
+    # avoidSun: the path stops at the first node the sky sees).
+    add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
+                                   'player 12.5 -60 0.5', 'mob minecraft:skeleton 0.5 -60 0.5 0 211 persistent'], 'time=1000')
+    # A zombified piglin runs Zombie.registerGoals too (the turtle egg goal draws its start delay).
+    add('zombified_piglin_player', 120, ['player 7.5 -60 0.5', 'mob minecraft:zombified_piglin 0.5 -60 0.5 0 241 persistent'])
+    add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])
+    # Chickens fleeing a hit (PanicGoal) beside a pool.
+    for seed in range(191, 193):
+        add(f'chicken_panic_{seed}', 60, ['fill -3 -61 -6 3 -61 6 minecraft:water',
+                                          'player 12.5 -60 6.5', f'mob minecraft:chicken 0.5 -60 6.5 0 {seed} persistent']
+            + [f'hurt {t} 0' for t in range(5, 60, 30)])
+    add('chicken_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:chicken 0.5 -60 0.5 0 195 persistent', 'hurt 5 0'])
+    add('pig_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:pig 0.5 -60 0.5 0 196 persistent', 'hurt 5 0'])
+    # A wild cat avoids the player it sees (Cat.reassessTameGoals adds that goal last) and sprints while
+    # it dashes at 1.33 (Cat.customServerAiStep).
+    add('cat_player', 120, ['player 6.5 -60 0.5', 'mob minecraft:cat 0.5 -60 0.5 0 261 persistent'])
     # Axolotls (#64): idle swimming, hunting a cod, and playing dead after hits, in a pool sunk into
     # the ground so no water flows out of it (the probe doesn't tick fluids).
     POOL = 'fill -5 -63 -5 5 -61 5 minecraft:water'
@@ -285,6 +494,22 @@ def scenarios():
                                 'mob minecraft:cod 2.5 -62 0.5 0 13 persistent noai'])
     add('axolotl_play_dead', 300, [POOL, 'player 12.5 -60 0.5', 'mob minecraft:axolotl 0.5 -62 0.5 0 28 persistent']
         + [f'hurt {t} 0' for t in range(4, 160, 12)])
+    # Tadpoles (TadpoleAi): swimming about and looking at a player, following frog food, panicking when hit.
+    add('tadpole_idle', 200, [POOL, 'player 3.5 -60 0.5', 'mob minecraft:tadpole 0.5 -62 0.5 0 301 persistent'])
+    add('tadpole_tempted', 200, [POOL, 'player 4.5 -60 0.5 hand=minecraft:slime_ball',
+                                 'mob minecraft:tadpole 0.5 -62 0.5 0 302 persistent'])
+    add('tadpole_panic', 100, [POOL, 'player 12.5 -60 0.5', 'mob minecraft:tadpole 0.5 -62 0.5 0 303 persistent',
+                               'hurt 5 0'])
+    # Fish swimming at random (#3631): RandomSwimmingGoal's position search in a sealed pool.
+    for species, seed in [('cod', 181), ('salmon', 182), ('tropical_fish', 183)]:
+        add(f'{species}_random_swim', 120, [POOL, 'player 12.5 -60 0.5',
+                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # FollowFlockLeaderGoal: fish of one kind form a school and the followers swim after their leader.
+    for species, seed in [('cod', 210), ('salmon', 220), ('tropical_fish', 230)]:
+        # No player near: fleeing it is another goal's matter.
+        add(f'{species}_school', 400, [POOL]
+            + [f'mob minecraft:{species} {x} -62 {z} {90 * i} {seed + i} persistent'
+               for i, (x, z) in enumerate([(-3.5, -2.5), (-1.5, 2.5), (0.5, -0.5), (2.5, 3.5), (3.5, -3.5)])])
     # A jobless villager outside a stone box, its composter inside and the doorway on the far
     # side: the path around needs more than the 256 nodes of the follow range (16 * 16); the
     # villager's setRequiredPathLength(48) raises PathFinder.maxVisitedNodes to 768.
@@ -433,7 +658,112 @@ def draws(before, after, limit=20000):
     return f'>{limit}'
 
 
-def compare(vanilla, rust, fields=None):
+# The setters `--writers` traces, by trace key (tools/port_ledger.py TRACE_FIELDS), with their packages.
+PACKAGES = {'Entity': 'net.minecraft.world.entity', 'LivingEntity': 'net.minecraft.world.entity',
+            'Mob': 'net.minecraft.world.entity', 'MoveControl': 'net.minecraft.world.entity.ai.control',
+            'LookControl': 'net.minecraft.world.entity.ai.control'}
+ORACLE = 'dev.horizonlab.parity.VanillaMobAiOracle'
+
+
+def writer_filter():
+    """A JFR method-trace filter: the trace keys' setters and the oracle's tick mark."""
+    try:
+        from . import port_ledger
+    except ImportError:
+        import port_ledger
+    setters = {name for _, names in port_ledger.TRACE_FIELDS.values() for name in names}
+    methods = sorted(f"{PACKAGES[c]}.{c}::{m}" for c, _, m in (n.partition('.') for n in setters) if c in PACKAGES)
+    return ';'.join(methods + [f'{ORACLE}::tickMark'])
+
+
+def read_writers(jfr, scenarios):
+    """{(scenario, tick): {setter: [[frame, ...], ...]}} from the oracle's JFR recording: the stack of every
+    setter call, in the tick it ran in (the calls after a tick mark until the next one), frames as
+    `Class.method` nearest first. `scenarios` is [(name, ticks)] in the order the oracle ran them: its tick
+    marks (one per tick, and one after the last) count through them."""
+    # The JDK the oracle ran on: `jfr` beside its `java`.
+    java = shutil.which('java')
+    tool = shutil.which('jfr') or (java and str(Path(java).resolve().parent / 'jfr')) or 'jfr'
+
+    out = subprocess.run([tool, 'print', '--json', '--events', 'jdk.MethodTrace', str(jfr)],
+                         capture_output=True, text=True, check=True).stdout
+    events = sorted((e['values'] for e in json.loads(out)['recording']['events']), key=lambda v: v['startTime'])
+
+    def name(method):
+        cls = method['type']['name'].replace('/', '.').rsplit('.', 1)[-1]
+        return cls.replace('$', '.') + '.' + method['name']
+
+    ticks = [(n, t) for n, count in scenarios for t in [*range(1, count + 1), None]]
+    writers, mark = {}, -1
+    for v in events:
+        what = name(v['method'])
+        if what.endswith('VanillaMobAiOracle.tickMark'):
+            mark += 1
+        elif 0 <= mark < len(ticks) and ticks[mark][1] is not None:
+            frames = [name(f['method']) for f in v['stackTrace']['frames']]
+            writers.setdefault(ticks[mark], {}).setdefault(what, []).append(frames)
+    return writers
+
+
+def ledger_blame(scenario_lines, writers=None):
+    """Lines naming, for a mob's first differing fields, the vanilla methods of its tick that write them and their
+    Rust ports (tools/port_ledger.py blame), when a ledger has been built (`port_ledger.py build`); else nothing.
+    With `writers` (--writers), those vanilla actually ran that tick come first."""
+    try:
+        try:
+            from . import port_ledger
+        except ImportError:
+            import port_ledger
+        led = port_ledger.load() if port_ledger.LEDGER.exists() else None
+    except (OSError, ValueError, SystemExit):
+        led = None
+    species = {name: [line.split()[1] for line in body if line.split()[:1] == ['mob']]
+               for name, body in scenario_lines.items()}
+
+    def lines(name, mob, keys, vanilla_trace, tick=None):
+        if led is None:
+            return []
+        out = []
+        kinds = species.get(name, [])
+        kind = kinds[mob] if 0 <= mob < len(kinds) else None
+        traced = [k for k in keys if k in port_ledger.TRACE_FIELDS]
+        if 'v' in traced and 'p' in traced:
+            traced.remove('p')  # the position follows the motion: what wrote the motion is the lead
+        if kind and traced:
+            # The frames of this tick's calls of the traced fields' setters, nearest first.
+            setters = {n for k in traced for n in port_ledger.TRACE_FIELDS[k][1]}
+
+            def ran_at(t):
+                ran = {}
+                for setter, stacks in (writers or {}).get((name, t), {}).items():
+                    if setter in setters:
+                        for frames in stacks:
+                            for depth, frame in enumerate(frames):
+                                ran[frame] = min(ran.get(frame, depth), depth)
+                return ran
+            ran = ran_at(tick) if tick else {}
+            before = ran_at(tick - 1) if tick and tick > 1 else {}
+            r = port_ledger.blame(led, kind, traced, limit=6, ran=ran or None, before=before or None)
+            for c in (r or {}).get('computed_by', []):
+                ran_mark = (' (ran this tick, not the one before)' if c.get('new') else
+                            ' (ran this tick)' if c.get('ran') else '')
+                out.append(f"      ledger: {','.join(traced)} is written by {c['vanilla']}{ran_mark} -> "
+                           f"{'; '.join(c['rust']) or 'no port'}")
+                out.extend(f'        {g}' for g in c['gaps'][:1])
+        if 'rng' in keys and vanilla_trace:
+            # The first vanilla draw of the tick: its frames, nearest first, and their ports.
+            for frame in vanilla_trace[0].split(':', 1)[-1].split()[:3]:
+                cls, _, meth = frame.rsplit(':', 1)[0].rpartition('.')
+                for cp in port_ledger.match_classes(led, cls.replace('$', '.'))[:1]:
+                    k = port_ledger.key(cp, meth)
+                    if k in led['methods']:
+                        ports = [port_ledger.fn_ref(led, f) for f in port_ledger.port_of(led, k)[:1]]
+                        out.append(f"      ledger: draw in {cls}.{meth} -> {'; '.join(ports) or 'no port'}")
+        return out
+    return lines
+
+
+def compare(vanilla, rust, fields=None, blame=None):
     """Returns (report lines, totals)."""
     report, totals = [], {'mob_ticks': 0, 'matched': 0, 'scenarios': 0, 'clean': 0}
     for name, v in vanilla.items():
@@ -476,6 +806,10 @@ def compare(vanilla, rust, fields=None):
                     for line in [x for x in r.get('trace', {}).get(t, []) if x.split(' ', 1)[0] == str(mob)][:40]:
                         report.append('      horizon ' + line)
                     report.extend('    ' + d for d in diffs[:12])
+                    if blame:
+                        keys = [k for k in (a or {}) if b is None or a.get(k) != b.get(k)]
+                        mine = [x for x in v.get('trace', {}).get(t, []) if x.split(' ', 1)[0] == str(mob)]
+                        report.extend(blame(name, mob, keys, mine, t))
             if first is not None:
                 clean = False
         # Creaking hearts (state, block entity, level random): first differing tick.
@@ -504,6 +838,9 @@ def main():
     parser.add_argument('--java-only', action='store_true')
     parser.add_argument('--rust-only', action='store_true', help='reuse the last vanilla output')
     parser.add_argument('--report-only', action='store_true', help='print divergences without failing')
+    parser.add_argument('--writers', action='store_true',
+                        help="record which vanilla methods set each traced field each tick (JFR), to rank the "
+                             "ledger's candidates under a divergence")
     parser.add_argument('--trace', action='store_true',
                         help="also trace Horizon's mob random draws (rng-trace probe with line tables)")
     args = parser.parse_args()
@@ -521,11 +858,15 @@ def main():
         shutil.rmtree(world, ignore_errors=True)
         # Each scenario forces 9x9 chunks 512 blocks past the last one, so a run generates ~80 chunks per scenario;
         # 3g ran out of heap in PoiManager.tick on a busy runner (#2160's CI, 143 scenarios).
-        oracle_harness.run_logged(['java', '-Xmx4g', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
+        # 4g then ran out within ~3 minutes on a fresh run once the scenarios grew (2026-10-30); 8g passes.
+        jfr = build / 'writers.jfr'
+        jfr.unlink(missing_ok=True)
+        record = [f'-XX:StartFlightRecording:method-trace={writer_filter()},filename={jfr}'] if args.writers else []
+        oracle_harness.run_logged(['java', '-Xmx8g', '-Djava.awt.headless=true', *record, '-cp', str(classes) + os.pathsep + dependencies,
                                    'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
-        command = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '--example', 'client_probe']
+        command = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client-lib', '--example', 'client_probe']
         target, env = lab.cargo_target(), None
         if args.trace:
             target = lab.LOCAL / 'mob-ai-trace-target'
@@ -539,7 +880,11 @@ def main():
         return
     names = {s[0] for _, s in chosen}
     vanilla = {k: v for k, v in parse(build / 'vanilla.txt').items() if k in names}
-    report, totals = compare(vanilla, parse(build / 'horizon.txt'))
+    writers = None
+    if args.writers and (build / 'writers.jfr').exists():
+        writers = read_writers(build / 'writers.jfr', [(s[0], s[1]) for _, s in chosen])
+    report, totals = compare(vanilla, parse(build / 'horizon.txt'),
+                             blame=ledger_blame({s[0]: s[3] for _, s in chosen}, writers))
     (build / 'report.txt').write_text('\n'.join(report) + '\n')
     print('\n'.join(report))
     print(f"{totals['clean']}/{totals['scenarios']} scenarios match entirely; "

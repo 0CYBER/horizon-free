@@ -3,6 +3,7 @@
 use super::{Game, Screen};
 use horizon_client::{hud::HudBatch, items::ItemStack, text::Text, ui};
 use std::fmt::Write as _;
+use winit::keyboard::KeyCode;
 
 /// `Stats.CUSTOM` in registration order with its formatter.
 const CUSTOM: &[(&str, Format)] = &[
@@ -155,12 +156,122 @@ const COLUMNS: [(&str, &str); 6] = [
     ("picked_up", "gui/sprites/statistics/item_picked_up"),
     ("dropped", "gui/sprites/statistics/item_dropped"),
 ];
+/// `ItemStatisticsList`'s rows: items with a positive item column, plus
+/// `Block.asItem` (`block_item`) of blocks with a positive `mined` count,
+/// whose stat is keyed by block; air is dropped.
+fn item_rows(stats: &super::stats::Stats, block_item: impl Fn(&str) -> String) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    for (ty, _) in COLUMNS {
+        for (k, v) in stats
+            .values
+            .get(&format!("minecraft:{ty}"))
+            .into_iter()
+            .flatten()
+        {
+            let item = if ty == "mined" {
+                block_item(k)
+            } else {
+                k.clone()
+            };
+            if *v > 0 && item != "minecraft:air" && !items.contains(&item) {
+                items.push(item);
+            }
+        }
+    }
+    items
+}
+/// `ItemRow`'s value in column `ty`: `mined` is the count of a `BlockItem`'s
+/// block (`item_block`, `BlockItem.getBlock`), none ("-") for other items.
+fn item_stat(
+    stats: &super::stats::Stats,
+    ty: &str,
+    item: &str,
+    item_block: impl Fn(&str) -> Option<String>,
+) -> Option<i32> {
+    if ty == "mined" {
+        item_block(item).map(|block| stats.get(ty, &block))
+    } else {
+        Some(stats.get(ty, item))
+    }
+}
+/// `ItemRowComparator.compare`: by the column's value (-1 for none), equal
+/// values by item registry id, the whole order reversed when `order` is -1.
+fn sort_rows(rows: &mut [String], order: i32, key: impl Fn(&str) -> (i32, usize)) {
+    rows.sort_by_cached_key(|i| key(i));
+    if order < 0 {
+        rows.reverse();
+    }
+}
 #[derive(Default)]
 pub(super) struct StatsUi {
     tab: usize,
     /// The list's scrolling: the wheel and the held scrollbar.
     scroll: horizon_client::ui::Scroll,
     sort: Option<(usize, i32)>,
+}
+impl StatsUi {
+    /// `TabNavigationBar.keyPressed` (`MenuTabBar.keyPressed`), which
+    /// `StatsScreen.keyPressed` runs before the screen's own keys: with
+    /// Control held, Ctrl+Tab and Ctrl+Shift+Tab cycle the tabs and
+    /// Ctrl+1..9 (Ctrl+0 is the tenth) pick one directly; a tab that cannot be
+    /// chosen is not switched to, the key is still taken. Whether the tab bar
+    /// took the key.
+    fn key(&mut self, key: KeyCode, ctrl: bool, shift: bool, active: [bool; 3]) -> bool {
+        if !ctrl {
+            return false;
+        }
+        let Some(tab) = tab_key(self.tab, &active, key, shift) else {
+            return false;
+        };
+        if active[tab] && tab != self.tab {
+            self.tab = tab;
+            self.scroll.amount = 0.0;
+        }
+        true
+    }
+}
+/// `InputConstants.Key.getNumericKeyValue`: the main row's digits and the
+/// keypad's, 1..9 and 0.
+fn numeric_key_value(key: KeyCode) -> Option<usize> {
+    Some(match key {
+        KeyCode::Digit1 | KeyCode::Numpad1 => 1,
+        KeyCode::Digit2 | KeyCode::Numpad2 => 2,
+        KeyCode::Digit3 | KeyCode::Numpad3 => 3,
+        KeyCode::Digit4 | KeyCode::Numpad4 => 4,
+        KeyCode::Digit5 | KeyCode::Numpad5 => 5,
+        KeyCode::Digit6 | KeyCode::Numpad6 => 6,
+        KeyCode::Digit7 | KeyCode::Numpad7 => 7,
+        KeyCode::Digit8 | KeyCode::Numpad8 => 8,
+        KeyCode::Digit9 | KeyCode::Numpad9 => 9,
+        KeyCode::Digit0 | KeyCode::Numpad0 => 0,
+        _ => return None,
+    })
+}
+/// `TabNavigationBar.getNextTabIndex`: the tab a key picks, or none. A digit
+/// names a tab (`Math.floorMod(digit - 1, 10)`, then clamped to the last tab);
+/// Tab moves to the next (Shift: the previous) tab that can be chosen, one
+/// full turn at most.
+fn tab_key(current: usize, active: &[bool], key: KeyCode, shift: bool) -> Option<usize> {
+    if active.is_empty() {
+        return None;
+    }
+    if let Some(digit) = numeric_key_value(key) {
+        // `Math.floorMod(digit - 1, 10)`, then `Mth.clamp` to the last tab.
+        return Some((digit + 9) % 10).map(|i| i.min(active.len() - 1));
+    }
+    if key != KeyCode::Tab {
+        return None;
+    }
+    let step: isize = if shift { -1 } else { 1 };
+    let count = active.len() as isize;
+    let mut i = (current as isize + step).rem_euclid(count);
+    for _ in 0..count {
+        if active[i as usize] {
+            return Some(i as usize);
+        }
+        i = (i + step).rem_euclid(count);
+    }
+    None
 }
 /// `MenuTabBar` geometry: three tabs over at most 400 pixels.
 fn tabs(w: f32) -> (f32, f32) {
@@ -199,23 +310,47 @@ impl Game<'_> {
             _ => (36.0, self.stat_mobs().len()),
         }
     }
+    /// Whether tab `i` can be chosen: the Items and Mobs tabs are active only
+    /// while their list has rows.
+    fn stats_tab_active(&self, i: usize) -> bool {
+        match i {
+            1 => !self.stat_items().is_empty(),
+            2 => !self.stat_mobs().is_empty(),
+            _ => true,
+        }
+    }
     /// Items (and block items) with any non-zero column.
     fn stat_items(&self) -> Vec<String> {
-        let mut items: Vec<String> = Vec::new();
-        for (ty, _) in COLUMNS {
-            if let Some(m) = self.stats.values.get(&format!("minecraft:{ty}")) {
-                for (k, v) in m {
-                    if *v > 0 && k != "minecraft:air" && !items.contains(k) {
-                        items.push(k.clone());
-                    }
-                }
-            }
-        }
+        let mut items = item_rows(&self.stats, |block| {
+            self.pack.assets.registry.default_state(block).map_or_else(
+                || "minecraft:air".to_owned(),
+                |s| self.res.facts().get(s).item.to_string(),
+            )
+        });
         if let Some((col, order)) = self.stats_ui.sort {
             let ty = COLUMNS[col].0;
-            items.sort_by_key(|i| self.stats.get(ty, i) * -order);
+            // `Item.getId`: one pass over the registry, not a scan per row
+            // (the screen asks for its rows several times a frame).
+            let ids: std::collections::HashMap<&str, usize> = self
+                .res
+                .items()
+                .registry_order
+                .iter()
+                .enumerate()
+                .map(|(n, id)| (&**id, n))
+                .collect();
+            sort_rows(&mut items, order, |i| {
+                let id = ids.get(i).copied().unwrap_or(usize::MAX);
+                (self.stat_item(ty, i).unwrap_or(-1), id)
+            });
         }
         items
+    }
+    fn stat_item(&self, ty: &str, item: &str) -> Option<i32> {
+        item_stat(&self.stats, ty, item, |i| {
+            let state = self.res.items().get(i)?.block?;
+            Some(self.res.facts().get(state).name.to_string())
+        })
     }
     fn stat_mobs(&self) -> Vec<String> {
         let mut mobs: Vec<String> = Vec::new();
@@ -230,21 +365,93 @@ impl Game<'_> {
         }
         mobs
     }
+    /// `MobRow`: the mob's name, its kills and killed-by lines, and their
+    /// colours (grey when none).
+    fn mob_row(&self, mob: &str) -> (Text, Text, Text, (u32, u32)) {
+        let name = Text::translate(&format!("entity.{}", mob.replace(':', ".")), &[]);
+        let kills = self.stats.get("killed", mob);
+        let by = self.stats.get("killed_by", mob);
+        let k = if kills == 0 {
+            Text::translate(
+                "stat_type.minecraft.killed.none",
+                std::slice::from_ref(&name),
+            )
+        } else {
+            Text::translate(
+                "stat_type.minecraft.killed",
+                &[Text::literal(kills.to_string()), name.clone()],
+            )
+        };
+        let b = if by == 0 {
+            Text::translate(
+                "stat_type.minecraft.killed_by.none",
+                std::slice::from_ref(&name),
+            )
+        } else {
+            Text::translate(
+                "stat_type.minecraft.killed_by",
+                &[name.clone(), Text::literal(by.to_string())],
+            )
+        };
+        let colors = (
+            if kills > 0 { 0xFFBA_BABA } else { 0xFF80_8080 },
+            if by > 0 { 0xFFBA_BABA } else { 0xFF80_8080 },
+        );
+        (name, k, b, colors)
+    }
     pub(super) fn draw_stats(&mut self, batch: &mut HudBatch) {
+        horizon_client::widgets::begin_screen(|| {
+            horizon_client::widgets::ScreenInfo::new(
+                "stats",
+                super::screen_info::tr("gui.stats", &[]),
+            )
+        });
         let (w, h) = (batch.width, batch.height);
         let atlas = &self.gui.atlas;
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
         let (top, bottom) = (TAB_H, h - FOOTER);
         ui::separators(batch, atlas, top, bottom, true);
         // The tab bar.
+        let mut tab_tip = false;
         let (x0, tw) = tabs(w);
-        for (i, key) in ["stat.generalButton", "stat.itemsButton", "stat.mobsButton"]
-            .into_iter()
-            .enumerate()
-        {
+        const TABS: [&str; 3] = ["stat.generalButton", "stat.itemsButton", "stat.mobsButton"];
+        // Its TabNavigationBar: the hovered tab, else the current one (a
+        // GridLayoutTab's extra narration is empty).
+        horizon_client::widgets::narratable(|| {
+            use horizon_client::widgets::{ListKind, Narratable, Row, What};
+            let row = |i: usize| {
+                let mut row = Row::new(i, Text::translate(TABS[i], &[]).plain());
+                row.hint = Some(String::new());
+                row
+            };
+            let hovered = (0..TABS.len())
+                .find(|&i| ui::hovered(self.cursor, x0 + tw * i as f32, 0.0, tw, TAB_H));
+            Narratable::new(
+                What::List {
+                    kind: ListKind::Tabs,
+                    total: TABS.len(),
+                    hovered: hovered.map(row),
+                    selected: Some(row(self.stats_ui.tab.min(TABS.len() - 1))),
+                },
+                [x0, 0.0, tw * TABS.len() as f32, TAB_H],
+            )
+            .key(horizon_client::widgets::key_of(&"stats/tabs"))
+        });
+        for (i, key) in TABS.into_iter().enumerate() {
             let x = x0 + tw * i as f32;
             let selected = self.stats_ui.tab == i;
+            let active = self.stats_tab_active(i);
+            // Only one that can be chosen: the bumpers step from the selected tab by clicking.
+            if active {
+                horizon_client::widgets::target_as(
+                    [x, 0.0, tw, TAB_H],
+                    horizon_client::widgets::Kind::Tab(selected),
+                );
+            }
             let hover = ui::hovered(self.cursor, x, 0.0, tw, TAB_H);
+            if hover && !active {
+                tab_tip = true;
+            }
             let sprite = match (selected, hover) {
                 (true, true) => "gui/sprites/widget/tab_selected_highlighted",
                 (true, false) => "gui/sprites/widget/tab_selected",
@@ -252,16 +459,14 @@ impl Game<'_> {
                 (false, false) => "gui/sprites/widget/tab",
             };
             ui::nine_slice(batch, atlas, sprite, x, 0.0, tw, TAB_H, u32::MAX);
-            let label = Text::translate(key, &[]);
-            let lw = atlas.font.width_text(&label);
-            let color = if selected { u32::MAX } else { 0xFFA0_A0A0 };
-            batch.text_styled(
+            ui::menu_tab_label(
+                batch,
                 atlas,
-                &label,
-                (x + (tw - lw) / 2.0).floor(),
-                8.0,
-                color,
-                true,
+                &Text::translate(key, &[]),
+                (x, 0.0, tw, TAB_H),
+                selected,
+                active,
+                horizon_client::hud_overlays::now_ms(),
             );
             if selected {
                 batch.fill(atlas, x + 2.0, TAB_H - 3.0, tw - 4.0, 1.0, u32::MAX);
@@ -275,6 +480,27 @@ impl Game<'_> {
         let scroll = self.stats_ui.scroll.amount;
         let row_y = |i: usize| top + 4.0 + i as f32 * row_h - scroll;
         let visible = |y: f32| y >= top && y + row_h <= bottom;
+        // The list's row under the mouse (`getHovered`).
+        let hovered_row = {
+            let (cx, cy) = self.cursor;
+            let i = ((cy - (top + 4.0) + scroll) / row_h).floor();
+            let inside = cy >= top && cy < bottom && cx >= left && cx < left + 280.0;
+            (inside && i >= 0.0 && (i as usize) < rows).then_some(i as usize)
+        };
+        let list_rect = [0.0, top, w, bottom - top];
+        let list_key = horizon_client::widgets::key_of(&("stats/list", self.stats_ui.tab));
+        let tr = super::screen_info::tr;
+        // GeneralStatisticsList and MobsStatisticsList: ObjectSelectionLists
+        // narrating the hovered row (none is selected).
+        let object_list = |narration: &dyn Fn(usize) -> String| {
+            horizon_client::widgets::narratable(|| {
+                use horizon_client::widgets::{ListKind, Narratable, Row};
+                let hovered = hovered_row.map(|i| Row::new(i, narration(i)));
+                Narratable::list(ListKind::Object, rows, hovered, None, list_rect).key(list_key)
+            });
+        };
+        // The hovered item's tooltip, drawn over the list.
+        let mut tip = None;
         match self.stats_ui.tab {
             0 => {
                 let mut sorted: Vec<(Text, String)> = CUSTOM
@@ -286,6 +512,10 @@ impl Game<'_> {
                     })
                     .collect();
                 sorted.sort_by_key(|(l, _)| l.plain());
+                object_list(&|i| {
+                    let (label, value) = &sorted[i];
+                    tr("narrator.select", &[&format!("{} {value}", label.plain())])
+                });
                 for (i, (label, value)) in sorted.iter().enumerate() {
                     let y = row_y(i);
                     if !visible(y) {
@@ -310,12 +540,35 @@ impl Game<'_> {
                 if items.is_empty() {
                     return self.draw_stats_footer(batch, w, h);
                 }
+                // ItemStatisticsList, a ContainerObjectSelectionList: the
+                // header's sort buttons and each row's item.
+                horizon_client::widgets::narratable(|| {
+                    horizon_client::widgets::Narratable::container_list(
+                        rows,
+                        hovered_row,
+                        list_rect,
+                    )
+                    .key(list_key)
+                });
                 // The header row of sort buttons.
                 let y = row_y(0);
                 if visible(y) {
-                    for (c, (_, sprite)) in COLUMNS.iter().enumerate() {
+                    for (c, (ty, sprite)) in COLUMNS.iter().enumerate() {
                         let x = left + 75.0 + 40.0 * c as f32 - 18.0;
                         let hover = ui::hovered(self.cursor, x, y + 1.0, 18.0, 18.0);
+                        // StatSortButton: an ImageButton named by its stat
+                        // type, which is its tooltip too.
+                        horizon_client::widgets::narratable(|| {
+                            let name = tr(&format!("stat_type.minecraft.{ty}"), &[]);
+                            horizon_client::widgets::Narratable::button(
+                                name.clone(),
+                                [x, y + 1.0, 18.0, 18.0],
+                                true,
+                            )
+                            .hint(name)
+                            .key(horizon_client::widgets::key_of(&("stats/sort", c)))
+                            .child_of(list_key, 0)
+                        });
                         let bg = if hover {
                             "gui/sprites/statistics/header"
                         } else {
@@ -341,6 +594,17 @@ impl Game<'_> {
                         continue;
                     }
                     let stack = ItemStack::new(item, 1);
+                    // ItemRowWidget, an ItemDisplayWidget: "Item: <name>".
+                    horizon_client::widgets::narratable(|| {
+                        let name = horizon_client::stations::hover_name(&self.pack.names, &stack);
+                        horizon_client::widgets::Narratable::text(
+                            tr("narration.item", &[&name]),
+                            [left + 1.0, y + 1.0, 18.0, 18.0],
+                        )
+                        .key(horizon_client::widgets::key_of(&("stats/item", item)))
+                        .child_of(list_key, i + 1)
+                        .without_tooltip()
+                    });
                     batch.sprite(
                         &self.gui.atlas,
                         "gui/sprites/container/slot",
@@ -348,6 +612,10 @@ impl Game<'_> {
                         y + 1.0,
                     );
                     self.draw_item(batch, &stack, left + 2.0, y + 2.0);
+                    // `ItemRowWidget.extractTooltip`: the item's tooltip at the slot's corner.
+                    if ui::hovered(self.cursor, left + 1.0, y + 1.0, 18.0, 18.0) {
+                        tip = Some((stack.clone(), left + 19.0, y + 19.0));
+                    }
                     let atlas = &self.gui.atlas;
                     let color = if (i + 1) % 2 == 0 {
                         u32::MAX
@@ -356,16 +624,9 @@ impl Game<'_> {
                     };
                     for (c, (ty, _)) in COLUMNS.iter().enumerate() {
                         let x = left + 75.0 + 40.0 * c as f32;
-                        let block = c == 0
-                            && self
-                                .res
-                                .items()
-                                .get(item)
-                                .is_some_and(|i| i.block.is_some());
-                        let text = if c == 0 && !block {
-                            Text::translate("stats.none", &[]).plain()
-                        } else {
-                            format(Format::Default, self.stats.get(ty, item))
+                        let text = match self.stat_item(ty, item) {
+                            Some(v) => format(Format::Default, v),
+                            None => Text::translate("stats.none", &[]).plain(),
                         };
                         let tw = HudBatch::text_width(atlas, &text);
                         batch.text(atlas, &text, x - tw, (y + 7.0).floor(), color, true);
@@ -373,41 +634,22 @@ impl Game<'_> {
                 }
             }
             _ => {
-                for (i, mob) in self.stat_mobs().iter().enumerate() {
+                let mobs = self.stat_mobs();
+                object_list(&|i| {
+                    let (_, kills, killed_by, _) = self.mob_row(&mobs[i]);
+                    let both = horizon_client::widgets::join_for_narration(&[
+                        &kills.plain(),
+                        &killed_by.plain(),
+                    ]);
+                    tr("narrator.select", &[&both])
+                });
+                for (i, mob) in mobs.iter().enumerate() {
                     let y = row_y(i);
                     if !visible(y) {
                         continue;
                     }
-                    let name = Text::translate(&format!("entity.{}", mob.replace(':', ".")), &[]);
+                    let (name, k, b, (ck, cb)) = self.mob_row(mob);
                     batch.text_styled(atlas, &name, left + 2.0, y + 1.0, u32::MAX, true);
-                    let kills = self.stats.get("killed", mob);
-                    let by = self.stats.get("killed_by", mob);
-                    let k = if kills == 0 {
-                        Text::translate(
-                            "stat_type.minecraft.killed.none",
-                            std::slice::from_ref(&name),
-                        )
-                    } else {
-                        Text::translate(
-                            "stat_type.minecraft.killed",
-                            &[Text::literal(kills.to_string()), name.clone()],
-                        )
-                    };
-                    let b = if by == 0 {
-                        Text::translate(
-                            "stat_type.minecraft.killed_by.none",
-                            std::slice::from_ref(&name),
-                        )
-                    } else {
-                        Text::translate(
-                            "stat_type.minecraft.killed_by",
-                            &[name.clone(), Text::literal(by.to_string())],
-                        )
-                    };
-                    let (ck, cb) = (
-                        if kills > 0 { 0xFFBA_BABA } else { 0xFF80_8080 },
-                        if by > 0 { 0xFFBA_BABA } else { 0xFF80_8080 },
-                    );
                     batch.text_styled(atlas, &k, left + 12.0, y + 10.0, ck, true);
                     batch.text_styled(atlas, &b, left + 12.0, y + 19.0, cb, true);
                 }
@@ -424,14 +666,25 @@ impl Game<'_> {
             self.stats_ui.scroll.amount,
         );
         self.draw_stats_footer(batch, w, h);
+        if let Some((stack, x, y)) = tip {
+            self.draw_stack_tooltip(batch, &stack, x, y);
+        }
+        // The empty tab's Tooltip.create(gui.stats.none_found).
+        if tab_tip {
+            let atlas = &self.gui.atlas;
+            let tip = Text::translate("gui.stats.none_found", &[]);
+            // Tooltip.splitTooltip: font.split(message, 170).
+            ui::tooltip(batch, atlas, &atlas.font.split(&tip, 170.0), self.cursor);
+        }
     }
     fn draw_stats_footer(&self, batch: &mut HudBatch, w: f32, h: f32) {
         let atlas = &self.gui.atlas;
         let (bx, by) = ((w / 2.0 - 100.0).floor(), h - FOOTER + 6.0);
         let hover = ui::hovered(self.cursor, bx, by, 200.0, 20.0);
-        ui::button(
+        ui::action_button(
             batch,
             atlas,
+            horizon_client::widgets::Action::Done,
             bx,
             by,
             200.0,
@@ -440,6 +693,20 @@ impl Game<'_> {
             true,
             hover,
         );
+    }
+    /// `StatsScreen.keyPressed`: the tab bar sees the key first
+    /// (`MenuTabBar.keyPressed`), and the rest of `Screen.keyPressed` is
+    /// Escape, which the screens' keys already handle.
+    pub(super) fn stats_key(&mut self, key: KeyCode) {
+        let active = [true, self.stats_tab_active(1), self.stats_tab_active(2)];
+        let ctrl = self.has_control_down_with_quirk();
+        let shift = self.has_shift_down();
+        let before = self.stats_ui.tab;
+        if self.stats_ui.key(key, ctrl, shift, active) && self.stats_ui.tab != before {
+            // TabManager.setCurrentTab(.., true): the click of a tab press.
+            self.audio
+                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+        }
     }
     pub(super) fn stats_click(&mut self, size: [u32; 2]) {
         // A press on the scrollbar holds it and clicks nothing else.
@@ -452,6 +719,7 @@ impl Game<'_> {
         for i in 0..3 {
             if ui::hovered(self.cursor, x0 + tw * i as f32, 0.0, tw, TAB_H)
                 && self.stats_ui.tab != i
+                && self.stats_tab_active(i)
             {
                 self.stats_ui.tab = i;
                 self.stats_ui.scroll.amount = 0.0;
@@ -522,5 +790,147 @@ impl Game<'_> {
     /// The button came up: the scrollbar lets go.
     pub(super) fn stats_release(&mut self) {
         self.stats_ui.scroll.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::KeyCode::{Digit0, Digit1, Digit2, Digit3, Numpad8, Tab};
+
+    /// `ItemStatisticsList`: a mined block's row is its item (`Block.asItem`),
+    /// air dropped, and a `BlockItem`'s Mined column reads its block's count.
+    /// The block <-> item pairs are vanilla 26.3's (`Items`: wheat seeds place
+    /// wheat, redstone places redstone wire, a torch places torch and wall
+    /// torch; water has no item).
+    #[test]
+    fn mined_blocks_count_under_the_item_that_places_them() {
+        let mut stats = super::super::stats::Stats::default();
+        stats.add("mined", "minecraft:wheat", 3);
+        stats.add("mined", "minecraft:redstone_wire", 5);
+        stats.add("mined", "minecraft:wall_torch", 7);
+        stats.add("mined", "minecraft:torch", 2);
+        stats.add("mined", "minecraft:water", 4);
+        stats.add("used", "minecraft:wheat_seeds", 1);
+        stats.add("crafted", "minecraft:stick", 6);
+        let block_item = |b: &str| {
+            match b {
+                "minecraft:wheat" => "minecraft:wheat_seeds",
+                "minecraft:redstone_wire" => "minecraft:redstone",
+                "minecraft:wall_torch" | "minecraft:torch" => "minecraft:torch",
+                _ => "minecraft:air",
+            }
+            .to_owned()
+        };
+        let item_block = |i: &str| {
+            match i {
+                "minecraft:wheat_seeds" => Some("minecraft:wheat"),
+                "minecraft:redstone" => Some("minecraft:redstone_wire"),
+                "minecraft:torch" => Some("minecraft:torch"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        };
+        let mut rows = item_rows(&stats, block_item);
+        rows.sort();
+        assert_eq!(
+            rows,
+            [
+                "minecraft:redstone",
+                "minecraft:stick",
+                "minecraft:torch",
+                "minecraft:wheat_seeds"
+            ]
+        );
+        let mined = |i: &str| item_stat(&stats, "mined", i, item_block);
+        assert_eq!(mined("minecraft:wheat_seeds"), Some(3));
+        assert_eq!(mined("minecraft:redstone"), Some(5));
+        assert_eq!(
+            mined("minecraft:torch"),
+            Some(2),
+            "the torch block's own count"
+        );
+        assert_eq!(mined("minecraft:stick"), None, "not a block item: '-'");
+        assert_eq!(
+            item_stat(&stats, "used", "minecraft:wheat_seeds", item_block),
+            Some(1)
+        );
+    }
+
+    /// `ItemRowComparator` with `sortByColumn`'s first click (order -1): the
+    /// biggest value first, "-" (-1) last, equal values by item registry id,
+    /// that order reversed too; the second click (order 1) is the mirror.
+    #[test]
+    fn item_rows_sort_by_value_then_registry_id() {
+        let rows = || ["c", "a", "none", "b", "d"].map(str::to_owned);
+        // (value, registry id)
+        let key = |i: &str| match i {
+            "a" => (5, 0),
+            "b" => (2, 1),
+            "c" => (5, 2),
+            "d" => (0, 3),
+            _ => (-1, 4),
+        };
+        let mut down = rows();
+        sort_rows(&mut down, -1, key);
+        assert_eq!(down, ["c", "a", "b", "d", "none"]);
+        let mut up = rows();
+        sort_rows(&mut up, 1, key);
+        assert_eq!(up, ["none", "d", "b", "a", "c"]);
+    }
+
+    /// `StatsScreen.keyPressed`: with Control held the tab bar takes the key -
+    /// Ctrl+Tab and Ctrl+Shift+Tab cycle the tabs, Ctrl+1..9 pick one (Ctrl+0
+    /// is the tenth, past the last tab) - and without it the key goes on.
+    #[test]
+    fn control_and_tab_switch_the_statistics_tabs() {
+        let all = [true, true, true];
+        let mut ui = StatsUi::default();
+        assert_eq!(ui.tab, 0);
+        for expected in [1, 2, 0] {
+            assert!(ui.key(Tab, true, false, all));
+            assert_eq!(ui.tab, expected, "Ctrl+Tab");
+        }
+        assert!(ui.key(Tab, true, true, all));
+        assert_eq!(ui.tab, 2, "Ctrl+Shift+Tab wraps back to the last tab");
+        assert!(ui.key(Digit1, true, false, all));
+        assert_eq!(ui.tab, 0);
+        assert!(ui.key(Digit2, true, false, all));
+        assert_eq!(ui.tab, 1);
+        assert!(ui.key(Numpad8, true, false, all));
+        assert_eq!(ui.tab, 2, "a digit past the last tab picks the last one");
+        assert!(ui.key(Digit0, true, false, all));
+        assert_eq!(ui.tab, 2, "0 is the tenth tab, clamped to the last one");
+        // Without Control the tab bar leaves the key for the rest of the screen.
+        assert!(!ui.key(Tab, false, false, all));
+        assert!(!ui.key(Digit3, false, false, all));
+        assert_eq!(ui.tab, 2, "the last tab stays");
+    }
+
+    /// `StatsScreen.setTabActiveStateAndTooltip`: the Items and Mobs tabs that
+    /// have no rows cannot be chosen, so the cycle skips them; a digit naming
+    /// one is still taken, and switches nothing.
+    #[test]
+    fn an_empty_tab_is_skipped_by_the_keyboard() {
+        let only_general_and_mobs = [true, false, true];
+        let mut ui = StatsUi::default();
+        assert!(ui.key(Tab, true, false, only_general_and_mobs));
+        assert_eq!(ui.tab, 2, "the empty Items tab is skipped");
+        assert!(ui.key(Tab, true, false, only_general_and_mobs));
+        assert_eq!(ui.tab, 0);
+        assert!(ui.key(Tab, true, true, only_general_and_mobs));
+        assert_eq!(ui.tab, 2);
+        assert!(ui.key(Digit2, true, false, only_general_and_mobs));
+        assert_eq!(ui.tab, 2, "an empty tab is not switched to");
+    }
+
+    /// Switching tabs starts the new list at the top, as a tab press does.
+    #[test]
+    fn a_tab_switch_scrolls_back_to_the_top() {
+        let mut ui = StatsUi::default();
+        ui.scroll.amount = 120.0;
+        assert!(ui.key(Tab, true, false, [true, true, true]));
+        assert_eq!(ui.tab, 1);
+        assert_eq!(ui.scroll.amount, 0.0);
     }
 }

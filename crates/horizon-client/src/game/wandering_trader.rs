@@ -161,14 +161,7 @@ impl Game<'_> {
             self.spawn_trader_llama(id, 4);
         }
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            m.extra.ints[5] = trader::DESPAWN_DELAY;
-            m.extra.point = Some([
-                f64::from(reference[0]),
-                f64::from(reference[1]),
-                f64::from(reference[2]),
-            ]);
-            m.extra.home = Some(reference);
-            m.extra.ints[4] = 16;
+            trader::start_visit(m, reference);
         }
         true
     }
@@ -240,7 +233,7 @@ impl Game<'_> {
                 if !self.world.loaded(x, z) {
                     continue;
                 }
-                for y in (from[1] - range).max(horizon_client::chunk::MIN_Y)..=from[1] + range {
+                for y in (from[1] - range).max(self.world.bottom_y())..=from[1] + range {
                     if &*self.res.facts().get(self.world.block(x, y, z)).name != "minecraft:bell" {
                         continue;
                     }

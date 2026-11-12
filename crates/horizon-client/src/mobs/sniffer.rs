@@ -34,6 +34,10 @@ fn now(m: &Mob) -> i32 {
 pub fn digging(m: &Mob) -> bool {
     state(m) == DIGGING
 }
+/// `Sniffer.canPlayDiggingSound`.
+pub fn can_play_digging_sound(m: &Mob) -> bool {
+    matches!(state(m), DIGGING | SEARCHING)
+}
 pub fn register(m: &mut Mob) {
     use super::path::PathType;
     m.ai.nav.can_float = true;
@@ -83,12 +87,15 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
             table: "minecraft:gameplay/sniffer_digging",
             at: [f64::from(h[0]), f64::from(h[1]), f64::from(h[2])],
         });
-        events.push(MobEvent::Sound(
-            "entity.sniffer.drop_seed",
-            m.center(),
-            1.0,
-            1.0,
-        ));
+        // Sniffer.dropSeed's this.playSound: silence mutes it.
+        if !m.silent {
+            events.push(MobEvent::Sound(
+                "entity.sniffer.drop_seed",
+                m.center(),
+                1.0,
+                1.0,
+            ));
+        }
     }
     // The searching sound is the client's (`playSearchingSound`).
     // onPathfindingStart / Done: water only blocks the way while it is dry.
@@ -210,3 +217,7 @@ mod tests {
         assert!(!can_mate_state(DIGGING));
     }
 }
+
+#[cfg(test)]
+#[path = "sniffer_silence_tests.rs"]
+mod sniffer_silence_tests;

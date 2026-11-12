@@ -10,10 +10,12 @@ use super::{
 use horizon_client::{
     containers::{Beacon, BlockEntity},
     effects::EffectInstance,
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
     items::ItemStack,
     mesher::Vertex,
     mobs::render::{DYE, DYE_NAMES},
+    test_instance_block::Status,
+    text::Text,
 };
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
@@ -29,12 +31,15 @@ pub(super) const EFFECTS: [(&str, i32); 6] = [
     ("strength", 3),
     ("regeneration", 4),
 ];
-const PAYMENT: [&str; 5] = [
-    "minecraft:iron_ingot",
-    "minecraft:gold_ingot",
-    "minecraft:emerald",
-    "minecraft:diamond",
-    "minecraft:netherite_ingot",
+/// `BeaconScreen.extractBackground`'s payment row in drawing order, with each
+/// item's x: netherite, emerald, diamond, gold, iron. Not by value: the
+/// emerald is left of the diamond.
+const PAYMENT_ROW: [(&str, f32); 5] = [
+    ("minecraft:netherite_ingot", 20.0),
+    ("minecraft:emerald", 41.0),
+    ("minecraft:diamond", 63.0),
+    ("minecraft:gold_ingot", 86.0),
+    ("minecraft:iron_ingot", 108.0),
 ];
 /// `BeaconMenu.PaymentSlot` and the player inventory, relative to the 176 origin.
 pub(super) fn slot_position(i: usize) -> Option<(f32, f32)> {
@@ -72,6 +77,43 @@ fn upgrade_button() -> (f32, f32) {
 fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
 }
+/// `BeaconPowerButton.setEffect`'s tooltip: the effect's description, and for
+/// `BeaconUpgradePowerButton` (`createEffectDescription`) " II" after it.
+fn effect_tooltip(e: usize, upgraded: bool) -> Text {
+    let effect = Text::translate(&format!("effect.minecraft.{}", EFFECTS[e].0), &[]);
+    if upgraded {
+        effect.append(" II")
+    } else {
+        effect
+    }
+}
+/// `BeaconScreen`: every button's tooltip whichever one the cursor is over
+/// (`BeaconPowerButton`'s its effect, `BeaconSpriteScreenButton`'s its label),
+/// hovered whether or not it is active.
+fn hovered_tooltip(
+    local: (f32, f32),
+    primary: Option<usize>,
+    buttons: &[(usize, f32, f32, bool)],
+) -> Option<Text> {
+    for &(e, x, y, _) in buttons {
+        if inside(local, x, y, 22.0, 22.0) {
+            return Some(effect_tooltip(e, false));
+        }
+    }
+    if let Some(p) = primary {
+        let (x, y) = upgrade_button();
+        if inside(local, x, y, 22.0, 22.0) {
+            return Some(effect_tooltip(p, true));
+        }
+    }
+    if inside(local, 164.0, 107.0, 22.0, 22.0) {
+        return Some(Text::translate("gui.done", &[]));
+    }
+    if inside(local, 190.0, 107.0, 22.0, 22.0) {
+        return Some(Text::translate("gui.cancel", &[]));
+    }
+    None
+}
 fn effect_id(name: &str) -> Option<&'static str> {
     let n = name.strip_prefix("minecraft:").unwrap_or(name);
     EFFECTS.iter().map(|(e, _)| *e).find(|e| *e == n)
@@ -84,6 +126,30 @@ fn average(a: u32, b: u32) -> u32 {
         .fold(0, |acc, &s| acc | ((ch(a, s) + ch(b, s)) / 2) << s)
 }
 impl Game<'_> {
+    /// `TestInstanceBlockEntity.getBeamSections`: grey while running, green
+    /// for a pass, red for a failed required test and orange for an optional
+    /// one; each section is one block tall and the last runs to the sky.
+    fn test_instance_beam(&self, e: &BlockEntity) -> Option<Vec<(u32, i32)>> {
+        let BlockEntity::TestInstanceBlock(b) = e else {
+            return None;
+        };
+        let color = match b.data.status {
+            Status::Cleared => return None,
+            Status::Running => 0x80_8080,
+            Status::Finished if b.data.error_message.is_none() => 0x00_FF00,
+            Status::Finished => {
+                let required = b
+                    .data
+                    .test
+                    .as_deref()
+                    .and_then(|key| self.test_def(key))
+                    .is_none_or(|t| t.required);
+                if required { 0xFF_0000 } else { 0xFF_8000 }
+            }
+        };
+        Some(vec![(color, 1)])
+    }
+
     /// The beam color of a `BeaconBeamBlock` (stained glass and panes, the beacon).
     fn beam_color(&self, name: &str) -> Option<u32> {
         if name == "minecraft:beacon" {
@@ -105,10 +171,33 @@ impl Game<'_> {
         let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
             return;
         };
-        self.tick_beacon(key, &mut b);
+        let previous = b.levels;
+        self.tick_beacon(key, &mut b, false);
+        let current = b.levels;
         self.world.block_entities.put(key, BlockEntity::Beacon(b));
+        if (previous == 0) != (current == 0) {
+            self.native_beacon_state_change(self.dim.id(), [key.0, key.1, key.2], current > 0);
+        }
     }
-    fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon) {
+    /// `ClientLevel.tickBlockEntities` for beacons: a server's chunk data
+    /// carries no beam sections, so the client builds them too; effects,
+    /// sounds and the advancement stay with the server.
+    pub(super) fn client_tick_beacons(&mut self) {
+        let keys: Vec<_> = self
+            .world
+            .block_entities
+            .iter()
+            .filter_map(|(k, e)| matches!(e, BlockEntity::Beacon(_)).then_some(*k))
+            .collect();
+        for key in keys {
+            let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
+                continue;
+            };
+            self.tick_beacon(key, &mut b, true);
+            self.world.block_entities.put(key, BlockEntity::Beacon(b));
+        }
+    }
+    fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon, client: bool) {
         let mut check = if b.last_check_y < y {
             b.checking.clear();
             b.last_check_y = y - 1;
@@ -153,20 +242,22 @@ impl Game<'_> {
             if !b.sections.is_empty() {
                 b.levels = self.beacon_base(x, y, z);
             }
-            if b.levels > 0 && !b.sections.is_empty() {
+            if !client && b.levels > 0 && !b.sections.is_empty() {
                 self.beacon_effects([x, y, z], b);
                 self.beacon_sound([x, y, z], "minecraft:block.beacon.ambient");
             }
         }
         if b.last_check_y >= surface {
-            b.last_check_y = super::MIN_Y - 1;
+            b.last_check_y = self.world.bottom_y() - 1;
             b.sections = std::mem::take(&mut b.checking);
             let (was, is) = (previous > 0, b.levels > 0);
             if !was && is {
-                self.beacon_sound([x, y, z], "minecraft:block.beacon.activate");
-                let levels = b.levels;
-                self.for_each_player(|g| g.beacon_constructed([x, y, z], levels));
-            } else if was && !is {
+                if !client {
+                    self.beacon_sound([x, y, z], "minecraft:block.beacon.activate");
+                    let levels = b.levels;
+                    self.for_each_player(|g| g.beacon_constructed([x, y, z], levels));
+                }
+            } else if was && !is && !client {
                 self.beacon_sound([x, y, z], "minecraft:block.beacon.deactivate");
             }
         }
@@ -211,7 +302,7 @@ impl Game<'_> {
         let mut levels = 0;
         for step in 1..=4 {
             let ly = y - step;
-            if ly < super::MIN_Y {
+            if ly < self.world.bottom_y() {
                 break;
             }
             let ok = (x - step..=x + step).all(|lx| {
@@ -237,15 +328,26 @@ impl Game<'_> {
             return;
         };
         let range = f64::from(b.levels * 10 + 10);
-        let Some(pp) = self.player.as_ref().map(|p| p.position) else {
+        let Some((pp, pl)) = self.player.as_ref().map(|p| (p.position, p.dimensions)) else {
             return;
         };
-        let inside = pp.x >= f64::from(p[0]) - range
-            && pp.x <= f64::from(p[0] + 1) + range
-            && pp.z >= f64::from(p[2]) - range
-            && pp.z <= f64::from(p[2] + 1) + range
-            && pp.y >= f64::from(p[1]) - range;
-        if !inside {
+        let height = f64::from(self.world.top_y() - self.world.bottom_y());
+        let bounds = pl.bounds(pp);
+        if !effect_box_hits(
+            p,
+            range,
+            height,
+            [
+                bounds.min_position().x,
+                bounds.min_position().y,
+                bounds.min_position().z,
+            ],
+            [
+                bounds.max_position().x,
+                bounds.max_position().y,
+                bounds.max_position().z,
+            ],
+        ) {
             return;
         }
         let secondary = b.secondary.as_deref().and_then(effect_id);
@@ -409,15 +511,15 @@ impl Game<'_> {
         let levels = self.beacon_levels();
         let sel = self.station.as_ref().map_or([None; 2], |s| s.beacon);
         let paid = self.station.as_ref().is_some_and(|s| s.inputs[0].is_some());
+        // BeaconScreen draws no title, but has the menu's.
+        super::screen_info::name_container(|| {
+            self.remote_menu_title().map_or_else(
+                || self.translate("container.beacon", "Beacon"),
+                |t| t.plain(),
+            )
+        });
+        self.render_transparent_background("beacon", batch);
         let atlas = &self.gui.atlas;
-        batch.fill(
-            atlas,
-            0.0,
-            0.0,
-            batch.width,
-            batch.height,
-            rgba(16, 16, 16, 160),
-        );
         if let Some(mut r) = atlas.sprites.get("gui/container/beacon").copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.u1 = r.u0 + 230.0 * du;
@@ -441,12 +543,12 @@ impl Game<'_> {
                 false,
             );
         }
-        for (i, item) in PAYMENT.iter().rev().enumerate() {
-            let x = [20.0, 41.0, 63.0, 86.0, 108.0][i];
+        for (item, x) in PAYMENT_ROW {
             self.draw_item(batch, &ItemStack::new(item, 1), bx + x, by + 109.0);
         }
         let atlas = &self.gui.atlas;
-        let mut tooltip = None;
+        let buttons = buttons();
+        let tooltip = hovered_tooltip(local, sel[0], &buttons);
         let button =
             |batch: &mut HudBatch, x: f32, y: f32, active: bool, selected: bool, icon: &str| {
                 let hover = inside(local, x, y, 22.0, 22.0);
@@ -474,9 +576,8 @@ impl Game<'_> {
                     18.0,
                     u32::MAX,
                 );
-                hover
             };
-        for (e, x, y, primary) in buttons() {
+        for (e, x, y, primary) in buttons {
             let tier = EFFECTS[e].1;
             let active = if primary {
                 tier <= levels && tier < 4
@@ -489,16 +590,12 @@ impl Game<'_> {
                 sel[1] == Some(e)
             };
             let icon = format!("mob_effect/{}", EFFECTS[e].0);
-            if button(batch, x, y, active, selected, &icon) {
-                tooltip = Some(format!("effect.minecraft.{}", EFFECTS[e].0));
-            }
+            button(batch, x, y, active, selected, &icon);
         }
         if let Some(p) = sel[0] {
             let (x, y) = upgrade_button();
             let icon = format!("mob_effect/{}", EFFECTS[p].0);
-            if button(batch, x, y, levels >= 4, sel[1] == Some(p), &icon) {
-                tooltip = Some(format!("effect.minecraft.{}", EFFECTS[p].0));
-            }
+            button(batch, x, y, levels >= 4, sel[1] == Some(p), &icon);
         }
         button(
             batch,
@@ -517,41 +614,36 @@ impl Game<'_> {
             "gui/sprites/container/beacon/cancel",
         );
         let slots: Vec<usize> = (0..36).chain([INPUT]).collect();
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             if let Some(stack) = self.slot_mut(i).clone() {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
         }
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
         let mut stack_tip = None;
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
             stack_tip = self.slot_mut(slot).clone();
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+            if let Some(stack) = stack_tip.filter(|s| self.tooltip_with_carried(s)) {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
         } else if let Some(stack) = stack_tip {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
-        } else if let Some(key) = tooltip {
-            let text = self.translate(&key, &key);
-            self.draw_tooltip_lines(
-                batch,
-                &[(horizon_client::text::Text::literal(text), u32::MAX)],
-                self.cursor.0,
-                self.cursor.1,
-            );
+        } else if let Some(text) = tooltip {
+            self.draw_tooltip_lines(batch, &[(text, u32::MAX)], self.cursor.0, self.cursor.1);
         }
     }
     /// `BeaconRenderer`: each section's rotating solid beam and its glow.
-    pub(super) fn beacon_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+    pub(super) fn beacon_geometry(
+        &mut self,
+        camera: glam::DVec3,
+        alpha: f64,
+        out: &mut Vec<Vertex>,
+    ) {
         let Some(s) = self
             .gui
             .atlas
@@ -563,15 +655,39 @@ impl Game<'_> {
         };
         let time = (self.world.game_time.rem_euclid(40)) as f32 + alpha as f32;
         let scoping = self.scoping();
-        let view = f64::from(self.settings.render_distance * 16);
-        for (k, e) in &self.world.block_entities {
-            let BlockEntity::Beacon(b) = e else { continue };
-            // `getBeamSections` is empty while Levels is 0.
-            if b.levels == 0 || b.sections.is_empty() {
-                continue;
+        // `BeaconRenderer.shouldRender` culls at the render distance; far
+        // terrain extends that to its own distance.
+        let view = f64::from(self.terrain_distance() * 16);
+        let world = &self.world;
+        if self.lod.is_some() {
+            // The beam stays after its chunk unloads; once the chunk is back,
+            // its block entity decides whether the beam is still there.
+            self.far_beacons.retain(|&pos, _| {
+                let (x, _, z) = pos;
+                !world.chunks.contains_key(&(x >> 4, z >> 4))
+                    || world
+                        .block_entities
+                        .get(&pos)
+                        .is_some_and(|e| beam(e).is_some() || is_test_instance_beam(e))
+            });
+        } else {
+            self.far_beacons.clear();
+        }
+        let test_beams: Vec<_> = world
+            .block_entities
+            .iter()
+            .filter_map(|(k, e)| Some((*k, self.test_instance_beam(e)?)))
+            .collect();
+        for (k, e) in &world.block_entities {
+            if let Some(sections) = beam(e) {
+                self.far_beacons.insert(*k, sections.to_vec());
             }
+        }
+        for (k, sections) in test_beams {
+            self.far_beacons.insert(k, sections);
+        }
+        for (k, sections) in &self.far_beacons {
             let base = glam::DVec3::new(f64::from(k.0) + 0.5, f64::from(k.1), f64::from(k.2) + 0.5);
-            // `BeaconRenderer.shouldRender`: horizontal distance under render distance × 16.
             let offset = base - camera;
             let horizontal = glam::DVec2::new(offset.x, offset.z).length();
             if horizontal >= view {
@@ -586,14 +702,130 @@ impl Game<'_> {
             let origin = (glam::DVec3::new(f64::from(k.0), f64::from(k.1), f64::from(k.2))
                 - camera)
                 .as_vec3();
-            horizon_client::block_entity_render::beacon_beam(
-                origin,
-                &b.sections,
-                time,
-                scale,
-                s,
-                out,
-            );
+            let start = out.len();
+            horizon_client::block_entity_render::beacon_beam(origin, sections, time, scale, s, out);
+            // HDR output: the beam shines (entity.wgsl fs_hdr_mark).
+            for v in &mut out[start..] {
+                v.layer |= u32::from(horizon_client::mesher::BRIGHT) << 16;
+            }
         }
+    }
+}
+/// Whether a test instance block shows a beam (`getBeamSections` not empty).
+fn is_test_instance_beam(e: &BlockEntity) -> bool {
+    matches!(e, BlockEntity::TestInstanceBlock(b) if b.data.status != Status::Cleared)
+}
+/// The beam sections of an active beacon (`BeaconRenderer` draws no beam for
+/// a beacon without a pyramid or with all sections cleared).
+fn beam(e: &BlockEntity) -> Option<&[(u32, i32)]> {
+    match e {
+        BlockEntity::Beacon(b) if b.levels > 0 && !b.sections.is_empty() => Some(&b.sections),
+        _ => None,
+    }
+}
+/// `BeaconBlockEntity.applyEffects` box: `AABB(pos).inflate(range).expandTowards(0, height, 0)`,
+/// tested with `AABB.intersects` (strict) against the player's bounding box.
+fn effect_box_hits(p: [i32; 3], range: f64, height: f64, lo: [f64; 3], hi: [f64; 3]) -> bool {
+    let [x, y, z] = p.map(f64::from);
+    lo[0] < x + 1.0 + range
+        && hi[0] > x - range
+        && lo[1] < y + 1.0 + range + height
+        && hi[1] > y - range
+        && lo[2] < z + 1.0 + range
+        && hi[2] > z - range
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// `BeaconScreen.extractBackground`: netherite 20, emerald 41, diamond
+    /// 41+22, gold 42+44, iron 42+66.
+    #[test]
+    fn the_payment_row_reads_netherite_emerald_diamond_gold_iron() {
+        assert_eq!(
+            PAYMENT_ROW,
+            [
+                ("minecraft:netherite_ingot", 20.0),
+                ("minecraft:emerald", 41.0),
+                ("minecraft:diamond", 63.0),
+                ("minecraft:gold_ingot", 86.0),
+                ("minecraft:iron_ingot", 108.0),
+            ]
+        );
+    }
+    /// `BeaconUpgradePowerButton.createEffectDescription` appends " II"; the
+    /// primary buttons' description is the bare effect.
+    #[test]
+    fn only_the_upgrade_button_names_the_second_level() {
+        for e in 0..EFFECTS.len() {
+            let primary = effect_tooltip(e, false).plain();
+            let upgrade = effect_tooltip(e, true).plain();
+            assert!(!primary.is_empty());
+            assert!(!primary.ends_with(" II"));
+            assert_eq!(upgrade, format!("{primary} II"));
+        }
+    }
+    /// `BeaconScreenButton.setTooltip`: every button has one while hovered,
+    /// and the sprite buttons' is their label whether or not they are active
+    /// (the tick is disabled without a payment and a chosen power).
+    #[test]
+    fn every_hovered_beacon_button_shows_its_tooltip() {
+        let at = |(x, y): (f32, f32)| (x + 11.0, y + 11.0);
+        let name =
+            |e: usize| horizon_client::lang::get(&format!("effect.minecraft.{}", EFFECTS[e].0));
+        let buttons = buttons();
+        for &(e, x, y, _) in &buttons {
+            let tip = hovered_tooltip(at((x, y)), None, &buttons).unwrap_or_default();
+            assert_eq!(tip.plain(), name(e), "button {e}");
+        }
+        let upgrade = at(upgrade_button());
+        assert!(hovered_tooltip(upgrade, None, &buttons).is_none());
+        assert_eq!(
+            hovered_tooltip(upgrade, Some(0), &buttons).unwrap().plain(),
+            format!("{} II", name(0))
+        );
+        assert_eq!(
+            hovered_tooltip(at((164.0, 107.0)), None, &buttons)
+                .unwrap_or_default()
+                .plain(),
+            horizon_client::lang::get("gui.done")
+        );
+        assert_eq!(
+            hovered_tooltip(at((190.0, 107.0)), Some(0), &buttons)
+                .unwrap_or_default()
+                .plain(),
+            horizon_client::lang::get("gui.cancel")
+        );
+        assert!(hovered_tooltip((0.0, 0.0), Some(0), &buttons).is_none());
+    }
+    #[test]
+    fn only_active_beacons_have_beams() {
+        let mut b = Beacon::default();
+        assert!(beam(&BlockEntity::Beacon(Box::new(b.clone()))).is_none());
+        b.levels = 1;
+        b.sections.push((0xFFFFFF, 10));
+        assert_eq!(
+            beam(&BlockEntity::Beacon(Box::new(b))),
+            Some(&[(0xFFFFFF, 10)][..])
+        );
+    }
+    #[test]
+    fn effect_box_uses_player_overlap() {
+        let hit = |x: f64, y: f64| {
+            effect_box_hits(
+                [0, 100, 0],
+                50.0,
+                384.0,
+                [x - 0.3, y, -0.3],
+                [x + 0.3, y + 1.8, 0.3],
+            )
+        };
+        assert!(hit(-50.2, 100.0));
+        assert!(!hit(-50.4, 100.0));
+        assert!(hit(51.2, 100.0));
+        assert!(!hit(51.4, 100.0));
+        assert!(hit(0.0, 48.3));
+        assert!(!hit(0.0, 48.1));
+        assert!(hit(0.0, 534.9));
+        assert!(!hit(0.0, 535.0));
     }
 }

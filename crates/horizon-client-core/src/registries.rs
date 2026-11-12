@@ -28,6 +28,16 @@ pub struct Registries {
     /// Game rule name -> integer-valued.
     pub game_rules: Vec<(String, bool)>,
     pub players: Vec<String>,
+    /// A dedicated server's lists, for the completions of `/op`, `/deop`, `/pardon`, `/pardon-ip` and
+    /// `/whitelist`: the operators' names, the banned names and addresses, the whitelisted names.
+    pub ops: Vec<String>,
+    pub banned_players: Vec<String>,
+    pub banned_ips: Vec<String>,
+    pub whitelisted: Vec<String>,
+    /// `ClientSuggestionProvider.customCompletionSuggestions`: the extra chat
+    /// completions the server sent (ClientboundCustomChatCompletionsPacket),
+    /// each once.
+    pub custom_completions: std::collections::BTreeSet<String>,
     /// Scoreboard objective names, team names and tracked score holders.
     pub objectives: Vec<String>,
     pub teams: Vec<String>,
@@ -54,6 +64,12 @@ pub struct Registries {
     pub function_tags: Vec<String>,
     /// The block the source is looking at (relevant coordinates).
     pub target_block: Option<[i32; 3]>,
+    /// `ClientSuggestionProvider.getSelectedEntities`: the UUID of the
+    /// entity under the crosshair (`Entity.getStringUUID`), if any.
+    pub selected_entities: Vec<String>,
+    /// `ClientSuggestionProvider.getAbsoluteCoordinates`: the exact point of
+    /// that block hit, each coordinate as `%.2f` (`Locale.ROOT`).
+    pub target_point: Option<[String; 3]>,
     /// Every registry's element and tag ids (`minecraft:item` -> ...), as
     /// the server's registry access and reloadable registries hold them.
     pub by_registry: BTreeMap<String, RegistryIds>,
@@ -73,6 +89,31 @@ pub struct Registries {
     pub trigger_objectives: Vec<String>,
     /// Objectives with the `trigger` criterion -> holder -> whether its score is locked.
     pub trigger_scores: BTreeMap<String, BTreeMap<String, bool>>,
+    /// The `ConfiguredFeature` codec for an inline `minecraft:worldgen/feature`
+    /// value (`ResourceOrIdArgument`), where the source has the server's live
+    /// features; None leaves the decode to when the command runs.
+    pub inline_feature: Option<InlineFeatureCheck>,
+}
+
+/// A codec check of an inline value: its error message when it does not decode.
+#[derive(Clone)]
+pub struct InlineFeatureCheck(
+    std::sync::Arc<dyn Fn(&horizon_world::nbt::Tag) -> Result<(), String> + Send + Sync>,
+);
+impl InlineFeatureCheck {
+    pub fn new(
+        check: impl Fn(&horizon_world::nbt::Tag) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        Self(std::sync::Arc::new(check))
+    }
+    pub fn check(&self, value: &horizon_world::nbt::Tag) -> Result<(), String> {
+        (self.0)(value)
+    }
+}
+impl std::fmt::Debug for InlineFeatureCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InlineFeatureCheck(..)")
+    }
 }
 /// The ids and tag ids of one registry.
 #[derive(Clone, Debug, Default)]
@@ -81,7 +122,55 @@ pub struct RegistryIds {
     pub tags: Vec<String>,
 }
 const EMPTY: &[String] = &[];
+/// ClientboundCustomChatCompletionsPacket.Action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomCompletionAction {
+    Add,
+    Remove,
+    Set,
+}
+impl CustomCompletionAction {
+    /// `Action.BY_ID`: `ByIdMap.continuous` with `OutOfBoundsStrategy.ZERO`,
+    /// so an unknown id is `ADD`.
+    pub fn from_id(id: i32) -> Self {
+        match id {
+            1 => Self::Remove,
+            2 => Self::Set,
+            _ => Self::Add,
+        }
+    }
+}
+/// `ClientSuggestionProvider.modifyCustomCompletions`: the server adds,
+/// removes or replaces the extra chat completions.
+pub fn modify_custom_completions(
+    set: &mut std::collections::BTreeSet<String>,
+    action: CustomCompletionAction,
+    entries: &[String],
+) {
+    match action {
+        CustomCompletionAction::Add => set.extend(entries.iter().cloned()),
+        CustomCompletionAction::Remove => {
+            for e in entries {
+                set.remove(e);
+            }
+        }
+        CustomCompletionAction::Set => {
+            set.clear();
+            set.extend(entries.iter().cloned());
+        }
+    }
+}
 impl Registries {
+    /// `ClientSuggestionProvider.getCustomTabSuggestions`: what chat (not a
+    /// command) completes, the online players' names with the server's custom
+    /// completions, each once.
+    pub fn custom_tab_suggestions(&self) -> std::collections::BTreeSet<&str> {
+        self.players
+            .iter()
+            .chain(&self.custom_completions)
+            .map(String::as_str)
+            .collect()
+    }
     /// Fill what the game did not build itself from vanilla's exported
     /// registries (`command-registries.json`, written by
     /// `VanillaCommandParseOracle registries`): built-in registries such as
@@ -109,6 +198,16 @@ impl Registries {
         fill(&mut self.templates, "templates");
         fill(&mut self.persistent_components, "persistent_components");
         fill(&mut self.learnable_recipes, "learnable_recipes");
+        if self.summonable.is_empty() {
+            self.summonable = strings(&r["summonable"]);
+            self.summonable.sort();
+            self.summonable.dedup();
+        }
+        if self.entity_types.is_empty() {
+            self.entity_types = strings(&r["entity_types"]);
+            self.entity_types.sort();
+            self.entity_types.dedup();
+        }
         const RELOADED: [&str; 5] = [
             "minecraft:advancement",
             "minecraft:recipe",
@@ -149,6 +248,77 @@ impl Registries {
             }
         }
     }
+    /// Only what [`Self::fill_from_export`] takes from an export, to keep
+    /// in place of the export itself (a third of its memory).
+    pub fn from_export(r: &serde_json::Value) -> Self {
+        let mut out = Self::default();
+        out.fill_from_export(r);
+        out
+    }
+    /// [`Self::fill_from_export`] from an export already read with
+    /// [`Self::from_export`]: each field the game left empty, each registry
+    /// it did not list.
+    pub fn fill_from_exported(&mut self, e: &Self) {
+        let fill = |field: &mut Vec<String>, from: &Vec<String>| {
+            if field.is_empty() {
+                field.clone_from(from);
+            }
+        };
+        fill(&mut self.effects, &e.effects);
+        fill(&mut self.enchantments, &e.enchantments);
+        fill(&mut self.attributes, &e.attributes);
+        fill(&mut self.damage_types, &e.damage_types);
+        fill(&mut self.templates, &e.templates);
+        fill(&mut self.persistent_components, &e.persistent_components);
+        fill(&mut self.learnable_recipes, &e.learnable_recipes);
+        if self.summonable.is_empty() {
+            self.summonable.clone_from(&e.summonable);
+            self.summonable.sort();
+            self.summonable.dedup();
+        }
+        if self.entity_types.is_empty() {
+            self.entity_types.clone_from(&e.entity_types);
+            self.entity_types.sort();
+            self.entity_types.dedup();
+        }
+        for (name, ids) in &e.by_registry {
+            if !self.by_registry.contains_key(name) {
+                self.by_registry.insert(name.clone(), ids.clone());
+            }
+        }
+        if self.block_entities.is_empty() {
+            self.block_entities.clone_from(&e.block_entities);
+        }
+        if self.block_tag_members.is_empty() {
+            self.block_tag_members.clone_from(&e.block_tag_members);
+        }
+        if self.clock_time_markers.is_empty() {
+            self.clock_time_markers.clone_from(&e.clock_time_markers);
+        }
+        if self.advancement_criteria.is_empty() {
+            self.advancement_criteria
+                .clone_from(&e.advancement_criteria);
+        }
+    }
+    /// Add the damage catalog's types ([`Self::damage_types`]: content mods'
+    /// and the world's packs' with vanilla's) to the commands'
+    /// `minecraft:damage_type` ids, which the export lists for vanilla alone.
+    /// `ResourceArgument` looks a type up in the server's registries, so
+    /// `/damage` takes every type the world has. The export's tags stay. The
+    /// ids are replaced, not extended: `by_registry` outlives a world, and a
+    /// pack's type must not stay accepted in the next world opened.
+    pub fn sync_damage_type_ids(&mut self) {
+        if self.damage_types.is_empty() {
+            return;
+        }
+        let mut ids = self.damage_types.clone();
+        ids.sort();
+        ids.dedup();
+        self.by_registry
+            .entry("minecraft:damage_type".into())
+            .or_default()
+            .ids = ids;
+    }
     /// The element ids of a registry (sorted).
     pub fn ids(&self, registry: &str) -> &[String] {
         if let Some(r) = self.by_registry.get(registry) {
@@ -184,5 +354,51 @@ impl Registries {
             "minecraft:block" => &self.block_tags,
             _ => EMPTY,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Registries;
+
+    /// A content mod's damage type joins vanilla's in the commands' ids, the
+    /// export's tags stay, and a second world open lists each type once.
+    #[test]
+    fn damage_type_ids_take_the_catalogs_types() {
+        let export = Registries::from_export(&serde_json::json!({
+            "by_registry": {"minecraft:damage_type": {
+                "ids": ["minecraft:fall", "minecraft:magic"],
+                "tags": ["minecraft:is_fall"],
+            }},
+        }));
+        let mut reg = Registries {
+            damage_types: vec![
+                "minecraft:magic".into(),
+                "example:test".into(),
+                "minecraft:fall".into(),
+            ],
+            ..Registries::default()
+        };
+        reg.fill_from_exported(&export);
+        assert_eq!(
+            reg.ids("minecraft:damage_type"),
+            ["minecraft:fall", "minecraft:magic"],
+            "the export alone lists vanilla's types"
+        );
+        for _ in 0..2 {
+            reg.sync_damage_type_ids();
+            assert_eq!(
+                reg.ids("minecraft:damage_type"),
+                ["example:test", "minecraft:fall", "minecraft:magic"]
+            );
+            assert_eq!(reg.tags("minecraft:damage_type"), ["minecraft:is_fall"]);
+        }
+        // The next world, without the pack: its type is no longer accepted.
+        reg.damage_types = vec!["minecraft:fall".into(), "minecraft:magic".into()];
+        reg.sync_damage_type_ids();
+        assert_eq!(
+            reg.ids("minecraft:damage_type"),
+            ["minecraft:fall", "minecraft:magic"]
+        );
     }
 }

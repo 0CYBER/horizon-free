@@ -1,0 +1,579 @@
+use crate::Result;
+use horizon_world::{
+    DATA_VERSION,
+    heightmap::HeightmapState,
+    registry::{BlockRegistry, BlockStateId},
+    worldgen::{tags::TagDefinitions, terrain::TerrainBlockStates},
+};
+use serde_json::Value;
+use std::{
+    collections::BTreeSet,
+    io,
+    path::Path,
+    sync::{Arc, Mutex},
+};
+
+pub const MATERIALS: [&str; 6] = ["bedrock", "dirt", "stone", "sand", "oak_planks", "bricks"];
+#[derive(Clone, Copy)]
+pub struct StateFacts {
+    air: bool,
+    fluid: bool,
+    air_block: bool,
+    motion: bool,
+    no_leaves: bool,
+}
+impl HeightmapState for StateFacts {
+    fn is_air(self) -> bool {
+        self.air
+    }
+    fn is_air_block(self) -> bool {
+        self.air_block
+    }
+    fn has_fluid(self) -> bool {
+        self.fluid
+    }
+    fn blocks_motion_in_heightmap(self) -> bool {
+        self.motion
+    }
+    fn blocks_motion_in_heightmap_no_leaves(self) -> bool {
+        self.no_leaves
+    }
+}
+#[derive(Clone)]
+pub struct Properties(Arc<Vec<StateFacts>>);
+#[cfg(any(test, feature = "test-support"))]
+impl Properties {
+    /// Heightmap facts for tests, per state: (air, has a fluid, blocks
+    /// motion, blocks motion but is not leaves). State 0 is minecraft:air.
+    pub fn for_tests(states: &[(bool, bool, bool, bool)]) -> Self {
+        Self(Arc::new(
+            states
+                .iter()
+                .enumerate()
+                .map(|(i, &(air, fluid, motion, no_leaves))| StateFacts {
+                    air,
+                    fluid,
+                    air_block: i == 0,
+                    motion,
+                    no_leaves,
+                })
+                .collect(),
+        ))
+    }
+}
+impl TerrainBlockStates for Properties {
+    type State = StateFacts;
+    fn heightmap_state(&self, id: BlockStateId) -> StateFacts {
+        self.0[id.0 as usize]
+    }
+}
+/// The block registry and the facts read from `facts.json` and the block tags:
+/// everything world generation and collisions need, with none of the block
+/// models or baked sprites.
+pub struct Assets {
+    /// Leaked once per process: shared by world generation threads.
+    pub registry: &'static BlockRegistry,
+    pub properties: Properties,
+    pub material_states: [BlockStateId; 6],
+    /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
+    pub blocks_fluid_flow: BTreeSet<String>,
+}
+/// The block models and their baked sprites, read from the pack at `root` over
+/// an existing block registry: everything the mesher and renderer need.
+pub struct RenderAssets {
+    pub sprite_size: u32,
+    pub sprite_minimum_size: u32,
+    /// The block sprites' RGBA, layer by layer: as built until a renderer has
+    /// them, then kept compressed ([`SpritePixels`]).
+    pub pixels: SpritePixels,
+    pub texture_layers: u32,
+    pub model_catalog: crate::models::StateModels,
+    /// Shared parsed resources; item-only validation errors surface at item preparation.
+    pub model_library: std::result::Result<Arc<horizon_assets::resolve::ModelLibrary>, String>,
+    pub model_placements: Vec<(horizon_core::position::BlockPos, BlockStateId)>,
+    pub model_gallery: Vec<Value>,
+    pub animations: Vec<crate::sprites::SpriteAnimation>,
+    pub sprite_layers: std::collections::BTreeMap<String, u32>,
+    /// OptiFine's emissive block overlays: base sprite and overlay sprite names.
+    pub emissive: Vec<(String, String)>,
+    pub translucent_layers: Vec<bool>,
+    /// Each layer's `MipmapGenerator` settings.
+    pub sprite_mips: Vec<crate::mipmap::Settings>,
+    /// The resource packs' LabPBR maps (normals, specular), layer by layer at `pbr_size`:
+    /// empty when they ship none.
+    pub pbr_normals: Vec<u8>,
+    pub pbr_specular: Vec<u8>,
+    pub pbr_size: u32,
+    /// OptiFine connected textures (empty without `optifine/ctm` files).
+    pub connected: crate::connected::ConnectedTextures,
+    /// Fusion connected textures (empty without Fusion's connecting textures and models).
+    pub fusion: crate::fusion::FusionTextures,
+    /// Counts up each time resources load, from 1: a native mod asks again where blocks'
+    /// sprites are when it changes (`native_block_sprites_version`).
+    pub generation: u64,
+}
+/// The block sprites' pixels for a renderer to upload. Once a renderer has
+/// them ([`Self::pack`]) they are kept lz4-compressed: the GPU holds the
+/// texture array, and the copy only serves a renderer made again (another
+/// window, a lost device, another graphics API), which waits for
+/// [`Self::get`] to uncompress them. Shared by the window and the workers'
+/// `RenderAssets`, so the compressed form replaces the raw one in place.
+pub struct SpritePixels(Arc<PixelStore>);
+struct PixelStore {
+    len: usize,
+    /// Set by the first `pack`: later calls cost one atomic read.
+    packing: std::sync::atomic::AtomicBool,
+    /// As built; dropped once `packed` holds them.
+    raw: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    packed: std::sync::OnceLock<Vec<u8>>,
+}
+impl SpritePixels {
+    pub fn new(pixels: Vec<u8>) -> Self {
+        Self(Arc::new(PixelStore {
+            len: pixels.len(),
+            packing: std::sync::atomic::AtomicBool::new(false),
+            raw: std::sync::Mutex::new(Some(Arc::new(pixels))),
+            packed: std::sync::OnceLock::new(),
+        }))
+    }
+    /// Their size in bytes, uncompressed.
+    pub fn len(&self) -> usize {
+        self.0.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.len == 0
+    }
+    /// The pixels as built, uncompressed again once packed.
+    pub fn get(&self) -> Arc<Vec<u8>> {
+        let raw = self.0.raw.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        raw.unwrap_or_else(|| {
+            let packed = self.0.packed.get().map(Vec::as_slice).unwrap_or_default();
+            Arc::new(
+                lz4_flex::decompress_size_prepended(packed)
+                    .ok()
+                    .filter(|p| p.len() == self.0.len)
+                    .unwrap_or_else(|| vec![0; self.0.len]),
+            )
+        })
+    }
+    /// Keep them compressed from now on, once a renderer has uploaded them:
+    /// compressed on a thread of their own, the raw copy dropped after.
+    pub fn pack(&self) {
+        use std::sync::atomic::Ordering;
+        if self.0.len == 0 || self.0.packing.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let store = self.0.clone();
+        let job = move || {
+            let raw = store.raw.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Some(raw) = raw {
+                let _ = store.packed.set(lz4_flex::compress_prepend_size(&raw));
+                // `get` reads the compressed copy from here on.
+                *store.raw.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+        };
+        let fallback = job.clone();
+        if std::thread::Builder::new()
+            .name("Sprite packing".into())
+            .spawn(job)
+            .is_err()
+        {
+            fallback();
+        }
+    }
+}
+/// The last `RenderAssets::generation` handed out.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn invalid(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+/// Every block registry [`Assets::load`] has handed out, one per distinct
+/// content. Callers keep `&'static` references, so a registry is never freed;
+/// loading equal data again (tests load the same root once per fixture)
+/// returns the one already leaked instead of leaking another (about 11 MB for
+/// vanilla).
+static REGISTRIES: Mutex<Vec<&'static BlockRegistry>> = Mutex::new(Vec::new());
+
+/// `registry` leaked, or the equal one leaked before it.
+fn intern_registry(registry: BlockRegistry) -> &'static BlockRegistry {
+    let mut leaked = REGISTRIES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&same) = leaked.iter().find(|&&known| *known == registry) {
+        return same;
+    }
+    let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
+    leaked.push(registry);
+    registry
+}
+impl Assets {
+    pub fn load(root: &Path) -> Result<Self> {
+        let manifest: Value = horizon_world::json_file::read(&root.join("horizon-resources.json"))?;
+        if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
+            return Err(invalid("resources do not match Horizon's pinned data version").into());
+        }
+        let (registry, flags) = horizon_world::level::data::load_registry_with_flags(root)?;
+        let bundle: Value = horizon_world::json_file::read(&root.join("block-tags.json"))?;
+        let mut definitions = TagDefinitions::default();
+        for (name, text) in bundle
+            .as_object()
+            .ok_or_else(|| invalid("invalid block tag bundle"))?
+        {
+            definitions.apply_json(
+                name,
+                "vanilla",
+                text.as_str()
+                    .ok_or_else(|| invalid("invalid block tag text"))?,
+            )?;
+        }
+        let built =
+            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+        if !built.missing.is_empty() {
+            return Err(invalid("unresolved block tags").into());
+        }
+        let motion: BTreeSet<_> = built
+            .tags
+            .get("minecraft:blocks_motion_in_heightmap")
+            .ok_or_else(|| invalid("missing motion tag"))?
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let no_leaves: BTreeSet<_> = built
+            .tags
+            .get("minecraft:blocks_motion_in_heightmap_no_leaves")
+            .ok_or_else(|| invalid("missing no-leaves motion tag"))?
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let blocks_fluid_flow = built
+            .tags
+            .get("minecraft:blocks_fluid_flow")
+            .ok_or_else(|| invalid("missing fluid flow tag"))?
+            .iter()
+            .cloned()
+            .collect();
+        let properties = Properties(Arc::new(
+            flags
+                .iter()
+                .enumerate()
+                .map(|(i, &(air, fluid))| {
+                    let name = &registry
+                        .state(BlockStateId(i as u32))
+                        .ok_or_else(|| invalid("missing registry state"))?
+                        .name;
+                    Ok(StateFacts {
+                        air,
+                        fluid,
+                        air_block: name == "minecraft:air",
+                        motion: motion.contains(name.as_str()),
+                        no_leaves: no_leaves.contains(name.as_str()),
+                    })
+                })
+                .collect::<Result<_>>()?,
+        ));
+        let mut material_states = [BlockStateId(0); 6];
+        for (layer, name) in MATERIALS.iter().enumerate() {
+            material_states[layer] = registry
+                .default_state(&format!("minecraft:{name}"))
+                .ok_or_else(|| invalid("missing test-scene material"))?;
+        }
+        // Chunks hold every state of this registry: content mods can take it
+        // past vanilla's 16-bit global palette.
+        crate::chunk::set_block_states(registry.len());
+        let registry = intern_registry(registry);
+        Ok(Self {
+            registry,
+            properties,
+            material_states,
+            blocks_fluid_flow,
+        })
+    }
+    /// The models and sprites of another resource root over these blocks
+    /// (resource packs changed): the registry and block facts come from the
+    /// game data, which resource packs do not touch.
+    pub fn reload(&self, root: &Path) -> Result<RenderAssets> {
+        RenderAssets::load(root, self)
+    }
+    /// [`Assets::reload`] with the model library already parsed.
+    ///
+    /// Parsing it reads every model file under `assets/`, which needs no
+    /// block registry, so a caller that has the files to spare can start
+    /// it before `Assets::load` finishes and hand the result in here. On
+    /// a cold cache that is most of a second of reading moved off the
+    /// critical path.
+    pub fn reload_with_models(
+        &self,
+        root: &Path,
+        parsed: crate::model_library::ParsedModels,
+    ) -> Result<RenderAssets> {
+        RenderAssets::load_with_parsed(root, self, true, Some(parsed))
+    }
+    /// [`Assets::reload`] for a server, which draws nothing: the sprites'
+    /// layers, without the block or item models or the textures' pixels.
+    pub fn reload_for_server(&self, root: &Path) -> Result<RenderAssets> {
+        RenderAssets::load_with(root, self, false)
+    }
+}
+impl RenderAssets {
+    pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        Self::load_with(root, assets, true)
+    }
+    fn load_with(root: &Path, assets: &Assets, draws: bool) -> Result<Self> {
+        Self::load_with_parsed(root, assets, draws, None)
+    }
+    /// `parsed`: the model library when a caller parsed it ahead of this
+    /// (see [`Assets::reload_with_models`]); otherwise it is parsed here.
+    fn load_with_parsed(
+        root: &Path,
+        assets: &Assets,
+        draws: bool,
+        parsed: Option<crate::model_library::ParsedModels>,
+    ) -> Result<Self> {
+        let registry = assets.registry;
+        let mut sprites = crate::sprites::Sprites::with_disk_cache(root);
+        for name in MATERIALS {
+            sprites.insert(root, &format!("minecraft:block/{name}"))?;
+        }
+        // A server draws no block and no item: its block models (about 24 MB
+        // baked) and item model library (7 MB) stay empty.
+        let parsed = match parsed {
+            Some(parsed) => parsed,
+            None if draws => {
+                let _step = crate::spans::startup::step("core.models_parse");
+                crate::model_library::ParsedModels::load(root)
+            }
+            None => crate::model_library::ParsedModels::default(),
+        };
+        // Connected-texture rules find their faces by sprite layer: what they match by name keeps a
+        // layer of its own, decided before the models insert their textures.
+        let ctm_rules = if draws {
+            horizon_optifine::ctm::load(root)
+        } else {
+            Vec::new()
+        };
+        sprites.keep_apart(crate::connected::ConnectedTextures::matched_sprites(
+            &ctm_rules,
+        ));
+        let mut models = if draws {
+            let _step = crate::spans::startup::step("core.models_bake");
+            crate::models::prepare_with_models(root, registry, &mut sprites, &parsed)?
+        } else {
+            crate::models::PreparedModels::default()
+        };
+        let model_library = {
+            let _step = crate::spans::startup::step("core.item_library");
+            parsed.into_item_library()
+        };
+        // Fluids are drawn by the fluid renderer, not block models; breaking
+        // progress uses the destroy-stage overlays.
+        for name in [
+            "water_still",
+            "water_flow",
+            "water_overlay",
+            "lava_still",
+            "lava_flow",
+        ] {
+            sprites.insert(root, &format!("minecraft:block/{name}"))?;
+        }
+        for stage in 0..10 {
+            sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
+            sprites.insert(root, &format!("minecraft:block/destroy_oit_stage_{stage}"))?;
+        }
+        let fusion = if draws {
+            let _step = crate::spans::startup::step("core.fusion");
+            crate::fusion::FusionTextures::load(root, registry, &mut sprites, &mut models.catalog)
+        } else {
+            Default::default()
+        };
+        let mut emissive = Vec::new();
+        let connected = if draws {
+            crate::native_emissive::load(root, &mut sprites);
+            // A side's sprite, for rules that connect by tile: the first quad facing it.
+            let catalog = &models.catalog;
+            let mut found = Vec::new();
+            crate::connected::ConnectedTextures::load(
+                root,
+                ctm_rules,
+                registry,
+                &mut sprites,
+                |state, face| {
+                    let side = horizon_assets::model::Direction::ALL[face as usize];
+                    catalog
+                        .models_at(
+                            state,
+                            horizon_core::position::BlockPos::new(0, 0, 0),
+                            &mut found,
+                        )
+                        .ok()?;
+                    found
+                        .iter()
+                        .flat_map(|m| &m.faces)
+                        .find(|f| f.quad.facing == side)
+                        .map(|f| f.layer)
+                },
+            )
+        } else {
+            Default::default()
+        };
+        // After the connected tiles: a tile identical to a block shares its layer, and the
+        // overlays skip shared layers.
+        if draws && let Some(suffix) = crate::pack_hooks::formats().emissive_suffix(root) {
+            emissive = crate::native_emissive::load_overlays(root, &suffix, &mut sprites);
+        }
+        sprites.save_disk_cache();
+        if draws {
+            sprites.finish();
+        } else {
+            sprites.finish_without_pixels();
+        }
+        // `finish` grows the buffer by doubling: keep only the bytes in use.
+        sprites.pixels.shrink_to_fit();
+        Ok(Self {
+            sprite_size: sprites.size,
+            sprite_minimum_size: sprites.minimum_size,
+            texture_layers: u32::try_from(sprites.count())?,
+            pixels: SpritePixels::new(sprites.pixels),
+            model_catalog: models.catalog,
+            model_library,
+            model_placements: models.placements,
+            model_gallery: models.states,
+            animations: sprites.animations,
+            sprite_layers: sprites.layers,
+            emissive,
+            translucent_layers: sprites.translucent,
+            sprite_mips: sprites.mips,
+            pbr_normals: sprites.normals,
+            pbr_specular: sprites.specular,
+            pbr_size: sprites.pbr_size,
+            connected,
+            fusion,
+            generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::items::ConsumeEffect;
+    use horizon_world::loot::PackOverlay;
+
+    #[test]
+    fn always_edible_and_consume_effects_loaded() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let items =
+            crate::items::Items::load(&root, assets.registry, &facts, &PackOverlay::NONE).unwrap();
+
+        let apple = items.get("minecraft:golden_apple").expect("golden apple");
+        assert!(apple.can_always_eat);
+        assert!(apple.food.is_some());
+        assert!(!apple.consumable.as_ref().unwrap().effects.is_empty());
+
+        let enchanted = items
+            .get("minecraft:enchanted_golden_apple")
+            .expect("enchanted golden apple");
+        assert!(enchanted.can_always_eat);
+        assert!(enchanted.food.is_some());
+        assert!(!enchanted.consumable.as_ref().unwrap().effects.is_empty());
+
+        let beef = items.get("minecraft:cooked_beef").expect("cooked beef");
+        assert!(!beef.can_always_eat);
+        assert!(beef.food.is_some());
+
+        // Consumables without food, their style and their remainders.
+        use horizon_world::consumable::UseAnimation;
+        let milk = items.get("minecraft:milk_bucket").expect("milk bucket");
+        let drink = milk.consumable.as_ref().unwrap();
+        assert!(milk.food.is_none());
+        assert_eq!(drink.effects, [ConsumeEffect::ClearAllEffects]);
+        assert_eq!((drink.ticks(), drink.animation), (32, UseAnimation::Drink));
+        assert_eq!(drink.sound, "minecraft:entity.generic.drink");
+        assert!(!drink.particles);
+        assert_eq!(milk.use_remainder.as_deref(), Some("minecraft:bucket"));
+        let honey = items.get("minecraft:honey_bottle").expect("honey bottle");
+        let sip = honey.consumable.as_ref().unwrap();
+        assert_eq!(sip.ticks(), 40);
+        assert_eq!(sip.sound, "minecraft:item.honey_bottle.drink");
+        assert_eq!(
+            sip.effects,
+            [ConsumeEffect::RemoveEffects(vec![
+                "minecraft:poison".into()
+            ])]
+        );
+        assert_eq!(
+            honey.use_remainder.as_deref(),
+            Some("minecraft:glass_bottle")
+        );
+        let kelp = items.get("minecraft:dried_kelp").unwrap();
+        let bite = kelp.consumable.as_ref().unwrap();
+        assert_eq!((bite.ticks(), bite.animation), (16, UseAnimation::Eat));
+        assert_eq!(bite.sound, "minecraft:entity.generic.eat");
+        assert!(bite.particles && kelp.use_remainder.is_none());
+        let chorus = items.get("minecraft:chorus_fruit").unwrap();
+        assert_eq!(
+            chorus.consumable.as_ref().unwrap().effects,
+            [ConsumeEffect::TeleportRandomly(
+                horizon_world::teleport_consume::TeleportConsume {
+                    diameter: 16.0,
+                    directional_particles: true,
+                }
+            )]
+        );
+        let chicken = items.get("minecraft:chicken").unwrap();
+        assert!(matches!(
+            chicken.consumable.as_ref().unwrap().effects[..],
+            [ConsumeEffect::ApplyEffects { probability, .. }] if probability == 0.3
+        ));
+    }
+
+    #[test]
+    fn equal_registries_are_leaked_once() {
+        use horizon_world::registry::BlockRegistry;
+        let registry = |extra: &str| {
+            let facts = format!(
+                r#"{{"defaults":{{"minecraft:air":0,"fixture:{extra}":1}},"states":[
+                    ["air",true,false,"","minecraft:air"],
+                    ["{extra}",false,false,"","fixture:{extra}"]
+                ]}}"#
+            );
+            BlockRegistry::from_facts_json(facts.as_bytes()).unwrap()
+        };
+        let first = super::intern_registry(registry("interned_once"));
+        let again = super::intern_registry(registry("interned_once"));
+        let other = super::intern_registry(registry("interned_other"));
+        assert!(std::ptr::eq(first, again), "equal content leaked twice");
+        assert!(!std::ptr::eq(first, other), "different content shared");
+        assert_eq!(
+            other.default_state("fixture:interned_other"),
+            Some(horizon_world::registry::BlockStateId(1))
+        );
+    }
+
+    #[test]
+    fn sprite_pixels_come_back_the_same_once_packed() {
+        // Two layers of 16x16 RGBA with some structure, as sprites have.
+        let pixels: Vec<u8> = (0..2 * 16 * 16 * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let stored = super::SpritePixels::new(pixels.clone());
+        assert_eq!(*stored.get(), pixels);
+        stored.pack();
+        stored.pack();
+        // The packing thread drops the raw copy once the compressed one is set.
+        let started = std::time::Instant::now();
+        while stored.0.raw.lock().unwrap().is_some() {
+            assert!(started.elapsed().as_secs() < 10, "packing never finished");
+            std::thread::yield_now();
+        }
+        assert!(
+            stored
+                .0
+                .packed
+                .get()
+                .is_some_and(|p| p.len() < pixels.len())
+        );
+        assert_eq!(*stored.get(), pixels);
+        assert_eq!(stored.len(), pixels.len());
+    }
+}

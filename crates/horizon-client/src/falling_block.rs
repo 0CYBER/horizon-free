@@ -1,5 +1,6 @@
 //! FallingBlockEntity's impact damage, anvil wear, saved impact settings and
-//! the cobwebs that hold it back.
+//! the blocks it moves through (cobwebs, bubble columns).
+use crate::motion::BubbleColumn;
 use crate::{
     mobs::{Damage as MobDamage, DamageKind, Mob},
     save::{float, number, put},
@@ -49,8 +50,9 @@ impl Damage {
     }
     pub fn from_nbt(tag: &Tag, anvil: bool) -> Self {
         Self {
-            hurt_entities: number(tag.get("HurtEntities")).map_or(anvil, |v| v != 0),
-            cancel_drop: number(tag.get("CancelDrop")).is_some_and(|v| v != 0),
+            // getBooleanOr: a number is true when its byte value is not 0.
+            hurt_entities: crate::entity_nbt::flag_or(tag, "HurtEntities", anvil),
+            cancel_drop: crate::entity_nbt::flag(tag, "CancelDrop"),
             per_distance: float(tag.get("FallHurtAmount")).unwrap_or(0.0) as f32,
             max: number(tag.get("FallHurtMax")).unwrap_or(40) as i32,
         }
@@ -118,30 +120,148 @@ pub fn bounds(position: Vec3) -> Aabb {
 pub fn web_multiplier() -> Vec3 {
     Vec3::new(0.25, f64::from(0.05_f32), 0.25)
 }
+/// `PowderSnowBlock.entityInside`'s `makeStuckInBlock` multiplier for an
+/// entity that is not living: the next move goes at 0.9F across, 1.5 down.
+pub fn powder_snow_multiplier() -> Vec3 {
+    Vec3::new(f64::from(0.9_f32), 1.5, f64::from(0.9_f32))
+}
+/// What a block a falling block moves through does to it in `entityInside`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inside {
+    /// `WebBlock`: `Entity.makeStuckInBlock`.
+    Cobweb,
+    /// `PowderSnowBlock`, for an entity that is not living:
+    /// `Entity.makeStuckInBlock`.
+    PowderSnow,
+    /// `BubbleColumnBlock`: lifts or drags it.
+    BubbleColumn(BubbleColumn),
+    Nothing,
+}
 /// `Entity.applyEffectsFromBlocks` after a falling block's move this tick
 /// (`from` to `to`; `original` the move it asked for, when the move was
-/// recorded): whether `checkInsideBlocks` reaches a cobweb (`is_web`), whose
-/// `entityInside` makes it stuck. Each movement sweeps its axes in
-/// `Direction.axisStepOrder` within 16 iterations, then the end alone.
-pub fn passes_cobweb(
+/// recorded; `velocity` already zeroed on the axes `Entity.move` collided on):
+/// the blocks it went through (`block` says what each is) push it and reset
+/// its fall. Returns the multiplier of the last block that made it stuck
+/// (`Entity.makeStuckInBlock`), and adds to `surfaces` the column blocks it is
+/// at the top of (`Entity.sendBubbleColumnParticles`).
+pub fn apply_effects_from_blocks(
     from: Vec3,
     to: Vec3,
     original: Option<Vec3>,
-    mut is_web: impl FnMut(BlockPos) -> bool,
-) -> bool {
-    let mut stuck = false;
+    velocity: &mut Vec3,
+    fall_distance: &mut f64,
+    surfaces: &mut Vec<BlockPos>,
+    block: impl FnMut(BlockPos) -> Inside,
+) -> Option<Vec3> {
+    let effects = Effects {
+        bounds,
+        from,
+        to,
+        original,
+    };
+    apply_effects_from_blocks_of(effects, velocity, fall_distance, surfaces, block)
+}
+/// A move [`apply_effects_from_blocks_of`] reads the blocks of: an entity of
+/// `bounds` (its box at a position) from `from` to `to`, `original` as there.
+pub struct Effects<B> {
+    pub bounds: B,
+    pub from: Vec3,
+    pub to: Vec3,
+    pub original: Option<Vec3>,
+}
+/// [`apply_effects_from_blocks`] for an entity of any size.
+pub fn apply_effects_from_blocks_of(
+    move_: Effects<impl Fn(Vec3) -> Aabb + Copy>,
+    velocity: &mut Vec3,
+    fall_distance: &mut f64,
+    surfaces: &mut Vec<BlockPos>,
+    mut block: impl FnMut(BlockPos) -> Inside,
+) -> Option<Vec3> {
+    let Effects {
+        bounds,
+        from,
+        to,
+        original,
+    } = move_;
+    let mut stuck = None;
+    inside_blocks(
+        bounds,
+        from,
+        to,
+        original,
+        |p, intersects, step_from, step_to| match block(p) {
+            Inside::Cobweb => {
+                // makeStuckInBlock forgets the fall.
+                *fall_distance = 0.0;
+                stuck = Some(web_multiplier());
+                true
+            }
+            Inside::PowderSnow => {
+                // getEntityInsideCollisionShape: after a fall over 2.5 it is the
+                // 0.9-high top, which only counts once the step reaches it.
+                let corner = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+                let top = Aabb::new(
+                    corner,
+                    corner.add_vector(Vec3::new(1.0, f64::from(0.9_f32), 1.0)),
+                );
+                let entered = *fall_distance <= 2.5
+                    || bounds(step_from).collided_along_vector(step_to.subtract(step_from), &[top]);
+                if entered {
+                    *fall_distance = 0.0;
+                    stuck = Some(powder_snow_multiplier());
+                }
+                entered
+            }
+            // BubbleColumnBlock.entityInside acts only when intersecting.
+            Inside::BubbleColumn(column) if intersects => {
+                if column.push(velocity) {
+                    *fall_distance = 0.0;
+                }
+                if column.surface {
+                    surfaces.push(p);
+                }
+                true
+            }
+            Inside::BubbleColumn(_) | Inside::Nothing => true,
+        },
+    );
+    stuck
+}
+/// Each block `checkInsideBlocks` reaches, in order, with whether its
+/// `entityInside` counts the block as intersected (every block of a movement a
+/// block or longer, else only those the box ends in) and the step reaching it.
+/// Each movement sweeps its axes in `Direction.axisStepOrder` within 16
+/// iterations, then the end alone. `visit` says whether the box was inside the
+/// block's `getEntityInsideCollisionShape`; only a block it was inside is not
+/// visited again.
+fn inside_blocks(
+    bounds: impl Fn(Vec3) -> Aabb,
+    from: Vec3,
+    to: Vec3,
+    original: Option<Vec3>,
+    mut visit: impl FnMut(BlockPos, bool, Vec3, Vec3) -> bool,
+) {
+    let mut seen = std::collections::HashSet::new();
     // checkInsideBlocks(from, to, ..): the iterations used plus one.
     let mut check = |from: Vec3, to: Vec3, max: i32| {
         let d = f64::from(1.0e-5_f32);
         let target = bounds(to).deflate(Vec3::new(d, d, d));
+        // The move spans a block or more: Mth.square(1.0 - 1.0E-5F).
+        let long = from.distance_squared(to) > (1.0 - d) * (1.0 - d);
         let mut iterations = 0;
         let _ = sweep_intersected_blocks(from, to, target, 1_000_000, |p, iteration| {
             if iteration >= max {
                 return false;
             }
             iterations = iteration;
-            // getEntityInsideCollisionShape is the whole block for cobwebs.
-            stuck |= is_web(p);
+            if !seen.contains(&p) {
+                let corner = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+                let inside =
+                    target.intersects_corners(corner, corner.add_vector(Vec3::new(1.0, 1.0, 1.0)));
+                if visit(p, long || inside, from, to) {
+                    seen.insert(p);
+                }
+            }
             true
         });
         iterations + 1
@@ -170,7 +290,6 @@ pub fn passes_cobweb(
     if budget <= 0 {
         check(to, to, 1);
     }
-    stuck
 }
 pub fn hurt_mobs(mobs: &mut [Mob], position: Vec3, amount: f32) {
     hurt_mobs_with_kind(mobs, position, amount, DamageKind::FallingBlock);
@@ -185,6 +304,7 @@ pub fn hurt_mobs_with_kind(mobs: &mut [Mob], position: Vec3, amount: f32, kind: 
         kind,
         attacker: None,
         from: Some([position.x, position.y, position.z]),
+        attacker_species: None,
     };
     for mob in mobs
         .iter_mut()
@@ -197,6 +317,27 @@ pub fn hurt_mobs_with_kind(mobs: &mut [Mob], position: Vec3, amount: f32, kind: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `FallingBlockEntity.readAdditionalSaveData` reads `HurtEntities` and
+    /// `CancelDrop` with `getBooleanOr`: an int 256 has byte value 0 and is
+    /// false, 257 is true.
+    #[test]
+    fn saved_flags_are_read_as_bytes() {
+        let load = |hurt: i32, cancel: i32| {
+            let tag = Tag::compound([
+                ("HurtEntities", Tag::Int(hurt)),
+                ("CancelDrop", Tag::Int(cancel)),
+            ]);
+            let d = Damage::from_nbt(&tag, true);
+            (d.hurt_entities, d.cancel_drop)
+        };
+        assert_eq!(load(1, 1), (true, true));
+        assert_eq!(load(256, 256), (false, false));
+        assert_eq!(load(257, 257), (true, true));
+        // Absent: an anvil hurts, nothing cancels its drop.
+        let absent = Damage::from_nbt(&Tag::compound([("Time", Tag::Int(1))]), true);
+        assert_eq!((absent.hurt_entities, absent.cancel_drop), (true, false));
+    }
+
     #[test]
     fn only_brushable_blocks_break_where_they_land() {
         assert!(Damage::falling("minecraft:suspicious_gravel").cancel_drop);
@@ -249,6 +390,31 @@ mod tests {
             assert!(!wear_anvil(&mut state));
         }
     }
+    fn passes_cobweb(
+        from: Vec3,
+        to: Vec3,
+        original: Option<Vec3>,
+        is_web: impl Fn(BlockPos) -> bool,
+    ) -> bool {
+        let (mut velocity, mut fall) = (Vec3::ZERO, 3.0);
+        let stuck = apply_effects_from_blocks(
+            from,
+            to,
+            original,
+            &mut velocity,
+            &mut fall,
+            &mut Vec::new(),
+            |p| {
+                if is_web(p) {
+                    Inside::Cobweb
+                } else {
+                    Inside::Nothing
+                }
+            },
+        );
+        assert_eq!(fall == 0.0, stuck.is_some());
+        stuck.is_some()
+    }
     #[test]
     fn a_cobweb_on_the_path_or_at_the_end_holds_a_falling_block() {
         let web = BlockPos::new(0, 5, 0);
@@ -283,6 +449,63 @@ mod tests {
         ));
         let beside = Vec3::new(1.5, 5.5, 0.5);
         assert!(!passes_cobweb(beside, beside, None, is_web));
+    }
+    #[test]
+    fn bubble_columns_lift_or_drag_a_falling_block() {
+        // Soul sand under x 0 lifts, magma under x 3 drags, both up to y 9.
+        let block = |p: BlockPos| match (p.x, p.y, p.z) {
+            (0 | 3, 0..=9, 0) => Inside::BubbleColumn(BubbleColumn {
+                drag: p.x == 3,
+                surface: p.y == 9,
+            }),
+            _ => Inside::Nothing,
+        };
+        let tops = std::cell::RefCell::new(Vec::new());
+        let step = |x: f64, from: f64, to: f64, vy: f64| {
+            tops.borrow_mut().clear();
+            let (from, to) = (Vec3::new(x, from, 0.5), Vec3::new(x, to, 0.5));
+            let mut velocity = Vec3::new(0.0, vy, 0.0);
+            let mut fall = 2.0;
+            let original = Some(to.subtract(from));
+            let stuck = apply_effects_from_blocks(
+                from,
+                to,
+                original,
+                &mut velocity,
+                &mut fall,
+                &mut tops.borrow_mut(),
+                block,
+            );
+            assert!(stuck.is_none());
+            (velocity.y, fall)
+        };
+        let near = |a: f64, b: f64| (a - b).abs() < 1.0e-9;
+        // Released in the column: its box ends in blocks 5 and 6, each lifts
+        // it by 0.06 (handleOnInsideBubbleColumn), and its fall is forgotten.
+        let (vy, fall) = step(0.5, 5.5, 5.46, -0.04);
+        assert!(near(vy, 0.08), "{vy}");
+        assert_eq!(fall, 0.0);
+        // The lift is capped at 0.7.
+        assert!(near(step(0.5, 5.0, 5.3, 0.68).0, 0.7));
+        // Falling a block or more into the surface block: every column
+        // block on the way counts, the surface throws it up by 0.1
+        // (handleOnAboveBubbleColumn), which keeps its fall.
+        let (vy, fall) = step(0.5, 11.0, 9.5, -1.5);
+        assert!(near(vy, -1.5 + 0.1), "{vy}");
+        assert_eq!(fall, 2.0);
+        // Only the surface block sends the splash and bubble particles.
+        assert_eq!(*tops.borrow(), [BlockPos::new(0, 9, 0)]);
+        step(0.5, 5.5, 5.46, -0.04);
+        assert!(tops.borrow().is_empty());
+        // Magma drags down by 0.03, at most to -0.3 inside and -0.9 at the surface.
+        assert!(near(step(3.5, 5.5, 5.4, -0.1).0, -0.16));
+        assert!(near(step(3.5, 5.5, 5.4, -0.29).0, -0.3));
+        assert!(near(step(3.5, 9.8, 9.6, -0.89).0, -0.9));
+        // A short move that leaves the column behind: the block it went
+        // through no longer intersects its box, so nothing pushes it.
+        assert_eq!(step(0.5, 9.95, 10.5, 0.55), (0.55, 2.0));
+        // Beside the column.
+        assert_eq!(step(1.5, 5.5, 5.46, -0.04), (-0.04, 2.0));
     }
     #[test]
     #[ignore = "requires prepared entity models/data in HORIZON_TEST_RESOURCES"]

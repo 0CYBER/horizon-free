@@ -58,6 +58,14 @@ impl<P: PositionalRandom, S: MaterialSurfaceQueries> MaterialSurfaceQueries
     ) -> Result<usize, DecodeError> {
         self.surface.bind_density(sampler, eager)
     }
+    fn bind_density_rows(
+        &mut self,
+        sampler: Arc<dyn horizon_core::density::DensitySampler>,
+        eager: bool,
+        rows: [i32; 2],
+    ) -> Result<usize, DecodeError> {
+        self.surface.bind_density_rows(sampler, eager, rows)
+    }
     fn density(&mut self, index: usize, position: BlockPos) -> Result<f32, MaterialRuleError> {
         self.surface.density(index, position)
     }
@@ -69,6 +77,12 @@ impl<P: PositionalRandom, S: MaterialSurfaceQueries> MaterialSurfaceQueries
     }
     fn biome(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         self.surface.biome(position)
+    }
+    fn biome_id(&mut self, position: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+        self.surface.biome_id(position)
+    }
+    fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+        self.surface.biome_index(name)
     }
     fn melts_frozen_ocean(
         &mut self,
