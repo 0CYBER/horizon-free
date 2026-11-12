@@ -8188,19 +8188,16 @@ impl Game<'_> {
                     .ok_or("missing lit block state")?;
                 state.properties.insert("lit".into(), "true".into());
                 self.level_set(hit.pos, registry.resolve(&state)?)?;
-                self.audio.play(
-                    if item == "fire_charge" {
-                        "minecraft:item.firecharge.use"
-                    } else {
-                        "minecraft:item.flintandsteel.use"
-                    },
-                    Some(at(hit.pos)),
-                    1.0,
-                    horizon_client::items::fire_starter_pitch(
-                        item == "fire_charge",
-                        &mut self.world.random,
-                    ),
+                let sound = if item == "fire_charge" {
+                    "minecraft:item.firecharge.use"
+                } else {
+                    "minecraft:item.flintandsteel.use"
+                };
+                let pitch = horizon_client::items::fire_starter_pitch(
+                    item == "fire_charge",
+                    &mut self.world.random,
                 );
+                self.play_block_use_sound(sound, at(hit.pos), pitch);
                 // FlintAndSteelItem / FireChargeItem.useOn: BLOCK_CHANGE at the lit block,
                 // and ItemStack.useOn's used statistic.
                 self.post_block_game_event(
@@ -8231,7 +8228,7 @@ impl Game<'_> {
                     item == "fire_charge",
                     &mut self.world.random,
                 );
-                self.audio.play(sound, Some(at(target)), 1.0, pitch);
+                self.play_block_use_sound(sound, at(target), pitch);
                 // BLOCK_PLACE: flint and steel names the clicked block, a fire charge the
                 // fire. Then ItemStack.useOn's used statistic.
                 let placed_at = if item == "fire_charge" {

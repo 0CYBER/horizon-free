@@ -64,6 +64,8 @@ It also reads a struct member outside a constant expression through a pointer to
 not out of a loaded copy of the whole struct, so a member an atomic function uses can be read.
 The HLSL backend writes an ordinary level-zero texture sample as `SampleLevel(..., 0.0)`, while
 comparison textures keep `SampleCmpLevelZero`; HLSL has no ordinary `SampleLevelZero` method.
+The shared interpolation defaults also compile with `glsl-in` alone, without needing the
+SPIR-V or WGSL frontend to enable them.
 
 ## DirectX Shader Compiler
 

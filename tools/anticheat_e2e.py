@@ -14,6 +14,8 @@ Checks:
 - timer: `[anticheat]` on, with the timer's thresholds once trusted (it logs only by default): a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
          reported to the console and kicked; the legit bots (walking and exploring at 20 Hz) are never
          flagged.
+- log-off: `[anticheat] log = ""`, survival: no flag log is written, and a bot attacking without swinging is
+         still kicked, with a warning on the console.
 - ground: the default thresholds, survival, allow-flight off: a bot walking 24 blocks up that claims the
          ground in every move (no-fall) and one walking on water that does (jesus) are flagged, their claim
          dropped (never sent back), and kicked by the anticheat, warned of the ban the next kick brings, never
@@ -117,6 +119,32 @@ def bots(bins, port, out, name, count, behaviour, seconds, *extra):
                     '--name', name, '--report', report, *extra],
                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=seconds + 180)
     return json.loads(report.read_text())
+
+
+def check_log_off(bins, scratch, out, seconds):
+    """`log = ""` writes no flag log (docs/anticheat.md), and the checks still act and the console still hears
+    of a kick: a bot attacking without swinging, as in `combat`, is kicked."""
+    folder = scratch / 'log-off'
+    server, port = start(bins, folder, '[anticheat]\nlog = ""\n', out, 'log-off', gamemode='survival',
+                         difficulty='peaceful')
+    try:
+        server.console('gamerule respawn_radius 0')
+        with ThreadPoolExecutor(2) as pool:
+            target = pool.submit(bots, bins, port, out, 'LTarget', 1, 'stand', seconds + 10)
+            server.wait_for('LTarget0 joined the game', 120)
+            cheater = bots(bins, port, out, 'LNoSwing', 1, 'stand', seconds, '--attack', 'LTarget0',
+                           '--no-swing')['per_bot'][0]
+            target.result()
+    finally:
+        server.stop()
+    if (folder / 'logs/anticheat.log').exists():
+        raise Failed(f'log-off: a flag log was written:\n{(folder / "logs/anticheat.log").read_text()}')
+    if 'disconnected' not in (cheater['error'] or ''):
+        raise Failed(f'log-off: the no-swing bot was not kicked ({cheater["error"]})')
+    told = [l for l in server.since(0) if f'[Anticheat] {cheater["name"]} failed combat' in l and 'kicked' in l]
+    if not told:
+        raise Failed('log-off: the console was not told of the kick')
+    print(f'log-off: no flag log written; the no-swing bot was still kicked and the console told ({told[0].strip()})')
 
 
 def run_pair(bins, folder, out, name, anticheat, seconds):
@@ -899,10 +927,11 @@ def check_prediction_items(bins, scratch, out, seconds):
 
 CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction,
           'prediction-water': check_prediction_water, 'prediction-items': check_prediction_items,
+          'log-off': check_log_off,
           'prediction-vanilla': check_prediction_vanilla,
           'combat': check_combat, 'combat-restart': check_combat_restart}
 # Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
-DEFAULT = ['combat', 'combat-restart', 'ground', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
+DEFAULT = ['combat', 'combat-restart', 'ground', 'log-off', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
 
 
 def main():
