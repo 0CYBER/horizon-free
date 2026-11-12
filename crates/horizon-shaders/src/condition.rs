@@ -9,11 +9,7 @@ use crate::macros::{is_ident, is_ident_start};
 
 /// The value of a condition; `Err` says what is wrong with it.
 pub fn eval_condition(expr: &str, macros: &Macros) -> Result<i64, String> {
-    let tokens = tokens(&resolve_defined(expr, macros)?, macros)?;
-    let real = tokens
-        .iter()
-        .any(|t| matches!(t, Token::Num(n) if n.fract() != 0.0))
-        || expr.contains('.');
+    let (tokens, real) = tokens(&resolve_defined(expr, macros)?, macros)?;
     let mut parser = Parser {
         tokens: &tokens,
         at: 0,
@@ -198,21 +194,30 @@ const OPS: [&str; 22] = [
     "<", ">", "&", "^", "|",
 ];
 
-fn tokens(expr: &str, macros: &Macros) -> Result<Vec<Token>, String> {
+fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
     let expanded = macros.expand(expr);
     let mut out = Vec::new();
+    let mut real = false;
     let mut rest = expanded.trim_start();
     while let Some(c) = rest.chars().next() {
         let fraction = c == '.' && rest[1..].starts_with(|c: char| c.is_ascii_digit());
         if c.is_ascii_digit() || fraction {
+            let hex = rest.starts_with("0x") || rest.starts_with("0X");
             let len = rest
-                .find(|c: char| !c.is_ascii_alphanumeric())
-                .unwrap_or(rest.len());
-            if fraction || rest[len..].starts_with('.') {
-                let len = rest
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
-                    .unwrap_or(rest.len());
-                let text = rest[..len].trim_end_matches(['f', 'F']);
+                .char_indices()
+                .find(|&(i, c)| {
+                    !(c.is_ascii_alphanumeric()
+                        || c == '.'
+                        || !hex
+                            && matches!(c, '+' | '-')
+                            && i > 0
+                            && matches!(rest.as_bytes()[i - 1], b'e' | b'E'))
+                })
+                .map_or(rest.len(), |(i, _)| i);
+            let text = &rest[..len];
+            if !hex && (text.contains('.') || text.contains(['e', 'E'])) {
+                real = true;
+                let text = text.trim_end_matches(['f', 'F']);
                 let n = text
                     .parse::<f64>()
                     .map_err(|_| format!("`{text}` is not a number"))?;
@@ -237,7 +242,7 @@ fn tokens(expr: &str, macros: &Macros) -> Result<Vec<Token>, String> {
         }
         rest = rest.trim_start();
     }
-    Ok(out)
+    Ok((out, real))
 }
 
 /// Decimal, `0x` hexadecimal or leading-zero octal, with an optional `u` suffix.
@@ -401,6 +406,32 @@ mod tests {
         assert_eq!(eval("1.5f"), Ok(1));
         assert_eq!(eval("7 / 2"), Ok(3));
         assert_eq!(eval("SHADOW_RES == 2048.0"), Ok(1));
+    }
+
+    #[test]
+    fn scientific_literals_and_macro_values_count() {
+        for expr in [
+            "1e-3 > 0",
+            "1.0e-3 == 0.001",
+            "1.0e+3 == 1000",
+            ".25E2 == 25",
+            "1E3 / 4e2 == 2.5",
+            "1e0 / 2 > 0",
+            "1e-3+1e-3 == 2e-3",
+            "1e+3-1 == 999",
+            "0x1E-1 == 29",
+            "0xEE+010 == 246",
+        ] {
+            assert_eq!(eval(expr), Ok(1), "{expr}");
+        }
+        let mut macros = Macros::standard();
+        macros.define("TINY", "1e-3");
+        macros.define("WHOLE_REAL", "1e0");
+        assert_eq!(eval_condition("TINY > 0", &macros), Ok(1));
+        assert_eq!(eval_condition("WHOLE_REAL / 2 > 0", &macros), Ok(1));
+        for expr in ["1e", "1e+", "1e--3"] {
+            assert!(eval(expr).is_err(), "{expr}");
+        }
     }
 
     #[test]
