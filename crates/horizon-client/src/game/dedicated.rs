@@ -528,6 +528,28 @@ fn parse_whitelist_bypass(text: &str) -> std::result::Result<Vec<String>, String
     Ok(out)
 }
 impl Lists {
+    /// The console's `/ban` of one player (`BanPlayerCommands.banPlayers`): whether they are banned now.
+    /// One banned already (`isBanned`) is left as they are, their first reason kept.
+    fn ban(&mut self, user: &NameAndId, reason: Option<String>) -> bool {
+        !self.bans.contains(user)
+            && self.bans.add(BanEntry::new(
+                user.clone(),
+                Some("Server".into()),
+                None,
+                reason,
+            ))
+    }
+
+    /// The console's `/ban-ip` (`BanIpCommands.banIp`): whether the address is banned now. One banned
+    /// already (`isBanned`) is left as it is.
+    fn ban_ip(&mut self, ip: &str, reason: Option<String>) -> bool {
+        let ip = ip.to_owned();
+        !self.ip_bans.contains(&ip)
+            && self
+                .ip_bans
+                .add(BanEntry::new(ip, Some("Server".into()), None, reason))
+    }
+
     fn load() -> Self {
         let mut l = Self {
             ops: OpList::new("ops.json"),
@@ -1939,12 +1961,7 @@ impl Game<'_> {
                     return;
                 };
                 let reason = (rest.len() > 1).then(|| rest[1..].join(" "));
-                let added = state.lists.lock().unwrap().bans.add(BanEntry::new(
-                    user.clone(),
-                    Some("Server".into()),
-                    None,
-                    reason.clone(),
-                ));
+                let added = state.lists.lock().unwrap().ban(&user, reason.clone());
                 if added {
                     self.console_reply(Text::translate(
                         "commands.ban.success",
@@ -1984,12 +2001,7 @@ impl Game<'_> {
                     return;
                 };
                 let reason = (rest.len() > 1).then(|| rest[1..].join(" "));
-                let added = state.lists.lock().unwrap().ip_bans.add(BanEntry::new(
-                    ip.clone(),
-                    Some("Server".into()),
-                    None,
-                    reason.clone(),
-                ));
+                let added = state.lists.lock().unwrap().ban_ip(&ip, reason.clone());
                 if !added {
                     self.console_reply(Text::translate("commands.banip.failed", &[]));
                     return;
@@ -2783,6 +2795,46 @@ mod tests {
             assert_log_lines(&fs::read_to_string(home.join("logs/latest.log")).unwrap());
             fs::remove_dir_all(home).unwrap();
         }
+    }
+
+    /// `BanPlayerCommands.banPlayers` skips a player who `isBanned`, and `BanIpCommands.banIp` refuses an
+    /// address that is: the console's `/ban` and `/ban-ip` of one banned already change nothing (the first
+    /// reason stays, and the console hears "Nothing changed"), whatever reason they give.
+    #[test]
+    fn the_console_does_not_ban_again_who_is_banned_already() {
+        use super::{BanList, Lists, NameAndId};
+        let dir = std::env::temp_dir().join(format!("horizon-console-ban-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut lists = Lists {
+            ops: super::OpList::new(dir.join("ops.json")),
+            white: super::WhiteList::new(dir.join("whitelist.json")),
+            bans: BanList::new(dir.join("banned-players.json")),
+            ip_bans: super::IpBanList::new(dir.join("banned-ips.json")),
+            use_whitelist: false,
+            enforce_whitelist: false,
+            op_level: 4,
+            player_idle_timeout: 0,
+            stop: false,
+            autosave: true,
+            whitelist_bypass: Vec::new(),
+        };
+        let alpha = NameAndId {
+            id: 0x5ca1ab1e,
+            name: "Alpha".into(),
+        };
+        assert!(lists.ban(&alpha, Some("cheating".into())));
+        assert!(!lists.ban(&alpha, Some("again".into())));
+        assert!(!lists.ban(&alpha, None));
+        let reason = lists.bans.get(&alpha).and_then(|b| b.reason.clone());
+        assert_eq!(reason.as_deref(), Some("cheating"));
+        assert!(lists.ban_ip("1.2.3.4", Some("spam".into())));
+        assert!(!lists.ban_ip("1.2.3.4", Some("more spam".into())));
+        let reason = lists
+            .ip_bans
+            .get(&"1.2.3.4".to_owned())
+            .and_then(|b| b.reason.clone());
+        assert_eq!(reason.as_deref(), Some("spam"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A temporary ban (`/tempban`, the chat filter's) keeps the player out and says when it ends;
