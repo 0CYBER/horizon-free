@@ -62,6 +62,8 @@ The GLSL frontend also resets the common type for each comma-separated declarato
 variable's array specifier does not change later variables.
 It also reads a struct member outside a constant expression through a pointer to the member,
 not out of a loaded copy of the whole struct, so a member an atomic function uses can be read.
+The HLSL backend's texture-sampling offset cast preserves the offset's scalar or vector width,
+including `int` for 1D and `int3` for 3D textures instead of always using `int2`.
 
 ## DirectX Shader Compiler
 
