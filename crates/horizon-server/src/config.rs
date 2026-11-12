@@ -512,7 +512,7 @@ impl Config {
         Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let w = &self.world;
         if !GAME_MODES.contains(&w.game_mode.as_str()) {
             return Err(format!(
