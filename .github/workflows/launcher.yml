@@ -280,6 +280,7 @@ jobs:
             echo "- The partner/sponsor plate (Sculk) is off by default; it no longer appears in the sidebar or on the Servers page."
             echo "- Settings > Game has the game folder again (saves, options.txt and packs), with Open, Change and Use the default, and the Minecraft folder beside it: Play's folder menu picks the same one."
             echo "- Skins work for the game's own offline name too (issue #14): pick one with the pencil on its chip in Settings > Account, or with Skin: on the top bar's name list. Offline names keep their own skins and capes, and a new name keeps the look."
+            echo "- The Wardrobe and Shop tabs stay out while no Microsoft account is signed in: cosmetics belong to an account on Horizon's service, and this build has no Microsoft sign-in, so the tabs only led to a sign-in button that did nothing."
             echo
             echo "The fork starts the game from your own assets, that you download before-hand in any compatible java launcher."
           } > "$RUNNER_TEMP/notes.md"
