@@ -170,7 +170,7 @@ impl Game<'_> {
             return;
         }
         if info.bundle {
-            self.tick_bundle(slot, ticks);
+            self.tick_bundle(slot, ticks, &stack, &info);
             return;
         }
         if self.mod_use(&stack) {
@@ -197,14 +197,23 @@ impl Game<'_> {
     }
     /// `BundleItem.onUseTick` and `getUseDuration` (200): the first tick and
     /// then every second tick from the 11th on drop one stack out of the
-    /// bundle in `slot`; the use ends after 200 ticks.
-    pub(super) fn tick_bundle(&mut self, slot: usize, ticks: u32) {
+    /// bundle in `slot`; after 200 ticks `completeUsingItem` ends the use.
+    pub(super) fn tick_bundle(
+        &mut self,
+        slot: usize,
+        ticks: u32,
+        stack: &ItemStack,
+        info: &horizon_client::items::ItemInfo,
+    ) {
         const USE_DURATION: u32 = 200;
         let remaining = USE_DURATION - ticks.min(USE_DURATION);
         if ticks == 0 || (remaining < USE_DURATION - 10 && remaining.is_multiple_of(2)) {
             self.drop_bundle_content(slot);
         }
-        self.using = (ticks + 1 < USE_DURATION).then_some((slot, ticks + 1));
+        match item_use::count_down(ticks, USE_DURATION as i32) {
+            Some(ticks) => self.using = Some((slot, ticks)),
+            None => self.complete_using_item(slot, stack, info),
+        }
     }
 
     /// `LivingEntity.releaseUsingItem` (`Item.releaseUsing`) for `stack`,
