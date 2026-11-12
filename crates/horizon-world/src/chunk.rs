@@ -26,6 +26,22 @@ fn bits_for_palette(len: usize, min: u8) -> u8 {
     }
 }
 
+/// `BlockEntity.getPosFromTag(chunk, tag)`: a saved block entity's `x`, `y`,
+/// `z`, moved into `chunk` when the tag names another chunk. Vanilla warns
+/// about such a save and keeps only the low four bits of each coordinate, so
+/// the entity stays in the chunk that held it instead of landing in one that
+/// never did.
+pub fn block_entity_pos(pos: (i32, i32, i32), chunk: [i32; 2]) -> (i32, i32, i32) {
+    let (x, y, z) = pos;
+    if (x >> 4, z >> 4) == (chunk[0], chunk[1]) {
+        return pos;
+    }
+    log::warn!(
+        "Block entity at {x} {y} {z} found in a wrong chunk, expected position from chunk {chunk:?}"
+    );
+    (chunk[0] * 16 + (x & 15), y, chunk[1] * 16 + (z & 15))
+}
+
 #[derive(Clone, Debug)]
 pub struct PalettedContainer {
     palette: Vec<Tag>,
@@ -254,7 +270,7 @@ pub struct ChunkData {
     position: ChunkPos,
 }
 impl ChunkData {
-    pub fn new(root: NamedTag) -> io::Result<Self> {
+    pub fn new(mut root: NamedTag) -> io::Result<Self> {
         // `SerializableChunkData.parse` reads the position with
         // `getIntOr("xPos", 0)` and `getIntOr("zPos", 0)`, so a chunk that does
         // not carry them is the chunk at 0, 0; `Tag.asInt` also takes the
@@ -271,8 +287,18 @@ impl ChunkData {
                 "expected DataVersion {DATA_VERSION}, got {version}; data fixing is not implemented"
             )));
         }
-        let Some(Tag::List(sections)) = root.tag.get("sections") else {
-            return Err(invalid("chunk is missing sections"));
+        // `SerializableChunkData.parse` reads `getListOrEmpty("sections")`, so a
+        // chunk without one is a chunk with no sections. Keep an empty list in
+        // the tag: that is what the writer would put there, and every reader
+        // below finds it.
+        if !matches!(root.tag.get("sections"), Some(Tag::List(_))) {
+            let Tag::Compound(map) = &mut root.tag else {
+                unreachable!()
+            };
+            map.insert(key("sections"), Tag::List(Vec::new()));
+        }
+        let Tag::List(sections) = root.tag.get("sections").unwrap() else {
+            unreachable!()
         };
         let mut seen = std::collections::BTreeSet::new();
         for section in sections {
@@ -1348,6 +1374,25 @@ mod tests {
             get_times[0][0],
             get_times[1][0],
             get_times[0][0] / get_times[1][0]
+        );
+    }
+
+    /// `BlockEntity.getPosFromTag`: a saved position in another chunk keeps its
+    /// offset inside the chunk but moves into the chunk that saved it; a
+    /// position already there is kept as it is.
+    #[test]
+    fn a_block_entity_saved_in_another_chunk_moves_into_this_one() {
+        assert_eq!(super::block_entity_pos((37, 70, -3), [0, 0]), (5, 70, 13));
+        assert_eq!(super::block_entity_pos((-1, -60, 19), [0, 0]), (15, -60, 3));
+        assert_eq!(
+            super::block_entity_pos((5, 70, 13), [0, 0]),
+            (5, 70, 13),
+            "already in the chunk"
+        );
+        // Another chunk: its own corner is chunk * 16.
+        assert_eq!(
+            super::block_entity_pos((37, 70, -3), [-2, 5]),
+            (-27, 70, 93)
         );
     }
 }

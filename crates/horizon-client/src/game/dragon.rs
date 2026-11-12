@@ -191,22 +191,12 @@ pub(super) struct Crystal {
     pub beam: Option<[i32; 3]>,
     /// `setPermanentlyInvulnerable` (respawned spike crystals).
     pub invulnerable: bool,
+    /// `onGround` and `fallDistance`: a crystal never moves itself, so they stay
+    /// as loaded until `/tp` grounds it or a cobweb or powder snow resets the
+    /// fall (`crystal.rs`).
+    pub fall: (bool, f64),
 }
 impl Crystal {
-    /// The start of `time` (the spin and bob) for a crystal at `position`: the random draw
-    /// vanilla makes, or under `HORIZON_STILL` one seeded from the position alone. Which crystal
-    /// gets which draw, and a server's entity ids, follow the order chunks load in, which differs
-    /// between launches; the position is the same in every copy of the world. The draw is made
-    /// either way, so the random stays where it would be.
-    pub(super) fn start_time(position: Vec3, drawn: i32, still: bool) -> i32 {
-        if still {
-            horizon_client::mobs::entity_random(0, position)
-                .next_int_bound(100_000)
-                .unwrap_or(0)
-        } else {
-            drawn
-        }
-    }
     /// `EntityType.END_CRYSTAL`: 2 x 2.
     pub(super) fn bounds(&self) -> Aabb {
         let p = self.position;
@@ -381,7 +371,7 @@ pub(super) struct Dragon {
     pub id: u32,
     pub position: Vec3,
     pub previous: Vec3,
-    velocity: Vec3,
+    pub(super) velocity: Vec3,
     pub yaw: f32,
     pub previous_yaw: f32,
     yaw_accel: f32,
@@ -869,14 +859,14 @@ impl Dragon {
     /// `ServerExplosion.hurtEntities` knockback on the dragon itself:
     /// `pushFromExplosion` adds `(1 - dist) * exposure` along the blast to
     /// its eye to the motion (`Entity.push`); the parts are not pushed.
-    fn whole_box(&self) -> Aabb {
+    pub(super) fn whole_box(&self) -> Aabb {
         let p = self.position;
         Aabb::new(
             Vec3::new(p.x - 8.0, p.y, p.z - 8.0),
             Vec3::new(p.x + 8.0, p.y + 8.0, p.z + 8.0),
         )
     }
-    fn explosion_knockback(
+    pub(super) fn explosion_knockback(
         &self,
         center: [f64; 3],
         radius: f32,
@@ -1291,14 +1281,8 @@ impl Game<'_> {
             let time = Crystal::start_time(at, drawn, self.clock.still());
             // EndCrystal's constructor takes an id from the entity counter.
             self.next_entity += 1;
-            self.crystals.push(Crystal {
-                id: self.next_entity,
-                position: at,
-                show_bottom: true,
-                time,
-                beam: None,
-                invulnerable: false,
-            });
+            self.crystals
+                .push(Crystal::new(self.next_entity, at, true, time));
             self.world
                 .modified
                 .insert((at.x.floor() as i32 >> 4, at.z.floor() as i32 >> 4));
@@ -1328,6 +1312,7 @@ impl Game<'_> {
             .flatten();
         for i in 0..self.crystals.len() {
             self.crystals[i].time += 1;
+            self.crystal_block_effects(i);
             let p = self.crystals[i].position;
             let b = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
             if let Some(fire) = fire
@@ -3666,7 +3651,7 @@ impl Crystal {
             self.position,
             Vec3::ZERO,
             [0.0, 0.0],
-            (false, 0.0),
+            self.fall,
             uuid,
             raw,
         );
@@ -3694,6 +3679,7 @@ impl Crystal {
                 _ => None,
             },
             invulnerable: horizon_client::entity_nbt::flag(tag, "Invulnerable"),
+            fall: horizon_client::entity_nbt::ground_from_nbt(tag),
         })
     }
 }
@@ -3916,14 +3902,8 @@ impl Game<'_> {
         // EndCrystal's constructor takes an id from the entity counter, so
         // the crystal is an entity a command can name (`@e[type=end_crystal]`).
         self.next_entity += 1;
-        self.crystals.push(Crystal {
-            id: self.next_entity,
-            position: at,
-            show_bottom: false,
-            time,
-            beam: None,
-            invulnerable: false,
-        });
+        self.crystals
+            .push(Crystal::new(self.next_entity, at, false, time));
         // EndCrystalItem.useOn: ENTITY_PLACE at the block above, by the player.
         self.post_block_game_event("minecraft:entity_place", above, self.sculk_actor(), None);
         self.world.modified.insert((above[0] >> 4, above[2] >> 4));
@@ -4219,12 +4199,9 @@ impl Game<'_> {
         let drawn = self.world.random.next_int_bound(100_000).unwrap_or(0);
         let time = Crystal::start_time(at, drawn, self.clock.still());
         self.crystals.push(Crystal {
-            id: 0,
-            position: at,
-            show_bottom: true,
-            time,
             beam: Some([0, 128, 0]),
             invulnerable: true,
+            ..Crystal::new(0, at, true, time)
         });
         let _ = self.set_state_named([cx, h, cz], "minecraft:bedrock", &[]);
         let _ = self.set_state_named([cx, h + 1, cz], "minecraft:fire", &[]);
@@ -4769,6 +4746,7 @@ impl Game<'_> {
     }
 }
 
+mod crystal;
 mod death_render;
 use death_render::{dissolve_color, dissolve_mask, dragon_rays};
 
@@ -5733,6 +5711,7 @@ mod dragon_fireball_spawn_tests {
                     .insert((x, z), Arc::new(Chunk::empty(x, z)));
             }
         }
+        game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("forceload add 0 0"));
         game
     }
@@ -5831,7 +5810,6 @@ mod dragon_fireball_spawn_tests {
         );
     }
 }
-
 #[cfg(test)]
 #[path = "thorns_tests.rs"]
 mod thorns_tests;
