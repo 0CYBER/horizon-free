@@ -4194,7 +4194,8 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     None => "",
                 };
                 let level_str = match level {
-                    Sl::Zero if gather.is_none() => "LevelZero",
+                    Sl::Zero if gather.is_none() && depth_ref.is_some() => "LevelZero",
+                    Sl::Zero if gather.is_none() => "Level",
                     Sl::Auto | Sl::Zero => "",
                     Sl::Exact(_) => "Level",
                     Sl::Bias(_) => "Bias",
@@ -4220,6 +4221,9 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 }
 
                 match level {
+                    Sl::Zero if gather.is_none() && depth_ref.is_none() => {
+                        write!(self.out, ", 0.0")?
+                    }
                     Sl::Auto | Sl::Zero => {}
                     Sl::Exact(expr) => {
                         write!(self.out, ", ")?;
