@@ -916,15 +916,7 @@ pub fn mob_to_nbt(
                 Tag::Int(m.extra.more_carrot_ticks),
             );
         }
-        "minecraft:goat" => {
-            map.insert(
-                "IsScreamingGoat".into(),
-                Tag::Byte(i8::from(m.extra.screaming)),
-            );
-            let [left, right] = m.extra.lost_horns;
-            map.insert("HasLeftHorn".into(), Tag::Byte(i8::from(!left)));
-            map.insert("HasRightHorn".into(), Tag::Byte(i8::from(!right)));
-        }
+        "minecraft:goat" => crate::mobs::goat::write_nbt(m, map),
         "minecraft:creeper" => {
             map.insert("Fuse".into(), Tag::Short(m.max_swell as i16));
             map.insert(
@@ -2353,11 +2345,7 @@ pub fn mob_from_nbt_with_random(
                 _ => 0,
             };
         }
-        crate::mobs::Species::Goat => {
-            m.extra.screaming = flag(tag, "IsScreamingGoat");
-            let horn = |key| number(tag.get(key)).is_some_and(|v| v == 0);
-            m.extra.lost_horns = [horn("HasLeftHorn"), horn("HasRightHorn")];
-        }
+        crate::mobs::Species::Goat => crate::mobs::goat::read_nbt(&mut m, tag),
         _ => {}
     }
     // `Rabbit.readAdditionalSaveData`.
@@ -2652,7 +2640,7 @@ pub fn mob_from_nbt_with_random(
         m.extra.counter = number(tag.get("still_timeout")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Shulker {
-        m.extra.variant3 = (number(tag.get("AttachFace")).unwrap_or(0) % 6).unsigned_abs() as u8;
+        m.extra.variant3 = (number(tag.get("AttachFace")).unwrap_or(0) as i8 % 6).unsigned_abs();
         m.extra.counter = number(tag.get("Peek")).map_or(0, |v| v as i8 as i32);
         m.extra.color = number(tag.get("Color")).map_or(16, |v| v as i8 as u8);
         m.anim.v[0] = m.extra.counter as f32 * 0.01;
@@ -4173,6 +4161,30 @@ mod tests {
                 .get("can_break")
                 .is_none()
         );
+    }
+
+    /// `Shulker` reads `AttachFace` as a byte before
+    /// `Direction.from3DDataValue` (`abs(data % 6)`): an int is narrowed
+    /// first, so 258 is byte 2, not 258 % 6 = 0, and 250 is byte -6, face 0.
+    #[test]
+    fn a_shulkers_attach_face_is_narrowed_to_a_byte_first() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:shulker".into();
+        ty.species = crate::mobs::Species::Shulker;
+        let types = [("minecraft:shulker".into(), kind)].into();
+        let face = |saved: Tag| {
+            let raw = Tag::compound([
+                ("id", string("minecraft:shulker")),
+                ("Pos", doubles(&[4.5, 220.0, 4.5])),
+                ("AttachFace", saved),
+            ]);
+            mob_from_nbt(&raw, &types, 1, None).unwrap().extra.variant3
+        };
+        assert_eq!(face(Tag::Byte(3)), 3);
+        assert_eq!(face(Tag::Byte(-2)), 2);
+        assert_eq!(face(Tag::Int(258)), 2);
+        assert_eq!(face(Tag::Int(250)), 0);
     }
     use super::*;
     use crate::items::ItemStack;
