@@ -955,18 +955,17 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     if id == "minecraft:jukebox" {
         let record = tag.get("RecordItem").and_then(item_from_nbt);
         let clock = number(tag.get("ticks_since_song_started"));
-        let ticks = clock.unwrap_or(0);
-        // JukeboxBlockEntity.loadAdditional adopts a saved clock separately
-        // from a record-only load. Catalog-dependent load validation is separate.
-        let song_clock_present = record.is_some() && clock.is_some();
-        let playing = record.is_some();
+        // `JukeboxBlockEntity.loadAdditional` -> `setSongWithoutPlaying`: only a
+        // saved clock brings a song back, and it comes back without playing.
+        let clocked = record.is_some() && clock.is_some();
         return Some((
             pos,
             BlockEntity::Jukebox(crate::containers::Jukebox {
                 items: [record],
-                ticks,
-                song_clock_present,
-                playing,
+                ticks: clock.unwrap_or(0),
+                song_clock_present: clocked,
+                playing: clocked,
+                loaded_clock: clocked,
             }),
         ));
     }
@@ -9249,8 +9248,9 @@ mod jukebox_song_clock_tests {
             };
             assert_eq!(j.record().is_some(), with_record);
             assert_eq!(j.ticks, clock.unwrap_or(0));
-            // H032 must preserve the separate legacy record-only adoption policy.
-            assert_eq!(j.playing, with_record);
+            // `setSongWithoutPlaying`: a saved clock, unstarted; else no song.
+            assert_eq!(j.playing, clock.is_some());
+            assert_eq!(j.loaded_clock, clock.is_some());
             let saved = encode_block_entity(pos, &model, "minecraft:jukebox");
             let command = block_entity_data(pos, &model, "minecraft:jukebox", None);
             check(label, &saved, clock);
