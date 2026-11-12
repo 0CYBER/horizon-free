@@ -317,6 +317,12 @@ pub fn settings_from_json(
 impl ChunkGenerator for FlatTerrain {
     type Worker = ();
     fn worker(&self) {}
+    /// FlatLevelSource's proto is already its decorated column. Keep a copy
+    /// for lighting a finished neighbour outside the kept area, just as the
+    /// vanilla pipeline does for FEATURES neighbours.
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        proto.downcast_ref::<Chunk>().cloned()
+    }
     fn lod_surface(&self, _: &mut (), _: i32, _: i32) -> Option<crate::lod::Surface> {
         self.surface
     }
@@ -609,5 +615,22 @@ mod tests {
             )])))
             .is_none()
         );
+    }
+
+    #[test]
+    fn light_view_keeps_a_flat_proto_column() {
+        let terrain = FlatTerrain {
+            shape: LevelShape::OVERWORLD,
+            layers: Vec::new(),
+            biome: 0,
+            surface: None,
+            void_platform: None,
+        };
+        let mut chunk = Chunk::empty(3, -4);
+        chunk.set(0, 0, 0, 42);
+        let proto: crate::streaming::Proto = Box::new(chunk);
+        let view = terrain.light_view(&proto).expect("flat proto light view");
+        assert_eq!((view.x, view.z), (3, -4));
+        assert_eq!(view.block(0, 0, 0).0, 42);
     }
 }

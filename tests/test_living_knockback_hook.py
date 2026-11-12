@@ -25,6 +25,7 @@ class LivingKnockbackHookTests(unittest.TestCase):
 use std::cell::{Cell, RefCell};
 mod items { #[derive(Clone, Debug, PartialEq)] pub struct ItemStack(pub &'static str); }
 use items::ItemStack;
+mod native_client_hooks { pub fn deferring() -> bool { false } }
 #[derive(Clone, Copy)]
 enum Who { Player, Mob(u32) }
 struct Damage { attacker: Option<Who> }

@@ -5,6 +5,7 @@
 //! minecarts and boats, whose loops can call the hooks, ask for each one in turn.
 use super::Game;
 use horizon_client::mobs::MobType;
+use horizon_client::mod_api;
 use std::sync::Arc;
 
 /// The type of an entity in a round, as the hooks name it.
@@ -31,6 +32,9 @@ pub(super) struct TickRound {
     ticking: Vec<(u32, TickKind)>,
     /// The entities a Pre canceled.
     canceled: Vec<u32>,
+    /// A mob round's: whether every native mod stays out of the mobs' turns
+    /// (`native_mob_phase_quiet`), so they may tick in groups. True without mods.
+    mobs_quiet: bool,
 }
 
 impl TickRound {
@@ -41,6 +45,10 @@ impl TickRound {
     /// Whether the mods hear this round.
     pub(super) fn listening(&self) -> bool {
         self.listening
+    }
+    /// Whether no native mod hooks a mob's turn: false for any round but a mob round.
+    pub(super) fn mobs_quiet(&self) -> bool {
+        self.mobs_quiet
     }
     /// The entity `id`, told its Pre, went before it ticked (an item merged into an earlier
     /// one): it hears no Post.
@@ -70,7 +78,19 @@ impl Game<'_> {
                 Vec::new()
             },
             canceled: Vec::new(),
+            mobs_quiet: false,
         }
+    }
+
+    /// The mobs' round: [`Self::native_tick_round`], and whether every mod stays out of their
+    /// turns. Mods are asked only while the parallel tick is on.
+    pub(super) fn native_mob_round(&mut self) -> TickRound {
+        let mut round = self.native_tick_round();
+        round.mobs_quiet = mod_api::mods().is_empty();
+        if !round.mobs_quiet && horizon_client::parallel::parallel_tick() != 0 {
+            self.native_mob_phase_quiet(&mut round.mobs_quiet);
+        }
+        round
     }
 
     /// `native_entity_tick_pre` for the entity `id` of `kind` about to tick in a family that
