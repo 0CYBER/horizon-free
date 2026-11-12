@@ -1779,7 +1779,8 @@ impl PlayConn {
 }
 impl io_pool::Session for PlayConn {
     /// Forward the player's packet, or say why it ends the connection: a
-    /// required resource pack declined, a rate-limit excess, a malformed packet.
+    /// required resource pack declined, a rate-limit excess, a cookie response
+    /// nobody asked for, a malformed packet.
     fn packet(&mut self, id: i32, payload: Vec<u8>) -> io_pool::Verdict {
         use io_pool::Verdict;
         let kick = |(reason, text): (horizon_world::nbt::Tag, String)| {
@@ -1817,6 +1818,12 @@ impl io_pool::Session for PlayConn {
             {
                 kick(pack_rejected(&self.shared, &self.name, r.id))
             }
+            // ServerCommonPacketListenerImpl.handleCookieResponse: the server asks for no cookie, so
+            // a response is always unexpected, for the singleplayer owner too.
+            Ok(play::Serverbound::CookieResponse(_)) => kick((
+                translatable("multiplayer.disconnect.unexpected_query_response", &[]),
+                "Unexpected custom data from client".to_owned(),
+            )),
             Ok(p) => {
                 // Bounded here, where packets are made, not only where the hub drains them.
                 if !self.undrained.handed(payload.len()) {
@@ -2594,5 +2601,62 @@ mod tests {
         let mut c = conn(1, Some(7));
         assert!(matches!(answer(&mut c, 8), Verdict::Go));
         assert_eq!(c.watch.alive.load(Ordering::Relaxed), -1);
+    }
+
+    /// `ServerCommonPacketListenerImpl.handleCookieResponse`: the server asks for no cookie, so a
+    /// response is always unexpected and disconnects with `DISCONNECT_UNEXPECTED_QUERY`, for the
+    /// singleplayer owner too (unlike a keep-alive).
+    #[test]
+    fn a_cookie_response_in_play_disconnects_the_player() {
+        use super::io_pool::Verdict;
+        use horizon_protocol::ids::play::serverbound::{CLIENT_TICK_END, COOKIE_RESPONSE};
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            singleplayer_profile: Some(("Owner".to_owned(), 1)),
+            ..crate::lan::NetConfig::loopback(0, "Cookie".into(), 8)
+        };
+        let lan = crate::lan::Lan::start_with(Arc::new(SyncData::empty()), config).unwrap();
+        let conn = |uuid: u128| PlayConn {
+            conn: 1,
+            shared: lan.shared.clone(),
+            uuid,
+            name: if uuid == 1 { "Owner" } else { "p" }.to_owned(),
+            required_pack: false,
+            rate: None,
+            watch: Arc::new(KeepAliveWatch {
+                start: Instant::now(),
+                alive: Arc::new(AtomicI64::new(-1)),
+            }),
+            latency: Arc::new(AtomicI32::new(0)),
+            sent_at: None,
+            next_keep_alive: Instant::now(),
+            counted: None,
+            undrained: Arc::default(),
+        };
+        // The body after the packet's one-byte VarInt id.
+        let response = play::Serverbound::CookieResponse(cfg::CookieResponse {
+            key: "minecraft:test".into(),
+            payload: None,
+        })
+        .encode();
+        let expected = play::Clientbound::Disconnect(cfg::Disconnect {
+            reason: translatable("multiplayer.disconnect.unexpected_query_response", &[]),
+        })
+        .encode();
+        for uuid in [2, 1] {
+            match conn(uuid).packet(COOKIE_RESPONSE, response[1..].to_vec()) {
+                Verdict::Kick(text, body) => {
+                    assert_eq!(text, "Unexpected custom data from client");
+                    assert_eq!(body, expected);
+                }
+                _ => panic!("the cookie response of player {uuid} did not disconnect them"),
+            }
+        }
+        // A packet the player may send still goes through.
+        assert!(matches!(
+            conn(2).packet(CLIENT_TICK_END, Vec::new()),
+            Verdict::Go
+        ));
     }
 }
