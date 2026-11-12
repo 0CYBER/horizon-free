@@ -7,10 +7,15 @@ and horizon-bots, legit bots beside cheating ones.
 
 Checks:
 - off:   `[anticheat] enabled = false` in server.toml: the anticheat says nothing, writes no log and kicks
-         no one, the cheating bot included (vanilla's checks only).
+         no one, the cheating bot included (vanilla's checks only). Then, on a survival server (allow-flight
+         on, so vanilla's floating kick stays out of it), the same for the checks that act by default: a bot
+         attacking without swinging, one attacking two players in the same tick and a no-fall one are never
+         flagged, kicked or banned, and their hits land.
 - timer: `[anticheat]` on, with the timer's thresholds once trusted (it logs only by default): a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
          reported to the console and kicked; the legit bots (walking and exploring at 20 Hz) are never
          flagged.
+- log-off: `[anticheat] log = ""`, survival: no flag log is written, and a bot attacking without swinging is
+         still kicked, with a warning on the console.
 - ground: the default thresholds, survival, allow-flight off: a bot walking 24 blocks up that claims the
          ground in every move (no-fall) and one walking on water that does (jesus) are flagged, their claim
          dropped (never sent back), and kicked by the anticheat, warned of the ban the next kick brings, never
@@ -25,6 +30,9 @@ Checks:
          twice a second and swinging each time, as vanilla's client does, is never flagged and its hits
          land; one that doesn't swing, and one that attacks two players in the same tick, are flagged,
          their attacks dropped, and kicked.
+- combat-restart: a player's kicks are kept across a restart (`anticheat-strikes.json`): a bot attacking
+         without swinging is kicked once (1 of 2 before a ban), the server stops and starts again on the same
+         folder, and the same bot, back and cheating again, is banned.
 - prediction-vanilla (only with --check): the same with the real vanilla 26.3 client (tools/vanilla_client.py, from the owner's
          own files; on macOS from the logged-in screen session, even a locked one), its keys pressed by
          VanillaMover (mods/horizon/src/test/java): it walks, sprint-jumps, strafes and sneaks, with Speed
@@ -89,7 +97,8 @@ class Failed(Exception):
 
 
 def start(bins, folder, anticheat, out, name, **extra):
-    folder.mkdir(parents=True)
+    # A folder already there is a server started again (combat-restart): its world and files stay.
+    folder.mkdir(parents=True, exist_ok=True)
     port = lab.free_port()
     props = dict(PROPERTIES, **extra, **{'server-port': str(port)})
     (folder / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
@@ -110,6 +119,32 @@ def bots(bins, port, out, name, count, behaviour, seconds, *extra):
                     '--name', name, '--report', report, *extra],
                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=seconds + 180)
     return json.loads(report.read_text())
+
+
+def check_log_off(bins, scratch, out, seconds):
+    """`log = ""` writes no flag log (docs/anticheat.md), and the checks still act and the console still hears
+    of a kick: a bot attacking without swinging, as in `combat`, is kicked."""
+    folder = scratch / 'log-off'
+    server, port = start(bins, folder, '[anticheat]\nlog = ""\n', out, 'log-off', gamemode='survival',
+                         difficulty='peaceful')
+    try:
+        server.console('gamerule respawn_radius 0')
+        with ThreadPoolExecutor(2) as pool:
+            target = pool.submit(bots, bins, port, out, 'LTarget', 1, 'stand', seconds + 10)
+            server.wait_for('LTarget0 joined the game', 120)
+            cheater = bots(bins, port, out, 'LNoSwing', 1, 'stand', seconds, '--attack', 'LTarget0',
+                           '--no-swing')['per_bot'][0]
+            target.result()
+    finally:
+        server.stop()
+    if (folder / 'logs/anticheat.log').exists():
+        raise Failed(f'log-off: a flag log was written:\n{(folder / "logs/anticheat.log").read_text()}')
+    if 'disconnected' not in (cheater['error'] or ''):
+        raise Failed(f'log-off: the no-swing bot was not kicked ({cheater["error"]})')
+    told = [l for l in server.since(0) if f'[Anticheat] {cheater["name"]} failed combat' in l and 'kicked' in l]
+    if not told:
+        raise Failed('log-off: the console was not told of the kick')
+    print(f'log-off: no flag log written; the no-swing bot was still kicked and the console told ({told[0].strip()})')
 
 
 def run_pair(bins, folder, out, name, anticheat, seconds):
@@ -137,6 +172,56 @@ def check_off(bins, scratch, out, seconds):
         if bot['error']:
             raise Failed(f'off: {bot["name"]} was dropped: {bot["error"]}')
     print(f'off: {legit["joined"] + cheat["joined"]} bots, the 1.5x one included, never flagged or kicked')
+    check_off_acting(bins, scratch, out, seconds)
+
+
+def check_off_acting(bins, scratch, out, seconds):
+    """`enabled = false` silences the checks that act by default too (`combat` and `ground`): the bots that
+    `check_combat` and `check_ground` show caught, on a survival server, are never flagged, dropped, kicked or
+    banned, and their hits land. allow-flight is on, so vanilla's floating kick (which ends a no-fall bot hovering
+    in the air whatever it claims) leaves the no-fall bot alone, and only the anticheat could kick it."""
+    folder = scratch / 'off-acting'
+    server, port = start(bins, folder, OFF, out, 'off-acting', gamemode='survival', difficulty='peaceful',
+                         **{'allow-flight': 'true'})
+    try:
+        server.console('gamerule respawn_radius 0')
+        server.console('gamerule natural_health_regeneration false')
+        with ThreadPoolExecutor(4) as pool:
+            targets = pool.submit(bots, bins, port, out, 'OffTarget', 2, 'stand', seconds + 10)
+            server.wait_for('OffTarget1 joined the game', 120)
+            runs = {
+                'NoSwing': pool.submit(bots, bins, port, out, 'OffNoSwing', 1, 'stand', seconds,
+                                       '--attack', 'OffTarget0', '--no-swing'),
+                'Aura': pool.submit(bots, bins, port, out, 'OffAura', 1, 'stand', seconds,
+                                    '--attack', 'OffTarget0,OffTarget1'),
+                'NoFall': pool.submit(bots, bins, port, out, 'OffNoFall', 1, 'walk', seconds, '--ground'),
+            }
+            runs = {k: v.result() for k, v in runs.items()}
+            runs['Target'] = targets.result()
+    finally:
+        server.stop()
+    if (folder / 'logs/anticheat.log').exists():
+        raise Failed(f'off: an anticheat log was written:\n{(folder / "logs/anticheat.log").read_text()}')
+    lines = server.since(0)
+    noise = [l for l in lines if 'Anticheat' in l or 'floating' in l]
+    if noise:
+        raise Failed('off: the anticheat spoke, or a bot was kicked for floating:\n' + '\n'.join(noise))
+    for run in runs.values():
+        for bot in run['per_bot']:
+            if bot['error']:
+                raise Failed(f'off: {bot["name"]} was dropped: {bot["error"]}')
+    bans = folder / 'banned-players.json'
+    if bans.exists() and json.loads(bans.read_text()):
+        raise Failed(f'off: a player was banned: {bans.read_text()}')
+    attacks = {name: runs[name]['per_bot'][0]['attacks'] for name in ('NoSwing', 'Aura')}
+    if min(attacks.values()) < 10:
+        raise Failed(f'off: the cheating bots attacked too little to show anything: {attacks}')
+    health = {bot['name']: bot['health'] for bot in runs['Target']['per_bot']}
+    # Nothing drops their attacks: the target both cheaters hit loses most of its health.
+    if not health['OffTarget0'] < 10:
+        raise Failed(f'off: the cheaters\' hits were dropped, the targets ended with {health} health')
+    print(f'off: survival: the no-swing, two-target and no-fall bots are never flagged, kicked '
+          f'or banned, and their hits land ({attacks} attacks; health left {health})')
 
 
 def check_timer(bins, scratch, out, seconds):
@@ -791,6 +876,47 @@ def check_combat(bins, scratch, out, seconds):
           f'flagged; health left: {health}')
 
 
+def check_combat_restart(bins, scratch, out, seconds):
+    """docs/anticheat.md: a check's kicks are counted "across sessions and restarts". The first kick of a
+    no-swing bot is saved in `anticheat-strikes.json`; after a restart on the same folder, the next one bans."""
+    folder = scratch / 'combat-restart'
+    rounds = []
+    for run in ('first', 'second'):
+        server, port = start(bins, folder, None, out, f'combat-restart-{run}', gamemode='survival',
+                             difficulty='peaceful')
+        try:
+            server.console('gamerule respawn_radius 0')
+            with ThreadPoolExecutor(2) as pool:
+                target = pool.submit(bots, bins, port, out, 'RTarget', 1, 'stand', seconds + 10)
+                server.wait_for('RTarget0 joined the game', 120)
+                cheater = bots(bins, port, out, 'RNoSwing', 1, 'stand', seconds, '--attack',
+                               'RTarget0', '--no-swing')['per_bot'][0]
+                target.result()
+        finally:
+            server.stop()
+        strikes = folder / 'anticheat-strikes.json'
+        rounds.append((cheater, json.loads(strikes.read_text()) if strikes.exists() else None))
+    log = (folder / 'logs/anticheat.log').read_text()
+    (first, after_first), (second, after_second) = rounds
+    if 'disconnected' not in (first['error'] or ''):
+        raise Failed(f'combat-restart: the no-swing bot was not kicked the first time ({first["error"]})')
+    if not after_first or [counts.get('combat') for counts in after_first.values()] != [1]:
+        raise Failed(f'combat-restart: the first kick was not saved as one strike: {after_first}')
+    if 'RNoSwing0 failed combat' not in log or 'kicked (1 of 2 before a ban)' not in log:
+        raise Failed(f'combat-restart: no first kick with its ban count in the log:\n{log}')
+    bans = json.loads((folder / 'banned-players.json').read_text())
+    ban = next((b for b in bans if b['name'] == 'RNoSwing0'), None)
+    if not ban or ban.get('reason') != 'Horizon anticheat: combat':
+        raise Failed(f'combat-restart: back after the restart, the bot cheated again and was not banned: {bans}')
+    if 'disconnected' not in (second['error'] or ''):
+        raise Failed(f'combat-restart: the banned bot was not sent away ({second["error"]})')
+    # The ban starts the count again (docs/anticheat.md).
+    if [counts.get('combat') for counts in after_second.values()] != [0]:
+        raise Failed(f'combat-restart: the ban did not start the count again: {after_second}')
+    print('combat-restart: kicked once (1 strike saved), the server restarted on the same folder, and the same '
+          'bot, cheating again, was banned (its count back at 0)')
+
+
 def check_prediction_water(bins, scratch, out, seconds):
     check_prediction(bins, scratch, out, seconds, 'prediction-water', water_play)
 
@@ -801,10 +927,11 @@ def check_prediction_items(bins, scratch, out, seconds):
 
 CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction,
           'prediction-water': check_prediction_water, 'prediction-items': check_prediction_items,
+          'log-off': check_log_off,
           'prediction-vanilla': check_prediction_vanilla,
-          'combat': check_combat}
+          'combat': check_combat, 'combat-restart': check_combat_restart}
 # Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
-DEFAULT = ['combat', 'ground', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
+DEFAULT = ['combat', 'combat-restart', 'ground', 'log-off', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
 
 
 def main():

@@ -1,0 +1,19 @@
+# The entity stage is new with these names (2026-11-10): no pack had the stage before them, so
+# none can collide with a name an existing pack uses, and they reach only packs with [entity].
+# The game doesn't draw the stage yet and refuses a pack that has it, so the list may still grow
+# (set_surface for entities is planned). Once a release draws the stage, the list is held like the
+# others: a new name needs a manifest key.
+EntityInput
+Frame
+Surface
+block_light_color
+block_light_colors
+block_light_grid
+block_light_sampler
+frame
+shadow_color
+shadow_distort
+shadow_map
+shadow_map_translucent
+shadow_position
+shadow_sampler

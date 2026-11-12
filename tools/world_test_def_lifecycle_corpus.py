@@ -12,6 +12,13 @@ Each step runs a test from its own spot and reads the test instance block it
 placed (`test`, `status`, `error_message`) after stepped ticks: a pass, a
 failure or no block at all is the witness, not a name list.
 
+After each step `/execute if loaded` reads a chunk only `/forceload` holds
+(`FORCED_ONLY`): a finished batch releases every forced chunk
+(`GameTestRunner`'s batch listener). It is not the spot's own chunk: the Java
+oracle's player isn't ticked, so its tickets stay on the 5x5 chunks around its
+spawn, while Horizon's player loads the chunks around wherever it stands, and
+neither reaches `FORCED_ONLY`.
+
 1. a name no pack has (`h275:never`);
 2. `h275:late`, then after `/datapack disable "file/h275-late"` (which reloads),
    then after `/datapack enable "file/h275-late"`;
@@ -30,6 +37,9 @@ PACKS = {
     'h275-override': {'h275:dup': FAIL, 'minecraft:always_pass': FAIL},
 }
 Y = 100
+# In the forced area (chunk x 11), out of both players' reach: the last spot is x 104 (chunk 6) and Horizon's
+# harness streams 4 chunks around its player.
+FORCED_ONLY = (184, 8)
 
 
 def world_test_def_lifecycle(full=False):
@@ -68,7 +78,7 @@ def world_test_def_lifecycle(full=False):
         for n in (2, 5):
             cmd(f'/tick step {n}', f'{label}-step-{n}')
             ops.append({'op': 'tick', 'n': n})
-        cmd(f'/execute if loaded {spot} {Y} 11', f'{label}-read-loaded', admission=False)
+        cmd(f'/execute if loaded {FORCED_ONLY[0]} {Y} {FORCED_ONLY[1]}', f'{label}-forced-loaded', admission=False)
         cmd(f'/test locate {name}', f'{label}-locate', admission=False)
         for field in ('test', 'status', 'error_message'):
             cmd(f'/data get block {spot} {Y} 11 data.{field}', f'{label}-{field}', admission=False)

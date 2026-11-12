@@ -3,6 +3,19 @@
 use super::*;
 
 impl Game<'_> {
+    /// `Level.playSound(player, ...)`: a guest's client already predicted the
+    /// fire-starter sound, so play it locally on the server and forward it to
+    /// the other guests without leaving it in the broadcast capture.
+    pub(super) fn play_block_use_sound(&mut self, sound: &str, at: [f64; 3], pitch: f32) {
+        if self.lan_acting.is_some() {
+            self.audio.play_unshared(sound, Some(at), 1.0, pitch);
+            self.guest_block_sounds
+                .push((sound.to_owned(), at, 1.0, pitch));
+        } else {
+            self.audio.play(sound, Some(at), 1.0, pitch);
+        }
+    }
+
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
     pub(super) fn use_hand(&mut self, block_hit: Option<&Hit>) -> Result<bool> {
@@ -127,6 +140,10 @@ impl Game<'_> {
                     self.with_level(|b, _, _| b.cake_candle_state(cake, item.as_deref()).is_some());
                 let pots_flower = self
                     .with_level(|b, _, _| b.potted_flower_state(cake, item.as_deref()).is_some());
+                // Read before the use runs: a sign's click commands execute in
+                // `process_level_events` and may change or remove the sign, but
+                // vanilla keeps the click consumed (`executedClickCommand`).
+                let sign_consumes = self.sign_consumes_click(hit.pos);
                 let (result, branch) = self.with_level(|b, level, ticks| {
                     b.use_item_on_branch(
                         level,
@@ -178,7 +195,15 @@ impl Game<'_> {
                         _ => {}
                     }
                 }
-                if result.consumes_action() {
+                // SignBlock.useWithoutItem answers PASS for a sign that is
+                // not waxed, has no click action to run and that nobody may
+                // build on: ServerPlayerGameMode.useItemOn goes on to
+                // ItemStack.useOn, so an adventure-mode `can_place_on` stack
+                // still places against the sign.
+                let sign_passes = branch == horizon_world::level::UseBranch::WithoutItem
+                    && self.res.facts().get(cake).sign_form().is_some()
+                    && !sign_consumes;
+                if result.consumes_action() && !sign_passes {
                     // ServerPlayerGameMode.useItemOn: ITEM_USED_ON_BLOCK with
                     // the stack before the use, or DEFAULT_BLOCK_USE.
                     match branch {
@@ -461,6 +486,8 @@ impl Game<'_> {
             return Ok(true);
         };
         let target = [pos.x, pos.y, pos.z];
+        let game_master = self.can_use_game_master_blocks();
+        let state = self.lectern_placed(target, state, &stack, game_master)?;
         let state = self.apply_item_block_state(target, state, &stack)?;
         let key = (target[0], target[1], target[2]);
         if !self.world.block_entities.stateful_entity(state.0)
@@ -469,7 +496,6 @@ impl Game<'_> {
             self.world.block_entities.insert(key, entity);
         }
         if self.world.block_entities.get(&key).is_some() {
-            let game_master = self.can_use_game_master_blocks();
             self.apply_placed_item(target, &stack, game_master);
             // Block.setPlacedBy.
             match self.world.block_entities.get(&key) {
@@ -671,6 +697,10 @@ impl Game<'_> {
         self.damage_held(1);
     }
 }
+
+#[cfg(test)]
+#[path = "sign_use_tests.rs"]
+mod sign_use_tests;
 
 #[cfg(test)]
 #[path = "sign_chain_tests.rs"]

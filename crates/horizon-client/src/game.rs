@@ -219,6 +219,7 @@ mod lan_far;
 mod lan_idle;
 mod lan_mobs;
 mod lan_mount_menu;
+mod lan_op;
 mod lan_particles;
 mod lan_pvp;
 mod lan_quiet;
@@ -362,6 +363,8 @@ mod paintings;
 mod pandas;
 mod particle_culling;
 mod passengers;
+mod perf_link;
+mod perf_remote;
 mod persist;
 mod perspective;
 mod physical_trigger;
@@ -384,6 +387,8 @@ mod potent_sulfur;
 mod potions;
 mod powder_snow;
 mod prediction;
+mod profile_capture;
+mod profile_lines;
 mod pumpkin;
 mod quick_actions;
 mod raids;
@@ -471,7 +476,6 @@ mod trial_spawner;
 mod trial_visuals;
 mod trident;
 mod tutorial;
-mod tweaks;
 mod ui_control;
 mod use_hand;
 mod using_item;
@@ -1499,8 +1503,8 @@ impl LevelAccess for GameLevel<'_> {
                 signal
             };
         }
-        if let Some(signal) = books::lectern_signal(self.world, pos) {
-            return signal * i32::from(books::has_book_state(self.registry, state));
+        if let Some(signal) = books::lectern_signal(self.world, self.registry, state, pos) {
+            return signal;
         }
         if let Some(signal) =
             machines::shelf_signal(self.world, self.registry, state, pos, direction)
@@ -2225,7 +2229,7 @@ struct Game<'a> {
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
-    tweaks: tweaks::Tweaks,
+    tweaks: extras::mouse_tweaks::Tweaks,
     /// The wheel and hovered slot of `BundleMouseActions`.
     bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
@@ -2322,6 +2326,8 @@ struct Game<'a> {
     debug: bool,
     /// `horizon-ctl gpu-passes`: time Horizon's own passes on the GPU with F3 shut.
     gpu_passes: bool,
+    /// `horizon-ctl gpu-passes detail`: also dispatch times and counters.
+    gpu_pass_detail: bool,
     screen: Screen,
     observed_screen: Option<native_hooks::ObservedScreen>,
     window: Option<Arc<Window>>,
@@ -2359,9 +2365,6 @@ struct Game<'a> {
     /// `SpectatorGui`: the menu a spectator opens with the hotbar keys.
     spectator_gui: horizon_client::spectator_menu::SpectatorGui,
     previous: Instant,
-    /// When the last frame's work ended: what runs before the next one starts (`idle`, the
-    /// event loop) shows in HORIZON_SPIKES as the time between frames.
-    frame_end: Instant,
     /// FramerateLimitTracker.latestInputTime.
     last_input: Instant,
     /// Controllers (Horizon's own).
@@ -2805,6 +2808,11 @@ struct Game<'a> {
     /// When an agent's last command came.
     agent_last: Option<Instant>,
     frame_stats: horizon_client::control::FrameStats,
+    /// This thread's and all threads' allocation counts at the last rendered frame.
+    alloc_mark: Option<(
+        horizon_threads::alloc_count::Counts,
+        horizon_threads::alloc_count::Counts,
+    )>,
     /// This play session's frame and tick times, for opt-in performance statistics.
     perf: horizon_client::telemetry::Session,
     /// Control replies waiting for a rendered frame or a benchmark deadline.
@@ -2813,7 +2821,7 @@ struct Game<'a> {
     screenshot_sequence: Option<screenshot_sequence::Sequence>,
     /// `render-capture DIR`: replied once the renderer wrote the scene.
     pending_render_capture: Option<std::sync::mpsc::Sender<String>>,
-    pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
+    pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>, bool)>,
     /// Recent frame times for the performance overlay.
     frame_graph: horizon_client::perf_overlay::FrameGraph,
     /// Horizon's extras (minimap, auto-reconnect; mods' counters): `game/extras.rs`.
@@ -2869,6 +2877,8 @@ struct Game<'a> {
     input_trace: input_trace::InputTrace,
     /// A repro recording, export or replay (game/repro.rs).
     repro: repro::Repro,
+    /// The health history and client captures (game/profile_capture.rs).
+    profile: profile_capture::Profile,
     /// `HORIZON_TICK_SCRIPT`'s scenario (game/tick_script.rs).
     tick_script: tick_script::TickScript,
     /// The overworld's last `sky_darken` and its inputs (time, rain, thunder).
@@ -3357,11 +3367,10 @@ impl Game<'_> {
     fn aim(&self) -> Option<([f64; 3], [f64; 3])> {
         // Minecraft.pick: from the camera entity's eyes along its view
         // (LivingEntity.getViewYRot: the head's yaw).
-        if let Some(m) = self.camera_mob() {
-            return Some((
-                [m.position.x, m.eye_y(), m.position.z],
-                pick_view_vector(m.head_yaw, m.head_pitch),
-            ));
+        if let Some(e) = self.camera_entity() {
+            let [x, y, z] = e.position;
+            let eye = [x, y + f64::from(e.eye_height), z];
+            return Some((eye, pick_view_vector(e.y_rot, e.x_rot)));
         }
         Some((self.eye_position()?, pick_view_vector(self.yaw, self.pitch)))
     }
@@ -3404,7 +3413,7 @@ impl Game<'_> {
         Some(b)
     }
     fn outline_context_kind(&self) -> horizon_world::collision_context::EntityContextKind {
-        if self.camera_mob().is_some() {
+        if self.camera_entity().is_some() {
             horizon_world::collision_context::EntityContextKind::Living
         } else {
             horizon_world::collision_context::EntityContextKind::Player
@@ -5088,11 +5097,11 @@ impl Game<'_> {
         if removed && !creative {
             let held = self.held().cloned();
             self.mine_block_with_held(&facts.name, facts.hardness);
-            let harvest = !facts.requires_tool
-                || self
-                    .res
-                    .items()
-                    .correct_for_drops(held.as_ref(), &facts.name);
+            let harvest = self.res.items().has_correct_tool_for_drops(
+                held.as_ref(),
+                facts.requires_tool,
+                &facts.name,
+            );
             if harvest {
                 // Block.playerDestroy: the mined statistic, the exhaustion and the drops.
                 self.award_stat("mined", &facts.name, 1);
@@ -7201,14 +7210,14 @@ impl Game<'_> {
         laps.lap("eg_objects");
         // Particles (ParticleEngine.extract): camera-facing quads.
         self.mark_stage(out.len(), "PARTICLES");
-        let world = &self.world;
         let particle_mode = self.settings.horizon.particle_culling;
         if particle_mode == horizon_client::graphics::ParticleCullingMode::Off {
-            self.particles.render(
+            self.particles.render_in_view(
                 camera,
                 self.particle_rotation(),
                 alpha as f32,
-                &|b| world.light(b[0], b[1], b[2]),
+                self.view_frustum.as_ref(),
+                &|b| self.world.light(b[0], b[1], b[2]),
                 &mut out,
             );
         } else {
@@ -7231,7 +7240,7 @@ impl Game<'_> {
                     true,
                     frustum.as_ref(),
                     &mut |min, max| particle_culling.hidden(min, max),
-                    &|b| world.light(b[0], b[1], b[2]),
+                    &|b| self.world.light(b[0], b[1], b[2]),
                     &mut out,
                 );
             }
@@ -8179,19 +8188,16 @@ impl Game<'_> {
                     .ok_or("missing lit block state")?;
                 state.properties.insert("lit".into(), "true".into());
                 self.level_set(hit.pos, registry.resolve(&state)?)?;
-                self.audio.play(
-                    if item == "fire_charge" {
-                        "minecraft:item.firecharge.use"
-                    } else {
-                        "minecraft:item.flintandsteel.use"
-                    },
-                    Some(at(hit.pos)),
-                    1.0,
-                    horizon_client::items::fire_starter_pitch(
-                        item == "fire_charge",
-                        &mut self.world.random,
-                    ),
+                let sound = if item == "fire_charge" {
+                    "minecraft:item.firecharge.use"
+                } else {
+                    "minecraft:item.flintandsteel.use"
+                };
+                let pitch = horizon_client::items::fire_starter_pitch(
+                    item == "fire_charge",
+                    &mut self.world.random,
                 );
+                self.play_block_use_sound(sound, at(hit.pos), pitch);
                 // FlintAndSteelItem / FireChargeItem.useOn: BLOCK_CHANGE at the lit block,
                 // and ItemStack.useOn's used statistic.
                 self.post_block_game_event(
@@ -8222,7 +8228,7 @@ impl Game<'_> {
                     item == "fire_charge",
                     &mut self.world.random,
                 );
-                self.audio.play(sound, Some(at(target)), 1.0, pitch);
+                self.play_block_use_sound(sound, at(target), pitch);
                 // BLOCK_PLACE: flint and steel names the clicked block, a fire charge the
                 // fire. Then ItemStack.useOn's used statistic.
                 let placed_at = if item == "fire_charge" {
@@ -8321,22 +8327,6 @@ impl Game<'_> {
         }
         self.tracked_special_box(id as i32)
     }
-    /// The renderer for the window, with the current block sprites, GUI
-    /// atlas and world border texture.
-    /// A new renderer's atlas holds only the pack's sprites: what was drawn into it at run time
-    /// (skins, maps, the themed UI's glyphs and corners) has to be drawn again.
-    pub(super) fn forget_atlas_slots(&mut self) {
-        self.skin_slots.forget();
-        self.maps.slots.forget();
-        self.trim_slots.forget();
-        self.map_patches.clear();
-        self.kept_block_entities.get_mut().clear();
-        horizon_client::ui_theme::reset_atlas();
-    }
-
-    fn new_renderer(&self, window: Arc<Window>) -> Result<Renderer> {
-        self.renderer_for(window, &self.pack, &self.gui)
-    }
     /// Rebuild GPU-owned state after the backend reports device loss.
     fn recover_device(&mut self) -> Result<()> {
         if !self.renderer.as_ref().is_some_and(Renderer::device_lost) {
@@ -8398,34 +8388,6 @@ impl Game<'_> {
         self.adopt_renderer(renderer);
         log::info!("Horizon: graphics device recovered; rebuilding world meshes");
         Ok(())
-    }
-    /// A renderer made again from the resources loaded takes over: what named the old one's
-    /// atlas slots is forgotten, the world is meshed again, and the shader pack and the
-    /// settings are applied again.
-    pub(super) fn adopt_renderer(&mut self, mut renderer: Renderer) {
-        // A new renderer starts with the vanilla column and without the world border's wall.
-        renderer.clear_sections(self.world.layout());
-        self.border_renderer.invalidate();
-        self.renderer = Some(renderer);
-        self.forget_atlas_slots();
-        self.clear_lod();
-        self.pending_uploads.clear();
-        let context = self.worker_context();
-        self.streaming.reload_resources(&mut self.world, context);
-        self.native_shaders = native_shaders::NativeShaders::picking(&std::mem::take(
-            &mut self.native_shaders.picked,
-        ));
-        self.apply_ui_settings();
-    }
-    /// `LevelExtractor.allChanged`: displayed sections and mesh work are
-    /// discarded, then every loaded section is rebuilt.
-    fn all_sections_changed(&mut self) {
-        self.clear_lod();
-        self.pending_uploads.clear();
-        if let Some(renderer) = self.renderer.as_mut() {
-            renderer.clear_sections(self.world.layout());
-        }
-        self.streaming.reload_sections(&mut self.world);
     }
     /// A translated message for the player the game acts for: `overlay` is
     /// `sendOverlayMessage` (the action bar), else `sendSystemMessage` (chat).
@@ -9110,7 +9072,7 @@ impl Game<'_> {
         // What faces the camera (particles, item sprites, block entity text) faces a mod's.
         // A spectated entity's view is not the local player's yaw and pitch
         // (`Camera.setup` reads the camera entity), so it is kept too.
-        let spectating = self.camera_mob().is_some();
+        let spectating = self.camera_entity().is_some();
         self.posed_rotation = view
             .filter(|posed| spectating || Some(*posed) != vanilla)
             .map(|(_, yaw, pitch)| (yaw, pitch));
@@ -9807,9 +9769,14 @@ impl Game<'_> {
         let debug_passes = self.debug_lists_gpu_passes();
         let result = match self.renderer.as_mut() {
             Some(renderer) => {
-                renderer.set_pass_timing(debug_passes || self.gpu_passes);
-                // `gpu_passes` is a measurement: it takes every sample it can.
-                renderer.set_pass_timing_gap(if self.gpu_passes {
+                use horizon_client::client_perf::request::GpuSwitch;
+                let capture_gpu = self.profile.gpu();
+                let recording = capture_gpu != GpuSwitch::Off;
+                renderer.set_pass_timing(debug_passes || self.gpu_passes || recording);
+                renderer.set_keep_timed_frames(recording);
+                renderer.set_pass_detail(self.gpu_pass_detail || capture_gpu == GpuSwitch::Detail);
+                // `gpu_passes` and a capture's `--gpu` are measurements: they take every sample they can.
+                renderer.set_pass_timing_gap(if self.gpu_passes || recording {
                     Duration::ZERO
                 } else {
                     horizon_client::debug_overlay::GPU_TIMING_GAP
@@ -11092,12 +11059,8 @@ impl Game<'_> {
                     self.observe_fullscreen();
                     self.sync_ime();
                     let now = Instant::now();
-                    let frame_cpu = self
-                        .options
-                        .spikes
-                        .and_then(|_| horizon_client::spans::thread_cpu());
+                    horizon_threads::work::tick_start();
                     let elapsed = now.duration_since(self.previous);
-                    let between = now.saturating_duration_since(self.frame_end);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
                     self.studio_fly(elapsed);
@@ -11185,46 +11148,19 @@ impl Game<'_> {
                         result => result?,
                     };
                     horizon_client::spans::time("pr_cursor", || self.apply_cursor_icon());
-                    // The frame's spans, taken every frame they are recorded so they never
-                    // pile up: the slow-frame line's, and the session's (`perf.frame`).
+                    // The frame's spans, taken every frame they are recorded so they never pile up.
                     let frame_spans = if horizon_client::spans::recording_here() {
                         horizon_client::spans::take_raw()
                     } else {
                         Vec::new()
                     };
-                    if horizon_client::spans::trace::due() {
-                        horizon_client::spans::trace::stop();
-                    }
-                    if let Some(threshold) = self.options.spikes
-                        && let Some(r) = self.renderer.as_ref()
-                    {
-                        let cpu = now.elapsed().saturating_sub(r.last_wait).as_secs_f32() * 1000.0;
-                        // Spans timed between frames (`idle`) come first.
-                        let spans = horizon_client::spans::merge(&frame_spans);
-                        let between = between.as_secs_f32() * 1000.0;
-                        if cpu > threshold || between > threshold {
-                            // The render thread's own CPU time in the frame:
-                            // far below the wall time, the frame waited.
-                            let worked = horizon_client::spans::thread_cpu()
-                                .zip(frame_cpu)
-                                .map_or_else(String::new, |(end, start)| {
-                                    format!(", cpu {:.1} ms", (end - start).as_secs_f32() * 1000.0)
-                                });
-                            let gap = if between > threshold {
-                                format!(", {between:.1} ms before it")
-                            } else {
-                                String::new()
-                            };
-                            log::info!(
-                                "Horizon: slow frame {cpu:.1} ms{worked}{gap} ({steps} ticks): {}",
-                                horizon_client::spans::describe(&spans)
-                            );
-                        }
-                    }
+                    let mut perf_times = None;
                     if let Some(r) = self.renderer.as_mut() {
                         let cpu = now.elapsed().saturating_sub(r.last_wait);
+                        horizon_threads::work::tick_end(cpu.as_nanos() as u64);
                         if rendered {
                             let ms = |d: Duration| d.as_secs_f32() * 1000.0;
+                            perf_times = Some((ms(cpu), r.gpu_times.last().copied()));
                             self.frame_graph.record(
                                 ms(elapsed),
                                 ms(cpu),
@@ -11304,6 +11240,17 @@ impl Game<'_> {
                     }
                     if rendered {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
+                        if let Some((cpu, gpu)) = perf_times {
+                            self.record_perf_frame(
+                                elapsed.as_secs_f32() * 1000.0,
+                                cpu,
+                                gpu,
+                                &frame_spans,
+                            );
+                        }
+                        if horizon_threads::alloc_count::ON {
+                            self.record_frame_allocs();
+                        }
                         self.debug_charts.frame_times.log(elapsed.as_nanos() as i64);
                         if self.frames == 0 {
                             // The launcher times Play to this line (launcher/src/perf.rs).
@@ -11344,7 +11291,6 @@ impl Game<'_> {
                             self.fps_frames = 0;
                             self.fps_at = Instant::now();
                         }
-                        self.frame_end = Instant::now();
                         if self.options.frames.is_some_and(|f| self.frames >= f)
                             || self
                                 .options
@@ -11428,6 +11374,9 @@ impl<'a> Game<'a> {
         let inventory = vec![None; 36];
         let now = Instant::now();
         let look = options.look;
+        let slow_frame_ms = options
+            .spikes
+            .unwrap_or(horizon_client::client_perf::SLOW_FRAME_MS);
         let particles = horizon_client::particles::ParticleEngine::new(
             &root,
             &gui.atlas.sprites,
@@ -11544,6 +11493,7 @@ impl<'a> Game<'a> {
             pause: false,
             debug: false,
             gpu_passes: false,
+            gpu_pass_detail: false,
             screen: Screen::Playing,
             observed_screen: None,
             window: None,
@@ -11566,7 +11516,6 @@ impl<'a> Game<'a> {
             started: now,
             spectator_gui: Default::default(),
             previous: now,
-            frame_end: now,
             last_input: now,
             pad: Default::default(),
             frames: 0,
@@ -11820,6 +11769,7 @@ impl<'a> Game<'a> {
             agent_control_on: false,
             agent_last: None,
             frame_stats: Default::default(),
+            alloc_mark: None,
             perf: Default::default(),
             pending_screenshot: None,
             screenshot_sequence: None,
@@ -11830,6 +11780,7 @@ impl<'a> Game<'a> {
             events: Default::default(),
             input_trace: Default::default(),
             repro: Default::default(),
+            profile: profile_capture::Profile::new(slow_frame_ms),
             tick_script: tick_script::TickScript::from_env(),
             agent: agent::Agent::default(),
             view_frustum: None,
@@ -12324,10 +12275,7 @@ pub fn run_with() -> Result<()> {
         horizon_threads::catch_stop_signals();
     }
     let started = Instant::now();
-    // A dedicated server writes its slow ticks to the log with the spans
-    // they spent their time in (`HORIZON_SPIKES`'s line; the variable still
-    // sets another threshold), so a lag spike players felt can be traced
-    // from the log alone. Timing the spans costs microseconds a tick.
+    // A dedicated server times its spans always, so its slow ring holds the steps of a lag spike (microseconds a tick).
     if options.spikes.is_none()
         && options.execution_role == execution_role::ExecutionRole::DedicatedServer
     {
@@ -12638,6 +12586,35 @@ mod subtitles;
 #[cfg(test)]
 #[path = "game_tests.rs"]
 mod tests;
+#[cfg(test)]
+mod test_neighbourhood {
+    //! Shared fixture step for tests that tick entities on prepared data.
+    use super::*;
+
+    impl Game<'_> {
+        /// Loads the chunks within 2 columns of `(cx, cz)` that are not loaded yet.
+        /// Entity ticking waits for every chunk in that 5x5 neighbourhood
+        /// (`ChunkMap.prepareEntityTickingChunk`), so a fixture that ticks mobs,
+        /// items or TNT in a chunk calls this after setting up its own chunks.
+        pub(crate) fn load_ticking_neighbourhood(&mut self, cx: i32, cz: i32) {
+            for z in cz - 2..=cz + 2 {
+                for x in cx - 2..=cx + 2 {
+                    if self.world.chunks.contains_key(&(x, z)) {
+                        continue;
+                    }
+                    self.world.chunks.insert(
+                        (x, z),
+                        std::sync::Arc::new(horizon_client::chunk::Chunk::empty(x, z)),
+                    );
+                    // A chunk that is already registered keeps its ticks.
+                    let _ = self
+                        .block_ticks
+                        .add_empty_chunk(horizon_core::position::ChunkPos::new(x, z));
+                }
+            }
+        }
+    }
+}
 
 fn write_level_for_role(
     level: &mut Level,

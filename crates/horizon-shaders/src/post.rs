@@ -1383,6 +1383,13 @@ impl Loader<'_> {
         ) {
             return None;
         }
+        let tessellated = self.pack.exists(&path("tcs")) || self.pack.exists(&path("tes"));
+        if tessellated {
+            self.post.notes.push(format!(
+                "{name}: uses a tessellation stage (unsupported); skipped"
+            ));
+            return None;
+        }
         if self.pack.exists(&path("gsh")) {
             let Some(inputs) = self.geometry.clone() else {
                 self.post.notes.push(format!(
@@ -1390,8 +1397,7 @@ impl Loader<'_> {
                 ));
                 return None;
             };
-            let (vsh, gsh) = (path("vsh"), path("gsh"));
-            return self.load_geometry(name, group, &vsh, &gsh, &fsh, &inputs);
+            return self.load_geometry(name.clone(), group, &vsh, &path("gsh"), &fsh, &inputs);
         }
         let vertex = self.preprocess(&vsh);
         let fragment = self.preprocess(&fsh);
@@ -2404,6 +2410,9 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
                 ("shaders/composite4.vsh", VSH),
                 ("shaders/composite4.fsh", FSH),
                 ("shaders/composite4.gsh", "x"),
+                ("shaders/composite6.vsh", VSH),
+                ("shaders/composite6.fsh", FSH),
+                ("shaders/composite6.tcs", "x"),
                 ("shaders/composite5.vsh", VSH),
                 (
                     "shaders/composite5.fsh",
@@ -2445,6 +2454,10 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
             notes.contains(
                 "composite4: uses a geometry stage (supported for the shadow pass's terrain and entities only)"
             ),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("composite6: uses a tessellation stage (unsupported); skipped"),
             "{notes}"
         );
         assert!(notes.contains("composite5.fsh:2:"), "{notes}");

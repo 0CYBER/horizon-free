@@ -64,6 +64,8 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 mod abilities;
 #[path = "remote_poll.rs"]
 mod poll;
+#[path = "remote_attributes.rs"]
+mod remote_attributes;
 #[path = "remote_tables.rs"]
 mod tables;
 
@@ -2806,23 +2808,8 @@ impl Game<'_> {
         if kind == "minecraft:experience_orb" {
             // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
             self.orbs.retain(|o| o.id != id as u32);
-            self.orbs.push(ExperienceOrb {
-                rotation: [0.0, 0.0],
-                join: Default::default(),
-                no_gravity: false,
-                id: id as u32,
-                position: at,
-                previous: at,
-                velocity: Vec3::ZERO,
-                value: 1,
-                age: 0,
-                on_ground: false,
-                count: 1,
-                ticks: 0,
-                health: 5,
-                air: 300,
-                following: None,
-            });
+            self.orbs
+                .push(ExperienceOrb::new(id as u32, at, Vec3::ZERO, 1));
         }
         if let Some(t) = mob_type {
             let mut mob = Mob::new(id as u32, t, at, head);
@@ -3042,11 +3029,12 @@ impl Game<'_> {
                 d.on_ground = on_ground;
                 return;
             }
-            if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
+            // A newly spawned block or TNT is at the back of its list.
+            if let Some(f) = self.falling.iter_mut().rev().find(|f| f.id == id as u32) {
                 f.position = at;
                 return;
             }
-            if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
+            if let Some(t) = self.tnts.iter_mut().rev().find(|t| t.id == id as u32) {
                 t.position = at;
                 t.on_ground = on_ground;
                 return;
@@ -3258,60 +3246,6 @@ impl Game<'_> {
         }
     }
 
-    /// `ClientPacketListener.handleUpdateAttributes` for a mob, each value from
-    /// `AttributeInstance.calculateValue`: its maximum health (the hearts drawn
-    /// over its mount), and its `minecraft:scale`, which sizes its box
-    /// (`LivingEntity.getDimensions`) and model (`LivingEntityRenderState.scale`)
-    /// as the local player's does: NPC plugins make their fake players bigger
-    /// with it, datapacks scale any mob.
-    fn remote_mob_attributes(&mut self, id: i32, values: &[play::AttributeSnapshot]) {
-        let catalog = &self.motion.attributes;
-        let value = |name: &str| {
-            let attribute = catalog.id(name)?;
-            let s = values
-                .iter()
-                .find(|s| s.attribute == attribute.registry_id())?;
-            Some(
-                catalog
-                    .attribute(attribute)
-                    .definition
-                    .sanitize(snapshot_value(s)),
-            )
-        };
-        let (max_health, scale) = (value("minecraft:max_health"), value("minecraft:scale"));
-        let (speed, jump) = (
-            value("minecraft:movement_speed"),
-            value("minecraft:jump_strength"),
-        );
-        let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) else {
-            return;
-        };
-        // A horse its rider's client moves goes at its own speed and jumps
-        // its own height (`getSpeed`, `getCustomJump`).
-        if horizon_client::mobs::equine::moved_by_rider(m.species()) {
-            if let Some(speed) = speed {
-                horizon_client::mobs::finalize::set_base(
-                    m,
-                    horizon_client::mobs::finalize::Attr::MovementSpeed,
-                    speed,
-                );
-            }
-            if let Some(jump) = jump {
-                m.extra.vector[0] = jump;
-            }
-        }
-        if let Some(max_health) = max_health {
-            horizon_client::mobs::finalize::set_base(
-                m,
-                horizon_client::mobs::finalize::Attr::MaxHealth,
-                max_health,
-            );
-        }
-        if let Some(scale) = scale {
-            m.extra.model_scale = scale as f32;
-        }
-    }
-
     pub(super) fn handle_packet(&mut self, packet: C) -> Result<()> {
         self.native_client_packet(&packet);
         match packet {
@@ -3476,20 +3410,7 @@ impl Game<'_> {
                 self.capture(true);
             }
             C::PlayerPosition(p) => self.remote_teleport(&p)?,
-            C::PlayerRotation(p) => {
-                self.yaw = if p.relative_yaw {
-                    self.yaw + p.yaw
-                } else {
-                    p.yaw
-                };
-                self.pitch = (if p.relative_pitch {
-                    self.pitch + p.pitch
-                } else {
-                    p.pitch
-                })
-                .clamp(-90.0, 90.0);
-                self.snap_player_model_pitch();
-            }
+            C::PlayerRotation(p) => self.remote_rotation(&p),
             C::PlayerLookAt(p) => self.remote_look_at(&p),
             // ClientCommonPacketListenerImpl.handlePostEffects.
             C::PostEffects(p) => self.post_effects = p.effects,
@@ -3643,6 +3564,7 @@ impl Game<'_> {
                     p.id as u32,
                     horizon_client::lan::playerdata::uuid_ints(p.uuid),
                 );
+                let replace = self.tracks_remote_entity(p.id);
                 self.spawn_entity(p.id, &kind, p.position, rotation);
                 if let Some(r) = self.remote.as_mut() {
                     r.cart_lerps.remove(&p.id);
@@ -3655,14 +3577,7 @@ impl Game<'_> {
                     (rotation[0], rotation[1]),
                     p.data,
                 ) {
-                    self.spawn_remote_projectile(
-                        p.id,
-                        &kind,
-                        p.position,
-                        (rotation[0], rotation[1]),
-                        p.velocity,
-                        p.data,
-                    );
+                    self.spawn_added_projectile(&p, &kind, (rotation[0], rotation[1]), replace);
                 }
                 // Entity.recreateFromPacket: objects must exist before applying motion.
                 self.remote_motion(p.id, p.velocity);
@@ -4565,7 +4480,16 @@ impl Game<'_> {
             // HUD draws and the health it may hold), reach, speed and so on.
             // Then the received health again, which the old maximum clamped.
             C::UpdateAttributes(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
+                let nameplate = self.remote_nameplate_values(&p.values);
                 self.apply_own_attributes(p.values);
+                if let Some(m) = self.player_model.as_mut() {
+                    if let Some(value) = nameplate.name_tag {
+                        m.set_name_tag_distance(value);
+                    }
+                    if let Some(value) = nameplate.below_name {
+                        m.set_below_name_distance(value);
+                    }
+                }
                 self.apply_remote_health();
             }
             C::UpdateAttributes(p) => self.remote_mob_attributes(p.id, &p.values),
@@ -5956,14 +5880,16 @@ impl Game<'_> {
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
+        // `falling` and `tnts` are searched from the back: AddEntity calls this right after
+        // appending the block or TNT, so a spawn doesn't walk the whole list.
         if let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) {
             // Squid.aiStep derives its body pitch and roll from network motion.
             m.velocity = v;
         } else if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
-        } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
+        } else if let Some(f) = self.falling.iter_mut().rev().find(|f| f.id == id as u32) {
             f.velocity = v;
-        } else if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
+        } else if let Some(t) = self.tnts.iter_mut().rev().find(|t| t.id == id as u32) {
             t.velocity = v;
         } else if let Some(o) = self.orbs.iter_mut().find(|o| o.id == id as u32) {
             o.velocity = v;
