@@ -207,8 +207,9 @@ pub fn find(dir: &Path, name: &str) -> Result<String, String> {
     }
     // The name given to `backup NAME` (or `auto`, `manual`): the newest backup with it.
     let label = format!("-{name}.zip");
+    // The whole label after the time stamp: `test` is not the end of `<stamp>-my-test.zip`.
     all.iter()
-        .find(|b| b.name.ends_with(&label))
+        .find(|b| b.name.len() == STAMP_LEN + label.len() && b.name.ends_with(&label))
         .map(|b| b.name.clone())
         .ok_or_else(|| {
             format!("no backup {name:?} in {DIR}/ (`horizon-server backups` lists them)")
@@ -572,6 +573,37 @@ mod tests {
                 .is_none()
         );
         assert_eq!(std::fs::read(&nether).unwrap(), b"nether-before");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `restore NAME` takes "the name given to `backup` (the newest with it)": the whole label after the
+    /// time stamp, not any name that happens to end the same way.
+    #[test]
+    fn a_label_matches_only_the_whole_label() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-backup-label-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(DIR)).unwrap();
+        let test = "2026-11-01_00-00-00-test.zip";
+        let my_test = "2026-11-02_00-00-00-my-test.zip";
+        let update = "2026-11-03_00-00-00-before-update.zip";
+        let nightly = "2026-11-04_00-00-00-nightly-auto.zip";
+        for name in [test, my_test, update, nightly] {
+            std::fs::write(dir.join(DIR).join(name), b"x").unwrap();
+        }
+        // The label `test` is the older file, not the newer one whose label ends with it.
+        assert_eq!(find(&dir, "test").unwrap(), test);
+        assert_eq!(find(&dir, "my-test").unwrap(), my_test);
+        assert_eq!(find(&dir, "before-update").unwrap(), update);
+        assert_eq!(find(&dir, "nightly-auto").unwrap(), nightly);
+        // A label that only ends another one names no backup.
+        assert!(find(&dir, "update").is_err());
+        assert!(find(&dir, "auto").is_err());
+        // The other ways in are as before: the file name, and a unique start of it.
+        assert_eq!(find(&dir, my_test).unwrap(), my_test);
+        assert_eq!(find(&dir, "2026-11-03").unwrap(), update);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
