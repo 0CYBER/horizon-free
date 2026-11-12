@@ -134,8 +134,8 @@ pub struct SyncData {
     /// ClientboundUpdateRecipesPacket's payload.
     pub recipes: Vec<u8>,
     pub advancements: super::advancements::ServerAdvancements,
-    /// The particle each effect shows, per (effect, ambient), looked up once (`effect_meta`).
-    effect_particles: std::sync::Mutex<super::effect_meta::ParticleCache>,
+    /// The registry ids of the particle types effects show, looked up once (`effect_meta`).
+    effect_particle_ids: std::sync::Mutex<super::effect_meta::ParticleTypeIds>,
 }
 
 use crate::crafting::qualified;
@@ -229,7 +229,7 @@ impl SyncData {
     /// No registries, tags or recipes: enough for tests of the login phase.
     pub fn empty() -> Self {
         Self {
-            effect_particles: Default::default(),
+            effect_particle_ids: Default::default(),
             builtin: Builtin::default(),
             dynamic: Dynamic::default(),
             registries: Vec::new(),
@@ -455,7 +455,7 @@ impl SyncData {
             None
         };
         let mut sync = Self {
-            effect_particles: Default::default(),
+            effect_particle_ids: Default::default(),
             content_identity,
             builtin,
             dynamic,
@@ -519,18 +519,16 @@ impl SyncData {
         &self,
         effects: impl IntoIterator<Item = (&'a str, bool)>,
     ) -> Vec<(u8, i32, entity_data::Value)> {
-        let mut cache = self
-            .effect_particles
+        let mut ids = self
+            .effect_particle_ids
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut particles = Vec::new();
         let mut all_ambient = true;
         for (effect, ambient) in effects {
             let effect = effect.trim_start_matches("minecraft:");
-            let particle = cache.get_or_insert_with(effect, ambient, || {
-                super::effect_meta::particle_of(effect, ambient, |name| {
-                    self.id("minecraft:particle_type", name)
-                })
+            let particle = super::effect_meta::particle_of(effect, ambient, |name| {
+                ids.get_or_insert_with(name, || self.id("minecraft:particle_type", name))
             });
             let Some(particle) = particle else {
                 continue;
