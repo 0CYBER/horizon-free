@@ -8,8 +8,8 @@ use crate::{
     gfx::EffectiveOutput,
     graphics::{
         EntityCullingMode, FarDetail, FrameGeneration, GpuCullingMode, GraphicsApi, HdrMode,
-        HdrSetup as Setup, LeafCullingMode, Overlay, Pacing, ParticleCullingMode, PresentMode,
-        Preset, Upscaling,
+        HdrSetup as Setup, LeafCullingMode, Overlay, Pacing, ParallelTickMode, ParticleCullingMode,
+        PresentMode, Preset, Upscaling,
     },
     graphics_style::Cost,
     lang,
@@ -98,6 +98,7 @@ pub enum H {
     PresentMode,
     Pacing,
     Workers,
+    ParallelTick,
     Overlay,
     ResolutionScale,
     DynamicResolution,
@@ -432,6 +433,11 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             H::Workers,
                             None,
                             "Threads that generate, light and mesh chunks. Next start.",
+                        ),
+                        h(
+                            H::ParallelTick,
+                            Saves,
+                            "Shares your world's tick among threads. Auto: only while that is faster.",
                         ),
                     ],
                 ),
@@ -887,6 +893,7 @@ impl H {
             H::ParticleCulling => labelled("Particle Culling", g.particle_culling.label()),
             H::LeafCulling => labelled("Leaf Culling", g.leaf_culling.label()),
             H::OpaqueIce => labelled("Opaque Ice", on_off(g.opaque_ice)),
+            H::ParallelTick => labelled("Parallel Tick", g.parallel_tick.label()),
             H::CacheShulkerBoxes => labelled("Shulker Boxes", on_off(g.cache_shulker_boxes)),
             H::CacheSigns => labelled("Signs", on_off(g.cache_signs)),
             H::CacheDecoratedPots => labelled("Decorated Pots", on_off(g.cache_decorated_pots)),
@@ -1041,6 +1048,9 @@ impl H {
                 g.leaf_culling = step(&LeafCullingMode::ALL, g.leaf_culling, back);
             }
             H::OpaqueIce => g.opaque_ice = !g.opaque_ice,
+            H::ParallelTick => {
+                g.parallel_tick = step(&ParallelTickMode::ALL, g.parallel_tick, back)
+            }
             H::CacheShulkerBoxes => g.cache_shulker_boxes = !g.cache_shulker_boxes,
             H::CacheSigns => g.cache_signs = !g.cache_signs,
             H::CacheDecoratedPots => g.cache_decorated_pots = !g.cache_decorated_pots,
@@ -1290,6 +1300,7 @@ impl Item {
                         | H::Pacing
                         | H::PresentMode
                         | H::Workers
+                        | H::ParallelTick
                         | H::FrameGeneration
                         | H::BatteryMode
                         | H::ShadowCache

@@ -568,6 +568,26 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "sides": r.section_sides() })))
             }
+            "parallel-tick" => {
+                use horizon_client::graphics::ParallelTickMode as Mode;
+                match words.get(1).copied() {
+                    None => {}
+                    Some(mode @ ("off" | "auto" | "on")) => {
+                        // The setting, as its switch sets it; not saved here (as `gpu-culling`).
+                        self.settings.horizon.parallel_tick = match mode {
+                            "on" => Mode::On,
+                            "auto" => Mode::Auto,
+                            _ => Mode::Off,
+                        };
+                        horizon_client::parallel::set_setting(self.settings.horizon.parallel_tick);
+                    }
+                    Some(other) => return Err(format!("unknown parallel tick mode {other}").into()),
+                }
+                let (setting, on, auto) = horizon_client::parallel::status();
+                Ok(Some(
+                    json!({ "ok": true, "setting": setting, "on": on, "auto": auto }),
+                ))
+            }
             "gpu-culling" => {
                 let r = self.renderer.as_mut().ok_or("no renderer")?;
                 match words.get(1).copied() {
@@ -1644,6 +1664,9 @@ impl Game<'_> {
                 .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
         status["lod"] = lod;
+        // Parallel Tick: the setting, whether the next tick shares its work, and Auto's state.
+        let (setting, on, auto) = horizon_client::parallel::status();
+        status["parallel_tick"] = json!({ "setting": setting, "on": on, "auto": auto });
         let (target, sampled) = self.lod.as_ref().map_or((0, 0), |lod| lod.progress());
         status["lod"]["target_tiles"] = target.into();
         status["lod"]["sampled_target_tiles"] = sampled.into();
