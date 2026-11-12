@@ -24,18 +24,20 @@ except ImportError:
 
 NAME = 'mob-display-name-parity'
 SCRIPT = [
-    ('setup', ['chat on']),
-    ('summon', ['cmd Alice summon minecraft:wolf 2.5 -60 4.5 {NoAI:1b}']),
-    ('named', ['cmd Alice summon minecraft:pig 4.5 -60 4.5 {NoAI:1b,CustomName:"Bob"}']),
+    # Only the script's own mobs may match its selectors. Both servers load a
+    # real generated world and may otherwise spawn different numbers of pigs.
+    ('setup', ['chat on', 'cmd Alice gamerule spawn_mobs false']),
+    ('summon', ['cmd Alice summon minecraft:wolf 2.5 -60 4.5 {NoAI:1b,Tags:["display_name_parity"]}']),
+    ('named', ['cmd Alice summon minecraft:pig 4.5 -60 4.5 {NoAI:1b,CustomName:"Bob",Tags:["display_name_parity"]}']),
     # /team names the team with PlayerTeam.getFormattedDisplayName and its member with
     # ScoreHolder.getFeedbackDisplayName (the display name, its scoreboard name shown on hover).
     ('team', ['cmd Alice team add reds', 'cmd Alice team modify reds color red',
-              'cmd Alice team join reds @e[type=minecraft:pig]']),
-    ('data', ['cmd Alice data get entity @e[type=minecraft:pig,limit=1] Health']),
-    ('kill', ['cmd Alice kill @e[type=minecraft:wolf]']),
+              'cmd Alice team join reds @e[type=minecraft:pig,tag=display_name_parity]']),
+    ('data', ['cmd Alice data get entity @e[type=minecraft:pig,tag=display_name_parity,limit=1] Health']),
+    ('kill', ['cmd Alice kill @e[type=minecraft:wolf,tag=display_name_parity]']),
     # /scoreboard names score holders with getFeedbackDisplayName too: an entity's UUID, a player's name on hover.
     ('scores', ['cmd Alice scoreboard objectives add points dummy',
-                'cmd Alice scoreboard players set @e[type=minecraft:pig] points 3',
+                'cmd Alice scoreboard players set @e[type=minecraft:pig,tag=display_name_parity] points 3',
                 'cmd Alice scoreboard players set Alice points 1']),
 ]
 INTS = re.compile(r'"uuid":\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\]')
