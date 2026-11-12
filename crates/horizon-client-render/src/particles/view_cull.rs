@@ -103,18 +103,10 @@ fn world_section(position: [f64; 3]) -> Option<[i32; 3]> {
     Some([block[0] >> 4, block[1] >> 4, block[2] >> 4])
 }
 
-/// Whether `QuadParticleGroup`'s test keeps `particle`: its point this frame (camera-relative) is on
-/// or inside `view`, the camera's frustum pulled back [`PARTICLE_FRUSTUM_OFFSET`] blocks.
-pub(super) fn in_view(
-    view: &crate::gfx::Frustum,
-    particle: &Particle,
-    camera: DVec3,
-    partial: f32,
-) -> bool {
-    let a = f64::from(partial);
-    let at = DVec3::from_array(array::from_fn(|i| {
-        particle.previous[i] + (particle.position[i] - particle.previous[i]) * a
-    })) - camera;
+/// Whether `QuadParticleGroup`'s test keeps `particle`: its position this tick (camera-relative, not
+/// interpolated) is on or inside `view`, the camera's frustum pulled back [`PARTICLE_FRUSTUM_OFFSET`] blocks.
+pub(super) fn in_view(view: &crate::gfx::Frustum, particle: &Particle, camera: DVec3) -> bool {
+    let at = DVec3::from_array(particle.position) - camera;
     view.contains_point(at.as_vec3())
 }
 

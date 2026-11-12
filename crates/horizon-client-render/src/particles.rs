@@ -4666,7 +4666,7 @@ impl ParticleEngine {
                 continue;
             }
             if let Some(view) = &view
-                && !view_cull::in_view(view, p, camera, partial)
+                && !view_cull::in_view(view, p, camera)
             {
                 continue;
             }
