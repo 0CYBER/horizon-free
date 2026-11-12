@@ -30,8 +30,7 @@ use horizon_world::registry::BlockStateId;
 use std::{collections::HashMap, sync::Arc};
 mod index;
 mod nbt;
-pub(super) use index::CartIndex;
-use index::cart_at;
+pub(super) use index::{CartIndex, cart_at};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum CartKind {
@@ -137,6 +136,9 @@ pub(super) struct Minecart {
     pub damage: f32,
     /// `Entity.noGravity` (`NoGravity` in its save).
     pub no_gravity: bool,
+    /// `Entity.ticksFrozen` (`TicksFrozen` in its save): powder snow builds
+    /// it up (`InsideBlockEffectType.FREEZE`), a cart never melts it.
+    pub ticks_frozen: i32,
     pub items: Vec<Option<ItemStack>>,
     /// Furnace minecarts: fuel ticks and `MinecartFurnace.push`. Its y part
     /// stays between ticks (it sets the push's length), only saving drops it.
@@ -144,6 +146,10 @@ pub(super) struct Minecart {
     pub push: Vec3,
     /// TNT minecarts: ticks until the explosion, -1 when not primed.
     pub fuse: i32,
+    /// TNT minecarts: `explosionPowerBase` and `explosionSpeedFactor`, the
+    /// blast's power at rest and its gain with the cart's speed.
+    pub explosion_power: f32,
+    pub explosion_speed_factor: f32,
     /// Hopper minecarts: an unpowered activator rail enables them.
     pub enabled: bool,
     /// Chest minecarts: the loot table rolled into `items` on load, saved
@@ -355,10 +361,13 @@ impl Minecart {
             hurt_dir: 1,
             damage: 0.0,
             no_gravity: false,
+            ticks_frozen: 0,
             items: vec![None; kind.slots()],
             fuel: 0,
             push: Vec3::ZERO,
             fuse: -1,
+            explosion_power: DEFAULT_EXPLOSION_POWER,
+            explosion_speed_factor: DEFAULT_EXPLOSION_SPEED_FACTOR,
             enabled: true,
             loot: None,
             first_tick: true,
@@ -1276,20 +1285,31 @@ impl Game<'_> {
         ) {
             c.fall_distance = 0.0;
         }
+        // PowderSnowBlock's FREEZE contact is counted here too.
         // WebBlock.entityInside: makeStuckInBlock(0.25, 0.05, 0.25) for every
         // cobweb the box (deflated by 1.0E-5) is in; it resets the fall distance.
         let b = c.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
         let (lo, hi) = (b.min_position(), b.max_position());
         let facts = self.res.facts();
+        let mut froze = false;
         for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
             for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
                 for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                    if &*facts.get(self.world.block(x, y, z)).name == "minecraft:cobweb" {
+                    let name = &*facts.get(self.world.block(x, y, z)).name;
+                    if name == "minecraft:powder_snow" {
+                        froze = true;
+                    }
+                    if name == "minecraft:cobweb" {
                         c.fall_distance = 0.0;
                         c.stuck = Vec3::new(0.25, f64::from(0.05_f32), 0.25);
                     }
                 }
             }
+        }
+        if froze {
+            // InsideBlockEffectType.FREEZE: once per applyEffectsFromBlocks.
+            c.ticks_frozen = (c.ticks_frozen + 1)
+                .min(horizon_client::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE);
         }
     }
     /// Runs `push_from_cart` for the cart being ticked (`c` is a copy of the
@@ -1533,7 +1553,9 @@ impl Game<'_> {
         }
         let speed = speed_sqr.sqrt().min(5.0);
         let r = c.random.next_double();
-        let power = (4.0 + r * 1.5 * speed) as f32;
+        // MinecartTNT.explode: the base power plus the speed's share.
+        let power = (f64::from(c.explosion_power)
+            + f64::from(c.explosion_speed_factor) * r * 1.5 * speed) as f32;
         let at = [c.position.x, c.position.y, c.position.z];
         // The cart is the explosion's source: it is gone before the blast
         // looks for entities, so it can't hit itself.
@@ -1892,10 +1914,11 @@ impl Game<'_> {
                 continue;
             }
             let kind = self.carts[i].kind.id();
+            horizon_threads::work::set_entity(horizon_threads::work::entity_id(kind));
             if !self.native_tick_pre_one(&mut round, id, kind) {
                 continue;
             }
-            let Some(i) = cart_at(&self.carts, id, i) else {
+            let Some(i) = self.cart_in_world(id, i, &round, kind) else {
                 continue;
             };
             // The ticked copy takes the loot roll instead of copying it: only
@@ -1930,6 +1953,7 @@ impl Game<'_> {
             // After the ticked cart is stored: a mod reads and changes the cart as it is now.
             self.native_tick_post_one(&round, id, kind);
         }
+        horizon_threads::work::clear_work();
         // On the server for every cart, the ridden ones too.
         let mut hint = 0;
         for id in ids {
@@ -2028,8 +2052,8 @@ impl Game<'_> {
         } else {
             (left, forward)
         };
-        let r = self.yaw.to_radians();
-        let (s, co) = (f64::from(r.sin()), f64::from(r.cos()));
+        let r = f64::from(self.yaw * 0.017_453_292);
+        let (s, co) = (f64::from(trig::sin(r)), f64::from(trig::cos(r)));
         let intent = [left * co - forward * s, forward * co + left * s];
         let mut c = self.carts[i].clone();
         let alive = self.tick_cart(&mut c, intent, i, &mut CartIndex::default());
@@ -2120,51 +2144,6 @@ impl Game<'_> {
             p.velocity = Vec3::ZERO;
         }
     }
-    /// `EntityType.createDefaultStackConfig` on a vehicle an item made: the
-    /// item's custom name and custom data (`applyComponentsFromItemStack`:
-    /// `Entity.applyImplicitComponent`'s two, saved as `CustomName` and
-    /// `data`), then its
-    /// `minecraft:entity_data` loaded over the vehicle (`updateCustomEntityTag`)
-    /// when it names this type. An op-only type (command block and spawner
-    /// minecarts) takes it from an op player only, never from a dispenser
-    /// (`by_player` false).
-    pub(super) fn apply_vehicle_stack_config(
-        &mut self,
-        target: super::commands::Target,
-        kind: &str,
-        stack: &ItemStack,
-        by_player: bool,
-    ) {
-        use horizon_world::nbt::Tag;
-        let name = stack.data().and_then(|d| d.custom_name.clone());
-        let custom = stack
-            .data()
-            .and_then(|d| d.other("minecraft:custom_data"))
-            .cloned();
-        let op = by_player && self.acting_player_is_op();
-        let data =
-            horizon_client::block_entity_item::spawn_egg_entity_data(stack, kind, op).cloned();
-        if name.is_none() && custom.is_none() && data.is_none() {
-            return;
-        }
-        let Some(mut own) = self.entity_nbt(target) else {
-            return;
-        };
-        if let Tag::Compound(map) = &mut own {
-            if let Some(name) = name {
-                map.insert("CustomName".into(), name);
-            }
-            if let Some(custom) = custom {
-                map.insert("data".into(), custom);
-            }
-        }
-        let tag = match &data {
-            Some(data) => horizon_client::data_cmd::merged(&own, data),
-            None => own,
-        };
-        // The vehicle's own compound, its name and data merged in: it loads back.
-        let _ = self.apply_entity_nbt(target, tag);
-    }
     /// `MinecartItem.useOn`: a cart on the clicked rail.
     pub(super) fn place_minecart(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
         let Some(kind) = CartKind::from_id(&stack.item) else {
@@ -2186,7 +2165,7 @@ impl Game<'_> {
             .insert((hit.pos[0] >> 4, hit.pos[2] >> 4));
         self.carts.push(cart);
         let id = self.next_entity;
-        self.apply_vehicle_stack_config(super::commands::Target::Cart(id), kind.id(), stack, true);
+        self.apply_item_stack_config(super::commands::Target::Cart(id), kind.id(), stack, true);
         if self.serving.is_some() || self.options.dedicated.is_some() {
             let cart = self.carts.last().unwrap();
             self.native_vehicle_create(
@@ -2420,28 +2399,6 @@ impl Game<'_> {
                     .any(|b| b.chest && b.id as i32 == key.2)
                     .then_some(CartKind::Chest)
             })
-    }
-    /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_cart(&mut self) -> bool {
-        let Some((i, d)) = self.cart_hit() else {
-            return false;
-        };
-        if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
-            return false;
-        }
-        let burning = self
-            .held()
-            .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
-        let area = self.carts[i].bounds();
-        // Player.attack's full damage against the cart's entity type.
-        let id = self.carts[i].id as i32;
-        let (damage, _, _, magic) = self.melee_damage(self.carts[i].kind.id(), false);
-        self.hurt_cart(i, damage, self.creative, burning);
-        self.vehicle_attack_sounds(area, magic.then_some(id));
-        // Player.onAttack: the hit starts the attack strength again.
-        self.attack_ticks = 0;
-        self.swing_arm();
-        true
     }
     /// An arrow hit cart `i` (`MinecartTNT.hurtServer`, then
     /// `VehicleEntity.hurtServer`): a burning arrow sets off a TNT minecart.
@@ -2913,7 +2870,7 @@ impl Game<'_> {
             emissive: &self.gui.atlas.emissive,
             translucent_sprites: &self.gui.atlas.translucent,
             atlas_revision: self.gui.atlas.revision,
-            nether: self.dim == super::Dim::Nether,
+            nether: self.nether_lighting(),
             lid: &lid,
             sign: &|_| None,
             banner: &|_| Vec::new(),
@@ -2928,6 +2885,11 @@ impl Game<'_> {
             .render_state(&scene, state.0, m, light, out);
     }
 }
+
+/// `MinecartTNT.DEFAULT_EXPLOSION_POWER_BASE` and `DEFAULT_EXPLOSION_SPEED_FACTOR`.
+const DEFAULT_EXPLOSION_POWER: f32 = 4.0;
+const DEFAULT_EXPLOSION_SPEED_FACTOR: f32 = 1.0;
+
 /// `VehicleEntity.hurtServer`'s destroy test: a creative player, damage past
 /// 40, or (`MinecartTNT.shouldSourceDestroy`) fire or an explosion hitting a
 /// TNT cart.
@@ -3943,7 +3905,7 @@ mod container_drop_tests {
                 c.items = slots.clone();
                 game.carts.push(c);
             }
-            game.world.random = LegacyRandom::new(1234);
+            game.world.random.set_seed(1234);
             if boat {
                 assert_eq!(game.hurt_boat_result(0, 100.0, false), Some(true));
                 assert!(game.boats.is_empty());

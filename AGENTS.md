@@ -22,13 +22,6 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   is the GitHub account the PR is opened from (`gh api user --jq .login`). Issues say "Filed by", reviews
   "Review by". Every comment starts with `🤖 Agent:`. Write only as the person you work for: the lines on
   this page that name Ludovic are for his own agents (account `ludovic111`), never for anyone else's.
-- **Review only when asked, and decide.** Review a pull request only when its author or a maintainer asks.
-  Asked by a maintainer to review open pull requests in general, take them one at a time, oldest first, skipping
-  drafts, your person's own and those they already reviewed. Check that the change does what it says (bugs, edge
-  cases), what it could break, whether tests cover it, and whether its scope and description hold up. Report only
-  what you can point to with a `file:line`, each point marked Blocker (fix before merge), Important, Nit,
-  Suggestion, Question or Praise. Submit a decision, never a plain comment: `gh pr review --approve` when nothing
-  blocks, `--request-changes` when something does.
 - **Attribution.** Commits end with a `Co-Authored-By:` line for the agent that wrote them, and PR bodies
   with that agent's own "Generated with" line. Example, Ludovic's agents (Claude Code on `ludovic111`):
   first line `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, commits
@@ -109,6 +102,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-shader-api` | Horizon's own WGSL shader packs ([docs/api/shaders.md](docs/api/shaders.md)): `horizon-shaders.toml`, the `.hshader` package; shared by the game, the launcher and the registry |
 | `horizon-shaders` | Shader packs (the `shaders/` folder format), rebuilt clean-room from a written spec of the format; no wgpu |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
+| `horizon-perf-format` | The `.hzperf` capture contract ([docs/perf-platform.md](docs/perf-platform.md) §3): `proto/horizon/perf/v1/capture.proto`, its generated types, the gzip writer and its thread. No Horizon dependencies; nothing in the game reads a capture |
 | `horizon-telemetry`, `horizon-telemetry-server`, `horizon-bench` | Opt-in data collection, its ingest server, the benchmark report format |
 | `horizon-system` | The machine the game runs on (OS, CPU, memory, drive, power, GPU maker and memory), for the crash report, the renderer's GPU info and telemetry |
 | `horizon-platform` | The platform's public API: what the Horizon layer may use of the engine ([docs/layers.md](docs/layers.md)); re-exports `horizon-system` today |
@@ -135,8 +129,8 @@ reads `README.md`, `launcher/links.json`, `docs/api/`, `roadmap/roadmap.json` an
 ## Build and test fast
 
 ```sh
-python3 tools/pr_ready.py                  # the self-check: fmt, clippy -D warnings, touched crates' tests, harnesses; paste its block in the PR
-python3 tools/pr_ready.py --quick          # same without harnesses
+python3 tools/pr_ready.py                  # the self-check: fmt, clippy -D warnings, touched crates' tests; paste its block in the PR
+python3 tools/pr_ready.py --harnesses      # also the affected harnesses (by default only when you change a harness, oracle, probe or the runner, as in CI)
 cargo test -p horizon-client -p horizon-client-lib --lib --bins --tests   # skips the examples (pr_ready does this); `--doc` separately
 cargo test -p horizon-client-lib --lib mod_content::tests:: -- --ignored   # the slow content-root tests, #[ignore]d; pr_ready runs them when mod content, assets, blocks or items change
 cargo build --profile fast -p horizon-client        # optimized, quick to link: use it to play or run lan_e2e
@@ -145,7 +139,8 @@ python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cov
 python3 tools/parity.py mob_ai sculk       # named harnesses
 python3 tools/lan_e2e.py --check chest     # two real games over LAN (server-thread host)
 python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
-python3 tools/lang_coverage.py --summary   # the keys each language still misses, and its English leftovers
+python3 tools/lang_coverage.py --summary   # one line per language: how many keys it carries and what it misses
+python3 tools/lang_coverage.py --summary --show-keys   # the same, then the keys behind the counts
 ```
 
 - Harnesses and the game need the vanilla data in `.local/` (`minecraft/`, `horizon-client/26.3`, `datagen/`,

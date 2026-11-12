@@ -20,7 +20,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom},
+    random::{LegacyRandom, LevelRandom, RandomSource, WorldgenRandom, XoroshiroRandom},
 };
 use horizon_world::{
     dimension_type::DimensionFacts,
@@ -856,7 +856,10 @@ impl<'a> Game<'a> {
         laps.lap("sn_inhabited");
         let spawn_mobs = self.ui.rules.bool("spawn_mobs");
         let spawn_enemies = self.ui.rules.bool("spawn_monsters");
-        let mut random = std::mem::replace(&mut self.world.random, LegacyRandom::new(0));
+        let mut random = std::mem::replace(
+            &mut self.world.random,
+            LevelRandom::for_level(LegacyRandom::new(0)),
+        );
         let mut pending = Vec::new();
         let last_state;
         {
@@ -915,6 +918,7 @@ impl<'a> Game<'a> {
                         }
                         spawned
                     };
+                    horizon_threads::work::set_chunk(chunk.0, chunk.1);
                     spawn_selection::spawn_for_chunk(
                         &level,
                         &mut random,
@@ -928,6 +932,7 @@ impl<'a> Game<'a> {
             }
             scratch.spawn_players = state.into_players();
         }
+        horizon_threads::work::clear_work();
         spawn_selection::attempt_counters(true);
         laps.lap("sn_attempts");
         self.world.random = random;
@@ -1162,7 +1167,7 @@ mod tests {
         // A contained chunk must actually reach the spawning pass, so an
         // empty category list cannot satisfy the rejected-chunk assertion.
         game.border.set_size(64.0);
-        game.world.random = LegacyRandom::new(12345);
+        game.world.random.set_seed(12345);
         game.spawn_natural();
         assert_ne!(
             game.world.random.next_long(),
@@ -1170,7 +1175,7 @@ mod tests {
         );
         game.world.inhabited.clear();
         game.border.set_size(2.0);
-        game.world.random = LegacyRandom::new(12345);
+        game.world.random.set_seed(12345);
         game.spawn_natural();
         // No shuffle draw for one candidate, and no attempt draws for a
         // rejected chunk. Inhabited time still advances before the gate.
