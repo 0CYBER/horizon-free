@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import io
 import json
 import os
 from pathlib import Path
@@ -472,6 +473,26 @@ class PrReadyTests(unittest.TestCase):
                                                  "their current inputs.\nNothing to run: every harness passed."),
                          "no harness affected")
         self.assertEqual(pr_ready.duration(125), "2 min 5 s")
+
+    def test_unittest_summary_keeps_skips_and_expected_failures(self):
+        class Outcomes(unittest.TestCase):
+            def test_pass(self):
+                self.assertTrue(True)
+
+            @unittest.skip("fixture platform is unavailable")
+            def test_skip(self):
+                self.fail("must not run")
+
+            @unittest.expectedFailure
+            def test_expected_failure(self):
+                self.fail("known fixture failure")
+
+        stream = io.StringIO()
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(Outcomes)
+        result = unittest.TextTestRunner(stream=stream).run(suite)
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(pr_ready.unittest_passed(stream.getvalue()),
+                         "3 run, OK (skipped=1, expected failures=1)")
 
     def test_python_checks_run_beside_cargo_and_harnesses_after_it(self):
         steps = pr_ready.plan(args(), "origin/main", {"crates/horizon-core/src/lib.rs"}, PACKAGES, LIBRARIES,
