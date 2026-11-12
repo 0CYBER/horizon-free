@@ -4272,6 +4272,7 @@ mod attribute_instance_save_tests {
         assert!(game.run_command("forceload add 0 0"));
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn mob(game: &Game<'_>, n: i32) -> usize {
@@ -5290,6 +5291,7 @@ mod h262_enderman_absolute_anger_tests {
             game.run_command("summon pig 13.5 200 2.5 {UUID:[I;262,0,0,99],NoAI:1b,NoGravity:1b}")
         );
         game.world.random.set_seed(262);
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn load(game: &mut Game<'_>, n: i32, end: Option<i64>) -> (u32, usize) {
@@ -5525,6 +5527,7 @@ mod sulfur_body_attribute_tests {
         assert!(game.run_command("scoreboard objectives add h192 dummy"));
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     /// `/attribute <cube> <attribute> get 1000`, read back through a score.
@@ -5779,6 +5782,7 @@ mod summoned_knot_tests {
             game.run_command("summon pig 13.5 200 2.5 {UUID:[I;129,0,0,99],NoAI:1b,NoGravity:1b}")
         );
         game.world.random.set_seed(129);
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn knot_id(game: &Game<'_>, n: i32) -> u32 {
@@ -5909,12 +5913,8 @@ mod summoned_knot_tests {
     #[ignore = "prepared resources; negative fractional registered position"]
     fn negative_fractional_knot_position_uses_floor_before_centering() {
         with_game(|game| {
-            game.world
-                .chunks
-                .insert((-1, -1), Arc::new(Chunk::empty(-1, -1)));
-            game.block_ticks
-                .add_empty_chunk(ChunkPos::new(-1, -1))
-                .unwrap();
+            // Chunk (-1, -1) is already loaded by the fixture's neighbourhood.
+            assert!(game.world.chunks.contains_key(&(-1, -1)));
             assert!(game.run_command("setblock -2 199 -3 stone strict"));
             assert!(game.run_command("setblock -2 200 -3 oak_fence strict"));
             assert!(game.run_command("summon leash_knot -1.2 200.8 -2.1 {UUID:[I;129,0,0,5]}"));

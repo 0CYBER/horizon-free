@@ -5711,6 +5711,7 @@ mod dragon_fireball_spawn_tests {
                     .insert((x, z), Arc::new(Chunk::empty(x, z)));
             }
         }
+        game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("forceload add 0 0"));
         game
     }

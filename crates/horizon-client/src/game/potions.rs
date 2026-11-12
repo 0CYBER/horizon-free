@@ -2635,6 +2635,7 @@ mod mob_absorption_max_tests {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
         assert!(game.run_command("scoreboard objectives add h203 dummy"));
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn pig(game: &Game<'_>, n: i32) -> usize {
@@ -2804,6 +2805,7 @@ mod mob_health_boost_tests {
         assert!(game.run_command("forceload add 0 0"));
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn pig(game: &Game<'_>, n: i32) -> usize {
@@ -3049,6 +3051,7 @@ mod depleted_absorption_tests {
         assert!(game.run_command("forceload add 0 0"));
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     /// The mob in the level with UUID word `n`.

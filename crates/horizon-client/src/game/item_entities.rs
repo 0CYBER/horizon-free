@@ -1033,14 +1033,10 @@ mod escape_tests {
         let mut game = server_game();
         let feet = horizon_core::geometry::Vec3::new(8.5, 70.0, 8.5);
         game.player = Some(horizon_client::motion::PlayerMotion::new(game.motion, feet).unwrap());
-        // Entity-ticking chunks also need the surrounding loaded chunks.
-        for x in -2..=2 {
-            for z in -2..=2 {
-                game.world
-                    .chunks
-                    .insert((x, z), Arc::new(Chunk::empty(x, z)));
-            }
-        }
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.load_ticking_neighbourhood(0, 0);
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(8, 8));
         let stone = game
