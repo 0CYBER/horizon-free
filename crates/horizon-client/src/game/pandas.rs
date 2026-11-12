@@ -126,6 +126,8 @@ impl Game<'_> {
                 .map(super::native_hooks::mob_kind)
                 .unwrap_or_default();
             self.native_entity_enter_love_mode(id, &kind, self.lan_acting_uuid);
+            // Animal.setInLove: entity event 18, the love hearts.
+            self.mob_event_particles(id, 18);
         }
         self.consume_held();
         if let Some(stack) = dropped {

@@ -112,19 +112,21 @@ impl Game<'_> {
         equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
         equipped.push((self.offhand.as_ref(), "offhand"));
         for (stack, slot) in equipped {
+            // ItemStack.forEachModifier: the stack's own ATTRIBUTE_MODIFIERS
+            // (its item's unless a command or a mod replaced them, #14641).
             let Some(stack) = stack else {
                 continue;
             };
-            let modifiers = world_items!(self).attribute_modifiers(stack);
-            for (attribute, id, amount, op, group) in &modifiers {
-                if !equipment_modifier_applies(group, slot) {
+            for (attribute, id, amount, op, group) in world_items!(self).attribute_modifiers(stack)
+            {
+                if !equipment_modifier_applies(&group, slot) {
                     continue;
                 }
                 if player
-                    .set_modifier_unclamped(attribute, id, *amount, op, true)
+                    .set_modifier_unclamped(&attribute, &id, amount, &op, true)
                     .is_ok()
                 {
-                    self.applied_modifiers.push((attribute.clone(), id.clone()));
+                    self.applied_modifiers.push((attribute, id));
                 }
             }
         }

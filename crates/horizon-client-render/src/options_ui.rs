@@ -1594,9 +1594,9 @@ pub struct OptionsUi {
     radial_pick: shell::Shell<crate::radial_editor::PickScreen>,
     /// Shaders: the shader packs and the picked one's options, on the settings shell.
     shader: shell::Shell<crate::shader_ui::ShaderScreen>,
-    /// The Pack Options page, and the packs' Polytone config entries by pack id (the game
-    /// fills them beside `pack_infos`).
-    pub pack_options: crate::pack_options_ui::PackOptionsUi,
+    /// Pack Options, on the settings shell, and the packs' Polytone config entries by pack id
+    /// (the game fills them beside `pack_infos`).
+    pack_options: shell::Shell<crate::pack_options_ui::PackOptionsScreen>,
     pub pack_configs: std::collections::BTreeMap<String, horizon_polytone::pack::Configs>,
     pub split_profiles: crate::split_profiles::SplitProfiles,
     /// HDR calibration while its page is open.
@@ -3401,10 +3401,6 @@ impl OptionsUi {
             c.draw(batch, atlas, cursor);
             return;
         }
-        if self.page() == Page::PackOptions {
-            self.pack_options.draw(batch, atlas, cursor, self.in_world);
-            return;
-        }
         let waiting = self.waiting();
         let in_world = self.in_world;
         if self.draw_radial_name(batch, atlas, cursor, in_world) {
@@ -3786,20 +3782,6 @@ impl OptionsUi {
             });
             return self.shell_events(s, outputs);
         }
-        if self.page() == Page::PackOptions {
-            let mut events = Vec::new();
-            for action in self
-                .pack_options
-                .click((x, y), size, drag, right || self.shift)
-            {
-                match action {
-                    crate::pack_options_ui::Action::ButtonClick => events.push(Event::ButtonClick),
-                    crate::pack_options_ui::Action::SliderDrag => {}
-                    crate::pack_options_ui::Action::Done => events.extend(self.back(s)),
-                }
-            }
-            return events;
-        }
         if self.page() == Page::Packs {
             let mut events = Vec::new();
             if drag {
@@ -3829,14 +3811,7 @@ impl OptionsUi {
                 crate::pack_screen::Action::BrowsePick(i) => {
                     events.push(Event::DownloadPack(i));
                 }
-                crate::pack_screen::Action::Options(id) => {
-                    let mut configs = horizon_polytone::pack::Configs::default();
-                    if let Some(own) = self.pack_configs.get(&id) {
-                        configs.merge(own);
-                    }
-                    self.pack_options = crate::pack_options_ui::PackOptionsUi::open(configs);
-                    self.push(Page::PackOptions);
-                }
+                crate::pack_screen::Action::Options(id) => self.open_pack_options(&id),
                 crate::pack_screen::Action::None => {}
             }
             return events;
@@ -4074,7 +4049,6 @@ impl OptionsUi {
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();
         let shell_slider = self.shell_mut().and_then(|shell| shell.release());
-        self.pack_options.release();
         let calibration_slider = self.calibration.as_mut().is_some_and(|c| c.release());
         let split_drop = self.split_setup.release();
         if slider || shell_slider.is_some() || calibration_slider {
@@ -4168,10 +4142,6 @@ impl OptionsUi {
             self.studio.wheel(amount);
             return Vec::new();
         }
-        if self.page() == Page::PackOptions {
-            self.pack_options.scroll(size, amount);
-            return Vec::new();
-        }
         let plain = self.resource_error.is_none()
             && !(self.pack_screen.is_some() && self.stack.last() == Some(&Page::Packs));
         if !plain {
@@ -4253,10 +4223,6 @@ impl OptionsUi {
         }
         if self.page() == Page::Studio {
             self.studio.wheel(amount);
-            return;
-        }
-        if self.page() == Page::PackOptions {
-            self.pack_options.scroll(size, amount);
             return;
         }
         match &mut self.pack_screen {
@@ -4393,14 +4359,8 @@ impl OptionsUi {
         self.can_change_value = false;
         match page {
             Page::PackOptions => {
-                let ui = std::mem::take(&mut self.pack_options);
-                if ui.changed {
-                    let entries = ui.configs.entries().keys().cloned().collect();
-                    events.push(Event::PackOptions {
-                        entries,
-                        chosen: ui.configs.chosen(),
-                    });
-                }
+                let screen = std::mem::take(&mut self.pack_options.screen);
+                events.extend(screen.finished());
             }
             Page::ShaderOptions | Page::ShaderPacks => {
                 if s.shader_options.as_ref().is_some_and(|o| o.changed) {
@@ -4959,6 +4919,34 @@ mod tests {
 
     /// A renderer whose destination offers nothing and whose display reports nothing.
     const NONE: EffectiveOutput = EffectiveOutput::NONE;
+
+    #[test]
+    fn pack_options_leave_with_a_change_and_with_nothing_after_its_undo() {
+        use crate::settings_shell::Screen as _;
+        let mut s = Settings::default();
+        let atlas = HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"));
+        let atlas = atlas.unwrap();
+        let mut ui = OptionsUi::default();
+        let mut configs = horizon_polytone::pack::Configs::default();
+        let birds = serde_json::json!({"default_value": true});
+        configs.add_entry("p:birds".into(), &birds);
+        ui.pack_configs.insert("pack".into(), configs);
+        for undone in [false, true] {
+            ui.open_pack_options("pack");
+            assert!(ui.shell().is_some(), "Pack Options is on the shell");
+            let birds = crate::pack_options_ui::Item::Entry(0);
+            ui.pack_options.screen.press(&mut s, birds, false);
+            if undone {
+                let before = s.clone();
+                ui.pack_options.screen.undo(&mut s, &before);
+            }
+            let events = ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None);
+            let sent = events
+                .iter()
+                .any(|e| matches!(e, Event::PackOptions { .. }));
+            assert_eq!(sent, !undone, "undone: {undone}");
+        }
+    }
 
     /// The window allows the input method only while `typing` says a search
     /// box has the focus (`Game::text_field_focused`), so a page without one

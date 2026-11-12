@@ -94,10 +94,14 @@ pub fn item_frame_to_nbt(f: &ItemFrame, uuid: [i32; 4], raw: Option<&Tag>) -> Ta
             (lo[1] + hi[1]) / 2.0,
             (lo[2] + hi[2]) / 2.0,
         ),
-        motion: Vec3::ZERO,
+        // BlockAttachedEntity.tick never runs super.tick, so the Motion, onGround and
+        // fallDistance that Entity.load read stay.
+        motion: raw.map_or(Vec3::ZERO, loaded_motion),
         rotation: [0.0, 0.0],
-        on_ground: false,
-        fall_distance: 0.0,
+        on_ground: raw.is_some_and(|raw| flag(raw, "OnGround")),
+        fall_distance: raw
+            .and_then(|raw| float(raw.get("fall_distance")))
+            .unwrap_or(0.0),
     };
     let mut tag = base.tag(raw);
     // `Entity.saveWithoutId`: `CustomName` before the frame's own fields.
@@ -167,5 +171,28 @@ mod tests {
             ("block_pos", Tag::IntArray(vec![0, 0, 0])),
         ]);
         assert_eq!(painting_from_nbt(&tag).unwrap().1, 1);
+    }
+
+    #[test]
+    fn item_frame_keeps_loaded_motion_on_ground_and_fall_distance() {
+        let tag = Tag::compound([
+            ("id", string("minecraft:item_frame")),
+            ("Pos", doubles(&[0.5, 64.0, 0.5])),
+            ("Facing", Tag::Byte(2)),
+            ("Motion", doubles(&[0.5, 20.0, -0.25])),
+            ("OnGround", Tag::Byte(1)),
+            ("fall_distance", Tag::Double(3.5f64.to_bits())),
+        ]);
+        let frame = item_frame_from_nbt(&tag, 1).unwrap();
+        let saved = item_frame_to_nbt(&frame, [1, 2, 3, 4], Some(&tag));
+        // A component beyond 10 loads as 0, the others stay.
+        assert_eq!(motion(&saved), Vec3::new(0.5, 0.0, -0.25));
+        assert!(flag(&saved, "OnGround"));
+        assert_eq!(float(saved.get("fall_distance")), Some(3.5));
+        // A frame made in play has nothing loaded: zeros.
+        let made = item_frame_to_nbt(&frame, [1, 2, 3, 4], None);
+        assert_eq!(motion(&made), Vec3::ZERO);
+        assert!(!flag(&made, "OnGround"));
+        assert_eq!(float(made.get("fall_distance")), Some(0.0));
     }
 }
