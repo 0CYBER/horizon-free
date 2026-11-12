@@ -37,8 +37,10 @@ It lives in the server for now, in its own crate (`horizon-anticheat`) plus one 
 player's moves (the position, the on-ground claim, cancelling a move) or for packet timing. It moves into a
 native mod once those hooks exist.
 
-horizon-server checks the section before every start (a wrong one turns the anticheat off, with an
-error in the log); the game reads it from `server.toml` when it starts (`horizon-client --dedicated` run by hand reads the same file from its folder, if there is one).
+horizon-server checks the section before every start: with a wrong one, `horizon-server start` and `run` don't
+start and print the error, which names the key. The game reads it from `server.toml` when it starts
+(`horizon-client --dedicated` run by hand reads the same file from its folder, if there is one); a wrong section
+there turns the anticheat off, with an error in the log.
 
 ## How a check acts
 
@@ -53,12 +55,13 @@ A check's kicks are counted for each player, across sessions and restarts (`stri
 `anticheat-strikes.json`). The kick that reaches the check's `ban_after` bans instead: the player goes
 into `banned-players.json` as `/ban` puts them, with "Horizon anticheat" as the source and "Horizon
 anticheat: <check>" as the reason, and is sent away with vanilla's ban message. A ban starts the count
-again, so a player an operator pardons (`/pardon`) is kicked once more before another ban. Only checks
-no legit client trips ban by default (`combat`); `ban_after = 0` turns a check's bans off.
+again, so a player an operator pardons (`/pardon`) is kicked once more before another ban. By default
+`combat` and `ground` ban at the second kick (`ban_after = 2`), `timer` and `prediction` never do; `ban_after = 0`
+turns a check's bans off.
 
-A kick or a ban is always told: the log line (with what the check saw), a warning in the console, and
-a line in the chat of the online operators (`alert_level`), so an operator can pardon a ban that was
-wrong.
+A kick or a ban is always told, even below `alert`: a warning in the console, the log line (with what the check
+saw) unless `log = ""`, and a line in the chat of the online operators (`alert_level`) unless `alerts = false`, so
+an operator can pardon a ban that was wrong.
 
 Every flag goes to `log`, with the time, the player, the check, its level, what it saw and what was done:
 
