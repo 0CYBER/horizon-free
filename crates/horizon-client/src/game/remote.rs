@@ -2417,7 +2417,7 @@ impl Game<'_> {
             .detach_tracking_target(TrackingTarget::LocalPlayer, || {
                 player.map(player_tracking_body)
             });
-        self.player = None;
+        self.drop_remote_player();
         // handleLogin / handleRespawn: LocalPlayer.setPortalCooldown, so a
         // player who arrives standing in a portal gets no overlay from it.
         self.portals.player.cooldown = spawn.portal_cooldown;
@@ -3451,6 +3451,7 @@ impl Game<'_> {
                 {
                     r.sequence = 0;
                 }
+                self.portals.respawn_attributes.respawn(p.keep & 1 != 0);
                 self.enter_remote_dimension(&p.spawn, true, reason);
                 // handleRespawn adds the new LocalPlayer after what the kept
                 // level holds; a new level holds nothing yet.
@@ -3562,7 +3563,7 @@ impl Game<'_> {
             C::Explode(p) => self.remote_explode(&p),
             C::Sound(p) => {
                 if let Some(name) = self.remote_sound_name(&p.sound)
-                    && !self.settings.extras.pvp.combat.mutes_sound(&name)
+                    && !self.pvp_mutes_sound(&name)
                 {
                     let at = [
                         f64::from(p.x) / 8.0,
@@ -3584,7 +3585,7 @@ impl Game<'_> {
             }
             C::SoundEntity(p) => {
                 if let Some(name) = self.remote_sound_name(&p.sound)
-                    && !self.settings.extras.pvp.combat.mutes_sound(&name)
+                    && !self.pvp_mutes_sound(&name)
                     && let Some(state) = self.remote_sound_entity_state(p.id)
                 {
                     let source = usize::try_from(p.source)
@@ -4564,9 +4565,7 @@ impl Game<'_> {
             // HUD draws and the health it may hold), reach, speed and so on.
             // Then the received health again, which the old maximum clamped.
             C::UpdateAttributes(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
-                if let Some(pl) = self.player.as_mut() {
-                    horizon_client::lan::attributes::apply(&mut pl.attributes, &p.values);
-                }
+                self.apply_own_attributes(p.values);
                 self.apply_remote_health();
             }
             C::UpdateAttributes(p) => self.remote_mob_attributes(p.id, &p.values),
@@ -5944,7 +5943,7 @@ impl Game<'_> {
         };
         let at = Vec3::new(p[0], p[1], p[2]);
         // ItemEntity's constructor draws bobOffs from the item's own random.
-        let mut random = horizon_client::mobs::entity_random(id as u32, at);
+        let mut random = (*horizon_client::mobs::entity_random(id as u32, at)).clone();
         let bob_offset = random.next_float() * std::f32::consts::PI * 2.0;
         self.dropped.push(ItemEntity {
             random,
@@ -6144,6 +6143,7 @@ impl Game<'_> {
                 // Player.tick derives noPhysics from the current game mode.
                 player.spectator = self.spectator();
                 player.velocity = delta;
+                self.take_carried_attributes(&mut player)?;
                 self.player = Some(player);
                 self.input_player_replaced();
                 self.sway = Default::default();

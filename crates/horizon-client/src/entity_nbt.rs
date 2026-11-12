@@ -1009,14 +1009,15 @@ pub fn mob_to_nbt(
             map.insert("Tame".into(), Tag::Byte(i8::from(m.extra.tame)));
             map.insert("Temper".into(), Tag::Int(m.extra.equine_temper));
             map.insert("Bred".into(), Tag::Byte(i8::from(m.extra.bred)));
-            // AbstractHorse.addAdditionalSaveData; Horizon does not model the
-            // eating haystack yet.
+            // AbstractHorse.addAdditionalSaveData; the eating haystack is not modelled yet.
             map.entry("EatingHaystack".into()).or_insert(Tag::Byte(0));
             if let Some(owner) = m.extra.owner {
                 map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
             }
             if id == "minecraft:horse" {
-                let v = i32::from(m.extra.variant) | i32::from(m.extra.variant2) << 8;
+                let loaded = map.get(&"Variant".into()).and_then(int_value);
+                let look = (m.extra.variant, m.extra.variant2);
+                let v = crate::mobs::equine::saved_variant(loaded, look.0, look.1);
                 map.insert("Variant".into(), Tag::Int(v));
             }
             let llama = crate::mobs::llama::is_llama(m.species());
@@ -1893,7 +1894,7 @@ pub fn mob_from_nbt_with_random(
     types: &HashMap<String, Arc<MobType>>,
     id: u32,
     registry: Option<&BlockRegistry>,
-    random: horizon_core::random::LegacyRandom,
+    random: horizon_core::random::EntityRandom,
 ) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
     let position = position(tag)?;
@@ -2248,8 +2249,7 @@ pub fn mob_from_nbt_with_random(
         m.extra.bred = flag(tag, "Bred");
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
         let v = number(tag.get("Variant")).unwrap_or(0) as i32;
-        m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
-        m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
+        (m.extra.variant, m.extra.variant2) = crate::mobs::equine::horse_look(v);
         if crate::mobs::llama::is_llama(m.species()) {
             crate::mobs::llama::from_nbt(&mut m, tag);
         }
@@ -3505,89 +3505,8 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
     Some(p)
 }
 
-/// `FireworkRocketEntity.readAdditionalSaveData`: Life, LifeTime (0 when
-/// absent: a bare `/summon` explodes at once), FireworksItem and
-/// ShotAtAngle, with `Projectile`'s Owner and LeftOwner.
-pub struct RocketNbt {
-    pub position: Vec3,
-    pub motion: Vec3,
-    pub life: i32,
-    pub lifetime: i32,
-    pub item: Option<crate::items::ItemStack>,
-    pub angled: bool,
-    pub owner: Option<Who>,
-    pub left_owner: bool,
-    pub on_ground: bool,
-    /// `Entity.load`'s Rotation.
-    pub rotation: [f32; 2],
-    /// `Projectile.hasBeenShot`: false until its first tick posts `projectile_shoot`.
-    pub has_been_shot: bool,
-    /// `Entity.isSilent`: no launch sound.
-    pub silent: bool,
-}
-pub fn firework_rocket_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<RocketNbt> {
-    let owner = uuid_from_tag(tag.get("Owner"));
-    Some(RocketNbt {
-        position: position(tag)?,
-        motion: motion(tag),
-        life: number(tag.get("Life")).unwrap_or(0) as i32,
-        lifetime: number(tag.get("LifeTime")).unwrap_or(0) as i32,
-        item: tag.get("FireworksItem").and_then(item_from_nbt),
-        angled: flag(tag, "ShotAtAngle"),
-        owner: (player.is_some() && owner == player).then_some(Who::Player),
-        left_owner: flag(tag, "LeftOwner"),
-        on_ground: flag(tag, "OnGround"),
-        rotation: rotation(tag),
-        has_been_shot: flag(tag, "HasBeenShot"),
-        silent: flag(tag, "Silent"),
-    })
-}
-
-/// What `FireworkRocketEntity.addAdditionalSaveData` writes, over `Projectile`'s
-/// Owner and LeftOwner.
-pub struct RocketSave<'a> {
-    pub rotation: [f32; 2],
-    pub position: Vec3,
-    pub motion: Vec3,
-    pub life: i32,
-    pub lifetime: i32,
-    pub item: &'a crate::items::ItemStack,
-    pub angled: bool,
-    pub owner: Option<[i32; 4]>,
-    pub left_owner: bool,
-    /// `Entity.onGround`, from the rocket's last `Entity.move`.
-    pub on_ground: bool,
-    pub has_been_shot: bool,
-}
-pub fn firework_rocket_to_nbt(r: &RocketSave, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
-    let mut tag = Base {
-        id: "minecraft:firework_rocket",
-        uuid,
-        position: r.position,
-        motion: r.motion,
-        rotation: r.rotation,
-        on_ground: r.on_ground,
-        fall_distance: 0.0,
-    }
-    .tag(raw);
-    for (key, value) in [
-        ("Life", Tag::Int(r.life)),
-        ("LifeTime", Tag::Int(r.lifetime)),
-        ("FireworksItem", item_to_nbt(r.item)),
-        ("ShotAtAngle", Tag::Byte(i8::from(r.angled))),
-        ("HasBeenShot", Tag::Byte(i8::from(r.has_been_shot))),
-    ] {
-        put(&mut tag, key, value);
-    }
-    if r.left_owner {
-        put(&mut tag, "LeftOwner", Tag::Byte(1));
-    }
-    if let Some(owner) = r.owner {
-        put(&mut tag, "Owner", Tag::IntArray(owner.to_vec()));
-    }
-    tag
-}
-
+mod rocket;
+pub use rocket::*;
 mod trident;
 pub use trident::{TRIDENT_HIT_GROUND, TridentNbt, TridentSave, trident_from_nbt, trident_to_nbt};
 mod hanging;
@@ -4452,6 +4371,49 @@ mod tests {
         }
     }
 
+    /// `Horse.getVariant` is `Variant.byId(typeVariant & 255)` and
+    /// `getMarkings` `Markings.byId((typeVariant & 0xFF00) >> 8)`; both maps
+    /// are `OutOfBoundsStrategy.WRAP` (7 coats, 5 markings), so 9 is coat 2
+    /// and markings 6 is 1.
+    #[test]
+    fn a_horses_unknown_coat_and_markings_wrap() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:horse".into();
+        ty.species = crate::mobs::Species::Horse;
+        let types = [("minecraft:horse".into(), kind)].into();
+        let look = |saved: i32| {
+            let raw = Tag::compound([
+                ("id", string("minecraft:horse")),
+                ("Pos", doubles(&[4.5, 220.0, 4.5])),
+                ("Variant", Tag::Int(saved)),
+            ]);
+            let m = mob_from_nbt(&raw, &types, 1, None).unwrap();
+            (m.extra.variant, m.extra.variant2)
+        };
+        assert_eq!(look(6 | 4 << 8), (6, 4));
+        assert_eq!(look(9), (2, 0));
+        assert_eq!(look(6 << 8), (0, 1));
+        assert_eq!(look(255 | 255 << 8), (3, 0));
+        // `Horse.addAdditionalSaveData` writes the loaded int back as it was;
+        // a horse whose look changed since saves the two ids.
+        let saved = |loaded: i32, change: Option<u8>| {
+            let raw = Tag::compound([
+                ("id", string("minecraft:horse")),
+                ("Pos", doubles(&[4.5, 220.0, 4.5])),
+                ("Variant", Tag::Int(loaded)),
+            ]);
+            let mut m = mob_from_nbt(&raw, &types, 1, None).unwrap();
+            if let Some(coat) = change {
+                m.extra.variant = coat;
+            }
+            number(mob_to_nbt(&m, [0; 4], Some(&raw), None, |_| None).get("Variant"))
+        };
+        assert_eq!(saved(9, None), Some(9));
+        assert_eq!(saved(6 << 8 | 0x7_0000, None), Some(6 << 8 | 0x7_0000));
+        assert_eq!(saved(9, Some(5)), Some(5));
+    }
+
     /// `LivingEntity.readAdditionalSaveData` reads `HurtTime` and `DeathTime`
     /// with `getShortOr`: an int tag is narrowed (`(short)(value & 65535)`),
     /// so 40000 is -25536 and never counts down.
@@ -4777,6 +4739,7 @@ mod tests {
                 left_owner: false,
                 on_ground: true,
                 has_been_shot: false,
+                fall_distance: 2.5,
             },
             [1, 2, 3, 4],
             None,
@@ -4788,6 +4751,8 @@ mod tests {
         );
         assert_eq!(r.position, Vec3::new(1.5, 70.0, -3.25));
         assert_eq!(r.rotation, [90.0, 10.0]);
+        // Entity.saveWithoutId/load keep the fall.
+        assert_eq!(r.fall_distance, 2.5);
         let trident = ItemStack::new("minecraft:trident", 1);
         let tag = trident_to_nbt(
             &TridentSave {

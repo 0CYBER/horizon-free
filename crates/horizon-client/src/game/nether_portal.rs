@@ -19,6 +19,7 @@ use horizon_core::{
     random::RandomSource,
 };
 use horizon_world::{
+    dimension_type::DimensionFacts,
     level::portal_travel::{
         BorderBounds, FoundRectangle, closest_portal, collision_free_position, exit_position,
         largest_rectangle_around, relative_position,
@@ -26,6 +27,8 @@ use horizon_world::{
     nbt::Tag,
 };
 use std::collections::HashMap;
+
+mod respawn_attributes;
 
 /// `Player.getDimensionChangingDelay`.
 pub(super) const PLAYER_DELAY: i32 = 10;
@@ -105,6 +108,8 @@ pub(super) struct Portals {
     dirty: bool,
     /// Per-chunk portal palette masks, kept across ticks (portal_sections).
     pub(super) sections: horizon_client::portal_sections::PortalSections,
+    /// The attributes a respawn hands from the old player to the new one.
+    pub(super) respawn_attributes: respawn_attributes::RespawnAttributes,
 }
 
 fn rotate_y(v: Vec3, degrees: f32) -> Vec3 {
@@ -340,12 +345,10 @@ impl Game<'_> {
             }
             None => (true, Vec3::new(0.5, 0.0, 0.0)),
         };
-        // DimensionType.getTeleportationScale: 8 out of the Nether, 1/8 into it.
-        let scale = if self.dim == Dim::Nether {
-            8.0
-        } else {
-            1.0 / 8.0
-        };
+        let scale = DimensionFacts::teleportation_scale(
+            self.dimension_type(),
+            self.dimension_type_of(target),
+        );
         Plan {
             dim: target,
             // getPortalDestination clamps to the border of the level it leads to.
