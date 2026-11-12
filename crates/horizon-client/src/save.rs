@@ -6038,7 +6038,11 @@ mod tests {
             "moved into the chunk that saved it"
         );
         let order = &chunk.saved.as_ref().expect("extras").block_entity_order;
-        assert_eq!(order, &[(5, 70, 13)], "load order follows the moved position");
+        assert_eq!(
+            order,
+            &[(5, 70, 13)],
+            "load order follows the moved position"
+        );
     }
 
     #[test]
