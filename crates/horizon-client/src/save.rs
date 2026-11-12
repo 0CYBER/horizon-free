@@ -15,6 +15,7 @@
 //! `level.dat`) are migrated on open.
 mod backpressure;
 mod block_entity_order;
+mod far_regions;
 mod respawn;
 
 use crate::{
@@ -2113,6 +2114,8 @@ const MAX_OPEN_REGIONS: usize = 256;
 struct RegionFiles {
     regions: HashMap<(i32, i32), (Option<Arc<Mutex<RegionFile>>>, u64)>,
     clock: u64,
+    /// Each region's write stamp (`far_regions::writing`).
+    written: HashMap<(i32, i32), u64>,
 }
 impl RegionFiles {
     #[cfg(test)]
@@ -2213,6 +2216,7 @@ fn write_region_records(
             continue;
         };
         let mut region = region.lock().map_err(|_| "region file poisoned")?;
+        let _writing = far_regions::writing(cache, (rx, rz));
         let mut changed = false;
         for (pos, record) in &list {
             match record {
@@ -2530,8 +2534,8 @@ pub struct SaveDir {
     pub tables: OnceLock<Arc<SaveTables>>,
     /// The dimension's skylight and height, from its folder name.
     pub shape: LevelShape,
-    /// Which chunks each region file holds, for far terrain (`lod_saved`).
-    lod_regions: Mutex<crate::fast_hash::FxHashMap<(i32, i32), LodRegion>>,
+    /// The region file headers kept for far readers (`far_record`).
+    far_regions: far_regions::FarRegions,
     /// Saved chunks decoded for far terrain, shared by its sampling threads
     /// (`lod_surfaces_shared`), oldest first.
     lod_decoded: Mutex<LodDecoded>,
@@ -2557,15 +2561,6 @@ struct LodDecoded {
 /// for how long: edits saved later show after it.
 const LOD_DECODED: usize = 1024;
 const LOD_DECODED_TTL: std::time::Duration = std::time::Duration::from_secs(30);
-/// A region file's saved chunks (bit `x + z * 32`), `None` without the file,
-/// as of `checked`.
-struct LodRegion {
-    checked: std::time::Instant,
-    chunks: Option<[u64; 16]>,
-}
-/// How long far terrain trusts a region file's chunk list: chunks saved after
-/// it was read show in the far view this long after.
-const LOD_REGION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 impl SaveDir {
     /// This dimension's server-owned mod attachments: `data/horizon/attachments.dat`, Horizon's
     /// own namespace. A file that doesn't read is moved aside to `attachments.dat.corrupt`, with
@@ -2633,7 +2628,7 @@ impl SaveDir {
             outstanding: Default::default(),
             tables: OnceLock::new(),
             shape,
-            lod_regions: Default::default(),
+            far_regions: Default::default(),
             lod_decoded: Default::default(),
             datafix_context: OnceLock::new(),
             blending_lookup: OnceLock::new(),
@@ -2750,40 +2745,6 @@ impl SaveDir {
         put(&mut data, "tickets", Tag::List(tickets));
         write_saved_data(&self.root, "chunk_tickets", data)
     }
-    /// Whether chunk `x z` is in its region file, from a chunk list kept
-    /// `LOD_REGION_TTL`. Far terrain asks for every column of the view: it
-    /// opened the region file each time, also where there is none, which
-    /// held the far view back for minutes.
-    fn lod_saved(&self, x: i32, z: i32) -> bool {
-        let key = (x >> 5, z >> 5);
-        let mut regions = self.lod_regions.lock().unwrap();
-        let fresh = regions
-            .get(&key)
-            .is_some_and(|region| region.checked.elapsed() < LOD_REGION_TTL);
-        if !fresh {
-            let chunks = RegionFile::open(self.region_path("region", key.0, key.1))
-                .ok()
-                .map(|region| {
-                    let mut bits = [0u64; 16];
-                    for (pos, _) in region.chunks() {
-                        let index = ((pos.x & 31) + (pos.z & 31) * 32) as usize;
-                        bits[index / 64] |= 1 << (index % 64);
-                    }
-                    bits
-                });
-            regions.insert(
-                key,
-                LodRegion {
-                    checked: std::time::Instant::now(),
-                    chunks,
-                },
-            );
-        }
-        let index = ((x & 31) + (z & 31) * 32) as usize;
-        regions[&key]
-            .chunks
-            .is_some_and(|bits| bits[index / 64] & (1 << (index % 64)) != 0)
-    }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
         region_path(&self.root, folder, rx, rz)
     }
@@ -2889,7 +2850,7 @@ impl SaveDir {
         Some(chunk)
     }
     /// A saved full chunk read for a player's far ring (`lan::far`), as `load` but past the gameplay
-    /// region cache, and only where the region file lists it (no file opened where there is none).
+    /// region cache (`far_record`).
     pub fn load_far(
         &self,
         x: i32,
@@ -2897,27 +2858,7 @@ impl SaveDir {
         registry: &BlockRegistry,
         biomes: &Biomes,
     ) -> Option<Chunk> {
-        let pending = self
-            .pending
-            .lock()
-            .ok()?
-            .get(&(Folder::Region, x, z))
-            .map(|(_, record)| record.clone());
-        let root = if let Some(record) = pending {
-            record.tag().map(|tag| (*tag).clone())?
-        } else {
-            if !self.lod_saved(x, z) {
-                return None;
-            }
-            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
-            let mut root = region
-                .read(ChunkPos::new(x, z))
-                .ok()??
-                .nbt(Limits::default())
-                .ok()?;
-            self.upgrade_record(Folder::Region, &mut root).ok()?;
-            root
-        };
+        let root = self.far_record(x, z)?;
         let tables = self.tables.get().map(|t| &**t);
         let mut chunk = decode_with(&root, registry, biomes, tables, self.shape.column())?;
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
@@ -5270,28 +5211,7 @@ impl SaveDir {
         assets: &crate::assets::Assets,
         biomes: &Biomes,
     ) -> Option<LodSurfaces> {
-        let pending = self
-            .pending
-            .lock()
-            .ok()?
-            .get(&(Folder::Region, x, z))
-            .map(|(_, record)| record.clone());
-        let root = if let Some(record) = pending {
-            record.tag().map(|tag| (*tag).clone())?
-        } else {
-            if !self.lod_saved(x, z) {
-                return None;
-            }
-            // Far-only reads must not populate the gameplay region cache across the whole view.
-            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
-            let mut root = region
-                .read(ChunkPos::new(x, z))
-                .ok()??
-                .nbt(Limits::default())
-                .ok()?;
-            self.upgrade_record(Folder::Region, &mut root).ok()?;
-            root
-        };
+        let root = self.far_record(x, z)?;
         // Proto saves may still be missing decoration from their neighbors.
         if text(root.tag.get("Status"))
             .is_some_and(|status| status != "minecraft:full" && status != "full")
