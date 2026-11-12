@@ -1149,7 +1149,7 @@ fn serve_login(
             );
         }
     };
-    let result = login_and_configure(&mut c, shared, uuid, &name, properties);
+    let result = login_and_configure(&mut c, shared, uuid, &name, &user, properties);
     match result {
         Ok(Some(parts)) => {
             play(c, shared, parts, address, counted, expected.is_some());
@@ -1225,6 +1225,7 @@ fn login_and_configure(
     shared: &Arc<Shared>,
     uuid: u128,
     name: &str,
+    user: &str,
     properties: Vec<login::Property>,
 ) -> Result<Option<Parts>, String> {
     let e = |e: horizon_protocol::Error| e.to_string();
@@ -1247,14 +1248,18 @@ fn login_and_configure(
         .encode(),
     )
     .map_err(e)?;
-    // The client may send its settings before acknowledging the login.
-    loop {
-        let (id, payload) = c.recv().map_err(e)?;
-        match login::Serverbound::decode(id, &payload).map_err(e)? {
-            login::Serverbound::LoginAcknowledged(_) => break,
-            login::Serverbound::CustomQueryAnswer(_) | login::Serverbound::CookieResponse(_) => {}
-            _ => return Err("unexpected packet during login".into()),
+    let (id, payload) = c.recv().map_err(e)?;
+    match login::Serverbound::decode(id, &payload).map_err(e)? {
+        login::Serverbound::LoginAcknowledged(_) => {}
+        // handleCustomQueryPacket and handleCookieResponse: this server sends no query and no
+        // cookie request here, so an answer is unexpected (DISCONNECT_UNEXPECTED_QUERY).
+        login::Serverbound::CustomQueryAnswer(_) | login::Serverbound::CookieResponse(_) => {
+            let reason = translatable("multiplayer.disconnect.unexpected_query_response", &[]);
+            let text = refuse(c, shared, "Server thread", user, &reason);
+            lost(shared, user, &text);
+            return Ok(None);
         }
+        _ => return Err("unexpected packet during login".into()),
     }
     c.reader.set_read_timeout(Some(READ_TIMEOUT)).map_err(e)?;
     // Configuration.
@@ -2365,6 +2370,129 @@ mod tests {
         assert_eq!(owner.uuid, owner_uuid);
         let guest = login_profile(Connection::local(lan.connect_local().unwrap()), "Alex");
         assert_eq!(guest.uuid, offline_uuid("Alex"));
+    }
+
+    /// Logs "Alex" in over memory up to `LoginFinished`, sends `stray` if there is one, then
+    /// `LoginAcknowledged` (so a server that lets the stray packet pass goes on to configuration
+    /// instead of waiting for the next packet), and returns the server's next packet with the lines
+    /// its log has written so far (en_us's text for the one key the refusal uses).
+    fn login_with_stray_packet(
+        stray: Option<login::Serverbound>,
+    ) -> ((i32, Vec<u8>), Arc<Mutex<Vec<String>>>) {
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+        let into = lines.clone();
+        let mut lang = horizon_protocol::text::Language::new();
+        lang.insert(
+            "multiplayer.disconnect.unexpected_query_response".into(),
+            "Unexpected custom data from client".into(),
+        );
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            log: Some(crate::lan::NetLog {
+                write: Arc::new(move |_, _, line| into.lock().unwrap().push(line.to_owned())),
+                lang: Arc::new(lang),
+                log_ips: false,
+            }),
+            ..crate::lan::NetConfig::loopback(0, "Stray packets".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let mut c = Connection::local(lan.connect_local().unwrap());
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port: 0,
+                intent: handshake::LOGIN,
+            })
+            .encode(),
+        )
+        .unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: "Alex".into(),
+                uuid: offline_uuid("Alex"),
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            match login::Clientbound::decode(id, &payload).unwrap() {
+                login::Clientbound::Compression(p) => c.set_compression(p.threshold),
+                login::Clientbound::LoginFinished(_) => break,
+                other => panic!("unexpected login packet {other:?}"),
+            }
+        }
+        if let Some(stray) = stray {
+            c.send(&stray.encode()).unwrap();
+        }
+        // A server that has already refused the login may have closed the connection.
+        let _ = c.send(&login::Serverbound::LoginAcknowledged(Empty).encode());
+        (c.recv().unwrap(), lines)
+    }
+
+    /// `ServerLoginPacketListenerImpl.handleCustomQueryPacket` and `handleCookieResponse`: this
+    /// server sends no login query and no cookie request, so an answer to either is unexpected and
+    /// ends the login with `ServerCommonPacketListenerImpl.DISCONNECT_UNEXPECTED_QUERY`, before
+    /// configuration starts.
+    fn assert_unexpected_query_refused(stray: login::Serverbound) {
+        use horizon_protocol::ids::login::clientbound::LOGIN_DISCONNECT;
+        let ((id, payload), lines) = login_with_stray_packet(Some(stray));
+        assert_eq!(
+            id, LOGIN_DISCONNECT,
+            "the login went on: the server sent packet {id}"
+        );
+        let login::Clientbound::Disconnect(reason) =
+            login::Clientbound::decode(id, &payload).unwrap()
+        else {
+            panic!("not a login disconnect")
+        };
+        assert_eq!(
+            reason.reason_json,
+            r#"{"translate":"multiplayer.disconnect.unexpected_query_response"}"#
+        );
+        // The refusal is logged as vanilla's `disconnect` does, then the loss of the connection.
+        let user = "Alex (<ip address withheld>)";
+        let expected = [
+            format!("Disconnecting {user}: Unexpected custom data from client"),
+            format!("{user} lost connection: Unexpected custom data from client"),
+        ];
+        let until = Instant::now() + Duration::from_secs(10);
+        while lines.lock().unwrap().len() < expected.len() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(*lines.lock().unwrap(), expected);
+    }
+
+    #[test]
+    fn a_login_query_answer_nobody_asked_for_disconnects_the_client() {
+        assert_unexpected_query_refused(login::Serverbound::CustomQueryAnswer(
+            login::CustomQueryAnswer {
+                transaction: 1,
+                payload: Some(vec![1, 2, 3]),
+            },
+        ));
+    }
+
+    #[test]
+    fn a_login_cookie_response_nobody_asked_for_disconnects_the_client() {
+        assert_unexpected_query_refused(login::Serverbound::CookieResponse(
+            login::CookieResponse {
+                key: "horizon:test".into(),
+                payload: None,
+            },
+        ));
+    }
+
+    /// The same login with nothing stray goes on to configuration: its first packet is the brand.
+    #[test]
+    fn a_login_with_nothing_stray_reaches_configuration() {
+        use horizon_protocol::ids::configuration::clientbound::CUSTOM_PAYLOAD;
+        let ((id, _), _) = login_with_stray_packet(None);
+        assert_eq!(id, CUSTOM_PAYLOAD);
     }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {
