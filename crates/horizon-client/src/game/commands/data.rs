@@ -697,6 +697,27 @@ impl Game<'_> {
                 self.carts[i] = cart;
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
+            Target::Painting(id) => {
+                // Painting.readAdditionalSaveData over HangingEntity's: the
+                // facing, the block it hangs on and a known variant
+                // (`VariantUtils.readVariant(..).ifPresent`: an unknown or
+                // unreadable one keeps the painting's).
+                let uuid = self.uuid_for(id);
+                let (pos, facing) =
+                    entity_nbt::painting_placement_from_nbt(&tag).ok_or_else(stale)?;
+                let known = entity_nbt::painting_from_nbt(&tag)
+                    .and_then(|(_, _, v)| self.painting_variants.get(&v?).cloned());
+                let p = self
+                    .paintings
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                    .ok_or_else(stale)?;
+                (p.pos, p.facing) = (pos, facing);
+                if let Some(v) = known {
+                    (p.variant, p.width, p.height) = (v.id, v.width, v.height);
+                }
+                set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
+            }
             Target::Other(id) => {
                 let uuid = self.uuid_for(id);
                 let marker = self
@@ -748,6 +769,7 @@ impl Game<'_> {
         | Target::Item(id)
         | Target::Stand(id)
         | Target::Frame(id)
+        | Target::Painting(id)
         | Target::Boat(id)
         | Target::Cart(id)
         | Target::Tnt(id)
@@ -1545,7 +1567,7 @@ impl Game<'_> {
         let before = self.next_entity;
         let mut tag = tag;
         crate::game::persist::mark_fresh(&mut tag);
-        self.world.loaded_entities.push((key, vec![tag]));
+        self.world.queue_entity_nbt(key, vec![tag]);
         self.spawn_loaded_entities();
         waiting.append(&mut self.world.loaded_entities);
         self.world.loaded_entities = waiting;
