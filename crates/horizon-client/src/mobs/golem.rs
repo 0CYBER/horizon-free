@@ -593,7 +593,8 @@ pub fn snow_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     for i in 0..4 {
         let xx = (m.position.x + f64::from((i % 2 * 2 - 1) as f32 * 0.25)).floor() as i32;
         let zz = (m.position.z + f64::from((i / 2 % 2 * 2 - 1) as f32 * 0.25)).floor() as i32;
-        let below = w.facts.get(w.world.block(xx, y - 1, zz));
+        let below_state = w.world.block(xx, y - 1, zz);
+        let below = w.facts.get(below_state);
         // SnowLayerBlock.canSurvive: the two snow-layer tags decide first,
         // then a full top face (or a full snow layer) supports the snow.
         let in_tag = |tag: &str| {
@@ -604,7 +605,10 @@ pub fn snow_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let supported = if in_tag("minecraft:cannot_support_snow_layer") {
             false
         } else {
-            in_tag("minecraft:support_override_snow_layer") || below.full_collision
+            in_tag("minecraft:support_override_snow_layer")
+                || w.top_face_full([xx, y - 1, zz])
+                || (&*below.name == "minecraft:snow"
+                    && w.prop(xx, y - 1, zz, "layers") == Some("8"))
         };
         if w.facts.is_air(w.world.block(xx, y, zz)) && supported && !placed.contains(&[xx, y, zz]) {
             placed.push([xx, y, zz]);
@@ -761,32 +765,71 @@ mod tests {
     }
 
     /// `SnowGolem.aiStep` tests `isAir` (cave and void air too) and
-    /// `SnowLayerBlock.canSurvive` (the two snow-layer tags, then a full top face).
+    /// `SnowLayerBlock.canSurvive`: the two snow-layer tags, then the block
+    /// below's top face (`Block.isFaceFull(collisionShape, UP)`), or a snow
+    /// layer eight deep, whose collision shape is only 14/16 high.
     #[test]
     fn snow_trail_follows_is_air_and_the_snow_layer_tags() {
-        let cases = [
-            ("minecraft:stone", "minecraft:cave_air", true),
-            ("minecraft:stone", "minecraft:void_air", true),
-            ("minecraft:soul_sand", "minecraft:air", true),
-            ("minecraft:mud", "minecraft:air", true),
-            ("minecraft:honey_block", "minecraft:air", true),
-            ("minecraft:ice", "minecraft:air", false),
-            ("minecraft:packed_ice", "minecraft:air", false),
-            ("minecraft:barrier", "minecraft:air", false),
-            ("minecraft:stone", "minecraft:water", false),
+        let cases: &[(&str, &[(&str, &str)], &str, bool)] = &[
+            ("minecraft:stone", &[], "minecraft:cave_air", true),
+            ("minecraft:stone", &[], "minecraft:void_air", true),
+            ("minecraft:soul_sand", &[], "minecraft:air", true),
+            ("minecraft:mud", &[], "minecraft:air", true),
+            ("minecraft:honey_block", &[], "minecraft:air", true),
+            ("minecraft:ice", &[], "minecraft:air", false),
+            ("minecraft:packed_ice", &[], "minecraft:air", false),
+            ("minecraft:barrier", &[], "minecraft:air", false),
+            ("minecraft:stone", &[], "minecraft:water", false),
+            // A top slab's and upside-down stairs' top face is full even
+            // though neither is a full block; a bottom one's is not.
+            (
+                "minecraft:stone_slab",
+                &[("type", "top")],
+                "minecraft:air",
+                true,
+            ),
+            (
+                "minecraft:stone_slab",
+                &[("type", "bottom")],
+                "minecraft:air",
+                false,
+            ),
+            (
+                "minecraft:stone_stairs",
+                &[("half", "top"), ("facing", "north")],
+                "minecraft:air",
+                true,
+            ),
+            (
+                "minecraft:stone_stairs",
+                &[("half", "bottom"), ("facing", "north")],
+                "minecraft:air",
+                false,
+            ),
+            // Eight layers of snow take a layer on top, seven do not.
+            ("minecraft:snow", &[("layers", "8")], "minecraft:air", true),
+            ("minecraft:snow", &[("layers", "7")], "minecraft:air", false),
         ];
-        for (floor, here, expect) in cases {
+        for (floor, properties, here, expect) in cases {
             crate::mobs::world::with_built_test_world(
                 &[],
                 |world, reg| {
+                    let mut floor_state = reg
+                        .state(reg.default_state(floor).unwrap())
+                        .unwrap()
+                        .clone();
+                    for (key, value) in *properties {
+                        floor_state
+                            .properties
+                            .insert((*key).into(), (*value).into());
+                    }
+                    let floor = reg.id(&floor_state).unwrap();
                     world
                         .chunks
                         .insert((0, 0), Arc::new(crate::chunk::Chunk::empty(0, 0)));
                     for x in 0..3 {
                         for z in 0..3 {
-                            world
-                                .set(x, 0, z, reg.default_state(floor).unwrap())
-                                .unwrap();
+                            world.set(x, 0, z, floor).unwrap();
                             world
                                 .set(x, 1, z, reg.default_state(here).unwrap())
                                 .unwrap();
@@ -801,7 +844,11 @@ mod tests {
                         .iter()
                         .filter(|e| matches!(e, MobEvent::SetBlockName { .. }))
                         .count();
-                    assert_eq!(placed > 0, expect, "{floor} under {here}");
+                    assert_eq!(
+                        placed,
+                        usize::from(*expect),
+                        "{floor}{properties:?} under {here}"
+                    );
                 },
             );
         }
