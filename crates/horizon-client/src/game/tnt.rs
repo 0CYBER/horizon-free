@@ -22,6 +22,8 @@ pub(super) struct PrimedTnt {
     pub(super) join: horizon_client::join_seq::JoinSeq,
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
+    /// `PrimedTnt.usedPortal`: set by teleport, never saved.
+    pub used_portal: bool,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -380,6 +382,7 @@ impl Game<'_> {
             horizon_client::save::insecure_uuid(&mut horizon_client::random_source::entity());
         self.persist.uuids.insert(self.next_entity, uuid);
         self.tnts.push(PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -830,6 +833,7 @@ mod tests {
         ]))
         .unwrap();
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             id: 1,
@@ -898,6 +902,7 @@ mod tests {
         use horizon_core::geometry::Direction;
         use horizon_world::piston_push::bounce_velocity;
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -944,6 +949,7 @@ mod tests {
         for bordered in [false, true] {
             let at = Vec3::new(24.0, 4.0, 20.5);
             let mut tnt = PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
@@ -1009,6 +1015,7 @@ mod tests {
             }
             let at = Vec3::new(19.5, top, 20.5);
             let mut tnt = PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
@@ -1078,6 +1085,7 @@ mod tests {
         world.set(21, 4, 20, flowing).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -1186,6 +1194,7 @@ mod tests {
         // (Entity.handleOnInsideBubbleColumn / handleOnAboveBubbleColumn).
         let at = Vec3::new(20.5, 6.0, 20.5);
         let mut tnt = PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -1270,6 +1279,7 @@ mod tests {
         world.set(20, 2, 20, soul_sand).unwrap();
         let at = Vec3::new(20.5, 6.0, 20.5);
         let primed = || PrimedTnt {
+            used_portal: false,
             rotation: [0.0, 0.0],
             join: Default::default(),
             no_gravity: false,
@@ -1360,6 +1370,54 @@ mod tests {
         );
         game.streaming.forced.insert((0, 0));
         Some(game)
+    }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn portal_transfer_tnt_state_follows_memory_but_not_saved_nbt() {
+        use super::super::commands::Target;
+        let mut game = server_game().expect("set HORIZON_TEST_RESOURCES");
+        game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 80, None, None);
+        assert!(!game.tnts[0].used_portal);
+        let id = game.tnts[0].id;
+        game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, false);
+        assert!(game.tnts[0].used_portal);
+        let saved = game.tnt_nbt(0);
+        game.tnts.clear();
+        game.load_tnt(saved, None);
+        assert!(!game.tnts[0].used_portal);
+        let mut transfer = game.tnt_nbt(0);
+        super::super::persist::mark_fresh(&mut transfer);
+        game.tnts.clear();
+        game.world.loaded_entities.push((
+            (0, 0),
+            vec![horizon_client::world::PendingEntity::after_tnt_portal(
+                transfer,
+            )],
+        ));
+        game.spawn_loaded_entities();
+        assert!(game.tnts[0].used_portal);
+        assert!(game.tnt_nbt(0).get("horizon:tnt_used_portal").is_none());
+    }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn portal_transfer_ordinary_nbt_cannot_supply_runtime_immunity() {
+        use horizon_world::nbt::Tag;
+        let mut game = server_game().expect("set HORIZON_TEST_RESOURCES");
+        for marker in [0, 1] {
+            game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 80, None, None);
+            let mut saved = game.tnt_nbt(0);
+            if let Tag::Compound(fields) = &mut saved {
+                fields.insert("horizon:tnt_used_portal".into(), Tag::Byte(marker));
+            }
+            game.tnts.clear();
+            game.world.queue_entity_nbt((0, 0), vec![saved]);
+            game.spawn_loaded_entities();
+            assert_eq!(game.tnts.len(), 1);
+            assert!(!game.tnts[0].used_portal, "ordinary NBT marker {marker}");
+            game.tnts.clear();
+        }
     }
 
     #[test]
@@ -1786,21 +1844,22 @@ mod tests {
             game.world.set(8, 63, 8, stone).unwrap();
             for kind in ["splash_potion", "lingering_potion", "experience_bottle"] {
                 for silent in [false, true, false] {
-                    game.launch_thrown(
+                    let mut shot = crate::game::potions::thrown_projectile(
                         ItemStack::new(&format!("minecraft:{kind}"), 1)
                             .with_potion("minecraft:swiftness"),
                         Vec3::new(8.5, 64.1, 8.5),
-                        Vec3::new(0.0, -1.0, 0.0),
-                        None,
+                        false,
                     );
-                    let id = *game.potions.thrown_ids().last().unwrap();
+                    shot.velocity = Vec3::new(0.0, -1.0, 0.0);
+                    game.add_projectile(shot);
+                    let id = game.creatures.projectiles.last().unwrap().id;
                     set_silent(&mut game, id, silent);
                     game.audio.heard.clear();
                     let particles = particle_count(&game);
                     let clouds = game.breath_clouds.len();
                     let xp: u32 = game.orbs.iter().map(|o| o.points() * o.count).sum();
-                    game.tick_effects(true);
-                    assert_eq!(game.potions.thrown_ids().count(), 0);
+                    game.tick_creature_entities().unwrap();
+                    assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
                     assert!(particle_count(&game) > particles, "{kind} keeps its splash");
                     assert_eq!(
                         sound_count(&game, "minecraft:entity.splash_potion.break"),
@@ -1818,6 +1877,47 @@ mod tests {
                 }
             }
         });
+    }
+
+    /// #13201: a dispensed potion or bottle is a level entity
+    /// (`ProjectileDispenseBehavior` → `Projectile.spawnProjectileUsingShoot`
+    /// → `level.addFreshEntity`), so selectors, `/data get` and `/kill` find
+    /// it while it flies.
+    #[test]
+    fn h13201_a_dispensed_potion_is_a_level_entity() {
+        let Some(mut game) = server_game() else {
+            return;
+        };
+        // An operator's commands.
+        game.ui.registries.permission = 4;
+        use crate::game::commands::Target;
+        use horizon_world::nbt::Tag;
+        for kind in ["splash_potion", "lingering_potion", "experience_bottle"] {
+            let stack = ItemStack::new(&format!("minecraft:{kind}"), 1);
+            // The dispenser at (8, 100, 8) facing south.
+            game.shoot_projectile_item(
+                Vec3::new(8.5, 100.2, 9.2),
+                [0.0, 0.1, 1.0],
+                &stack,
+                1.1,
+                6.0,
+            );
+            let id = game.creatures.projectiles.last().unwrap().id;
+            let selector = format!("@e[type=minecraft:{kind},x=8.5,y=100,z=8.5,distance=..12]");
+            // Found as shot and again after it flew a tick.
+            for _ in 0..2 {
+                let found = game.run_command(&format!("execute if entity {selector}"));
+                assert!(found, "{kind}");
+                assert_eq!(game.level_entity(id as i32), Some(Target::Projectile(id)));
+                let saved = game.entity_nbt(Target::Projectile(id)).unwrap();
+                let id_tag = Tag::String(format!("minecraft:{kind}").as_str().into());
+                assert_eq!(saved.get("id"), Some(&id_tag));
+                assert!(saved.get("Item").is_some() && saved.get("Motion").is_some());
+                game.tick_creature_entities().unwrap();
+            }
+            assert!(game.run_command(&format!("kill {selector}")), "{kind}");
+            assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
+        }
     }
 
     fn set_silent(game: &mut Game<'_>, id: u32, silent: bool) {
@@ -2045,6 +2145,7 @@ mod entity_collision_tests {
         game.block_ticks
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
+        game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("summon oak_boat 4.5 200 4.5"));
         assert!(game.run_command("summon oak_boat 12.5 200 12.5"));

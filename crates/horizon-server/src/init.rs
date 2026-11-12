@@ -199,7 +199,14 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
             .yes(&format!("Make {first} an operator?"), true)
             .then(|| first.clone())
     });
-    add_players(dir, &players, op.as_deref(), cfg.server.online_mode)?;
+    let op_level = cfg.op_permission_level(dir);
+    add_players(
+        dir,
+        &players,
+        op.as_deref(),
+        cfg.server.online_mode,
+        op_level,
+    )?;
 
     // 5. The game and its files.
     match engine::program(&cfg, dir) {
@@ -243,6 +250,7 @@ fn add_players(
     players: &[String],
     op: Option<&str>,
     online: bool,
+    op_level: i32,
 ) -> Result<(), String> {
     if !players.is_empty() {
         let mut white = WhiteList::new(dir.join("whitelist.json"));
@@ -263,7 +271,8 @@ fn add_players(
             .map_err(|e| format!("ops.json: {e}; fix it or move it away, then run init again"))?;
         ops.add(OpEntry {
             user: crate::lists::account(name, online)?,
-            level: 4,
+            // PlayerList.op: the level of `op-permission-level`.
+            level: op_level,
             bypasses_player_limit: false,
         });
         println!("Operator: {name}");
@@ -283,7 +292,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let theirs = "[{\"uuid\": \"x\", \"name\": \"Kim\",}]";
         std::fs::write(dir.join("whitelist.json"), theirs).unwrap();
-        assert!(add_players(&dir, &["Alex".into()], None, false).is_err());
+        assert!(add_players(&dir, &["Alex".into()], None, false, 4).is_err());
         assert_eq!(
             std::fs::read_to_string(dir.join("whitelist.json")).unwrap(),
             theirs
@@ -345,6 +354,31 @@ mod tests {
         assert!(run(&dir, answers).unwrap_err().contains("EULA"));
         assert!(!dir.join(config::FILE).exists());
         assert!(!eula::agreed(&dir.join("eula.txt")).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn init_op_gets_the_op_permission_level_of_the_imported_properties() {
+        // `PlayerList.op` writes `operatorUserPermissions()`, the level of `op-permission-level`.
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-init-op-level-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(config::PROPERTIES), "op-permission-level=2\n").unwrap();
+        let answers = Answers {
+            eula: true,
+            port: Some(25598),
+            whitelist: Some(false),
+            op: Some("Alex".into()),
+            online: Some(false),
+            yes: true,
+            ..Default::default()
+        };
+        run(&dir, answers).unwrap();
+        let ops = std::fs::read_to_string(dir.join("ops.json")).unwrap();
+        assert!(ops.contains("\"level\": 2,"), "{ops}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
