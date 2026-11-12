@@ -2,6 +2,7 @@
 //! in a village with enough occupied beds or inside a swamp hut.
 use super::{
     Dim, Game,
+    creatures::SpawnYaw,
     raids::{section, sections_to_village},
 };
 use horizon_client::mobs::{Species, spawn_rules};
@@ -118,21 +119,37 @@ impl Game<'_> {
             })
             .count()
     }
-    /// `spawnCat`: finalized for a natural spawn, black inside
-    /// `#cats_spawn_as_black` structures (`Cat.finalizeSpawn`).
+    /// `spawnCat`: a natural spawn, then `snapTo(spawnPos, 0.0F, 0.0F)`, so
+    /// the cat faces yaw 0 and its facing takes no draw.
     fn spawn_cat(&mut self, pos: [i32; 3], persistent: bool) {
         let at = [
             f64::from(pos[0]) + 0.5,
             f64::from(pos[1]),
             f64::from(pos[2]) + 0.5,
         ];
-        let Some(id) = self.spawn_mob("minecraft:cat", at, persistent) else {
+        let Some(id) = self.spawn_mob_reason_yaw(
+            "minecraft:cat",
+            at,
+            persistent,
+            false,
+            !persistent,
+            SpawnYaw::Fixed(0.0),
+        ) else {
             return;
         };
+        // `Cat.finalizeSpawn` asks `#cats_spawn_as_black` about the entity's
+        // own block position, which is still the origin here: `snapTo` runs
+        // after it. So the hut the cat spawns in does not make it black.
         let black = self.structure_tag("minecraft:cats_spawn_as_black");
-        let in_black = self.structures_at(pos).iter().any(|s| black.contains(s));
-        if in_black && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+        let at_origin = self.structures_at([0, 0, 0]);
+        if at_origin.iter().any(|s| black.contains(s))
+            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+        {
             m.extra.variant = 10;
         }
     }
 }
+
+#[cfg(test)]
+#[path = "cat_spawner_tests.rs"]
+mod cat_spawner_tests;
