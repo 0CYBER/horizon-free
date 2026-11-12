@@ -269,21 +269,19 @@ fn uuid(id: u128) -> String {
     )
 }
 
-/// A UUID as `UUID.fromString` takes it (8-4-4-4-12 hex digits), or the 32 undashed digits of `UUIDUtil`'s
-/// lenient codec; anything else (a short id, a sign, dashes anywhere) is no UUID.
+/// A UUID as `PlayerDto`'s codec, `UUIDUtil.STRING_CODEC` (`UUID.fromString`), takes it: 8-4-4-4-12 hex
+/// digits. 32 undashed digits are no UUID there (nor in `UUIDUtil.LENIENT_CODEC`), and neither is a short id,
+/// a sign or dashes anywhere else here.
 fn parse_uuid(text: &str) -> Option<u128> {
-    let digits = match text.len() {
-        32 => text.to_owned(),
-        36 => {
-            let parts: Vec<&str> = text.split('-').collect();
-            let lengths: Vec<usize> = parts.iter().map(|p| p.len()).collect();
-            if lengths != [8, 4, 4, 4, 12] {
-                return None;
-            }
-            parts.concat()
-        }
-        _ => return None,
-    };
+    if text.len() != 36 {
+        return None;
+    }
+    let parts: Vec<&str> = text.split('-').collect();
+    let lengths: Vec<usize> = parts.iter().map(|p| p.len()).collect();
+    if lengths != [8, 4, 4, 4, 12] {
+        return None;
+    }
+    let digits = parts.concat();
     digits
         .bytes()
         .all(|b| b.is_ascii_hexdigit())
@@ -1220,8 +1218,11 @@ mod tests {
         let id = |s: &str| player_dto(&serde_json::json!({ "id": s })).map(|(id, _)| id);
         let want = Some(0x0123_4567_89ab_cdef_0123_4567_89ab_cdefu128);
         assert_eq!(id("01234567-89ab-cdef-0123-456789abcdef").unwrap(), want);
-        assert_eq!(id("0123456789abcdef0123456789abcdef").unwrap(), want);
+        assert_eq!(id("01234567-89AB-CDEF-0123-456789ABCDEF").unwrap(), want);
         for bad in [
+            // PlayerDto reads its id with UUIDUtil.STRING_CODEC (UUID.fromString): vanilla answers
+            // `Invalid UUID string` for the 32 undashed digits.
+            "0123456789abcdef0123456789abcdef",
             "abc",
             "1",
             "+123456789abcdef0123456789abcdef",
