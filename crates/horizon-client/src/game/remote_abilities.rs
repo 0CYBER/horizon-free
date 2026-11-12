@@ -34,6 +34,29 @@ impl Game<'_> {
     pub(in crate::game) fn remote_walking_speed(&self) -> f32 {
         walking_speed(self.remote.as_ref().and_then(|r| r.abilities.as_ref()))
     }
+
+    /// ClientPacketListener.handleRotatePlayer: the server's yaw and pitch, each added to the
+    /// current one when its bit says relative, then sent back as a `Rot` move with both
+    /// flags false.
+    pub(super) fn remote_rotation(&mut self, p: &play::PlayerRotation) {
+        self.yaw = if p.relative_yaw {
+            self.yaw + p.yaw
+        } else {
+            p.yaw
+        };
+        self.pitch = (if p.relative_pitch {
+            self.pitch + p.pitch
+        } else {
+            p.pitch
+        })
+        .clamp(-90.0, 90.0);
+        self.snap_player_model_pitch();
+        self.send(S::MovePlayerRot(play::MovePlayerRot {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            flags: 0,
+        }));
+    }
 }
 
 #[cfg(test)]

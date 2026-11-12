@@ -853,7 +853,7 @@ impl H {
     fn label(self, s: &Settings, out: &EffectiveOutput) -> Text {
         let g = &s.horizon;
         match self {
-            H::Preset => labelled("Preset", g.preset.label()),
+            H::Preset => labelled("Horizon Preset", g.preset.label()),
             H::LodDistance => match g.lod_distance {
                 0 => labelled("LOD Distance", "Off"),
                 n => labelled("LOD Distance", lang::tr("%s chunks", &[&n])),
@@ -1753,6 +1753,14 @@ mod tests {
         ui.set_search("tearing");
         let found = ui.listed(&s, SIZE);
         assert!(found.iter().any(|(_, i)| *i == Item::Vanilla(Opt::Vsync)));
+        // Both presets answer "preset"; Horizon's own, named apart from vanilla's, answers its name.
+        ui.set_search("preset");
+        let found = ui.listed(&s, SIZE);
+        let general = |item| (Page::General, item);
+        assert!(found.contains(&general(Item::Horizon(H::Preset))));
+        assert!(found.contains(&general(Item::Vanilla(Opt::Preset))));
+        ui.set_search("horizon preset");
+        assert_eq!(ui.listed(&s, SIZE), [general(Item::Horizon(H::Preset))]);
         ui.set_search("hdr");
         let [x, y, w, h] = cols.page(Page::ALL.len() - 1);
         press(&mut ui, &mut s, (x + w / 2.0, y + h / 2.0));

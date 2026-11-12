@@ -40,6 +40,11 @@ thread_local! {
     static LEVEL: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
+/// The level this thread acts in (`in_level`), for a helper thread to act in it too.
+pub fn current_level() -> Option<&'static str> {
+    LEVEL.get()
+}
+
 /// Scope authority to this thread and restore it even on an error or panic.
 /// Nested guest actions may temporarily enter a different dimension.
 pub fn in_level<R>(dimension: Option<&'static str>, f: impl FnOnce() -> R) -> R {
@@ -66,6 +71,10 @@ pub fn trample_allowed(entity: i32, kind: &str, position: BlockPos, distance: f6
     let (Some(dimension), Some(hook)) = (LEVEL.get(), TRAMPLE.get()) else {
         return true;
     };
+    // A grouped mob turn: no mod hooks it (`native_client_hooks::Deferred`).
+    if crate::native_client_hooks::deferring() {
+        return true;
+    }
     let mut cancel = false;
     let at = [position.x, position.y, position.z];
     hook(dimension, entity, kind, at, distance, &mut cancel);
@@ -82,7 +91,8 @@ fn dispatch(event: Event<'_>, damage: &mut f32) {
     let contact = match event {
         Event::StepOn(c) | Event::Inside(c) | Event::FallOn(c, _) => c,
     };
-    if contact.block.starts_with("minecraft:") {
+    // A grouped mob turn reaches no mod's hook (`native_client_hooks::Deferred`).
+    if contact.block.starts_with("minecraft:") || crate::native_client_hooks::deferring() {
         return;
     }
     if let Some(dimension) = LEVEL.get()
@@ -208,6 +218,15 @@ mod tests {
             let bounds = bounds.move_by(Vec3::new(-1.0, 0.0, 0.0));
             swept_inside(17, c.kind, at, at, bounds, block);
             assert_eq!(SEEN.get(), 8, "stationary overlap still notifies");
+            // A grouped mob turn, on any thread: no mod hears its contacts or tramples.
+            let ((), _) = crate::native_client_hooks::deferring_turn(|| {
+                emit(Event::StepOn(c));
+                assert_eq!(fall(c, 12.0, 10.0), 10.0);
+                let _ = TRAMPLE.set(|_, _, _, _, _, cancel| *cancel = true);
+                assert!(trample_allowed(17, c.kind, c.position, 12.0));
+            });
+            assert_eq!(SEEN.get(), 8, "a grouped turn reaches no contact hook");
+            assert!(!trample_allowed(17, c.kind, c.position, 12.0));
         });
         let _ =
             std::panic::catch_unwind(|| in_level(Some("minecraft:the_nether"), || panic!("test")));

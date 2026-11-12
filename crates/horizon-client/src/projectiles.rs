@@ -246,6 +246,10 @@ pub struct Projectile {
     /// `Entity.needsSync`: a server tells its clients about the change this
     /// tick instead of at the next update interval.
     pub needs_sync: bool,
+    /// `WindCharge.noDeflectTicks`: a player's wind charge turns for nothing
+    /// (`deflect` refuses) until it has ticked 5 times. Not saved, so a
+    /// loaded one starts again at 5.
+    pub no_deflect_ticks: u8,
     /// The bubble column tops this tick's `onAboveBubbleColumn` pushes came
     /// from, for their particles (`sendBubbleColumnParticles`); the caller
     /// drains them.
@@ -275,6 +279,9 @@ pub struct Projectile {
     /// charge until [`Projectile::set_item`] gives it another. None for the
     /// kinds that are no `Fireball` (a wither skull, a wind charge).
     pub item: Option<crate::items::ItemStack>,
+    /// `ThrownEgg`'s item `CHICKEN_VARIANT` component, as the chicken variant
+    /// index its hatchlings get; None when no item was recorded.
+    pub egg_variant: Option<u8>,
     /// The UUID its own random made (`Mth.createInsecureUUID`), for the server
     /// to keep unless a save gives one: an arrow's at construction, another
     /// kind's when it is shot (`shoot_own`), which is the same stream since
@@ -333,6 +340,11 @@ pub trait ProjectileWorld {
         velocity
     }
     fn targets(&self) -> &[(Who, Aabb)];
+    /// `Level.getMinY() - 64` (`Entity.checkBelowWorld`); the Overworld's
+    /// unless the world says otherwise.
+    fn below_world_y(&self) -> f64 {
+        -128.0
+    }
     /// Server-only mod-block contacts along the completed movement.
     fn block_contacts(&self, _entity: i32, _kind: &str, _from: Vec3, _to: Vec3, _bounds: Aabb) {}
     /// `Level.isEmptyBlock`.
@@ -443,6 +455,35 @@ pub fn water_bubble_at(position: [f64; 3], movement: [f64; 3]) -> ([f64; 3], [f6
         movement,
     )
 }
+/// The chicken variant a thrown egg stack carries: its explicit
+/// `minecraft:chicken/variant` component, else its item's default (egg
+/// temperate, blue egg cold, brown egg warm). An explicit removal
+/// (`!minecraft:chicken/variant`) leaves the hatchling its temperate default.
+pub fn egg_chicken_variant(stack: &crate::items::ItemStack) -> u8 {
+    let named = stack
+        .extra
+        .as_ref()
+        .and_then(|d| d.other("minecraft:chicken/variant"))
+        .and_then(|t| match t {
+            horizon_world::nbt::Tag::String(s) => s.to_string().ok(),
+            _ => None,
+        });
+    // 🤖 Agent: a removed component resolves to absent, not to the item default.
+    let removed = stack
+        .extra
+        .as_ref()
+        .is_some_and(|d| d.other("!minecraft:chicken/variant").is_some());
+    let name = named.as_deref().unwrap_or(if removed {
+        "temperate"
+    } else {
+        match &*stack.item {
+            "minecraft:blue_egg" => "cold",
+            "minecraft:brown_egg" => "warm",
+            _ => "temperate",
+        }
+    });
+    crate::mobs::finalize::variant_index(crate::mobs::Species::Chicken, name)
+}
 impl Projectile {
     /// `Entity.getBoundingBox`: its type's square box standing on its position,
     /// a wind charge's 0.15 lower (`AbstractWindCharge.makeBoundingBox`).
@@ -461,6 +502,11 @@ impl Projectile {
         )
     }
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
+        let no_deflect_ticks = if kind == ProjectileKind::WindCharge {
+            5
+        } else {
+            0
+        };
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
         // `Fireball.defineSynchedData`: DATA_ITEM_STACK starts as a fire charge.
         let item = kind
@@ -481,6 +527,7 @@ impl Projectile {
         Self {
             join: Default::default(),
             id: 0,
+            egg_variant: None,
             kind,
             owner,
             owner_uuid: None,
@@ -501,6 +548,7 @@ impl Projectile {
             bonus: Default::default(),
             acceleration,
             needs_sync: false,
+            no_deflect_ticks,
             bubble_surfaces: Vec::new(),
             touching_water: false,
             no_gravity: false,
@@ -882,6 +930,12 @@ impl Projectile {
     /// `Fireball.setItem`: the item a fireball is drawn as. An empty stack
     /// puts the default fire charge back, anything else is kept as a single
     /// one (`copyWithCount(1)`); a kind that is no `Fireball` has no item.
+    /// `ThrownEgg`'s item: what its hatchlings' variant comes from.
+    pub fn set_egg_item(&mut self, stack: &crate::items::ItemStack) {
+        if self.kind == ProjectileKind::Egg {
+            self.egg_variant = Some(egg_chicken_variant(stack));
+        }
+    }
     pub fn set_item(&mut self, stack: crate::items::ItemStack) {
         if !self.kind.is_item_fireball() {
             return;
@@ -1223,7 +1277,7 @@ impl Projectile {
                 }
             }
         }
-        (self.position.y > -128.0, Hit::None)
+        (self.position.y >= w.below_world_y(), Hit::None)
     }
     /// AbstractHurtingProjectile.applyInertia, on both server and client.
     pub fn apply_hurting_inertia(&mut self, water: bool) {
@@ -1247,6 +1301,7 @@ impl Projectile {
 
     /// One tick: returns whether to keep the projectile and what it hit.
     pub fn tick(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
+        horizon_threads::work::set_entity(horizon_threads::work::entity_id(self.kind.id()));
         self.tick_with(w, true, false)
     }
     /// One tick of a server's projectile on its client: [`tick`](Self::tick),
@@ -1425,7 +1480,14 @@ impl Projectile {
         if !base_first {
             self.tick_shoot_event();
         }
+        // WindCharge.tick: after AbstractHurtingProjectile.tick.
+        self.no_deflect_ticks = self.no_deflect_ticks.saturating_sub(1);
         result
+    }
+    /// `Projectile.deflect`, which `WindCharge` refuses while its
+    /// `noDeflectTicks` last.
+    pub fn deflectable(&self) -> bool {
+        self.no_deflect_ticks == 0
     }
     /// `applyEffectsFromBlocks` after the tick's move, for its cobwebs and
     /// powder snow (`makeStuckInBlock`): the last such block its box (deflated
@@ -1569,7 +1631,7 @@ impl Projectile {
         {
             self.position = at;
             self.touching_water = w.in_water(self.bounds());
-            let alive = self.position.y > -128.0 && self.age < 1200;
+            let alive = self.position.y >= w.below_world_y() && self.age < 1200;
             return (alive, Hit::None);
         }
         // LlamaSpit never discards on an entity: `onHitEntity` only hurts, so
@@ -1617,7 +1679,10 @@ impl Projectile {
                 self.velocity.y * drag - self.get_gravity(),
                 self.velocity.z * drag,
             );
-            return (self.position.y > -128.0 && self.age < 6000, spit_hit);
+            return (
+                self.position.y >= w.below_world_y() && self.age < 6000,
+                spit_hit,
+            );
         }
         self.position = to;
         // Fireballs ease towards the motion (`ProjectileUtil.rotateTowardsMovement`);
@@ -1632,8 +1697,8 @@ impl Projectile {
         // it touches now, and their currents push it.
         self.touching_water = w.in_water(self.bounds());
         self.velocity = w.pushed_by_currents(self.bounds(), self.velocity);
-        let alive =
-            self.position.y > -128.0 && self.age < if self.is_fireball() { 1200 } else { 6000 };
+        let alive = self.position.y >= w.below_world_y()
+            && self.age < if self.is_fireball() { 1200 } else { 6000 };
         (alive, Hit::None)
     }
     /// AbstractArrow.onHitEntity damage: ceil(speed * base) plus crit bonus.
@@ -1708,6 +1773,26 @@ impl Projectile {
 mod tests {
     use super::*;
     use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn egg_variant_honors_explicit_removal() {
+        use crate::mobs::{Species, finalize::variant_index};
+        let mut blue = crate::items::ItemStack::new("minecraft:blue_egg", 1);
+        assert_eq!(
+            egg_chicken_variant(&blue),
+            variant_index(Species::Chicken, "cold")
+        );
+        let mut data = horizon_items::item_data::StackData::default();
+        data.set_other(
+            "!minecraft:chicken/variant",
+            Some(horizon_world::nbt::Tag::Compound(Default::default())),
+        );
+        blue.extra = Some(Box::new(data));
+        assert_eq!(
+            egg_chicken_variant(&blue),
+            variant_index(Species::Chicken, "temperate")
+        );
+    }
 
     struct Empty(Vec<(Who, Aabb)>);
     impl ProjectileWorld for Empty {
@@ -2886,6 +2971,23 @@ mod render_light_tests {
             shot(ProjectileKind::SmallFireball).entity_type(),
             "minecraft:small_fireball"
         );
+    }
+    /// `ThrownEgg.onHit`: the hatchlings take the variant of the item's
+    /// `CHICKEN_VARIANT` component (egg temperate, blue cold, brown warm).
+    #[test]
+    fn thrown_egg_carries_its_chickens_variant() {
+        use crate::items::ItemStack;
+        let variant = |item: &str| {
+            let mut egg = Projectile::new(ProjectileKind::Egg, Vec3::ZERO, None);
+            egg.set_egg_item(&ItemStack::new(item, 1));
+            egg.egg_variant
+        };
+        assert_eq!(variant("minecraft:egg"), Some(0));
+        assert_eq!(variant("minecraft:brown_egg"), Some(1));
+        assert_eq!(variant("minecraft:blue_egg"), Some(2));
+        let mut snowball = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);
+        snowball.set_egg_item(&ItemStack::new("minecraft:blue_egg", 1));
+        assert_eq!(snowball.egg_variant, None);
     }
 }
 crate::impl_joined!(Projectile);

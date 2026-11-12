@@ -48,6 +48,7 @@ path = ""                    # the game program; empty: the one installed beside
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true      # start the game again when it crashes
 low_memory = false           # true: no transparent huge pages, ~60 MB less idle for ~1 % more tick time
+parallel_tick = false        # true: the server tick shares its work among helper threads (same results)
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
@@ -241,6 +242,8 @@ pub struct Engine {
     pub restart_on_crash: bool,
     /// The game without transparent huge pages (docs/hosting.md): less memory, slightly slower ticks.
     pub low_memory: bool,
+    /// The game's parallel tick phases (`HORIZON_PARALLEL_TICK=1`), for hosts that cannot set the variable.
+    pub parallel_tick: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -468,6 +471,7 @@ impl Default for Engine {
             resources: String::new(),
             restart_on_crash: true,
             low_memory: false,
+            parallel_tick: false,
         }
     }
 }
@@ -508,7 +512,7 @@ impl Config {
         Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let w = &self.world;
         if !GAME_MODES.contains(&w.game_mode.as_str()) {
             return Err(format!(
@@ -593,6 +597,18 @@ impl Config {
         Ok(written)
     }
 
+    /// The level `op` gives a new operator: `op-permission-level` as the game reads it at its next start,
+    /// that is `server.properties` with this configuration's keys written over it (as
+    /// [`Config::write_properties`] does). 4, vanilla's default, when the keys cannot be read.
+    pub fn op_permission_level(&self, dir: &Path) -> i32 {
+        let mut properties = read_properties(&dir.join(PROPERTIES)).unwrap_or_default();
+        for (key, value) in self.vanilla() {
+            properties.put(&key, value);
+        }
+        ServerProperties::new(properties, &mut SystemEntropy::default())
+            .map_or(4, |p| p.op_permission_level)
+    }
+
     /// A configuration from a vanilla `server.properties`: typed settings from their keys, and every other
     /// key the file sets to something other than vanilla's default under `[properties]`.
     pub fn import(source: &Properties) -> Result<Self, String> {
@@ -645,6 +661,7 @@ pub fn render(config: &Config) -> String {
         ("engine", "resources"),
         ("engine", "restart_on_crash"),
         ("engine", "low_memory"),
+        ("engine", "parallel_tick"),
         ("backups", "every"),
         ("backups", "keep"),
         ("updates", "keep"),

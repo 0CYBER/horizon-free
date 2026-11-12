@@ -39,6 +39,73 @@ pub struct NativeClientHooks {
 
 static HOOKS: OnceLock<NativeClientHooks> = OnceLock::new();
 
+/// A hook a mob's turn reached while the mob phase runs in groups on several threads (#14457),
+/// told on the server thread once the groups are joined, in the serial loop's order. Only hooks
+/// that hand nothing back are kept: a group runs only while the build found no mod hooking the
+/// others (`horizon_mod_api_gen::mob_turn`), so those are skipped there.
+pub enum Deferred {
+    LivingJump {
+        entity: u32,
+        kind: String,
+    },
+    /// `health::damage_post` on a mob, with the mob as the hook saw it.
+    DamagePost {
+        mob: Box<crate::mobs::Mob>,
+        damage: crate::mobs::Damage,
+        amount: f32,
+    },
+}
+
+thread_local! {
+    /// The hooks this thread's mob turn reached, while it runs in a group.
+    static DEFERRED: std::cell::RefCell<Option<Vec<Deferred>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether this thread runs a mob turn of a group: its hooks are kept or skipped.
+pub fn deferring() -> bool {
+    DEFERRED.with(|d| d.borrow().is_some())
+}
+
+/// Keep `deferred` to be told at the join ([`deferring`]).
+pub(crate) fn defer(deferred: Deferred) {
+    DEFERRED.with(|d| {
+        if let Some(kept) = d.borrow_mut().as_mut() {
+            kept.push(deferred);
+        }
+    });
+}
+
+/// Run `turn` with its hooks kept rather than told, and hand them back in the order it reached
+/// them. A panic in `turn` drops what it kept.
+pub fn deferring_turn<R>(turn: impl FnOnce() -> R) -> (R, Vec<Deferred>) {
+    struct Restore(Option<Vec<Deferred>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            DEFERRED.with(|d| *d.borrow_mut() = previous);
+        }
+    }
+    let previous = DEFERRED.with(|d| d.borrow_mut().replace(Vec::new()));
+    let restore = Restore(previous);
+    let out = turn();
+    let kept = DEFERRED.with(|d| d.borrow_mut().take()).unwrap_or_default();
+    drop(restore);
+    (out, kept)
+}
+
+/// Tell a kept hook now, as its turn would have.
+pub fn replay(deferred: Deferred) {
+    match deferred {
+        Deferred::LivingJump { entity, kind } => living_jump(entity, &kind),
+        Deferred::DamagePost {
+            mob,
+            damage,
+            amount,
+        } => crate::health::damage_post(crate::health::Hurting::Mob(&mob, &damage), amount),
+    }
+}
+
 /// Install the process-wide callbacks once; a second installation keeps the first.
 #[allow(
     clippy::result_large_err,
@@ -97,6 +164,9 @@ pub(crate) fn chat_decorate(
 }
 
 pub(crate) fn living_heal(entity: u32, amount: &mut f32, cancel: &mut bool) {
+    if deferring() {
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_heal)(entity, amount, cancel);
     }
@@ -107,6 +177,9 @@ pub(crate) fn living_death_message(
     kind: &str,
     message: &mut Option<horizon_client_core::text::Text>,
 ) {
+    if deferring() {
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_death_message)(entity, kind, message);
     }
@@ -119,6 +192,9 @@ pub(crate) fn living_breathe(
     consume: &mut i32,
     refill: &mut i32,
 ) {
+    if deferring() {
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_breathe)(entity, kind, can_breathe, consume, refill);
     }
@@ -132,6 +208,9 @@ pub(crate) fn living_drown(
     bubble_count: i32,
     cancel: &mut bool,
 ) {
+    if deferring() {
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_drown)(
             entity,
@@ -151,18 +230,31 @@ pub(crate) fn living_fall(
     multiplier: &mut f32,
     cancel: &mut bool,
 ) {
+    if deferring() {
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_fall)(entity, kind, distance, multiplier, cancel);
     }
 }
 
 pub(crate) fn living_jump(entity: u32, kind: &str) {
+    if deferring() {
+        defer(Deferred::LivingJump {
+            entity,
+            kind: kind.to_owned(),
+        });
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_jump)(entity, kind);
     }
 }
 
 pub(crate) fn register_goals(mob: &mut crate::mobs::Mob) {
+    if deferring() {
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
         (hooks.register_goals)(mob);
     }
@@ -246,5 +338,35 @@ pub(crate) fn sound_play(
 ) {
     if let Some(hooks) = HOOKS.get() {
         (hooks.sound_play)(sound, volume, pitch, cancel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A grouped mob turn keeps its notifications in order and tells none; outside one they are
+    /// not kept.
+    #[test]
+    fn a_grouped_turn_keeps_its_notifications_in_order() {
+        let ((), kept) = deferring_turn(|| {
+            assert!(deferring());
+            living_jump(3, "minecraft:cow");
+            living_jump(9, "minecraft:pig");
+        });
+        let jumps: Vec<_> = kept
+            .iter()
+            .map(|d| match d {
+                Deferred::LivingJump { entity, kind } => (*entity, kind.as_str()),
+                Deferred::DamagePost { .. } => panic!("no damage"),
+            })
+            .collect();
+        assert_eq!(jumps, [(3, "minecraft:cow"), (9, "minecraft:pig")]);
+        assert!(!deferring());
+        let ((), none) = deferring_turn(|| {});
+        assert!(none.is_empty());
+        let unwound = std::panic::catch_unwind(|| deferring_turn(|| panic!("turn failed")));
+        assert!(unwound.is_err());
+        assert!(!deferring(), "a failed turn stops keeping");
     }
 }
