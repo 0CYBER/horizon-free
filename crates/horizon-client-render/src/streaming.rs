@@ -924,10 +924,10 @@ impl<G: ChunkGenerator> Source for Jobs<G> {
         });
     }
     fn all_idle(&self) {
-        // No worker needs retained mesh capacity now. Drop it outside the
-        // pool lock; the pool then asks the allocator to return freed pages.
+        // No worker needs its kept meshes or light scratch: freed outside the pool lock.
         let meshes = std::mem::take(&mut *self.shared.meshes.lock().unwrap());
         drop(meshes);
+        crate::light::release_scratch();
         self.generator.all_idle();
     }
 }

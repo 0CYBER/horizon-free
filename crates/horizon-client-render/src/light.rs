@@ -366,6 +366,19 @@ fn give_scratch(scratch: LightScratch) {
     }
 }
 
+/// Frees the pooled scratch, once the streaming workers have had nothing to
+/// do for a while (`jobs::Source::all_idle`): a full pool is some 50 MB on
+/// twelve threads, and a loaded view lights nothing new until the player
+/// moves on. The next job builds one again.
+pub fn release_scratch() {
+    let pool = std::mem::take(
+        &mut *SCRATCH_POOL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    drop(pool);
+}
+
 thread_local! {
     static RELIGHT_SCRATCH: RefCell<RelightScratch> = RefCell::new(RelightScratch::new());
 }
