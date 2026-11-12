@@ -9084,8 +9084,8 @@ impl Game<'_> {
     /// `native_living_change_target`, `native_living_heal`, `native_living_breathe`,
     /// `native_living_drown`, `native_living_fall`, `native_living_death_message`,
     /// `native_register_goals` (its goals run in the turns), `native_living_incoming_damage` (all
-    /// versions), `native_living_damage_pre`, `native_living_knockback`, a content mod effect's
-    /// ticks, and no mixin into those. `native_living_jump` and `native_living_damage_post` may
+    /// versions), `native_living_damage_pre`, `native_living_knockback`, `native_trample`, the
+    /// `native_block_*` contacts, a content mod effect's ticks, and no mixin into those. `native_living_jump` and `native_living_damage_post` may
     /// stay hooked: in a grouped tick they are told on the server thread once the mobs have
     /// ticked, in the order the mobs ticked. Each mod is asked on its own, in order, once a tick while
     /// the option is on; one that doesn't set it keeps the tick on the server thread, as before. The

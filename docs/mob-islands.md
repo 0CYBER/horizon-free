@@ -120,8 +120,9 @@ groups (`LoopLookup`).
 What a mod can run in a mob's turn: `native_living_change_target`, `native_living_heal`,
 `native_living_breathe`, `native_living_drown`, `native_living_fall`,
 `native_living_death_message`, `native_register_goals` (its goals), the incoming damage hooks,
-`native_living_damage_pre`, `native_living_knockback`, a content mod effect's ticks,
-`native_living_jump` and `native_living_damage_post`, and mixins into them. A trait mod's
+`native_living_damage_pre`, `native_living_knockback`, `native_trample` (a mob falling on
+farmland), `native_block_step_on`, `native_block_entity_inside` and `native_block_fall_on` (a
+content mod's blocks), a content mod effect's ticks, `native_living_jump` and `native_living_damage_post`, and mixins into them. A trait mod's
 overridden methods can't be seen, so each mod declares it with `native_mob_phase_quiet`; one
 that doesn't keeps the loop serial. While every mod is quiet, grouped turns skip the hooks that
 hand something back (no mod listens) and keep the two notifications, which the server thread tells
