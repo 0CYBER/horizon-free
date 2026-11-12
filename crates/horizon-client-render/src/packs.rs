@@ -468,17 +468,20 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
 /// file with a comment after the closing brace. Gson reads past a UTF-8 byte order mark;
 /// serde_json rejects it.
 pub(crate) fn parse_meta(bytes: &[u8]) -> Option<serde_json::Value> {
-    first_json(bytes)
+    first_json(bytes).ok()
 }
-
-/// Reads the first JSON value from resource metadata, matching Gson's
-/// `JsonReader` (which ignores a trailing signature or comment). Resource
-/// packs commonly append such text to texture metadata as well as pack.mcmeta.
-pub(crate) fn first_json(bytes: &[u8]) -> Option<serde_json::Value> {
-    serde_json::Deserializer::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
+/// The first JSON value of a `.mcmeta` file, as `ResourceMetadata.fromJsonStream` reads it:
+/// Gson's `TypeAdapter.read` stops after the value, so text after it (packs leave `//` notes
+/// there) is never read, and a UTF-8 byte order mark is skipped.
+pub(crate) fn first_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    match serde_json::Deserializer::from_slice(bytes)
         .into_iter()
-        .next()?
-        .ok()
+        .next()
+    {
+        Some(value) => value,
+        None => Err(serde::de::Error::custom("empty metadata")),
+    }
 }
 /// A pack's Polytone config entries (`assets/<namespace>/polytone/config_entries/<name>.json`,
 /// in the pack's base, not its overlays) at their default values.
