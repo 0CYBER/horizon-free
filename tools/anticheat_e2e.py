@@ -7,7 +7,10 @@ and horizon-bots, legit bots beside cheating ones.
 
 Checks:
 - off:   `[anticheat] enabled = false` in server.toml: the anticheat says nothing, writes no log and kicks
-         no one, the cheating bot included (vanilla's checks only).
+         no one, the cheating bot included (vanilla's checks only). Then, on a survival server (allow-flight
+         on, so vanilla's floating kick stays out of it), the same for the checks that act by default: a bot
+         attacking without swinging, one attacking two players in the same tick and a no-fall one are never
+         flagged, kicked or banned, and their hits land.
 - timer: `[anticheat]` on, with the timer's thresholds once trusted (it logs only by default): a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
          reported to the console and kicked; the legit bots (walking and exploring at 20 Hz) are never
          flagged.
@@ -137,6 +140,56 @@ def check_off(bins, scratch, out, seconds):
         if bot['error']:
             raise Failed(f'off: {bot["name"]} was dropped: {bot["error"]}')
     print(f'off: {legit["joined"] + cheat["joined"]} bots, the 1.5x one included, never flagged or kicked')
+    check_off_acting(bins, scratch, out, seconds)
+
+
+def check_off_acting(bins, scratch, out, seconds):
+    """`enabled = false` silences the checks that act by default too (`combat` and `ground`): the bots that
+    `check_combat` and `check_ground` show caught, on a survival server, are never flagged, dropped, kicked or
+    banned, and their hits land. allow-flight is on, so vanilla's floating kick (which ends a no-fall bot hovering
+    in the air whatever it claims) leaves the no-fall bot alone, and only the anticheat could kick it."""
+    folder = scratch / 'off-acting'
+    server, port = start(bins, folder, OFF, out, 'off-acting', gamemode='survival', difficulty='peaceful',
+                         **{'allow-flight': 'true'})
+    try:
+        server.console('gamerule respawn_radius 0')
+        server.console('gamerule natural_health_regeneration false')
+        with ThreadPoolExecutor(4) as pool:
+            targets = pool.submit(bots, bins, port, out, 'OffTarget', 2, 'stand', seconds + 10)
+            server.wait_for('OffTarget1 joined the game', 120)
+            runs = {
+                'NoSwing': pool.submit(bots, bins, port, out, 'OffNoSwing', 1, 'stand', seconds,
+                                       '--attack', 'OffTarget0', '--no-swing'),
+                'Aura': pool.submit(bots, bins, port, out, 'OffAura', 1, 'stand', seconds,
+                                    '--attack', 'OffTarget0,OffTarget1'),
+                'NoFall': pool.submit(bots, bins, port, out, 'OffNoFall', 1, 'walk', seconds, '--ground'),
+            }
+            runs = {k: v.result() for k, v in runs.items()}
+            runs['Target'] = targets.result()
+    finally:
+        server.stop()
+    if (folder / 'logs/anticheat.log').exists():
+        raise Failed(f'off: an anticheat log was written:\n{(folder / "logs/anticheat.log").read_text()}')
+    lines = server.since(0)
+    noise = [l for l in lines if 'Anticheat' in l or 'floating' in l]
+    if noise:
+        raise Failed('off: the anticheat spoke, or a bot was kicked for floating:\n' + '\n'.join(noise))
+    for run in runs.values():
+        for bot in run['per_bot']:
+            if bot['error']:
+                raise Failed(f'off: {bot["name"]} was dropped: {bot["error"]}')
+    bans = folder / 'banned-players.json'
+    if bans.exists() and json.loads(bans.read_text()):
+        raise Failed(f'off: a player was banned: {bans.read_text()}')
+    attacks = {name: runs[name]['per_bot'][0]['attacks'] for name in ('NoSwing', 'Aura')}
+    if min(attacks.values()) < 10:
+        raise Failed(f'off: the cheating bots attacked too little to show anything: {attacks}')
+    health = {bot['name']: bot['health'] for bot in runs['Target']['per_bot']}
+    # Nothing drops their attacks: the target both cheaters hit loses most of its health.
+    if not health['OffTarget0'] < 10:
+        raise Failed(f'off: the cheaters\' hits were dropped, the targets ended with {health} health')
+    print(f'off: survival: the no-swing, two-target and no-fall bots are never flagged, kicked '
+          f'or banned, and their hits land ({attacks} attacks; health left {health})')
 
 
 def check_timer(bins, scratch, out, seconds):
