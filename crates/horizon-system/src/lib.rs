@@ -824,7 +824,7 @@ pub fn cpu_seconds(pid: u32) -> Option<f64> {
 mod windows_process {
     use std::ffi::c_void;
 
-    /// Enough for `GetProcessTimes` and `K32GetProcessMemoryInfo` (Windows 8.1 and later).
+    /// Enough for `GetProcessTimes` and `K32GetProcessMemoryInfo` (Windows 7 and later).
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 
     /// `PROCESS_MEMORY_COUNTERS`.
