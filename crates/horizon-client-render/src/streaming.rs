@@ -1438,7 +1438,7 @@ impl Streaming {
         let entities = std::mem::take(&mut chunk.entities);
         world.entities_pending.insert((chunk.x, chunk.z));
         if !entities.is_empty() {
-            world.loaded_entities.push(((chunk.x, chunk.z), entities));
+            world.queue_entity_nbt((chunk.x, chunk.z), entities);
         }
         self.generated_total += 1;
         // A chunk saved with its light needs no light job; its unlit

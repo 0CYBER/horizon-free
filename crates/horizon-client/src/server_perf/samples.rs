@@ -6,7 +6,9 @@ use horizon_perf_format::v1::{Overhead, SampleProfile, Side, Symbols, Unit};
 /// The longest window a capture records, and the one a capture without a window gets.
 pub const MAX_WINDOW_S: f64 = 600.0;
 
-/// Seconds per time block: 5 s, longer when the window would need more than 32 of them.
+/// Seconds per time block: 5 s, longer when the window would need more than 32 of them. Only the Linux
+/// sampler (`mod linux`, below) starts a session, so it is built there only.
+#[cfg(target_os = "linux")]
 fn block_s(window_s: f64) -> f32 {
     (window_s / 32.0).ceil().max(5.0) as f32
 }

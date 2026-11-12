@@ -14,10 +14,11 @@ use std::collections::BTreeSet;
 
 const STAGES: &str = "[sky]\nfile = \"sky.wgsl\"\n[material]\nfile = \"material.wgsl\"\n\
                       [vertex]\nfile = \"vertex.wgsl\"\n[weather]\nfile = \"weather.wgsl\"\n\
-                      [[post]]\nfile = \"post.wgsl\"\n[tonemap]\nfile = \"tonemap.wgsl\"\n";
+                      [[post]]\nfile = \"post.wgsl\"\n[tonemap]\nfile = \"tonemap.wgsl\"\n\
+                      [entity]\nfile = \"entity.wgsl\"\n";
 
 /// Each stage written as plainly as it can be, by its file.
-const FILES: [(&str, &str); 6] = [
+const FILES: [(&str, &str); 7] = [
     (
         "sky.wgsl",
         "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
@@ -41,6 +42,10 @@ const FILES: [(&str, &str); 6] = [
     (
         "tonemap.wgsl",
         "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n",
+    ),
+    (
+        "entity.wgsl",
+        "fn entity(input: EntityInput) -> Surface { return Surface(input.albedo); }\n",
     ),
 ];
 
@@ -197,5 +202,10 @@ fn a_pack_s_own_name_collides_only_with_its_own_stage_s_prelude() {
     // primaries = "bt2020"` will bring reach only the packs that set the key.
     let post = "fn to_bt709(c: vec3<f32>) -> vec3<f32> { return c; }\n\
                 fn post(input: PostInput) -> vec4<f32> { return vec4<f32>(to_bt709(input.color.rgb), 1.0); }\n";
+    check(&pack(Some(("post.wgsl", post)))).unwrap();
+    // A stage added later brings its names to the packs that define it, and to no other stage:
+    // `EntityInput` is still a post stage's own to define.
+    let post = "struct EntityInput { color: vec4<f32> }\n\
+                fn post(input: PostInput) -> vec4<f32> { return EntityInput(input.color).color; }\n";
     check(&pack(Some(("post.wgsl", post)))).unwrap();
 }

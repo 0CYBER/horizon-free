@@ -344,7 +344,7 @@ fn check_can_move(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool
         if p.alive && !p.creative && !p.spectator {
             potential = true;
             // GAZE_DISGUISE_EQUIPMENT hides the player once the creaking is awake.
-            let disguised = p.head.as_deref() == Some("minecraft:carved_pumpkin");
+            let disguised = super::enderman::wears_gaze_disguise(w, p);
             if (!active || !disguised) && looked_at_by(m, w) {
                 if active {
                     return false;
