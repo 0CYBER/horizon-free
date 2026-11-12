@@ -846,20 +846,26 @@ impl Game<'_> {
         let (mut items_kept, mut orbs_kept) = (0, 0);
         let (mut boats_gone, mut carts_gone) = (0, 0);
         let mut destroyed_contents = Vec::new();
-        // The entities in reach, less those a mod spares (`native_explosion_entities`).
-        let reach: Vec<u32> = self
-            .entity_handles()
-            .filter_map(|handle| {
-                with_entity!(self, handle, e => {
-                    let feet = e.position();
-                    let dist = blast_distance(center, [feet.x, feet.y, feet.z]);
-                    (dist <= diameter).then(|| e.id())
+        // The entities in reach, less those a mod spares (`native_explosion_entities`); no list
+        // without native mods, which are the only ones to spare any.
+        let spared: std::collections::HashSet<u32> = if horizon_client::mod_api::mods().is_empty() {
+            Default::default()
+        } else {
+            let reach: Vec<u32> = self
+                .entity_handles()
+                .filter_map(|handle| {
+                    with_entity!(self, handle, e => {
+                        let feet = e.position();
+                        let dist = blast_distance(center, [feet.x, feet.y, feet.z]);
+                        (dist <= diameter).then(|| e.id())
+                    })
                 })
-            })
-            .collect();
-        let mut kept = reach.clone();
-        self.native_explosion_entities(self.dim.id(), center, &mut kept);
-        let spared: Vec<u32> = reach.into_iter().filter(|id| !kept.contains(id)).collect();
+                .collect();
+            let mut kept = reach.clone();
+            self.native_explosion_entities(self.dim.id(), center, &mut kept);
+            let kept: std::collections::HashSet<u32> = kept.into_iter().collect();
+            reach.into_iter().filter(|id| !kept.contains(id)).collect()
+        };
         for handle in self.entity_handles() {
             let handle = match handle {
                 EntityHandle::Boat(i) => EntityHandle::Boat(i - boats_gone),
