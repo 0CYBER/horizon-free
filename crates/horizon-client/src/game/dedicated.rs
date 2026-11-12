@@ -855,6 +855,28 @@ fn auto_save(state: &ServerState) -> bool {
     state.lists.lock().unwrap().autosave
 }
 
+/// `MinecraftServer.tickServer`'s pause-when-empty count. `pause_after` is its
+/// `pauseWhenEmptySeconds() * 20`; while that is above 0, a tick with no player and no
+/// `/tick sprint` running (`ServerTickRateManager.isSprinting`) adds one to `empty_ticks`, and any
+/// other tick sets it back to 0. A `/pregen` task keeps the server busy as a player would: paused,
+/// nothing would post-process its chunks. Returns whether the server is paused this tick.
+fn count_empty_tick(
+    empty_ticks: &mut i32,
+    pause_after: i32,
+    players: usize,
+    pregen: bool,
+    sprinting: bool,
+) -> bool {
+    if pause_after > 0 {
+        if players == 0 && !pregen && !sprinting {
+            *empty_ticks += 1;
+        } else {
+            *empty_ticks = 0;
+        }
+    }
+    pause_after > 0 && *empty_ticks >= pause_after
+}
+
 /// `MinecraftServer.setAutoSave`: enable or disable periodic saves and report whether it changed.
 pub(super) fn set_auto_save(lists: &Mutex<Lists>, enabled: bool) -> bool {
     let mut l = lists.lock().unwrap();
@@ -1329,16 +1351,13 @@ impl Game<'_> {
             // Vanilla reads pauseWhenEmptySeconds on every tick, so management changes take effect
             // without restarting the server.
             let pause_after = state.pause_when_empty_seconds.wrapping_mul(20);
-            if pause_after > 0 {
-                // A `/pregen` task keeps the server busy as a player would:
-                // paused, nothing would post-process its chunks.
-                if players == 0 && self.pregen_level().is_none() {
-                    state.empty_ticks += 1;
-                } else {
-                    state.empty_ticks = 0;
-                }
-            }
-            let paused = pause_after > 0 && state.empty_ticks >= pause_after;
+            let paused = count_empty_tick(
+                &mut state.empty_ticks,
+                pause_after,
+                players,
+                self.pregen_level().is_some(),
+                self.clock.sprinting(),
+            );
             state.paused = paused;
             if paused && state.empty_ticks == pause_after {
                 log(
@@ -2556,6 +2575,51 @@ mod tests {
             overload_warning(std::time::Duration::from_millis(13_027), tick),
             "Can't keep up! Is the server overloaded? Running 13027ms or 260 ticks behind"
         );
+    }
+
+    /// MinecraftServer.tickServer: a tick only counts toward pause-when-empty with no player and
+    /// no `/tick sprint` running (`ServerTickRateManager.isSprinting`); a sprint on an empty server
+    /// keeps the count at 0, so it is never paused, and the count starts again after it.
+    #[test]
+    fn a_sprint_on_an_empty_server_does_not_count_toward_the_pause() {
+        let pause_after = 60 * 20;
+        let mut empty_ticks = 0;
+        // One server tick: (players, a `/pregen` task, a `/tick sprint`) -> paused.
+        let tick = |empty_ticks: &mut i32, players, pregen, sprinting| {
+            super::count_empty_tick(empty_ticks, pause_after, players, pregen, sprinting)
+        };
+        for _ in 0..2000 {
+            assert!(!tick(&mut empty_ticks, 0, false, true));
+        }
+        assert_eq!(empty_ticks, 0);
+        // The sprint ended: 1200 empty ticks later the server pauses, not before.
+        for n in 1..=pause_after {
+            assert_eq!(
+                tick(&mut empty_ticks, 0, false, false),
+                n == pause_after,
+                "tick {n}"
+            );
+        }
+        // A sprint that starts while paused resumes the server at once.
+        assert!(!tick(&mut empty_ticks, 0, false, true));
+        assert_eq!(empty_ticks, 0);
+        // A player, or a `/pregen` task, resets the count too.
+        empty_ticks = 5;
+        assert!(!tick(&mut empty_ticks, 1, false, false));
+        assert_eq!(empty_ticks, 0);
+        empty_ticks = 5;
+        assert!(!tick(&mut empty_ticks, 0, true, false));
+        assert_eq!(empty_ticks, 0);
+        // pause-when-empty-seconds=0 never pauses and leaves the count alone.
+        empty_ticks = 5;
+        assert!(!super::count_empty_tick(
+            &mut empty_ticks,
+            0,
+            0,
+            false,
+            false
+        ));
+        assert_eq!(empty_ticks, 5);
     }
 
     /// A `panic!("literal")` carries a `&str`, a formatted one a `String`; anything else is
