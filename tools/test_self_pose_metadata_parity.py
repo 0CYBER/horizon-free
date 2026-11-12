@@ -4,6 +4,7 @@ Initial default delivery is observational; flags never stand in for a typed Pose
 """
 import argparse,hashlib,json,os,re,time
 from pathlib import Path
+PARITY_MANUAL = "a proof run by hand: --work-dir DIR --reference-only for the Java side, then --work-dir DIR2 --reference-dir DIR --binary BIN"  # not a harness: tools/parity.py leaves it out
 try:
     from . import net_capture,test_locator_bar_parity as net
     from .test_builtin_component_delivery_parity import Commands,generate,offline,uuid_words
