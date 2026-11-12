@@ -19,7 +19,7 @@
 //! `HORIZON_PARALLEL_TICK=1` turns it on (off by default), `verify` also runs the serial loop on
 //! copies and logs a tick whose result differs. The loop stays serial under `HORIZON_TEST_SEEDS`,
 //! with few ticking mobs, when one island holds most of them, and while a native mod may hook a
-//! mob's turn: every loaded mod must say it doesn't (`native_mob_phase_quiet`). The hooks that hand
+//! mob's turn, as the build finds it (`horizon_mod_api_gen::mob_turn`). The hooks that hand
 //! nothing back are kept and told at the join, in list order (`native_client_hooks::Deferred`).
 //! Everything else a mob can reach in its turn is in its reach: a pet's teleport to its owner, a
 //! teleporting meal, a changed speed, a wither's head targets and a warden's suspects; a raid's
@@ -118,6 +118,16 @@ fn lanes() -> usize {
     capped_lanes(horizon_client::parallel::lanes(), hardware)
 }
 
+/// Whether a native mod can run in a mob's turn, as the build found it (`HORIZON_MOB_TURN`, from
+/// `horizon_mod_api_gen::mob_turn`): then the loop stays serial. Without that finding, any trait
+/// mod counts.
+fn mods_hook_turns() -> bool {
+    match option_env!("HORIZON_MOB_TURN") {
+        Some(found) => found == "hooked",
+        None => !horizon_client::mod_api::mods().is_empty(),
+    }
+}
+
 /// Whether native mods are loaded at all: grouped turns keep the hooks that hand nothing back
 /// for the join, and skip the others (no mod hooks them while the islands run).
 fn defers() -> bool {
@@ -133,9 +143,6 @@ pub(super) struct Plan {
 pub(super) struct Islands<'t> {
     /// The host's own player's UUID, when one is in the level (`Game::who_by_uuid`).
     pub uuid: Option<[i32; 4]>,
-    /// Whether a native mod may hook a mob's turn (not every mod said `native_mob_phase_quiet`):
-    /// the loop stays serial.
-    pub mods: bool,
     /// A new entity-ticking test for a group's thread (`Game::entity_ticking_area`).
     pub ticking: &'t dyn Fn() -> Box<dyn Fn(i32, i32) -> bool + Send>,
 }
@@ -151,7 +158,7 @@ impl Islands<'_> {
     ) -> Option<Plan> {
         let lanes = lanes();
         if lanes < 2
-            || self.mods
+            || mods_hook_turns()
             || mobs.len() < MIN_TICKING
             || horizon_client::random_source::repeating_per_thread()
         {
@@ -1290,7 +1297,6 @@ mod tests {
                 let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     Islands {
                         uuid: None,
-                        mods: false,
                         ticking: &|| Box::new(|_, _| true),
                     }
                     .run(
@@ -1767,7 +1773,6 @@ mod tests {
         turns.cached_difficulty = None;
         let grouped = Islands {
             uuid: None,
-            mods: false,
             ticking: &|| Box::new(ticking),
         }
         .run(
