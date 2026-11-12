@@ -525,9 +525,12 @@ impl Launcher {
         .detach();
     }
 
-    /// The account the page is for: the selected one.
+    /// The account the page is for: the selected one, if it signed in with Microsoft.
     fn wardrobe_account(&self) -> Option<account::Account> {
-        self.accounts.selected().cloned()
+        match self.accounts.player() {
+            account::Player::Microsoft(_) => self.accounts.selected().cloned(),
+            _ => None,
+        }
     }
 
     /// A trip came back: keep what it learnt, say how it went.
