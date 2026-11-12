@@ -107,7 +107,7 @@ struct Entry {
 #[derive(Debug)]
 pub struct Filter {
     entries: Vec<Entry>,
-    by_first: [Vec<u16>; 27],
+    by_first: [Vec<usize>; 27],
     /// Words never matched: exact (`false`) or as a prefix (`true`).
     allowed: Vec<(Vec<Run>, bool)>,
 }
@@ -146,7 +146,7 @@ impl Filter {
             let Some(first) = runs.first() else {
                 continue;
             };
-            f.by_first[usize::from(first.letter)].push(f.entries.len() as u16);
+            f.by_first[usize::from(first.letter)].push(f.entries.len());
             f.entries.push(Entry { runs, kind });
         }
         f
@@ -176,7 +176,7 @@ impl Filter {
             }
             for at in 0..word.len() {
                 for &e in &self.by_first[usize::from(word[at].letter)] {
-                    let e = &self.entries[usize::from(e)];
+                    let e = &self.entries[e];
                     let whole = e.kind == Kind::Whole;
                     if (!whole || at == 0) && fits(&e.runs, &word[at..], whole) {
                         return true;
@@ -187,7 +187,7 @@ impl Filter {
         // Spread entries over the whole text, from the start of a word, across at least two.
         for (w, &at) in t.joined_at.iter().enumerate() {
             for &e in &self.by_first[usize::from(t.joined[at].letter)] {
-                let e = &self.entries[usize::from(e)];
+                let e = &self.entries[e];
                 if e.kind == Kind::Spread
                     && fits(&e.runs, &t.joined[at..], false)
                     && t.spans_words(w, e.runs.len())

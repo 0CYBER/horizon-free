@@ -108,6 +108,17 @@ fn a_custom_list_has_the_same_syntax() {
     assert!(!f.matches("me h"));
 }
 
+#[test]
+fn a_large_custom_list_keeps_rules_past_the_u16_boundary() {
+    let list = "alpha\n".repeat(65_536) + "~omega\n";
+    let filter = Filter::new(&list);
+    assert_eq!(filter.len(), 65_537);
+    assert!(filter.matches("alpha"));
+    assert!(filter.matches("omega"));
+    assert!(filter.matches("o me ga"));
+    assert!(!filter.matches("hello"));
+}
+
 fn guard(config: Config) -> Guard {
     Guard::new(config, filter(), None)
 }
