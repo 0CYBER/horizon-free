@@ -46,14 +46,44 @@ impl DensitySampler for RangeChoiceSampler {
         buffer: &mut [f32],
         volume: DensityVolume,
     ) -> Result<(), SampleError> {
+        self.sample_choice(context, buffer, volume, None)
+    }
+    fn sample_needed(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: &[u64],
+    ) -> Result<(), SampleError> {
+        self.sample_choice(context, buffer, volume, usable_mask(needed, volume))
+    }
+}
+impl RangeChoiceSampler {
+    /// The volume, or with `needed` only the Ys it sets.
+    fn sample_choice(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: Option<&[u64]>,
+    ) -> Result<(), SampleError> {
         check_exact_buffer(buffer, volume)?;
         // Vanilla evaluates the in-range branch before the selector in bulk.
-        self.when_in_range.sample_volume(context, buffer, volume)?;
+        sample_with(&*self.when_in_range, context, buffer, volume, needed)?;
         context.with_buffer(volume.size(), |context, input| {
-            self.input.sample_volume(context, input, volume)?;
+            sample_with(&*self.input, context, input, volume, needed)?;
+            // The other branch is read only where the selector is out of range, so it need
+            // not be sampled elsewhere. It is still asked, in vanilla's order.
+            let outside_needed = needed_where(input, volume, needed, |v| !self.contains(v));
+            let outside_needed = outside_needed.as_deref();
             context.with_buffer(volume.size(), |context, outside| {
-                self.when_out_of_range
-                    .sample_volume(context, outside, volume)?;
+                sample_with(
+                    &*self.when_out_of_range,
+                    context,
+                    outside,
+                    volume,
+                    outside_needed,
+                )?;
                 self.choose(buffer, input, outside);
                 Ok(())
             })
@@ -98,27 +128,19 @@ impl DensityValue {
             }),
         }
     }
-    /// For a sampled value, the Ys of each column (one bit per Y, if at most 64) whose
-    /// `alpha` reads it.
+    /// For a sampled value, the Ys of each column (one bit per Y, if at most 64) that a caller
+    /// needing `needed` reads through an `alpha` that `reads` it.
     fn needed(
         &self,
         alpha: &[f32],
         volume: DensityVolume,
+        needed: Option<&[u64]>,
         reads: fn(f32) -> bool,
     ) -> Option<Vec<u64>> {
-        let size_y = volume.sizes()[1];
-        if matches!(self, Self::Constant(_)) || size_y > 64 {
+        if matches!(self, Self::Constant(_)) {
             return None;
         }
-        let columns = alpha[..volume.size()].chunks_exact(size_y);
-        Some(
-            columns
-                .map(|column| {
-                    (column.iter().enumerate())
-                        .fold(0, |bits, (y, &alpha)| bits | u64::from(reads(alpha)) << y)
-                })
-                .collect(),
-        )
+        needed_where(alpha, volume, needed, reads)
     }
 }
 #[derive(Clone, Copy)]
@@ -172,12 +194,33 @@ impl DensitySampler for LerpSampler {
         buffer: &mut [f32],
         volume: DensityVolume,
     ) -> Result<(), SampleError> {
+        self.sample_lerp(context, buffer, volume, None)
+    }
+    fn sample_needed(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: &[u64],
+    ) -> Result<(), SampleError> {
+        self.sample_lerp(context, buffer, volume, usable_mask(needed, volume))
+    }
+}
+impl LerpSampler {
+    /// The volume, or with `needed` only the Ys it sets.
+    fn sample_lerp(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: Option<&[u64]>,
+    ) -> Result<(), SampleError> {
         check_exact_buffer(buffer, volume)?;
-        self.alpha.sample_volume(context, buffer, volume)?;
+        sample_with(&*self.alpha, context, buffer, volume, needed)?;
         // `interpolate` reads `first` only where alpha is not 1 and `second` only where it is
         // not 0, so they need not be sampled elsewhere.
-        let first_needed = self.first.needed(buffer, volume, |alpha| alpha != 1.0);
-        let second_needed = self.second.needed(buffer, volume, |alpha| alpha != 0.0);
+        let first_needed = (self.first).needed(buffer, volume, needed, |alpha| alpha != 1.0);
+        let second_needed = (self.second).needed(buffer, volume, needed, |alpha| alpha != 0.0);
         let (first_needed, second_needed) = (first_needed.as_deref(), second_needed.as_deref());
         self.first
             .with_volume(context, volume, first_needed, |context, first| {
@@ -246,22 +289,51 @@ impl DensitySampler for IntervalSelectSampler {
         buffer: &mut [f32],
         volume: DensityVolume,
     ) -> Result<(), SampleError> {
+        self.sample_select(context, buffer, volume, None)
+    }
+    fn sample_needed(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: &[u64],
+    ) -> Result<(), SampleError> {
+        self.sample_select(context, buffer, volume, usable_mask(needed, volume))
+    }
+}
+impl IntervalSelectSampler {
+    /// The volume, or with `needed` only the Ys it sets.
+    fn sample_select(
+        &self,
+        context: &mut SamplerContext,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        needed: Option<&[u64]>,
+    ) -> Result<(), SampleError> {
         check_exact_buffer(buffer, volume)?;
         let total = volume
             .size()
             .checked_mul(self.branches.len())
             .filter(|count| *count <= isize::MAX as usize / size_of::<f32>())
             .ok_or(DensityError::VolumeTooLarge)?;
-        self.input.sample_volume(context, buffer, volume)?;
+        sample_with(&*self.input, context, buffer, volume, needed)?;
+        // Each value is read from the one branch its input selects, so a branch need not be
+        // sampled elsewhere. Every branch is still asked, in vanilla's order.
+        let branch_needed = self.branch_needed(buffer, volume, needed);
+        let columns = volume.size() / volume.sizes()[1];
         // Contiguous retained storage replaces a separate allocation per branch.
         // Each child still receives a slice with exactly the logical volume size.
         context.with_buffer(total, |context, values| {
-            for (branch, output) in self
+            for (index, (branch, output)) in self
                 .branches
                 .iter()
                 .zip(values.chunks_exact_mut(volume.size()))
+                .enumerate()
             {
-                branch.sample_volume(context, output, volume)?;
+                let needed = branch_needed
+                    .as_ref()
+                    .map(|masks| &masks[index * columns..(index + 1) * columns]);
+                sample_with(&**branch, context, output, volume, needed)?;
             }
             // Delay every output selection until all child volumes have returned.
             for (index, input) in buffer.iter_mut().enumerate() {
@@ -269,5 +341,30 @@ impl DensitySampler for IntervalSelectSampler {
             }
             Ok(())
         })
+    }
+
+    /// For each branch in turn, the Ys of each column (one bit per Y, if at most 64) a caller
+    /// needing `needed` reads from it: those whose `input` selects it.
+    fn branch_needed(
+        &self,
+        input: &[f32],
+        volume: DensityVolume,
+        needed: Option<&[u64]>,
+    ) -> Option<Vec<u64>> {
+        let size_y = volume.sizes()[1];
+        if size_y > 64 {
+            return None;
+        }
+        let columns = volume.size() / size_y;
+        let mut masks = vec![0_u64; self.branches.len() * columns];
+        for (column, values) in input[..volume.size()].chunks_exact(size_y).enumerate() {
+            let wanted = needed.map_or(u64::MAX, |needed| needed[column]);
+            for (y, &value) in values.iter().enumerate() {
+                if (wanted >> y) & 1 == 1 {
+                    masks[self.select(value) * columns + column] |= 1 << y;
+                }
+            }
+        }
+        Some(masks)
     }
 }

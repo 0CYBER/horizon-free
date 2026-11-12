@@ -37,12 +37,12 @@ VisibilitySet.set	inline	crates/horizon-client-render/src/mesher.rs::visibility	
 VisibilitySet.visibilityBetween	port	crates/horizon-client-render/src/gfx/occlusion.rs::Graph::propagate	the faces a section connects are read from its visibility bits when the search moves on
 VisibilitySet.toString	skip:debug		debug text
 Frustum.set	skip:java		copies the frustum; Horizon passes the Frustum value
-Frustum.offset	missing		minor: particles are not culled against a frustum pulled back 3 blocks (ParticleEngine.extract); Horizon has no particle frustum test
+Frustum.offset	port	crates/horizon-client-render/src/gfx/view_frustum.rs::Frustum::pulled_back	the camera moved back along the view direction (LevelExtractor.extract passes the particles a copy offset by -3.0F); a frustum with no depth planes is returned unchanged
 Frustum.offsetToFullyIncludeCameraCube	port	crates/horizon-client-render/src/gfx/occlusion.rs::Graph::search	the occlusion search starts in the camera's own section, so its cube is always included; gap: minor: no frustum offset
 Frustum.calculateFrustum	port	crates/horizon-client-render/src/gfx.rs::frustum	the six planes from projection times view
-Frustum.isVisible	port	crates/horizon-client-render/src/gfx.rs::Frustum::intersects	box against the planes; gap: minor: infinite bounds are not special-cased
-Frustum.cubeInFrustum	port	crates/horizon-client-render/src/gfx.rs::Frustum::intersects	box test on camera-relative bounds
-Frustum.pointInFrustum	missing		minor: only particle culling uses it (QuadParticleGroup), and Horizon has no particle frustum test
+Frustum.isVisible	port	crates/horizon-client-render/src/gfx/view_frustum.rs::Frustum::intersects	box against the planes; gap: minor: infinite bounds are not special-cased
+Frustum.cubeInFrustum	port	crates/horizon-client-render/src/gfx/view_frustum.rs::Frustum::intersects	box test on camera-relative bounds
+Frustum.pointInFrustum	port	crates/horizon-client-render/src/gfx/view_frustum.rs::Frustum::contains_point	on or inside all six planes; a point that is not finite is kept
 Frustum.getFrustumPoints	skip:debug		the eight frustum corners, for debug drawing only
 Frustum.getNearPlaneBounds	port	crates/horizon-client-render/src/camera.rs::near_plane_bounds	the culling projection's NDC z=-1 plane, moved to the eye by screen_quads
 BeeDebugRenderer	missing		minor: F3 bee and hive debug view (hive blacklist, flowers, ghost hives); not drawn

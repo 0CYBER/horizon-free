@@ -75,6 +75,12 @@ fn grid_state(count: u32, mut x: i32, mut z: i32) -> u32 {
 impl ChunkGenerator for DebugTerrain {
     type Worker = ();
     fn worker(&self) {}
+    /// DebugLevelSource's proto is already its decorated column. Keep a copy
+    /// for lighting a finished neighbour outside the kept area, matching the
+    /// vanilla FEATURES neighbour path.
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        proto.downcast_ref::<Chunk>().cloned()
+    }
     /// `DebugLevelSource.buildTerrain` builds nothing; `applyBiomeDecoration`
     /// writes the barriers and the grid.
     fn proto(&self, _: &mut (), cx: i32, cz: i32) -> crate::streaming::Proto {
@@ -127,5 +133,21 @@ mod tests {
         // x = 2 * 32 + 1 maps to x / 2 = 32: index 32 * 32 + z / 2, past the 1000 states.
         assert_eq!(grid_state(1000, 65, 1), 0);
         assert_eq!(grid_state(1000, 61, 3), 30 * 32 + 1);
+    }
+
+    #[test]
+    fn light_view_keeps_a_debug_proto_column() {
+        let terrain = DebugTerrain {
+            shape: LevelShape::OVERWORLD,
+            biome: 0,
+            barrier: 0,
+            states: 0,
+        };
+        let mut chunk = Chunk::empty(-2, 5);
+        chunk.set(0, 0, 0, 42);
+        let proto: crate::streaming::Proto = Box::new(chunk);
+        let view = terrain.light_view(&proto).expect("debug proto light view");
+        assert_eq!((view.x, view.z), (-2, 5));
+        assert_eq!(view.block(0, 0, 0).0, 42);
     }
 }

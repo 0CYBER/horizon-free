@@ -183,8 +183,9 @@ mod tests {
     /// (it resumes from the return address), while every caller's frame stays.
     #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
     #[inline(never)]
-    fn busy_in_a_named_frame(stop: &AtomicBool) {
+    fn busy_in_a_named_frame(stop: &AtomicBool, inside: &AtomicBool) {
         let mut n = 0u64;
+        inside.store(true, Ordering::Release);
         while !stop.load(Ordering::Relaxed) {
             n = std::hint::black_box(spin)(n);
         }
@@ -194,15 +195,21 @@ mod tests {
     #[test]
     fn reads_the_stack_of_a_busy_thread_from_another() {
         let stop = Arc::new(AtomicBool::new(false));
+        let inside = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let worker = {
-            let stop = stop.clone();
+            let (stop, inside) = (stop.clone(), inside.clone());
             std::thread::spawn(move || {
                 tx.send(Watched::current()).unwrap();
-                busy_in_a_named_frame(&stop);
+                busy_in_a_named_frame(&stop, &inside);
             })
         };
         let watched = rx.recv().unwrap();
+        // The worker may still be waking this thread from inside `send`: ask only once it is in
+        // the frame the test looks for.
+        while !inside.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
         let stack = watched.stack(Duration::from_secs(10));
         stop.store(true, Ordering::Relaxed);
         worker.join().unwrap();
