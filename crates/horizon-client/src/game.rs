@@ -562,7 +562,7 @@ use horizon_world::{
     level::{
         Behaviours, BucketContent, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess,
         LevelEvent, PlaceContext, PlaceOutcome, PlacementContext, PlayerContext, PlayerEffect,
-        Ticks, flags as level_flags,
+        RandomTickMaskUpdate, Ticks, flags as level_flags,
     },
     registry::BlockStateId,
 };
