@@ -9,6 +9,9 @@ use horizon_core::random::{LegacyRandom, LevelRandom};
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
 
+mod pending_entity;
+pub use pending_entity::{EntityLoadReason, PendingEntity};
+
 mod modified;
 pub use modified::ModifiedChunks;
 
@@ -81,7 +84,7 @@ pub struct World {
     /// incrementally by streaming.
     pub light_edits: Vec<((i32, i32, i32), u32, u32)>,
     /// Saved entities of chunks that just loaded, spawned by the game.
-    pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
+    pub loaded_entities: Vec<((i32, i32), Vec<PendingEntity>)>,
     /// Chunks loaded since the level's last pass, their entity sections not
     /// ready yet (`PersistentEntitySectionManager`'s PENDING), empty ones too:
     /// the pass ends by readying them (`processPendingLoads`).
@@ -215,6 +218,12 @@ impl Weather {
     }
 }
 impl World {
+    /// Queue ordinary NBT; transient transfer state is never decoded from it.
+    pub fn queue_entity_nbt(&mut self, key: (i32, i32), tags: Vec<horizon_world::nbt::Tag>) {
+        self.loaded_entities
+            .push((key, tags.into_iter().map(PendingEntity::from).collect()));
+    }
+
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
             shape: LevelShape::OVERWORLD,
