@@ -3914,6 +3914,32 @@ def armor_stand_climbing():
 
 
 
+def painting_saved_ground():
+    """#14543: `Entity.load` reads `OnGround` (`getBooleanOr`) and `fall_distance`, and `saveWithoutId` writes
+    them back; `BlockAttachedEntity.tick` never moves a painting nor runs `baseTick`, so both keep what was loaded."""
+    # Entities tick once the forced chunk's 2-column neighbourhood is loaded (ChunkMap.prepareEntityTickingChunk).
+    x0, y0, z0 = 4096 - 128, 260, 3584
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks',
+            'chunks': [[(x0 >> 4) + i, (z0 >> 4) + k] for i in range(-2, 3) for k in range(-2, 3)]},
+           cmd('/tick freeze', False)]
+    subjects = ['OnGround:1b', 'OnGround:0b', 'OnGround:3b', 'fall_distance:2.5d',
+                'OnGround:1b,fall_distance:7.0d', 'Tags:["plain"]']
+    for n, fields in enumerate(subjects, 1):
+        ops.append(cmd(f'/summon painting {x0 + 2 * n}.5 {y0} {z0 + 8}.5 {{UUID:[I;14543,0,{n},1],{fields}}}',
+                       expect_result=1))
+
+    def reads():
+        for n in range(1, len(subjects) + 1):
+            for key in ('OnGround', 'fall_distance'):
+                ops.append(cmd(f'/data get entity 000038cf-0000-0000-0000-{n:04x}00000001 {key}'))
+
+    reads()
+    ops += [cmd('/tick unfreeze', False), {'op': 'tick', 'n': 2}, cmd('/tick freeze', False)]
+    reads()
+    return ops + setup('/tick unfreeze', f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/forceload remove {x0} {z0}')
+
+
 def creeper_cloud_selectors():
     """Creeper clouds are command targets for their actual lifetime (#7438)."""
     generated = '@e[type=minecraft:area_effect_cloud,tag=!direct]'
@@ -8269,6 +8295,7 @@ def groups():
         ('animal signed InLove', animal_signed_in_love()),
         ('mob fire resistance damage', mob_fire_resistance_damage()),
         ('armor stand climbing', armor_stand_climbing()),
+        ('painting saved ground', painting_saved_ground()),
         ('mob armor damage', mob_armor_damage()),
         ('mob max health bounds', mob_max_health_bounds()),
         ('creeper custom fuse', creeper_custom_fuse()),
