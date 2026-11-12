@@ -346,13 +346,10 @@ impl Station {
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
         Self::new(kind, pos)
     }
-    /// `StonecutterScreen.containerChanged`: without recipes to show, the
-    /// list scrolls back to the top.
+    /// `StonecutterScreen.containerChanged`: a changed input puts the list back at the top.
     pub(super) fn stonecutter_changed(&mut self) {
-        if self.inputs[0].is_none() || self.stone.recipes.is_empty() {
-            self.start = 0;
-            self.scroll = 0.0;
-        }
+        self.start = 0;
+        self.scroll = 0.0;
     }
     /// `StonecutterScreen.isScrollBarActive`.
     fn stonecutter_scrolls(&self) -> bool {
@@ -3157,3 +3154,6 @@ mod brewing_tick;
 
 #[cfg(test)]
 mod brewing_changed_tests;
+
+#[cfg(test)]
+mod stonecutter_scroll_tests;
