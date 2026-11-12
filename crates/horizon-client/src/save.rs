@@ -1849,8 +1849,10 @@ fn decode_column(
     if let Some(Tag::List(entities)) = tag.get("block_entities") {
         for e in entities {
             let int = |k: &str| number(e.get(k)).map(|v| v as i32);
-            if let (Some(x), Some(y), Some(z)) = (int("x"), int("y"), int("z")) {
-                extras.block_entity_order.push((x, y, z));
+            if let (Some(bx), Some(y), Some(bz)) = (int("x"), int("y"), int("z")) {
+                extras
+                    .block_entity_order
+                    .push(block_entity_pos((bx, y, bz), [*x, *z]));
             }
             match decode_block_entity(e).map(|(p, be)| (block_entity_pos(p, [*x, *z]), be)) {
                 Some(mut be) => {
@@ -6037,6 +6039,8 @@ mod tests {
             [(5, 70, 13)],
             "moved into the chunk that saved it"
         );
+        let order = &chunk.saved.as_ref().expect("extras").block_entity_order;
+        assert_eq!(order, &[(5, 70, 13)], "load order follows the moved position");
     }
 
     #[test]
