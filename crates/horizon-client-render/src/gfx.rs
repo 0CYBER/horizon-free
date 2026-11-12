@@ -12583,56 +12583,8 @@ fn block_entities_within_reach<'a>(
         })
         .flatten()
 }
-/// Camera-relative clip planes (`Frustum`).
-#[derive(Clone, Copy, Debug)]
-pub struct Frustum {
-    planes: [Vec4; 6],
-}
-impl Frustum {
-    /// Whether the camera-relative box `min..max` is at least partly inside.
-    pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
-        !self.planes.iter().any(|p| {
-            let sign = p.truncate().cmpge(Vec3::ZERO);
-            let v = Vec3::select(sign, max, min);
-            p.truncate().dot(v) + p.w < 0.0
-        })
-    }
-    /// Whether a camera-relative sphere is at least partly inside. Frustum
-    /// planes are normalized, so each test needs only one dot product and a
-    /// radius comparison.
-    pub fn intersects_sphere(&self, center: Vec3, radius: f32) -> bool {
-        if !center.is_finite() || !radius.is_finite() || radius < 0.0 {
-            return true;
-        }
-        !self
-            .planes
-            .iter()
-            .any(|plane| plane.truncate().dot(center) + plane.w < -radius)
-    }
-    /// Depth clip planes alone: X/Y projection jitter cannot change this test.
-    /// Retaining side-of-screen geometry makes this safe before TAA selects a phase.
-    pub fn intersects_depth(&self, min: Vec3, max: Vec3) -> bool {
-        if !min.is_finite() || !max.is_finite() || !min.cmple(max).all() {
-            return true;
-        }
-        !self.planes[4..].iter().any(|p| {
-            let sign = p.truncate().cmpge(Vec3::ZERO);
-            let v = Vec3::select(sign, max, min);
-            p.truncate().dot(v) + p.w < 0.0
-        })
-    }
-    /// Whether the camera-relative box `min..max` is entirely inside. Then
-    /// `intersects` accepts every box within it: each plane's distance only
-    /// grows from this box's nearest corner to the inner box's farthest, and
-    /// rounding keeps that order.
-    pub fn contains(&self, min: Vec3, max: Vec3) -> bool {
-        self.planes.iter().all(|p| {
-            let sign = p.truncate().cmpge(Vec3::ZERO);
-            let v = Vec3::select(sign, min, max);
-            p.truncate().dot(v) + p.w >= 0.0
-        })
-    }
-}
+mod view_frustum;
+pub use view_frustum::Frustum;
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
 /// fire_side's 0.01 pixel in front of its block, from z-fighting.
