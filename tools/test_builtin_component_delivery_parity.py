@@ -17,6 +17,7 @@ import struct
 import subprocess
 import time
 import uuid
+PARITY_MANUAL = "a proof run by hand, once per side: --side java, then --side native, each with --binary BIN"  # not a harness: tools/parity.py leaves it out
 try:
     from . import anvil_dump as nbt, net_capture, test_locator_bar_parity as net
 except ImportError:
