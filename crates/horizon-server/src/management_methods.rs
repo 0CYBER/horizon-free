@@ -98,7 +98,7 @@ pub fn call(shared: &Shared, client: u32, short: &str, argument: &Value) -> Resu
             game.operator_user_permission_level(client, None)
         }
         "serversettings/operator_user_permission_level/set" => {
-            game.operator_user_permission_level(client, Some(management_int(argument)?))
+            game.operator_user_permission_level(client, Some(permission_level(argument)?))
         }
         "serversettings/force_game_mode" => game.force_game_mode(client, None),
         "serversettings/force_game_mode/set" => game.force_game_mode(
@@ -400,19 +400,14 @@ fn ip(value: &Value) -> Result<Value, Failure> {
     Ok(json!({ "ip": ip }))
 }
 
-/// An `OperatorDto`: the player, and the permission level (0 to 4) and bypass when given.
+/// An `OperatorDto`: the player, and the permission level (clamped to 0 to 4) and bypass when given.
 fn operator(value: &Value) -> Result<Value, Failure> {
     let Some(dto) = value.get("player") else {
         return Err(invalid_params("No key player"));
     };
     let level = match value.get("permissionLevel") {
         None => None,
-        Some(level) => Some(
-            level
-                .as_i64()
-                .filter(|l| (0..=4).contains(l))
-                .ok_or_else(|| invalid_params(format!("Not a valid permission level: {level}")))?,
-        ),
+        Some(level) => Some(permission_level(level)?),
     };
     let bypass = match value.get("bypassesPlayerLimit") {
         None => None,
@@ -507,6 +502,12 @@ fn management_int(value: &Value) -> Result<i32, Failure> {
             })
     };
     parsed.ok_or_else(|| invalid_params(format!("Not a number: {value}")))
+}
+
+/// `PermissionLevel.INT_CODEC`: `Codec.INT` ([`management_int`]), then `PermissionLevel.byId`, whose `ByIdMap`
+/// clamps to 0 (`ALL`) through 4 (`OWNERS`). Any number is a level; anything else is not.
+fn permission_level(value: &Value) -> Result<i32, Failure> {
+    Ok(management_int(value)?.clamp(0, 4))
 }
 
 /// The running game, through its control endpoint.
@@ -1443,7 +1444,11 @@ status-heartbeat-interval=0
             operator(&json!({ "player": { "name": "Kim0" }, "permissionLevel": 2 })).unwrap(),
             json!({ "player": { "id": null, "name": "Kim0" }, "permissionLevel": 2, "bypassesPlayerLimit": null })
         );
-        assert!(operator(&json!({ "player": { "name": "Kim0" }, "permissionLevel": 5 })).is_err());
+        // PermissionLevel.INT_CODEC clamps (a_permission_level_is_clamped_as_vanillas_codec_reads_it).
+        assert_eq!(
+            operator(&json!({ "player": { "name": "Kim0" }, "permissionLevel": 5 })).unwrap()["permissionLevel"],
+            4
+        );
         assert!(
             operator(&json!({ "player": { "name": "Kim0" }, "bypassesPlayerLimit": 1 })).is_err()
         );
@@ -1463,5 +1468,33 @@ status-heartbeat-interval=0
             json!({ "jsonrpc": "2.0", "id": null, "result": {
                 "started": false, "version": { "name": "26.3", "protocol": 777 } } })
         );
+    }
+
+    /// `PermissionLevel.INT_CODEC` (an `OperatorDto`'s `permissionLevel`, and
+    /// `serversettings/operator_user_permission_level/set`): `Codec.INT`, then `PermissionLevel.byId`, whose
+    /// `ByIdMap` clamps. Vanilla's codec gives 5 and 100 as 4, -1 as 0, 2.7 as 2, and refuses "2".
+    #[test]
+    fn a_permission_level_is_clamped_as_vanillas_codec_reads_it() {
+        for (sent, level) in [
+            (json!(5), 4),
+            (json!(100), 4),
+            (json!(-1), 0),
+            (json!(2.0), 2),
+            (json!(2.7), 2),
+            (json!(4), 4),
+        ] {
+            assert_eq!(permission_level(&sent).unwrap(), level, "{sent}");
+            let op =
+                operator(&json!({ "player": { "name": "Kim" }, "permissionLevel": sent })).unwrap();
+            assert_eq!(op["permissionLevel"], json!(level), "{sent}");
+        }
+        for sent in [json!("2"), json!(true)] {
+            assert!(permission_level(&sent).is_err(), "{sent}");
+            let op = operator(&json!({ "player": { "name": "Kim" }, "permissionLevel": sent }));
+            assert!(op.is_err(), "{sent}");
+        }
+        // No level: the server's default is the game's to fill in.
+        let op = operator(&json!({ "player": { "name": "Kim" } })).unwrap();
+        assert_eq!(op["permissionLevel"], Value::Null);
     }
 }
