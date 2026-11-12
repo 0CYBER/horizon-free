@@ -9,6 +9,10 @@ use super::{
 };
 use horizon_core::random::RandomSource;
 
+#[cfg(test)]
+#[path = "monster_no_action_tests.rs"]
+mod monster_no_action_tests;
+
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
@@ -241,6 +245,15 @@ pub fn mob_brightness(m: &Mob, w: &MobWorld) -> f32 {
         m.eye_y().floor() as i32,
         m.position.z.floor() as i32,
     )
+}
+/// The same with the override a mob can give it: `Blaze` and `Vex` report a
+/// constant 1.0 whatever the light.
+pub fn magic_value(m: &Mob, w: &MobWorld) -> f32 {
+    if matches!(m.species(), Species::Blaze | Species::Vex) {
+        1.0
+    } else {
+        mob_brightness(m, w)
+    }
 }
 fn dark_enough(m: &Mob, w: &MobWorld) -> bool {
     mob_brightness(m, w) < 0.5
