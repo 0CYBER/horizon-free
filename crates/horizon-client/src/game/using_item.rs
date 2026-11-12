@@ -3,6 +3,25 @@
 //! vibrations a use makes.
 use super::*;
 
+/// What a use began with: `LivingEntity.useItem` (`None` for a use no start recorded) and
+/// whether a mod's `Start` or `Tick` set its ticks left (`game/item_use.rs`).
+#[derive(Default)]
+pub(super) struct UseStart {
+    pub(super) ticks_set: bool,
+    pub(super) item: Option<ItemStack>,
+}
+
+impl UseStart {
+    /// A use of `item` that no mod has set the ticks of yet (`LivingEntity.onSyncedDataUpdated`'s
+    /// `useItem` on the client).
+    pub(super) fn of(item: ItemStack) -> Self {
+        Self {
+            ticks_set: false,
+            item: Some(item),
+        }
+    }
+}
+
 impl Game<'_> {
     /// `Consumable.startConsuming` for a held consumable: food needs
     /// `Player.canEat` (`Consumable.canConsume`), anything else is always
@@ -87,6 +106,14 @@ impl Game<'_> {
             self.using = None;
             return;
         };
+        // updatingUsingItem: another item in the hand than the use began with
+        // stops the use, without a release.
+        if let Some(used) = self.use_start.item.clone()
+            && used.item != stack.item
+        {
+            self.stop_using_item(&used);
+            return;
+        }
         // Switching hotbar slots only ends a main-hand use.
         let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
         if !self.right || hand_changed || self.screen != Screen::Playing {
@@ -235,12 +262,21 @@ impl Game<'_> {
         }
         self.stop_using_item(stack);
     }
+    /// `LivingEntity.releaseUsingItem` of a guest's `stack`: `releaseUsing` runs only when
+    /// the hand still holds the item the use began with, `stopUsingItem` always follows.
+    pub(super) fn release_using_item(&mut self, stack: &ItemStack, ticks: u32) {
+        match self.use_start.item.clone() {
+            Some(used) if used.item != stack.item => self.stop_using_item(&used),
+            _ => self.release_used_item(stack, ticks, false),
+        }
+    }
     /// `LivingEntity.stopUsingItem`: the use of `stack` is over (`useItem` and
     /// its remaining ticks are cleared), and when the use effects of the stack
     /// ask for it, `ItemStack.causeUseVibration` sends an `ITEM_INTERACT_FINISH`
     /// game event from the player, at its feet.
     pub(super) fn stop_using_item(&mut self, stack: &ItemStack) {
         self.using = None;
+        self.use_start.item = None;
         self.use_vibration(stack, "minecraft:item_interact_finish");
     }
     /// `ItemStack.causeUseVibration` for `stack` used by the player: the
