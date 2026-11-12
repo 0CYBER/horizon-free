@@ -270,6 +270,22 @@ impl Game<'_> {
             _ => self.release_used_item(stack, ticks, false),
         }
     }
+    /// `LivingEntity.stopUsingItem` for the use in progress, whatever stack began it; nothing
+    /// when no item is in use (`wasUsingItem`).
+    pub(super) fn stop_using(&mut self) {
+        let Some((slot, _)) = self.using else {
+            return;
+        };
+        match self
+            .use_start
+            .item
+            .clone()
+            .or_else(|| self.stack_in(slot).cloned())
+        {
+            Some(stack) => self.stop_using_item(&stack),
+            None => self.using = None,
+        }
+    }
     /// `LivingEntity.stopUsingItem`: the use of `stack` is over (`useItem` and
     /// its remaining ticks are cleared), and when the use effects of the stack
     /// ask for it, `ItemStack.causeUseVibration` sends an `ITEM_INTERACT_FINISH`
