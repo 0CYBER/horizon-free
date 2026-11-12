@@ -41,6 +41,11 @@ const MOB_TURN: &[&str] = &[
     "living_damage_pre",
     "living_knockback",
     "living_knockback_v2",
+    // Called from a mob's move: farmland it falls on, a content mod's blocks it touches.
+    "trample",
+    "block_step_on",
+    "block_entity_inside",
+    "block_fall_on",
 ];
 /// The hooks a mob's turn calls without waiting: a trait mod hears them after the loop, but a
 /// mixin into them still runs in the turn.
@@ -192,6 +197,10 @@ mod tests {
         std::fs::create_dir_all(&helper).unwrap();
         std::fs::write(helper.join("lib.rs"), "pub fn  living_fall() {}").unwrap();
         assert_eq!(mob_turn(&dir), Some("hooked"), "a helper crate's hook");
+        std::fs::remove_dir_all(dir.join("native-crates")).unwrap();
+        let moves = "impl Hooks for Example {\n    fn trample(&self) {}\n}\n";
+        std::fs::write(lib.join("lib.rs"), moves).unwrap();
+        assert_eq!(mob_turn(&dir), Some("hooked"), "a hook a mob's move calls");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
