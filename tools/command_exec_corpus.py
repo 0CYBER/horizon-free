@@ -521,6 +521,16 @@ def player_state():
         cmd('/attribute @s minecraft:max_health base reset'),
         cmd('/spawnpoint @s 8 230 8'),
         cmd('/setworldspawn 8 230 8'),
+        # Vanilla only checks the spawnable bounds, not a loaded chunk.
+        cmd('/setworldspawn 29999999 64 -30000000'),
+        cmd('/setworldspawn 30000000 64 0'),
+        cmd('/setworldspawn 0 64 -30000001'),
+        cmd('/setworldspawn 0 -20000000 0'),
+        cmd('/setworldspawn 0 20000000 0'),
+        cmd('/spawnpoint @s 30000000 64 0'),
+        cmd('/spawnpoint @s 29999999 64 29999999'),
+        cmd('/setworldspawn 8 230 8'),
+        cmd('/spawnpoint @s 8 230 8'),
         cmd('/tp @s 8.5 230 8.5'),
         cmd('/tp @s ~1 ~ ~'),
         cmd('/teleport @s 8.5 230 8.5 90 0'),
@@ -4099,6 +4109,23 @@ def creeper_custom_fuse():
             ops.append(cmd(f'/execute if entity @e[tag={tag}]'))
         elapsed = tick
     return ops + setup('/gamerule mob_griefing true')
+
+
+def raw_entity_flags():
+    """#13853: `Entity.load` reads the flags with `getBooleanOr` and `saveWithoutId` writes each back as `1b` only
+    when true: a leash knot's or a marker's raw save normalizes them too."""
+    x0, y0, z0 = 4096 - 256, 260, 3584
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]}]
+    subjects = [('leash_knot', 'NoGravity:-1b'), ('leash_knot', 'NoGravity:0b,Silent:3b'),
+                ('marker', 'Glowing:-1b,NoGravity:2b,data:{a:1}'), ('marker', 'Silent:0b')]
+    for n, (kind, fields) in enumerate(subjects, 1):
+        uuid = f'000037e8-0000-0000-0000-{n:04x}00000001'
+        ops += [cmd(f'/summon {kind} {x0 + 3 * n}.5 {y0}.5 {z0 + 8}.5 {{UUID:[I;14312,0,{n},1],{fields}}}',
+                    expect_result=1)]
+        for key in ('NoGravity', 'Silent', 'Glowing'):
+            ops.append(cmd(f'/data get entity {uuid} {key}'))
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/forceload remove {x0} {z0}')
 
 
 def marker_data_mutation():
@@ -7824,20 +7851,35 @@ def comparator_setblock_output():
     return ops + setup('/tick unfreeze', f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
 
-def raw_entity_flags():
-    """#13853: `Entity.load` reads the flags with `getBooleanOr` and `saveWithoutId` writes each back as `1b` only
-    when true: a leash knot's or a marker's raw save normalizes them too."""
-    x0, y0, z0 = 4096 - 256, 260, 3584
-    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]}]
-    subjects = [('leash_knot', 'NoGravity:-1b'), ('leash_knot', 'NoGravity:0b,Silent:3b'),
-                ('marker', 'Glowing:-1b,NoGravity:2b,data:{a:1}'), ('marker', 'Silent:0b')]
-    for n, (kind, fields) in enumerate(subjects, 1):
-        uuid = f'000037e8-0000-0000-0000-{n:04x}00000001'
-        ops += [cmd(f'/summon {kind} {x0 + 3 * n}.5 {y0}.5 {z0 + 8}.5 {{UUID:[I;14312,0,{n},1],{fields}}}',
-                    expect_result=1)]
-        for key in ('NoGravity', 'Silent', 'Glowing'):
-            ops.append(cmd(f'/data get entity {uuid} {key}'))
-    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+def explosion_player_experience():
+    """#11330: `Block.onExplosionHit` passes `dropExperience` = the blast's indirect source is a player (a primed
+    TNT's `owner`) to `spawnAfterBreak`, so blasted sculk pops its constant experience (catalyst 5, sculk 1) only
+    for a player's TNT, not for one whose `owner` is a zombie's UUID. Orbs may merge, so only whether any came
+    out is compared."""
+    # Entities tick once the forced chunk's 2-column neighbourhood is loaded (ChunkMap.prepareEntityTickingChunk).
+    x0, y0, z0 = 4096 - 384, 260, 3584
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks',
+            'chunks': [[(x0 >> 4) + i, (z0 >> 4) + k] for i in range(-2, 3) for k in range(-2, 3)]},
+           cmd('/tick freeze', False)]
+    near = f'x={x0},y={y0 - 4},z={z0},dx=16,dy=16,dz=16'
+    for owner in (None, '@p', 'zombie'):
+        ops += [cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 6} {z0 + 15} air', False),
+                cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} bedrock', False),
+                cmd(f'/setblock {x0 + 8} {y0} {z0 + 8} sculk_catalyst', expect_result=1),
+                cmd(f'/setblock {x0 + 7} {y0} {z0 + 8} sculk', expect_result=1),
+                cmd(f'/summon tnt {x0 + 8}.5 {y0 + 1} {z0 + 8}.5 {{fuse:1,Tags:["xp_tnt"]}}', expect_result=1)]
+        if owner == 'zombie':
+            ops.append(cmd(f'/summon zombie {x0 + 1}.5 {y0} {z0 + 1}.5 '
+                           f'{{NoAI:1b,Silent:1b,PersistenceRequired:1b,Tags:["xp_owner"]}}',
+                           expect_result=1))
+            owner = f'@e[type=zombie,tag=xp_owner,{near},limit=1]'
+        if owner:
+            ops.append(cmd(f'/data modify entity @e[type=tnt,tag=xp_tnt,limit=1] owner set from entity {owner} UUID'))
+        ops += [cmd('/tick unfreeze', False), {'op': 'tick', 'n': 2}, cmd('/tick freeze', False),
+                cmd(f'/execute if block {x0 + 8} {y0} {z0 + 8} air', expect_result=1),
+                cmd(f'/execute if entity @e[type=experience_orb,{near}]', comparison='positive_result'),
+                cmd(f'/kill @e[type=!player,{near}]', False), cmd(f'/kill @e[type=item,{near}]', False)]
+    return ops + setup('/tick unfreeze', f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 6} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
 
 
@@ -8008,6 +8050,7 @@ def groups():
         ('nautilus saved Sitting', nautilus_saved_sitting()),
         ('axolotl hunting memory', axolotl_hunting_memory()),
         ('marker data mutation', marker_data_mutation()),
+        ('raw entity flags', raw_entity_flags()),
         ('mob effect update result', mob_effect_update_result()),
         ('axolotl integer memory TTL', axolotl_integer_memory_ttl()),
         ('parrot saved Age', parrot_saved_age()),
@@ -8038,7 +8081,7 @@ def groups():
         ('primed tnt fall', primed_tnt_fall()),
         ('dispensed item escape', dispensed_item_escape()),
         ('command block last output', command_block_last_output()),
-        ('raw entity flags', raw_entity_flags()),
+        ('explosion player experience', explosion_player_experience()),
         ('comparator setblock output', comparator_setblock_output()),
         ('glide fall accumulation', glide_fall_accumulation()),
         ('living short timers', living_short_timers()),
