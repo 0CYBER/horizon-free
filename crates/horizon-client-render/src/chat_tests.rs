@@ -1071,10 +1071,6 @@ fn a_server_filter_mask_hides_or_masks_the_message() {
 /// single click only places the caret there.
 #[test]
 fn a_double_click_in_the_chat_box_selects_the_word() {
-/// `SuggestionsList.extractRenderState`: the list's rectangle asks for the
-/// pointing hand; outside it the cursor stays the arrow.
-#[test]
-fn the_suggestion_list_asks_for_the_pointing_hand() {
     let font = font();
     let m = Measure(&font);
     let registries = Registries::default();
@@ -1094,6 +1090,20 @@ fn the_suggestion_list_asks_for_the_pointing_hand() {
     assert!(screen.click(&m, &c, x, y));
     assert_eq!((screen.input.highlight, screen.input.cursor), (6, 11));
     assert_eq!(screen.input.selected_text(), "world");
+}
+
+/// `SuggestionsList.extractRenderState`: the list's rectangle asks for the
+/// pointing hand; outside it the cursor stays the arrow.
+#[test]
+fn the_suggestion_list_asks_for_the_pointing_hand() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", false, 0, 640, 360, full());
     screen.type_text(&m, &c, "/");
     let rect = screen
         .suggestions
