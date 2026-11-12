@@ -2,7 +2,7 @@
 //! cache behind the opt-in Particle Culling setting.
 
 use super::{Particle, ParticleEngine, Vertex};
-use glam::{DVec3, Vec3 as FVec3};
+use glam::{DVec3, Quat, Vec3 as FVec3};
 use std::array;
 
 const PARTICLE_SECTION_CACHE_SIZE: usize = 128;
@@ -126,8 +126,7 @@ impl ParticleEngine {
     pub fn render_in_view(
         &self,
         camera: DVec3,
-        yaw: f32,
-        pitch: f32,
+        base: Quat,
         partial: f32,
         view: Option<&crate::gfx::Frustum>,
         light_at: &dyn Fn([i32; 3]) -> u8,
@@ -135,8 +134,7 @@ impl ParticleEngine {
     ) {
         self.render_inner::<false>(
             camera,
-            yaw,
-            pitch,
+            base,
             partial,
             0.0,
             view,
