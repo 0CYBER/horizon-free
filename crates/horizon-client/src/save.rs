@@ -14,6 +14,7 @@
 //! Worlds saved by older Horizon builds (`region/`, `DIM-1/`, `Player` in
 //! `level.dat`) are migrated on open.
 mod backpressure;
+mod block_entity_order;
 mod respawn;
 
 use crate::{
@@ -1848,11 +1849,8 @@ fn decode_column(
     };
     if let Some(Tag::List(entities)) = tag.get("block_entities") {
         for e in entities {
-            let int = |k: &str| number(e.get(k)).map(|v| v as i32);
-            if let (Some(bx), Some(y), Some(bz)) = (int("x"), int("y"), int("z")) {
-                extras
-                    .block_entity_order
-                    .push(block_entity_pos((bx, y, bz), [*x, *z]));
+            if let Some(at) = block_entity_order::saved_at(e, [*x, *z]) {
+                extras.block_entity_order.push(at);
             }
             match decode_block_entity(e).map(|(p, be)| (block_entity_pos(p, [*x, *z]), be)) {
                 Some(mut be) => {
