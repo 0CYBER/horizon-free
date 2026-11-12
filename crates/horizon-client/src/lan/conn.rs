@@ -1812,6 +1812,13 @@ impl io_pool::Session for PlayConn {
                     ))
                 }
             }
+            // handleUseItemOn and handleUseItem: `ackBlockChangesUpTo` throws on a negative sequence
+            // before anything is done, and the server only logs it ("Failed to handle packet ...,
+            // suppressing error"): such a packet does nothing, and no player is disconnected for it.
+            Ok(
+                play::Serverbound::UseItem(play::UseItem { sequence, .. })
+                | play::Serverbound::UseItemOn(play::UseItemOn { sequence, .. }),
+            ) if sequence < 0 => Verdict::Go,
             Ok(play::Serverbound::ResourcePack(r))
                 if r.action == PACK_DECLINED && self.required_pack =>
             {
@@ -2488,6 +2495,85 @@ mod tests {
         sender.flush();
         assert_eq!(bodies(&rx), [vec![vec![5]], vec![b"disconnect".to_vec()]]);
         assert_eq!(sender.pending.load(Ordering::Relaxed), 5);
+    }
+
+    /// `handleUseItemOn` and `handleUseItem`: `ackBlockChangesUpTo(sequence)` throws on a negative
+    /// sequence before the handler does anything, and the server only logs it, so such a packet
+    /// does nothing and its sender stays. One with a sequence of 0 or more goes on to the hub.
+    #[test]
+    fn a_use_with_a_negative_sequence_is_dropped_before_the_hub() {
+        use super::io_pool::Verdict;
+        use horizon_protocol::ids::play::serverbound::{USE_ITEM, USE_ITEM_ON};
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            ..crate::lan::NetConfig::loopback(0, "Sequence".into(), 8)
+        };
+        let lan = crate::lan::Lan::start_with(Arc::new(SyncData::empty()), config).unwrap();
+        let mut c = PlayConn {
+            conn: 1,
+            shared: lan.shared.clone(),
+            uuid: 2,
+            name: "p".to_owned(),
+            required_pack: false,
+            rate: None,
+            watch: Arc::new(KeepAliveWatch {
+                start: Instant::now(),
+                alive: Arc::new(AtomicI64::new(-1)),
+            }),
+            latency: Arc::new(AtomicI32::new(0)),
+            sent_at: None,
+            next_keep_alive: Instant::now(),
+            counted: None,
+            undrained: Arc::default(),
+        };
+        // The bodies after the packets' one-byte VarInt ids.
+        let packets = |sequence: i32| {
+            [
+                (
+                    USE_ITEM,
+                    play::Serverbound::UseItem(play::UseItem {
+                        hand: 0,
+                        sequence,
+                        yaw: 0.0,
+                        pitch: 0.0,
+                    })
+                    .encode(),
+                ),
+                (
+                    USE_ITEM_ON,
+                    play::Serverbound::UseItemOn(play::UseItemOn {
+                        hand: 0,
+                        pos: [0, 64, 0],
+                        face: 1,
+                        cursor: [0.5, 1.0, 0.5],
+                        inside: false,
+                        world_border: false,
+                        sequence,
+                    })
+                    .encode(),
+                ),
+            ]
+        };
+        let forwarded = |lan: &crate::lan::Lan| {
+            let events = lan.poll();
+            events
+                .iter()
+                .filter(|e| matches!(e, crate::lan::NetEvent::Packet(..)))
+                .count()
+        };
+        for sequence in [-1, i32::MIN] {
+            for (id, packet) in packets(sequence) {
+                assert!(matches!(c.packet(id, packet[1..].to_vec()), Verdict::Go));
+            }
+        }
+        assert_eq!(forwarded(&lan), 0, "a negative sequence reached the hub");
+        for sequence in [0, 7] {
+            for (id, packet) in packets(sequence) {
+                assert!(matches!(c.packet(id, packet[1..].to_vec()), Verdict::Go));
+            }
+        }
+        assert_eq!(forwarded(&lan), 4);
     }
 
     /// A client that answers no keep-alive is timed out 30 s after the last
