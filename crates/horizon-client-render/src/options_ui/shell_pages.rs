@@ -23,6 +23,7 @@ impl OptionsUi {
             Page::ControllerRadialPick => Some(&self.radial_pick),
             page if Self::controller_page(page).is_some() => Some(&self.controller),
             page if Self::shader_page(page).is_some() => Some(&self.shader),
+            Page::PackOptions => Some(&self.pack_options),
             _ => None,
         }
     }
@@ -35,8 +36,19 @@ impl OptionsUi {
             Page::ControllerRadialPick => Some(&mut self.radial_pick),
             page if Self::controller_page(page).is_some() => Some(&mut self.controller),
             page if Self::shader_page(page).is_some() => Some(&mut self.shader),
+            Page::PackOptions => Some(&mut self.pack_options),
             _ => None,
         }
+    }
+    /// Pack Options for the pack `id`, from the pack screen: its Polytone config entries.
+    pub(super) fn open_pack_options(&mut self, id: &str) {
+        let mut configs = horizon_polytone::pack::Configs::default();
+        if let Some(own) = self.pack_configs.get(id) {
+            configs.merge(own);
+        }
+        // Opening a shell starts it afresh: the entries go in after.
+        self.push(Page::PackOptions);
+        self.pack_options.screen = crate::pack_options_ui::PackOptionsScreen::open(configs);
     }
     /// Where the open shell screen asked the focus to open (a radial slot's list, on the slot's
     /// action), for a controller's focus to land there.
@@ -53,13 +65,14 @@ impl OptionsUi {
             return;
         }
         // Every shell: the click may have changed the page.
-        let shells: [&mut dyn shell::Hosted; 6] = [
+        let shells: [&mut dyn shell::Hosted; 7] = [
             &mut self.extras,
             &mut self.graphics,
             &mut self.controller,
             &mut self.radial,
             &mut self.radial_pick,
             &mut self.shader,
+            &mut self.pack_options,
         ];
         for shell in shells {
             shell.clicks_step(false);

@@ -40,7 +40,6 @@ use winit::keyboard::KeyCode;
 
 mod guest_body;
 mod horizon_channels;
-use horizon_channels::horizon_channel;
 
 #[cfg(test)]
 mod crack_feedback_tests;
@@ -1606,7 +1605,7 @@ impl Game<'_> {
                 );
                 return false;
             }
-            self.unpack_boat_loot(i);
+            self.unpack_boat_loot(i, true);
         }
         // `createMenu` (ChestMenu.threeRows or a HopperMenu), and
         // `MenuProvider.getDisplayName`, the vehicle's name key.
@@ -1634,64 +1633,6 @@ impl Game<'_> {
         host.hub
             .open_container(conn, menu, title, pos, slots, items, None);
         true
-    }
-
-    /// `ContainerEntity.unpackChestVehicleLootTable` for a chest boat: the table
-    /// its raw NBT still holds rolls into the slots on the first open (an empty
-    /// boat, as a command leaves one), and `player_generates_container_loot`
-    /// fires for the player who opened it.
-    fn boat_loot_pending(&self, id: u32) -> bool {
-        matches!(
-            self.persist.raw.get(&id),
-            Some(horizon_world::nbt::Tag::Compound(map)) if map.contains_key(&"LootTable".into())
-        )
-    }
-
-    fn unpack_boat_loot(&mut self, i: usize) {
-        use horizon_world::nbt::Tag;
-        let id = self.boats[i].id;
-        let (table, seed) = {
-            let Some(Tag::Compound(map)) = self.persist.raw.get_mut(&id) else {
-                return;
-            };
-            let Some(table) = crate::save::text(map.get(&"LootTable".into()))
-                .and_then(|id| horizon_client_core::identifier::normalize_id(&id))
-            else {
-                return;
-            };
-            let seed = match map.get(&"LootTableSeed".into()) {
-                Some(Tag::Long(seed)) => Some(*seed),
-                _ => None,
-            };
-            // The table is spent even when nothing can be rolled into it (the
-            // loot data is not loaded): vanilla clears it before filling.
-            map.remove(&"LootTable".into());
-            map.remove(&"LootTableSeed".into());
-            (table, seed)
-        };
-        // `LootTable.fill` sets the slots it rolls and leaves the rest; a boat
-        // that already holds something keeps it, so no table is applied over it.
-        if self.boats[i].items.iter().any(Option::is_some) {
-            return;
-        }
-        let loot = crate::structure_blocks::loot_data(&self.options.resources, &self.pack_files());
-        let b = &self.boats[i];
-        let at = Vec3::new(b.position.x, b.position.y, b.position.z);
-        let biome = self.biome_name_at(at).unwrap_or_default();
-        let pos = (
-            b.position.x.floor() as i32,
-            b.position.y.floor() as i32,
-            b.position.z.floor() as i32,
-        );
-        crate::structure_blocks::roll_container(
-            &mut self.boats[i].items,
-            loot.as_deref(),
-            table.clone(),
-            seed,
-            pos,
-            &biome,
-        );
-        self.trigger_loot_table(&table);
     }
 
     /// The guest's open container is closing (`AbstractContainerMenu.removed`):
@@ -2134,22 +2075,8 @@ impl Game<'_> {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
-        // Plugin channels a client registers in play (minecraft:register), from a dead player
-        // too; the packet goes on as before.
-        if let S::CustomPayload(p) = &packet
-            && let Some(register) = horizon_client::lan::channel_registration(&p.channel)
-        {
-            self.guest_channels(host, gi, &p.data, register);
-        }
-        // A plugin channel's message on a channel that isn't one of Horizon's own (the match below
-        // takes those) is for the mods, from a dead player too: vanilla's handleCustomPayload doesn't
-        // look at health.
-        let packet = match packet {
-            S::CustomPayload(p) if !horizon_channel(&p.channel) => {
-                self.guest_custom_payload(host, conn, p.channel, p.data);
-                return;
-            }
-            packet => packet,
+        let Some(packet) = self.guest_plugin_channels(host, conn, gi, packet) else {
+            return;
         };
         // A dead player acts no more, but the death screen still respawns and chats: its
         // commands run as anyone's (ServerGamePacketListenerImpl.handleChatCommand doesn't
@@ -2312,7 +2239,7 @@ impl Game<'_> {
                 }
                 4 | 5 => {
                     if !spectator {
-                        self.as_guest(host, conn, |g| g.drop_held(a.action == 4));
+                        self.guest_drop_held(host, gi, conn, a.action == 4);
                     }
                 }
                 // RELEASE_USE_ITEM: ServerPlayer.releaseUsingItem, with the
@@ -2883,6 +2810,9 @@ impl Game<'_> {
             }
             S::CustomPayload(p) if p.channel == horizon_client::lod_net::CHANNEL => {
                 self.guest_far_terrain(host, conn, &p.data)
+            }
+            S::CustomPayload(p) if p.channel == horizon_client::perf_net::CHANNEL => {
+                self.guest_perf(host, conn, &p.data)
             }
             S::CustomPayload(p) if p.channel == horizon_client::lan::recipes::TRANSFER_CHANNEL => {
                 self.guest_recipe_transfer(host, conn, &p.data);
@@ -3477,13 +3407,7 @@ impl Game<'_> {
         if host.hub.guests[gi].spectator() {
             return;
         }
-        // handleAttack: a target inside the world border, then
-        // `isWithinAttackRange(mainHandItem, box, 3.0)` before anything else, players,
-        // mobs, objects and fireballs alike.
-        if let Some(target) = self.guest_target_box(host, gi, id)
-            && (!self.inside_border(&target)
-                || self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true))
-        {
+        if self.guest_attack_stops(host, gi, id) {
             return;
         }
         // Native mods, where Player.attack starts: a canceled blow does
@@ -4502,7 +4426,7 @@ impl Game<'_> {
             let me = self.player_text(&name, uuid);
             let text = match cause {
                 Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                None if at[1] < f64::from(self.world.bottom_y() - 64) => {
+                None if at[1] < self.world.below_world_y() => {
                     horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                 }
                 None => self.guest_death_message(conn, me),
@@ -6220,6 +6144,7 @@ fn eye_columns(at: [f64; 3], body: Dimensions) -> [std::ops::RangeInclusive<i32>
     [range(at[0]), range(at[2])]
 }
 
+mod attack_checks;
 mod dig_stop;
 use dig_stop::{StopDig, stop_dig};
 
@@ -6858,7 +6783,7 @@ mod guest_close_listener_tests {
 
 #[cfg(test)]
 mod horizon_channel_tests {
-    use super::horizon_channel;
+    use super::horizon_channels::horizon_channel;
 
     #[test]
     fn horizon_channels_reach_their_handlers_and_others_go_to_the_mods() {
@@ -6870,6 +6795,7 @@ mod horizon_channel_tests {
         assert!(horizon_channel(horizon_protocol::quiet::CHANNEL));
         assert!(horizon_channel(horizon_protocol::mod_net::CHANNEL));
         assert!(horizon_channel(horizon_client::lod_net::CHANNEL));
+        assert!(horizon_channel(horizon_client::perf_net::CHANNEL));
         assert!(!horizon_channel("mymod:hello"));
         assert!(!horizon_channel("minecraft:brand"));
     }

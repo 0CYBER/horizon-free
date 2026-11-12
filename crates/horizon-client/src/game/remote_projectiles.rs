@@ -325,6 +325,7 @@ impl Game<'_> {
         match kind {
             "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
+                used_portal: false,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
                 no_gravity: false,
@@ -400,14 +401,8 @@ impl Game<'_> {
                     .next_int_bound(100_000)
                     .unwrap_or(0);
                 let time = super::dragon::Crystal::start_time(at, drawn, self.clock.still());
-                self.crystals.push(super::dragon::Crystal {
-                    id,
-                    position: at,
-                    show_bottom: true,
-                    time,
-                    beam: None,
-                    invulnerable: false,
-                });
+                self.crystals
+                    .push(super::dragon::Crystal::new(id, at, true, time));
             }
             _ => {
                 let Some(k) = projectile_kind(kind) else {

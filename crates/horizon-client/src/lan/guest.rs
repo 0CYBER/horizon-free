@@ -301,6 +301,8 @@ pub struct Guest {
     /// with `armor` so each player compares against their own snapshot.
     pub location_armor: [Option<ItemStack>; 4],
     pub offhand: Option<ItemStack>,
+    /// The converted held, offhand and armor stacks, kept while they do not change.
+    pub equipment: super::equipment_cache::EquipmentCache,
     pub selected: usize,
     pub carried: Option<ItemStack>,
     /// The inventory menu's crafting grid (2x2) and its result
@@ -557,6 +559,7 @@ impl Guest {
             armor: [None, None, None, None],
             location_armor: [None, None, None, None],
             offhand: None,
+            equipment: Default::default(),
             selected: 0,
             carried: None,
             craft_grid: Default::default(),
@@ -906,6 +909,22 @@ impl Guest {
             self.menu_sent[slot] = self.menu_slot(slot);
         }
     }
+    /// `ServerPlayer.drop(boolean)`: `setRemoteSlot` on the selected hotbar
+    /// slot of the open menu (the inventory menu without one) records what the
+    /// dropping client already predicted, so the next broadcast sends the slot
+    /// again once it changes back (a pickup refilling the stack).
+    pub fn told_selected(&mut self) {
+        let slot = 36 + self.selected;
+        self.menu_sent[slot] = self.menu_slot(slot);
+        let told = self.inventory.get(self.selected).cloned().flatten();
+        if let Some(m) = self.menu.as_mut() {
+            let at = m.size + 27 + self.selected;
+            if m.sent.len() <= at {
+                m.sent.resize(at + 1, None);
+            }
+            m.sent[at] = told;
+        }
+    }
     pub fn set_menu_slot(&mut self, slot: usize, item: Option<ItemStack>) {
         match slot {
             0 => self.craft_result = item,
@@ -1058,9 +1077,131 @@ fn builtin_component(
                 write_block_predicate(predicate, ids, &mut w)?;
             }
         }
+        "minecraft:tool" => write_tool(value, ids, &mut w)?,
+        "minecraft:attribute_modifiers" => write_attribute_modifiers(value, ids, &mut w)?,
         _ => return None,
     }
     Some(horizon_protocol::item::Component::Raw(w.data))
+}
+
+/// `Tool.STREAM_CODEC` from `Tool.CODEC`'s saved form: the rules (blocks, an
+/// optional speed and an optional `correct_for_drops`), then the default
+/// mining speed, the wear per block and `can_destroy_blocks_in_creative`,
+/// each at its codec default when the stack leaves it out.
+fn write_tool(
+    value: &horizon_world::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_world::datafix::dynamic::{as_bool_opt, as_number};
+    use horizon_world::nbt::Tag;
+    let Tag::List(rules) = value.get("rules")? else {
+        return None;
+    };
+    w.varint(i32::try_from(rules.len()).ok()?);
+    for rule in rules.as_slice() {
+        write_holder_set("minecraft:block", rule.get("blocks")?, ids, w)?;
+        match rule.get("speed") {
+            Some(speed) => {
+                w.bool(true);
+                w.f32(as_number(speed)?.float_value());
+            }
+            None => w.bool(false),
+        }
+        match rule.get("correct_for_drops") {
+            Some(correct) => {
+                w.bool(true);
+                w.bool(as_bool_opt(Some(correct))?);
+            }
+            None => w.bool(false),
+        }
+    }
+    let number = |key: &str| value.get(key).map(as_number);
+    w.f32(match number("default_mining_speed") {
+        Some(speed) => speed?.float_value(),
+        None => 1.0,
+    });
+    // ExtraCodecs.NON_NEGATIVE_INT.
+    let wear = match number("damage_per_block") {
+        Some(wear) => wear?.int_value(),
+        None => 1,
+    };
+    w.varint((wear >= 0).then_some(wear)?);
+    w.bool(match value.get("can_destroy_blocks_in_creative") {
+        Some(can) => as_bool_opt(Some(can))?,
+        None => true,
+    });
+    Some(())
+}
+
+/// `ItemAttributeModifiers.STREAM_CODEC` from its saved list: each entry's
+/// attribute (`ByteBufCodecs.holderRegistry`, its id), modifier id, amount
+/// and operation, slot group (`any` when left out) and display (`default`).
+fn write_attribute_modifiers(
+    value: &horizon_world::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_world::datafix::dynamic::{as_number, namespaced};
+    use horizon_world::nbt::Tag;
+    let Tag::List(entries) = value else {
+        return None;
+    };
+    let string = |tag: Option<&Tag>| match tag {
+        Some(Tag::String(s)) => s.to_string().ok(),
+        _ => None,
+    };
+    w.varint(i32::try_from(entries.len()).ok()?);
+    for entry in entries.as_slice() {
+        let attribute = ids(
+            "minecraft:attribute",
+            &namespaced(&string(entry.get("type"))?),
+        )?;
+        w.varint((attribute >= 0).then_some(attribute)?);
+        w.string(&namespaced(&string(entry.get("id"))?));
+        w.f64(as_number(entry.get("amount")?)?.double_value());
+        // AttributeModifier.Operation ids.
+        w.varint(match string(entry.get("operation"))?.as_str() {
+            "add_value" => 0,
+            "add_multiplied_base" => 1,
+            "add_multiplied_total" => 2,
+            _ => return None,
+        });
+        // EquipmentSlotGroup ids.
+        let slot = match entry.get("slot") {
+            Some(slot) => string(Some(slot))?,
+            None => "any".to_owned(),
+        };
+        w.varint(match slot.as_str() {
+            "any" => 0,
+            "mainhand" => 1,
+            "offhand" => 2,
+            "hand" => 3,
+            "feet" => 4,
+            "legs" => 5,
+            "chest" => 6,
+            "head" => 7,
+            "armor" => 8,
+            "body" => 9,
+            "saddle" => 10,
+            _ => return None,
+        });
+        // ItemAttributeModifiers.Display.Type ids; an override carries its text.
+        match entry.get("display") {
+            None => w.varint(0),
+            Some(display) => match string(display.get("type"))?.as_str() {
+                "default" => w.varint(0),
+                "hidden" => w.varint(1),
+                "override" => {
+                    let text = display.get("value")?;
+                    w.varint(2);
+                    w.bytes(&horizon_world::nbt::write_network(text, Default::default()).ok()?);
+                }
+                _ => return None,
+            },
+        }
+    }
+    Some(())
 }
 
 /// `ByteBufCodecs.holderSet`: tags or direct registry entries, without item-id remapping.
@@ -1390,6 +1531,13 @@ fn network_stack(
             (
                 "minecraft:can_break",
                 horizon_protocol::item::component::CAN_BREAK,
+            ),
+            // The client predicts mining with the stack's own tool and shows
+            // the stack's own attribute modifiers (#14641).
+            ("minecraft:tool", horizon_protocol::item::component::TOOL),
+            (
+                "minecraft:attribute_modifiers",
+                horizon_protocol::item::component::ATTRIBUTE_MODIFIERS,
             ),
         ] {
             if d.other(&format!("!{name}")).is_some() {
@@ -1937,6 +2085,89 @@ mod tests {
         }
     }
 
+    /// A `tool` or `attribute_modifiers` the writers cannot encode is left out
+    /// of the packet, whole, as `can_break`'s is.
+    #[test]
+    fn a_tool_or_modifier_the_writers_cannot_encode_is_dropped_whole() {
+        let ids = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:block", "minecraft:stone") => Some(1),
+            ("minecraft:attribute", "minecraft:attack_damage") => Some(3),
+            _ => None,
+        };
+        let parse = |snbt: &str| horizon_world::nbt::parse_snbt(snbt).unwrap().0;
+        let entry = |extra: &str| {
+            format!(r#"[{{type:"attack_damage",id:"x",amount:2.0d,operation:"add_value"{extra}}}]"#)
+        };
+        // The forms the cases below spoil all encode.
+        for (name, snbt) in [
+            (
+                "minecraft:tool",
+                r#"{rules:[{blocks:"minecraft:stone"}]}"#.to_owned(),
+            ),
+            ("minecraft:attribute_modifiers", entry("")),
+            (
+                "minecraft:attribute_modifiers",
+                entry(r#",display:{type:"override",value:"x"}"#),
+            ),
+        ] {
+            let encoded = builtin_component(name, &parse(&snbt), &ids);
+            assert!(encoded.is_some(), "{name} {snbt}");
+        }
+        for (name, snbt) in [
+            // No rules; a rule without blocks, or with a block the registry lacks.
+            ("minecraft:tool", "{}".to_owned()),
+            ("minecraft:tool", "{rules:[{speed:2.0f}]}".to_owned()),
+            (
+                "minecraft:tool",
+                r#"{rules:[{blocks:"minecraft:missing"}]}"#.to_owned(),
+            ),
+            // A speed that is no number; a negative wear (`NON_NEGATIVE_INT`).
+            (
+                "minecraft:tool",
+                r#"{rules:[{blocks:"minecraft:stone",speed:"fast"}]}"#.to_owned(),
+            ),
+            (
+                "minecraft:tool",
+                "{rules:[],damage_per_block:-1}".to_owned(),
+            ),
+            // Not a list; an unknown attribute, operation, slot group or display type.
+            ("minecraft:attribute_modifiers", "{}".to_owned()),
+            (
+                "minecraft:attribute_modifiers",
+                entry("").replace("attack_damage", "missing"),
+            ),
+            (
+                "minecraft:attribute_modifiers",
+                entry("").replace("add_value", "multiply"),
+            ),
+            ("minecraft:attribute_modifiers", entry(r#",slot:"tail""#)),
+            (
+                "minecraft:attribute_modifiers",
+                entry(r#",display:{type:"loud"}"#),
+            ),
+            // An entry without its modifier id; an override without its text.
+            (
+                "minecraft:attribute_modifiers",
+                entry("").replace(r#"id:"x","#, ""),
+            ),
+            (
+                "minecraft:attribute_modifiers",
+                entry(r#",display:{type:"override"}"#),
+            ),
+        ] {
+            let encoded = builtin_component(name, &parse(&snbt), &ids);
+            assert!(encoded.is_none(), "{name} {snbt}");
+        }
+        // Through the stack: the bad component is neither added nor removed.
+        let mut stack = ItemStack::new("minecraft:iron_pickaxe", 1);
+        stack
+            .data_mut()
+            .set_other("minecraft:tool", Some(parse("{}")));
+        let sent = stack_to_network(|_| 1, ids, &Some(stack)).unwrap();
+        assert!(sent.component(component::TOOL).is_none());
+        assert!(sent.removed.is_empty());
+    }
+
     #[test]
     fn builtin_removal_markers_survive_actual_saved_stack_adoption() {
         for (name, kind) in [
@@ -2302,5 +2533,39 @@ mod tests {
                 &format!("scale {scale}"),
             );
         }
+    }
+
+    #[test]
+    fn told_selected_records_the_predicted_drop() {
+        use crate::lan::PlayerSender;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicI32;
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut guest = Guest::new(
+            Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Dropper".into(),
+                properties: Vec::new(),
+                info: horizon_protocol::packets::configuration::ClientInformation::new(2),
+                brand: "test".into(),
+                sender: PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+                expected: false,
+                configured: Default::default(),
+            },
+            2,
+            [0.5, 64.0, 0.5],
+            0,
+        );
+        guest.selected = 3;
+        guest.inventory[3] = Some(ItemStack::new("minecraft:netherrack", 63));
+        guest.told_selected();
+        // Dropping one is already known to the client (63); the pickup that
+        // refills the slot must then differ from `menu_sent` and be sent.
+        assert_eq!(guest.menu_sent[39].as_ref().map(|s| s.count), Some(63));
+        guest.inventory[3].as_mut().unwrap().count = 64;
+        assert_ne!(guest.menu_sent[39], guest.menu_slot(39));
     }
 }
