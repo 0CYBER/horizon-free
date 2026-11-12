@@ -600,7 +600,7 @@ pub fn write_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
 /// fields and the ticks left of the long jump cooldown.
 pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     m.extra.screaming = crate::entity_nbt::flag(tag, "IsScreamingGoat");
-    let horn = |key| crate::save::number(tag.get(key)).is_some_and(|v| v == 0);
+    let horn = |key| !crate::entity_nbt::flag_or(tag, key, true);
     m.extra.lost_horns = [horn("HasLeftHorn"), horn("HasRightHorn")];
     let cooldown = tag
         .get("Brain")

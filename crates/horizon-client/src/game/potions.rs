@@ -385,31 +385,21 @@ impl Game<'_> {
                 .play("minecraft:entity.silverfish.hurt", Some(at), 1.0, 1.0);
         }
     }
-    /// A splash potion, lingering potion or experience bottle in flight (the
-    /// player's throws and dispensers both end up here).
-    pub(super) fn launch_thrown(
-        &mut self,
-        stack: ItemStack,
-        position: Vec3,
-        velocity: Vec3,
-        owner: Option<Text>,
-    ) {
-        let id = self.take_entity_id();
-        self.potions.thrown.push(ThrownPotion {
-            id,
-            stack,
-            previous: position,
-            position,
-            velocity,
-            age: 0,
-            thrower: owner.is_some().then_some(Who::Player),
-            guest: self.lan_acting.filter(|_| owner.is_some()),
-            owner,
-            left_owner: false,
-            last_deflected_by: None,
-            random: LegacyRandom::new(i64::from(id)),
-        });
-    }
+}
+/// A splash potion, lingering potion or experience bottle about to fly (the
+/// player's throws and dispensers both make one): `ThrownSplashPotion`,
+/// `ThrownLingeringPotion` or `ThrownExperienceBottle`, which
+/// `level.addFreshEntity` makes a level entity like a summoned one, so
+/// selectors and `/data` find it (#13201).
+pub(super) fn thrown_projectile(stack: ItemStack, position: Vec3, by_player: bool) -> Projectile {
+    let kind = match &*stack.item {
+        "minecraft:experience_bottle" => ProjectileKind::ExperienceBottle,
+        item => {
+            let lingering = item == "minecraft:lingering_potion";
+            ProjectileKind::Potion(Box::new(stack), lingering)
+        }
+    };
+    Projectile::new(kind, position, by_player.then_some(Who::Player))
 }
 /// What a player's body was last given for its effects and enchantments:
 /// a guest keeps their own while the host's are in `PotionState`.
@@ -586,43 +576,21 @@ impl Game<'_> {
                     _ => ("minecraft:entity.lingering_potion.throw", 0.5),
                 };
                 self.audio.play(sound, Some(eye), 0.5, pitch);
-                // Projectile.shootFromRotation(xRot, yRot, -20, 0.5, 1.0).
-                let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-                let dir = [
-                    -yaw.sin() * pitch.cos(),
-                    -(self.pitch - 20.0).to_radians().sin(),
-                    yaw.cos() * pitch.cos(),
-                ];
-                let l = dir
-                    .iter()
-                    .map(|c| f64::from(*c).powi(2))
-                    .sum::<f64>()
-                    .sqrt()
-                    .max(1e-9);
-                // getMovementToShoot: normalize, add triangle(0, 0.0172275 * uncertainty), scale.
-                let r = &mut self.world.random;
-                let mut jitter = || r.triangle(0.0, 0.0172275);
-                let v = Vec3::new(
-                    (f64::from(dir[0]) / l + jitter()) * power,
-                    (f64::from(dir[1]) / l + jitter()) * power,
-                    (f64::from(dir[2]) / l + jitter()) * power,
-                );
-                let pv = self.known_player_movement();
+                // Projectile.shootFromRotation(xRot, yRot, -20, power, 1.0), with
+                // what the thrower last moved (getKnownMovement).
+                let velocity = self.known_player_movement();
                 let on_ground = self.player.as_ref().is_some_and(|p| p.ground.on_ground);
-                let v = Vec3::new(
-                    v.x + pv.x,
-                    v.y + if on_ground { 0.0 } else { pv.y },
-                    v.z + pv.z,
+                let one = ItemStack {
+                    count: 1,
+                    ..stack.clone()
+                };
+                let mut shot =
+                    thrown_projectile(one, Vec3::new(eye[0], eye[1] - 0.1, eye[2]), true);
+                shot.shoot_from_rotation(
+                    self.pitch, self.yaw, -20.0, power, 1.0, velocity, on_ground,
                 );
-                self.launch_thrown(
-                    ItemStack {
-                        count: 1,
-                        ..stack.clone()
-                    },
-                    Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
-                    v,
-                    Some(self.player_display_text()),
-                );
+                shot.guest = self.lan_acting;
+                self.add_projectile(shot);
                 // ThrowablePotionItem.use / ExperienceBottleItem.use: awardStat(ITEM_USED).
                 self.award_stat("used", &stack.item, 1);
                 self.swing_arm();
@@ -2667,6 +2635,7 @@ mod mob_absorption_max_tests {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
         assert!(game.run_command("scoreboard objectives add h203 dummy"));
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn pig(game: &Game<'_>, n: i32) -> usize {
@@ -2836,6 +2805,7 @@ mod mob_health_boost_tests {
         assert!(game.run_command("forceload add 0 0"));
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     fn pig(game: &Game<'_>, n: i32) -> usize {
@@ -3081,6 +3051,7 @@ mod depleted_absorption_tests {
         assert!(game.run_command("forceload add 0 0"));
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
         game.creative = true;
+        game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
     }
     /// The mob in the level with UUID word `n`.
