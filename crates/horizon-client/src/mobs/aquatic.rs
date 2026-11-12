@@ -375,10 +375,6 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     m.on_ground = false;
                 }
             }
-            // LivingEntity air: dolphins drown underwater and refill instantly in air.
-            if !m.fluids.eye_in_water {
-                m.air = 4800;
-            }
         }
         _ => {}
     }

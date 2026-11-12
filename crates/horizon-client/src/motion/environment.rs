@@ -102,11 +102,12 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             breathe(self.player.entity_id as u32, "minecraft:player", vanilla)
         };
-        // LivingDrownEvent, likewise.
+        // LivingDrownEvent, likewise. A player's getMaxAirSupply is Entity's 300.
         if let Some(drowning) = drown(
             self.player.entity_id as u32,
             "minecraft:player",
             &mut self.player.air,
+            300,
             breath,
             !self.player.client_side,
         ) {
